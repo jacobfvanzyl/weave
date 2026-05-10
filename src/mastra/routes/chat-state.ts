@@ -42,19 +42,22 @@ const toUiPart = (part: MastraDBMessage['content']['parts'][number]) => {
 
   if (!hasToolData) return null;
 
+  const toolName = getToolName(record);
+  const result = getToolResult(record);
+  const isError = Boolean(record.isError);
+
   return {
-    type: 'tool-call',
+    type: `tool-${toolName}`,
     toolCallId:
       typeof getToolInvocation(record)?.toolCallId === 'string'
         ? getToolInvocation(record)!.toolCallId as string
         : typeof record.toolCallId === 'string'
           ? record.toolCallId
-          : `${getToolName(record)}-${Math.random().toString(36).slice(2)}`,
-    toolName: getToolName(record),
-    args: getToolArgs(record),
-    result: getToolResult(record),
-    isError: Boolean(record.isError),
-    argsText: JSON.stringify(getToolArgs(record), null, 2),
+          : `${toolName}-${Math.random().toString(36).slice(2)}`,
+    state: result === undefined ? 'input-available' : isError ? 'output-error' : 'output-available',
+    input: getToolArgs(record),
+    output: result,
+    errorText: isError ? (typeof result === 'string' ? result : JSON.stringify(result)) : undefined,
   };
 };
 
@@ -62,6 +65,7 @@ const toUiMessage = (message: MastraDBMessage) => ({
   id: message.id,
   role: message.role,
   parts: message.content.parts.map(toUiPart).filter(part => part !== null),
+  status: message.role === 'assistant' ? { type: 'complete' } : undefined,
   metadata: message.content.metadata,
 });
 
@@ -127,6 +131,30 @@ export const chatStateRoutes = [
 
         return c.json({ thread });
       } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/chat-state/threads/:threadId/raw-messages', {
+    method: 'GET',
+    handler: async c => {
+      try {
+        const resourceId = c.req.query('resourceId');
+        const threadId = c.req.param('threadId');
+        if (!resourceId) return c.json({ error: 'resourceId is required' }, 400);
+
+        const memory = await getMemory(c);
+        const result = await memory.recall({
+          threadId,
+          resourceId,
+          perPage: false,
+          orderBy: { field: 'createdAt', direction: 'ASC' },
+        });
+
+        return c.json({ messages: result.messages });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('No thread found')) return c.json({ messages: [] });
         return errorResponse(c, error);
       }
     },

@@ -11,12 +11,13 @@ import type { UIMessage } from 'ai';
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Plus, Send } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listServerMessages } from '../../lib/chat-state-api';
 import { chatUrl } from '../../lib/mastra-client';
 import { getModelDisplayName, modelOptions, resolveModelInput } from '../../lib/models';
 import { useChatStore } from '../../stores/chat-store';
 
+const ThreadIdContext = createContext<string | null>(null);
 const toolCallCache = new Map<string, Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result' | 'isError'>>();
 
 const isEmptyObject = (value: unknown) =>
@@ -26,6 +27,7 @@ const isDegradedToolCall = ({ toolName, args, result }: Pick<ToolCallMessagePart
   (toolName === 'call' || toolName === 'tool') && isEmptyObject(args) && result === undefined;
 
 const ToolCall = (props: ToolCallMessagePartProps) => {
+  const threadId = useContext(ThreadIdContext);
   const cached = toolCallCache.get(props.toolCallId);
   const display = isDegradedToolCall(props) && cached ? { ...props, ...cached } : props;
   const displayStatus = display.result !== undefined ? (display.isError ? 'error' : 'complete') : display.status.type;
@@ -38,12 +40,12 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
     const title = typeof args?.title === 'string' ? args.title : typeof result?.title === 'string' ? result.title : undefined;
 
     if (title) {
-      const threadId = useChatStore.getState().threadId;
+      const targetThreadId = threadId ?? useChatStore.getState().threadId;
       useChatStore.setState(state => ({
-        threads: state.threads.map(thread => (thread.id === threadId ? { ...thread, title } : thread)),
+        threads: state.threads.map(thread => (thread.id === targetThreadId ? { ...thread, title } : thread)),
       }));
     }
-  }, [display.args, display.result, display.toolName]);
+  }, [display.args, display.result, display.toolName, threadId]);
 
   if (!isDegradedToolCall(display)) {
     toolCallCache.set(props.toolCallId, {
@@ -293,8 +295,10 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ThreadRunningTracker threadId={threadId} />
-      <Thread />
+      <ThreadIdContext.Provider value={threadId}>
+        <ThreadRunningTracker threadId={threadId} />
+        <Thread />
+      </ThreadIdContext.Provider>
     </AssistantRuntimeProvider>
   );
 };
