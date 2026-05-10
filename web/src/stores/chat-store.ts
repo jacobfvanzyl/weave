@@ -17,9 +17,13 @@ type ChatState = {
   threadId: string;
   threads: ChatThread[];
   selectedModel: string;
+  showToolCalls: boolean;
   runningThreadIds: string[];
   completedThreadIds: string[];
+  deletedThreadIds: string[];
+  hasInitializedThreads: boolean;
   setSelectedModel: (model: string) => void;
+  setShowToolCalls: (showToolCalls: boolean) => void;
   setServerThreads: (threads: ChatThread[]) => void;
   newThread: () => Promise<void>;
   setThreadId: (threadId: string) => void;
@@ -50,29 +54,40 @@ export const useChatStore = create<ChatState>()(
       threadId: initialThread.id,
       threads: [initialThread],
       selectedModel: defaultModel,
+      showToolCalls: true,
       runningThreadIds: [],
       completedThreadIds: [],
+      deletedThreadIds: [],
+      hasInitializedThreads: false,
       setSelectedModel: selectedModel => set({ selectedModel }),
+      setShowToolCalls: showToolCalls => set({ showToolCalls }),
       setServerThreads: threads =>
         set(state => {
+          const deletedThreadIds = new Set(state.deletedThreadIds);
+          const activeThreads = threads.filter(thread => !deletedThreadIds.has(thread.id));
+          const mappedServerThreads = activeThreads.map(serverThread => {
+            const localThread = state.threads.find(thread => thread.id === serverThread.id);
+            return localThread?.title && localThread.title !== 'New chat' && serverThread.title === 'New chat'
+              ? { ...serverThread, title: localThread.title }
+              : serverThread;
+          });
           const optimisticThreads = state.threads.filter(
-            localThread => !threads.some(serverThread => serverThread.id === localThread.id),
+            localThread =>
+              !deletedThreadIds.has(localThread.id) &&
+              !activeThreads.some(serverThread => serverThread.id === localThread.id) &&
+              (activeThreads.length === 0 || state.hasInitializedThreads || localThread.title !== 'New chat'),
           );
-          const nextThreads = threads.length > 0
-            ? [
-                ...optimisticThreads,
-                ...threads.map(serverThread => {
-                  const localThread = state.threads.find(thread => thread.id === serverThread.id);
-                  return localThread?.title && localThread.title !== 'New chat' && serverThread.title === 'New chat'
-                    ? { ...serverThread, title: localThread.title }
-                    : serverThread;
-                }),
-              ]
-            : state.threads;
+          const nextThreads = activeThreads.length > 0 ? [...mappedServerThreads, ...optimisticThreads] : state.threads;
+          const shouldSelectLastMessaged = !state.hasInitializedThreads && mappedServerThreads.length > 0;
 
           return {
             threads: nextThreads,
-            threadId: nextThreads.some(thread => thread.id === state.threadId) ? state.threadId : nextThreads[0]?.id || state.threadId,
+            threadId: shouldSelectLastMessaged
+              ? mappedServerThreads[0].id
+              : nextThreads.some(thread => thread.id === state.threadId)
+                ? state.threadId
+                : nextThreads[0]?.id || state.threadId,
+            hasInitializedThreads: true,
           };
         }),
       newThread: async () => {
@@ -93,12 +108,7 @@ export const useChatStore = create<ChatState>()(
         })),
       deleteThread: async threadId => {
         const resourceId = get().resourceId;
-        try {
-          await deleteServerThread(resourceId, threadId);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!message.includes('thread not found')) throw error;
-        }
+        const previousState = get();
 
         set(state => {
           const threads = state.threads.filter(thread => thread.id !== threadId);
@@ -110,8 +120,25 @@ export const useChatStore = create<ChatState>()(
             threadId: nextThreadId,
             runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
             completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
+            deletedThreadIds: state.deletedThreadIds.includes(threadId) ? state.deletedThreadIds : [...state.deletedThreadIds, threadId],
           };
         });
+
+        try {
+          await deleteServerThread(resourceId, threadId);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes('thread not found')) return;
+
+          set({
+            threadId: previousState.threadId,
+            threads: previousState.threads,
+            runningThreadIds: previousState.runningThreadIds,
+            completedThreadIds: previousState.completedThreadIds,
+            deletedThreadIds: previousState.deletedThreadIds,
+          });
+          throw error;
+        }
       },
       setThreadRunning: (threadId, running) =>
         set(state => ({
@@ -169,6 +196,7 @@ export const useChatStore = create<ChatState>()(
         resourceId: state.resourceId,
         threadId: state.threadId,
         selectedModel: state.selectedModel,
+        showToolCalls: state.showToolCalls,
       }),
     },
   ),

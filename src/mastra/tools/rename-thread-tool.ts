@@ -29,7 +29,7 @@ export const renameThreadTool = createTool({
       return { title: nextTitle, renamed: false };
     }
 
-    const agent = await context.mastra?.getAgent('weatherAgent');
+    const agent = await context.mastra?.getAgent('mageHandAgent');
     const memory = await agent?.getMemory();
     if (!memory) {
       return { title: nextTitle, renamed: false };

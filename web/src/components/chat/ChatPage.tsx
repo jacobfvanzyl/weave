@@ -1,9 +1,25 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { PanelLeft, Settings } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
 import { useChatStore } from '../../stores/chat-store';
 import { AssistantChat } from './AssistantChat';
 import { ThreadSidebar } from './ThreadSidebar';
+
+const useIsMobilePortrait = () => {
+  const [isMobilePortrait, setIsMobilePortrait] = useState(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 767px) and (orientation: portrait)');
+    const sync = () => setIsMobilePortrait(mediaQuery.matches);
+
+    sync();
+    mediaQuery.addEventListener('change', sync);
+    return () => mediaQuery.removeEventListener('change', sync);
+  }, []);
+
+  return isMobilePortrait;
+};
 
 export const ChatPage = () => {
   const resourceId = useChatStore(state => state.resourceId);
@@ -12,11 +28,31 @@ export const ChatPage = () => {
   const runningThreadIds = useChatStore(state => state.runningThreadIds);
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const showToolCalls = useChatStore(state => state.showToolCalls);
+  const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
+  const isMobilePortrait = useIsMobilePortrait();
   const activeThread = threads.find(thread => thread.id === threadId);
+  const shouldShowTitle = Boolean(activeThread && activeThread.title !== 'New chat');
   const { data: serverThreads = [], isFetched } = useQuery({
     queryKey: ['threads', resourceId],
     queryFn: () => listServerThreads(resourceId),
   });
+
+  useEffect(() => {
+    if (!isSettingsOpen) return undefined;
+
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!settingsMenuRef.current?.contains(event.target as Node)) {
+        setIsSettingsOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    return () => document.removeEventListener('pointerdown', closeOnOutsideClick);
+  }, [isSettingsOpen]);
 
   useEffect(() => {
     if (serverThreads.length > 0) {
@@ -29,10 +65,49 @@ export const ChatPage = () => {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <ThreadSidebar />
+      {isSidebarOpen ? (
+        <>
+          <button
+            className="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm md:hidden"
+            aria-label="Close sidebar"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+          <ThreadSidebar closeOnSelect={isMobilePortrait} onClose={() => setIsSidebarOpen(false)} />
+        </>
+      ) : null}
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center border-b border-border bg-background/80 px-4">
-          <h2 className="truncate text-sm font-semibold text-foreground">{activeThread?.title || 'New chat'}</h2>
+        <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background/80 px-4">
+          <button
+            className="absolute left-4 rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+            onClick={() => setIsSidebarOpen(open => !open)}
+          >
+            <PanelLeft size={18} />
+          </button>
+          {shouldShowTitle ? (
+            <h2 className="max-w-[60%] truncate text-center text-sm font-semibold text-foreground">{activeThread?.title}</h2>
+          ) : null}
+          <div ref={settingsMenuRef} className="absolute right-4">
+            <button
+              className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              aria-label="Chat settings"
+              onClick={() => setIsSettingsOpen(open => !open)}
+            >
+              <Settings size={18} />
+            </button>
+            {isSettingsOpen ? (
+              <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-border bg-background p-2 text-sm shadow-lg">
+                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md px-3 py-2 text-foreground transition hover:bg-muted">
+                  <span>Show tool calls</span>
+                  <input
+                    type="checkbox"
+                    checked={showToolCalls}
+                    onChange={event => setShowToolCalls(event.target.checked)}
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
         </header>
         <div className="relative min-h-0 flex-1">
           {threads

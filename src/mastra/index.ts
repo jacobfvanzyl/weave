@@ -8,20 +8,20 @@ import { DuckDBStore } from "@mastra/duckdb";
 import { MastraCompositeStore } from '@mastra/core/storage';
 import { Observability, DefaultExporter, CloudExporter, SensitiveDataFilter } from '@mastra/observability';
 import { weatherWorkflow } from './workflows/weather-workflow';
-import { weatherAgent } from './agents/weather-agent';
+import { mageHandAgent } from './agents/mage-hand-agent';
 import { toolCallAppropriatenessScorer, completenessScorer, translationScorer } from './scorers/weather-scorer';
 import { chatStateRoutes } from './routes/chat-state';
 
 export const mastra = new Mastra({
   workflows: { weatherWorkflow },
-  agents: { weatherAgent },
+  agents: { mageHandAgent },
   scorers: { toolCallAppropriatenessScorer, completenessScorer, translationScorer },
   editor: new MastraEditor(),
   server: {
     apiRoutes: [
       chatRoute({
         path: '/chat',
-        agent: 'weather-agent',
+        agent: 'mage-hand',
         version: 'v6',
       }),
       ...chatStateRoutes,

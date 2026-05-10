@@ -61,3 +61,15 @@ textarea,
 input {
   font: inherit;
 }
+
+.shiki-code pre {
+  margin: 0;
+  overflow-x: auto;
+  background: transparent !important;
+}
+
+.shiki-code code {
+  display: block;
+  min-width: max-content;
+  background: transparent;
+}

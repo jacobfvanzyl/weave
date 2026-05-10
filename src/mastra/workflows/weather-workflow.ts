@@ -101,9 +101,9 @@ const planActivities = createStep({
       throw new Error('Forecast data not found')
     }
 
-    const agent = mastra?.getAgent('weatherAgent');
+    const agent = mastra?.getAgent('mageHandAgent');
     if (!agent) {
-      throw new Error('Weather agent not found');
+      throw new Error('Mage Hand agent not found');
     }
 
     const prompt = `Based on the following weather forecast for ${forecast.location}, suggest appropriate activities:

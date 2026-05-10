@@ -1,7 +1,7 @@
 import { registerApiRoute } from '@mastra/core/server';
 import type { MastraDBMessage } from '@mastra/core/agent';
 
-const agentId = 'weatherAgent';
+const agentId = 'mageHandAgent';
 
 const getToolInvocation = (part: Record<string, unknown>) =>
   typeof part.toolInvocation === 'object' && part.toolInvocation !== null
@@ -31,6 +31,20 @@ const getToolResult = (part: Record<string, unknown>) => {
 const toUiPart = (part: MastraDBMessage['content']['parts'][number]) => {
   if (part.type === 'text' && typeof (part as { text?: unknown }).text === 'string') {
     return { type: 'text', text: (part as { text: string }).text };
+  }
+
+  if (part.type === 'reasoning') {
+    const record = part as Record<string, unknown>;
+    const details = Array.isArray(record.details) ? record.details : [];
+    const text = details
+      .map(detail => typeof detail === 'object' && detail !== null ? (detail as { text?: unknown }).text : undefined)
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n\n')
+      .trim();
+    const fallback = typeof record.reasoning === 'string' ? record.reasoning.trim() : '';
+    const reasoning = text || fallback;
+
+    return reasoning ? { type: 'reasoning', text: reasoning } : null;
   }
 
   const record = part as Record<string, unknown>;
@@ -69,6 +83,34 @@ const toUiMessage = (message: MastraDBMessage) => ({
   metadata: message.content.metadata,
 });
 
+const getRenameTitle = (message: MastraDBMessage) => {
+  for (const part of message.content.parts) {
+    const record = part as Record<string, unknown>;
+    if (getToolName(record) !== 'renameThreadTool' && getToolName(record) !== 'rename-thread') continue;
+
+    const result = getToolResult(record);
+    if (typeof result === 'object' && result !== null && typeof (result as { title?: unknown }).title === 'string') {
+      return (result as { title: string }).title.trim();
+    }
+
+    const args = getToolArgs(record);
+    if (typeof args === 'object' && args !== null && typeof (args as { title?: unknown }).title === 'string') {
+      return (args as { title: string }).title.trim();
+    }
+  }
+
+  return '';
+};
+
+const getThreadTitleFromMessages = (messages: MastraDBMessage[]) => {
+  for (const message of messages) {
+    const title = getRenameTitle(message);
+    if (title) return title;
+  }
+
+  return '';
+};
+
 const getMemory = async (c: any) => {
   const mastra = c.get('mastra');
   if (!mastra) throw new Error('Mastra instance missing from route context');
@@ -104,7 +146,23 @@ export const chatStateRoutes = [
           orderBy: { field: 'updatedAt', direction: 'DESC' },
         });
 
-        return c.json({ threads: result.threads });
+        const threads = await Promise.all(
+          result.threads.map(async thread => {
+            if (thread.title && thread.title !== 'New chat') return thread;
+
+            const messages = await memory.recall({
+              threadId: thread.id,
+              resourceId,
+              perPage: false,
+              orderBy: { field: 'createdAt', direction: 'ASC' },
+            });
+            const title = getThreadTitleFromMessages(messages.messages);
+
+            return title ? { ...thread, title } : thread;
+          }),
+        );
+
+        return c.json({ threads });
       } catch (error) {
         return errorResponse(c, error);
       }
