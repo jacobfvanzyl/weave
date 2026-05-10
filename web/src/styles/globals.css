@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-user: var(--user);
+  --color-user-foreground: var(--user-foreground);
+  --color-success: var(--success);
+}
+
+:root,
+:root[data-theme="latte"] {
+  color-scheme: light;
+  --background: #eff1f5;
+  --foreground: #4c4f69;
+  --muted: #e6e9ef;
+  --muted-foreground: #6c6f85;
+  --border: #ccd0da;
+  --primary: #1e66f5;
+  --primary-foreground: #eff1f5;
+  --user: #1e66f5;
+  --user-foreground: #eff1f5;
+  --success: #40a02b;
+}
+
+:root[data-theme="mocha"] {
+  color-scheme: dark;
+  --background: #1e1e2e;
+  --foreground: #cdd6f4;
+  --muted: #313244;
+  --muted-foreground: #a6adc8;
+  --border: #45475a;
+  --primary: #89b4fa;
+  --primary-foreground: #1e1e2e;
+  --user: #89b4fa;
+  --user-foreground: #11111b;
+  --success: #a6e3a1;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}

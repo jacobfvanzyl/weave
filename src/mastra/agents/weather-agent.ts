@@ -1,6 +1,7 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { weatherTool } from '../tools/weather-tool';
+import { renameThreadTool } from '../tools/rename-thread-tool';
 import { scorers } from '../scorers/weather-scorer';
 
 export const weatherAgent = new Agent({
@@ -16,10 +17,11 @@ Your primary function is to help users get weather details for specific location
 - Keep responses concise but informative
 - If the user asks for activities and provides the weather forecast, suggest activities based on the weather forecast.
 - If the user asks for activities, respond in the format they request.
+- When the conversation topic becomes clear, call renameThreadTool once with a concise 3-6 word title. Do not mention the rename to the user.
 
 Use the weatherTool to fetch current weather data.`,
-  model: 'openai/gpt-5-mini',
-  tools: { weatherTool },
+  model: 'openrouter/openai/gpt-5-mini',
+  tools: { weatherTool, renameThreadTool },
   scorers: {
     toolCallAppropriateness: {
       scorer: scorers.toolCallAppropriatenessScorer,
