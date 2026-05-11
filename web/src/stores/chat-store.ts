@@ -39,7 +39,7 @@ const createLocalThread = (): ChatThread => {
 
   return {
     id: createId('thread'),
-    title: 'New chat',
+    title: '...',
     createdAt: now,
     updatedAt: now,
   };
@@ -67,15 +67,15 @@ export const useChatStore = create<ChatState>()(
           const activeThreads = threads.filter(thread => !deletedThreadIds.has(thread.id));
           const mappedServerThreads = activeThreads.map(serverThread => {
             const localThread = state.threads.find(thread => thread.id === serverThread.id);
-            return localThread?.title && localThread.title !== 'New chat' && serverThread.title === 'New chat'
-              ? { ...serverThread, title: localThread.title }
-              : serverThread;
+            const hasLocalTitle = localThread?.title && !['New chat', '...'].includes(localThread.title);
+            const hasPlaceholderServerTitle = !serverThread.title || ['New chat', '...'].includes(serverThread.title);
+            return hasLocalTitle && hasPlaceholderServerTitle ? { ...serverThread, title: localThread.title } : serverThread;
           });
           const optimisticThreads = state.threads.filter(
             localThread =>
               !deletedThreadIds.has(localThread.id) &&
               !activeThreads.some(serverThread => serverThread.id === localThread.id) &&
-              (activeThreads.length === 0 || state.hasInitializedThreads || localThread.title !== 'New chat'),
+              (activeThreads.length === 0 || state.hasInitializedThreads || !['New chat', '...'].includes(localThread.title)),
           );
           const nextThreads = activeThreads.length > 0 ? [...mappedServerThreads, ...optimisticThreads] : state.threads;
           const shouldSelectLastMessaged = !state.hasInitializedThreads && mappedServerThreads.length > 0;
@@ -163,9 +163,10 @@ export const useChatStore = create<ChatState>()(
       touchThread: (threadId, title, reorder = false) => {
         const now = new Date().toISOString();
         const existing = get().threads.find(thread => thread.id === threadId);
-        const threadTitle = title?.trim() || existing?.title || 'New chat';
+        const threadTitle = title?.trim() || existing?.title || '...';
+        const hasPlaceholderTitle = !existing?.title || ['New chat', '...'].includes(existing.title);
 
-        const shouldRename = title?.trim() && existing?.title === 'New chat';
+        const shouldRename = Boolean(title?.trim() && hasPlaceholderTitle);
         if (shouldRename) {
           void renameServerThread(threadId, threadTitle).catch(error => {
             const message = error instanceof Error ? error.message : String(error);
@@ -179,7 +180,7 @@ export const useChatStore = create<ChatState>()(
               thread.id === threadId
                 ? {
                     ...thread,
-                    title: thread.title === 'New chat' ? threadTitle : thread.title,
+                    title: ['New chat', '...'].includes(thread.title) ? threadTitle : thread.title,
                     updatedAt: reorder ? now : thread.updatedAt,
                   }
                 : thread,

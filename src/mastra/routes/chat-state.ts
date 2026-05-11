@@ -1,6 +1,7 @@
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { registerApiRoute } from '@mastra/core/server';
 import type { MastraDBMessage } from '@mastra/core/agent';
+import { getAuthUserFromHeader } from '../auth';
 
 const agentId = 'mageHandAgent';
 
@@ -139,6 +140,19 @@ const errorResponse = (c: any, error: unknown) => {
 };
 
 export const chatStateRoutes = [
+  registerApiRoute('/chat-state/me', {
+    method: 'GET',
+    handler: async c => {
+      try {
+        const user = getAuthUserFromHeader(c.req.header('Authorization'));
+        if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+        return c.json({ user: { id: user.id, name: user.name } });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
   registerApiRoute('/chat-state/threads', {
     method: 'GET',
     handler: async c => {
@@ -154,7 +168,7 @@ export const chatStateRoutes = [
 
         const threads = await Promise.all(
           result.threads.map(async thread => {
-            if (thread.title && thread.title !== 'New chat') return thread;
+            if (thread.title && !['New chat', '...'].includes(thread.title)) return thread;
 
             const messages = await memory.recall({
               threadId: thread.id,
@@ -181,7 +195,7 @@ export const chatStateRoutes = [
         const body = await c.req.json();
         const resourceId = getResourceId(c);
         const threadId = body?.threadId;
-        const title = body?.title ?? 'New chat';
+        const title = body?.title ?? '...';
 
         const memory = await getMemory(c);
         const thread = await memory.createThread({

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronUp, Loader2, MessageSquare, MessageSquarePlus, Moon, Sun, Trash2, X } from 'lucide-react';
 import { Button } from '../ui/button';
+import { getAuthUser } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { useChatStore } from '../../stores/chat-store';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
+import { MageHandIcon } from '../icons/MageHandIcon';
 
 const formatThreadTimestamp = (value: string) =>
   new Intl.DateTimeFormat(undefined, {
@@ -36,6 +38,12 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   const mode = useThemeStore(state => state.mode);
   const toggleMode = useThemeStore(state => state.toggleMode);
   const resolvedTheme = getResolvedTheme(mode);
+  const { data: authUser } = useQuery({
+    queryKey: ['auth-user'],
+    queryFn: getAuthUser,
+    staleTime: 1000 * 60 * 5,
+  });
+  const displayName = authUser?.name ?? '...';
 
   useEffect(() => {
     if (!isResourceMenuOpen) return undefined;
@@ -53,7 +61,10 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   return (
     <aside className="fixed inset-y-0 left-0 z-40 flex w-full shrink-0 flex-col border-r border-border bg-muted/95 p-4 shadow-xl backdrop-blur md:static md:z-auto md:w-80 md:bg-muted/50 md:shadow-none md:backdrop-blur-none">
       <div className="mb-6 flex items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold">Mage Hand</h1>
+        <h1 className="flex items-center gap-2 text-lg font-semibold">
+          <MageHandIcon className="h-6 w-6 text-mauve" />
+          <span>Mage Hand</span>
+        </h1>
         <button
           className="rounded-lg p-2 text-muted-foreground transition hover:bg-background/80 hover:text-foreground md:hidden"
           aria-label="Close sidebar"
@@ -147,7 +158,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
               <div className="h-8 w-8 shrink-0 rounded-full bg-primary/20 text-center text-xs font-semibold leading-8 text-primary">
                 U
               </div>
-              <span className="truncate">User</span>
+              <span className="truncate">{displayName}</span>
             </div>
             <ChevronUp size={14} className={cn('shrink-0 transition', isResourceMenuOpen ? 'rotate-180' : '')} />
           </div>

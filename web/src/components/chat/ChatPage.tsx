@@ -35,7 +35,7 @@ export const ChatPage = () => {
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
   const isMobilePortrait = useIsMobilePortrait();
   const activeThread = threads.find(thread => thread.id === threadId);
-  const shouldShowTitle = Boolean(activeThread && activeThread.title !== 'New chat');
+  const shouldShowTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
   const { data: serverThreads = [], isFetched } = useQuery({
     queryKey: ['threads', resourceId],
     queryFn: () => listServerThreads(),

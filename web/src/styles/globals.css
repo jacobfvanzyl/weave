@@ -11,6 +11,7 @@
   --color-user: var(--user);
   --color-user-foreground: var(--user-foreground);
   --color-success: var(--success);
+  --color-mauve: var(--mauve);
 }
 
 :root,
@@ -26,6 +27,7 @@
   --user: #1e66f5;
   --user-foreground: #eff1f5;
   --success: #40a02b;
+  --mauve: #8839ef;
 }
 
 :root[data-theme="mocha"] {
@@ -40,6 +42,7 @@
   --user: #89b4fa;
   --user-foreground: #11111b;
   --success: #a6e3a1;
+  --mauve: #cba6f7;
 }
 
 html,

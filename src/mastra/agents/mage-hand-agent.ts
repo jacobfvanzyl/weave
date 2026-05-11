@@ -1,9 +1,7 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
-import { weatherTool } from '../tools/weather-tool';
 import { renameThreadTool } from '../tools/rename-thread-tool';
 import { webExtractTool, webSearchTool } from '../tools/web-search-tools';
-import { scorers } from '../scorers/weather-scorer';
 
 export const mageHandAgent = new Agent({
   id: 'mage-hand',
@@ -29,10 +27,11 @@ Web capability:
 - Cite source URLs when using web information.
 - Do not use web tools for stable facts already known or project-local facts available in context.
 
-Weather capability:
-- Use weatherTool when the user asks for live weather or forecasts.
-- Ask for a location if weather is requested and no location is provided.
-- Include relevant details like humidity, wind conditions, and precipitation when available.`,
+Image display:
+- When showing an image in chat, use Markdown image syntax: ![short alt text](image-url).
+- Prefer HTTPS/public image URLs. Do not emit raw base64 images unless explicitly requested.
+- If a tool returns an imageUrl, render it as: ![alt](imageUrl).
+`,
     providerOptions: {
       openai: {
         reasoningEffort: 'medium',
@@ -40,29 +39,6 @@ Weather capability:
     },
   },
   model: 'openrouter/openai/gpt-5.4-mini',
-  tools: { weatherTool, renameThreadTool, webSearch: webSearchTool, webExtract: webExtractTool },
-  scorers: {
-    toolCallAppropriateness: {
-      scorer: scorers.toolCallAppropriatenessScorer,
-      sampling: {
-        type: 'ratio',
-        rate: 1,
-      },
-    },
-    completeness: {
-      scorer: scorers.completenessScorer,
-      sampling: {
-        type: 'ratio',
-        rate: 1,
-      },
-    },
-    translation: {
-      scorer: scorers.translationScorer,
-      sampling: {
-        type: 'ratio',
-        rate: 1,
-      },
-    },
-  },
+  tools: { renameThreadTool, webSearch: webSearchTool, webExtract: webExtractTool },
   memory: new Memory(),
 });

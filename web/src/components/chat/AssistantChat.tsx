@@ -21,6 +21,7 @@ import { cn } from '../../lib/cn';
 import { chatUrl, getAuthHeaders } from '../../lib/mastra-client';
 import { fetchModelsDevModelOptions, fallbackModelOptions, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
 import { useChatStore } from '../../stores/chat-store';
+import { MageHandIcon } from '../icons/MageHandIcon';
 import { CodeBlock } from './CodeBlock';
 
 const ThreadIdContext = createContext<string | null>(null);
@@ -140,14 +141,16 @@ const MarkdownImage = ({ alt, src }: { alt?: string; src?: string }) => {
   }
 
   return (
-    <img
-      alt={alt ?? ''}
-      src={src}
-      className="my-3 max-w-full rounded-lg border border-border"
-      loading="lazy"
-      referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
-    />
+    <div className="my-3 flex max-h-[80vh] max-w-full items-center justify-center overflow-hidden">
+      <img
+        alt={alt ?? ''}
+        src={src}
+        className="max-h-[calc(100dvh-var(--composer-height,0px)-theme(spacing.16))] max-w-full rounded-lg border border-border object-contain"
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+      />
+    </div>
   );
 };
 
@@ -196,8 +199,8 @@ const ThreadMessage = () => (
   <MessagePrimitive.Root className="w-full px-4 py-3">
     <MessagePrimitive.If assistant>
       <div className="flex justify-start gap-3">
-        <div className="mt-1 h-8 w-8 shrink-0 rounded-full bg-muted text-center text-xs font-semibold leading-8 text-muted-foreground">
-          A
+        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-mauve">
+          <MageHandIcon className="h-5 w-5" />
         </div>
         <div className="min-w-0 max-w-[78%] rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6 shadow-sm">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
@@ -338,21 +341,42 @@ const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
   return null;
 };
 
-const Thread = () => (
-  <ThreadPrimitive.Root className="flex h-full flex-col bg-background">
-    <ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto">
-      <ThreadPrimitive.Empty>
-        <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center px-6 text-center">
-          <img src="/mage-hand.png" alt="" className="h-24 w-24 object-contain" />
-        </div>
-      </ThreadPrimitive.Empty>
-      <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
-    </ThreadPrimitive.Viewport>
-    <div className="shrink-0 bg-gradient-to-t from-background via-background p-4">
-      <Composer />
-    </div>
-  </ThreadPrimitive.Root>
-);
+const Thread = () => {
+  const composerRef = useRef<HTMLDivElement>(null);
+  const [composerHeight, setComposerHeight] = useState(0);
+
+  useEffect(() => {
+    const composer = composerRef.current;
+    if (!composer) return undefined;
+
+    const updateComposerHeight = () => setComposerHeight(composer.getBoundingClientRect().height);
+    updateComposerHeight();
+
+    const resizeObserver = new ResizeObserver(updateComposerHeight);
+    resizeObserver.observe(composer);
+
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  return (
+    <ThreadPrimitive.Root
+      className="flex h-full flex-col bg-background"
+      style={{ '--composer-height': `${composerHeight}px` } as React.CSSProperties}
+    >
+      <ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto">
+        <ThreadPrimitive.Empty>
+          <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center px-6 text-center">
+            <MageHandIcon className="h-24 w-24 text-mauve" />
+          </div>
+        </ThreadPrimitive.Empty>
+        <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
+      </ThreadPrimitive.Viewport>
+      <div ref={composerRef} className="shrink-0 bg-gradient-to-t from-background via-background p-4">
+        <Composer />
+      </div>
+    </ThreadPrimitive.Root>
+  );
+};
 
 type AssistantChatProps = {
   threadId: string;

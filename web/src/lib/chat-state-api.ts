@@ -13,7 +13,7 @@ type ServerThread = {
 
 const toChatThread = (thread: ServerThread): ChatThread => ({
   id: thread.id,
-  title: thread.title || 'New chat',
+  title: thread.title || '...',
   createdAt: thread.createdAt,
   updatedAt: thread.updatedAt,
 });
@@ -24,6 +24,19 @@ const parseJson = async <T>(response: Response): Promise<T> => {
   }
 
   return response.json() as Promise<T>;
+};
+
+export type AuthUser = {
+  id: string;
+  name: string;
+};
+
+export const getAuthUser = async () => {
+  const result = await parseJson<{ user: AuthUser }>(
+    await fetch(`${mastraUrl}/chat-state/me`, { headers: getAuthHeaders() }),
+  );
+
+  return result.user;
 };
 
 export const listServerThreads = async () => {
@@ -39,7 +52,7 @@ export const createServerThread = async (threadId: string) => {
     await fetch(`${mastraUrl}/chat-state/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title: 'New chat' }),
+      body: JSON.stringify({ threadId, title: '...' }),
     }),
   );
 
