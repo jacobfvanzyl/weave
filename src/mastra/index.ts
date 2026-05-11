@@ -10,6 +10,7 @@ import { MastraCompositeStore } from '@mastra/core/storage';
 import { Observability, DefaultExporter, CloudExporter, SensitiveDataFilter } from '@mastra/observability';
 import { mageHandAgent } from './agents/mage-hand-agent';
 import { chatStateRoutes } from './routes/chat-state';
+import { promptRoutes } from './routes/prompts';
 import { parseAuthTokens, type SimpleAuthUser } from './auth';
 
 const storageUrl = process.env.TURSO_DATABASE_URL ?? process.env.MASTRA_STORAGE_URL ?? 'file:./mastra.db';
@@ -30,6 +31,7 @@ export const mastra = new Mastra({
         version: 'v6',
       }),
       ...chatStateRoutes,
+      ...promptRoutes,
     ],
   },
   storage: new MastraCompositeStore({

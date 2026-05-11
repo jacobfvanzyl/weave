@@ -4,6 +4,8 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useAui,
+  useAuiState,
   useThread,
 } from '@assistant-ui/react';
 import type { ReasoningMessagePartProps, ToolCallMessagePartProps } from '@assistant-ui/react';
@@ -18,8 +20,10 @@ import { Loader2, Plus, Send } from 'lucide-react';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
+import { fuzzyScore } from '../../lib/fuzzy';
 import { chatUrl, getAuthHeaders } from '../../lib/mastra-client';
 import { fetchModelsDevModelOptions, fallbackModelOptions, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
+import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
 import { useChatStore } from '../../stores/chat-store';
 import { MageHandIcon } from '../icons/MageHandIcon';
 import { CodeBlock } from './CodeBlock';
@@ -32,6 +36,8 @@ const isEmptyObject = (value: unknown) =>
 
 const isDegradedToolCall = ({ toolName, args, result }: Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result'>) =>
   (toolName === 'call' || toolName === 'tool') && isEmptyObject(args) && result === undefined;
+
+const isRenameThreadTool = (toolName: string) => ['renameThreadTool', 'rename-thread'].includes(toolName);
 
 const Reasoning = ({ text }: ReasoningMessagePartProps) => (
   <details className="my-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
@@ -53,7 +59,7 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
   const displayStatus = display.result !== undefined ? (display.isError ? 'error' : 'complete') : display.status.type;
 
   useEffect(() => {
-    if (!['renameThreadTool', 'rename-thread'].includes(display.toolName)) return;
+    if (!isRenameThreadTool(display.toolName)) return;
 
     const args = display.args as { title?: unknown } | undefined;
     const result = display.result as { renamed?: unknown; title?: unknown } | undefined;
@@ -76,7 +82,7 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
     });
   }
 
-  if (!showToolCalls) return null;
+  if (isRenameThreadTool(display.toolName) || !showToolCalls) return null;
 
   return (
     <details className="my-2 rounded-lg border border-border bg-background/70 px-3 py-2 text-xs" open={displayStatus === 'running'}>
@@ -121,6 +127,42 @@ const emptyThreadPlaceholders = [
 
 const getRandomEmptyThreadPlaceholder = () =>
   emptyThreadPlaceholders[Math.floor(Math.random() * emptyThreadPlaceholders.length)];
+
+const slashCommandPattern = /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/;
+
+const parseSlashCommand = (text: string) => {
+  const match = slashCommandPattern.exec(text.trim());
+  if (!match) return null;
+  return { name: match[1], args: match[2] ?? '' };
+};
+
+const getMessageText = (message: UIMessage) =>
+  message.parts
+    ?.filter((part): part is { type: 'text'; text: string } =>
+      Boolean(part.type === 'text' && 'text' in part && typeof part.text === 'string'),
+    )
+    .map(part => part.text)
+    .join('') ?? '';
+
+const withLastUserText = (messages: UIMessage[], text: string, metadata: Record<string, unknown>) => {
+  const nextMessages = [...messages];
+  let index = -1;
+  for (let messageIndex = nextMessages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    if (nextMessages[messageIndex].role === 'user') {
+      index = messageIndex;
+      break;
+    }
+  }
+  if (index === -1) return messages;
+
+  const message = nextMessages[index];
+  nextMessages[index] = {
+    ...message,
+    metadata: { ...(typeof message.metadata === 'object' && message.metadata ? message.metadata : {}), ...metadata },
+    parts: message.parts?.map(part => part.type === 'text' ? { ...part, text } : part),
+  };
+  return nextMessages;
+};
 
 const MarkdownImage = ({ alt, src }: { alt?: string; src?: string }) => {
   const [failed, setFailed] = useState(false);
@@ -265,7 +307,7 @@ const ModelPicker = () => {
           const resolvedModel = resolveModelInput(event.target.value);
           if (resolvedModel) setSelectedModel(resolvedModel);
         }}
-        className="h-10 w-64 rounded-lg bg-transparent px-2 text-right text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50"
+        className="h-10 w-64 rounded-lg bg-transparent px-2 text-right text-base leading-6 text-foreground outline-none transition placeholder:text-muted-foreground focus:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50"
       />
       <datalist id="weave-models">
         {modelOptions.map(model => (
@@ -276,17 +318,145 @@ const ModelPicker = () => {
   );
 };
 
-const Composer = () => {
-  const isEmpty = useThread(state => state.messages.length === 0 && !state.isLoading);
-  const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
+const PromptSlashMenu = ({
+  prompts,
+  query,
+  activeIndex,
+  onSelect,
+}: {
+  prompts: PromptSummary[];
+  query: string;
+  activeIndex: number;
+  onSelect: (prompt: PromptSummary) => void;
+}) => {
+  const matches = prompts
+    .map(prompt => ({
+      prompt,
+      score: Math.max(
+        fuzzyScore(query, prompt.name),
+        fuzzyScore(query, prompt.description),
+        ...prompt.tags.map(tag => fuzzyScore(query, tag)),
+      ),
+    }))
+    .filter(match => match.score > 0)
+    .sort((a, b) => b.score - a.score || a.prompt.name.localeCompare(b.prompt.name))
+    .slice(0, 8);
+
+  if (matches.length === 0) return null;
 
   return (
-    <ComposerPrimitive.Root className="mx-0 rounded-[2rem] border border-border bg-muted/70 px-6 py-5 shadow-lg sm:mx-11">
+    <div className="absolute bottom-full left-0 z-20 mb-3 w-full overflow-hidden rounded-xl border border-border bg-background shadow-xl">
+      {matches.map(({ prompt }, index) => (
+        <button
+          key={prompt.name}
+          type="button"
+          onMouseDown={event => {
+            event.preventDefault();
+            onSelect(prompt);
+          }}
+          className={cn(
+            'flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition',
+            index === activeIndex ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
+          )}
+        >
+          <span className="w-28 shrink-0 font-bold text-primary">/{prompt.name}</span>
+          {prompt.argumentHint ? <span className="shrink-0 text-xs text-muted-foreground">{prompt.argumentHint}</span> : null}
+          <span className="min-w-0 truncate">— {prompt.description}</span>
+        </button>
+      ))}
+    </div>
+  );
+};
+
+const SlashHighlightedInput = ({
+  value,
+  placeholder,
+  knownPromptNames,
+  onKeyDown,
+}: {
+  value: string;
+  placeholder: string;
+  knownPromptNames: Set<string>;
+  onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
+}) => {
+  const match = /^(\/[a-zA-Z0-9_-]+)([\s\S]*)$/.exec(value);
+  const commandName = match?.[1].slice(1);
+  const isKnownCommand = Boolean(commandName && knownPromptNames.has(commandName));
+
+  return (
+    <div className="relative text-base leading-6">
+      {match && isKnownCommand ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 min-h-10 overflow-hidden whitespace-pre-wrap break-words p-0 font-[inherit] leading-6 text-foreground"
+        >
+          <span className="font-bold text-primary">{match[1]}</span>
+          <span>{match[2] || ' '}</span>
+        </div>
+      ) : null}
       <ComposerPrimitive.Input
         autoFocus
-        placeholder={isEmpty ? emptyPlaceholder : ''}
-        className="min-h-10 w-full resize-none bg-transparent text-xl outline-none placeholder:text-muted-foreground"
+        placeholder={placeholder}
+        onKeyDown={onKeyDown}
+        className={cn(
+          'relative min-h-10 w-full resize-none bg-transparent p-0 text-base leading-6 outline-none placeholder:text-muted-foreground',
+          match && isKnownCommand && 'text-transparent caret-foreground',
+        )}
       />
+    </div>
+  );
+};
+
+const Composer = () => {
+  const aui = useAui();
+  const isEmpty = useThread(state => state.messages.length === 0 && !state.isLoading);
+  const composerText = useAuiState(state => state.composer.text);
+  const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
+  const { data: prompts = [] } = useQuery({ queryKey: ['prompts'], queryFn: listPrompts, staleTime: 1000 * 60 });
+  const knownPromptNames = useMemo(() => new Set(prompts.map(prompt => prompt.name)), [prompts]);
+  const promptMatches = prompts
+    .map(prompt => ({
+      prompt,
+      score: Math.max(
+        fuzzyScore(slashMatch?.[1] ?? '', prompt.name),
+        fuzzyScore(slashMatch?.[1] ?? '', prompt.description),
+        ...prompt.tags.map(tag => fuzzyScore(slashMatch?.[1] ?? '', tag)),
+      ),
+    }))
+    .filter(match => slashMatch && match.score > 0)
+    .sort((a, b) => b.score - a.score || a.prompt.name.localeCompare(b.prompt.name));
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [slashMatch?.[1]]);
+
+  const selectPrompt = (prompt: PromptSummary) => {
+    aui.composer().setText(`/${prompt.name} `);
+    setActiveIndex(0);
+  };
+
+  const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = event => {
+    if (!slashMatch || promptMatches.length === 0) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveIndex(index => (index + 1) % Math.min(promptMatches.length, 8));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveIndex(index => (index - 1 + Math.min(promptMatches.length, 8)) % Math.min(promptMatches.length, 8));
+    } else if (event.key === 'Tab' || event.key === 'Enter') {
+      event.preventDefault();
+      selectPrompt(promptMatches[Math.min(activeIndex, promptMatches.length - 1)].prompt);
+    } else if (event.key === 'Escape') {
+      setActiveIndex(0);
+    }
+  };
+
+  return (
+    <ComposerPrimitive.Root className="relative mx-0 rounded-[2rem] border border-border bg-muted/70 px-6 py-5 shadow-lg sm:mx-11">
+      {slashMatch ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
+      <SlashHighlightedInput value={composerText} placeholder={isEmpty ? emptyPlaceholder : ''} knownPromptNames={knownPromptNames} onKeyDown={handleKeyDown} />
     <div className="mt-2 flex items-center gap-3">
       <button
         type="button"
@@ -391,21 +561,23 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
     () =>
       new AssistantChatTransport({
         api: chatUrl,
-        prepareSendMessagesRequest({ messages }) {
-          const firstUserText = messages
-            .find(message => message.role === 'user')
-            ?.parts?.filter((part): part is { type: 'text'; text: string } =>
-              Boolean(part.type === 'text' && 'text' in part && typeof part.text === 'string'),
-            )
-            .map(part => part.text)
-            .join(' ')
-            .trim();
+        async prepareSendMessagesRequest({ messages }) {
+          const firstUserText = messages.find(message => message.role === 'user') ? getMessageText(messages.find(message => message.role === 'user')!).trim() : '';
+          const lastUserText = getMessageText([...messages].reverse().find(message => message.role === 'user') ?? messages[messages.length - 1]).trim();
+          const slashCommand = parseSlashCommand(lastUserText);
+          const requestMessages = slashCommand
+            ? withLastUserText(messages, await expandPrompt(slashCommand.name, slashCommand.args), {
+                slashCommandOriginalText: lastUserText,
+                slashCommandName: slashCommand.name,
+              })
+            : messages;
+
           useChatStore.getState().touchThread(threadId, firstUserText?.slice(0, 64), true);
 
           return {
             headers: getAuthHeaders(),
             body: {
-              messages,
+              messages: requestMessages,
               model: selectedModel,
               memory: {
                 thread: threadId,

@@ -77,13 +77,20 @@ const toUiPart = (part: MastraDBMessage['content']['parts'][number]) => {
   };
 };
 
-const toUiMessage = (message: MastraDBMessage) => ({
-  id: message.id,
-  role: message.role,
-  parts: message.content.parts.map(toUiPart).filter(part => part !== null),
-  status: message.role === 'assistant' ? { type: 'complete' } : undefined,
-  metadata: message.content.metadata,
-});
+const toUiMessage = (message: MastraDBMessage) => {
+  const metadata = message.content.metadata as Record<string, unknown> | undefined;
+  const originalText = message.role === 'user' && typeof metadata?.slashCommandOriginalText === 'string'
+    ? metadata.slashCommandOriginalText
+    : undefined;
+
+  return {
+    id: message.id,
+    role: message.role,
+    parts: originalText ? [{ type: 'text', text: originalText }] : message.content.parts.map(toUiPart).filter(part => part !== null),
+    status: message.role === 'assistant' ? { type: 'complete' } : undefined,
+    metadata: message.content.metadata,
+  };
+};
 
 const getRenameTitle = (message: MastraDBMessage) => {
   for (const part of message.content.parts) {
