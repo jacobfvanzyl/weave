@@ -38,7 +38,7 @@ export const ChatPage = () => {
   const shouldShowTitle = Boolean(activeThread && activeThread.title !== 'New chat');
   const { data: serverThreads = [], isFetched } = useQuery({
     queryKey: ['threads', resourceId],
-    queryFn: () => listServerThreads(resourceId),
+    queryFn: () => listServerThreads(),
   });
 
   useEffect(() => {

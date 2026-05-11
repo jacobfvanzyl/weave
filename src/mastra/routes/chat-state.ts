@@ -1,3 +1,4 @@
+import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { registerApiRoute } from '@mastra/core/server';
 import type { MastraDBMessage } from '@mastra/core/agent';
 
@@ -125,6 +126,12 @@ const getMemory = async (c: any) => {
   return memory;
 };
 
+const getResourceId = (c: any) => {
+  const resourceId = c.get('requestContext')?.get(MASTRA_RESOURCE_ID_KEY);
+  if (typeof resourceId !== 'string' || !resourceId) throw new Error('Authenticated resource missing');
+  return resourceId;
+};
+
 const errorResponse = (c: any, error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error('[chat-state]', error);
@@ -136,8 +143,7 @@ export const chatStateRoutes = [
     method: 'GET',
     handler: async c => {
       try {
-        const resourceId = c.req.query('resourceId');
-        if (!resourceId) return c.json({ error: 'resourceId is required' }, 400);
+        const resourceId = getResourceId(c);
 
         const memory = await getMemory(c);
         const result = await memory.listThreads({
@@ -173,11 +179,9 @@ export const chatStateRoutes = [
     handler: async c => {
       try {
         const body = await c.req.json();
-        const resourceId = body?.resourceId;
+        const resourceId = getResourceId(c);
         const threadId = body?.threadId;
         const title = body?.title ?? 'New chat';
-
-        if (!resourceId) return c.json({ error: 'resourceId is required' }, 400);
 
         const memory = await getMemory(c);
         const thread = await memory.createThread({
@@ -197,9 +201,8 @@ export const chatStateRoutes = [
     method: 'GET',
     handler: async c => {
       try {
-        const resourceId = c.req.query('resourceId');
+        const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
-        if (!resourceId) return c.json({ error: 'resourceId is required' }, 400);
 
         const memory = await getMemory(c);
         const result = await memory.recall({
@@ -221,9 +224,8 @@ export const chatStateRoutes = [
     method: 'GET',
     handler: async c => {
       try {
-        const resourceId = c.req.query('resourceId');
+        const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
-        if (!resourceId) return c.json({ error: 'resourceId is required' }, 400);
 
         const memory = await getMemory(c);
         const result = await memory.recall({
@@ -245,11 +247,10 @@ export const chatStateRoutes = [
     method: 'PATCH',
     handler: async c => {
       try {
-        const resourceId = c.req.query('resourceId');
+        const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
         const body = await c.req.json();
         const title = typeof body?.title === 'string' ? body.title.trim() : '';
-        if (!resourceId) return c.json({ error: 'resourceId is required' }, 400);
         if (!title) return c.json({ error: 'title is required' }, 400);
 
         const memory = await getMemory(c);
@@ -272,9 +273,8 @@ export const chatStateRoutes = [
     method: 'DELETE',
     handler: async c => {
       try {
-        const resourceId = c.req.query('resourceId');
+        const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
-        if (!resourceId) return c.json({ error: 'resourceId is required' }, 400);
 
         const memory = await getMemory(c);
         const thread = await memory.getThreadById({ threadId });

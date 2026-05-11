@@ -2,6 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { weatherTool } from '../tools/weather-tool';
 import { renameThreadTool } from '../tools/rename-thread-tool';
+import { webExtractTool, webSearchTool } from '../tools/web-search-tools';
 import { scorers } from '../scorers/weather-scorer';
 
 export const mageHandAgent = new Agent({
@@ -22,6 +23,12 @@ Act as a capable general-purpose collaborator:
 - Preserve user intent. Avoid unnecessary refusal, moralizing, or over-explaining.
 - When the conversation topic becomes clear, call renameThreadTool once with a concise 3-6 word title. Do not mention the rename to the user.
 
+Web capability:
+- Use webSearch when the user asks for current, recent, external, or source-backed information that may not be in your context.
+- Use webExtract on the best result URLs when full source content is needed before answering.
+- Cite source URLs when using web information.
+- Do not use web tools for stable facts already known or project-local facts available in context.
+
 Weather capability:
 - Use weatherTool when the user asks for live weather or forecasts.
 - Ask for a location if weather is requested and no location is provided.
@@ -33,7 +40,7 @@ Weather capability:
     },
   },
   model: 'openrouter/openai/gpt-5.4-mini',
-  tools: { weatherTool, renameThreadTool },
+  tools: { weatherTool, renameThreadTool, webSearch: webSearchTool, webExtract: webExtractTool },
   scorers: {
     toolCallAppropriateness: {
       scorer: scorers.toolCallAppropriatenessScorer,

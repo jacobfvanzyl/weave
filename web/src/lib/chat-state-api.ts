@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { mastraUrl } from './mastra-client';
+import { getAuthHeaders, mastraUrl } from './mastra-client';
 import type { ChatThread } from '../stores/chat-store';
 
 type ServerThread = {
@@ -26,33 +26,31 @@ const parseJson = async <T>(response: Response): Promise<T> => {
   return response.json() as Promise<T>;
 };
 
-export const listServerThreads = async (resourceId: string) => {
-  const params = new URLSearchParams({ resourceId });
+export const listServerThreads = async () => {
   const result = await parseJson<{ threads: ServerThread[] }>(
-    await fetch(`${mastraUrl}/chat-state/threads?${params}`),
+    await fetch(`${mastraUrl}/chat-state/threads`, { headers: getAuthHeaders() }),
   );
 
   return result.threads.map(toChatThread);
 };
 
-export const createServerThread = async (resourceId: string, threadId: string) => {
+export const createServerThread = async (threadId: string) => {
   const result = await parseJson<{ thread: ServerThread }>(
     await fetch(`${mastraUrl}/chat-state/threads`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ resourceId, threadId, title: 'New chat' }),
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ threadId, title: 'New chat' }),
     }),
   );
 
   return toChatThread(result.thread);
 };
 
-export const renameServerThread = async (resourceId: string, threadId: string, title: string) => {
-  const params = new URLSearchParams({ resourceId });
+export const renameServerThread = async (threadId: string, title: string) => {
   const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(`${mastraUrl}/chat-state/threads/${threadId}?${params}`, {
+    await fetch(`${mastraUrl}/chat-state/threads/${threadId}`, {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ title }),
     }),
   );
@@ -60,15 +58,15 @@ export const renameServerThread = async (resourceId: string, threadId: string, t
   return toChatThread(result.thread);
 };
 
-export const deleteServerThread = async (resourceId: string, threadId: string) => {
-  const params = new URLSearchParams({ resourceId });
-  await parseJson<{ ok: true }>(await fetch(`${mastraUrl}/chat-state/threads/${threadId}?${params}`, { method: 'DELETE' }));
+export const deleteServerThread = async (threadId: string) => {
+  await parseJson<{ ok: true }>(
+    await fetch(`${mastraUrl}/chat-state/threads/${threadId}`, { method: 'DELETE', headers: getAuthHeaders() }),
+  );
 };
 
-export const listServerMessages = async (resourceId: string, threadId: string) => {
-  const params = new URLSearchParams({ resourceId });
+export const listServerMessages = async (threadId: string) => {
   const result = await parseJson<{ messages: UIMessage[] }>(
-    await fetch(`${mastraUrl}/chat-state/threads/${threadId}/messages?${params}`),
+    await fetch(`${mastraUrl}/chat-state/threads/${threadId}/messages`, { headers: getAuthHeaders() }),
   );
 
   return result.messages;

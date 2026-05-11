@@ -91,11 +91,10 @@ export const useChatStore = create<ChatState>()(
           };
         }),
       newThread: async () => {
-        const resourceId = get().resourceId;
         const localThread = createLocalThread();
         set(state => ({ threadId: localThread.id, threads: [localThread, ...state.threads] }));
 
-        const serverThread = await createServerThread(resourceId, localThread.id);
+        const serverThread = await createServerThread(localThread.id);
         set(state => ({
           threadId: serverThread.id,
           threads: [serverThread, ...state.threads.filter(thread => thread.id !== localThread.id)],
@@ -107,7 +106,6 @@ export const useChatStore = create<ChatState>()(
           completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
         })),
       deleteThread: async threadId => {
-        const resourceId = get().resourceId;
         const previousState = get();
 
         set(state => {
@@ -125,7 +123,7 @@ export const useChatStore = create<ChatState>()(
         });
 
         try {
-          await deleteServerThread(resourceId, threadId);
+          await deleteServerThread(threadId);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (message.includes('thread not found')) return;
@@ -169,7 +167,7 @@ export const useChatStore = create<ChatState>()(
 
         const shouldRename = title?.trim() && existing?.title === 'New chat';
         if (shouldRename) {
-          void renameServerThread(get().resourceId, threadId, threadTitle).catch(error => {
+          void renameServerThread(threadId, threadTitle).catch(error => {
             const message = error instanceof Error ? error.message : String(error);
             if (!message.includes('thread not found')) console.error('[chat-store] Failed to rename thread', error);
           });
@@ -193,7 +191,6 @@ export const useChatStore = create<ChatState>()(
     {
       name: 'weave-chat',
       partialize: state => ({
-        resourceId: state.resourceId,
         threadId: state.threadId,
         selectedModel: state.selectedModel,
         showToolCalls: state.showToolCalls,

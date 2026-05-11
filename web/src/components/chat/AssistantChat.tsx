@@ -18,7 +18,7 @@ import { Loader2, Plus, Send } from 'lucide-react';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
-import { chatUrl } from '../../lib/mastra-client';
+import { chatUrl, getAuthHeaders } from '../../lib/mastra-client';
 import { fetchModelsDevModelOptions, fallbackModelOptions, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
 import { useChatStore } from '../../stores/chat-store';
 import { CodeBlock } from './CodeBlock';
@@ -379,18 +379,18 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
           useChatStore.getState().touchThread(threadId, firstUserText?.slice(0, 64), true);
 
           return {
+            headers: getAuthHeaders(),
             body: {
               messages,
               model: selectedModel,
               memory: {
-                resource: resourceId,
                 thread: threadId,
               },
             },
           };
         },
       }),
-    [resourceId, selectedModel, threadId],
+    [selectedModel, threadId],
   );
 
   const runtime = useChatRuntime({
@@ -417,7 +417,7 @@ export const AssistantChat = ({ threadId }: AssistantChatProps) => {
   const resourceId = useChatStore(state => state.resourceId);
   const { data: initialMessages = [], isLoading } = useQuery({
     queryKey: ['thread-messages', resourceId, threadId],
-    queryFn: () => listServerMessages(resourceId, threadId),
+    queryFn: () => listServerMessages(threadId),
     staleTime: 0,
   });
 
