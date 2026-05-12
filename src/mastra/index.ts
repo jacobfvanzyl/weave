@@ -1,19 +1,28 @@
 
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Mastra } from '@mastra/core/mastra';
 import { SimpleAuth } from '@mastra/core/server';
 import { PinoLogger } from '@mastra/loggers';
 import { MastraEditor } from '@mastra/editor';
-import { chatRoute } from '@mastra/ai-sdk';
 import { LibSQLStore } from '@mastra/libsql';
 import { DuckDBStore } from "@mastra/duckdb";
 import { MastraCompositeStore } from '@mastra/core/storage';
 import { Observability, DefaultExporter, CloudExporter, SensitiveDataFilter } from '@mastra/observability';
 import { mageHandAgent } from './agents/mage-hand-agent';
+import { chatRoutes } from './routes/chat';
 import { chatStateRoutes } from './routes/chat-state';
 import { promptRoutes } from './routes/prompts';
+import { planesRoutes } from './routes/planes';
+import { portalSocketRoutes } from './routes/portal-socket';
 import { parseAuthTokens, type SimpleAuthUser } from './auth';
+import { startPortalWebSocketSidecar } from './portal/websocket-sidecar';
 
-const storageUrl = process.env.TURSO_DATABASE_URL ?? process.env.MASTRA_STORAGE_URL ?? 'file:./mastra.db';
+const localDataDir = join(process.cwd(), '.data');
+mkdirSync(localDataDir, { recursive: true });
+const localStorageUrl = pathToFileURL(join(localDataDir, 'mastra.db')).href;
+const storageUrl = process.env.TURSO_DATABASE_URL ?? process.env.MASTRA_STORAGE_URL ?? localStorageUrl;
 const storageAuthToken = process.env.TURSO_AUTH_TOKEN ?? process.env.MASTRA_STORAGE_AUTH_TOKEN;
 
 export const mastra = new Mastra({
@@ -25,13 +34,11 @@ export const mastra = new Mastra({
       mapUserToResourceId: user => user.id,
     }),
     apiRoutes: [
-      chatRoute({
-        path: '/chat',
-        agent: 'mage-hand',
-        version: 'v6',
-      }),
+      ...chatRoutes,
       ...chatStateRoutes,
       ...promptRoutes,
+      ...planesRoutes,
+      ...portalSocketRoutes,
     ],
   },
   storage: new MastraCompositeStore({
@@ -64,3 +71,5 @@ export const mastra = new Mastra({
     },
   }),
 });
+
+startPortalWebSocketSidecar(mastra);

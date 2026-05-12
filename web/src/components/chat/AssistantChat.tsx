@@ -16,7 +16,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Plus, Send } from 'lucide-react';
+import { Check, Clipboard, Loader2, Plus, Send } from 'lucide-react';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
@@ -57,6 +57,12 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
   const cached = toolCallCache.get(props.toolCallId);
   const display = isDegradedToolCall(props) && cached ? { ...props, ...cached } : props;
   const displayStatus = display.result !== undefined ? (display.isError ? 'error' : 'complete') : display.status.type;
+  const [isResultCopied, setIsResultCopied] = useState(false);
+  const resultText = display.result === undefined
+    ? ''
+    : typeof display.result === 'string'
+      ? display.result
+      : JSON.stringify(display.result, null, 2);
 
   useEffect(() => {
     if (!isRenameThreadTool(display.toolName)) return;
@@ -99,11 +105,26 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
         </div>
         {display.result !== undefined ? (
           <div>
-            <div className={display.isError ? 'mb-1 text-[10px] uppercase tracking-wide text-destructive' : 'mb-1 text-[10px] uppercase tracking-wide text-muted-foreground'}>
-              {display.isError ? 'Error' : 'Result'}
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <div className={display.isError ? 'text-[10px] uppercase tracking-wide text-destructive' : 'text-[10px] uppercase tracking-wide text-muted-foreground'}>
+                {display.isError ? 'Error' : 'Result'}
+              </div>
+              <button
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                type="button"
+                onClick={async event => {
+                  event.preventDefault();
+                  await navigator.clipboard.writeText(resultText);
+                  setIsResultCopied(true);
+                  window.setTimeout(() => setIsResultCopied(false), 1200);
+                }}
+              >
+                {isResultCopied ? <Check size={12} /> : <Clipboard size={12} />}
+                {isResultCopied ? 'Copied' : 'Copy'}
+              </button>
             </div>
             <pre className="overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-4 text-foreground">
-              {typeof display.result === 'string' ? display.result : JSON.stringify(display.result, null, 2)}
+              {resultText}
             </pre>
           </div>
         ) : null}
@@ -241,7 +262,7 @@ const ThreadMessage = () => (
   <MessagePrimitive.Root className="w-full px-4 py-3">
     <MessagePrimitive.If assistant>
       <div className="flex justify-start gap-3">
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-mauve">
+        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
           <MageHandIcon className="h-5 w-5" />
         </div>
         <div className="min-w-0 max-w-[78%] rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6 shadow-sm">
@@ -536,7 +557,7 @@ const Thread = () => {
       <ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto">
         <ThreadPrimitive.Empty>
           <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center px-6 text-center">
-            <MageHandIcon className="h-24 w-24 text-mauve" />
+            <MageHandIcon className="h-24 w-24 text-yellow" />
           </div>
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />

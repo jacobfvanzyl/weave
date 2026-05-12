@@ -4,6 +4,14 @@ import type { MastraDBMessage } from '@mastra/core/agent';
 import { getAuthUserFromHeader } from '../auth';
 
 const agentId = 'mageHandAgent';
+const hiddenThreadPrefixes = ['__plane__', '__portal__'];
+
+const isHiddenThread = (thread: { id: string; metadata?: unknown }) => {
+  const metadata = thread.metadata as Record<string, unknown> | undefined;
+  return hiddenThreadPrefixes.some(prefix => thread.id.startsWith(prefix)) || metadata?.kind === 'plane' || metadata?.kind === 'portal-token';
+};
+
+const timestampString = (value: unknown) => typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
 
 const getToolInvocation = (part: Record<string, unknown>) =>
   typeof part.toolInvocation === 'object' && part.toolInvocation !== null
@@ -174,7 +182,7 @@ export const chatStateRoutes = [
         });
 
         const threads = await Promise.all(
-          result.threads.map(async thread => {
+          result.threads.filter(thread => !isHiddenThread(thread)).map(async thread => {
             if (thread.title && !['New chat', '...'].includes(thread.title)) return thread;
 
             const messages = await memory.recall({
@@ -189,7 +197,13 @@ export const chatStateRoutes = [
           }),
         );
 
-        return c.json({ threads });
+        const sortedThreads = threads.sort((a, b) => {
+          const aOrder = typeof (a.metadata as Record<string, unknown> | undefined)?.sortOrder === 'number' ? (a.metadata as Record<string, number>).sortOrder : Number.MAX_SAFE_INTEGER;
+          const bOrder = typeof (b.metadata as Record<string, unknown> | undefined)?.sortOrder === 'number' ? (b.metadata as Record<string, number>).sortOrder : Number.MAX_SAFE_INTEGER;
+          return aOrder - bOrder || timestampString(b.updatedAt).localeCompare(timestampString(a.updatedAt));
+        });
+
+        return c.json({ threads: sortedThreads });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -203,16 +217,59 @@ export const chatStateRoutes = [
         const resourceId = getResourceId(c);
         const threadId = body?.threadId;
         const title = body?.title ?? '...';
+        const planeId = typeof body?.planeId === 'string' ? body.planeId : undefined;
+        const demiplaneId = typeof body?.demiplaneId === 'string' ? body.demiplaneId : undefined;
 
         const memory = await getMemory(c);
         const thread = await memory.createThread({
           resourceId,
           threadId,
           title,
+          metadata: planeId ? { mode: 'plane', planeId, demiplaneId } : { mode: 'plain' },
           saveThread: true,
         });
 
         return c.json({ thread });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/chat-state/threads/reorder', {
+    method: 'PATCH',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const body = await c.req.json();
+        const threadIds = Array.isArray(body?.threadIds) ? body.threadIds.filter((id: unknown) => typeof id === 'string') : [];
+        const scope = body?.scope as Record<string, unknown> | undefined;
+        const scopePlaneId = typeof scope?.planeId === 'string' ? scope.planeId : undefined;
+        const scopeDemiplaneId = typeof scope?.demiplaneId === 'string' ? scope.demiplaneId : undefined;
+        const plain = scope?.plain === true;
+
+        const memory = await getMemory(c);
+        const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
+        const visibleThreads = result.threads.filter(thread => !isHiddenThread(thread));
+        const scopedThreads = visibleThreads.filter(thread => {
+          const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
+          if (metadata.archived === true) return false;
+          if (plain) return metadata.mode !== 'plane' && typeof metadata.planeId !== 'string';
+          if (scopeDemiplaneId) return metadata.planeId === scopePlaneId && metadata.demiplaneId === scopeDemiplaneId;
+          if (scopePlaneId) return metadata.planeId === scopePlaneId && typeof metadata.demiplaneId !== 'string';
+          return false;
+        });
+        const scopedIds = new Set(scopedThreads.map(thread => thread.id));
+        if (threadIds.length !== scopedIds.size || threadIds.some(id => !scopedIds.has(id))) {
+          return c.json({ error: 'threadIds must include all threads in scope' }, 400);
+        }
+
+        await Promise.all(threadIds.map(async (id, index) => {
+          const thread = scopedThreads.find(item => item.id === id)!;
+          const metadata = { ...((thread.metadata ?? {}) as Record<string, unknown>), sortOrder: index };
+          await memory.updateThread({ id, title: thread.title, metadata });
+        }));
+
+        return c.json({ ok: true });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -272,16 +329,19 @@ export const chatStateRoutes = [
         const threadId = c.req.param('threadId');
         const body = await c.req.json();
         const title = typeof body?.title === 'string' ? body.title.trim() : '';
-        if (!title) return c.json({ error: 'title is required' }, 400);
+        const hasArchived = typeof body?.archived === 'boolean';
+        if (!title && !hasArchived) return c.json({ error: 'title or archived is required' }, 400);
 
         const memory = await getMemory(c);
         const thread = await memory.getThreadById({ threadId });
         if (!thread || thread.resourceId !== resourceId) return c.json({ error: 'thread not found' }, 404);
 
+        const metadata = { ...((thread.metadata ?? {}) as Record<string, unknown>) };
+        if (hasArchived) metadata.archived = body.archived;
         const updatedThread = await memory.updateThread({
           id: threadId,
-          title,
-          metadata: thread.metadata,
+          title: title || thread.title,
+          metadata,
         });
 
         return c.json({ thread: updatedThread });

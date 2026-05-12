@@ -11,11 +11,46 @@ type ServerThread = {
   metadata?: Record<string, unknown>;
 };
 
+export type Demiplane = {
+  id: string;
+  planeId: string;
+  workspaceKind: 'primary' | 'worktree';
+  name: string;
+  status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'error';
+  locked?: boolean;
+  branch?: string;
+  sortOrder?: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Plane = {
+  id: string;
+  userId: string;
+  name: string;
+  projectKind: 'standard' | 'git';
+  description?: string;
+  portalId?: string;
+  portalRootId?: string;
+  repoPath?: string;
+  gitRemote?: string;
+  defaultBranch?: string;
+  rootPathHint?: string;
+  sortOrder?: number;
+  demiplanes: Demiplane[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 const toChatThread = (thread: ServerThread): ChatThread => ({
   id: thread.id,
   title: thread.title || '...',
   createdAt: thread.createdAt,
   updatedAt: thread.updatedAt,
+  sortOrder: typeof thread.metadata?.sortOrder === 'number' ? thread.metadata.sortOrder : undefined,
+  planeId: typeof thread.metadata?.planeId === 'string' ? thread.metadata.planeId : undefined,
+  demiplaneId: typeof thread.metadata?.demiplaneId === 'string' ? thread.metadata.demiplaneId : undefined,
+  archived: thread.metadata?.archived === true,
 });
 
 const parseJson = async <T>(response: Response): Promise<T> => {
@@ -47,12 +82,24 @@ export const listServerThreads = async () => {
   return result.threads.map(toChatThread);
 };
 
-export const createServerThread = async (threadId: string) => {
+export const createServerThread = async (threadId: string, planeId?: string, demiplaneId?: string) => {
   const result = await parseJson<{ thread: ServerThread }>(
     await fetch(`${mastraUrl}/chat-state/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title: '...' }),
+      body: JSON.stringify({ threadId, title: '...', planeId, demiplaneId }),
+    }),
+  );
+
+  return toChatThread(result.thread);
+};
+
+export const archiveServerThread = async (threadId: string, archived = true) => {
+  const result = await parseJson<{ thread: ServerThread }>(
+    await fetch(`${mastraUrl}/chat-state/threads/${threadId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ archived }),
     }),
   );
 
@@ -74,6 +121,108 @@ export const renameServerThread = async (threadId: string, title: string) => {
 export const deleteServerThread = async (threadId: string) => {
   await parseJson<{ ok: true }>(
     await fetch(`${mastraUrl}/chat-state/threads/${threadId}`, { method: 'DELETE', headers: getAuthHeaders() }),
+  );
+};
+
+export const listPlanes = async () => {
+  const result = await parseJson<{ planes: Plane[] }>(
+    await fetch(`${mastraUrl}/planes`, { headers: getAuthHeaders() }),
+  );
+
+  return result.planes;
+};
+
+export type PortalConnection = {
+  portalId: string;
+  userId: string;
+  name?: string;
+  roots: unknown[];
+  status: 'online' | 'offline';
+};
+
+export const listPortals = async () => {
+  const result = await parseJson<{ portals: PortalConnection[] }>(
+    await fetch(`${mastraUrl}/portals`, { headers: getAuthHeaders() }),
+  );
+
+  return result.portals;
+};
+
+export const browsePortal = async (portalId: string, rootId = 'default', path = '') => {
+  const params = new URLSearchParams({ rootId, path });
+  return parseJson<Record<string, unknown>>(
+    await fetch(`${mastraUrl}/portals/${portalId}/browse?${params}`, { headers: getAuthHeaders() }),
+  );
+};
+
+export const createPlane = async (input: string | { name: string; projectKind?: 'standard' | 'git'; portalId?: string; rootId?: string; repoPath?: string }) => {
+  const body = typeof input === 'string' ? { name: input, projectKind: 'standard' } : input;
+  const result = await parseJson<{ plane: Plane }>(
+    await fetch(`${mastraUrl}/planes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify(body),
+    }),
+  );
+
+  return result.plane;
+};
+
+export const reorderPlanes = async (planeIds: string[]) => {
+  const result = await parseJson<{ planes: Plane[] }>(
+    await fetch(`${mastraUrl}/planes/reorder`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ planeIds }),
+    }),
+  );
+
+  return result.planes;
+};
+
+export const createDemiplane = async (planeId: string, name: string) => {
+  const result = await parseJson<{ plane: Plane; demiplane: Demiplane }>(
+    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ name }),
+    }),
+  );
+
+  return result.demiplane;
+};
+
+export const reorderDemiplanes = async (planeId: string, demiplaneIds: string[]) => {
+  const result = await parseJson<{ plane: Plane }>(
+    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes/reorder`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ demiplaneIds }),
+    }),
+  );
+
+  return result.plane;
+};
+
+export const createPlaneThread = async (planeId: string, threadId: string, demiplaneId?: string) => {
+  const result = await parseJson<{ thread: ServerThread; demiplane: Demiplane }>(
+    await fetch(`${mastraUrl}/planes/${planeId}/threads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ threadId, title: '...', demiplaneId }),
+    }),
+  );
+
+  return { thread: toChatThread(result.thread), demiplane: result.demiplane };
+};
+
+export const reorderThreads = async (scope: { plain?: true; planeId?: string; demiplaneId?: string }, threadIds: string[]) => {
+  await parseJson<{ ok: true }>(
+    await fetch(`${mastraUrl}/chat-state/threads/reorder`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ scope, threadIds }),
+    }),
   );
 };
 

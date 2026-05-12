@@ -1,0 +1,19 @@
+{
+  "tasks": {
+    "check": "deno check src/main.ts",
+    "daemon": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run=bash,git,fd,rg,ls src/main.ts daemon",
+    "login": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts login"
+  },
+  "compilerOptions": {
+    "lib": ["deno.ns", "deno.window"]
+  },
+  "fmt": {
+    "singleQuote": true,
+    "lineWidth": 120
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  }
+}

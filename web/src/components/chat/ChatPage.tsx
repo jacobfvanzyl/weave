@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { PanelLeft, Settings } from 'lucide-react';
-import { listServerThreads } from '../../lib/chat-state-api';
+import { listPlanes, listServerThreads } from '../../lib/chat-state-api';
 import { useChatStore } from '../../stores/chat-store';
 import { AssistantChat } from './AssistantChat';
 import { ThreadSidebar } from './ThreadSidebar';
@@ -35,7 +35,15 @@ export const ChatPage = () => {
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
   const isMobilePortrait = useIsMobilePortrait();
   const activeThread = threads.find(thread => thread.id === threadId);
-  const shouldShowTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
+  const hasThreadTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
+  const { data: planes = [] } = useQuery({
+    queryKey: ['planes', resourceId],
+    queryFn: () => listPlanes(),
+  });
+  const activePlane = activeThread?.planeId ? planes.find(plane => plane.id === activeThread.planeId) : undefined;
+  const activeDemiplane = activeThread?.demiplaneId
+    ? activePlane?.demiplanes.find(demiplane => demiplane.id === activeThread.demiplaneId)
+    : undefined;
   const { data: serverThreads = [], isFetched } = useQuery({
     queryKey: ['threads', resourceId],
     queryFn: () => listServerThreads(),
@@ -84,8 +92,22 @@ export const ChatPage = () => {
           >
             <PanelLeft size={18} />
           </button>
-          {shouldShowTitle ? (
-            <h2 className="max-w-[60%] truncate text-center text-sm font-semibold text-foreground">{activeThread?.title}</h2>
+          {activePlane || hasThreadTitle ? (
+            <h2 className="flex max-w-[60%] items-center justify-center gap-1 truncate text-center text-sm font-semibold text-foreground">
+              {activePlane ? (
+                <>
+                  <span className="min-w-0 truncate text-mauve">{activePlane.name}</span>
+                  {activeDemiplane ? (
+                    <>
+                      <span className="shrink-0 text-muted-foreground">/</span>
+                      <span className="min-w-0 truncate text-success">{activeDemiplane.name}</span>
+                    </>
+                  ) : null}
+                  {hasThreadTitle ? <span className="shrink-0 text-muted-foreground">/</span> : null}
+                </>
+              ) : null}
+              {hasThreadTitle ? <span className="min-w-0 truncate text-foreground">{activeThread?.title}</span> : null}
+            </h2>
           ) : null}
           <div ref={settingsMenuRef} className="absolute right-4">
             <button

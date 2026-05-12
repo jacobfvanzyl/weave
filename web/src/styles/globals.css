@@ -11,7 +11,12 @@
   --color-user: var(--user);
   --color-user-foreground: var(--user-foreground);
   --color-success: var(--success);
+  --color-success-button: var(--success-button);
   --color-mauve: var(--mauve);
+  --color-mauve-button: var(--mauve-button);
+  --color-peach: var(--peach);
+  --color-yellow: var(--yellow);
+  --color-rosewater: var(--rosewater);
 }
 
 :root,
@@ -27,7 +32,12 @@
   --user: #1e66f5;
   --user-foreground: #eff1f5;
   --success: #40a02b;
+  --success-button: #a6e3a1;
   --mauve: #8839ef;
+  --mauve-button: #cba6f7;
+  --peach: #fe640b;
+  --yellow: #df8e1d;
+  --rosewater: #dc8a78;
 }
 
 :root[data-theme="mocha"] {
@@ -42,7 +52,12 @@
   --user: #89b4fa;
   --user-foreground: #11111b;
   --success: #a6e3a1;
+  --success-button: #a6e3a1;
   --mauve: #cba6f7;
+  --mauve-button: #cba6f7;
+  --peach: #fab387;
+  --yellow: #f9e2af;
+  --rosewater: #f5e0dc;
 }
 
 html,

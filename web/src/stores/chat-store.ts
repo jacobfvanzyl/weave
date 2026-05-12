@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { createServerThread, deleteServerThread, renameServerThread } from '../lib/chat-state-api';
+import { archiveServerThread, createPlaneThread, createServerThread, deleteServerThread, renameServerThread } from '../lib/chat-state-api';
 import { defaultModel } from '../lib/models';
 
 const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
@@ -10,6 +10,10 @@ export type ChatThread = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  sortOrder?: number;
+  planeId?: string;
+  demiplaneId?: string;
+  archived?: boolean;
 };
 
 type ChatState = {
@@ -25,8 +29,10 @@ type ChatState = {
   setSelectedModel: (model: string) => void;
   setShowToolCalls: (showToolCalls: boolean) => void;
   setServerThreads: (threads: ChatThread[]) => void;
-  newThread: () => Promise<void>;
+  newThread: (planeId?: string, demiplaneId?: string) => Promise<void>;
   setThreadId: (threadId: string) => void;
+  archiveThread: (threadId: string) => Promise<void>;
+  restoreThread: (threadId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<void>;
   touchThread: (threadId: string, title?: string, reorder?: boolean) => void;
   setThreadRunning: (threadId: string, running: boolean) => void;
@@ -90,11 +96,13 @@ export const useChatStore = create<ChatState>()(
             hasInitializedThreads: true,
           };
         }),
-      newThread: async () => {
-        const localThread = createLocalThread();
+      newThread: async (planeId, demiplaneId) => {
+        const localThread = { ...createLocalThread(), planeId, demiplaneId };
         set(state => ({ threadId: localThread.id, threads: [localThread, ...state.threads] }));
 
-        const serverThread = await createServerThread(localThread.id);
+        const serverThread = planeId
+          ? (await createPlaneThread(planeId, localThread.id, demiplaneId)).thread
+          : await createServerThread(localThread.id);
         set(state => ({
           threadId: serverThread.id,
           threads: [serverThread, ...state.threads.filter(thread => thread.id !== localThread.id)],
@@ -105,6 +113,25 @@ export const useChatStore = create<ChatState>()(
           threadId,
           completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
         })),
+      archiveThread: async threadId => {
+        set(state => {
+          const nextThreads = state.threads.map(thread => thread.id === threadId ? { ...thread, archived: true } : thread);
+          const visibleThreads = nextThreads.filter(thread => !thread.archived);
+          return {
+            threads: nextThreads,
+            threadId: state.threadId === threadId ? visibleThreads[0]?.id ?? state.threadId : state.threadId,
+            runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
+            completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
+          };
+        });
+        await archiveServerThread(threadId, true);
+      },
+      restoreThread: async threadId => {
+        set(state => ({
+          threads: state.threads.map(thread => thread.id === threadId ? { ...thread, archived: false } : thread),
+        }));
+        await archiveServerThread(threadId, false);
+      },
       deleteThread: async threadId => {
         const previousState = get();
 
