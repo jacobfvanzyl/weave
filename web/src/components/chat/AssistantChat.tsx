@@ -261,11 +261,11 @@ const MarkdownText = ({ text }: { text: string }) => (
 const ThreadMessage = () => (
   <MessagePrimitive.Root className="w-full px-4 py-3">
     <MessagePrimitive.If assistant>
-      <div className="flex justify-start gap-3">
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
+      <div className="chat-message-row flex justify-start gap-3">
+        <div className="chat-message-avatar mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
           <MageHandIcon className="h-5 w-5" />
         </div>
-        <div className="min-w-0 max-w-[78%] rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6 shadow-sm">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6 shadow-sm">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
           <div className="text-red-300">
             <MessagePrimitive.Error />
@@ -274,14 +274,14 @@ const ThreadMessage = () => (
       </div>
     </MessagePrimitive.If>
     <MessagePrimitive.If user>
-      <div className="flex justify-end gap-3">
-        <div className="min-w-0 max-w-[78%] rounded-xl border border-primary/40 bg-user px-4 py-3 text-sm leading-6 text-user-foreground shadow-sm">
+      <div className="chat-message-row flex justify-end gap-3">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-xl border border-primary/40 bg-user px-4 py-3 text-sm leading-6 text-user-foreground shadow-sm">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
           <div className="text-red-950">
             <MessagePrimitive.Error />
           </div>
         </div>
-        <div className="mt-1 h-8 w-8 shrink-0 rounded-full bg-user text-center text-xs font-semibold leading-8 text-user-foreground">
+        <div className="chat-message-avatar mt-1 h-8 w-8 shrink-0 rounded-full bg-user text-center text-xs font-semibold leading-8 text-user-foreground">
           U
         </div>
       </div>
@@ -316,7 +316,7 @@ const ModelPicker = () => {
   };
 
   return (
-    <div className="min-w-0 shrink-0">
+    <div className="model-picker min-w-0 shrink-0">
       <input
         aria-label="Model"
         list="weave-models"
@@ -478,26 +478,26 @@ const Composer = () => {
     <ComposerPrimitive.Root className="relative mx-0 rounded-[2rem] border border-border bg-muted/70 px-6 py-5 shadow-lg sm:mx-11">
       {slashMatch ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
       <SlashHighlightedInput value={composerText} placeholder={isEmpty ? emptyPlaceholder : ''} knownPromptNames={knownPromptNames} onKeyDown={handleKeyDown} />
-    <div className="mt-2 flex items-center gap-3">
-      <button
+      <div className="mt-2 flex items-center gap-3">
+        <button
         type="button"
         className="rounded-lg p-2 text-muted-foreground transition hover:bg-background/70 hover:text-foreground"
         aria-label="Add attachment"
       >
         <Plus size={24} />
       </button>
-      <div className="flex-1" />
-      <ModelPicker />
-      <AuiIf condition={state => !state.thread.isRunning}>
+        <div className="flex-1" />
+        <ModelPicker />
+        <AuiIf condition={state => !state.thread.isRunning}>
         <ComposerPrimitive.Send className="rounded-lg p-2 text-foreground transition hover:bg-background/70 disabled:opacity-40">
           <Send size={22} />
         </ComposerPrimitive.Send>
-      </AuiIf>
-      <AuiIf condition={state => state.thread.isRunning}>
+        </AuiIf>
+        <AuiIf condition={state => state.thread.isRunning}>
         <ComposerPrimitive.Cancel className="rounded-lg p-2 text-primary transition hover:bg-background/70">
           <Loader2 size={22} className="animate-spin" />
         </ComposerPrimitive.Cancel>
-      </AuiIf>
+        </AuiIf>
       </div>
     </ComposerPrimitive.Root>
   );
@@ -531,6 +531,47 @@ const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
 
   return null;
 };
+
+const IdleActiveThreadRefresher = ({ threadId }: { threadId: string }) => {
+  const queryClient = useQueryClient();
+  const resourceId = useChatStore(state => state.resourceId);
+  const activeThreadId = useChatStore(state => state.threadId);
+  const isRunning = useThread(state => state.isRunning);
+  const composerText = useAuiState(state => state.composer.text);
+  const [isComposerIdle, setIsComposerIdle] = useState(true);
+
+  useEffect(() => {
+    setIsComposerIdle(false);
+    const timeout = window.setTimeout(() => setIsComposerIdle(true), 1000);
+    return () => window.clearTimeout(timeout);
+  }, [composerText]);
+
+  useEffect(() => {
+    const isActive = activeThreadId === threadId;
+    const hasDraft = composerText.trim().length > 0;
+    const isVisible = document.visibilityState === 'visible';
+    const canRefresh = isActive && !isRunning && isComposerIdle && !hasDraft && isVisible && navigator.onLine;
+
+    if (!canRefresh) return undefined;
+
+    const refresh = async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+      ]);
+    };
+
+    const interval = window.setInterval(() => void refresh(), 6000);
+    return () => window.clearInterval(interval);
+  }, [activeThreadId, composerText, isComposerIdle, isRunning, queryClient, resourceId, threadId]);
+
+  return null;
+};
+
+const getMessagesVersion = (messages: UIMessage[]) =>
+  messages
+    .map(message => `${message.id}:${message.role}:${message.parts?.length ?? 0}:${getMessageText(message).length}`)
+    .join('|');
 
 const Thread = () => {
   const composerRef = useRef<HTMLDivElement>(null);
@@ -624,6 +665,7 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
     <AssistantRuntimeProvider runtime={runtime}>
       <ThreadIdContext.Provider value={threadId}>
         <ThreadRunningTracker threadId={threadId} />
+        <IdleActiveThreadRefresher threadId={threadId} />
         <Thread />
       </ThreadIdContext.Provider>
     </AssistantRuntimeProvider>
@@ -640,5 +682,5 @@ export const AssistantChat = ({ threadId }: AssistantChatProps) => {
 
   if (isLoading) return <div className="h-full bg-background" />;
 
-  return <AssistantChatRuntime key={`${threadId}:${initialMessages.length}`} threadId={threadId} initialMessages={initialMessages} />;
+  return <AssistantChatRuntime key={`${threadId}:${getMessagesVersion(initialMessages)}`} threadId={threadId} initialMessages={initialMessages} />;
 };

@@ -91,3 +91,18 @@ input {
   min-width: max-content;
   background: transparent;
 }
+
+@media (max-width: 767px) and (orientation: portrait) {
+  .chat-message-row {
+    gap: 0;
+  }
+
+  .chat-message-avatar,
+  .model-picker {
+    display: none;
+  }
+
+  .chat-message-bubble {
+    max-width: 100%;
+  }
+}

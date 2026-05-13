@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core';
 import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -46,18 +46,38 @@ const moveItem = <T extends { id: string }>(items: T[], activeId: string, overId
   return next;
 };
 
-const SortableSection = ({ items, onReorder, children }: { items: string[]; onReorder: (activeId: string, overId: string) => void; children: ReactNode }) => {
+const SortableSection = ({
+  items,
+  onReorder,
+  onDragStart,
+  onDragEnd,
+  children,
+}: {
+  items: string[];
+  onReorder: (activeId: string, overId: string) => void;
+  onDragStart?: (event: DragStartEvent) => void;
+  onDragEnd?: (event: DragEndEvent) => void;
+  children: ReactNode;
+}) => {
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 5 } }),
   );
-  const onDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (over && active.id !== over.id) onReorder(String(active.id), String(over.id));
+    onDragEnd?.(event);
   };
 
   return (
-    <DndContext collisionDetection={closestCenter} modifiers={[restrictToVerticalAxis, restrictToParentElement]} sensors={sensors} onDragEnd={onDragEnd}>
+    <DndContext
+      collisionDetection={closestCenter}
+      modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+      sensors={sensors}
+      onDragStart={onDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => onDragEnd?.({} as DragEndEvent)}
+    >
       <SortableContext items={items} strategy={verticalListSortingStrategy}>
         {children}
       </SortableContext>
@@ -65,16 +85,41 @@ const SortableSection = ({ items, onReorder, children }: { items: string[]; onRe
   );
 };
 
-const SortableItem = ({ id, className, handleClassName, canDrag = true, children }: { id: string; className?: string; handleClassName?: string; canDrag?: boolean; children: ReactNode }) => {
+const SortableItem = ({
+  id,
+  className,
+  handleClassName,
+  canDrag = true,
+  showHandle = true,
+  children,
+}: {
+  id: string;
+  className?: string;
+  handleClassName?: string;
+  canDrag?: boolean;
+  showHandle?: boolean;
+  children: ReactNode | ((activatorProps: {
+    ref: (node: HTMLElement | null) => void;
+    attributes: Record<string, unknown>;
+    listeners: Record<string, unknown> | undefined;
+  }) => ReactNode);
+}) => {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: !canDrag });
+  const hasCustomActivator = typeof children === 'function';
+  const useRootActivator = canDrag && !showHandle && !hasCustomActivator;
 
   return (
     <div
-      ref={setNodeRef}
-      className={cn('group relative', className, isDragging && 'z-20 opacity-90 shadow-lg')}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      ref={node => {
+        setNodeRef(node);
+        if (useRootActivator) setActivatorNodeRef(node);
+      }}
+      className={cn('group relative', useRootActivator && 'cursor-grab touch-none select-none active:cursor-grabbing', className, isDragging && 'z-20 opacity-90 shadow-lg')}
+      style={{ transform: CSS.Transform.toString(transform), transition, touchAction: useRootActivator ? 'none' : undefined }}
+      {...(useRootActivator ? attributes : {})}
+      {...(useRootActivator ? listeners : {})}
     >
-      {canDrag ? (
+      {canDrag && showHandle ? (
         <button
           ref={setActivatorNodeRef}
           className={cn('absolute left-0 top-1/2 z-10 -translate-x-3 -translate-y-1/2 cursor-grab touch-none select-none rounded p-0.5 text-muted-foreground/70 transition hover:bg-muted hover:text-foreground active:cursor-grabbing', handleClassName)}
@@ -88,7 +133,7 @@ const SortableItem = ({ id, className, handleClassName, canDrag = true, children
           <GripVertical size={13} />
         </button>
       ) : null}
-      {children}
+      {hasCustomActivator ? children({ ref: setActivatorNodeRef, attributes, listeners }) : children}
     </div>
   );
 };
@@ -113,6 +158,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   } = useChatStore();
   const queryClient = useQueryClient();
   const resourceMenuRef = useRef<HTMLDivElement>(null);
+  const openPlaneIdsBeforeDragRef = useRef<string[] | null>(null);
   const [isResourceMenuOpen, setIsResourceMenuOpen] = useState(false);
   const [threadMenuId, setThreadMenuId] = useState<string | null>(null);
   const [sectionMenuId, setSectionMenuId] = useState<string | null>(null);
@@ -144,6 +190,18 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   const sortedPlanes = sortManual(planes);
   const togglePlaneCollapsed = (planeId: string) =>
     setCollapsedPlaneIds(ids => (ids.includes(planeId) ? ids.filter(id => id !== planeId) : [...ids, planeId]));
+  const collapsePlanesForDrag = () => {
+    openPlaneIdsBeforeDragRef.current = sortedPlanes
+      .map(plane => plane.id)
+      .filter(planeId => !collapsedPlaneIds.includes(planeId));
+    setCollapsedPlaneIds(sortedPlanes.map(plane => plane.id));
+  };
+  const restorePlanesAfterDrag = () => {
+    const openPlaneIds = openPlaneIdsBeforeDragRef.current;
+    openPlaneIdsBeforeDragRef.current = null;
+    if (!openPlaneIds) return;
+    setCollapsedPlaneIds(sortedPlanes.map(plane => plane.id).filter(planeId => !openPlaneIds.includes(planeId)));
+  };
   const reorderPlainThreads = async (activeId: string, overId: string) => {
     const ordered = moveItem(plainThreads, activeId, overId);
     await reorderThreads({ plain: true }, ordered.map(thread => thread.id));
@@ -232,9 +290,9 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
             key={thread.id}
             id={thread.id}
             canDrag={plainThreads.length > 1}
-            handleClassName="left-4 translate-x-0"
+            showHandle={false}
             className={cn(
-              'group -ml-4 flex items-start gap-2 rounded-lg border border-transparent p-2 pl-10 text-left transition',
+              'group flex items-start gap-2 rounded-lg border border-transparent p-2 text-left transition',
               thread.id === threadId ? 'border-primary bg-background' : 'hover:bg-background/60',
             )}
           >
@@ -343,6 +401,8 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
           </div>
           <SortableSection
             items={sortedPlanes.map(plane => plane.id)}
+            onDragStart={collapsePlanesForDrag}
+            onDragEnd={restorePlanesAfterDrag}
             onReorder={async (activeId, overId) => {
               const ordered = moveItem(sortedPlanes, activeId, overId);
               await reorderPlanes(ordered.map(item => item.id));
@@ -361,11 +421,19 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
               <SortableItem
                 key={plane.id}
                 id={plane.id}
-                handleClassName="top-5 translate-y-0"
                 canDrag={sortedPlanes.length > 1}
+                showHandle={false}
                 className={cn('p-2', index > 0 && 'border-t border-mauve/60')}
               >
-                <div className={cn('flex items-center gap-2 text-sm font-bold text-mauve', !isCollapsed && 'mb-2')}>
+                {dragActivator => (
+                <>
+                <div
+                  ref={dragActivator.ref}
+                  className={cn('flex cursor-grab touch-none select-none items-center gap-2 text-sm font-bold text-mauve active:cursor-grabbing', !isCollapsed && 'mb-2')}
+                  style={{ touchAction: 'none' }}
+                  {...dragActivator.attributes}
+                  {...dragActivator.listeners}
+                >
                   <button
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     onClick={() => togglePlaneCollapsed(plane.id)}
@@ -449,6 +517,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           key={thread.id}
                           id={thread.id}
                           canDrag={standardPlaneThreads.length > 1}
+                          showHandle={false}
                           className={cn(
                             'group relative flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[13px] leading-5 transition',
                             thread.id === threadId ? 'border-primary bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background/60',
@@ -583,6 +652,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                 key={thread.id}
                                 id={thread.id}
                                 canDrag={demiplaneThreads.length > 1}
+                                showHandle={false}
                                 className={cn(
                                   'group relative flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[13px] leading-5 transition',
                                   thread.id === threadId ? 'border-primary bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background/60',
@@ -656,6 +726,8 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                     </div>
                   </>
                 ) : null}
+                </>
+                )}
               </SortableItem>
             );
           })}
