@@ -54,6 +54,7 @@ export const requestPortalTool = async (input: {
   demiplaneId?: string;
   rootId?: string;
   repoPath?: string;
+  workspacePath?: string;
   tool: string;
   args: unknown;
   timeoutMs?: number;
@@ -70,6 +71,7 @@ export const requestPortalTool = async (input: {
     demiplaneId: input.demiplaneId,
     rootId: input.rootId,
     repoPath: input.repoPath,
+    workspacePath: input.workspacePath,
     tool: input.tool,
     args: input.args,
   };

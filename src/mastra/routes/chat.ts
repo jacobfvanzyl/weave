@@ -114,7 +114,12 @@ const refreshAgentInstructions = async (memory: any, planeThread: any, planeMeta
   }
 };
 
-const getProjectInstructions = async (mastra: any, resourceId: string | undefined, threadId: unknown) => {
+const markGitDemiplaneContext = (requestContext: any, value: boolean) => {
+  requestContext?.set?.('gitDemiplane', value);
+};
+
+const getProjectInstructions = async (mastra: any, resourceId: string | undefined, threadId: unknown, requestContext?: any) => {
+  markGitDemiplaneContext(requestContext, false);
   if (typeof threadId !== 'string' || !resourceId) return undefined;
 
   const memory = await getMemory(mastra);
@@ -125,6 +130,8 @@ const getProjectInstructions = async (mastra: any, resourceId: string | undefine
   if (metadata?.mode !== 'plane' || typeof metadata.planeId !== 'string' || typeof metadata.demiplaneId !== 'string') {
     return undefined;
   }
+
+  markGitDemiplaneContext(requestContext, true);
 
   const planeThread = await memory.getThreadById({ threadId: planeThreadId(metadata.planeId) }).catch(() => undefined);
   if (!planeThread || planeThread.resourceId !== resourceId) return undefined;
@@ -172,14 +179,15 @@ export const chatRoutes = [
       const requestContext = c.get('requestContext');
       const resourceId = requestContext?.get(MASTRA_RESOURCE_ID_KEY);
       const threadId = params?.memory?.thread;
-      const projectInstructions = await getProjectInstructions(mastra, resourceId, threadId);
+      const projectInstructions = await getProjectInstructions(mastra, resourceId, threadId, requestContext);
+      const isGitDemiplane = requestContext?.get?.('gitDemiplane') === true;
       const system = projectInstructions
         ? [params.system, projectInstructions].filter(Boolean).join('\n\n')
         : params.system;
 
       const stream = await handleChatStream({
         mastra,
-        agentId: 'mage-hand',
+        agentId: isGitDemiplane ? 'mage-hand-coding' : 'mage-hand',
         version: 'v6',
         params: {
           ...params,

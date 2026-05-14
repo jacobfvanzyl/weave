@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core';
+import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragStartEvent, type DraggableAttributes } from '@dnd-kit/core';
 import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Check, ChevronUp, Code2, Folder, GripVertical, Loader2, MessageSquare, Moon, MoreHorizontal, MoreVertical, Plus, RotateCcw, Sun, Trash2, X } from 'lucide-react';
-import { createDemiplane, createPlane, getAuthUser, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads } from '../../lib/chat-state-api';
+import { Archive, Check, ChevronUp, Code2, Folder, GripVertical, Link, Loader2, Lock, MessageSquare, Moon, MoreHorizontal, MoreVertical, Plus, RotateCcw, Sun, Trash2, X } from 'lucide-react';
+import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, getAuthUser, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { useChatStore } from '../../stores/chat-store';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
@@ -45,6 +45,14 @@ const moveItem = <T extends { id: string }>(items: T[], activeId: string, overId
   next.splice(to, 0, item);
   return next;
 };
+
+const demiplaneStatusClass = (status: string) => status === 'ready'
+  ? 'bg-success'
+  : status === 'creating'
+    ? 'bg-primary animate-pulse'
+    : status === 'dirty'
+      ? 'bg-yellow'
+      : 'bg-destructive';
 
 const SortableSection = ({
   items,
@@ -100,8 +108,8 @@ const SortableItem = ({
   showHandle?: boolean;
   children: ReactNode | ((activatorProps: {
     ref: (node: HTMLElement | null) => void;
-    attributes: Record<string, unknown>;
-    listeners: Record<string, unknown> | undefined;
+    attributes: DraggableAttributes;
+    listeners: Record<string, Function> | undefined;
   }) => ReactNode);
 }) => {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: !canDrag });
@@ -163,6 +171,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   const [threadMenuId, setThreadMenuId] = useState<string | null>(null);
   const [sectionMenuId, setSectionMenuId] = useState<string | null>(null);
   const [archivedDialogScopeId, setArchivedDialogScopeId] = useState<string | null>(null);
+  const [deletePlaneId, setDeletePlaneId] = useState<string | null>(null);
   const [collapsedPlaneIds, setCollapsedPlaneIds] = useState<string[]>(loadCollapsedPlaneIds);
   const mode = useThemeStore(state => state.mode);
   const toggleMode = useThemeStore(state => state.toggleMode);
@@ -233,6 +242,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
     : planes.find(plane => plane.id === archivedDialogScopeId)?.name
       ?? planes.flatMap(plane => plane.demiplanes).find(demiplane => demiplane.id === archivedDialogScopeId)?.name
       ?? 'Archived Threads';
+  const deletePlaneTarget = deletePlaneId ? planes.find(plane => plane.id === deletePlaneId) : undefined;
 
   useEffect(() => {
     if (!isResourceMenuOpen && !threadMenuId && !sectionMenuId) return undefined;
@@ -469,10 +479,14 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           className="flex h-5 w-10 shrink-0 items-center justify-center rounded-full bg-success text-background transition hover:opacity-90"
                           aria-label={`Create workspace in ${plane.name}`}
                           onClick={async () => {
-                            const name = window.prompt('Workspace name');
+                            const name = window.prompt('Branch / workspace name');
                             if (!name?.trim()) return;
-                            await createDemiplane(plane.id, name.trim());
-                            await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                            try {
+                              await createDemiplane(plane.id, name.trim());
+                              await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                            } catch (error) {
+                              window.alert(error instanceof Error ? error.message : String(error));
+                            }
                           }}
                         >
                           <Plus size={14} strokeWidth={3} />
@@ -488,6 +502,26 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                         </button>
                         {sectionMenuId === plane.id ? (
                           <div className="absolute right-0 top-6 z-20 w-36 rounded-md border border-border bg-background p-1 text-xs font-normal text-muted-foreground shadow-lg" onPointerDown={event => event.stopPropagation()}>
+                            {plane.projectKind === 'git' ? (
+                              <button
+                                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:bg-muted hover:text-foreground"
+                                onClick={async () => {
+                                  setSectionMenuId(null);
+                                  const path = window.prompt('Existing worktree path');
+                                  if (!path?.trim()) return;
+                                  const name = window.prompt('Workspace display name (optional)') ?? undefined;
+                                  try {
+                                    await adoptDemiplane(plane.id, path.trim(), name?.trim() || undefined);
+                                    await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                                  } catch (error) {
+                                    window.alert(error instanceof Error ? error.message : String(error));
+                                  }
+                                }}
+                              >
+                                <Link size={13} />
+                                Attach Workspace
+                              </button>
+                            ) : null}
                             <button
                               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:bg-muted hover:text-foreground"
                               onClick={() => {
@@ -497,6 +531,16 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                             >
                               <Archive size={13} />
                               Archived Threads
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-destructive transition hover:bg-destructive/10"
+                              onClick={() => {
+                                setDeletePlaneId(plane.id);
+                                setSectionMenuId(null);
+                              }}
+                            >
+                              <Trash2 size={13} />
+                              Delete Plane
                             </button>
                           </div>
                         ) : null}
@@ -603,8 +647,15 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                             canDrag={sortedDemiplanes.length > 1}
                             className={cn('space-y-1 py-2', demiplaneIndex > 0 && 'border-t border-success/60')}
                           >
-                            <div className="flex items-center justify-between gap-2 text-sm font-bold text-success">
-                              <span className="min-w-0 flex-1 truncate">{demiplane.name}</span>
+                            <div className="flex items-start justify-between gap-2 text-sm font-bold text-success">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <span className="truncate">{demiplane.name}</span>
+                                  <span className={cn('h-2 w-2 shrink-0 rounded-full', demiplaneStatusClass(demiplane.status))} title={demiplane.status} aria-label={demiplane.status} />
+                                  {demiplane.locked || demiplane.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
+                                </div>
+                                {demiplane.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{demiplane.lastError}</div> : null}
+                              </div>
                               <button
                                 className="flex h-5 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:opacity-90"
                                 aria-label={`Create thread in ${demiplane.name}`}
@@ -639,6 +690,42 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                       <Archive size={13} />
                                       Archived Threads
                                     </button>
+                                    {!demiplane.locked && demiplane.workspaceKind !== 'primary' ? (
+                                      <>
+                                        <button
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:bg-muted hover:text-foreground"
+                                          onClick={async () => {
+                                            setSectionMenuId(null);
+                                            if (!window.confirm(`Detach ${demiplane.name} from this Plane? Worktree files stay on disk.`)) return;
+                                            try {
+                                              await deleteDemiplane(plane.id, demiplane.id, 'detach');
+                                              await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                                            } catch (error) {
+                                              window.alert(error instanceof Error ? error.message : String(error));
+                                            }
+                                          }}
+                                        >
+                                          <Link size={13} />
+                                          Detach
+                                        </button>
+                                        <button
+                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-destructive transition hover:bg-destructive/10"
+                                          onClick={async () => {
+                                            setSectionMenuId(null);
+                                            if (!window.confirm(`Remove worktree for ${demiplane.name}? This runs wt remove.`)) return;
+                                            try {
+                                              await deleteDemiplane(plane.id, demiplane.id, 'remove');
+                                              await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                                            } catch (error) {
+                                              window.alert(error instanceof Error ? error.message : String(error));
+                                            }
+                                          }}
+                                        >
+                                          <Trash2 size={13} />
+                                          Remove Worktree
+                                        </button>
+                                      </>
+                                    ) : null}
                                   </div>
                                 ) : null}
                               </div>
@@ -734,6 +821,43 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
           </SortableSection>
         </div>
       </div>
+
+      {deletePlaneTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-border bg-background p-4 shadow-xl">
+            <div className="mb-3 flex items-start gap-3">
+              <Trash2 className="mt-0.5 shrink-0 text-destructive" size={18} />
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-foreground">Delete Plane?</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  This will permanently delete <span className="font-medium text-foreground">{deletePlaneTarget.name}</span>, its workspaces, and all threads in it.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground transition hover:bg-muted"
+                onClick={() => setDeletePlaneId(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-md bg-destructive px-3 py-1.5 text-xs text-destructive-foreground transition hover:opacity-90"
+                onClick={async () => {
+                  await deletePlane(deletePlaneTarget.id);
+                  setDeletePlaneId(null);
+                  await Promise.all([
+                    queryClient.invalidateQueries({ queryKey: ['planes', resourceId] }),
+                    queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+                  ]);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {archivedDialogScopeId ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">

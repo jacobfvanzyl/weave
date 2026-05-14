@@ -12,13 +12,15 @@ export type Demiplane = {
   portalId?: string;
   mountId?: string;
   workspaceKind: 'primary' | 'worktree';
+  source?: 'primary' | 'worktrunk' | 'adopted' | 'legacy';
   name: string;
   path?: string;
   branch?: string;
   baseBranch?: string;
   locked?: boolean;
   sortOrder?: number;
-  status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual';
+  status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual' | 'error';
+  lastError?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -69,6 +71,8 @@ const getResourceId = (c: any) => {
 
 const cleanName = (value: unknown) => (typeof value === 'string' ? value.trim().slice(0, 80) : '');
 const optionalString = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
+const normalizeBranch = (value: unknown) => optionalString(value)?.replace(/^refs\/heads\//, '');
+const normalizePath = (value: unknown) => optionalString(value)?.replace(/\/+$/, '') || undefined;
 const timestampString = (value: unknown) => typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
 
 const isPlaneThread = (thread: { id: string; metadata?: unknown }) => {
@@ -130,6 +134,41 @@ const assertPortalForUser = (portalId: string | undefined, resourceId: string) =
   return portal;
 };
 
+const assertGitPlaneReady = (plane: Plane, resourceId: string) => {
+  if (plane.projectKind !== 'git') throw new Error('standard projects cannot have workspaces');
+  assertPortalForUser(plane.portalId, resourceId);
+  if (!plane.portalRootId || !plane.repoPath) throw new Error('git project is missing Portal repo binding');
+};
+
+const isPrimaryDemiplane = (demiplane: Demiplane) => demiplane.locked === true || demiplane.workspaceKind === 'primary' || demiplane.source === 'primary';
+
+const normalizeDemiplanePath = (demiplane: Pick<Demiplane, 'path'>) => normalizePath(demiplane.path)?.toLowerCase();
+const normalizeDemiplaneBranch = (demiplane: Pick<Demiplane, 'branch'>) => normalizeBranch(demiplane.branch)?.toLowerCase();
+
+const assertUniqueDemiplane = (plane: Plane, candidate: Pick<Demiplane, 'path' | 'branch'>, ignoreId?: string) => {
+  const candidatePath = normalizeDemiplanePath(candidate);
+  const candidateBranch = normalizeDemiplaneBranch(candidate);
+  const duplicatePath = candidatePath && plane.demiplanes.some(item => item.id !== ignoreId && normalizeDemiplanePath(item) === candidatePath);
+  if (duplicatePath) throw new Error('workspace path is already attached to this Plane');
+  const duplicateBranch = candidateBranch && plane.demiplanes.some(item => item.id !== ignoreId && normalizeDemiplaneBranch(item) === candidateBranch);
+  if (duplicateBranch) throw new Error('workspace branch is already attached to this Plane');
+};
+
+const portalToolError = (result: { ok?: boolean; error?: unknown }) => {
+  if (result.ok === false) throw new Error(typeof result.error === 'string' ? result.error : 'Portal tool failed');
+};
+
+const getActiveThreadsForDemiplane = async (memory: any, resourceId: string, planeId: string, demiplaneId: string) => {
+  const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
+  return result.threads.filter((thread: any) => {
+    const metadata = thread.metadata as Record<string, unknown> | undefined;
+    return metadata?.mode === 'plane'
+      && metadata.planeId === planeId
+      && metadata.demiplaneId === demiplaneId
+      && metadata.archived !== true;
+  });
+};
+
 const createGitPlane = async (c: any, resourceId: string, basePlane: Plane, body: Record<string, unknown>): Promise<Plane> => {
   const portalId = optionalString(body?.portalId);
   const rootId = optionalString(body?.rootId);
@@ -146,14 +185,17 @@ const createGitPlane = async (c: any, resourceId: string, basePlane: Plane, body
   if (result.ok === false) throw new Error(result.error ?? 'git inspect failed');
 
   const git = result.git ?? {};
-  const defaultBranch = optionalString(git.defaultBranch) ?? optionalString(git.currentBranch) ?? 'main';
+  const defaultBranch = normalizeBranch(git.defaultBranch) ?? normalizeBranch(git.currentBranch) ?? 'main';
+  const repoRoot = normalizePath(git.root);
   const at = basePlane.createdAt;
   const primaryWorkspace: Demiplane = {
     id: createId('demiplane'),
     planeId: basePlane.id,
     workspaceKind: 'primary',
+    source: 'primary',
     name: defaultBranch,
     portalId,
+    path: repoRoot,
     branch: defaultBranch,
     locked: true,
     sortOrder: 0,
@@ -265,6 +307,33 @@ export const planesRoutes = [
     },
   }),
   registerApiRoute('/planes/:planeId', {
+    method: 'DELETE',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const planeId = c.req.param('planeId');
+        const memory = await getMemory(c);
+        const plane = await getPlane(memory, resourceId, planeId);
+        if (!plane) return c.json({ error: 'plane not found' }, 404);
+
+        const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
+        const planeThreads = result.threads.filter(thread => {
+          const metadata = thread.metadata as Record<string, unknown> | undefined;
+          return metadata?.mode === 'plane' && metadata.planeId === planeId;
+        });
+
+        await Promise.all([
+          memory.deleteThread(planeThreadId(planeId)),
+          ...planeThreads.map(thread => memory.deleteThread(thread.id)),
+        ]);
+
+        return c.json({ ok: true });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/planes/:planeId', {
     method: 'GET',
     handler: async c => {
       try {
@@ -273,6 +342,39 @@ export const planesRoutes = [
         const plane = await getPlane(memory, resourceId, c.req.param('planeId'));
         if (!plane) return c.json({ error: 'plane not found' }, 404);
         return c.json({ plane });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/planes/:planeId/demiplanes/discover', {
+    method: 'GET',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const planeId = c.req.param('planeId');
+        const memory = await getMemory(c);
+        const plane = await getPlane(memory, resourceId, planeId);
+        if (!plane) return c.json({ error: 'plane not found' }, 404);
+        assertGitPlaneReady(plane, resourceId);
+
+        const result = await requestPortalTool({
+          portalId: plane.portalId!,
+          planeId,
+          rootId: plane.portalRootId,
+          repoPath: plane.repoPath,
+          tool: 'portal.worktrunk.list',
+          args: {},
+          timeoutMs: 10_000,
+        }) as { ok?: boolean; error?: string; worktrees?: Array<Record<string, unknown>> };
+        portalToolError(result);
+        const worktrees = (result.worktrees ?? []).map(worktree => {
+          const path = normalizePath(worktree.path);
+          const branch = normalizeBranch(worktree.branch);
+          const demiplane = plane.demiplanes.find(item => normalizePath(item.path) === path || normalizeBranch(item.branch) === branch);
+          return { ...worktree, path, branch, adopted: Boolean(demiplane), demiplaneId: demiplane?.id };
+        });
+        return c.json({ worktrees });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -291,19 +393,37 @@ export const planesRoutes = [
         const memory = await getMemory(c);
         const plane = await getPlane(memory, resourceId, planeId);
         if (!plane) return c.json({ error: 'plane not found' }, 404);
+        assertGitPlaneReady(plane, resourceId);
+        assertUniqueDemiplane(plane, { branch: name });
 
-        if (plane.projectKind !== 'git') return c.json({ error: 'standard projects cannot have workspaces' }, 400);
-        if (!plane.portalId) return c.json({ error: 'git project has no portal' }, 400);
-        if (!getPortalConnection(plane.portalId)) return c.json({ error: 'project portal is offline' }, 409);
+        const result = await requestPortalTool({
+          portalId: plane.portalId!,
+          planeId,
+          rootId: plane.portalRootId,
+          repoPath: plane.repoPath,
+          tool: 'portal.worktrunk.create',
+          args: { branch: name },
+          timeoutMs: 60_000,
+        }) as { ok?: boolean; error?: string; worktree?: Record<string, unknown> };
+        portalToolError(result);
+
+        const worktree = result.worktree ?? {};
+        const path = normalizePath(worktree.path);
+        const branch = normalizeBranch(worktree.branch) ?? name;
+        if (!path) throw new Error('Worktrunk did not return a worktree path');
+        assertUniqueDemiplane(plane, { path, branch });
 
         const at = nowIso();
         const demiplane: Demiplane = {
           id: createId('demiplane'),
           planeId,
           workspaceKind: 'worktree',
+          source: 'worktrunk',
           name,
-          branch: optionalString(body?.branch) ?? name,
-          status: 'creating',
+          portalId: plane.portalId,
+          path,
+          branch,
+          status: 'ready',
           locked: false,
           sortOrder: plane.demiplanes.length,
           createdAt: at,
@@ -312,6 +432,103 @@ export const planesRoutes = [
         const nextPlane = { ...plane, demiplanes: [...plane.demiplanes, demiplane], updatedAt: at };
         const thread = await savePlane(memory, resourceId, nextPlane);
         return c.json({ plane: toPlane(thread), demiplane });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/planes/:planeId/demiplanes/adopt', {
+    method: 'POST',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const planeId = c.req.param('planeId');
+        const body = await c.req.json();
+        const path = optionalString(body?.path);
+        if (!path) return c.json({ error: 'path is required' }, 400);
+
+        const memory = await getMemory(c);
+        const plane = await getPlane(memory, resourceId, planeId);
+        if (!plane) return c.json({ error: 'plane not found' }, 404);
+        assertGitPlaneReady(plane, resourceId);
+
+        const result = await requestPortalTool({
+          portalId: plane.portalId!,
+          planeId,
+          rootId: plane.portalRootId,
+          repoPath: plane.repoPath,
+          tool: 'portal.git.worktree.validate',
+          args: { path },
+          timeoutMs: 10_000,
+        }) as { ok?: boolean; error?: string; worktree?: Record<string, unknown> };
+        portalToolError(result);
+
+        const worktree = result.worktree ?? {};
+        const normalizedPath = normalizePath(worktree.path);
+        const branch = normalizeBranch(worktree.branch);
+        if (!normalizedPath) throw new Error('validated worktree did not return a path');
+        assertUniqueDemiplane(plane, { path: normalizedPath, branch });
+
+        const at = nowIso();
+        const name = cleanName(body?.name) || branch || normalizedPath.split('/').pop() || 'Workspace';
+        const demiplane: Demiplane = {
+          id: createId('demiplane'),
+          planeId,
+          workspaceKind: 'worktree',
+          source: 'adopted',
+          name,
+          portalId: plane.portalId,
+          path: normalizedPath,
+          branch,
+          status: 'ready',
+          locked: false,
+          sortOrder: plane.demiplanes.length,
+          createdAt: at,
+          updatedAt: at,
+        };
+        const nextPlane = { ...plane, demiplanes: [...plane.demiplanes, demiplane], updatedAt: at };
+        const thread = await savePlane(memory, resourceId, nextPlane);
+        return c.json({ plane: toPlane(thread), demiplane });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/planes/:planeId/demiplanes/:demiplaneId', {
+    method: 'DELETE',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const planeId = c.req.param('planeId');
+        const demiplaneId = c.req.param('demiplaneId');
+        const mode = c.req.query('mode') === 'detach' ? 'detach' : 'remove';
+        const memory = await getMemory(c);
+        const plane = await getPlane(memory, resourceId, planeId);
+        if (!plane) return c.json({ error: 'plane not found' }, 404);
+        assertGitPlaneReady(plane, resourceId);
+
+        const demiplane = plane.demiplanes.find(item => item.id === demiplaneId);
+        if (!demiplane) return c.json({ error: 'demiplane not found' }, 404);
+        if (isPrimaryDemiplane(demiplane)) return c.json({ error: 'primary workspace cannot be removed' }, 400);
+        const activeThreads = await getActiveThreadsForDemiplane(memory, resourceId, planeId, demiplaneId);
+        if (activeThreads.length > 0) return c.json({ error: 'workspace has active threads; archive or delete them before removing the workspace' }, 409);
+
+        if (mode === 'remove') {
+          const result = await requestPortalTool({
+            portalId: demiplane.portalId ?? plane.portalId!,
+            planeId,
+            rootId: plane.portalRootId,
+            repoPath: plane.repoPath,
+            tool: 'portal.worktrunk.remove',
+            args: { branch: demiplane.branch, path: demiplane.path },
+            timeoutMs: 60_000,
+          }) as { ok?: boolean; error?: string };
+          portalToolError(result);
+        }
+
+        const nextPlane = { ...plane, demiplanes: plane.demiplanes.filter(item => item.id !== demiplaneId), updatedAt: nowIso() };
+        const thread = await savePlane(memory, resourceId, nextPlane);
+        return c.json({ plane: toPlane(thread), demiplane, mode });
       } catch (error) {
         return errorResponse(c, error);
       }

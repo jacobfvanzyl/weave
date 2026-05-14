@@ -14,12 +14,18 @@ type ServerThread = {
 export type Demiplane = {
   id: string;
   planeId: string;
+  portalId?: string;
+  mountId?: string;
   workspaceKind: 'primary' | 'worktree';
+  source?: 'primary' | 'worktrunk' | 'adopted' | 'legacy';
   name: string;
-  status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'error';
+  path?: string;
+  status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual' | 'error';
   locked?: boolean;
   branch?: string;
+  baseBranch?: string;
   sortOrder?: number;
+  lastError?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -168,6 +174,12 @@ export const createPlane = async (input: string | { name: string; projectKind?: 
   return result.plane;
 };
 
+export const deletePlane = async (planeId: string) => {
+  await parseJson<{ ok: true }>(
+    await fetch(`${mastraUrl}/planes/${planeId}`, { method: 'DELETE', headers: getAuthHeaders() }),
+  );
+};
+
 export const reorderPlanes = async (planeIds: string[]) => {
   const result = await parseJson<{ planes: Plane[] }>(
     await fetch(`${mastraUrl}/planes/reorder`, {
@@ -190,6 +202,37 @@ export const createDemiplane = async (planeId: string, name: string) => {
   );
 
   return result.demiplane;
+};
+
+export const adoptDemiplane = async (planeId: string, path: string, name?: string) => {
+  const result = await parseJson<{ plane: Plane; demiplane: Demiplane }>(
+    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes/adopt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ path, name }),
+    }),
+  );
+
+  return result.demiplane;
+};
+
+export const deleteDemiplane = async (planeId: string, demiplaneId: string, mode: 'detach' | 'remove') => {
+  const result = await parseJson<{ plane: Plane; demiplane: Demiplane; mode: 'detach' | 'remove' }>(
+    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes/${demiplaneId}?mode=${mode}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }),
+  );
+
+  return result;
+};
+
+export const discoverDemiplanes = async (planeId: string) => {
+  const result = await parseJson<{ worktrees: Array<Record<string, unknown>> }>(
+    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes/discover`, { headers: getAuthHeaders() }),
+  );
+
+  return result.worktrees;
 };
 
 export const reorderDemiplanes = async (planeId: string, demiplaneIds: string[]) => {

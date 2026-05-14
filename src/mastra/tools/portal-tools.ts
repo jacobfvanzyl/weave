@@ -36,7 +36,12 @@ const getThreadBinding = async (context: any) => {
   const rootId = typeof planeMetadata?.portalRootId === 'string' ? planeMetadata.portalRootId : undefined;
   const repoPath = typeof planeMetadata?.repoPath === 'string' ? planeMetadata.repoPath : undefined;
 
-  return { resourceId, planeId: metadata.planeId, demiplaneId: metadata.demiplaneId, portalId, rootId, repoPath };
+  const workspacePath = typeof demiplane?.path === 'string' ? demiplane.path : undefined;
+  if (planeMetadata?.projectKind === 'git' && !workspacePath) {
+    throw new Error('This Demiplane has no workspace path yet. Recreate it with Worktrunk or attach an existing worktree.');
+  }
+
+  return { resourceId, planeId: metadata.planeId, demiplaneId: metadata.demiplaneId, portalId, rootId, repoPath, workspacePath };
 };
 
 const routePortalTool = async (tool: string, args: unknown, context: any, timeoutMs?: number) => {
@@ -51,6 +56,7 @@ const routePortalTool = async (tool: string, args: unknown, context: any, timeou
     demiplaneId: binding.demiplaneId,
     rootId: binding.rootId,
     repoPath: binding.repoPath,
+    workspacePath: binding.workspacePath,
     tool,
     args,
     timeoutMs,
@@ -59,11 +65,11 @@ const routePortalTool = async (tool: string, args: unknown, context: any, timeou
 
 export const portalReadTool = createTool({
   id: 'read',
-  description: 'Read a file from the current Demiplane through a connected Portal.',
+  description: 'Read the contents of a file from the current Demiplane through a connected Portal. Text output is truncated to 2000 lines or 50KB. Use offset/limit for large files. When you need the full file, continue with offset until complete.',
   inputSchema: z.object({
     path: z.string().describe('Path to the file to read, relative to the Demiplane root'),
-    offset: z.number().optional(),
-    limit: z.number().optional(),
+    offset: z.number().optional().describe('Line number to start reading from, 1-indexed'),
+    limit: z.number().optional().describe('Maximum number of lines to read'),
   }),
   outputSchema: z.object({ ok: z.boolean(), content: z.string().optional(), error: z.string().optional() }),
   execute: async (input, context) => routePortalTool('read', input, context),
@@ -71,7 +77,7 @@ export const portalReadTool = createTool({
 
 export const portalWriteTool = createTool({
   id: 'write',
-  description: 'Write a file in the current Demiplane through a connected Portal.',
+  description: 'Write content to a file in the current Demiplane through a connected Portal. Creates the file if it does not exist, overwrites if it does. Automatically creates parent directories.',
   inputSchema: z.object({
     path: z.string().describe('Path to write, relative to the Demiplane root'),
     content: z.string().describe('Full file content'),
@@ -82,12 +88,15 @@ export const portalWriteTool = createTool({
 
 export const portalEditTool = createTool({
   id: 'edit',
-  description: 'Edit a file in the current Demiplane using exact text replacements.',
+  description: 'Edit a single file in the current Demiplane using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. Each edit is matched against the original file, not incrementally. If two changes affect nearby or overlapping lines, merge them into one edit.',
   inputSchema: z.object({
     path: z.string().describe('Path to edit, relative to the Demiplane root'),
-    edits: z.array(z.object({ oldText: z.string(), newText: z.string() })).min(1),
+    edits: z.array(z.object({
+      oldText: z.string().describe('Exact text for one targeted replacement. Must be unique in the original file and non-overlapping with other edits.'),
+      newText: z.string().describe('Replacement text for this targeted edit.'),
+    }).strict()).min(1),
   }),
-  outputSchema: z.object({ ok: z.boolean(), replacements: z.number().optional(), error: z.string().optional() }),
+  outputSchema: z.object({ ok: z.boolean(), replacements: z.number().optional(), diff: z.string().optional(), error: z.string().optional() }),
   execute: async (input, context) => routePortalTool('edit', input, context),
 });
 

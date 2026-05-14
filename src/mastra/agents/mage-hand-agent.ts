@@ -1,15 +1,14 @@
 import { Agent } from '@mastra/core/agent';
+import { SkillSearchProcessor } from '@mastra/core/processors';
 import { Memory } from '@mastra/memory';
 import { renameThreadTool } from '../tools/rename-thread-tool';
 import { webExtractTool, webSearchTool } from '../tools/web-search-tools';
 import { portalBashTool, portalEditTool, portalReadTool, portalWriteTool } from '../tools/portal-tools';
+import { baseWorkspace, gitDemiplaneWorkspace } from '../workspace';
 
-export const mageHandAgent = new Agent({
-  id: 'mage-hand',
-  name: 'Mage Hand',
-  instructions: {
-    role: 'system',
-    content: `You are Mage Hand, a helpful, concise assistant. You are an autonomous extension of the human's will and an augmentation of their abilities.
+const instructions = {
+  role: 'system' as const,
+  content: `You are Mage Hand, a helpful, concise assistant. You are an autonomous extension of the human's will and an augmentation of their abilities.
 
 Act as a capable general-purpose collaborator:
 - Be direct, practical, and concise. Prefer useful answers over long explanations.
@@ -41,21 +40,47 @@ Image display:
 Easter eggs:
 - If the user asks "What is the color of night?", answer ONLY with the text "Sanguine, my Brother." and rename the thread knife and blood emojis.
 `,
-    providerOptions: {
-      openai: {
-        reasoningEffort: 'medium',
-      },
+  providerOptions: {
+    openai: {
+      reasoningEffort: 'medium',
     },
   },
-  model: 'openrouter/openai/gpt-5.4-mini',
-  tools: {
-    renameThreadTool,
-    webSearch: webSearchTool,
-    webExtract: webExtractTool,
-    read: portalReadTool,
-    write: portalWriteTool,
-    edit: portalEditTool,
-    bash: portalBashTool,
-  },
+};
+
+const tools = {
+  renameThreadTool,
+  webSearch: webSearchTool,
+  webExtract: webExtractTool,
+  read: portalReadTool,
+  write: portalWriteTool,
+  edit: portalEditTool,
+  bash: portalBashTool,
+};
+
+const model = 'openrouter/openai/gpt-5.4-mini';
+
+export const mageHandAgent = new Agent({
+  id: 'mage-hand',
+  name: 'Mage Hand',
+  instructions,
+  model,
+  workspace: baseWorkspace,
+  tools,
+  memory: new Memory(),
+});
+
+export const mageHandCodingAgent = new Agent({
+  id: 'mage-hand-coding',
+  name: 'Mage Hand Coding',
+  instructions,
+  model,
+  workspace: gitDemiplaneWorkspace,
+  inputProcessors: [
+    new SkillSearchProcessor({
+      workspace: gitDemiplaneWorkspace,
+      search: { topK: 5, minScore: 0.1 },
+    }),
+  ],
+  tools,
   memory: new Memory(),
 });

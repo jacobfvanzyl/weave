@@ -10,7 +10,8 @@ import { LibSQLStore } from '@mastra/libsql';
 import { DuckDBStore } from "@mastra/duckdb";
 import { MastraCompositeStore } from '@mastra/core/storage';
 import { Observability, DefaultExporter, CloudExporter, SensitiveDataFilter } from '@mastra/observability';
-import { mageHandAgent } from './agents/mage-hand-agent';
+import { mageHandAgent, mageHandCodingAgent } from './agents/mage-hand-agent';
+import { workspace } from './workspace';
 import { chatRoutes } from './routes/chat';
 import { chatStateRoutes } from './routes/chat-state';
 import { promptRoutes } from './routes/prompts';
@@ -26,7 +27,8 @@ const storageUrl = process.env.TURSO_DATABASE_URL ?? process.env.MASTRA_STORAGE_
 const storageAuthToken = process.env.TURSO_AUTH_TOKEN ?? process.env.MASTRA_STORAGE_AUTH_TOKEN;
 
 export const mastra = new Mastra({
-  agents: { mageHandAgent },
+  workspace,
+  agents: { mageHandAgent, mageHandCodingAgent },
   editor: new MastraEditor(),
   server: {
     auth: new SimpleAuth<SimpleAuthUser>({
