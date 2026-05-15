@@ -155,6 +155,7 @@ const assertGitPlaneReady = (plane: Plane, resourceId: string) => {
 
 const isPrimaryDemiplane = (demiplane: Demiplane) => demiplane.locked === true || demiplane.workspaceKind === 'primary' || demiplane.source === 'primary';
 
+const normalizeRemote = (value: unknown) => optionalString(value)?.replace(/\.git$/, '').toLowerCase();
 const normalizeDemiplanePath = (demiplane: Pick<Demiplane, 'path'>) => normalizePath(demiplane.path)?.toLowerCase();
 const normalizeDemiplaneBranch = (demiplane: Pick<Demiplane, 'branch'>) => normalizeBranch(demiplane.branch)?.toLowerCase();
 
@@ -169,6 +170,11 @@ const assertUniqueDemiplane = (plane: Plane, candidate: Pick<Demiplane, 'path' |
 
 const portalToolError = (result: { ok?: boolean; error?: unknown }) => {
   if (result.ok === false) throw new Error(typeof result.error === 'string' ? result.error : 'Portal tool failed');
+};
+
+const getAllPlanes = async (memory: any, resourceId: string) => {
+  const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
+  return result.threads.filter(isPlaneThread).map(toPlane);
 };
 
 const getActiveThreadsForDemiplane = async (memory: any, resourceId: string, planeId: string, demiplaneId: string) => {
@@ -355,6 +361,108 @@ export const planesRoutes = [
         const plane = await getPlane(memory, resourceId, c.req.param('planeId'));
         if (!plane) return c.json({ error: 'plane not found' }, 404);
         return c.json({ plane });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/planes/resolve-workspace', {
+    method: 'POST',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const body = await c.req.json();
+        const workspacePath = normalizePath(body?.workspacePath ?? body?.gitTopLevel);
+        const branch = normalizeBranch(body?.branch);
+        const remote = normalizeRemote(body?.remote);
+        const createThread = body?.createThread !== false;
+        if (!workspacePath) return c.json({ error: 'workspacePath or gitTopLevel is required' }, 400);
+
+        const memory = await getMemory(c);
+        const planes = (await getAllPlanes(memory, resourceId)).filter(plane => plane.projectKind === 'git');
+        const exact = planes.flatMap(plane => plane.demiplanes.map(demiplane => ({ plane, demiplane })))
+          .find(item => normalizeDemiplanePath(item.demiplane) === workspacePath.toLowerCase());
+
+        let resolvedPlane = exact?.plane;
+        let resolvedDemiplane = exact?.demiplane;
+        let validation: Record<string, unknown> | undefined;
+        let adopted = false;
+        let offline = Boolean(resolvedPlane?.portalId && !getPortalConnection(resolvedPlane.portalId));
+
+        if (!resolvedPlane) {
+          for (const plane of planes) {
+            if (remote && normalizeRemote(plane.gitRemote) !== remote) continue;
+            if (!plane.portalId) continue;
+            try {
+              const result = await requestPortalTool({
+                portalId: plane.portalId,
+                planeId: plane.id,
+                rootId: plane.portalRootId,
+                repoPath: plane.repoPath,
+                tool: 'portal.git.worktree.validate',
+                args: { path: workspacePath },
+                timeoutMs: 10_000,
+              }) as { ok?: boolean; error?: string; worktree?: Record<string, unknown> };
+              portalToolError(result);
+              validation = result.worktree ?? {};
+              const validatedPath = normalizePath(validation.path) ?? workspacePath;
+              const validatedBranch = normalizeBranch(validation.branch) ?? branch;
+              resolvedPlane = plane;
+              resolvedDemiplane = plane.demiplanes.find(item => normalizeDemiplanePath(item) === validatedPath.toLowerCase())
+                ?? plane.demiplanes.find(item => validatedBranch && normalizeDemiplaneBranch(item) === validatedBranch.toLowerCase());
+
+              if (!resolvedDemiplane) {
+                assertUniqueDemiplane(plane, { path: validatedPath, branch: validatedBranch });
+                const at = nowIso();
+                resolvedDemiplane = {
+                  id: createId('demiplane'),
+                  planeId: plane.id,
+                  workspaceKind: 'worktree',
+                  source: 'adopted',
+                  name: validatedBranch || validatedPath.split('/').pop() || 'Workspace',
+                  portalId: plane.portalId,
+                  path: validatedPath,
+                  branch: validatedBranch,
+                  status: 'ready',
+                  locked: false,
+                  sortOrder: plane.demiplanes.length,
+                  createdAt: at,
+                  updatedAt: at,
+                };
+                resolvedPlane = { ...plane, demiplanes: [...plane.demiplanes, resolvedDemiplane], updatedAt: at };
+                await savePlane(memory, resourceId, resolvedPlane);
+                adopted = true;
+              }
+              break;
+            } catch (error) {
+              if (error instanceof Error && error.message === 'Portal is offline') offline = true;
+            }
+          }
+        }
+
+        if (!resolvedPlane || !resolvedDemiplane) {
+          const remoteMatches = remote ? planes.filter(plane => normalizeRemote(plane.gitRemote) === remote) : [];
+          return c.json({
+            resolved: false,
+            offline,
+            needsConfirmation: remoteMatches.length > 0,
+            candidates: remoteMatches.map(plane => ({ planeId: plane.id, name: plane.name, gitRemote: plane.gitRemote })),
+          });
+        }
+
+        let thread: unknown;
+        if (createThread) {
+          const sortOrder = await getTopThreadSortOrder(memory, resourceId, resolvedPlane.id, resolvedDemiplane.id);
+          thread = await memory.createThread({
+            resourceId,
+            threadId: createId('thread'),
+            title: '...',
+            metadata: { mode: 'plane', planeId: resolvedPlane.id, demiplaneId: resolvedDemiplane.id, sortOrder },
+            saveThread: true,
+          });
+        }
+
+        return c.json({ resolved: true, offline, adopted, plane: resolvedPlane, demiplane: resolvedDemiplane, thread, validation });
       } catch (error) {
         return errorResponse(c, error);
       }

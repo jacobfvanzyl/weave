@@ -6,6 +6,7 @@ import { requestPortalTool } from '../portal/registry';
 const agentId = 'mageHandAgent';
 const planeThreadId = (planeId: string) => `__plane__${planeId}`;
 const agentInstructionsRefreshMs = 60_000;
+const activeThreadStreams = new Set<string>();
 
 type AgentInstructions = {
   path: string;
@@ -159,6 +160,29 @@ const routeSubscriptionModel = (model: unknown) => {
   return `chatgpt/codex/${model.slice('openai/'.length)}`;
 };
 
+const releaseOnStreamClose = (stream: ReadableStream<unknown>, release: () => void) => new ReadableStream<unknown>({
+  async start(controller) {
+    const reader = stream.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        controller.enqueue(value);
+      }
+      controller.close();
+    } catch (error) {
+      controller.error(error);
+    } finally {
+      release();
+      reader.releaseLock();
+    }
+  },
+  cancel() {
+    release();
+    return stream.cancel().catch(() => undefined);
+  },
+});
+
 const toSseResponse = (stream: ReadableStream<unknown>) => {
   const sseStream = stream.pipeThrough(new TransformStream<unknown, string>({
     transform(chunk, controller) {
@@ -203,20 +227,41 @@ export const chatRoutes = [
         chatgptSubscription: true,
       });
 
-      const stream = await handleChatStream({
-        mastra,
-        agentId,
-        version: 'v6',
-        params: {
-          ...params,
-          model: routedModel,
-          system,
-          requestContext,
-          abortSignal: c.req.raw.signal,
-        },
-      });
+      if (typeof threadId === 'string' && activeThreadStreams.has(threadId)) {
+        return c.json({ error: 'thread has an active stream' }, 409);
+      }
 
-      return toSseResponse(stream as ReadableStream<unknown>);
+      const releaseThreadLock = () => {
+        if (typeof threadId === 'string') activeThreadStreams.delete(threadId);
+      };
+
+      if (typeof threadId === 'string') {
+        activeThreadStreams.add(threadId);
+        c.req.raw.signal.addEventListener('abort', releaseThreadLock, { once: true });
+      }
+      try {
+        const stream = await handleChatStream({
+          mastra,
+          agentId,
+          version: 'v6',
+          params: {
+            ...params,
+            model: routedModel,
+            system,
+            requestContext,
+            abortSignal: c.req.raw.signal,
+          },
+        });
+
+        const lockedStream = typeof threadId === 'string'
+          ? releaseOnStreamClose(stream as ReadableStream<unknown>, releaseThreadLock)
+          : stream as ReadableStream<unknown>;
+
+        return toSseResponse(lockedStream);
+      } catch (error) {
+        releaseThreadLock();
+        throw error;
+      }
     },
   }),
 ];

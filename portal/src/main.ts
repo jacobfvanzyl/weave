@@ -24,7 +24,9 @@ type ParsedArgs = {
   flags: Record<string, string | boolean>;
 };
 
-const defaultConfigPath = `${Deno.env.get('HOME') ?? '.'}/.mage-hand/portal.json`;
+const homeDir = Deno.env.get('HOME') ?? '.';
+const defaultConfigPath = `${homeDir}/.weave/portal.json`;
+const legacyConfigPath = `${homeDir}/.mage-hand/portal.json`;
 const defaultHttpServerUrl = 'http://localhost:4111';
 const defaultWsServerUrl = 'ws://localhost:4112';
 const defaultName = 'Mage Portal';
@@ -98,7 +100,10 @@ const withFileMutationQueue = async <T>(path: string, task: () => Promise<T>) =>
 };
 
 const readConfig = async (path: string): Promise<PortalConfig> => {
-  const content = await Deno.readTextFile(path);
+  const content = await Deno.readTextFile(path).catch(async error => {
+    if (path !== defaultConfigPath || !(error instanceof Deno.errors.NotFound)) throw error;
+    return await Deno.readTextFile(legacyConfigPath);
+  });
   return JSON.parse(content) as PortalConfig;
 };
 
@@ -747,10 +752,10 @@ const usage = () => {
 
 Commands:
   login --server http://localhost:4111 --token <auth-token> [--ws-server ws://localhost:4112] [--name <name>]
-  root --path /path/to/code [--id default] [--name Code] [--config ~/.mage-hand/portal.json]
-  mount --plane plane_x --path /path/to/repo [--config ~/.mage-hand/portal.json]
-  daemon [--config ~/.mage-hand/portal.json] [--ws-server ws://localhost:4112]
-  status [--config ~/.mage-hand/portal.json]
+  root --path /path/to/code [--id default] [--name Code] [--config ~/.weave/portal.json]
+  mount --plane plane_x --path /path/to/repo [--config ~/.weave/portal.json]
+  daemon [--config ~/.weave/portal.json] [--ws-server ws://localhost:4112]
+  status [--config ~/.weave/portal.json]
 `);
 };
 

@@ -1,0 +1,23 @@
+{
+  "tasks": {
+    "check": "deno check src/main.ts",
+    "start": "deno run --allow-net --allow-read --allow-env --allow-run=git src/main.ts"
+  },
+  "nodeModulesDir": "auto",
+  "imports": {
+    "ai": "npm:ai@6.0.177",
+    "pi-tui": "npm:@earendil-works/pi-tui@0.74.0"
+  },
+  "compilerOptions": {
+    "lib": ["deno.ns", "deno.window"]
+  },
+  "fmt": {
+    "singleQuote": true,
+    "lineWidth": 120
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  }
+}
