@@ -16,11 +16,12 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clipboard, Loader2, Plus, Send } from 'lucide-react';
+import { Check, Clipboard, KeyRound, Loader2, Plus, Send } from 'lucide-react';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
+import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
 import { chatUrl, getAuthHeaders } from '../../lib/mastra-client';
 import { fetchModelsDevModelOptions, fallbackModelOptions, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
@@ -394,11 +395,13 @@ const SlashHighlightedInput = ({
   placeholder,
   knownPromptNames,
   onKeyDown,
+  disabled,
 }: {
   value: string;
   placeholder: string;
   knownPromptNames: Set<string>;
   onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
+  disabled?: boolean;
 }) => {
   const match = /^(\/[a-zA-Z0-9_-]+)([\s\S]*)$/.exec(value);
   const commandName = match?.[1].slice(1);
@@ -416,11 +419,12 @@ const SlashHighlightedInput = ({
         </div>
       ) : null}
       <ComposerPrimitive.Input
-        autoFocus
+        autoFocus={!disabled}
+        disabled={disabled}
         placeholder={placeholder}
         onKeyDown={onKeyDown}
         className={cn(
-          'relative min-h-10 w-full resize-none bg-transparent p-0 text-base leading-6 outline-none placeholder:text-muted-foreground',
+          'relative min-h-10 w-full resize-none bg-transparent p-0 text-base leading-6 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-70',
           match && isKnownCommand && 'text-transparent caret-foreground',
         )}
       />
@@ -436,6 +440,12 @@ const Composer = () => {
   const [activeIndex, setActiveIndex] = useState(0);
   const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
   const { data: prompts = [] } = useQuery({ queryKey: ['prompts'], queryFn: listPrompts, staleTime: 1000 * 60 });
+  const { data: chatgptAuth } = useQuery({
+    queryKey: ['chatgpt-auth-status'],
+    queryFn: getChatGPTAuthStatus,
+    staleTime: 10_000,
+  });
+  const isChatGPTConnected = chatgptAuth?.connected === true;
   const knownPromptNames = useMemo(() => new Set(prompts.map(prompt => prompt.name)), [prompts]);
   const promptMatches = prompts
     .map(prompt => ({
@@ -474,10 +484,21 @@ const Composer = () => {
     }
   };
 
+  const connectChatGPT = async () => {
+    const login = await startChatGPTLogin();
+    window.open(login.url, 'mage-hand-chatgpt-login', 'width=720,height=820,popup=yes');
+  };
+
   return (
     <ComposerPrimitive.Root className="relative mx-0 rounded-[2rem] border border-border bg-muted/70 px-6 py-5 shadow-lg sm:mx-11">
-      {slashMatch ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
-      <SlashHighlightedInput value={composerText} placeholder={isEmpty ? emptyPlaceholder : ''} knownPromptNames={knownPromptNames} onKeyDown={handleKeyDown} />
+      {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
+      <SlashHighlightedInput
+        value={composerText}
+        placeholder={isChatGPTConnected ? (isEmpty ? emptyPlaceholder : '') : 'Connect ChatGPT to start chatting'}
+        knownPromptNames={knownPromptNames}
+        onKeyDown={handleKeyDown}
+        disabled={!isChatGPTConnected}
+      />
       <div className="mt-2 flex items-center gap-3">
         <button
         type="button"
@@ -489,9 +510,20 @@ const Composer = () => {
         <div className="flex-1" />
         <ModelPicker />
         <AuiIf condition={state => !state.thread.isRunning}>
-        <ComposerPrimitive.Send className="rounded-lg p-2 text-foreground transition hover:bg-background/70 disabled:opacity-40">
-          <Send size={22} />
-        </ComposerPrimitive.Send>
+          {isChatGPTConnected ? (
+            <ComposerPrimitive.Send className="rounded-lg p-2 text-foreground transition hover:bg-background/70 disabled:opacity-40">
+              <Send size={22} />
+            </ComposerPrimitive.Send>
+          ) : (
+            <button
+              type="button"
+              aria-label="Connect ChatGPT"
+              onClick={() => void connectChatGPT()}
+              className="rounded-lg p-2 text-[#fab387] transition hover:bg-background/70"
+            >
+              <KeyRound size={22} />
+            </button>
+          )}
         </AuiIf>
         <AuiIf condition={state => state.thread.isRunning}>
         <ComposerPrimitive.Cancel className="rounded-lg p-2 text-primary transition hover:bg-background/70">

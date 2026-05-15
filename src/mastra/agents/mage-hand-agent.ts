@@ -57,7 +57,7 @@ const tools = {
   bash: portalBashTool,
 };
 
-const model = 'openrouter/openai/gpt-5.4-mini';
+const model = 'chatgpt/codex/gpt-5.5';
 
 export const mageHandAgent = new Agent({
   id: 'mage-hand',

@@ -152,6 +152,13 @@ const getProjectInstructions = async (mastra: any, resourceId: string | undefine
   return instructionBlocks.length > 0 ? instructionBlocks.join('\n\n') : undefined;
 };
 
+const routeSubscriptionModel = (model: unknown) => {
+  if (typeof model !== 'string') return model;
+  if (!model.startsWith('openai/')) return model;
+
+  return `chatgpt/codex/${model.slice('openai/'.length)}`;
+};
+
 const toSseResponse = (stream: ReadableStream<unknown>) => {
   const sseStream = stream.pipeThrough(new TransformStream<unknown, string>({
     transform(chunk, controller) {
@@ -185,12 +192,24 @@ export const chatRoutes = [
         ? [params.system, projectInstructions].filter(Boolean).join('\n\n')
         : params.system;
 
+      const agentId = isGitDemiplane ? 'mage-hand-coding' : 'mage-hand';
+      const routedModel = routeSubscriptionModel(params?.model);
+      console.info('[chat] stream request', {
+        agentId,
+        selectedModel: params?.model,
+        routedModel,
+        threadId,
+        resourceId,
+        chatgptSubscription: true,
+      });
+
       const stream = await handleChatStream({
         mastra,
-        agentId: isGitDemiplane ? 'mage-hand-coding' : 'mage-hand',
+        agentId,
         version: 'v6',
         params: {
           ...params,
+          model: routedModel,
           system,
           requestContext,
           abortSignal: c.req.raw.signal,

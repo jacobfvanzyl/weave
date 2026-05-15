@@ -21,6 +21,8 @@ const providerNames: Record<string, string> = {
   meta: 'Meta',
   'meta-llama': 'Meta',
   openai: 'OpenAI',
+  chatgpt: 'ChatGPT',
+  codex: 'Codex',
   qwen: 'Qwen',
 };
 
@@ -32,11 +34,17 @@ const titleCase = (value: string) =>
     .replace(/\bAi\b/g, 'AI')
     .replace(/\bV(\d)/g, 'V$1');
 
+const cleanModelName = (value: string) =>
+  titleCase(value)
+    .replace(/\bGPT (\d)(?:\s+)(\d)\b/g, 'GPT-$1.$2')
+    .replace(/\bGPT (\d)(?:\s+)(\d)\s+Mini\b/g, 'GPT-$1.$2 Mini')
+    .replace(/\bGPT (\d)(?:\s+)(\d)\s+Codex\b/g, 'GPT-$1.$2 Codex');
+
 export const getFallbackModelDisplayName = (modelId: string) => {
   const withoutGateway = modelId.startsWith('openrouter/') ? modelId.slice('openrouter/'.length) : modelId;
   const [provider, ...modelParts] = withoutGateway.split('/');
   const providerName = providerNames[provider] ?? titleCase(provider);
-  const modelName = titleCase(modelParts.join('/') || provider);
+  const modelName = cleanModelName(modelParts.join('/') || provider);
 
   return `${providerName} ${modelName}`;
 };
@@ -44,6 +52,9 @@ export const getFallbackModelDisplayName = (modelId: string) => {
 export const getModelDisplayName = getFallbackModelDisplayName;
 
 export const availableModels = [
+  'openai/gpt-5.4-mini',
+  'openai/gpt-5.4',
+  'openai/gpt-5.5',
   'openrouter/openai/gpt-5.4-mini',
   'openrouter/openai/gpt-5-mini',
   'openrouter/openai/gpt-5',
@@ -63,7 +74,7 @@ export const fallbackModelOptions: ModelOption[] = availableModels.map(id => ({
 
 export const modelOptions = fallbackModelOptions;
 
-export const defaultModel = availableModels[0];
+export const defaultModel = 'openai/gpt-5.5';
 
 export const fetchModelsDevModelOptions = async () => {
   const response = await fetch('https://models.dev/api.json');
@@ -71,13 +82,20 @@ export const fetchModelsDevModelOptions = async () => {
 
   const data = await response.json() as ModelsDevResponse;
   const openRouterModels = data.openrouter?.models ?? {};
-  const resolvedOptions = Object.values(openRouterModels)
+  const openAiModels = data.openai?.models ?? {};
+  const openAiOptions = Object.values(openAiModels)
+    .map(model => ({
+      id: `openai/${model.id}`,
+      label: model.name ? cleanModelName(model.name) : getFallbackModelDisplayName(`openai/${model.id}`),
+    }));
+  const openRouterOptions = Object.values(openRouterModels)
     .map(model => ({
       id: `openrouter/${model.id}`,
-      label: model.name ? `OpenRouter ${model.name}` : getFallbackModelDisplayName(`openrouter/${model.id}`),
+      label: model.name ? `OpenRouter ${cleanModelName(model.name)}` : getFallbackModelDisplayName(`openrouter/${model.id}`),
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
+  const resolvedOptions = [...openAiOptions, ...openRouterOptions].sort((a, b) => a.label.localeCompare(b.label));
   const resolvedIds = new Set(resolvedOptions.map(option => option.id));
   const fallbackOnlyOptions = fallbackModelOptions.filter(option => !resolvedIds.has(option.id));
 

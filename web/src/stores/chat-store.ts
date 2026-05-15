@@ -229,6 +229,11 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'weave-chat',
+      version: 4,
+      migrate: persistedState => ({
+        ...(persistedState as Partial<ChatState>),
+        selectedModel: defaultModel,
+      }),
       partialize: state => ({
         threadId: state.threadId,
         selectedModel: state.selectedModel,

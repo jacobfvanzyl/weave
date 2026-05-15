@@ -17,8 +17,10 @@ import { chatStateRoutes } from './routes/chat-state';
 import { promptRoutes } from './routes/prompts';
 import { planesRoutes } from './routes/planes';
 import { portalSocketRoutes } from './routes/portal-socket';
+import { chatgptAuthRoutes } from './routes/chatgpt-auth';
 import { parseAuthTokens, type SimpleAuthUser } from './auth';
 import { startPortalWebSocketSidecar } from './portal/websocket-sidecar';
+import { ChatGPTCodexGateway } from './providers/chatgpt-codex-gateway';
 
 const localDataDir = join(process.cwd(), '.data');
 mkdirSync(localDataDir, { recursive: true });
@@ -29,6 +31,9 @@ const storageAuthToken = process.env.TURSO_AUTH_TOKEN ?? process.env.MASTRA_STOR
 export const mastra = new Mastra({
   workspace,
   agents: { mageHandAgent, mageHandCodingAgent },
+  gateways: {
+    chatgpt: new ChatGPTCodexGateway(),
+  },
   editor: new MastraEditor(),
   server: {
     auth: new SimpleAuth<SimpleAuthUser>({
@@ -41,6 +46,7 @@ export const mastra = new Mastra({
       ...promptRoutes,
       ...planesRoutes,
       ...portalSocketRoutes,
+      ...chatgptAuthRoutes,
     ],
   },
   storage: new MastraCompositeStore({
