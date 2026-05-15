@@ -17,6 +17,8 @@
   --color-peach: var(--peach);
   --color-yellow: var(--yellow);
   --color-rosewater: var(--rosewater);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
 }
 
 :root,
@@ -38,6 +40,8 @@
   --peach: #fe640b;
   --yellow: #df8e1d;
   --rosewater: #dc8a78;
+  --destructive: #d20f39;
+  --destructive-foreground: #eff1f5;
 }
 
 :root[data-theme="mocha"] {
@@ -58,6 +62,8 @@
   --peach: #fab387;
   --yellow: #f9e2af;
   --rosewater: #f5e0dc;
+  --destructive: #f38ba8;
+  --destructive-foreground: #11111b;
 }
 
 html,

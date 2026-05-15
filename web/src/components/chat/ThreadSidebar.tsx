@@ -46,13 +46,15 @@ const moveItem = <T extends { id: string }>(items: T[], activeId: string, overId
   return next;
 };
 
-const demiplaneStatusClass = (status: string) => status === 'ready'
-  ? 'bg-success'
-  : status === 'creating'
-    ? 'bg-primary animate-pulse'
-    : status === 'dirty'
-      ? 'bg-yellow'
-      : 'bg-destructive';
+const demiplaneStatusClass = (status: string, isPortalConnected: boolean) => {
+  if (!isPortalConnected) return 'bg-destructive';
+  if (status === 'ready') return 'bg-success';
+  if (status === 'creating') return 'bg-primary animate-pulse';
+  if (status === 'dirty') return 'bg-yellow';
+  return 'bg-destructive';
+};
+
+const getDemiplanePortalId = (plane: { portalId?: string }, demiplane: { portalId?: string }) => demiplane.portalId ?? plane.portalId;
 
 const SortableSection = ({
   items,
@@ -194,6 +196,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   });
   const displayName = authUser?.name ?? '...';
   const onlinePortalCount = portals.filter(portal => portal.status === 'online').length;
+  const onlinePortalIds = new Set(portals.filter(portal => portal.status === 'online').map(portal => portal.portalId));
   const plainThreads = sortManual(threads.filter(thread => !thread.planeId && thread.archived !== true));
   const threadsByPlane = new Map(planes.map(plane => [plane.id, sortManual(threads.filter(thread => thread.planeId === plane.id))]));
   const sortedPlanes = sortManual(planes);
@@ -638,6 +641,9 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                         >
                         {sortedDemiplanes.map((demiplane, demiplaneIndex) => {
                         const demiplaneThreads = planeThreads.filter(thread => thread.demiplaneId === demiplane.id && thread.archived !== true);
+                        const demiplanePortalId = getDemiplanePortalId(plane, demiplane);
+                        const isDemiplanePortalConnected = Boolean(demiplanePortalId && onlinePortalIds.has(demiplanePortalId));
+                        const demiplaneStatusLabel = isDemiplanePortalConnected ? demiplane.status : 'portal offline';
 
                         return (
                           <SortableItem
@@ -651,7 +657,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                               <div className="min-w-0 flex-1">
                                 <div className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate">{demiplane.name}</span>
-                                  <span className={cn('h-2 w-2 shrink-0 rounded-full', demiplaneStatusClass(demiplane.status))} title={demiplane.status} aria-label={demiplane.status} />
+                                  <span className={cn('h-2 w-2 shrink-0 rounded-full', demiplaneStatusClass(demiplane.status, isDemiplanePortalConnected))} title={demiplaneStatusLabel} aria-label={demiplaneStatusLabel} />
                                   {demiplane.locked || demiplane.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
                                 </div>
                                 {demiplane.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{demiplane.lastError}</div> : null}

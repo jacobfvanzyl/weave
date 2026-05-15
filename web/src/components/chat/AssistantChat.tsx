@@ -6,9 +6,11 @@ import {
   ThreadPrimitive,
   useAui,
   useAuiState,
+  useMessage,
   useThread,
 } from '@assistant-ui/react';
 import type { ReasoningMessagePartProps, ToolCallMessagePartProps } from '@assistant-ui/react';
+import type { ThreadMessage } from '@assistant-ui/core';
 import type { UIMessage } from 'ai';
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import ReactMarkdown from 'react-markdown';
@@ -259,6 +261,71 @@ const MarkdownText = ({ text }: { text: string }) => (
   </div>
 );
 
+const getAssistantDisplayedText = (message: ThreadMessage) => {
+  if (message.role !== 'assistant') return '';
+
+  return message.content
+    .filter((part): part is { type: 'text' | 'reasoning'; text: string } =>
+      (part.type === 'text' || part.type === 'reasoning') && typeof part.text === 'string',
+    )
+    .map(part => part.text)
+    .join('')
+    .trim();
+};
+
+const findLastMessageIndex = (messages: readonly ThreadMessage[], role: ThreadMessage['role']) => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === role) return index;
+  }
+  return -1;
+};
+
+const RunningEllipsis = () => (
+  <span aria-label="Agent working" className="inline-block animate-pulse text-muted-foreground">
+    ...
+  </span>
+);
+
+const RunningAssistantPlaceholder = () => {
+  const isRunning = useThread(state => state.isRunning);
+  const messages = useThread(state => state.messages);
+
+  const shouldShow = useMemo(() => {
+    if (!isRunning) return false;
+
+    const lastUserIndex = findLastMessageIndex(messages, 'user');
+    const lastAssistantIndex = findLastMessageIndex(messages, 'assistant');
+    return lastAssistantIndex < lastUserIndex;
+  }, [isRunning, messages]);
+
+  if (!shouldShow) return null;
+
+  return (
+    <div className="w-full px-4 py-3">
+      <div className="chat-message-row flex justify-start gap-3">
+        <div className="chat-message-avatar mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
+          <MageHandIcon className="h-5 w-5" />
+        </div>
+        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6 shadow-sm">
+          <RunningEllipsis />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const AssistantMessageContent = () => {
+  const message = useMessage();
+  const displayedText = getAssistantDisplayedText(message);
+  const isEmptyAssistantMessage = message.role === 'assistant' && displayedText.length === 0;
+
+  if (isEmptyAssistantMessage) {
+    return <RunningEllipsis />;
+  }
+
+  return <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />;
+};
+
 const ThreadMessage = () => (
   <MessagePrimitive.Root className="w-full px-4 py-3">
     <MessagePrimitive.If assistant>
@@ -267,7 +334,7 @@ const ThreadMessage = () => (
           <MageHandIcon className="h-5 w-5" />
         </div>
         <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6 shadow-sm">
-          <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
+          <AssistantMessageContent />
           <div className="text-red-300">
             <MessagePrimitive.Error />
           </div>
@@ -634,6 +701,7 @@ const Thread = () => {
           </div>
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
+        <RunningAssistantPlaceholder />
       </ThreadPrimitive.Viewport>
       <div ref={composerRef} className="shrink-0 bg-gradient-to-t from-background via-background p-4">
         <Composer />
