@@ -13,6 +13,21 @@ const isHiddenThread = (thread: { id: string; metadata?: unknown }) => {
 
 const timestampString = (value: unknown) => typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
 
+const getTopSortOrder = async (memory: any, resourceId: string, scope: { planeId?: string; demiplaneId?: string }) => {
+  const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
+  const orders = result.threads
+    .filter((thread: any) => !isHiddenThread(thread))
+    .filter((thread: any) => {
+      const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
+      if (metadata.archived === true) return false;
+      if (scope.planeId) return metadata.planeId === scope.planeId && metadata.demiplaneId === scope.demiplaneId;
+      return metadata.mode !== 'plane' && typeof metadata.planeId !== 'string';
+    })
+    .map((thread: any) => (thread.metadata as Record<string, unknown> | undefined)?.sortOrder)
+    .filter((value: unknown): value is number => typeof value === 'number');
+  return orders.length ? Math.min(...orders) - 1 : 0;
+};
+
 const getToolInvocation = (part: Record<string, unknown>) =>
   typeof part.toolInvocation === 'object' && part.toolInvocation !== null
     ? (part.toolInvocation as Record<string, unknown>)
@@ -221,11 +236,13 @@ export const chatStateRoutes = [
         const demiplaneId = typeof body?.demiplaneId === 'string' ? body.demiplaneId : undefined;
 
         const memory = await getMemory(c);
+        const sortOrder = await getTopSortOrder(memory, resourceId, { planeId, demiplaneId });
+        const metadata = planeId ? { mode: 'plane', planeId, demiplaneId, sortOrder } : { mode: 'plain', sortOrder };
         const thread = await memory.createThread({
           resourceId,
           threadId,
           title,
-          metadata: planeId ? { mode: 'plane', planeId, demiplaneId } : { mode: 'plain' },
+          metadata,
           saveThread: true,
         });
 

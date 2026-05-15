@@ -75,6 +75,19 @@ const normalizeBranch = (value: unknown) => optionalString(value)?.replace(/^ref
 const normalizePath = (value: unknown) => optionalString(value)?.replace(/\/+$/, '') || undefined;
 const timestampString = (value: unknown) => typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
 
+const getTopThreadSortOrder = async (memory: any, resourceId: string, planeId: string, demiplaneId?: string) => {
+  const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
+  const orders = result.threads
+    .filter((thread: any) => {
+      const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
+      if (metadata.archived === true) return false;
+      return metadata.planeId === planeId && metadata.demiplaneId === demiplaneId;
+    })
+    .map((thread: any) => (thread.metadata as Record<string, unknown> | undefined)?.sortOrder)
+    .filter((value: unknown): value is number => typeof value === 'number');
+  return orders.length ? Math.min(...orders) - 1 : 0;
+};
+
 const isPlaneThread = (thread: { id: string; metadata?: unknown }) => {
   const metadata = thread.metadata as Record<string, unknown> | undefined;
   return thread.id.startsWith(planeThreadPrefix) || metadata?.kind === 'plane';
@@ -585,9 +598,10 @@ export const planesRoutes = [
         if (plane.projectKind === 'standard' && requestedDemiplaneId) return c.json({ error: 'standard projects cannot have workspace threads' }, 400);
         if (plane.projectKind === 'git' && !demiplane) return c.json({ error: 'git project threads must belong to a workspace' }, 400);
 
+        const sortOrder = await getTopThreadSortOrder(memory, resourceId, planeId, demiplane?.id);
         const metadata = demiplane
-          ? { mode: 'plane', planeId, demiplaneId: demiplane.id }
-          : { mode: 'plane', planeId };
+          ? { mode: 'plane', planeId, demiplaneId: demiplane.id, sortOrder }
+          : { mode: 'plane', planeId, sortOrder };
         const thread = await memory.createThread({
           resourceId,
           threadId,
