@@ -1,0 +1,60 @@
+import type { ChatMessage, RenderMessage } from './types.ts';
+import { formatToolCall, isRenameThreadTool, renderMarkdown, renderPlainText, renderUserMessage } from './rendering.ts';
+import { ansi, mocha } from './theme.ts';
+
+export const toolNameFromPartType = (type: string) => type.startsWith('tool-') ? type.slice('tool-'.length) : undefined;
+
+export const renderMessagePart = (part: Record<string, unknown>) => {
+  if (part.type === 'text' && typeof part.text === 'string') return part.text;
+  if (part.type === 'reasoning' && typeof part.text === 'string') return part.text;
+
+  if (typeof part.type === 'string' && part.type.startsWith('tool-')) {
+    const toolName = toolNameFromPartType(part.type);
+    if (isRenameThreadTool(toolName)) return '';
+    return formatToolCall(toolName, typeof part.toolCallId === 'string' ? part.toolCallId : undefined);
+  }
+
+  return '';
+};
+
+export const textFromMessage = (message: ChatMessage) => (message.parts ?? [])
+  .map(renderMessagePart)
+  .filter(Boolean)
+  .join('\n');
+
+export const chatMessageToRenderMessages = (message: ChatMessage): RenderMessage[] => {
+  if (message.role === 'system') {
+    const text = textFromMessage(message).trim();
+    return text ? [{ type: 'system', text }] : [];
+  }
+  if (message.role === 'user') {
+    const text = textFromMessage(message).trim();
+    return text ? [{ type: 'user', id: message.id, text }] : [];
+  }
+
+  const rendered: RenderMessage[] = [];
+  const textParts: string[] = [];
+  for (const part of message.parts ?? []) {
+    if (part.type === 'text' && typeof part.text === 'string') textParts.push(part.text);
+    if (part.type === 'reasoning' && typeof part.text === 'string') textParts.push(part.text);
+    if (typeof part.type === 'string' && part.type.startsWith('tool-')) {
+      const toolName = toolNameFromPartType(part.type);
+      if (isRenameThreadTool(toolName)) continue;
+      rendered.push({ type: 'tool', toolName: toolName ?? 'tool', toolCallId: typeof part.toolCallId === 'string' ? part.toolCallId : undefined });
+    }
+  }
+  const text = textParts.join('\n').trim();
+  if (text) rendered.push({ type: 'assistant', id: message.id, rawText: text, renderedText: renderMarkdown(text) });
+  return rendered;
+};
+
+export const renderTranscriptMessage = (message: RenderMessage, width: number) => {
+  if (message.type === 'user') return renderUserMessage(message.text, width).split('\n');
+  if (message.type === 'assistant') return message.renderedText ? message.renderedText.split('\n') : renderPlainText(message.rawText, width);
+  if (message.type === 'tool') return [formatToolCall(message.toolName, message.toolCallId, width)];
+  return [ansi.fg(mocha.overlay0, message.text)];
+};
+
+export const getMessagesVersion = (messages: ChatMessage[]) => messages
+  .map(message => `${message.id}:${message.role}:${message.parts?.length ?? 0}:${textFromMessage(message).length}`)
+  .join('|');

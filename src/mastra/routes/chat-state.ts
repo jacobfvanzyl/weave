@@ -315,6 +315,31 @@ export const chatStateRoutes = [
       }
     },
   }),
+  registerApiRoute('/chat-state/threads/:threadId/context-usage', {
+    method: 'GET',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const threadId = c.req.param('threadId');
+        const memory = await getMemory(c);
+        const recalled = await memory.recall({
+          threadId,
+          resourceId,
+          perPage: false,
+          orderBy: { field: 'createdAt', direction: 'ASC' },
+        });
+        const tokens = recalled.usage?.tokens ?? 0;
+        const contextWindow = typeof memory.MAX_CONTEXT_TOKENS === 'number' ? memory.MAX_CONTEXT_TOKENS : undefined;
+        return c.json({
+          tokens,
+          contextWindow,
+          percent: contextWindow ? Math.min(100, (tokens / contextWindow) * 100) : undefined,
+        });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
   registerApiRoute('/chat-state/threads/:threadId/messages', {
     method: 'GET',
     handler: async c => {
