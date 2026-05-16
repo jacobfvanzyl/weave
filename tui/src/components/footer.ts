@@ -12,6 +12,7 @@ type FooterParts = {
 };
 
 const contextColor = (percent: number) => percent > 75 ? mocha.red : percent > 50 ? mocha.yellow : mocha.green;
+const formatContextPercent = (percent: number) => percent > 0 && percent < 10 ? percent.toFixed(1) : percent.toFixed(0);
 
 export class WeaveFooterComponent implements Component {
   constructor(private getParts: () => FooterParts) {}
@@ -20,7 +21,7 @@ export class WeaveFooterComponent implements Component {
     const { modelDisplayName, contextPercent = 0, title } = this.getParts();
     const sep = ansi.fg(mocha.surface1, ' | ');
     const model = `${ansi.fg(mocha.green, '◆')} ${ansi.fg(mocha.green, modelDisplayName)}`;
-    const context = ansi.fg(contextColor(contextPercent), `${contextPercent.toFixed(0)}%`);
+    const context = ansi.fg(contextColor(contextPercent), `${formatContextPercent(contextPercent)}%`);
     const row1 = truncateToWidth(ansi.bold(`${model}${sep}${context}`), width);
 
     const titleParts = [

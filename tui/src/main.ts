@@ -5,9 +5,9 @@ import { ResumeList } from './components/resume-list.ts';
 import { defaultConfigPath, defaultServerUrl, parseArgs, readConfig, stringFlag, writeConfig } from './config.ts';
 import { detectWorkspace } from './git.ts';
 import { chatMessageToRenderMessages, getMessagesVersion, renderTranscriptMessage } from './messages.ts';
-import { defaultModel, fallbackModelOptions, fetchModelOptions, getResolvedModelDisplayName } from './models.ts';
+import { defaultModel, fallbackModelOptions, fetchModelOptions, getResolvedModelContextWindow, getResolvedModelDisplayName } from './models.ts';
 import { formatToolCall, renderMarkdown } from './rendering.ts';
-import type { AppState, ChatMessage, RenderMessage, ResolvedWorkspace } from './types.ts';
+import type { AppState, ChatMessage, RenderMessage, ResolvedWorkspace, TokenUsage } from './types.ts';
 
 const createIdlePoller = (server: string, token: string, threadId: string, seenMessageIds: Set<string>, onMessages?: (messages: ChatMessage[]) => void) => {
   let running = false;
@@ -49,7 +49,7 @@ const createIdlePoller = (server: string, token: string, threadId: string, seenM
   };
 };
 
-const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspace, initialMessages: ChatMessage[], model: string, modelDisplayName: string) => {
+const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspace, initialMessages: ChatMessage[], model: string, modelDisplayName: string, modelContextWindow?: number) => {
   const terminal = new ProcessTerminal();
   const tui = new TUI(terminal, true);
   const titleFor = (threadTitle?: string) => ({
@@ -57,6 +57,14 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
     demiplane: resolved.demiplane?.name,
     thread: threadTitle && !['...', 'New chat'].includes(threadTitle) ? threadTitle : undefined,
   });
+  const usageTotalTokens = (usage: TokenUsage | undefined) => usage?.totalTokens
+    ?? ((usage?.inputTokens ?? usage?.promptTokens ?? 0) + (usage?.outputTokens ?? usage?.completionTokens ?? 0));
+  const updateContextFromUsage = (usage: TokenUsage | undefined) => {
+    const tokens = usageTotalTokens(usage);
+    if (!tokens || !modelContextWindow) return;
+    state.contextPercent = Math.min(100, (tokens / modelContextWindow) * 100);
+  };
+
   const state: AppState = {
     modelDisplayName,
     contextPercent: 0,
@@ -79,8 +87,8 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
       state.contextPercent = undefined;
       return;
     }
-    const usage = await getContextUsage(server, token, threadId);
-    state.contextPercent = usage.percent;
+    const usage = await getContextUsage(server, token, threadId, modelContextWindow);
+    if (typeof usage.percent === 'number' && usage.percent > 0) state.contextPercent = usage.percent;
   };
   if (threadId) void refreshContextUsage().finally(requestRender);
   const addMessages = (messages: ChatMessage[]) => {
@@ -224,9 +232,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
             state.messages.splice(state.messages.length - 1, 0, { type: 'tool', toolName: toolName ?? 'tool', toolCallId });
             requestRender();
           },
-          usage => {
-            void usage;
-          },
+          updateContextFromUsage,
           () => {
             assistant.renderedText = assistant.rawText.trim() ? renderMarkdown(assistant.rawText) : undefined;
             void refreshContextUsage().finally(requestRender);
@@ -262,6 +268,7 @@ const start = async (flags: Record<string, string | boolean>) => {
   const model = stringFlag(flags, 'model') ?? Deno.env.get('WEAVE_MODEL') ?? config.model ?? defaultModel;
   const modelOptions = await fetchModelOptions().catch(() => fallbackModelOptions);
   const modelDisplayName = getResolvedModelDisplayName(model, modelOptions);
+  const modelContextWindow = getResolvedModelContextWindow(model, modelOptions);
 
   const workspace = await detectWorkspace();
   const resolved = await resolveWorkspace(server, token, workspace);
@@ -274,7 +281,7 @@ const start = async (flags: Record<string, string | boolean>) => {
   const messages = resolved.thread?.id ? await listMessages(server, token, resolved.thread.id) : [];
   if (resolved.offline) messages.unshift({ id: 'offline', role: 'system', parts: [{ type: 'text', text: '[offline] Portal offline. Chat works; local tools unavailable until reconnect.' }] });
   if (resolved.adopted) messages.unshift({ id: 'adopted', role: 'system', parts: [{ type: 'text', text: `[adopted] ${resolved.demiplane?.path}` }] });
-  await chatLoop(server, token, resolved, messages, model, modelDisplayName);
+  await chatLoop(server, token, resolved, messages, model, modelDisplayName, modelContextWindow);
 };
 
 const login = async (flags: Record<string, string | boolean>) => {

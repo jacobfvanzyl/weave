@@ -1,6 +1,6 @@
-export type ModelOption = { id: string; label: string };
+export type ModelOption = { id: string; label: string; contextWindow?: number };
 
-type ModelsDevModel = { id: string; name?: string };
+type ModelsDevModel = { id: string; name?: string; limit?: { context?: number } };
 type ModelsDevProvider = { models?: Record<string, ModelsDevModel> };
 type ModelsDevResponse = Record<string, ModelsDevProvider>;
 
@@ -56,9 +56,23 @@ export const getFallbackModelDisplayName = (modelId: string) => {
   return `${providerName} ${modelName}`;
 };
 
+const fallbackContextWindows: Record<string, number> = {
+  'openai/gpt-5.4-mini': 1_050_000,
+  'openai/gpt-5.4': 1_050_000,
+  'openai/gpt-5.5': 1_050_000,
+  'openrouter/openai/gpt-5.4-mini': 1_050_000,
+  'openrouter/openai/gpt-5-mini': 400_000,
+  'openrouter/openai/gpt-5': 400_000,
+  'openrouter/anthropic/claude-sonnet-4': 200_000,
+  'openrouter/anthropic/claude-opus-4.1': 200_000,
+  'openrouter/google/gemini-2.5-pro': 1_048_576,
+  'openrouter/google/gemini-2.5-flash': 1_048_576,
+};
+
 export const fallbackModelOptions: ModelOption[] = availableModels.map(id => ({
   id,
   label: getFallbackModelDisplayName(id),
+  contextWindow: fallbackContextWindows[id],
 }));
 
 export const fetchModelOptions = async () => {
@@ -71,11 +85,13 @@ export const fetchModelOptions = async () => {
   const openAiOptions = Object.values(openAiModels).map(model => ({
     id: `openai/${model.id}`,
     label: model.name ? cleanModelName(model.name) : getFallbackModelDisplayName(`openai/${model.id}`),
+    contextWindow: model.limit?.context,
   }));
   const openRouterOptions = Object.values(openRouterModels)
     .map(model => ({
       id: `openrouter/${model.id}`,
       label: model.name ? `OpenRouter ${cleanModelName(model.name)}` : getFallbackModelDisplayName(`openrouter/${model.id}`),
+      contextWindow: model.limit?.context,
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
@@ -87,3 +103,6 @@ export const fetchModelOptions = async () => {
 
 export const getResolvedModelDisplayName = (modelId: string, options: ModelOption[] = fallbackModelOptions) =>
   options.find(option => option.id === modelId)?.label ?? getFallbackModelDisplayName(modelId);
+
+export const getResolvedModelContextWindow = (modelId: string, options: ModelOption[] = fallbackModelOptions) =>
+  options.find(option => option.id === modelId)?.contextWindow ?? fallbackContextWindows[modelId];

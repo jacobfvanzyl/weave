@@ -134,6 +134,23 @@ const getRenameTitle = (message: MastraDBMessage) => {
   return '';
 };
 
+const messageTextForTokenEstimate = (message: MastraDBMessage) => message.content.parts
+  .map(part => {
+    const record = part as Record<string, unknown>;
+    if (typeof record.text === 'string') return record.text;
+    if (typeof record.result === 'string') return record.result;
+    if (record.result !== undefined) return JSON.stringify(record.result);
+    if (record.output !== undefined) return typeof record.output === 'string' ? record.output : JSON.stringify(record.output);
+    return JSON.stringify(record);
+  })
+  .filter(Boolean)
+  .join('\n');
+
+const estimateContextTokens = (memory: any, messages: MastraDBMessage[]) => messages.reduce((total, message) => {
+  const text = messageTextForTokenEstimate(message);
+  return total + (typeof memory.estimateTokens === 'function' ? memory.estimateTokens(text) : Math.ceil(text.length / 4));
+}, 0);
+
 const getThreadTitleFromMessages = (messages: MastraDBMessage[]) => {
   for (const message of messages) {
     const title = getRenameTitle(message);
@@ -328,8 +345,13 @@ export const chatStateRoutes = [
           perPage: false,
           orderBy: { field: 'createdAt', direction: 'ASC' },
         });
-        const tokens = recalled.usage?.tokens ?? 0;
-        const contextWindow = typeof memory.MAX_CONTEXT_TOKENS === 'number' ? memory.MAX_CONTEXT_TOKENS : undefined;
+        const tokens = estimateContextTokens(memory, recalled.messages);
+        const queryContextWindow = Number(c.req.query('contextWindow'));
+        const contextWindow = Number.isFinite(queryContextWindow) && queryContextWindow > 0
+          ? queryContextWindow
+          : typeof memory.MAX_CONTEXT_TOKENS === 'number'
+            ? memory.MAX_CONTEXT_TOKENS
+            : undefined;
         return c.json({
           tokens,
           contextWindow,

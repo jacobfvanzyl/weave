@@ -21,8 +21,9 @@ export const listMessages = async (server: string, token: string, threadId: stri
   return body.messages ?? [];
 };
 
-export const getContextUsage = async (server: string, token: string, threadId: string) => {
-  const response = await apiFetch(server, token, `/chat-state/threads/${threadId}/context-usage`);
+export const getContextUsage = async (server: string, token: string, threadId: string, contextWindow?: number) => {
+  const query = contextWindow ? `?contextWindow=${contextWindow}` : '';
+  const response = await apiFetch(server, token, `/chat-state/threads/${threadId}/context-usage${query}`);
   return await response.json() as { tokens: number; contextWindow?: number; percent?: number };
 };
 

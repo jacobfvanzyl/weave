@@ -34,19 +34,22 @@ export type StreamChunk = {
   errorText?: string;
   toolName?: string;
   toolCallId?: string;
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-  };
-  totalUsage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-  };
+  usage?: TokenUsage;
+  totalUsage?: TokenUsage;
   response?: {
     modelId?: string;
   };
+};
+
+export type TokenUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  reasoningTokens?: number;
 };
 
 export type RenderMessage =
