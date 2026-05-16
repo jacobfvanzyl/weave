@@ -107,7 +107,25 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
   let ctrlCArmed = false;
   let ctrlCTimer: number | undefined;
   let poller: ReturnType<typeof createIdlePoller> | undefined;
+  let assistantSpinnerTimer: number | undefined;
   const requestRender = () => tui.requestRender();
+  const stopAssistantSpinner = (assistant?: RenderMessage) => {
+    if (assistant?.type === 'assistant') assistant.pending = false;
+    if (assistantSpinnerTimer) {
+      clearInterval(assistantSpinnerTimer);
+      assistantSpinnerTimer = undefined;
+    }
+  };
+  const startAssistantSpinner = (assistant: RenderMessage) => {
+    stopAssistantSpinner();
+    if (assistant.type !== 'assistant') return;
+    assistant.pending = true;
+    assistant.spinnerFrame = 0;
+    assistantSpinnerTimer = setInterval(() => {
+      assistant.spinnerFrame = ((assistant.spinnerFrame ?? 0) + 1) % 10;
+      requestRender();
+    }, 80);
+  };
   const refreshContextUsage = async () => {
     if (!threadId) {
       state.contextPercent = undefined;
@@ -156,6 +174,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
 
   const stop = async (code = 0) => {
     poller?.stop();
+    stopAssistantSpinner();
     if (ctrlCTimer) clearTimeout(ctrlCTimer);
     tui.stop();
     await terminal.drainInput().catch(() => undefined);
@@ -272,8 +291,9 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
           state.title = titleFor();
           switchPoller(threadId, []);
         }
-        const assistant: RenderMessage = { type: 'assistant', rawText: '' };
+        const assistant: RenderMessage = { type: 'assistant', rawText: '', pending: true, spinnerFrame: 0 };
         state.messages.push(assistant);
+        startAssistantSpinner(assistant);
         await streamChat(
           server,
           token,
@@ -281,6 +301,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
           trimmed,
           model,
           delta => {
+            stopAssistantSpinner(assistant);
             assistant.rawText += delta;
             requestRender();
           },
@@ -294,6 +315,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
           },
           updateContextFromUsage,
           () => {
+            stopAssistantSpinner(assistant);
             assistant.renderedText = assistant.rawText.trim() ? renderMarkdown(assistant.rawText) : undefined;
             void refreshContextUsage().finally(requestRender);
           },
@@ -306,10 +328,12 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
         setThreadTitle(renameTitleFromMessages(messages));
         poller?.prime(messages);
       } catch (error) {
+        stopAssistantSpinner();
         if (markConnectionError(error)) state.status = undefined;
         else state.status = error instanceof Error ? error.message : String(error);
         requestRender();
       } finally {
+        stopAssistantSpinner();
         busy = false;
       }
     })();

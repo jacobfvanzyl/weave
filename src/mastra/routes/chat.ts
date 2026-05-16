@@ -191,6 +191,7 @@ export const chatRoutes = [
           mastra,
           agentId,
           version: 'v6',
+          defaultOptions: { maxSteps: 1000 },
           params: {
             ...params,
             model: routedModel,

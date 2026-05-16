@@ -56,8 +56,8 @@ export type TokenUsage = {
 
 export type RenderMessage =
   | { type: 'user'; id?: string; text: string }
-  | { type: 'assistant'; id?: string; rawText: string; renderedText?: string }
-  | { type: 'tool'; toolName: string; toolCallId?: string }
+  | { type: 'assistant'; id?: string; rawText: string; renderedText?: string; pending?: boolean; spinnerFrame?: number }
+  | { type: 'tool'; toolName: string; toolCallId?: string; input?: unknown; output?: unknown; isError?: boolean }
   | { type: 'system'; text: string };
 
 export type ConnectionStatus = 'connected' | 'not-connected';

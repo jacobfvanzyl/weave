@@ -58,7 +58,14 @@ export const chatMessageToRenderMessages = (message: ChatMessage): RenderMessage
     if (typeof part.type === 'string' && part.type.startsWith('tool-')) {
       const toolName = toolNameFromPartType(part.type);
       if (isRenameThreadTool(toolName)) continue;
-      rendered.push({ type: 'tool', toolName: toolName ?? 'tool', toolCallId: typeof part.toolCallId === 'string' ? part.toolCallId : undefined });
+      rendered.push({
+        type: 'tool',
+        toolName: toolName ?? 'tool',
+        toolCallId: typeof part.toolCallId === 'string' ? part.toolCallId : undefined,
+        input: part.input,
+        output: part.output,
+        isError: part.state === 'output-error',
+      });
     }
   }
   const text = textParts.join('\n').trim();
@@ -69,10 +76,20 @@ export const chatMessageToRenderMessages = (message: ChatMessage): RenderMessage
 export const renderToolSummary = (messages: RenderMessage[], width: number) =>
   formatToolSummary(messages.filter(message => message.type === 'tool').map(message => message.toolName), width).split('\n');
 
+const workingSpinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+const renderWorkingSpinner = (frame = 0) => {
+  const spinner = workingSpinnerFrames[frame % workingSpinnerFrames.length] ?? workingSpinnerFrames[0];
+  return `${ansi.fg(mocha.blue, spinner)} ${ansi.fg(mocha.overlay0, 'Working...')}`;
+};
+
 export const renderTranscriptMessage = (message: RenderMessage, width: number) => {
   if (message.type === 'user') return renderUserMessage(message.text, width).split('\n');
-  if (message.type === 'assistant') return message.renderedText ? message.renderedText.split('\n') : renderPlainText(message.rawText, width);
-  if (message.type === 'tool') return [formatToolCall(message.toolName, message.toolCallId, width)];
+  if (message.type === 'assistant') {
+    if (message.pending && !message.rawText.trim()) return [renderWorkingSpinner(message.spinnerFrame)];
+    return message.renderedText ? message.renderedText.split('\n') : renderPlainText(message.rawText, width);
+  }
+  if (message.type === 'tool') return formatToolCall(message.toolName, message.toolCallId, width, message.input, message.output, message.isError).split('\n');
   return [ansi.fg(mocha.overlay0, message.text)];
 };
 
