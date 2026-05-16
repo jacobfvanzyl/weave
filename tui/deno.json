@@ -6,6 +6,7 @@
   "nodeModulesDir": "auto",
   "imports": {
     "ai": "npm:ai@6.0.177",
+    "cli-highlight": "npm:cli-highlight@2.1.11",
     "pi-tui": "npm:@earendil-works/pi-tui@0.74.0"
   },
   "compilerOptions": {

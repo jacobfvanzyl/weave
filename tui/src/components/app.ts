@@ -1,5 +1,5 @@
-import { CombinedAutocompleteProvider, Editor, getKeybindings, TUI, type Component, type Focusable } from 'pi-tui';
-import { renderTranscriptMessage } from '../messages.ts';
+import { CombinedAutocompleteProvider, Editor, getKeybindings, truncateToWidth, TUI, type Component, type Focusable } from 'pi-tui';
+import { renderToolSummary, renderTranscriptMessage } from '../messages.ts';
 import { ansi, mocha } from '../theme.ts';
 import type { AppState } from '../types.ts';
 import { WeaveFooterComponent } from './footer.ts';
@@ -37,12 +37,24 @@ export class WeaveApp implements Component, Focusable {
   render(width: number) {
     this.editor.focused = this.focused;
     const lines: string[] = [];
-    for (const message of this.state.messages) {
+    for (let index = 0; index < this.state.messages.length; index += 1) {
+      const message = this.state.messages[index];
+      if (message.type === 'tool') {
+        const tools = [message];
+        while (this.state.messages[index + 1]?.type === 'tool') {
+          const next = this.state.messages[index + 1];
+          if (next.type !== 'tool') break;
+          tools.push(next);
+          index += 1;
+        }
+        lines.push('', ...renderToolSummary(tools, width));
+        continue;
+      }
       lines.push('', ...renderTranscriptMessage(message, width));
     }
     if (this.state.status) lines.push('', ansi.fg(mocha.overlay0, this.state.status));
     lines.push('', ...this.editor.render(width), ...this.footer.render(width));
-    return lines;
+    return lines.map(line => truncateToWidth(line, width));
   }
 
   handleInput(data: string) {

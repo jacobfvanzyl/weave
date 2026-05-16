@@ -1,4 +1,5 @@
 import type { MarkdownTheme } from 'pi-tui';
+import { highlightCode } from './highlight.ts';
 
 export const mocha = {
   rosewater: '#f5e0dc', flamingo: '#f2cdcd', pink: '#f5c2e7', mauve: '#cba6f7',
@@ -17,6 +18,19 @@ const hexToRgb = (hex: string) => {
     g: Number.parseInt(value.slice(2, 4), 16),
     b: Number.parseInt(value.slice(4, 6), 16),
   };
+};
+
+const rgbToHex = ({ r, g, b }: { r: number; g: number; b: number }) =>
+  `#${[r, g, b].map(value => Math.round(value).toString(16).padStart(2, '0')).join('')}`;
+
+export const blendHex = (foreground: string, background: string, alpha: number) => {
+  const fg = hexToRgb(foreground);
+  const bg = hexToRgb(background);
+  return rgbToHex({
+    r: fg.r * alpha + bg.r * (1 - alpha),
+    g: fg.g * alpha + bg.g * (1 - alpha),
+    b: fg.b * alpha + bg.b * (1 - alpha),
+  });
 };
 
 export const ansi = {
@@ -50,4 +64,5 @@ export const markdownTheme: MarkdownTheme = {
   italic: ansi.italic,
   underline: ansi.underline,
   strikethrough: ansi.strikethrough,
+  highlightCode,
 };

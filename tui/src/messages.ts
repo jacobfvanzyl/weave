@@ -1,5 +1,5 @@
 import type { ChatMessage, RenderMessage } from './types.ts';
-import { formatToolCall, isRenameThreadTool, renderMarkdown, renderPlainText, renderUserMessage } from './rendering.ts';
+import { formatToolCall, formatToolSummary, isRenameThreadTool, renderMarkdown, renderPlainText, renderUserMessage } from './rendering.ts';
 import { ansi, mocha } from './theme.ts';
 
 export const toolNameFromPartType = (type: string) => type.startsWith('tool-') ? type.slice('tool-'.length) : undefined;
@@ -47,6 +47,9 @@ export const chatMessageToRenderMessages = (message: ChatMessage): RenderMessage
   if (text) rendered.push({ type: 'assistant', id: message.id, rawText: text, renderedText: renderMarkdown(text) });
   return rendered;
 };
+
+export const renderToolSummary = (messages: RenderMessage[], width: number) =>
+  formatToolSummary(messages.filter(message => message.type === 'tool').map(message => message.toolName), width).split('\n');
 
 export const renderTranscriptMessage = (message: RenderMessage, width: number) => {
   if (message.type === 'user') return renderUserMessage(message.text, width).split('\n');
