@@ -4,6 +4,24 @@ import { ansi, mocha } from './theme.ts';
 
 export const toolNameFromPartType = (type: string) => type.startsWith('tool-') ? type.slice('tool-'.length) : undefined;
 
+const toolPayloadTitle = (value: unknown) =>
+  value && typeof value === 'object' && typeof (value as { title?: unknown }).title === 'string'
+    ? (value as { title: string }).title.trim()
+    : '';
+
+export const renameTitleFromMessages = (messages: ChatMessage[]) => {
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (typeof part.type !== 'string' || !part.type.startsWith('tool-')) continue;
+      const toolName = toolNameFromPartType(part.type);
+      if (!isRenameThreadTool(toolName)) continue;
+      const title = toolPayloadTitle(part.output) || toolPayloadTitle(part.input);
+      if (title) return title;
+    }
+  }
+  return '';
+};
+
 export const renderMessagePart = (part: Record<string, unknown>) => {
   if (part.type === 'text' && typeof part.text === 'string') return part.text;
   if (part.type === 'reasoning' && typeof part.text === 'string') return part.text;

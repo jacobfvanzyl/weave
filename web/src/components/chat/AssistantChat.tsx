@@ -396,7 +396,7 @@ const ModelPicker = () => {
           const resolvedModel = resolveModelInput(event.target.value);
           if (resolvedModel) setSelectedModel(resolvedModel);
         }}
-        className="h-10 w-64 rounded-lg bg-transparent px-2 text-right text-base leading-6 text-foreground outline-none transition placeholder:text-muted-foreground focus:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50"
+        className="h-10 w-64 rounded-lg bg-transparent px-2 text-right text-base leading-6 text-[#89b4fa] outline-none transition placeholder:text-muted-foreground focus:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50"
       />
       <datalist id="weave-models">
         {modelOptions.map(model => (
@@ -578,7 +578,7 @@ const Composer = () => {
         <ModelPicker />
         <AuiIf condition={state => !state.thread.isRunning}>
           {isChatGPTConnected ? (
-            <ComposerPrimitive.Send className="rounded-lg p-2 text-foreground transition hover:bg-background/70 disabled:opacity-40">
+            <ComposerPrimitive.Send className="rounded-lg p-2 text-[#89b4fa] transition hover:bg-background/70 disabled:opacity-40">
               <Send size={22} />
             </ComposerPrimitive.Send>
           ) : (

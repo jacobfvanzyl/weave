@@ -159,8 +159,10 @@ const usageFrom = (response: Record<string, unknown> | undefined): LanguageModel
   const inputTokens = typeof usage?.input_tokens === 'number' ? usage.input_tokens : undefined;
   const outputTokens = typeof usage?.output_tokens === 'number' ? usage.output_tokens : undefined;
   const totalTokens = typeof usage?.total_tokens === 'number' ? usage.total_tokens : undefined;
+  const inputDetails = usage?.input_tokens_details as Record<string, unknown> | undefined;
+  const cachedInputTokens = typeof inputDetails?.cached_tokens === 'number' ? inputDetails.cached_tokens : undefined;
 
-  return { inputTokens, outputTokens, totalTokens };
+  return { inputTokens, outputTokens, totalTokens, cachedInputTokens };
 };
 
 export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
@@ -276,8 +278,15 @@ export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
 
             if (type === 'response.completed' || type === 'response.done' || type === 'response.incomplete' || type === 'response.failed') {
               const res = event.response as Record<string, unknown> | undefined;
+              const usage = usageFrom(res);
+              console.info('[chatgpt-codex] response completed', {
+                model: modelId,
+                inputTokens: usage.inputTokens,
+                cachedInputTokens: usage.cachedInputTokens,
+                outputTokens: usage.outputTokens,
+              });
               if (textStarted) controller.enqueue({ type: 'text-end', id: textId });
-              controller.enqueue({ type: 'finish', finishReason: finishReason(res?.status), usage: usageFrom(res) });
+              controller.enqueue({ type: 'finish', finishReason: finishReason(res?.status), usage });
               controller.close();
               return;
             }

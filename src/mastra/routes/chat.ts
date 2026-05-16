@@ -1,64 +1,13 @@
 import { handleChatStream } from '@mastra/ai-sdk';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { registerApiRoute } from '@mastra/core/server';
+import { buildChatSystemMessages, type ProjectAgentInstructions } from '../agents/instructions';
 import { requestPortalTool } from '../portal/registry';
 
 const agentId = 'mageHandAgent';
 const planeThreadId = (planeId: string) => `__plane__${planeId}`;
 const agentInstructionsRefreshMs = 60_000;
 const activeThreadStreams = new Set<string>();
-
-type AgentInstructions = {
-  path: string;
-  content: string;
-  size?: number;
-  updatedAt?: string;
-  checkedAt?: string;
-};
-
-const gitPlaneCodingInstructions = [
-  '# Git Plane Coding Agent',
-  '',
-  'Apply these instructions only while working in this Git Plane Demiplane.',
-  'These instructions supplement the base Mage Hand behavior and repository instructions. If they conflict with higher-priority system/developer instructions, follow the higher-priority instructions.',
-  '',
-  'You are operating in a git-backed repository workspace. Behave like a dedicated coding agent, not a general chat assistant.',
-  '',
-  'Coding workflow:',
-  '- Treat the repository as the primary source of truth.',
-  '- Inspect relevant files before proposing or making code changes.',
-  '- Use project-local tools for filesystem and command work when needed.',
-  '- Prefer small, precise, reviewable edits over broad rewrites.',
-  '- Preserve existing style, architecture, naming, and conventions.',
-  '- Do not modify unrelated files or refactor unrelated code.',
-  '- Validate user input and handle errors explicitly.',
-  '- Never hardcode secrets, credentials, tokens, or environment-specific private values.',
-  '',
-  'Search and file operations:',
-  '- Use bash for discovery/search commands such as ls, fd, and rg before reading unknown files.',
-  '- Use read for file inspection.',
-  '- Use edit for targeted changes.',
-  '- Use write only for new files or full-file replacement.',
-  '',
-  'Verification:',
-  '- After changes, run the most relevant available check when practical: tests, typecheck, lint, or build.',
-  '- If verification cannot run or fails for unrelated/environmental reasons, say so clearly.',
-  '',
-  'Communication:',
-  '- Be concise and implementation-focused.',
-  '- State changed files clearly.',
-  '- Summarize verification performed and remaining risks.',
-].join('\n');
-
-const formatProjectContextFile = (path: string, content: string) => [
-  '# Project Context',
-  '',
-  'Project-specific instructions and guidelines:',
-  '',
-  `## ${path}`,
-  '',
-  content,
-].join('\n');
 
 const getMemory = async (mastra: any) => {
   const agent = await mastra?.getAgent(agentId);
@@ -67,14 +16,14 @@ const getMemory = async (mastra: any) => {
   return memory;
 };
 
-const shouldRefreshAgentInstructions = (agentInstructions: AgentInstructions | undefined) => {
+const shouldRefreshAgentInstructions = (agentInstructions: ProjectAgentInstructions | undefined) => {
   if (!agentInstructions?.checkedAt) return true;
   const checkedAt = Date.parse(agentInstructions.checkedAt);
   return Number.isNaN(checkedAt) || Date.now() - checkedAt > agentInstructionsRefreshMs;
 };
 
 const refreshAgentInstructions = async (memory: any, planeThread: any, planeMetadata: Record<string, any>) => {
-  const agentInstructions = planeMetadata.agentInstructions as AgentInstructions | undefined;
+  const agentInstructions = planeMetadata.agentInstructions as ProjectAgentInstructions | undefined;
   if (planeMetadata.projectKind !== 'git' || !shouldRefreshAgentInstructions(agentInstructions)) return planeMetadata;
   if (typeof planeMetadata.portalId !== 'string' || typeof planeMetadata.portalRootId !== 'string' || typeof planeMetadata.repoPath !== 'string') {
     return planeMetadata;
@@ -88,7 +37,7 @@ const refreshAgentInstructions = async (memory: any, planeThread: any, planeMeta
       tool: 'portal.agentInstructions.read',
       args: { rootId: planeMetadata.portalRootId, path: planeMetadata.repoPath },
       timeoutMs: 5_000,
-    }) as { ok?: boolean; error?: string; agentInstructions?: AgentInstructions };
+    }) as { ok?: boolean; error?: string; agentInstructions?: ProjectAgentInstructions };
 
     if (result.ok === false) throw new Error(result.error ?? 'agent instructions refresh failed');
 
@@ -119,8 +68,13 @@ const markGitDemiplaneContext = (requestContext: any, value: boolean) => {
   requestContext?.set?.('gitDemiplane', value);
 };
 
+const markGitProjectContext = (requestContext: any, value: boolean) => {
+  requestContext?.set?.('gitProject', value);
+};
+
 const getProjectInstructions = async (mastra: any, resourceId: string | undefined, threadId: unknown, requestContext?: any) => {
   markGitDemiplaneContext(requestContext, false);
+  markGitProjectContext(requestContext, false);
   if (typeof threadId !== 'string' || !resourceId) return undefined;
 
   const memory = await getMemory(mastra);
@@ -137,20 +91,9 @@ const getProjectInstructions = async (mastra: any, resourceId: string | undefine
   const planeThread = await memory.getThreadById({ threadId: planeThreadId(metadata.planeId) }).catch(() => undefined);
   if (!planeThread || planeThread.resourceId !== resourceId) return undefined;
 
-  const planeMetadata = await refreshAgentInstructions(memory, planeThread, planeThread.metadata as Record<string, any> | undefined ?? {});
-  const instructionBlocks: string[] = [];
-
-  if (planeMetadata?.projectKind === 'git') {
-    instructionBlocks.push(gitPlaneCodingInstructions);
-  }
-
-  const agentsMd = planeMetadata?.agentInstructions;
-  if (agentsMd && typeof agentsMd.content === 'string' && agentsMd.content.trim()) {
-    const path = typeof agentsMd.path === 'string' ? agentsMd.path : 'AGENTS.md';
-    instructionBlocks.push(formatProjectContextFile(path, agentsMd.content.slice(0, 32_000)));
-  }
-
-  return instructionBlocks.length > 0 ? instructionBlocks.join('\n\n') : undefined;
+  const planeMetadata = await refreshAgentInstructions(memory, planeThread, planeThread.metadata as Record<string, any> | undefined ?? {}) as Record<string, any> | undefined;
+  markGitProjectContext(requestContext, planeMetadata?.projectKind === 'git');
+  return planeMetadata?.agentInstructions as ProjectAgentInstructions | undefined;
 };
 
 const routeSubscriptionModel = (model: unknown) => {
@@ -208,13 +151,17 @@ export const chatRoutes = [
       const params = await c.req.json();
       const mastra = c.get('mastra');
       const requestContext = c.get('requestContext');
-      const resourceId = requestContext?.get(MASTRA_RESOURCE_ID_KEY);
+      const contextResourceId = requestContext?.get(MASTRA_RESOURCE_ID_KEY);
+      const resourceId = typeof contextResourceId === 'string' ? contextResourceId : undefined;
       const threadId = params?.memory?.thread;
       const projectInstructions = await getProjectInstructions(mastra, resourceId, threadId, requestContext);
       const isGitDemiplane = requestContext?.get?.('gitDemiplane') === true;
-      const system = projectInstructions
-        ? [params.system, projectInstructions].filter(Boolean).join('\n\n')
-        : params.system;
+      const isGitProject = requestContext?.get?.('gitProject') === true;
+      const system = buildChatSystemMessages({
+        includeGitInstructions: isGitProject,
+        projectInstructions,
+        callerSystem: params.system as Parameters<typeof buildChatSystemMessages>[0]['callerSystem'],
+      });
 
       const agentId = isGitDemiplane ? 'mage-hand-coding' : 'mage-hand';
       const routedModel = routeSubscriptionModel(params?.model);

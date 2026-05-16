@@ -81,6 +81,17 @@ async function* parseSseJson(body: ReadableStream<Uint8Array>) {
   }
 }
 
+const streamToolId = (chunk: StreamChunk) => chunk.toolCallId ?? chunk.id;
+
+const parseToolInputTitle = (rawInput: string) => {
+  try {
+    const input = rawInput ? JSON.parse(rawInput) as { title?: unknown } : undefined;
+    return typeof input?.title === 'string' ? input.title.trim() : '';
+  } catch {
+    return '';
+  }
+};
+
 export const streamChat = async (
   server: string,
   token: string,
@@ -89,6 +100,7 @@ export const streamChat = async (
   model: string,
   onDelta: (delta: string) => void,
   onTool: (toolName: string | undefined, toolCallId: string | undefined) => void,
+  onRename: (title: string) => void,
   onUsage: (usage: StreamChunk['usage'] | StreamChunk['totalUsage']) => void,
   onDone: () => void,
 ) => {
@@ -102,9 +114,25 @@ export const streamChat = async (
   });
 
   if (!response.body) throw new Error('chat response missing body');
+  const renameToolIds = new Set<string>();
+  const toolInputById = new Map<string, string>();
   for await (const chunk of parseSseJson(response.body)) {
     if (chunk.type === 'text-delta') onDelta(chunk.delta ?? '');
-    if (chunk.type === 'tool-input-start' && chunk.toolName !== 'renameThreadTool' && chunk.toolName !== 'rename-thread') onTool(chunk.toolName, chunk.toolCallId);
+    if (chunk.type === 'tool-input-start') {
+      const toolId = streamToolId(chunk);
+      if (chunk.toolName === 'renameThreadTool' || chunk.toolName === 'rename-thread') {
+        if (toolId) renameToolIds.add(toolId);
+      } else onTool(chunk.toolName, toolId);
+    }
+    const toolId = streamToolId(chunk);
+    if (chunk.type === 'tool-input-delta' && toolId && renameToolIds.has(toolId)) {
+      toolInputById.set(toolId, `${toolInputById.get(toolId) ?? ''}${chunk.delta ?? ''}`);
+    }
+    if (chunk.type === 'tool-call' && toolId && renameToolIds.has(toolId)) {
+      const rawInput = typeof chunk.input === 'string' ? chunk.input : toolInputById.get(toolId) ?? '';
+      const title = parseToolInputTitle(rawInput);
+      if (title) onRename(title);
+    }
     if (chunk.usage) onUsage(chunk.usage);
     if (chunk.totalUsage) onUsage(chunk.totalUsage);
     if (chunk.type === 'error') onDelta(`\n[error] ${chunk.errorText ?? 'stream error'}`);

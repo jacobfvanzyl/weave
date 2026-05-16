@@ -34,6 +34,8 @@ export type StreamChunk = {
   errorText?: string;
   toolName?: string;
   toolCallId?: string;
+  id?: string;
+  input?: unknown;
   usage?: TokenUsage;
   totalUsage?: TokenUsage;
   response?: {

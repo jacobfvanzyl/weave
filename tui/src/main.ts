@@ -4,7 +4,7 @@ import { WeaveApp } from './components/app.ts';
 import { ResumeList } from './components/resume-list.ts';
 import { defaultConfigPath, defaultServerUrl, parseArgs, readConfig, stringFlag, writeConfig } from './config.ts';
 import { detectWorkspace } from './git.ts';
-import { chatMessageToRenderMessages, getMessagesVersion, renderTranscriptMessage } from './messages.ts';
+import { chatMessageToRenderMessages, getMessagesVersion, renameTitleFromMessages, renderTranscriptMessage } from './messages.ts';
 import { defaultModel, fallbackModelOptions, fetchModelOptions, getResolvedModelContextWindow, getResolvedModelDisplayName } from './models.ts';
 import { formatToolCall, renderMarkdown } from './rendering.ts';
 import type { AppState, ChatMessage, RenderMessage, ResolvedWorkspace, TokenUsage } from './types.ts';
@@ -122,7 +122,12 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
     }
   };
   if (threadId) void refreshContextUsage().finally(requestRender);
+  const setThreadTitle = (threadTitle: string) => {
+    if (!threadTitle.trim()) return;
+    state.title = titleFor(threadTitle.trim());
+  };
   const addMessages = (messages: ChatMessage[]) => {
+    setThreadTitle(renameTitleFromMessages(messages));
     state.messages.push(...messages.flatMap(chatMessageToRenderMessages));
     void refreshContextUsage().finally(requestRender);
   };
@@ -226,6 +231,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
                 const messages = await listMessages(server, token, selected.id);
                 markConnected();
                 state.title = titleFor(selected.title);
+                setThreadTitle(renameTitleFromMessages(messages));
                 state.messages = messages.flatMap(chatMessageToRenderMessages);
                 resolved.thread = { id: selected.id };
                 switchPoller(selected.id, messages);
@@ -282,6 +288,10 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
             state.messages.splice(state.messages.length - 1, 0, { type: 'tool', toolName: toolName ?? 'tool', toolCallId });
             requestRender();
           },
+          title => {
+            setThreadTitle(title);
+            requestRender();
+          },
           updateContextFromUsage,
           () => {
             assistant.renderedText = assistant.rawText.trim() ? renderMarkdown(assistant.rawText) : undefined;
@@ -293,6 +303,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
           markConnectionError(error);
           return [];
         });
+        setThreadTitle(renameTitleFromMessages(messages));
         poller?.prime(messages);
       } catch (error) {
         if (markConnectionError(error)) state.status = undefined;
