@@ -2,6 +2,12 @@ import type { ChatMessage, ChatThread, ResolvedWorkspace, StreamChunk } from './
 
 export const normalizeHttpUrl = (server: string) => server.replace(/\/$/, '');
 
+export const isConnectionError = (error: unknown) => {
+  if (!(error instanceof Error)) return false;
+  if (error instanceof TypeError) return true;
+  return /fetch failed|error sending request|connection refused|econnrefused|connection reset|network error/i.test(error.message);
+};
+
 export const apiFetch = async (server: string, token: string, path: string, init: RequestInit = {}) => {
   const response = await fetch(`${server}${path}`, {
     ...init,

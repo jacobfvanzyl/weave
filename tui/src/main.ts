@@ -1,5 +1,5 @@
 import { ProcessTerminal, TUI } from 'pi-tui';
-import { createThread, getContextUsage, listDemiplaneThreads, listMessages, normalizeHttpUrl, resolveWorkspace, streamChat } from './api.ts';
+import { createThread, getContextUsage, isConnectionError, listDemiplaneThreads, listMessages, normalizeHttpUrl, resolveWorkspace, streamChat } from './api.ts';
 import { WeaveApp } from './components/app.ts';
 import { ResumeList } from './components/resume-list.ts';
 import { defaultConfigPath, defaultServerUrl, parseArgs, readConfig, stringFlag, writeConfig } from './config.ts';
@@ -9,7 +9,22 @@ import { defaultModel, fallbackModelOptions, fetchModelOptions, getResolvedModel
 import { formatToolCall, renderMarkdown } from './rendering.ts';
 import type { AppState, ChatMessage, RenderMessage, ResolvedWorkspace, TokenUsage } from './types.ts';
 
-const createIdlePoller = (server: string, token: string, threadId: string, seenMessageIds: Set<string>, onMessages?: (messages: ChatMessage[]) => void) => {
+const stderrIsTerminal = () => (Deno.stderr as unknown as { isTerminal?: () => boolean }).isTerminal?.() ?? false;
+
+const printStartupConnectionError = (server: string) => {
+  const message = `Not Connected: unable to reach ${server}`;
+  console.error(stderrIsTerminal() ? `\x1b[2J\x1b[H${message}` : message);
+};
+
+const createIdlePoller = (
+  server: string,
+  token: string,
+  threadId: string,
+  seenMessageIds: Set<string>,
+  onMessages?: (messages: ChatMessage[]) => void,
+  onConnectionError?: (error: unknown) => void,
+  onConnected?: () => void,
+) => {
   let running = false;
   let messagesVersion = '';
 
@@ -18,6 +33,7 @@ const createIdlePoller = (server: string, token: string, threadId: string, seenM
     running = true;
     try {
       const messages = await listMessages(server, token, threadId);
+      onConnected?.();
       const nextVersion = getMessagesVersion(messages);
       if (messagesVersion && nextVersion !== messagesVersion) {
         const unseenMessages = messages.filter(message => !seenMessageIds.has(message.id));
@@ -28,7 +44,8 @@ const createIdlePoller = (server: string, token: string, threadId: string, seenM
       }
       messagesVersion = nextVersion;
     } catch (error) {
-      console.error(`\n[refresh failed] ${error instanceof Error ? error.message : String(error)}`);
+      if (isConnectionError(error)) onConnectionError?.(error);
+      else console.error(`\n[refresh failed] ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       running = false;
     }
@@ -64,9 +81,18 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
     if (!tokens || !modelContextWindow) return;
     state.contextPercent = Math.min(100, (tokens / modelContextWindow) * 100);
   };
+  const markConnected = () => {
+    state.connectionStatus = 'connected';
+  };
+  const markConnectionError = (error: unknown) => {
+    if (!isConnectionError(error)) return false;
+    state.connectionStatus = 'not-connected';
+    return true;
+  };
 
   const state: AppState = {
     modelDisplayName,
+    connectionStatus: resolved.offline ? 'not-connected' : 'connected',
     contextPercent: 0,
     title: titleFor(),
     messages: initialMessages.flatMap(chatMessageToRenderMessages),
@@ -87,8 +113,13 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
       state.contextPercent = undefined;
       return;
     }
-    const usage = await getContextUsage(server, token, threadId, modelContextWindow);
-    if (typeof usage.percent === 'number' && usage.percent > 0) state.contextPercent = usage.percent;
+    try {
+      const usage = await getContextUsage(server, token, threadId, modelContextWindow);
+      markConnected();
+      if (typeof usage.percent === 'number' && usage.percent > 0) state.contextPercent = usage.percent;
+    } catch (error) {
+      if (!markConnectionError(error)) throw error;
+    }
   };
   if (threadId) void refreshContextUsage().finally(requestRender);
   const addMessages = (messages: ChatMessage[]) => {
@@ -99,7 +130,21 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
     poller?.stop();
     seenMessageIds.clear();
     threadId = nextThreadId;
-    poller = createIdlePoller(server, token, nextThreadId, seenMessageIds, addMessages);
+    poller = createIdlePoller(
+      server,
+      token,
+      nextThreadId,
+      seenMessageIds,
+      addMessages,
+      error => {
+        markConnectionError(error);
+        requestRender();
+      },
+      () => {
+        markConnected();
+        requestRender();
+      },
+    );
     poller.prime(messages);
   };
   if (threadId) switchPoller(threadId, initialMessages);
@@ -158,6 +203,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
         requestRender();
         try {
           const threads = await listDemiplaneThreads(server, token, planeId, resolved.demiplane?.id);
+          markConnected();
           state.status = undefined;
           if (threads.length === 0) {
             state.status = 'No threads in this demiplane.';
@@ -178,6 +224,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
               requestRender();
               try {
                 const messages = await listMessages(server, token, selected.id);
+                markConnected();
                 state.title = titleFor(selected.title);
                 state.messages = messages.flatMap(chatMessageToRenderMessages);
                 resolved.thread = { id: selected.id };
@@ -185,7 +232,8 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
                 await refreshContextUsage();
                 state.status = undefined;
               } catch (error) {
-                state.status = error instanceof Error ? error.message : String(error);
+                if (markConnectionError(error)) state.status = undefined;
+                else state.status = error instanceof Error ? error.message : String(error);
               } finally {
                 busy = false;
                 requestRender();
@@ -195,7 +243,8 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
           overlay = tui.showOverlay(resumeList, { anchor: 'bottom-center', width: '90%', maxHeight: '50%', margin: { bottom: 6 } });
           requestRender();
         } catch (error) {
-          state.status = error instanceof Error ? error.message : String(error);
+          if (markConnectionError(error)) state.status = undefined;
+          else state.status = error instanceof Error ? error.message : String(error);
         } finally {
           busy = false;
           requestRender();
@@ -213,6 +262,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
           const planeId = resolved.plane?.id;
           if (!planeId) throw new Error('resolved workspace missing plane.id');
           threadId = await createThread(server, token, planeId, resolved.demiplane?.id);
+          markConnected();
           state.title = titleFor();
           switchPoller(threadId, []);
         }
@@ -238,10 +288,15 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
             void refreshContextUsage().finally(requestRender);
           },
         );
-        const messages = await listMessages(server, token, threadId).catch(() => []);
+        markConnected();
+        const messages = await listMessages(server, token, threadId).catch(error => {
+          markConnectionError(error);
+          return [];
+        });
         poller?.prime(messages);
       } catch (error) {
-        state.status = error instanceof Error ? error.message : String(error);
+        if (markConnectionError(error)) state.status = undefined;
+        else state.status = error instanceof Error ? error.message : String(error);
         requestRender();
       } finally {
         busy = false;
@@ -271,7 +326,13 @@ const start = async (flags: Record<string, string | boolean>) => {
   const modelContextWindow = getResolvedModelContextWindow(model, modelOptions);
 
   const workspace = await detectWorkspace();
-  const resolved = await resolveWorkspace(server, token, workspace);
+  const resolved = await resolveWorkspace(server, token, workspace).catch(error => {
+    if (isConnectionError(error)) {
+      printStartupConnectionError(server);
+      Deno.exit(1);
+    }
+    throw error;
+  });
   if (!resolved.resolved) {
     console.error('No Plane/Demiplane resolved for cwd. Open web client or connect Portal, then try again.');
     if (resolved.needsConfirmation) console.error('Remote matched but needs confirmation in web client.');

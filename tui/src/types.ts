@@ -58,9 +58,12 @@ export type RenderMessage =
   | { type: 'tool'; toolName: string; toolCallId?: string }
   | { type: 'system'; text: string };
 
+export type ConnectionStatus = 'connected' | 'not-connected';
+
 export type AppState = {
   messages: RenderMessage[];
   status?: string;
+  connectionStatus?: ConnectionStatus;
   modelDisplayName: string;
   contextPercent?: number;
   title: {

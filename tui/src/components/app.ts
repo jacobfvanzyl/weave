@@ -14,11 +14,12 @@ export class WeaveApp implements Component, Focusable {
   constructor(private tui: TUI, private state: AppState) {
     this.footer = new WeaveFooterComponent(() => ({
       modelDisplayName: this.state.modelDisplayName,
+      connectionStatus: this.state.connectionStatus,
       contextPercent: this.state.contextPercent,
       title: this.state.title,
     }));
     this.editor = new Editor(tui, {
-      borderColor: (text: string) => ansi.fg(mocha.green, text),
+      borderColor: (text: string) => ansi.fg(mocha.blue, text),
       selectList: {
         selectedPrefix: (text: string) => ansi.fg(mocha.mauve, text),
         selectedText: (text: string) => ansi.fg(mocha.mauve, text),
