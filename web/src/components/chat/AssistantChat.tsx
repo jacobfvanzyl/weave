@@ -54,18 +54,44 @@ const Reasoning = ({ text }: ReasoningMessagePartProps) => (
   </details>
 );
 
+const getToolChipDetail = (toolName: string, args: unknown) => {
+  const record = args && typeof args === 'object' ? args as Record<string, unknown> : undefined;
+  if (toolName === 'bash' && typeof record?.command === 'string') return record.command;
+  if (['read', 'write', 'edit'].includes(toolName) && typeof record?.path === 'string') return record.path;
+  return '';
+};
+
+const getToolResultText = (toolName: string, result: unknown) => {
+  if (result === undefined) return '';
+  if (typeof result === 'string') return result;
+  if (result && typeof result === 'object') {
+    const record = result as Record<string, unknown>;
+    if (typeof record.content === 'string') return record.content;
+    if (typeof record.text === 'string') return record.text;
+    if (typeof record.stdout === 'string' || typeof record.stderr === 'string') {
+      return [record.stdout, record.stderr].filter(item => typeof item === 'string' && item.trim()).join('\n');
+    }
+    if (typeof record.diff === 'string' && record.diff.trim()) return record.diff;
+    if (toolName === 'write' && typeof record.bytes === 'number') return `Wrote ${record.bytes} bytes.`;
+    if (toolName === 'edit' && typeof record.replacements === 'number') return `Applied ${record.replacements} replacement${record.replacements === 1 ? '' : 's'}.`;
+    if (typeof record.error === 'string') return record.error;
+  }
+  return JSON.stringify(result, null, 2);
+};
+
 const ToolCall = (props: ToolCallMessagePartProps) => {
   const threadId = useContext(ThreadIdContext);
   const showToolCalls = useChatStore(state => state.showToolCalls);
   const cached = toolCallCache.get(props.toolCallId);
   const display = isDegradedToolCall(props) && cached ? { ...props, ...cached } : props;
-  const displayStatus = display.result !== undefined ? (display.isError ? 'error' : 'complete') : display.status.type;
+  const rawStatus = display.status.type;
+  const displayStatus = display.result !== undefined
+    ? (display.isError ? 'error' : 'complete')
+    : rawStatus === 'incomplete'
+      ? 'running'
+      : rawStatus;
   const [isResultCopied, setIsResultCopied] = useState(false);
-  const resultText = display.result === undefined
-    ? ''
-    : typeof display.result === 'string'
-      ? display.result
-      : JSON.stringify(display.result, null, 2);
+  const resultText = getToolResultText(display.toolName, display.result);
 
   useEffect(() => {
     if (!isRenameThreadTool(display.toolName)) return;
@@ -93,45 +119,41 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
 
   if (isRenameThreadTool(display.toolName) || !showToolCalls) return null;
 
+  const chipDetail = getToolChipDetail(display.toolName, display.args);
+  const isBusy = displayStatus === 'running';
+
   return (
-    <details className="my-2 rounded-lg border border-border bg-background/70 px-3 py-2 text-xs" open={displayStatus === 'running'}>
-      <summary className="cursor-pointer select-none font-medium text-muted-foreground">
-        Tool: <span className="text-foreground">{display.toolName}</span>
-        <span className="ml-2 text-[10px] uppercase tracking-wide text-muted-foreground">{displayStatus}</span>
+    <details className="my-2 rounded-lg border border-border bg-background/70 px-3 py-2 text-xs">
+      <summary className="flex cursor-pointer select-none items-center gap-2 font-medium text-muted-foreground">
+        <span className="shrink-0 text-muted-foreground">▸</span>
+        {isBusy ? <Loader2 size={12} className="shrink-0 animate-spin text-primary" /> : null}
+        <span className="min-w-0 truncate">
+          <span className="font-bold italic text-mauve">{display.toolName}</span>
+          {chipDetail ? <span className="text-foreground">: {chipDetail}</span> : null}
+        </span>
       </summary>
-      <div className="mt-2 space-y-2">
-        <div>
-          <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">Input</div>
-          <pre className="overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-4 text-foreground">
-            {JSON.stringify(display.args, null, 2)}
+      {display.result !== undefined ? (
+        <div className="mt-2">
+          <div className="mb-1 flex justify-end">
+            <button
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              type="button"
+              onClick={async event => {
+                event.preventDefault();
+                await navigator.clipboard.writeText(resultText);
+                setIsResultCopied(true);
+                window.setTimeout(() => setIsResultCopied(false), 1200);
+              }}
+            >
+              {isResultCopied ? <Check size={12} /> : <Clipboard size={12} />}
+              {isResultCopied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <pre className={cn('overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-4', display.isError ? 'text-destructive' : 'text-foreground')}>
+            {resultText}
           </pre>
         </div>
-        {display.result !== undefined ? (
-          <div>
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <div className={display.isError ? 'text-[10px] uppercase tracking-wide text-destructive' : 'text-[10px] uppercase tracking-wide text-muted-foreground'}>
-                {display.isError ? 'Error' : 'Result'}
-              </div>
-              <button
-                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                type="button"
-                onClick={async event => {
-                  event.preventDefault();
-                  await navigator.clipboard.writeText(resultText);
-                  setIsResultCopied(true);
-                  window.setTimeout(() => setIsResultCopied(false), 1200);
-                }}
-              >
-                {isResultCopied ? <Check size={12} /> : <Clipboard size={12} />}
-                {isResultCopied ? 'Copied' : 'Copy'}
-              </button>
-            </div>
-            <pre className="overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-4 text-foreground">
-              {resultText}
-            </pre>
-          </div>
-        ) : null}
-      </div>
+      ) : null}
     </details>
   );
 };
@@ -314,10 +336,17 @@ const RunningAssistantPlaceholder = () => {
   );
 };
 
+const hasRenderableAssistantContent = (message: ThreadMessage) => {
+  if (message.role !== 'assistant') return true;
+  return message.content.some(part => {
+    if ((part.type === 'text' || part.type === 'reasoning') && typeof part.text === 'string') return part.text.trim().length > 0;
+    return part.type.startsWith('tool-') || part.type === 'tool-call';
+  });
+};
+
 const AssistantMessageContent = () => {
   const message = useMessage();
-  const displayedText = getAssistantDisplayedText(message);
-  const isEmptyAssistantMessage = message.role === 'assistant' && displayedText.length === 0;
+  const isEmptyAssistantMessage = message.role === 'assistant' && !hasRenderableAssistantContent(message);
 
   if (isEmptyAssistantMessage) {
     return <RunningEllipsis />;
@@ -703,7 +732,7 @@ const Thread = () => {
         <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
         <RunningAssistantPlaceholder />
       </ThreadPrimitive.Viewport>
-      <div ref={composerRef} className="shrink-0 bg-gradient-to-t from-background via-background p-4">
+      <div ref={composerRef} className="shrink-0 bg-gradient-to-t from-background via-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
         <Composer />
       </div>
     </ThreadPrimitive.Root>

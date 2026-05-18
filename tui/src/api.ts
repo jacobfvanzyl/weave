@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatThread, ResolvedWorkspace, StreamChunk } from './types.ts';
+import type { ChatMessage, ChatThread, PortalConnection, ResolvedWorkspace, StreamChunk } from './types.ts';
 
 export const normalizeHttpUrl = (server: string) => server.replace(/\/$/, '');
 
@@ -53,10 +53,16 @@ export const createThread = async (server: string, token: string, planeId: strin
   return threadId;
 };
 
-export const resolveWorkspace = async (server: string, token: string, workspace: Record<string, unknown>) => {
+export const listPortals = async (server: string, token: string) => {
+  const response = await apiFetch(server, token, '/portals');
+  const body = await response.json() as { portals?: PortalConnection[] };
+  return body.portals ?? [];
+};
+
+export const resolveWorkspace = async (server: string, token: string, workspace: Record<string, unknown>, portalId?: string) => {
   const response = await apiFetch(server, token, '/planes/resolve-workspace', {
     method: 'POST',
-    body: JSON.stringify({ ...workspace, createThread: false }),
+    body: JSON.stringify({ ...workspace, portalId, allowAdHoc: true, createThread: false }),
   });
   return await response.json() as ResolvedWorkspace;
 };
@@ -99,7 +105,7 @@ export const streamChat = async (
   text: string,
   model: string,
   onDelta: (delta: string) => void,
-  onTool: (toolName: string | undefined, toolCallId: string | undefined) => void,
+  onTool: (toolName: string | undefined, toolCallId: string | undefined, input?: unknown, output?: unknown, isError?: boolean) => void,
   onRename: (title: string) => void,
   onUsage: (usage: StreamChunk['usage'] | StreamChunk['totalUsage']) => void,
   onDone: () => void,
@@ -116,22 +122,37 @@ export const streamChat = async (
   if (!response.body) throw new Error('chat response missing body');
   const renameToolIds = new Set<string>();
   const toolInputById = new Map<string, string>();
+  const toolNameById = new Map<string, string | undefined>();
   for await (const chunk of parseSseJson(response.body)) {
     if (chunk.type === 'text-delta') onDelta(chunk.delta ?? '');
-    if (chunk.type === 'tool-input-start') {
-      const toolId = streamToolId(chunk);
-      if (chunk.toolName === 'renameThreadTool' || chunk.toolName === 'rename-thread') {
-        if (toolId) renameToolIds.add(toolId);
-      } else onTool(chunk.toolName, toolId);
-    }
     const toolId = streamToolId(chunk);
-    if (chunk.type === 'tool-input-delta' && toolId && renameToolIds.has(toolId)) {
+    if (toolId && chunk.toolName) toolNameById.set(toolId, chunk.toolName);
+    if (chunk.type === 'tool-input-start' && toolId) {
+      if (chunk.toolName === 'renameThreadTool' || chunk.toolName === 'rename-thread') {
+        renameToolIds.add(toolId);
+      } else {
+        onTool(chunk.toolName, toolId);
+      }
+    }
+    if (chunk.type === 'tool-input-delta' && toolId) {
       toolInputById.set(toolId, `${toolInputById.get(toolId) ?? ''}${chunk.delta ?? ''}`);
     }
-    if (chunk.type === 'tool-call' && toolId && renameToolIds.has(toolId)) {
-      const rawInput = typeof chunk.input === 'string' ? chunk.input : toolInputById.get(toolId) ?? '';
-      const title = parseToolInputTitle(rawInput);
-      if (title) onRename(title);
+    if (toolId && chunk.input !== undefined) {
+      const toolName = chunk.toolName ?? toolNameById.get(toolId);
+      if (renameToolIds.has(toolId)) {
+        const rawInput = typeof chunk.input === 'string' ? chunk.input : toolInputById.get(toolId) ?? '';
+        const title = parseToolInputTitle(rawInput);
+        if (title) onRename(title);
+      } else {
+        onTool(toolName, toolId, chunk.input);
+      }
+    }
+    if (chunk.type === 'tool-input-end' && toolId && !renameToolIds.has(toolId)) {
+      onTool(toolNameById.get(toolId), toolId, toolInputById.get(toolId));
+    }
+    const output = chunk.output ?? chunk.result;
+    if (toolId && output !== undefined && !renameToolIds.has(toolId)) {
+      onTool(chunk.toolName ?? toolNameById.get(toolId), toolId, undefined, output, chunk.isError === true || chunk.type === 'tool-error');
     }
     if (chunk.usage) onUsage(chunk.usage);
     if (chunk.totalUsage) onUsage(chunk.totalUsage);

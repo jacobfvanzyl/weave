@@ -41,31 +41,49 @@ const stringifyToolValue = (value: unknown) => {
   return JSON.stringify(value, null, 2);
 };
 
-const toolPath = (input: unknown) => input && typeof input === 'object' && typeof (input as { path?: unknown }).path === 'string'
-  ? (input as { path: string }).path
-  : undefined;
+const parseToolObject = (value: unknown) => {
+  if (value && typeof value === 'object') return value as Record<string, unknown>;
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
-const toolCommand = (input: unknown) => input && typeof input === 'object' && typeof (input as { command?: unknown }).command === 'string'
-  ? (input as { command: string }).command
-  : undefined;
+const toolPath = (input: unknown) => {
+  const record = parseToolObject(input);
+  return typeof record?.path === 'string' ? record.path : undefined;
+};
+
+const toolCommand = (input: unknown) => {
+  const record = parseToolObject(input);
+  return typeof record?.command === 'string' ? record.command : undefined;
+};
 
 const toolLineRange = (input: unknown) => {
   if (!input || typeof input !== 'object') return '';
-  const { offset, limit } = input as { offset?: unknown; limit?: unknown };
+  const { offset, limit } = parseToolObject(input) ?? {};
   if (typeof offset !== 'number') return '';
   return ansi.fg(mocha.yellow, `:${offset}${typeof limit === 'number' ? `-${offset + limit - 1}` : ''}`);
 };
 
-const formatToolHeader = (toolName: string | undefined, input: unknown) => {
+const formatToolHeaderLines = (toolName: string | undefined, input: unknown, width: number) => {
   if (toolName === 'bash') {
-    const command = toolCommand(input);
-    return ansi.fg(mocha.mauve, ansi.bold(`$ ${command || '...'}`));
+    const command = toolCommand(input)?.trimEnd();
+    if (!command) return [ansi.fg(mocha.mauve, ansi.bold('$ ...'))];
+    const [firstLine = '', ...rest] = command.split('\n');
+    return [
+      ansi.fg(mocha.mauve, ansi.bold(`$ ${firstLine}`)),
+      ...rest.flatMap(line => wrapTextWithAnsi(ansi.fg(mocha.text, line), Math.max(1, width - 2))),
+    ];
   }
   if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
     const path = toolPath(input);
-    return `${ansi.fg(mocha.mauve, ansi.bold(toolName))} ${path ? ansi.fg(mocha.blue, path) : ansi.fg(mocha.overlay0, '...')}${toolName === 'read' ? toolLineRange(input) : ''}`;
+    return [`${ansi.fg(mocha.mauve, ansi.bold(toolName))} ${path ? ansi.fg(mocha.blue, path) : ansi.fg(mocha.overlay0, '...')}${toolName === 'read' ? toolLineRange(input) : ''}`];
   }
-  return ansi.fg(mocha.mauve, ansi.bold(toolName ?? 'tool'));
+  return [ansi.fg(mocha.mauve, ansi.bold(toolName ?? 'tool'))];
 };
 
 const formatToolOutput = (toolName: string | undefined, output: unknown, width: number) => {
@@ -89,9 +107,9 @@ export const formatToolCall = (
   output?: unknown,
   isError?: boolean,
 ) => {
-  const header = ` ${formatToolHeader(toolName, input ?? (toolCallId ? { path: undefined } : undefined))}`;
+  const headerLines = formatToolHeaderLines(toolName, input ?? (toolCallId ? { path: undefined } : undefined), width).map(line => ` ${line}`);
   const outputLines = formatToolOutput(toolName, output, width);
-  const lines = [header, ...outputLines.map(line => ` ${line}`)];
+  const lines = [...headerLines, ...outputLines.map(line => ` ${line}`)];
   const background = isError ? blendHex(mocha.red, mocha.base, 0.15) : toolBackground;
   return [
     ansi.bg(background, ' '.repeat(width)),

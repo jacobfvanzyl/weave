@@ -5,8 +5,9 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, Check, ChevronUp, Code2, Folder, GripVertical, Link, Loader2, Lock, MessageSquare, Moon, MoreHorizontal, MoreVertical, Plus, RotateCcw, Sun, Trash2, X } from 'lucide-react';
-import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, getAuthUser, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads } from '../../lib/chat-state-api';
+import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, getAuthUser, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads, type CreatePlaneInput } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
+import { GitPlaneDirectoryPicker } from './GitPlaneDirectoryPicker';
 import { useChatStore } from '../../stores/chat-store';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
 import { MageHandIcon } from '../icons/MageHandIcon';
@@ -174,6 +175,9 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   const [sectionMenuId, setSectionMenuId] = useState<string | null>(null);
   const [archivedDialogScopeId, setArchivedDialogScopeId] = useState<string | null>(null);
   const [deletePlaneId, setDeletePlaneId] = useState<string | null>(null);
+  const [isCreatePlaneDialogOpen, setIsCreatePlaneDialogOpen] = useState(false);
+  const [isCreatingPlane, setIsCreatingPlane] = useState(false);
+  const [createPlaneError, setCreatePlaneError] = useState<string | null>(null);
   const [collapsedPlaneIds, setCollapsedPlaneIds] = useState<string[]>(loadCollapsedPlaneIds);
   const mode = useThemeStore(state => state.mode);
   const toggleMode = useThemeStore(state => state.toggleMode);
@@ -197,8 +201,8 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   const displayName = authUser?.name ?? '...';
   const onlinePortalCount = portals.filter(portal => portal.status === 'online').length;
   const onlinePortalIds = new Set(portals.filter(portal => portal.status === 'online').map(portal => portal.portalId));
-  const plainThreads = sortManual(threads.filter(thread => !thread.planeId && thread.archived !== true));
-  const threadsByPlane = new Map(planes.map(plane => [plane.id, sortManual(threads.filter(thread => thread.planeId === plane.id))]));
+  const plainThreads = sortManual(threads.filter(thread => (!thread.planeId || thread.adHoc) && thread.archived !== true));
+  const threadsByPlane = new Map(planes.map(plane => [plane.id, sortManual(threads.filter(thread => thread.planeId === plane.id && !thread.adHoc))]));
   const sortedPlanes = sortManual(planes);
   const togglePlaneCollapsed = (planeId: string) =>
     setCollapsedPlaneIds(ids => (ids.includes(planeId) ? ids.filter(id => id !== planeId) : [...ids, planeId]));
@@ -234,7 +238,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
     window.localStorage.setItem(collapsedPlanesStorageKey, JSON.stringify(collapsedPlaneIds));
   }, [collapsedPlaneIds]);
   const archivedDialogThreads = archivedDialogScopeId === 'plain'
-    ? threads.filter(thread => !thread.planeId && thread.archived)
+    ? threads.filter(thread => (!thread.planeId || thread.adHoc) && thread.archived)
     : threads.filter(thread => {
       if (!archivedDialogScopeId || !thread.archived) return false;
       if (thread.demiplaneId) return thread.demiplaneId === archivedDialogScopeId;
@@ -321,6 +325,8 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                   <Loader2 size={14} className="animate-spin text-primary" />
                 ) : completedThreadIds.includes(thread.id) ? (
                   <Check size={14} className="text-success" />
+                ) : thread.adHoc ? (
+                  <Code2 size={14} />
                 ) : (
                   <MessageSquare size={14} />
                 )}
@@ -388,24 +394,9 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
             <button
               className="flex h-5 w-10 items-center justify-center rounded-full bg-mauve text-background transition hover:opacity-90"
               aria-label="Create Plane"
-              onClick={async () => {
-                const name = window.prompt('Project name');
-                if (!name?.trim()) return;
-                const gitBacked = window.confirm('Create as git-backed project?');
-                if (!gitBacked) {
-                  await createPlane({ name: name.trim(), projectKind: 'standard' });
-                } else {
-                  const onlinePortals = portals.filter(portal => portal.status === 'online');
-                  if (onlinePortals.length === 0) {
-                    window.alert('Connect a Portal before creating a git-backed project.');
-                    return;
-                  }
-                  const portal = onlinePortals[0];
-                  const repoPath = window.prompt('Repo path relative to Portal root');
-                  if (!repoPath?.trim()) return;
-                  await createPlane({ name: name.trim(), projectKind: 'git', portalId: portal.portalId, rootId: 'default', repoPath: repoPath.trim() });
-                }
-                await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+              onClick={() => {
+                setCreatePlaneError(null);
+                setIsCreatePlaneDialogOpen(true);
               }}
             >
               <Plus size={14} strokeWidth={3} />
@@ -455,7 +446,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                     <ChevronUp size={14} className={cn('shrink-0 text-mauve transition', isCollapsed ? 'rotate-180' : '')} />
                     <span className="min-w-0 truncate">{plane.name}</span>
                     {plane.projectKind === 'git' ? (
-                      <Code2 size={14} className="shrink-0 text-success" aria-label="Git-backed Plane" />
+                      <Code2 size={14} className="shrink-0 text-success" aria-label="Code - Portal Plane" />
                     ) : (
                       <Folder size={14} className="shrink-0 text-success" aria-label="Standard Plane" />
                     )}
@@ -827,6 +818,31 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
           </SortableSection>
         </div>
       </div>
+
+      {isCreatePlaneDialogOpen ? (
+        <GitPlaneDirectoryPicker
+          portals={portals.filter(portal => portal.status === 'online')}
+          isCreating={isCreatingPlane}
+          createError={createPlaneError}
+          onCancel={() => {
+            setIsCreatePlaneDialogOpen(false);
+            setCreatePlaneError(null);
+          }}
+          onCreate={async (input: CreatePlaneInput) => {
+            setIsCreatingPlane(true);
+            setCreatePlaneError(null);
+            try {
+              await createPlane(input);
+              setIsCreatePlaneDialogOpen(false);
+              await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+            } catch (error) {
+              setCreatePlaneError(error instanceof Error ? error.message : String(error));
+            } finally {
+              setIsCreatingPlane(false);
+            }
+          }}
+        />
+      ) : null}
 
       {deletePlaneTarget ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">

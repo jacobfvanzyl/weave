@@ -25,6 +25,14 @@ export type ChatThread = {
   planeId?: string;
   demiplaneId?: string;
   archived?: boolean;
+  adHoc?: boolean;
+  workspacePath?: string;
+};
+
+type PersistedChatState = {
+  threadId: string;
+  selectedModel: string;
+  showToolCalls: boolean;
 };
 
 type ChatState = {
@@ -230,10 +238,14 @@ export const useChatStore = create<ChatState>()(
     {
       name: 'weave-chat',
       version: 4,
-      migrate: persistedState => ({
-        ...(persistedState as Partial<ChatState>),
-        selectedModel: defaultModel,
-      }),
+      migrate: persistedState => {
+        const state = persistedState as Partial<PersistedChatState>;
+        return {
+          threadId: typeof state.threadId === 'string' ? state.threadId : initialThread.id,
+          selectedModel: defaultModel,
+          showToolCalls: typeof state.showToolCalls === 'boolean' ? state.showToolCalls : true,
+        };
+      },
       partialize: state => ({
         threadId: state.threadId,
         selectedModel: state.selectedModel,

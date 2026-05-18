@@ -2,6 +2,7 @@ export type TuiConfig = {
   httpServerUrl?: string;
   authToken?: string;
   model?: string;
+  portalId?: string;
 };
 
 export type ParsedArgs = {
@@ -22,10 +23,17 @@ export type ChatThread = {
   metadata?: Record<string, unknown>;
 };
 
+export type PortalConnection = {
+  portalId: string;
+  name?: string;
+  status?: string;
+};
+
 export type ResolvedWorkspace = Record<string, any> & {
   plane?: { id?: string; name?: string };
   demiplane?: { id?: string; name?: string; path?: string };
   thread?: { id?: string };
+  adHoc?: boolean;
 };
 
 export type StreamChunk = {
@@ -36,6 +44,9 @@ export type StreamChunk = {
   toolCallId?: string;
   id?: string;
   input?: unknown;
+  output?: unknown;
+  result?: unknown;
+  isError?: boolean;
   usage?: TokenUsage;
   totalUsage?: TokenUsage;
   response?: {
@@ -69,7 +80,7 @@ export type AppState = {
   modelDisplayName: string;
   contextPercent?: number;
   title: {
-    plane: string;
+    plane?: string;
     demiplane?: string;
     thread?: string;
   };

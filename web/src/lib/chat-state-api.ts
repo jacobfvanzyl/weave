@@ -57,6 +57,8 @@ const toChatThread = (thread: ServerThread): ChatThread => ({
   planeId: typeof thread.metadata?.planeId === 'string' ? thread.metadata.planeId : undefined,
   demiplaneId: typeof thread.metadata?.demiplaneId === 'string' ? thread.metadata.demiplaneId : undefined,
   archived: thread.metadata?.archived === true,
+  adHoc: thread.metadata?.adHoc === true,
+  workspacePath: typeof thread.metadata?.workspacePath === 'string' ? thread.metadata.workspacePath : undefined,
 });
 
 const parseJson = async <T>(response: Response): Promise<T> => {
@@ -138,30 +140,80 @@ export const listPlanes = async () => {
   return result.planes;
 };
 
+export type PortalRoot = {
+  id: string;
+  name?: string;
+};
+
 export type PortalConnection = {
   portalId: string;
   userId: string;
   name?: string;
-  roots: unknown[];
+  roots: PortalRoot[];
   status: 'online' | 'offline';
 };
 
+export type PortalBrowseEntry = {
+  name: string;
+  type: 'directory' | 'file' | 'other';
+  hidden?: boolean;
+};
+
+export type PortalBrowseResult = {
+  ok?: boolean;
+  rootId: string;
+  path: string;
+  entries: PortalBrowseEntry[];
+  isGitRepo?: boolean;
+  git?: Record<string, unknown>;
+  error?: string;
+};
+
+export type CreatePlaneInput = {
+  name: string;
+  projectKind?: 'standard' | 'git';
+  portalId?: string;
+  rootId?: string;
+  repoPath?: string;
+};
+
+const normalizePortalRoots = (roots: unknown): PortalRoot[] => Array.isArray(roots)
+  ? roots.flatMap(root => {
+      const record = root && typeof root === 'object' ? root as Record<string, unknown> : undefined;
+      const id = typeof record?.id === 'string' ? record.id.trim() : '';
+      if (!id) return [];
+      return [{ id, name: typeof record?.name === 'string' ? record.name : undefined }];
+    })
+  : [];
+
+const normalizePortalConnection = (portal: unknown): PortalConnection | undefined => {
+  const record = portal && typeof portal === 'object' ? portal as Record<string, unknown> : undefined;
+  if (typeof record?.portalId !== 'string' || typeof record.userId !== 'string') return undefined;
+  return {
+    portalId: record.portalId,
+    userId: record.userId,
+    name: typeof record.name === 'string' ? record.name : undefined,
+    roots: normalizePortalRoots(record.roots),
+    status: record.status === 'online' ? 'online' : 'offline',
+  };
+};
+
 export const listPortals = async () => {
-  const result = await parseJson<{ portals: PortalConnection[] }>(
+  const result = await parseJson<{ portals: unknown[] }>(
     await fetch(`${mastraUrl}/portals`, { headers: getAuthHeaders() }),
   );
 
-  return result.portals;
+  return result.portals.flatMap(portal => normalizePortalConnection(portal) ?? []);
 };
 
 export const browsePortal = async (portalId: string, rootId = 'default', path = '') => {
   const params = new URLSearchParams({ rootId, path });
-  return parseJson<Record<string, unknown>>(
+  return parseJson<PortalBrowseResult>(
     await fetch(`${mastraUrl}/portals/${portalId}/browse?${params}`, { headers: getAuthHeaders() }),
   );
 };
 
-export const createPlane = async (input: string | { name: string; projectKind?: 'standard' | 'git'; portalId?: string; rootId?: string; repoPath?: string }) => {
+export const createPlane = async (input: string | CreatePlaneInput) => {
   const body = typeof input === 'string' ? { name: input, projectKind: 'standard' } : input;
   const result = await parseJson<{ plane: Plane }>(
     await fetch(`${mastraUrl}/planes`, {

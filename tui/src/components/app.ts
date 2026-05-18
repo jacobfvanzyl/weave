@@ -31,7 +31,7 @@ export class WeaveApp implements Component, Focusable {
     this.editor.onSubmit = text => this.onSubmit?.(text);
     this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
       { name: 'new', description: 'Start a new draft thread' },
-      { name: 'resume', description: 'Resume a thread in this demiplane' },
+      { name: 'threads', description: 'Resume a thread in this demiplane' },
     ], Deno.cwd()));
   }
 

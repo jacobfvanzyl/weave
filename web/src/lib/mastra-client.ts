@@ -1,4 +1,5 @@
-export const mastraUrl = import.meta.env.VITE_MASTRA_URL ?? 'http://localhost:4111';
+const defaultMastraUrl = `${window.location.protocol}//${window.location.hostname}:4111`;
+export const mastraUrl = import.meta.env.VITE_MASTRA_URL ?? defaultMastraUrl;
 export const agentId = import.meta.env.VITE_AGENT_ID ?? 'mage-hand';
 export const chatUrl = `${mastraUrl}/chat`;
 

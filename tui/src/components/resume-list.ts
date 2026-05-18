@@ -40,7 +40,7 @@ export class ResumeList implements Component {
 
   render(width: number) {
     return [
-      ansi.fg(mocha.mauve, ansi.bold('Resume Thread')),
+      ansi.fg(mocha.mauve, ansi.bold('Threads')),
       ansi.fg(mocha.overlay0, 'Choose a thread from this demiplane'),
       '',
       ...this.list.render(width),

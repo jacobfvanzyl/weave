@@ -285,6 +285,15 @@ const resolveWorkspacePath = async (config: PortalConfig, request: Record<string
   return { root, candidate };
 };
 
+const pathStatTool = async (_config: PortalConfig, request: Record<string, unknown>) => {
+  const args = (request.args ?? {}) as Record<string, unknown>;
+  const path = typeof args.path === 'string' ? args.path.trim() : '';
+  if (!path) return { ok: false, error: 'path is required' };
+  const realPath = await Deno.realPath(path);
+  const stat = await Deno.stat(realPath);
+  return { ok: true, path: realPath, isDirectory: stat.isDirectory, isFile: stat.isFile, isSymlink: stat.isSymlink };
+};
+
 const listRootTool = async (config: PortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   const rootId = typeof args?.rootId === 'string' ? args.rootId : 'default';
@@ -596,7 +605,9 @@ const handleToolCall = async (config: PortalConfig, ws: WebSocket, request: Reco
             ? await bashTool(config, request)
             : request.tool === 'portal.fs.list'
               ? await listRootTool(config, request)
-              : request.tool === 'portal.git.inspect'
+              : request.tool === 'portal.fs.stat'
+                ? await pathStatTool(config, request)
+                : request.tool === 'portal.git.inspect'
                 ? await inspectGitTool(config, request)
                 : request.tool === 'portal.agentInstructions.read'
                   ? await readAgentInstructionsTool(config, request)
@@ -624,7 +635,7 @@ const handleToolCall = async (config: PortalConfig, ws: WebSocket, request: Reco
 };
 
 const getPortalCapabilities = async () => {
-  const baseCapabilities = ['read', 'write', 'edit', 'bash', 'portal.fs.list', 'portal.git.inspect', 'portal.agentInstructions.read', 'portal.git.worktree.validate', 'portal.worktrunk.status'];
+  const baseCapabilities = ['read', 'write', 'edit', 'bash', 'portal.fs.list', 'portal.fs.stat', 'portal.git.inspect', 'portal.agentInstructions.read', 'portal.git.worktree.validate', 'portal.worktrunk.status'];
   const status = await getWorktrunkStatus().catch(() => ({ installed: false }));
   return status.installed
     ? [...baseCapabilities, 'portal.worktrunk.list', 'portal.worktrunk.create', 'portal.worktrunk.remove']

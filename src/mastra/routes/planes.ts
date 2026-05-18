@@ -5,6 +5,8 @@ import { getPortalConnection, listPortalConnections, requestPortalTool } from '.
 const agentId = 'mageHandAgent';
 const planeThreadPrefix = '__plane__';
 const portalThreadPrefix = '__portal__';
+const adHocPlanePrefix = 'plane_ad_hoc_';
+const adHocDemiplanePrefix = 'demiplane_ad_hoc_';
 
 export type Demiplane = {
   id: string;
@@ -21,6 +23,8 @@ export type Demiplane = {
   sortOrder?: number;
   status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual' | 'error';
   lastError?: string;
+  hidden?: boolean;
+  systemKind?: 'adHoc';
   createdAt: string;
   updatedAt: string;
 };
@@ -45,6 +49,8 @@ export type Plane = {
     updatedAt?: string;
     checkedAt?: string;
   };
+  hidden?: boolean;
+  systemKind?: 'adHoc';
   demiplanes: Demiplane[];
   createdAt: string;
   updatedAt: string;
@@ -110,6 +116,8 @@ const toPlane = (thread: any): Plane => {
     rootPathHint: metadata.rootPathHint,
     sortOrder: typeof metadata.sortOrder === 'number' ? metadata.sortOrder : undefined,
     agentInstructions: metadata.agentInstructions,
+    hidden: metadata.hidden === true,
+    systemKind: metadata.systemKind === 'adHoc' ? 'adHoc' : undefined,
     demiplanes: Array.isArray(metadata.demiplanes) ? metadata.demiplanes : [],
     createdAt: typeof thread.createdAt === 'string' ? thread.createdAt : metadata.createdAt ?? nowIso(),
     updatedAt: typeof thread.updatedAt === 'string' ? thread.updatedAt : metadata.updatedAt ?? nowIso(),
@@ -170,6 +178,68 @@ const assertUniqueDemiplane = (plane: Plane, candidate: Pick<Demiplane, 'path' |
 
 const portalToolError = (result: { ok?: boolean; error?: unknown }) => {
   if (result.ok === false) throw new Error(typeof result.error === 'string' ? result.error : 'Portal tool failed');
+};
+
+const hashText = async (value: string) => {
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(bytes)).slice(0, 12).map(byte => byte.toString(16).padStart(2, '0')).join('');
+};
+
+const pathBasename = (path: string) => path.split('/').filter(Boolean).pop() || path;
+
+const validateAdHocPath = async (resourceId: string, portalId: string, workspacePath: string) => {
+  assertPortalForUser(portalId, resourceId);
+  const result = await requestPortalTool({
+    portalId,
+    tool: 'portal.fs.stat',
+    args: { path: workspacePath },
+    timeoutMs: 10_000,
+  }) as { ok?: boolean; error?: string; path?: string; isDirectory?: boolean };
+  portalToolError(result);
+  const realPath = normalizePath(result.path);
+  if (!realPath || result.isDirectory !== true) throw new Error('Ad-hoc path must be an existing directory reachable by Portal');
+  return realPath;
+};
+
+const ensureAdHocWorkspace = async (memory: any, resourceId: string, portalId: string, workspacePath: string) => {
+  const realPath = await validateAdHocPath(resourceId, portalId, workspacePath);
+  const adHocPlaneId = `${adHocPlanePrefix}${await hashText(resourceId)}`;
+  const demiplaneId = `${adHocDemiplanePrefix}${await hashText(`${portalId}:${realPath}`)}`;
+  const at = nowIso();
+  const existing = await getPlane(memory, resourceId, adHocPlaneId);
+  const plane: Plane = existing ?? {
+    id: adHocPlaneId,
+    userId: resourceId,
+    name: 'Ad-hoc',
+    projectKind: 'standard',
+    hidden: true,
+    systemKind: 'adHoc',
+    demiplanes: [],
+    createdAt: at,
+    updatedAt: at,
+  };
+  const demiplane = plane.demiplanes.find(item => item.id === demiplaneId);
+  if (demiplane) return { plane, demiplane };
+
+  const nextDemiplane: Demiplane = {
+    id: demiplaneId,
+    planeId: adHocPlaneId,
+    portalId,
+    workspaceKind: 'primary',
+    source: 'adopted',
+    name: pathBasename(realPath),
+    path: realPath,
+    locked: true,
+    status: 'ready',
+    hidden: true,
+    systemKind: 'adHoc',
+    sortOrder: plane.demiplanes.length,
+    createdAt: at,
+    updatedAt: at,
+  };
+  const nextPlane = { ...plane, hidden: true, systemKind: 'adHoc' as const, demiplanes: [...plane.demiplanes, nextDemiplane], updatedAt: at };
+  await savePlane(memory, resourceId, nextPlane);
+  return { plane: nextPlane, demiplane: nextDemiplane };
 };
 
 const getAllPlanes = async (memory: any, resourceId: string) => {
@@ -254,7 +324,7 @@ export const planesRoutes = [
           perPage: false,
           orderBy: { field: 'updatedAt', direction: 'DESC' },
         });
-        const planes = result.threads.filter(isPlaneThread).map(toPlane).sort((a, b) =>
+        const planes = result.threads.filter(isPlaneThread).map(toPlane).filter(plane => !plane.hidden && plane.systemKind !== 'adHoc').sort((a, b) =>
           (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER)
           || timestampString(b.updatedAt).localeCompare(timestampString(a.updatedAt)),
         );
@@ -379,7 +449,9 @@ export const planesRoutes = [
         if (!workspacePath) return c.json({ error: 'workspacePath or gitTopLevel is required' }, 400);
 
         const memory = await getMemory(c);
-        const planes = (await getAllPlanes(memory, resourceId)).filter(plane => plane.projectKind === 'git');
+        const allowAdHoc = body?.allowAdHoc === true;
+        const portalId = optionalString(body?.portalId);
+        const planes = (await getAllPlanes(memory, resourceId)).filter(plane => plane.projectKind === 'git' && !plane.hidden && plane.systemKind !== 'adHoc');
         const exact = planes.flatMap(plane => plane.demiplanes.map(demiplane => ({ plane, demiplane })))
           .find(item => normalizeDemiplanePath(item.demiplane) === workspacePath.toLowerCase());
 
@@ -441,6 +513,10 @@ export const planesRoutes = [
         }
 
         if (!resolvedPlane || !resolvedDemiplane) {
+          if (allowAdHoc && portalId) {
+            const adHoc = await ensureAdHocWorkspace(memory, resourceId, portalId, workspacePath);
+            return c.json({ resolved: true, adHoc: true, offline: false, plane: adHoc.plane, demiplane: adHoc.demiplane });
+          }
           const remoteMatches = remote ? planes.filter(plane => normalizeRemote(plane.gitRemote) === remote) : [];
           return c.json({
             resolved: false,
@@ -703,12 +779,19 @@ export const planesRoutes = [
           ? plane.demiplanes.find(item => item.id === requestedDemiplaneId)
           : undefined;
         if (requestedDemiplaneId && !demiplane) return c.json({ error: 'demiplane not found' }, 404);
-        if (plane.projectKind === 'standard' && requestedDemiplaneId) return c.json({ error: 'standard projects cannot have workspace threads' }, 400);
+        const isAdHoc = plane.systemKind === 'adHoc' && demiplane?.systemKind === 'adHoc';
+        if (plane.projectKind === 'standard' && requestedDemiplaneId && !isAdHoc) return c.json({ error: 'standard projects cannot have workspace threads' }, 400);
         if (plane.projectKind === 'git' && !demiplane) return c.json({ error: 'git project threads must belong to a workspace' }, 400);
 
         const sortOrder = await getTopThreadSortOrder(memory, resourceId, planeId, demiplane?.id);
         const metadata = demiplane
-          ? { mode: 'plane', planeId, demiplaneId: demiplane.id, sortOrder }
+          ? {
+              mode: 'plane',
+              planeId,
+              demiplaneId: demiplane.id,
+              sortOrder,
+              ...(isAdHoc ? { adHoc: true, portalId: demiplane.portalId, workspacePath: demiplane.path } : {}),
+            }
           : { mode: 'plane', planeId, sortOrder };
         const thread = await memory.createThread({
           resourceId,

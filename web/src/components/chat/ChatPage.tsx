@@ -72,7 +72,7 @@ export const ChatPage = () => {
   }, [isFetched, newThread, serverThreads, setServerThreads, threads.length]);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-dvh overflow-hidden">
       {isSidebarOpen ? (
         <>
           <button

@@ -21,7 +21,7 @@ const getTopSortOrder = async (memory: any, resourceId: string, scope: { planeId
       const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
       if (metadata.archived === true) return false;
       if (scope.planeId) return metadata.planeId === scope.planeId && metadata.demiplaneId === scope.demiplaneId;
-      return metadata.mode !== 'plane' && typeof metadata.planeId !== 'string';
+      return metadata.adHoc === true || (metadata.mode !== 'plane' && typeof metadata.planeId !== 'string');
     })
     .map((thread: any) => (thread.metadata as Record<string, unknown> | undefined)?.sortOrder)
     .filter((value: unknown): value is number => typeof value === 'number');
@@ -43,14 +43,23 @@ const getToolName = (part: Record<string, unknown>) => {
   return 'tool';
 };
 
+const parseJsonString = (value: unknown) => {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+};
+
 const getToolArgs = (part: Record<string, unknown>) => {
   const invocation = getToolInvocation(part);
-  return invocation?.args ?? part.args ?? part.input ?? {};
+  return parseJsonString(invocation?.args ?? invocation?.input ?? part.args ?? part.input ?? {});
 };
 
 const getToolResult = (part: Record<string, unknown>) => {
   const invocation = getToolInvocation(part);
-  return invocation?.result ?? part.result ?? part.output;
+  return parseJsonString(invocation?.result ?? invocation?.output ?? part.result ?? part.output);
 };
 
 const toUiPart = (part: MastraDBMessage['content']['parts'][number]) => {
@@ -287,7 +296,7 @@ export const chatStateRoutes = [
         const scopedThreads = visibleThreads.filter(thread => {
           const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
           if (metadata.archived === true) return false;
-          if (plain) return metadata.mode !== 'plane' && typeof metadata.planeId !== 'string';
+          if (plain) return metadata.adHoc === true || (metadata.mode !== 'plane' && typeof metadata.planeId !== 'string');
           if (scopeDemiplaneId) return metadata.planeId === scopePlaneId && metadata.demiplaneId === scopeDemiplaneId;
           if (scopePlaneId) return metadata.planeId === scopePlaneId && typeof metadata.demiplaneId !== 'string';
           return false;

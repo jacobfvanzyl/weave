@@ -1,5 +1,5 @@
 import { ProcessTerminal, TUI } from 'pi-tui';
-import { createThread, getContextUsage, isConnectionError, listDemiplaneThreads, listMessages, normalizeHttpUrl, resolveWorkspace, streamChat } from './api.ts';
+import { createThread, getContextUsage, isConnectionError, listDemiplaneThreads, listMessages, listPortals, normalizeHttpUrl, resolveWorkspace, streamChat } from './api.ts';
 import { WeaveApp } from './components/app.ts';
 import { ResumeList } from './components/resume-list.ts';
 import { defaultConfigPath, defaultServerUrl, parseArgs, readConfig, stringFlag, writeConfig } from './config.ts';
@@ -70,7 +70,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
   const terminal = new ProcessTerminal();
   const tui = new TUI(terminal, true);
   const titleFor = (threadTitle?: string) => ({
-    plane: resolved.plane?.name ?? 'Plane',
+    plane: resolved.adHoc ? undefined : resolved.plane?.name ?? 'Plane',
     demiplane: resolved.demiplane?.name,
     thread: threadTitle && !['...', 'New chat'].includes(threadTitle) ? threadTitle : undefined,
   });
@@ -215,7 +215,7 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
         requestRender();
         return;
       }
-      if (trimmed === '/resume') {
+      if (trimmed === '/threads') {
         const planeId = resolved.plane?.id;
         if (!planeId) {
           state.status = 'Resolved workspace missing plane.id';
@@ -305,8 +305,16 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
             assistant.rawText += delta;
             requestRender();
           },
-          (toolName, toolCallId) => {
-            state.messages.splice(state.messages.length - 1, 0, { type: 'tool', toolName: toolName ?? 'tool', toolCallId });
+          (toolName, toolCallId, input, output, isError) => {
+            const existing = toolCallId ? state.messages.find(message => message.type === 'tool' && message.toolCallId === toolCallId) : undefined;
+            if (existing?.type === 'tool') {
+              existing.toolName = toolName ?? existing.toolName;
+              if (input !== undefined) existing.input = input;
+              if (output !== undefined) existing.output = output;
+              if (isError !== undefined) existing.isError = isError;
+            } else {
+              state.messages.splice(state.messages.length - 1, 0, { type: 'tool', toolName: toolName ?? 'tool', toolCallId, input, output, isError });
+            }
             requestRender();
           },
           title => {
@@ -325,6 +333,10 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
           markConnectionError(error);
           return [];
         });
+        if (messages.length > 0) {
+          state.messages = messages.flatMap(chatMessageToRenderMessages);
+          requestRender();
+        }
         setThreadTitle(renameTitleFromMessages(messages));
         poller?.prime(messages);
       } catch (error) {
@@ -361,7 +373,16 @@ const start = async (flags: Record<string, string | boolean>) => {
   const modelContextWindow = getResolvedModelContextWindow(model, modelOptions);
 
   const workspace = await detectWorkspace();
-  const resolved = await resolveWorkspace(server, token, workspace).catch(error => {
+  const configuredPortalId = stringFlag(flags, 'portal') ?? config.portalId;
+  const portals = await listPortals(server, token).catch(() => []);
+  const onlinePortals = portals.filter(portal => portal.status === 'online');
+  const portalId = configuredPortalId ?? (onlinePortals.length === 1 ? onlinePortals[0].portalId : undefined);
+  if (!portalId) {
+    const choices = onlinePortals.map(portal => `- ${portal.portalId}${portal.name ? ` (${portal.name})` : ''}`).join('\n');
+    console.error(`No Portal selected. Pass --portal <portalId>${choices ? `\nOnline portals:\n${choices}` : ''}`);
+    Deno.exit(1);
+  }
+  const resolved = await resolveWorkspace(server, token, workspace, portalId).catch(error => {
     if (isConnectionError(error)) {
       printStartupConnectionError(server);
       Deno.exit(1);
@@ -395,9 +416,9 @@ const usage = () => {
 
 Commands:
   login --server http://localhost:4111 --token <auth-token> [--model openai/gpt-5.5]
-  start [--server http://localhost:4111] [--token <auth-token>] [--model openai/gpt-5.5]
+  start [--server http://localhost:4111] [--token <auth-token>] [--portal <portalId>] [--model openai/gpt-5.5]
 
-Inside chat: /new starts a draft thread. /resume lists demiplane threads. Ctrl+C twice exits.
+Inside chat: /new starts a draft thread. /threads lists demiplane threads. Ctrl+C twice exits.
 `);
 };
 

@@ -235,6 +235,7 @@ export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
         const textId = 'text-0';
         let textStarted = false;
         const toolNames = new Map<string, string>();
+        const toolCallIdsByItemId = new Map<string, string>();
 
         try {
           for await (const event of parseSse(response)) {
@@ -258,12 +259,13 @@ export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
               const item = event.item as Record<string, unknown> | undefined;
               if (item?.type === 'function_call' && typeof item.call_id === 'string' && typeof item.name === 'string') {
                 toolNames.set(item.call_id, item.name);
+                if (typeof item.id === 'string') toolCallIdsByItemId.set(item.id, item.call_id);
                 controller.enqueue({ type: 'tool-input-start', id: item.call_id, toolName: item.name });
               }
             }
 
             if (type === 'response.function_call_arguments.delta' && typeof event.delta === 'string' && typeof event.item_id === 'string') {
-              controller.enqueue({ type: 'tool-input-delta', id: event.item_id, delta: event.delta });
+              controller.enqueue({ type: 'tool-input-delta', id: toolCallIdsByItemId.get(event.item_id) ?? event.item_id, delta: event.delta });
             }
 
             if (type === 'response.output_item.done') {

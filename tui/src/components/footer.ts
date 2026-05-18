@@ -6,7 +6,7 @@ type FooterParts = {
   connectionStatus?: 'connected' | 'not-connected';
   contextPercent?: number;
   title: {
-    plane: string;
+    plane?: string;
     demiplane?: string;
     thread?: string;
   };
@@ -27,7 +27,7 @@ export class WeaveFooterComponent implements Component {
     const row1 = truncateToWidth(ansi.bold(`${model}${sep}${context}${connection}`), width);
 
     const titleParts = [
-      ansi.fg(mocha.mauve, title.plane),
+      title.plane ? ansi.fg(mocha.mauve, title.plane) : undefined,
       title.demiplane ? ansi.fg(mocha.green, title.demiplane) : undefined,
       title.thread ? ansi.fg(mocha.text, ansi.bold(title.thread)) : undefined,
     ].filter((part): part is string => Boolean(part));
