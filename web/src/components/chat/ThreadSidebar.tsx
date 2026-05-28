@@ -4,7 +4,7 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Check, ChevronUp, Code2, Folder, GripVertical, Link, Loader2, Lock, MessageSquare, Moon, MoreHorizontal, MoreVertical, Plus, RotateCcw, Sun, Trash2, X } from 'lucide-react';
+import { Archive, Check, ChevronUp, Code2, Folder, GripVertical, Link, Loader2, Lock, MessageSquare, Moon, MoreVertical, Plus, RotateCcw, Sun, Trash2, X } from 'lucide-react';
 import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, getAuthUser, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads, type CreatePlaneInput } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { GitPlaneDirectoryPicker } from './GitPlaneDirectoryPicker';
@@ -275,7 +275,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   const renderThreadMenu = (thread: typeof threads[number]) => (
     <Menu>
       <MenuTrigger render={<Button className="shrink-0" size="icon-xs" variant="ghost" aria-label={`Open menu for ${thread.title}`} />}>
-        <MoreHorizontal size={14} />
+        <MoreVertical size={14} />
       </MenuTrigger>
       <MenuPopup align="end" sideOffset={4} className="w-32">
         <MenuItem
@@ -382,10 +382,10 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             <div className="-ml-4 h-px flex-1 bg-border" />
-            <span className="text-mauve">Planes</span>
+            <span className="text-success">Planes</span>
             <div className="h-px flex-1 bg-border" />
             <Button
-              className="h-6 w-8 bg-mauve text-background hover:bg-mauve/90"
+              className="h-6 w-8 bg-success-button text-background hover:bg-success-button/90"
               size="icon-xs"
               aria-label="Create Plane"
               onClick={() => {
