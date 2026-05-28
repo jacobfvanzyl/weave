@@ -29,6 +29,11 @@ import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
 import { useChatStore } from '../../stores/chat-store';
 import { MageHandIcon } from '../icons/MageHandIcon';
+import { Badge } from '../ui/badge';
+import { Button } from '../ui/button';
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
+import { CommandPanel } from '../ui/command';
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
 import { CodeBlock } from './CodeBlock';
 
 const ThreadIdContext = createContext<string | null>(null);
@@ -43,15 +48,17 @@ const isDegradedToolCall = ({ toolName, args, result }: Pick<ToolCallMessagePart
 const isRenameThreadTool = (toolName: string) => ['renameThreadTool', 'rename-thread'].includes(toolName);
 
 const Reasoning = ({ text }: ReasoningMessagePartProps) => (
-  <details className="my-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
-    <summary className="cursor-pointer select-none font-medium text-primary">
+  <Collapsible className="my-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+    <CollapsibleTrigger className="flex w-full items-center gap-2 text-left font-medium text-primary">
       Reasoning
-      <span className="ml-2 text-[10px] uppercase tracking-wide text-muted-foreground">summary</span>
-    </summary>
-    <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-background/70 p-2 text-[11px] leading-4 text-foreground">
-      {text}
-    </pre>
-  </details>
+      <Badge size="sm" variant="info">summary</Badge>
+    </CollapsibleTrigger>
+    <CollapsiblePanel>
+      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 text-[11px] leading-4 text-foreground">
+        {text}
+      </pre>
+    </CollapsiblePanel>
+  </Collapsible>
 );
 
 const getToolChipDetail = (toolName: string, args: unknown) => {
@@ -123,20 +130,23 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
   const isBusy = displayStatus === 'running';
 
   return (
-    <details className="my-2 max-w-full overflow-hidden rounded-lg border border-border bg-background/70 px-3 py-2 text-xs">
-      <summary className="flex min-w-0 cursor-pointer select-none items-center gap-2 font-medium text-muted-foreground">
-        <span className="shrink-0 text-muted-foreground">▸</span>
+    <Collapsible className="my-2 max-w-full overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-xs">
+      <CollapsibleTrigger className="flex min-w-0 cursor-pointer select-none items-center gap-2 font-medium text-muted-foreground">
         {isBusy ? <Loader2 size={12} className="shrink-0 animate-spin text-primary" /> : null}
         <span className="min-w-0 truncate">
           <span className="font-bold italic text-mauve">{display.toolName}</span>
           {chipDetail ? <span className="text-foreground">: {chipDetail}</span> : null}
         </span>
-      </summary>
+        <Badge className="ml-auto" size="sm" variant={display.isError ? 'error' : isBusy ? 'info' : 'success'}>
+          {displayStatus}
+        </Badge>
+      </CollapsibleTrigger>
       {display.result !== undefined ? (
-        <div className="mt-2">
+        <CollapsiblePanel className="mt-2">
           <div className="mb-1 flex justify-end">
-            <button
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            <Button
+              size="xs"
+              variant="ghost"
               type="button"
               onClick={async event => {
                 event.preventDefault();
@@ -147,14 +157,14 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
             >
               {isResultCopied ? <Check size={12} /> : <Clipboard size={12} />}
               {isResultCopied ? 'Copied' : 'Copy'}
-            </button>
+            </Button>
           </div>
           <pre className={cn('max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-[11px] leading-4', display.isError ? 'text-destructive' : 'text-foreground')}>
             {resultText}
           </pre>
-        </div>
+        </CollapsiblePanel>
       ) : null}
-    </details>
+    </Collapsible>
   );
 };
 
@@ -221,7 +231,7 @@ const MarkdownImage = ({ alt, src }: { alt?: string; src?: string }) => {
         href={src}
         target="_blank"
         rel="noreferrer"
-        className="my-3 block rounded-lg border border-border bg-background/70 p-3 text-sm text-primary underline underline-offset-2"
+        className="my-3 block rounded-lg border border-border bg-card p-3 text-sm text-primary underline underline-offset-2"
       >
         Image failed to load: {alt || src}
       </a>
@@ -259,17 +269,17 @@ const MarkdownText = ({ text }: { text: string }) => (
         strong: ({ children }) => <strong className="font-bold text-inherit">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
         del: ({ children }) => <del className="text-muted-foreground line-through">{children}</del>,
-        a: ({ children, href }) => <a href={href} className="break-words text-primary underline underline-offset-2" target="_blank" rel="noreferrer">{children}</a>,
+        a: ({ children, href }) => <a href={href} className="break-all text-primary underline underline-offset-2" target="_blank" rel="noreferrer">{children}</a>,
         code: ({ children, className }) =>
           className?.startsWith('language-') ? (
             <CodeBlock className={className}>{String(children)}</CodeBlock>
           ) : (
-            <code className={cn('break-words rounded bg-background/70 px-1 py-0.5 text-[0.9em]', className)}>{children}</code>
+            <code className={cn('break-words rounded bg-muted px-1 py-0.5 text-[0.9em]', className)}>{children}</code>
           ),
-        pre: ({ children }) => <div className="my-3 max-w-full overflow-x-auto rounded-md bg-background/70 p-3 text-xs leading-5">{children}</div>,
+        pre: ({ children }) => <div className="my-3 max-w-full overflow-x-auto rounded-md bg-muted p-3 text-xs leading-5">{children}</div>,
         blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
         table: ({ children }) => <div className="my-3 max-w-full overflow-x-auto"><table className="w-full border-collapse text-left text-xs">{children}</table></div>,
-        thead: ({ children }) => <thead className="border-b border-border bg-muted/50">{children}</thead>,
+        thead: ({ children }) => <thead className="border-b border-border bg-muted">{children}</thead>,
         tbody: ({ children }) => <tbody className="divide-y divide-border">{children}</tbody>,
         th: ({ children }) => <th className="border border-border px-3 py-2 font-semibold text-foreground">{children}</th>,
         td: ({ children }) => <td className="border border-border px-3 py-2 align-top">{children}</td>,
@@ -328,7 +338,7 @@ const RunningAssistantPlaceholder = () => {
         <div className="chat-message-avatar mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
           <MageHandIcon className="h-5 w-5" />
         </div>
-        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6 shadow-sm">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-border bg-card px-4 py-3 text-sm leading-6">
           <RunningEllipsis />
         </div>
       </div>
@@ -362,7 +372,7 @@ const ThreadMessage = () => (
         <div className="chat-message-avatar mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
           <MageHandIcon className="h-5 w-5" />
         </div>
-        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6 shadow-sm">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-border bg-card px-4 py-3 text-sm leading-6">
           <AssistantMessageContent />
           <div className="text-red-300">
             <MessagePrimitive.Error />
@@ -372,7 +382,7 @@ const ThreadMessage = () => (
     </MessagePrimitive.If>
     <MessagePrimitive.If user>
       <div className="chat-message-row flex min-w-0 justify-end gap-3">
-        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-xl border border-primary/40 bg-user px-4 py-3 text-sm leading-6 text-user-foreground shadow-sm">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-primary bg-user px-4 py-3 text-sm leading-6 text-user-foreground">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
           <div className="text-red-950">
             <MessagePrimitive.Error />
@@ -397,47 +407,40 @@ const ModelPicker = () => {
   });
   const modelOptions = modelConfig?.options ?? [];
   const activeModel = selectedModel || modelConfig?.defaultModel || '';
-  const [modelInput, setModelInput] = useState('');
 
   useEffect(() => {
     if (!selectedModel && modelConfig?.defaultModel) setSelectedModel(modelConfig.defaultModel);
   }, [modelConfig?.defaultModel, selectedModel, setSelectedModel]);
 
-  useEffect(() => {
-    setModelInput(activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : '');
-  }, [activeModel, modelOptions]);
-
-  const commitModelInput = (input: string) => {
-    const resolvedModel = resolveModelInput(input, modelOptions);
-    if (resolvedModel) {
-      setSelectedModel(resolvedModel);
-      setModelInput(getResolvedModelDisplayName(resolvedModel, modelOptions));
-      return;
-    }
-
-    setModelInput(activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : '');
-  };
-
   return (
     <div className="model-picker min-w-0 shrink-0">
-      <input
-        aria-label="Model"
-        list="weave-models"
-        value={modelInput}
-        disabled={isRunning || modelOptions.length === 0}
-        onBlur={event => commitModelInput(event.target.value)}
-        onChange={event => {
-          setModelInput(event.target.value);
-          const resolvedModel = resolveModelInput(event.target.value, modelOptions);
-          if (resolvedModel) setSelectedModel(resolvedModel);
+      <Select
+        value={activeModel}
+        onValueChange={value => {
+          if (value) setSelectedModel(resolveModelInput(value, modelOptions) ?? value);
         }}
-        className="h-10 w-64 rounded-lg bg-transparent px-2 text-right text-base leading-6 text-[#89b4fa] outline-none transition placeholder:text-muted-foreground focus:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50"
-      />
-      <datalist id="weave-models">
-        {modelOptions.map(model => (
-          <option key={model.id} value={model.label} label={model.id} />
-        ))}
-      </datalist>
+        disabled={isRunning || modelOptions.length === 0}
+      >
+        <SelectTrigger
+          aria-label="Model"
+          className="h-10 w-64 border-transparent bg-transparent text-blue shadow-none before:hidden hover:bg-muted"
+          variant="ghost"
+        >
+          <SelectValue className="text-right">
+            {activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : 'Model'}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectPopup align="end" className="max-h-72">
+          {modelOptions.map(model => (
+            <SelectItem key={model.id} value={model.id}>
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate">{model.label}</span>
+                <span className="truncate text-xs text-muted-foreground">{model.id}</span>
+              </span>
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
     </div>
   );
 };
@@ -469,26 +472,27 @@ const PromptSlashMenu = ({
   if (matches.length === 0) return null;
 
   return (
-    <div className="absolute bottom-full left-0 z-20 mb-3 w-full overflow-hidden rounded-xl border border-border bg-background shadow-xl">
+    <CommandPanel className="absolute bottom-full left-0 z-20 mb-3 w-full overflow-hidden rounded-xl">
       {matches.map(({ prompt }, index) => (
-        <button
+        <Button
           key={prompt.name}
           type="button"
+          variant="ghost"
           onMouseDown={event => {
             event.preventDefault();
             onSelect(prompt);
           }}
           className={cn(
-            'flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition',
+            'h-auto w-full justify-start gap-3 rounded-none px-4 py-3 text-left text-sm',
             index === activeIndex ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
           )}
         >
           <span className="w-28 shrink-0 font-bold text-primary">/{prompt.name}</span>
           {prompt.argumentHint ? <span className="shrink-0 text-xs text-muted-foreground">{prompt.argumentHint}</span> : null}
           <span className="min-w-0 truncate">— {prompt.description}</span>
-        </button>
+        </Button>
       ))}
-    </div>
+    </CommandPanel>
   );
 };
 
@@ -592,7 +596,7 @@ const Composer = () => {
   };
 
   return (
-    <ComposerPrimitive.Root className="relative mx-0 rounded-[2rem] border border-border bg-muted/70 px-5 py-3 shadow-lg sm:mx-11">
+    <ComposerPrimitive.Root className="relative mx-0 rounded-lg border border-input bg-background px-5 py-3 sm:mx-11">
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
       <div className="flex min-w-0 items-center gap-3">
         <div className="min-w-0 flex-1">
@@ -607,22 +611,24 @@ const Composer = () => {
         <ModelPicker />
         <AuiIf condition={state => !state.thread.isRunning}>
           {isChatGPTConnected ? (
-            <ComposerPrimitive.Send className="shrink-0 rounded-lg p-2 text-[#89b4fa] transition hover:bg-background/70 disabled:opacity-40">
+            <ComposerPrimitive.Send render={<Button size="icon-lg" variant="ghost" className="shrink-0 text-blue" />}>
               <Send size={22} />
             </ComposerPrimitive.Send>
           ) : (
-            <button
+            <Button
               type="button"
               aria-label="Connect ChatGPT"
               onClick={() => void connectChatGPT()}
-              className="shrink-0 rounded-lg p-2 text-[#fab387] transition hover:bg-background/70"
+              size="icon-lg"
+              variant="ghost"
+              className="shrink-0 text-peach"
             >
               <KeyRound size={22} />
-            </button>
+            </Button>
           )}
         </AuiIf>
         <AuiIf condition={state => state.thread.isRunning}>
-          <ComposerPrimitive.Cancel className="shrink-0 rounded-lg p-2 text-primary transition hover:bg-background/70">
+          <ComposerPrimitive.Cancel render={<Button size="icon-lg" variant="ghost" className="shrink-0 text-primary" />}>
             <Loader2 size={22} className="animate-spin" />
           </ComposerPrimitive.Cancel>
         </AuiIf>
@@ -732,7 +738,7 @@ const Thread = () => {
         <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
         <RunningAssistantPlaceholder />
       </ThreadPrimitive.Viewport>
-      <div ref={composerRef} className="shrink-0 bg-gradient-to-t from-background via-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+      <div ref={composerRef} className="shrink-0 border-t border-border bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
         <Composer />
       </div>
     </ThreadPrimitive.Root>

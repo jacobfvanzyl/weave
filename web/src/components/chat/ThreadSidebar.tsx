@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragStartEvent, type DraggableAttributes } from '@dnd-kit/core';
 import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -11,6 +11,28 @@ import { GitPlaneDirectoryPicker } from './GitPlaneDirectoryPicker';
 import { useChatStore } from '../../stores/chat-store';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
 import { MageHandIcon } from '../icons/MageHandIcon';
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from '../ui/alert-dialog';
+import { Button } from '../ui/button';
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from '../ui/dialog';
+import { Empty, EmptyDescription } from '../ui/empty';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../ui/menu';
+import { ScrollArea } from '../ui/scroll-area';
 
 const collapsedPlanesStorageKey = 'weave.collapsedPlaneIds';
 
@@ -23,14 +45,6 @@ const loadCollapsedPlaneIds = () => {
     return [];
   }
 };
-
-const formatThreadTimestamp = (value: string) =>
-  new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(value));
 
 const sortManual = <T extends { sortOrder?: number; updatedAt: string }>(items: T[]) => [...items].sort((a, b) =>
   (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER)
@@ -96,6 +110,17 @@ const SortableSection = ({
   );
 };
 
+const SidebarItemButton = ({ className, ...props }: ComponentProps<typeof Button>) => (
+  <Button
+    variant="ghost"
+    className={cn(
+      'h-auto min-w-0 flex-1 justify-start whitespace-normal rounded-none border-0 bg-transparent p-0 text-left font-normal shadow-none before:hidden hover:!bg-transparent data-pressed:!bg-transparent [:hover,[data-pressed]]:!bg-transparent',
+      className,
+    )}
+    {...props}
+  />
+);
+
 const SortableItem = ({
   id,
   className,
@@ -131,18 +156,19 @@ const SortableItem = ({
       {...(useRootActivator ? listeners : {})}
     >
       {canDrag && showHandle ? (
-        <button
+        <Button
           ref={setActivatorNodeRef}
-          className={cn('absolute left-0 top-1/2 z-10 -translate-x-3 -translate-y-1/2 cursor-grab touch-none select-none rounded p-0.5 text-muted-foreground/70 transition hover:bg-muted hover:text-foreground active:cursor-grabbing', handleClassName)}
+          className={cn('absolute left-0 top-1/2 z-10 -translate-x-3 -translate-y-1/2 cursor-grab touch-none select-none p-0 text-muted-foreground/70 hover:text-foreground active:cursor-grabbing', handleClassName)}
           aria-label="Drag to reorder"
-          type="button"
+          size="icon-xs"
+          variant="ghost"
           style={{ touchAction: 'none' }}
           onClick={event => event.preventDefault()}
           {...attributes}
           {...listeners}
         >
           <GripVertical size={13} />
-        </button>
+        </Button>
       ) : null}
       {hasCustomActivator ? children({ ref: setActivatorNodeRef, attributes, listeners }) : children}
     </div>
@@ -168,11 +194,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
     deleteThread,
   } = useChatStore();
   const queryClient = useQueryClient();
-  const resourceMenuRef = useRef<HTMLDivElement>(null);
   const openPlaneIdsBeforeDragRef = useRef<string[] | null>(null);
-  const [isResourceMenuOpen, setIsResourceMenuOpen] = useState(false);
-  const [threadMenuId, setThreadMenuId] = useState<string | null>(null);
-  const [sectionMenuId, setSectionMenuId] = useState<string | null>(null);
   const [archivedDialogScopeId, setArchivedDialogScopeId] = useState<string | null>(null);
   const [deletePlaneId, setDeletePlaneId] = useState<string | null>(null);
   const [isCreatePlaneDialogOpen, setIsCreatePlaneDialogOpen] = useState(false);
@@ -250,46 +272,64 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
       ?? planes.flatMap(plane => plane.demiplanes).find(demiplane => demiplane.id === archivedDialogScopeId)?.name
       ?? 'Archived Threads';
   const deletePlaneTarget = deletePlaneId ? planes.find(plane => plane.id === deletePlaneId) : undefined;
-
-  useEffect(() => {
-    if (!isResourceMenuOpen && !threadMenuId && !sectionMenuId) return undefined;
-
-    const closeOnOutsideClick = (event: PointerEvent) => {
-      if (!resourceMenuRef.current?.contains(event.target as Node)) {
-        setIsResourceMenuOpen(false);
-      }
-      setThreadMenuId(null);
-      setSectionMenuId(null);
-    };
-
-    document.addEventListener('pointerdown', closeOnOutsideClick);
-    return () => document.removeEventListener('pointerdown', closeOnOutsideClick);
-  }, [isResourceMenuOpen, threadMenuId, sectionMenuId]);
+  const renderThreadMenu = (thread: typeof threads[number]) => (
+    <Menu>
+      <MenuTrigger render={<Button className="shrink-0" size="icon-xs" variant="ghost" aria-label={`Open menu for ${thread.title}`} />}>
+        <MoreHorizontal size={14} />
+      </MenuTrigger>
+      <MenuPopup align="end" sideOffset={4} className="w-32">
+        <MenuItem
+          onClick={async event => {
+            event.preventDefault();
+            await archiveThread(thread.id);
+            await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
+          }}
+        >
+          <Archive size={13} />
+          Archive
+        </MenuItem>
+        <MenuItem
+          variant="destructive"
+          onClick={async event => {
+            event.preventDefault();
+            await deleteThread(thread.id);
+            await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
+          }}
+        >
+          <Trash2 size={13} />
+          Delete
+        </MenuItem>
+      </MenuPopup>
+    </Menu>
+  );
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 flex w-full shrink-0 flex-col border-r border-border bg-muted/95 p-4 shadow-xl backdrop-blur md:static md:z-auto md:w-96 md:bg-muted/50 md:shadow-none md:backdrop-blur-none">
+    <aside className="fixed inset-y-0 left-0 z-40 flex w-full shrink-0 flex-col border-r border-border bg-muted p-4 md:static md:z-auto md:w-96">
       <div className="mb-6 flex items-center justify-between gap-3">
         <h1 className="flex items-center gap-2 text-lg font-semibold">
           <MageHandIcon className="h-6 w-6 text-yellow" />
           <span>Mage Hand</span>
         </h1>
-        <button
-          className="rounded-lg p-2 text-muted-foreground transition hover:bg-background/80 hover:text-foreground md:hidden"
+        <Button
+          className="md:hidden"
+          size="icon"
+          variant="ghost"
           aria-label="Close sidebar"
           onClick={onClose}
         >
           <X size={18} />
-        </button>
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            <div className="-ml-4 h-0.5 flex-1 bg-primary/60" />
+            <div className="-ml-4 h-px flex-1 bg-border" />
             <span className="text-primary">Threads</span>
-            <div className="h-0.5 flex-1 bg-primary/60" />
-            <button
-              className="flex h-5 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:opacity-90"
+            <div className="h-px flex-1 bg-border" />
+            <Button
+              className="h-6 w-8"
+              size="icon-xs"
               aria-label="Create Thread"
               onClick={async () => {
                 await newThread();
@@ -298,7 +338,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
               }}
             >
               <Plus size={14} strokeWidth={3} />
-            </button>
+            </Button>
 
           </div>
         <SortableSection items={plainThreads.map(thread => thread.id)} onReorder={reorderPlainThreads}>
@@ -309,18 +349,18 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
             canDrag={plainThreads.length > 1}
             showHandle={false}
             className={cn(
-              'group flex items-start gap-2 rounded-lg border border-transparent p-2 text-left transition',
-              thread.id === threadId ? 'border-primary bg-background' : 'hover:bg-background/60',
+              'group flex min-h-9 min-w-0 items-center gap-2 rounded-md border border-transparent px-2 py-1 text-left transition-colors',
+              thread.id === threadId ? 'border-transparent bg-background' : 'hover:bg-background',
             )}
           >
-            <button
-              className="min-w-0 flex-1 text-left"
+            <SidebarItemButton
+              className="min-w-0 flex-1 items-center text-left"
               onClick={() => {
                 setThreadId(thread.id);
                 if (closeOnSelect) onClose?.();
               }}
             >
-              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
                 {runningThreadIds.includes(thread.id) ? (
                   <Loader2 size={14} className="animate-spin text-primary" />
                 ) : completedThreadIds.includes(thread.id) ? (
@@ -330,57 +370,10 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                 ) : (
                   <MessageSquare size={14} />
                 )}
-                <span className="truncate">{thread.title}</span>
+                <span className="min-w-0 flex-1 truncate">{thread.title}</span>
               </div>
-              <div className="mt-1 truncate pl-6 text-xs text-muted-foreground">{formatThreadTimestamp(thread.updatedAt)}</div>
-            </button>
-            <div className="relative">
-              <button
-                className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                aria-label={`Open menu for ${thread.title}`}
-                onPointerDown={event => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-                onClick={event => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setThreadMenuId(openId => (openId === thread.id ? null : thread.id));
-                }}
-              >
-                <MoreHorizontal size={14} />
-              </button>
-              {threadMenuId === thread.id ? (
-                <div className="absolute right-0 top-6 z-20 w-28 rounded-md border border-border bg-background p-1 text-xs shadow-lg" onPointerDown={event => event.stopPropagation()}>
-                  <button
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                    onClick={async event => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setThreadMenuId(null);
-                      await archiveThread(thread.id);
-                      await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
-                    }}
-                  >
-                    <Archive size={13} />
-                    Archive
-                  </button>
-                  <button
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                    onClick={async event => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setThreadMenuId(null);
-                      await deleteThread(thread.id);
-                      await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
-                    }}
-                  >
-                    <Trash2 size={13} />
-                    Delete
-                  </button>
-                </div>
-              ) : null}
-            </div>
+            </SidebarItemButton>
+            {renderThreadMenu(thread)}
           </SortableItem>
         ))}
         </SortableSection>
@@ -388,11 +381,12 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
 
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            <div className="-ml-4 h-0.5 flex-1 bg-mauve/60" />
+            <div className="-ml-4 h-px flex-1 bg-border" />
             <span className="text-mauve">Planes</span>
-            <div className="h-0.5 flex-1 bg-mauve/60" />
-            <button
-              className="flex h-5 w-10 items-center justify-center rounded-full bg-mauve text-background transition hover:opacity-90"
+            <div className="h-px flex-1 bg-border" />
+            <Button
+              className="h-6 w-8 bg-mauve text-background hover:bg-mauve/90"
+              size="icon-xs"
               aria-label="Create Plane"
               onClick={() => {
                 setCreatePlaneError(null);
@@ -400,7 +394,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
               }}
             >
               <Plus size={14} strokeWidth={3} />
-            </button>
+            </Button>
 
           </div>
           <SortableSection
@@ -427,7 +421,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                 id={plane.id}
                 canDrag={sortedPlanes.length > 1}
                 showHandle={false}
-                className={cn('p-2', index > 0 && 'border-t border-mauve/60')}
+                className={cn('p-2', index > 0 && 'border-t border-border')}
               >
                 {dragActivator => (
                 <>
@@ -438,24 +432,25 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                   {...dragActivator.attributes}
                   {...dragActivator.listeners}
                 >
-                  <button
+                  <SidebarItemButton
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     onClick={() => togglePlaneCollapsed(plane.id)}
                     aria-expanded={!isCollapsed}
                   >
                     <ChevronUp size={14} className={cn('shrink-0 text-mauve transition', isCollapsed ? 'rotate-180' : '')} />
-                    <span className="min-w-0 truncate">{plane.name}</span>
                     {plane.projectKind === 'git' ? (
-                      <Code2 size={14} className="shrink-0 text-success" aria-label="Code - Portal Plane" />
+                      <Code2 size={14} className="shrink-0 text-blue" aria-label="Code - Portal Plane" />
                     ) : (
-                      <Folder size={14} className="shrink-0 text-success" aria-label="Standard Plane" />
+                      <Folder size={14} className="shrink-0 text-blue" aria-label="Standard Plane" />
                     )}
-                  </button>
+                    <span className="min-w-0 truncate">{plane.name}</span>
+                  </SidebarItemButton>
                   {!isCollapsed ? (
                     <>
                       {plane.projectKind === 'standard' ? (
-                        <button
-                          className="flex h-5 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:opacity-90"
+                        <Button
+                          className="h-6 w-8 shrink-0"
+                          size="icon-xs"
                           aria-label={`Create thread in ${plane.name}`}
                           onClick={async () => {
                             await newThread(plane.id);
@@ -467,10 +462,11 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           }}
                         >
                           <Plus size={14} strokeWidth={3} />
-                        </button>
+                        </Button>
                       ) : (
-                        <button
-                          className="flex h-5 w-10 shrink-0 items-center justify-center rounded-full bg-success text-background transition hover:opacity-90"
+                        <Button
+                          className="h-6 w-8 shrink-0 border-blue bg-blue text-background hover:bg-blue/90"
+                          size="icon-xs"
                           aria-label={`Create workspace in ${plane.name}`}
                           onClick={async () => {
                             const name = window.prompt('Branch / workspace name');
@@ -484,67 +480,47 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           }}
                         >
                           <Plus size={14} strokeWidth={3} />
-                        </button>
+                        </Button>
                       )}
-                      <div className="relative">
-                        <button
-                          className="rounded-md p-1 text-mauve transition hover:bg-background/60"
-                          aria-label={`${plane.name} menu`}
-                          onClick={() => setSectionMenuId(id => id === plane.id ? null : plane.id)}
-                        >
+                      <Menu>
+                        <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-mauve" aria-label={`${plane.name} menu`} />}>
                           <MoreVertical size={14} />
-                        </button>
-                        {sectionMenuId === plane.id ? (
-                          <div className="absolute right-0 top-6 z-20 w-36 rounded-md border border-border bg-background p-1 text-xs font-normal text-muted-foreground shadow-lg" onPointerDown={event => event.stopPropagation()}>
-                            {plane.projectKind === 'git' ? (
-                              <button
-                                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:bg-muted hover:text-foreground"
-                                onClick={async () => {
-                                  setSectionMenuId(null);
-                                  const path = window.prompt('Existing worktree path');
-                                  if (!path?.trim()) return;
-                                  const name = window.prompt('Workspace display name (optional)') ?? undefined;
-                                  try {
-                                    await adoptDemiplane(plane.id, path.trim(), name?.trim() || undefined);
-                                    await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
-                                  } catch (error) {
-                                    window.alert(error instanceof Error ? error.message : String(error));
-                                  }
-                                }}
-                              >
-                                <Link size={13} />
-                                Attach Workspace
-                              </button>
-                            ) : null}
-                            <button
-                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:bg-muted hover:text-foreground"
-                              onClick={() => {
-                                setArchivedDialogScopeId(plane.id);
-                                setSectionMenuId(null);
+                        </MenuTrigger>
+                        <MenuPopup align="end" sideOffset={4} className="w-44">
+                          {plane.projectKind === 'git' ? (
+                            <MenuItem
+                              onClick={async () => {
+                                const path = window.prompt('Existing worktree path');
+                                if (!path?.trim()) return;
+                                const name = window.prompt('Workspace display name (optional)') ?? undefined;
+                                try {
+                                  await adoptDemiplane(plane.id, path.trim(), name?.trim() || undefined);
+                                  await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                                } catch (error) {
+                                  window.alert(error instanceof Error ? error.message : String(error));
+                                }
                               }}
                             >
-                              <Archive size={13} />
-                              Archived Threads
-                            </button>
-                            <button
-                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-destructive transition hover:bg-destructive/10"
-                              onClick={() => {
-                                setDeletePlaneId(plane.id);
-                                setSectionMenuId(null);
-                              }}
-                            >
-                              <Trash2 size={13} />
-                              Delete Plane
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
+                              <Link size={13} />
+                              Attach Workspace
+                            </MenuItem>
+                          ) : null}
+                          <MenuItem onClick={() => setArchivedDialogScopeId(plane.id)}>
+                            <Archive size={13} />
+                            Archived Threads
+                          </MenuItem>
+                          <MenuItem variant="destructive" onClick={() => setDeletePlaneId(plane.id)}>
+                            <Trash2 size={13} />
+                            Delete Plane
+                          </MenuItem>
+                        </MenuPopup>
+                      </Menu>
                     </>
                   ) : null}
                 </div>
                 {!isCollapsed ? (
                   <>
-                    <div className="space-y-2">
+                    <div className="ml-3 space-y-2 border-l border-border pl-3">
                       {plane.projectKind === 'standard' ? (
                         <SortableSection
                           items={standardPlaneThreads.map(thread => thread.id)}
@@ -557,66 +533,23 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           canDrag={standardPlaneThreads.length > 1}
                           showHandle={false}
                           className={cn(
-                            'group relative flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[13px] leading-5 transition',
-                            thread.id === threadId ? 'border-primary bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background/60',
+                            'group relative flex min-h-8 min-w-0 w-full items-center gap-2 rounded-md border px-2 py-1 text-left text-[13px] leading-5 transition-colors',
+                            thread.id === threadId ? 'border-transparent bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background',
                           )}
                         >
-                          <button
-                            className="min-w-0 flex-1 text-left"
+                          <SidebarItemButton
+                            className="min-w-0 flex-1 items-center text-left"
                             onClick={() => {
                               setThreadId(thread.id);
                               if (closeOnSelect) onClose?.();
                             }}
                           >
-                            <div className="flex items-center gap-2">
+                            <div className="flex min-w-0 items-center gap-2">
                               {runningThreadIds.includes(thread.id) ? <Loader2 size={13} className="animate-spin" /> : <MessageSquare size={13} />}
-                              <span className="truncate text-[13px] font-normal leading-5">{thread.title}</span>
+                              <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">{thread.title}</span>
                             </div>
-                            <div className="mt-1 truncate pl-5 text-xs text-muted-foreground">{formatThreadTimestamp(thread.updatedAt)}</div>
-                          </button>
-                          <div className="relative">
-                            <button
-                              className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                              aria-label={`Open menu for ${thread.title}`}
-                              onClick={event => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setThreadMenuId(openId => (openId === thread.id ? null : thread.id));
-                              }}
-                            >
-                              <MoreHorizontal size={14} />
-                            </button>
-                            {threadMenuId === thread.id ? (
-                              <div className="absolute right-0 top-6 z-20 w-28 rounded-md border border-border bg-background p-1 text-xs shadow-lg" onPointerDown={event => event.stopPropagation()}>
-                                <button
-                                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                                  onClick={async event => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    setThreadMenuId(null);
-                                    await archiveThread(thread.id);
-                                    await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
-                                  }}
-                                >
-                                  <Archive size={13} />
-                                  Archive
-                                </button>
-                                <button
-                                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                                  onClick={async event => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    setThreadMenuId(null);
-                                    await deleteThread(thread.id);
-                                    await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
-                                  }}
-                                >
-                                  <Trash2 size={13} />
-                                  Delete
-                                </button>
-                              </div>
-                            ) : null}
-                          </div>
+                          </SidebarItemButton>
+                          {renderThreadMenu(thread)}
                         </SortableItem>
                       ))}
                         </SortableSection>
@@ -642,9 +575,9 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                             id={demiplane.id}
                             canDrag={sortedDemiplanes.length > 1}
                             showHandle={false}
-                            className={cn('space-y-1 py-2', demiplaneIndex > 0 && 'border-t border-success/60')}
+                            className={cn('space-y-1 pt-2 pb-0', demiplaneIndex > 0 && 'border-t border-border')}
                           >
-                            <div className="flex items-start justify-between gap-2 text-sm font-bold text-success">
+                            <div className="flex items-start justify-between gap-2 text-sm font-bold text-blue">
                               <div className="min-w-0 flex-1">
                                 <div className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate">{demiplane.name}</span>
@@ -653,8 +586,9 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                 </div>
                                 {demiplane.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{demiplane.lastError}</div> : null}
                               </div>
-                              <button
-                                className="flex h-5 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:opacity-90"
+                              <Button
+                                className="h-6 w-8 shrink-0"
+                                size="icon-xs"
                                 aria-label={`Create thread in ${demiplane.name}`}
                                 onClick={async () => {
                                   await newThread(plane.id, demiplane.id);
@@ -666,66 +600,51 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                 }}
                               >
                                 <Plus size={14} strokeWidth={3} />
-                              </button>
-                              <div className="relative">
-                                <button
-                                  className="rounded-md p-1 text-success transition hover:bg-background/60"
-                                  aria-label={`${demiplane.name} menu`}
-                                  onClick={() => setSectionMenuId(id => id === demiplane.id ? null : demiplane.id)}
-                                >
+                              </Button>
+                              <Menu>
+                                <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-blue" aria-label={`${demiplane.name} menu`} />}>
                                   <MoreVertical size={14} />
-                                </button>
-                                {sectionMenuId === demiplane.id ? (
-                                  <div className="absolute right-0 top-6 z-20 w-36 rounded-md border border-border bg-background p-1 text-xs font-normal text-muted-foreground shadow-lg" onPointerDown={event => event.stopPropagation()}>
-                                    <button
-                                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:bg-muted hover:text-foreground"
-                                      onClick={() => {
-                                        setArchivedDialogScopeId(demiplane.id);
-                                        setSectionMenuId(null);
-                                      }}
-                                    >
-                                      <Archive size={13} />
-                                      Archived Threads
-                                    </button>
-                                    {!demiplane.locked && demiplane.workspaceKind !== 'primary' ? (
-                                      <>
-                                        <button
-                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition hover:bg-muted hover:text-foreground"
-                                          onClick={async () => {
-                                            setSectionMenuId(null);
-                                            if (!window.confirm(`Detach ${demiplane.name} from this Plane? Worktree files stay on disk.`)) return;
-                                            try {
-                                              await deleteDemiplane(plane.id, demiplane.id, 'detach');
-                                              await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
-                                            } catch (error) {
-                                              window.alert(error instanceof Error ? error.message : String(error));
-                                            }
-                                          }}
-                                        >
-                                          <Link size={13} />
-                                          Detach
-                                        </button>
-                                        <button
-                                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-destructive transition hover:bg-destructive/10"
-                                          onClick={async () => {
-                                            setSectionMenuId(null);
-                                            if (!window.confirm(`Remove worktree for ${demiplane.name}? This runs wt remove.`)) return;
-                                            try {
-                                              await deleteDemiplane(plane.id, demiplane.id, 'remove');
-                                              await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
-                                            } catch (error) {
-                                              window.alert(error instanceof Error ? error.message : String(error));
-                                            }
-                                          }}
-                                        >
-                                          <Trash2 size={13} />
-                                          Remove Worktree
-                                        </button>
-                                      </>
-                                    ) : null}
-                                  </div>
-                                ) : null}
-                              </div>
+                                </MenuTrigger>
+                                <MenuPopup align="end" sideOffset={4} className="w-44">
+                                  <MenuItem onClick={() => setArchivedDialogScopeId(demiplane.id)}>
+                                    <Archive size={13} />
+                                    Archived Threads
+                                  </MenuItem>
+                                  {!demiplane.locked && demiplane.workspaceKind !== 'primary' ? (
+                                    <>
+                                      <MenuItem
+                                        onClick={async () => {
+                                          if (!window.confirm(`Detach ${demiplane.name} from this Plane? Worktree files stay on disk.`)) return;
+                                          try {
+                                            await deleteDemiplane(plane.id, demiplane.id, 'detach');
+                                            await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                                          } catch (error) {
+                                            window.alert(error instanceof Error ? error.message : String(error));
+                                          }
+                                        }}
+                                      >
+                                        <Link size={13} />
+                                        Detach
+                                      </MenuItem>
+                                      <MenuItem
+                                        variant="destructive"
+                                        onClick={async () => {
+                                          if (!window.confirm(`Remove worktree for ${demiplane.name}? This runs wt remove.`)) return;
+                                          try {
+                                            await deleteDemiplane(plane.id, demiplane.id, 'remove');
+                                            await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                                          } catch (error) {
+                                            window.alert(error instanceof Error ? error.message : String(error));
+                                          }
+                                        }}
+                                      >
+                                        <Trash2 size={13} />
+                                        Remove Worktree
+                                      </MenuItem>
+                                    </>
+                                  ) : null}
+                                </MenuPopup>
+                              </Menu>
                             </div>
                             <SortableSection
                               items={demiplaneThreads.map(thread => thread.id)}
@@ -738,66 +657,23 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                 canDrag={demiplaneThreads.length > 1}
                                 showHandle={false}
                                 className={cn(
-                                  'group relative flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[13px] leading-5 transition',
-                                  thread.id === threadId ? 'border-primary bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background/60',
+                                  'group relative flex min-h-8 min-w-0 w-full items-center gap-2 rounded-md border px-2 py-1 text-left text-[13px] leading-5 transition-colors',
+                                  thread.id === threadId ? 'border-transparent bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background',
                                 )}
                               >
-                                <button
-                                  className="min-w-0 flex-1 text-left"
+                                <SidebarItemButton
+                                  className="min-w-0 flex-1 items-center text-left"
                                   onClick={() => {
                                     setThreadId(thread.id);
                                     if (closeOnSelect) onClose?.();
                                   }}
                                 >
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex min-w-0 items-center gap-2">
                                     {runningThreadIds.includes(thread.id) ? <Loader2 size={13} className="animate-spin" /> : <MessageSquare size={13} />}
-                                    <span className="truncate text-[13px] font-normal leading-5">{thread.title}</span>
+                                    <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">{thread.title}</span>
                                   </div>
-                                  <div className="mt-1 truncate pl-5 text-xs text-muted-foreground">{formatThreadTimestamp(thread.updatedAt)}</div>
-                                </button>
-                                <div className="relative">
-                                  <button
-                                    className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                                    aria-label={`Open menu for ${thread.title}`}
-                                    onClick={event => {
-                                      event.preventDefault();
-                                      event.stopPropagation();
-                                      setThreadMenuId(openId => (openId === thread.id ? null : thread.id));
-                                    }}
-                                  >
-                                    <MoreHorizontal size={14} />
-                                  </button>
-                                  {threadMenuId === thread.id ? (
-                                    <div className="absolute right-0 top-6 z-20 w-28 rounded-md border border-border bg-background p-1 text-xs shadow-lg" onPointerDown={event => event.stopPropagation()}>
-                                      <button
-                                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                                        onClick={async event => {
-                                          event.preventDefault();
-                                          event.stopPropagation();
-                                          setThreadMenuId(null);
-                                          await archiveThread(thread.id);
-                                          await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
-                                        }}
-                                      >
-                                        <Archive size={13} />
-                                        Archive
-                                      </button>
-                                      <button
-                                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                                        onClick={async event => {
-                                          event.preventDefault();
-                                          event.stopPropagation();
-                                          setThreadMenuId(null);
-                                          await deleteThread(thread.id);
-                                          await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
-                                        }}
-                                      >
-                                        <Trash2 size={13} />
-                                        Delete
-                                      </button>
-                                    </div>
-                                  ) : null}
-                                </div>
+                                </SidebarItemButton>
+                                {renderThreadMenu(thread)}
                               </SortableItem>
                             ))}
                             </SortableSection>
@@ -844,27 +720,26 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
         />
       ) : null}
 
-      {deletePlaneTarget ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-sm rounded-lg border border-border bg-background p-4 shadow-xl">
-            <div className="mb-3 flex items-start gap-3">
-              <Trash2 className="mt-0.5 shrink-0 text-destructive" size={18} />
-              <div className="min-w-0">
-                <h2 className="text-sm font-semibold text-foreground">Delete Plane?</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  This will permanently delete <span className="font-medium text-foreground">{deletePlaneTarget.name}</span>, its workspaces, and all threads in it.
-                </p>
+      <AlertDialog open={Boolean(deletePlaneTarget)} onOpenChange={open => {
+        if (!open) setDeletePlaneId(null);
+      }}>
+        {deletePlaneTarget ? (
+          <AlertDialogPopup className="max-w-sm">
+            <AlertDialogHeader>
+              <div className="flex items-start gap-3 text-left">
+                <Trash2 className="mt-0.5 shrink-0 text-destructive" size={18} />
+                <div className="min-w-0">
+                  <AlertDialogTitle>Delete Plane?</AlertDialogTitle>
+                  <AlertDialogDescription className="mt-1">
+                    This will permanently delete <span className="font-medium text-foreground">{deletePlaneTarget.name}</span>, its workspaces, and all threads in it.
+                  </AlertDialogDescription>
+                </div>
               </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground transition hover:bg-muted"
-                onClick={() => setDeletePlaneId(null)}
-              >
-                Cancel
-              </button>
-              <button
-                className="rounded-md bg-destructive px-3 py-1.5 text-xs text-destructive-foreground transition hover:opacity-90"
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+              <Button
+                variant="destructive"
                 onClick={async () => {
                   await deletePlane(deletePlaneTarget.id);
                   setDeletePlaneId(null);
@@ -875,72 +750,63 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                 }}
               >
                 Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {archivedDialogScopeId ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-sm rounded-lg border border-border bg-background p-3 shadow-xl">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">Archived Threads</h2>
-                <p className="mt-1 truncate text-xs text-muted-foreground">{archivedDialogTitle}</p>
-              </div>
-              <button
-                className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                aria-label="Close archived threads"
-                onClick={() => setArchivedDialogScopeId(null)}
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="max-h-72 space-y-2 overflow-y-auto">
-              {archivedDialogThreads.length === 0 ? (
-                <div className="rounded-md border border-border/70 p-3 text-xs text-muted-foreground">No archived threads</div>
-              ) : archivedDialogThreads.map(thread => (
-                <div key={thread.id} className="flex items-center gap-2 rounded-md border border-border/70 p-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm text-foreground">{thread.title}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">{formatThreadTimestamp(thread.updatedAt)}</div>
-                  </div>
-                  <button
-                    className="flex h-7 items-center gap-1 rounded-full bg-primary px-2 text-xs text-primary-foreground transition hover:opacity-90"
-                    onClick={async () => {
-                      await restoreThread(thread.id);
-                      await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
-                    }}
-                  >
-                    <RotateCcw size={13} />
-                    Restore
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <div ref={resourceMenuRef} className="relative mt-4">
-        {isResourceMenuOpen ? (
-          <div className="absolute bottom-full left-0 right-0 mb-2 rounded-lg border border-border bg-background p-2 text-sm shadow-lg">
-            <button
-              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-foreground transition hover:bg-muted"
-              onClick={() => {
-                toggleMode();
-                setIsResourceMenuOpen(false);
-              }}
-            >
-              {resolvedTheme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-              <span>{resolvedTheme === 'dark' ? 'Switch to Catppuccin Latte' : 'Switch to Catppuccin Mocha'}</span>
-            </button>
-          </div>
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogPopup>
         ) : null}
-        <button
-          className="w-full rounded-lg border border-border bg-background/60 p-3 text-left text-xs text-muted-foreground transition hover:bg-background"
-          onClick={() => setIsResourceMenuOpen(open => !open)}
+      </AlertDialog>
+
+      <Dialog open={Boolean(archivedDialogScopeId)} onOpenChange={open => {
+        if (!open) setArchivedDialogScopeId(null);
+      }}>
+        {archivedDialogScopeId ? (
+          <DialogPopup className="max-w-sm" showCloseButton={false}>
+            <DialogHeader className="flex-row items-start justify-between gap-3">
+              <div className="min-w-0">
+                <DialogTitle>Archived Threads</DialogTitle>
+                <DialogDescription className="truncate">{archivedDialogTitle}</DialogDescription>
+              </div>
+              <DialogClose render={<Button size="icon-sm" variant="ghost" aria-label="Close archived threads" />}>
+                <X size={16} />
+              </DialogClose>
+            </DialogHeader>
+            <DialogPanel className="pt-1">
+              <ScrollArea className="max-h-72">
+                <div className="space-y-2">
+                  {archivedDialogThreads.length === 0 ? (
+                    <Empty className="rounded-md border border-border/70 p-3">
+                      <EmptyDescription>No archived threads</EmptyDescription>
+                    </Empty>
+                  ) : archivedDialogThreads.map(thread => (
+                    <div key={thread.id} className="flex items-center gap-2 rounded-md border border-border/70 p-2">
+                      <div className="min-w-0 flex-1 truncate text-sm text-foreground">{thread.title}</div>
+                      <Button
+                        size="xs"
+                        onClick={async () => {
+                          await restoreThread(thread.id);
+                          await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
+                        }}
+                      >
+                        <RotateCcw size={13} />
+                        Restore
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </DialogPanel>
+          </DialogPopup>
+        ) : null}
+      </Dialog>
+
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              className="relative mt-4 min-h-20 w-full justify-start whitespace-normal rounded-lg border border-border bg-background/60 p-4 text-left text-xs text-muted-foreground transition hover:bg-background"
+            />
+          }
         >
           <div className="flex items-center justify-between gap-3 font-medium text-foreground">
             <div className="flex min-w-0 items-center gap-3">
@@ -955,10 +821,16 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                 </span>
               </div>
             </div>
-            <ChevronUp size={14} className={cn('shrink-0 transition', isResourceMenuOpen ? 'rotate-180' : '')} />
+            <ChevronUp size={14} className="shrink-0 transition data-[popup-open]:rotate-180" />
           </div>
-        </button>
-      </div>
+        </MenuTrigger>
+        <MenuPopup side="top" align="start" className="w-(--anchor-width)">
+          <MenuItem onClick={toggleMode}>
+            {resolvedTheme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            <span>{resolvedTheme === 'dark' ? 'Switch to Catppuccin Latte' : 'Switch to Catppuccin Mocha'}</span>
+          </MenuItem>
+        </MenuPopup>
+      </Menu>
     </aside>
   );
 };

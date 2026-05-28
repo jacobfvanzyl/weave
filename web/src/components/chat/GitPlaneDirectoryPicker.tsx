@@ -2,6 +2,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronUp, Folder, Loader2, X } from 'lucide-react';
 import { browsePortal, type CreatePlaneInput, type PortalBrowseResult, type PortalConnection, type PortalRoot } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
+import { Alert, AlertDescription } from '../ui/alert';
+import { Button } from '../ui/button';
+import { Dialog, DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../ui/dialog';
+import { Empty, EmptyDescription } from '../ui/empty';
+import { Field, FieldLabel } from '../ui/field';
+import { Input } from '../ui/input';
+import { ScrollArea } from '../ui/scroll-area';
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
+import { Spinner } from '../ui/spinner';
 
 type GitPlaneDirectoryPickerProps = {
   portals: PortalConnection[];
@@ -98,78 +107,93 @@ export const GitPlaneDirectoryPicker = ({ portals, isCreating = false, createErr
     : Boolean(trimmedName && selectedPortal?.portalId && selectedRootId && browseResult?.isGitRepo && !isBrowsing && !isCreating);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-border bg-background p-4 shadow-xl">
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">Create Plane</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Name Plane and choose type before creating it.</p>
+    <Dialog open onOpenChange={open => {
+      if (!open) onCancel();
+    }}>
+      <DialogPopup className="max-w-lg" showCloseButton={false}>
+        <DialogHeader className="flex-row items-start justify-between gap-3">
+          <div className="min-w-0">
+            <DialogTitle>Create Plane</DialogTitle>
+            <DialogDescription>Name Plane and choose type before creating it.</DialogDescription>
           </div>
-          <button className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground" onClick={onCancel} aria-label="Close directory picker">
+          <DialogClose render={<Button size="icon-sm" variant="ghost" aria-label="Close directory picker" />}>
             <X size={16} />
-          </button>
-        </div>
+          </DialogClose>
+        </DialogHeader>
 
-        <div className="grid gap-2 sm:grid-cols-2">
-          <label className="space-y-1 text-xs text-muted-foreground">
-            <span>Name</span>
-            <input
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-foreground"
+        <DialogPanel className="grid gap-3 pt-1">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field>
+            <FieldLabel>Name</FieldLabel>
+            <Input
+              nativeInput
               value={planeName}
               onChange={event => setPlaneName(event.target.value)}
               disabled={isCreating}
               autoFocus
               placeholder="Project name"
             />
-          </label>
-          <label className="space-y-1 text-xs text-muted-foreground">
-            <span>Type</span>
-            <select
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-foreground"
+          </Field>
+          <Field>
+            <FieldLabel>Type</FieldLabel>
+            <Select
               value={projectKind}
-              onChange={event => setProjectKind(event.target.value === 'git' ? 'git' : 'standard')}
+              onValueChange={value => setProjectKind(value === 'git' ? 'git' : 'standard')}
               disabled={isCreating}
             >
-              <option value="standard">Standard</option>
-              <option value="git">Code - Portal</option>
-            </select>
-          </label>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="standard">Standard</SelectItem>
+                <SelectItem value="git">Code - Portal</SelectItem>
+              </SelectPopup>
+            </Select>
+          </Field>
         </div>
 
-        {projectKind === 'git' ? <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <label className="space-y-1 text-xs text-muted-foreground">
-            <span>Portal</span>
-            <select
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-foreground"
+        {projectKind === 'git' ? <div className="grid gap-3 sm:grid-cols-2">
+          <Field>
+            <FieldLabel>Portal</FieldLabel>
+            <Select
               value={selectedPortal?.portalId ?? ''}
-              onChange={event => setSelectedPortalId(event.target.value)}
+              onValueChange={value => setSelectedPortalId(value ?? '')}
               disabled={onlinePortals.length === 0 || isCreating}
             >
-              {onlinePortals.map(portal => (
-                <option key={portal.portalId} value={portal.portalId}>{portal.name || portal.portalId}</option>
-              ))}
-            </select>
-          </label>
-          <label className="space-y-1 text-xs text-muted-foreground">
-            <span>Root</span>
-            <select
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-foreground"
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                {onlinePortals.map(portal => (
+                  <SelectItem key={portal.portalId} value={portal.portalId}>{portal.name || portal.portalId}</SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </Field>
+          <Field>
+            <FieldLabel>Root</FieldLabel>
+            <Select
               value={selectedRootId}
-              onChange={event => setSelectedRootId(event.target.value)}
+              onValueChange={value => setSelectedRootId(value ?? '')}
               disabled={!selectedPortal || isCreating}
             >
-              {roots.map(root => <option key={root.id} value={root.id}>{root.name || root.id}</option>)}
-            </select>
-          </label>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                {roots.map(root => <SelectItem key={root.id} value={root.id}>{root.name || root.id}</SelectItem>)}
+              </SelectPopup>
+            </Select>
+          </Field>
         </div> : null}
 
-        {projectKind === 'git' ? <div className="mt-3 rounded-md border border-border bg-muted/40 p-2 text-xs">
+        {projectKind === 'git' ? <div className="rounded-md border border-border bg-muted p-2 text-xs">
           <div className="flex items-center justify-between gap-2">
             <span className="min-w-0 truncate text-muted-foreground">/{displayPath}</span>
             {path ? (
-              <button className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-muted-foreground transition hover:bg-background hover:text-foreground" onClick={() => setPath(parentPath(path))} disabled={isCreating}>
+              <Button size="xs" variant="ghost" className="shrink-0" onClick={() => setPath(parentPath(path))} disabled={isCreating}>
                 <ChevronUp size={13} /> Parent
-              </button>
+              </Button>
             ) : null}
           </div>
           <div className={cn('mt-2 rounded px-2 py-1', browseResult?.isGitRepo ? 'bg-success/15 text-success' : 'bg-background/60 text-muted-foreground')}>
@@ -177,34 +201,39 @@ export const GitPlaneDirectoryPicker = ({ portals, isCreating = false, createErr
           </div>
         </div> : null}
 
-        {projectKind === 'git' ? <div className="mt-3 min-h-44 flex-1 overflow-auto rounded-md border border-border bg-background/70 p-1">
+        {projectKind === 'git' ? <ScrollArea className="min-h-44 flex-1 rounded-md border border-border bg-background">
+          <div className="p-1">
           {isBrowsing ? (
-            <div className="flex h-32 items-center justify-center gap-2 text-xs text-muted-foreground"><Loader2 size={14} className="animate-spin" /> Loading directories</div>
+            <div className="flex h-32 items-center justify-center gap-2 text-xs text-muted-foreground"><Spinner /> Loading directories</div>
           ) : browseError ? (
-            <div className="p-3 text-xs text-destructive">{browseError}</div>
+            <Alert variant="error"><AlertDescription>{browseError}</AlertDescription></Alert>
           ) : directories.length === 0 ? (
-            <div className="p-3 text-xs text-muted-foreground">No child directories.</div>
+            <Empty><EmptyDescription>No child directories.</EmptyDescription></Empty>
           ) : directories.map(entry => (
-            <button
+            <Button
               key={entry.name}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-foreground transition hover:bg-muted"
+              className="w-full justify-start text-xs"
+              size="sm"
+              variant="ghost"
               onClick={() => setPath(joinPath(path, entry.name))}
               disabled={isCreating}
             >
               <Folder size={14} className={cn('shrink-0', entry.hidden ? 'text-muted-foreground' : 'text-success')} />
               <span className="min-w-0 truncate">{entry.name}</span>
-            </button>
+            </Button>
           ))}
-        </div> : null}
+          </div>
+        </ScrollArea> : null}
 
-        {projectKind === 'git' && onlinePortals.length === 0 ? <div className="mt-3 rounded-md bg-destructive/10 p-2 text-xs text-destructive">Connect a Portal before creating a Code - Portal Plane.</div> : null}
+        {projectKind === 'git' && onlinePortals.length === 0 ? <Alert variant="error"><AlertDescription>Connect a Portal before creating a Code - Portal Plane.</AlertDescription></Alert> : null}
 
-        {createError ? <div className="mt-3 rounded-md bg-destructive/10 p-2 text-xs text-destructive">{createError}</div> : null}
+        {createError ? <Alert variant="error"><AlertDescription>{createError}</AlertDescription></Alert> : null}
+        </DialogPanel>
 
-        <div className="mt-4 flex justify-end gap-2">
-          <button className="rounded-md px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground" onClick={onCancel} disabled={isCreating}>Cancel</button>
-          <button
-            className="flex items-center gap-2 rounded-md bg-success px-3 py-1.5 text-xs font-medium text-background transition hover:opacity-90 disabled:opacity-50"
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={isCreating}>Cancel</Button>
+          <Button
+            className="bg-success text-background hover:bg-success/90"
             disabled={!canCreate}
             onClick={() => {
               if (projectKind === 'standard') return onCreate({ name: trimmedName, projectKind: 'standard' });
@@ -213,9 +242,9 @@ export const GitPlaneDirectoryPicker = ({ portals, isCreating = false, createErr
           >
             {isCreating ? <Loader2 size={13} className="animate-spin" /> : null}
             Create Plane
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
   );
 };

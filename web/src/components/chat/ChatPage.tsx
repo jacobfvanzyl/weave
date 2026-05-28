@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { PanelLeft, Settings } from 'lucide-react';
 import { listPlanes, listServerThreads } from '../../lib/chat-state-api';
 import { useChatStore } from '../../stores/chat-store';
+import { Button } from '../ui/button';
+import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { AssistantChat } from './AssistantChat';
 import { ThreadSidebar } from './ThreadSidebar';
 
@@ -31,8 +33,6 @@ export const ChatPage = () => {
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => !isMobilePortraitNow());
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const settingsMenuRef = useRef<HTMLDivElement>(null);
   const showToolCalls = useChatStore(state => state.showToolCalls);
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
   const isMobilePortrait = useIsMobilePortrait();
@@ -52,19 +52,6 @@ export const ChatPage = () => {
   });
 
   useEffect(() => {
-    if (!isSettingsOpen) return undefined;
-
-    const closeOnOutsideClick = (event: PointerEvent) => {
-      if (!settingsMenuRef.current?.contains(event.target as Node)) {
-        setIsSettingsOpen(false);
-      }
-    };
-
-    document.addEventListener('pointerdown', closeOnOutsideClick);
-    return () => document.removeEventListener('pointerdown', closeOnOutsideClick);
-  }, [isSettingsOpen]);
-
-  useEffect(() => {
     if (serverThreads.length > 0) {
       setServerThreads(serverThreads);
       return;
@@ -82,7 +69,7 @@ export const ChatPage = () => {
       {isSidebarOpen ? (
         <>
           <button
-            className="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm md:hidden"
+            className="fixed inset-0 z-30 bg-background/80 md:hidden"
             aria-label="Close sidebar"
             onClick={() => setIsSidebarOpen(false)}
           />
@@ -90,14 +77,16 @@ export const ChatPage = () => {
         </>
       ) : null}
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background/80 px-4">
-          <button
-            className="absolute left-4 rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background px-4">
+          <Button
+            className="absolute left-4"
+            size="icon"
+            variant="ghost"
             aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
             onClick={() => setIsSidebarOpen(open => !open)}
           >
             <PanelLeft size={18} />
-          </button>
+          </Button>
           {activePlane || hasThreadTitle ? (
             <h2 className="flex max-w-[60%] items-center justify-center gap-1 truncate text-center text-sm font-semibold text-foreground">
               {activePlane ? (
@@ -115,27 +104,23 @@ export const ChatPage = () => {
               {hasThreadTitle ? <span className="min-w-0 truncate text-foreground">{activeThread?.title}</span> : null}
             </h2>
           ) : null}
-          <div ref={settingsMenuRef} className="absolute right-4">
-            <button
-              className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-              aria-label="Chat settings"
-              onClick={() => setIsSettingsOpen(open => !open)}
+          <Menu>
+            <MenuTrigger
+              className="absolute right-4"
+              render={<Button size="icon" variant="ghost" aria-label="Chat settings" />}
             >
               <Settings size={18} />
-            </button>
-            {isSettingsOpen ? (
-              <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-border bg-background p-2 text-sm shadow-lg">
-                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md px-3 py-2 text-foreground transition hover:bg-muted">
-                  <span>Show tool calls</span>
-                  <input
-                    type="checkbox"
-                    checked={showToolCalls}
-                    onChange={event => setShowToolCalls(event.target.checked)}
-                  />
-                </label>
-              </div>
-            ) : null}
-          </div>
+            </MenuTrigger>
+            <MenuPopup align="end" sideOffset={8} className="w-56">
+              <MenuCheckboxItem
+                checked={showToolCalls}
+                variant="switch"
+                onCheckedChange={checked => setShowToolCalls(checked)}
+              >
+                Show tool calls
+              </MenuCheckboxItem>
+            </MenuPopup>
+          </Menu>
         </header>
         <div className="relative min-h-0 flex-1">
           {threads
