@@ -27,16 +27,20 @@ export const renderUserMessage = (text: string, width = terminalWidth()) => {
 
 export const isRenameThreadTool = (toolName: string | undefined) => toolName === 'renameThreadTool' || toolName === 'rename-thread';
 
-const stringifyToolValue = (value: unknown) => {
+const stringifyToolValue = (toolName: string | undefined, value: unknown) => {
   if (value === undefined || value === null) return '';
   if (typeof value === 'string') return value;
   if (typeof value === 'object') {
     const record = value as Record<string, unknown>;
+    if (typeof record.error === 'string') return record.error;
     if (typeof record.stdout === 'string' || typeof record.stderr === 'string') {
       return [record.stdout, record.stderr].filter(item => typeof item === 'string' && item.trim()).join('\n');
     }
+    if (toolName === 'edit' && typeof record.diff === 'string') return record.diff;
     if (typeof record.text === 'string') return record.text;
     if (typeof record.content === 'string') return record.content;
+    if (toolName === 'write' && typeof record.bytes === 'number') return `Wrote ${record.bytes} bytes.`;
+    if (toolName === 'edit' && typeof record.replacements === 'number') return `Applied ${record.replacements} replacement${record.replacements === 1 ? '' : 's'}.`;
   }
   return JSON.stringify(value, null, 2);
 };
@@ -74,9 +78,10 @@ const formatToolHeaderLines = (toolName: string | undefined, input: unknown, wid
     const command = toolCommand(input)?.trimEnd();
     if (!command) return [ansi.fg(mocha.mauve, ansi.bold('$ ...'))];
     const [firstLine = '', ...rest] = command.split('\n');
+    const commandWidth = Math.max(1, width - 3);
     return [
-      ansi.fg(mocha.mauve, ansi.bold(`$ ${firstLine}`)),
-      ...rest.flatMap(line => wrapTextWithAnsi(ansi.fg(mocha.text, line), Math.max(1, width - 2))),
+      ...wrapTextWithAnsi(`${ansi.fg(mocha.mauve, ansi.bold('$'))} ${ansi.fg(mocha.mauve, ansi.bold(firstLine))}`, commandWidth),
+      ...rest.flatMap(line => wrapTextWithAnsi(ansi.fg(mocha.text, line), commandWidth)),
     ];
   }
   if (toolName === 'read' || toolName === 'write' || toolName === 'edit') {
@@ -87,9 +92,9 @@ const formatToolHeaderLines = (toolName: string | undefined, input: unknown, wid
 };
 
 const formatToolOutput = (toolName: string | undefined, output: unknown, width: number) => {
-  const text = stringifyToolValue(output).trim();
+  const text = stringifyToolValue(toolName, output).trim();
   if (!text) return [];
-  const maxLines = toolName === 'bash' ? 10 : 10;
+  const maxLines = toolName === 'bash' ? 10 : toolName === 'edit' ? 14 : 10;
   const lines = text.split('\n');
   const visibleLines = toolName === 'bash' ? lines.slice(-maxLines) : lines.slice(0, maxLines);
   const skipped = lines.length - visibleLines.length;

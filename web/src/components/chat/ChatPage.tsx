@@ -6,8 +6,10 @@ import { useChatStore } from '../../stores/chat-store';
 import { AssistantChat } from './AssistantChat';
 import { ThreadSidebar } from './ThreadSidebar';
 
+const isMobilePortraitNow = () => window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
+
 const useIsMobilePortrait = () => {
-  const [isMobilePortrait, setIsMobilePortrait] = useState(false);
+  const [isMobilePortrait, setIsMobilePortrait] = useState(() => isMobilePortraitNow());
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 767px) and (orientation: portrait)');
@@ -28,7 +30,7 @@ export const ChatPage = () => {
   const runningThreadIds = useChatStore(state => state.runningThreadIds);
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => !isMobilePortraitNow());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
   const showToolCalls = useChatStore(state => state.showToolCalls);
@@ -70,6 +72,10 @@ export const ChatPage = () => {
 
     if (isFetched && serverThreads.length === 0 && threads.length === 0) void newThread();
   }, [isFetched, newThread, serverThreads, setServerThreads, threads.length]);
+
+  useEffect(() => {
+    if (isMobilePortrait && activeThread) setIsSidebarOpen(false);
+  }, [activeThread, isMobilePortrait]);
 
   return (
     <div className="flex h-dvh overflow-hidden">

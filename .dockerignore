@@ -1,0 +1,17 @@
+**/node_modules
+.mastra
+.data
+**/dist
+web/dist
+tui/dist
+portal/dist
+.env
+.env.*
+*.db
+*.db-*
+*.duckdb
+*.duckdb.*
+.git
+.gitignore
+.DS_Store
+output.txt

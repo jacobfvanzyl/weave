@@ -10,6 +10,20 @@ type PortalRoot = {
 };
 
 type PortalConfig = {
+  httpServerUrl?: string;
+  wsServerUrl?: string;
+  authToken?: string;
+  portalId?: string;
+  portal?: {
+    portalId?: string;
+    portalToken?: string;
+    name?: string;
+    mounts?: PortalMount[];
+    roots?: PortalRoot[];
+  };
+};
+
+type ResolvedPortalConfig = {
   portalId: string;
   portalToken: string;
   httpServerUrl: string;
@@ -25,8 +39,8 @@ type ParsedArgs = {
 };
 
 const homeDir = Deno.env.get('HOME') ?? '.';
-const defaultConfigPath = `${homeDir}/.weave/portal.json`;
-const legacyConfigPath = `${homeDir}/.mage-hand/portal.json`;
+const configHomeDir = Deno.env.get('XDG_CONFIG_HOME') ?? `${homeDir}/.config`;
+const defaultConfigPath = `${configHomeDir}/weave/config.json`;
 const defaultHttpServerUrl = 'http://localhost:4111';
 const defaultWsServerUrl = 'ws://localhost:4112';
 const defaultName = 'Mage Portal';
@@ -100,11 +114,25 @@ const withFileMutationQueue = async <T>(path: string, task: () => Promise<T>) =>
 };
 
 const readConfig = async (path: string): Promise<PortalConfig> => {
-  const content = await Deno.readTextFile(path).catch(async error => {
-    if (path !== defaultConfigPath || !(error instanceof Deno.errors.NotFound)) throw error;
-    return await Deno.readTextFile(legacyConfigPath);
+  const content = await Deno.readTextFile(path).catch(error => {
+    if (error instanceof Deno.errors.NotFound) return '{}';
+    throw error;
   });
   return JSON.parse(content) as PortalConfig;
+};
+
+const resolvePortalConfig = (config: PortalConfig): ResolvedPortalConfig => {
+  const portal = config.portal ?? {};
+  if (!portal.portalId || !portal.portalToken) throw new Error('Portal is not logged in. Run portal login first.');
+  return {
+    portalId: portal.portalId,
+    portalToken: portal.portalToken,
+    httpServerUrl: normalizeHttpUrl(config.httpServerUrl ?? defaultHttpServerUrl),
+    wsServerUrl: normalizeWsUrl(config.wsServerUrl ?? defaultWsServerUrl),
+    name: portal.name ?? defaultName,
+    mounts: portal.mounts,
+    roots: portal.roots,
+  };
 };
 
 const writeConfig = async (path: string, config: PortalConfig) => {
@@ -141,26 +169,32 @@ const login = async (flags: Record<string, string | boolean>) => {
   const body = await response.json() as { portalId?: string; token?: string };
   if (!body.portalId || !body.token) throw new Error('Portal token response missing portalId/token.');
 
+  const existingConfig = await readConfig(configPath);
   const config: PortalConfig = {
-    portalId: body.portalId,
-    portalToken: body.token,
+    ...existingConfig,
     httpServerUrl,
     wsServerUrl,
-    name,
+    portalId: body.portalId,
+    portal: {
+      ...(existingConfig.portal ?? {}),
+      portalId: body.portalId,
+      portalToken: body.token,
+      name,
+    },
   };
 
   await writeConfig(configPath, config);
-  console.log(`Portal logged in: ${config.portalId}`);
+  console.log(`Portal logged in: ${body.portalId}`);
   console.log(`Config: ${configPath}`);
 };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const getRoots = (config: PortalConfig) => config.roots?.length
+const getRoots = (config: Pick<ResolvedPortalConfig, 'roots'>) => config.roots?.length
   ? config.roots
   : [{ id: 'default', name: 'Default', path: Deno.env.get('HOME') ?? '.' }];
 
-const resolveRootPath = async (config: PortalConfig, rootId: string, path = '') => {
+const resolveRootPath = async (config: ResolvedPortalConfig, rootId: string, path = '') => {
   const root = getRoots(config).find(item => item.id === rootId);
   if (!root) throw new Error(`Unknown root: ${rootId}`);
   const rootPath = await Deno.realPath(root.path);
@@ -246,7 +280,7 @@ const inspectGit = async (path: string) => {
   return { root, currentBranch, defaultBranch, remote, agentsMd };
 };
 
-const resolveWorkspaceRoot = async (config: PortalConfig, request: Record<string, unknown>) => {
+const resolveWorkspaceRoot = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   if (typeof request.workspacePath === 'string' && request.workspacePath.trim()) {
     return await Deno.realPath(request.workspacePath.trim());
   }
@@ -265,7 +299,7 @@ const resolveWorkspaceRoot = async (config: PortalConfig, request: Record<string
   return root;
 };
 
-const resolveWorkspacePath = async (config: PortalConfig, request: Record<string, unknown>, path: string, mustExist = true) => {
+const resolveWorkspacePath = async (config: ResolvedPortalConfig, request: Record<string, unknown>, path: string, mustExist = true) => {
   const root = await resolveWorkspaceRoot(config, request);
   const candidatePath = normalizePath(path.startsWith('/') ? path : `${root}/${path}`);
 
@@ -294,7 +328,7 @@ const pathStatTool = async (_config: PortalConfig, request: Record<string, unkno
   return { ok: true, path: realPath, isDirectory: stat.isDirectory, isFile: stat.isFile, isSymlink: stat.isSymlink };
 };
 
-const listRootTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const listRootTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   const rootId = typeof args?.rootId === 'string' ? args.rootId : 'default';
   const path = typeof args?.path === 'string' ? args.path : '';
@@ -308,7 +342,7 @@ const listRootTool = async (config: PortalConfig, request: Record<string, unknow
   return { ok: true, rootId, path: relativePath, entries: entries.sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'directory' ? -1 : 1), isGitRepo: Boolean(git), git };
 };
 
-const inspectGitTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const inspectGitTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   const rootId = typeof args?.rootId === 'string' ? args.rootId : 'default';
   const path = typeof args?.path === 'string' ? args.path : '';
@@ -318,7 +352,7 @@ const inspectGitTool = async (config: PortalConfig, request: Record<string, unkn
   return { ok: true, rootId, path: target === rootPath ? '' : target.slice(rootPath.length + 1), git };
 };
 
-const readAgentInstructionsTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const readAgentInstructionsTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   const rootId = typeof args?.rootId === 'string' ? args.rootId : 'default';
   const path = typeof args?.path === 'string' ? args.path : '';
@@ -347,14 +381,14 @@ const normalizeWtWorktree = (item: unknown) => {
 
 const worktrunkStatusTool = async () => getWorktrunkStatus();
 
-const worktrunkListTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const worktrunkListTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const root = await resolveWorkspaceRoot(config, request);
   const result = await runWtJson(root, ['-C', root, 'list', '--format', 'json']);
   const worktrees = Array.isArray(result) ? result.map(normalizeWtWorktree) : [];
   return { ok: true, worktrees };
 };
 
-const worktrunkCreateTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const worktrunkCreateTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   const branch = typeof args?.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
   if (!branch) throw new Error('Missing branch');
@@ -366,7 +400,7 @@ const worktrunkCreateTool = async (config: PortalConfig, request: Record<string,
   return { ok: true, worktree: normalizeWtWorktree(result), raw: result };
 };
 
-const worktrunkRemoveTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const worktrunkRemoveTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   const target = typeof args?.branch === 'string' && args.branch.trim()
     ? args.branch.trim()
@@ -383,7 +417,7 @@ const worktrunkRemoveTool = async (config: PortalConfig, request: Record<string,
   return { ok: true, result };
 };
 
-const gitWorktreeValidateTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const gitWorktreeValidateTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   const path = typeof args?.path === 'string' && args.path.trim() ? args.path.trim() : undefined;
   if (!path) throw new Error('Missing path');
@@ -432,7 +466,7 @@ const truncateReadContent = (content: string, startLine: number, totalLines: num
   return `${output}\n\n[Showing lines ${startLine}-${shownEnd} of ${totalLines}. Use offset=${nextOffset} to continue.]`;
 };
 
-const readFileTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const readFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   if (typeof request.planeId !== 'string') throw new Error('Missing planeId');
   if (typeof args?.path !== 'string') throw new Error('Missing path');
@@ -448,7 +482,7 @@ const readFileTool = async (config: PortalConfig, request: Record<string, unknow
   return { ok: true, content: truncateReadContent(selected, offset, lines.length, limit) };
 };
 
-const writeFileTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const writeFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   if (typeof request.planeId !== 'string') throw new Error('Missing planeId');
   if (typeof args?.path !== 'string') throw new Error('Missing path');
@@ -505,7 +539,7 @@ const generateSimpleDiff = (oldContent: string, newContent: string) => {
   return output.join('\n');
 };
 
-const editFileTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const editFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   if (typeof request.planeId !== 'string') throw new Error('Missing planeId');
   if (typeof args?.path !== 'string') throw new Error('Missing path');
@@ -561,7 +595,7 @@ const editFileTool = async (config: PortalConfig, request: Record<string, unknow
   });
 };
 
-const bashTool = async (config: PortalConfig, request: Record<string, unknown>) => {
+const bashTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
   if (typeof request.planeId !== 'string') throw new Error('Missing planeId');
   if (typeof args?.command !== 'string' || !args.command.trim()) throw new Error('Missing command');
@@ -590,7 +624,7 @@ const bashTool = async (config: PortalConfig, request: Record<string, unknown>) 
   }
 };
 
-const handleToolCall = async (config: PortalConfig, ws: WebSocket, request: Record<string, unknown>) => {
+const handleToolCall = async (config: ResolvedPortalConfig, ws: WebSocket, request: Record<string, unknown>) => {
   const id = typeof request.id === 'string' ? request.id : undefined;
   if (!id) return;
 
@@ -642,14 +676,14 @@ const getPortalCapabilities = async () => {
     : baseCapabilities;
 };
 
-const connectOnce = (config: PortalConfig) => new Promise<void>((resolve, reject) => {
+const connectOnce = (config: ResolvedPortalConfig) => new Promise<void>((resolve, reject) => {
   const url = new URL('/portals/connect', config.wsServerUrl);
   url.searchParams.set('portalId', config.portalId);
   url.searchParams.set('token', config.portalToken);
 
   const ws = new WebSocket(url);
   let accepted = false;
-  let heartbeat: number | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
 
   const cleanup = () => {
     if (heartbeat !== undefined) clearInterval(heartbeat);
@@ -701,7 +735,8 @@ const connectOnce = (config: PortalConfig) => new Promise<void>((resolve, reject
 
 const daemon = async (flags: Record<string, string | boolean>) => {
   const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
-  const config = await readConfig(configPath);
+  const rawConfig = await readConfig(configPath);
+  const config = resolvePortalConfig(rawConfig);
   config.wsServerUrl = normalizeWsUrl(stringFlag(flags, 'ws-server') ?? config.wsServerUrl);
   config.name = stringFlag(flags, 'name') ?? config.name;
 
@@ -732,8 +767,9 @@ const addRoot = async (flags: Record<string, string | boolean>) => {
 
   const config = await readConfig(configPath);
   const realPath = await Deno.realPath(path);
-  const roots = (config.roots ?? []).filter(root => root.id !== id);
-  config.roots = [...roots, { id, name, path: realPath }];
+  const portal = config.portal ?? {};
+  const roots = (portal.roots ?? []).filter(root => root.id !== id);
+  config.portal = { ...portal, roots: [...roots, { id, name, path: realPath }] };
   await writeConfig(configPath, config);
   console.log(`Root ${id}: ${realPath}`);
 };
@@ -746,8 +782,9 @@ const mountPlane = async (flags: Record<string, string | boolean>) => {
 
   const config = await readConfig(configPath);
   const realPath = await Deno.realPath(path);
-  const mounts = (config.mounts ?? []).filter(mount => mount.planeId !== planeId);
-  config.mounts = [...mounts, { planeId, localPath: realPath }];
+  const portal = config.portal ?? {};
+  const mounts = (portal.mounts ?? []).filter(mount => mount.planeId !== planeId);
+  config.portal = { ...portal, mounts: [...mounts, { planeId, localPath: realPath }] };
   await writeConfig(configPath, config);
   console.log(`Mounted ${planeId}: ${realPath}`);
 };
@@ -755,7 +792,10 @@ const mountPlane = async (flags: Record<string, string | boolean>) => {
 const status = async (flags: Record<string, string | boolean>) => {
   const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
   const config = await readConfig(configPath);
-  console.log(JSON.stringify({ ...config, portalToken: `${config.portalToken.slice(0, 8)}...` }, null, 2));
+  const portal = config.portal?.portalToken
+    ? { ...config.portal, portalToken: `${config.portal.portalToken.slice(0, 8)}...` }
+    : config.portal;
+  console.log(JSON.stringify({ ...config, portal }, null, 2));
 };
 
 const usage = () => {
@@ -763,10 +803,10 @@ const usage = () => {
 
 Commands:
   login --server http://localhost:4111 --token <auth-token> [--ws-server ws://localhost:4112] [--name <name>]
-  root --path /path/to/code [--id default] [--name Code] [--config ~/.weave/portal.json]
-  mount --plane plane_x --path /path/to/repo [--config ~/.weave/portal.json]
-  daemon [--config ~/.weave/portal.json] [--ws-server ws://localhost:4112]
-  status [--config ~/.weave/portal.json]
+  root --path /path/to/code [--id default] [--name Code] [--config ~/.config/weave/config.json]
+  mount --plane plane_x --path /path/to/repo [--config ~/.config/weave/config.json]
+  daemon [--config ~/.config/weave/config.json] [--ws-server ws://localhost:4112]
+  status [--config ~/.config/weave/config.json]
 `);
 };
 
@@ -774,7 +814,7 @@ const main = async () => {
   const { command, flags } = parseArgs(Deno.args);
 
   if (command === 'login') return login(flags);
-  if (command === 'daemon') return daemon(flags);
+  if (!command || command === 'daemon') return daemon(flags);
   if (command === 'root') return addRoot(flags);
   if (command === 'mount') return mountPlane(flags);
   if (command === 'status') return status(flags);

@@ -1,7 +1,8 @@
 import type { ParsedArgs, TuiConfig } from './types.ts';
 
 export const homeDir = Deno.env.get('HOME') ?? '.';
-export const defaultConfigPath = `${homeDir}/.weave/tui.json`;
+export const configHomeDir = Deno.env.get('XDG_CONFIG_HOME') ?? `${homeDir}/.config`;
+export const defaultConfigPath = `${configHomeDir}/weave/config.json`;
 export const defaultServerUrl = 'http://localhost:4111';
 
 export const parseArgs = (args: string[]): ParsedArgs => {

@@ -1,8 +1,15 @@
 export type TuiConfig = {
   httpServerUrl?: string;
+  wsServerUrl?: string;
   authToken?: string;
-  model?: string;
   portalId?: string;
+  portal?: {
+    portalId?: string;
+    portalToken?: string;
+    name?: string;
+    mounts?: Array<{ planeId: string; localPath: string }>;
+    roots?: Array<{ id: string; name: string; path: string }>;
+  };
 };
 
 export type ParsedArgs = {

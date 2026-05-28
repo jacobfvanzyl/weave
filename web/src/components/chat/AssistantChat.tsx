@@ -18,14 +18,14 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clipboard, KeyRound, Loader2, Plus, Send } from 'lucide-react';
+import { Check, Clipboard, KeyRound, Loader2, Send } from 'lucide-react';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
 import { chatUrl, getAuthHeaders } from '../../lib/mastra-client';
-import { fetchModelsDevModelOptions, fallbackModelOptions, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
+import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
 import { useChatStore } from '../../stores/chat-store';
 import { MageHandIcon } from '../icons/MageHandIcon';
@@ -123,8 +123,8 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
   const isBusy = displayStatus === 'running';
 
   return (
-    <details className="my-2 rounded-lg border border-border bg-background/70 px-3 py-2 text-xs">
-      <summary className="flex cursor-pointer select-none items-center gap-2 font-medium text-muted-foreground">
+    <details className="my-2 max-w-full overflow-hidden rounded-lg border border-border bg-background/70 px-3 py-2 text-xs">
+      <summary className="flex min-w-0 cursor-pointer select-none items-center gap-2 font-medium text-muted-foreground">
         <span className="shrink-0 text-muted-foreground">▸</span>
         {isBusy ? <Loader2 size={12} className="shrink-0 animate-spin text-primary" /> : null}
         <span className="min-w-0 truncate">
@@ -149,7 +149,7 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
               {isResultCopied ? 'Copied' : 'Copy'}
             </button>
           </div>
-          <pre className={cn('overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-4', display.isError ? 'text-destructive' : 'text-foreground')}>
+          <pre className={cn('max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-[11px] leading-4', display.isError ? 'text-destructive' : 'text-foreground')}>
             {resultText}
           </pre>
         </div>
@@ -243,7 +243,7 @@ const MarkdownImage = ({ alt, src }: { alt?: string; src?: string }) => {
 };
 
 const MarkdownText = ({ text }: { text: string }) => (
-  <div className="space-y-3 text-inherit [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+  <div className="min-w-0 max-w-full space-y-3 overflow-hidden break-words text-inherit [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       rehypePlugins={[rehypeRaw, rehypeSanitize]}
@@ -259,16 +259,16 @@ const MarkdownText = ({ text }: { text: string }) => (
         strong: ({ children }) => <strong className="font-bold text-inherit">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
         del: ({ children }) => <del className="text-muted-foreground line-through">{children}</del>,
-        a: ({ children, href }) => <a href={href} className="text-primary underline underline-offset-2" target="_blank" rel="noreferrer">{children}</a>,
+        a: ({ children, href }) => <a href={href} className="break-words text-primary underline underline-offset-2" target="_blank" rel="noreferrer">{children}</a>,
         code: ({ children, className }) =>
           className?.startsWith('language-') ? (
             <CodeBlock className={className}>{String(children)}</CodeBlock>
           ) : (
-            <code className={cn('rounded bg-background/70 px-1 py-0.5 text-[0.9em]', className)}>{children}</code>
+            <code className={cn('break-words rounded bg-background/70 px-1 py-0.5 text-[0.9em]', className)}>{children}</code>
           ),
-        pre: ({ children }) => <div className="my-3 overflow-x-auto rounded-md bg-background/70 p-3 text-xs leading-5">{children}</div>,
+        pre: ({ children }) => <div className="my-3 max-w-full overflow-x-auto rounded-md bg-background/70 p-3 text-xs leading-5">{children}</div>,
         blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
-        table: ({ children }) => <div className="my-3 overflow-x-auto"><table className="w-full border-collapse text-left text-xs">{children}</table></div>,
+        table: ({ children }) => <div className="my-3 max-w-full overflow-x-auto"><table className="w-full border-collapse text-left text-xs">{children}</table></div>,
         thead: ({ children }) => <thead className="border-b border-border bg-muted/50">{children}</thead>,
         tbody: ({ children }) => <tbody className="divide-y divide-border">{children}</tbody>,
         th: ({ children }) => <th className="border border-border px-3 py-2 font-semibold text-foreground">{children}</th>,
@@ -324,7 +324,7 @@ const RunningAssistantPlaceholder = () => {
 
   return (
     <div className="w-full px-4 py-3">
-      <div className="chat-message-row flex justify-start gap-3">
+      <div className="chat-message-row flex min-w-0 justify-start gap-3">
         <div className="chat-message-avatar mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
           <MageHandIcon className="h-5 w-5" />
         </div>
@@ -358,7 +358,7 @@ const AssistantMessageContent = () => {
 const ThreadMessage = () => (
   <MessagePrimitive.Root className="w-full px-4 py-3">
     <MessagePrimitive.If assistant>
-      <div className="chat-message-row flex justify-start gap-3">
+      <div className="chat-message-row flex min-w-0 justify-start gap-3">
         <div className="chat-message-avatar mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
           <MageHandIcon className="h-5 w-5" />
         </div>
@@ -371,7 +371,7 @@ const ThreadMessage = () => (
       </div>
     </MessagePrimitive.If>
     <MessagePrimitive.If user>
-      <div className="chat-message-row flex justify-end gap-3">
+      <div className="chat-message-row flex min-w-0 justify-end gap-3">
         <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-xl border border-primary/40 bg-user px-4 py-3 text-sm leading-6 text-user-foreground shadow-sm">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
           <div className="text-red-950">
@@ -390,16 +390,22 @@ const ModelPicker = () => {
   const isRunning = useThread(state => state.isRunning);
   const selectedModel = useChatStore(state => state.selectedModel);
   const setSelectedModel = useChatStore(state => state.setSelectedModel);
-  const { data: modelOptions = fallbackModelOptions } = useQuery({
-    queryKey: ['models-dev', 'openrouter'],
-    queryFn: fetchModelsDevModelOptions,
-    staleTime: 1000 * 60 * 60,
+  const { data: modelConfig } = useQuery({
+    queryKey: ['models'],
+    queryFn: fetchModelConfig,
+    staleTime: 1000 * 60 * 5,
   });
-  const [modelInput, setModelInput] = useState(getResolvedModelDisplayName(selectedModel, modelOptions));
+  const modelOptions = modelConfig?.options ?? [];
+  const activeModel = selectedModel || modelConfig?.defaultModel || '';
+  const [modelInput, setModelInput] = useState('');
 
   useEffect(() => {
-    setModelInput(getResolvedModelDisplayName(selectedModel, modelOptions));
-  }, [modelOptions, selectedModel]);
+    if (!selectedModel && modelConfig?.defaultModel) setSelectedModel(modelConfig.defaultModel);
+  }, [modelConfig?.defaultModel, selectedModel, setSelectedModel]);
+
+  useEffect(() => {
+    setModelInput(activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : '');
+  }, [activeModel, modelOptions]);
 
   const commitModelInput = (input: string) => {
     const resolvedModel = resolveModelInput(input, modelOptions);
@@ -409,7 +415,7 @@ const ModelPicker = () => {
       return;
     }
 
-    setModelInput(getResolvedModelDisplayName(selectedModel, modelOptions));
+    setModelInput(activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : '');
   };
 
   return (
@@ -418,11 +424,11 @@ const ModelPicker = () => {
         aria-label="Model"
         list="weave-models"
         value={modelInput}
-        disabled={isRunning}
+        disabled={isRunning || modelOptions.length === 0}
         onBlur={event => commitModelInput(event.target.value)}
         onChange={event => {
           setModelInput(event.target.value);
-          const resolvedModel = resolveModelInput(event.target.value);
+          const resolvedModel = resolveModelInput(event.target.value, modelOptions);
           if (resolvedModel) setSelectedModel(resolvedModel);
         }}
         className="h-10 w-64 rounded-lg bg-transparent px-2 text-right text-base leading-6 text-[#89b4fa] outline-none transition placeholder:text-muted-foreground focus:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50"
@@ -520,7 +526,7 @@ const SlashHighlightedInput = ({
         placeholder={placeholder}
         onKeyDown={onKeyDown}
         className={cn(
-          'relative min-h-10 w-full resize-none bg-transparent p-0 text-base leading-6 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-70',
+          'relative max-h-40 min-h-6 w-full resize-none bg-transparent p-0 text-base leading-6 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-70',
           match && isKnownCommand && 'text-transparent caret-foreground',
         )}
       />
@@ -586,28 +592,22 @@ const Composer = () => {
   };
 
   return (
-    <ComposerPrimitive.Root className="relative mx-0 rounded-[2rem] border border-border bg-muted/70 px-6 py-5 shadow-lg sm:mx-11">
+    <ComposerPrimitive.Root className="relative mx-0 rounded-[2rem] border border-border bg-muted/70 px-5 py-3 shadow-lg sm:mx-11">
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
-      <SlashHighlightedInput
-        value={composerText}
-        placeholder={isChatGPTConnected ? (isEmpty ? emptyPlaceholder : '') : 'Connect ChatGPT to start chatting'}
-        knownPromptNames={knownPromptNames}
-        onKeyDown={handleKeyDown}
-        disabled={!isChatGPTConnected}
-      />
-      <div className="mt-2 flex items-center gap-3">
-        <button
-        type="button"
-        className="rounded-lg p-2 text-muted-foreground transition hover:bg-background/70 hover:text-foreground"
-        aria-label="Add attachment"
-      >
-        <Plus size={24} />
-      </button>
-        <div className="flex-1" />
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <SlashHighlightedInput
+            value={composerText}
+            placeholder={isChatGPTConnected ? (isEmpty ? emptyPlaceholder : '') : 'Connect ChatGPT to start chatting'}
+            knownPromptNames={knownPromptNames}
+            onKeyDown={handleKeyDown}
+            disabled={!isChatGPTConnected}
+          />
+        </div>
         <ModelPicker />
         <AuiIf condition={state => !state.thread.isRunning}>
           {isChatGPTConnected ? (
-            <ComposerPrimitive.Send className="rounded-lg p-2 text-[#89b4fa] transition hover:bg-background/70 disabled:opacity-40">
+            <ComposerPrimitive.Send className="shrink-0 rounded-lg p-2 text-[#89b4fa] transition hover:bg-background/70 disabled:opacity-40">
               <Send size={22} />
             </ComposerPrimitive.Send>
           ) : (
@@ -615,16 +615,16 @@ const Composer = () => {
               type="button"
               aria-label="Connect ChatGPT"
               onClick={() => void connectChatGPT()}
-              className="rounded-lg p-2 text-[#fab387] transition hover:bg-background/70"
+              className="shrink-0 rounded-lg p-2 text-[#fab387] transition hover:bg-background/70"
             >
               <KeyRound size={22} />
             </button>
           )}
         </AuiIf>
         <AuiIf condition={state => state.thread.isRunning}>
-        <ComposerPrimitive.Cancel className="rounded-lg p-2 text-primary transition hover:bg-background/70">
-          <Loader2 size={22} className="animate-spin" />
-        </ComposerPrimitive.Cancel>
+          <ComposerPrimitive.Cancel className="shrink-0 rounded-lg p-2 text-primary transition hover:bg-background/70">
+            <Loader2 size={22} className="animate-spin" />
+          </ComposerPrimitive.Cancel>
         </AuiIf>
       </div>
     </ComposerPrimitive.Root>
@@ -769,7 +769,7 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
             headers: getAuthHeaders(),
             body: {
               messages: requestMessages,
-              model: selectedModel,
+              ...(selectedModel ? { model: selectedModel } : {}),
               memory: {
                 thread: threadId,
               },

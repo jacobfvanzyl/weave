@@ -1,11 +1,11 @@
 import { ProcessTerminal, TUI } from 'pi-tui';
-import { createThread, getContextUsage, isConnectionError, listDemiplaneThreads, listMessages, listPortals, normalizeHttpUrl, resolveWorkspace, streamChat } from './api.ts';
+import { archiveThread, createThread, getContextUsage, isConnectionError, listDemiplaneThreads, listMessages, listPortals, normalizeHttpUrl, resolveWorkspace, streamChat } from './api.ts';
 import { WeaveApp } from './components/app.ts';
 import { ResumeList } from './components/resume-list.ts';
 import { defaultConfigPath, defaultServerUrl, parseArgs, readConfig, stringFlag, writeConfig } from './config.ts';
 import { detectWorkspace } from './git.ts';
 import { chatMessageToRenderMessages, getMessagesVersion, renameTitleFromMessages, renderTranscriptMessage } from './messages.ts';
-import { defaultModel, fallbackModelOptions, fetchModelOptions, getResolvedModelContextWindow, getResolvedModelDisplayName } from './models.ts';
+import { fetchModelConfig, getResolvedModelContextWindow, getResolvedModelDisplayName } from './models.ts';
 import { formatToolCall, renderMarkdown } from './rendering.ts';
 import type { AppState, ChatMessage, RenderMessage, ResolvedWorkspace, TokenUsage } from './types.ts';
 
@@ -105,9 +105,9 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
   let threadId = resolved.thread?.id;
   let busy = false;
   let ctrlCArmed = false;
-  let ctrlCTimer: number | undefined;
+  let ctrlCTimer: ReturnType<typeof setTimeout> | undefined;
   let poller: ReturnType<typeof createIdlePoller> | undefined;
-  let assistantSpinnerTimer: number | undefined;
+  let assistantSpinnerTimer: ReturnType<typeof setInterval> | undefined;
   const requestRender = () => tui.requestRender();
   const stopAssistantSpinner = (assistant?: RenderMessage) => {
     if (assistant?.type === 'assistant') assistant.pending = false;
@@ -170,6 +170,16 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
     );
     poller.prime(messages);
   };
+  const resetToDraftThread = () => {
+    poller?.stop();
+    poller = undefined;
+    seenMessageIds.clear();
+    threadId = undefined;
+    resolved.thread = undefined;
+    state.title = titleFor();
+    state.messages = [];
+    state.contextPercent = undefined;
+  };
   if (threadId) switchPoller(threadId, initialMessages);
 
   const stop = async (code = 0) => {
@@ -204,15 +214,32 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
       requestRender();
       if (!trimmed || busy) return;
       if (trimmed === '/new') {
-        poller?.stop();
-        poller = undefined;
-        seenMessageIds.clear();
-        threadId = undefined;
-        resolved.thread = undefined;
-        state.title = titleFor();
-        state.messages = [];
-        state.contextPercent = undefined;
+        resetToDraftThread();
         requestRender();
+        return;
+      }
+      if (trimmed === '/archive') {
+        if (!threadId) {
+          resetToDraftThread();
+          state.status = 'No current thread to archive.';
+          requestRender();
+          return;
+        }
+        busy = true;
+        state.status = 'Archiving thread...';
+        requestRender();
+        try {
+          await archiveThread(server, token, threadId);
+          markConnected();
+          resetToDraftThread();
+          state.status = undefined;
+        } catch (error) {
+          if (markConnectionError(error)) state.status = undefined;
+          else state.status = error instanceof Error ? error.message : String(error);
+        } finally {
+          busy = false;
+          requestRender();
+        }
         return;
       }
       if (trimmed === '/threads') {
@@ -367,10 +394,10 @@ const start = async (flags: Record<string, string | boolean>) => {
   const server = normalizeHttpUrl(stringFlag(flags, 'server') ?? config.httpServerUrl ?? defaultServerUrl);
   const token = stringFlag(flags, 'token') ?? Deno.env.get('WEAVE_AUTH_TOKEN') ?? config.authToken;
   if (!token) throw new Error('Missing auth token. Run login, pass --token, or set WEAVE_AUTH_TOKEN.');
-  const model = stringFlag(flags, 'model') ?? Deno.env.get('WEAVE_MODEL') ?? config.model ?? defaultModel;
-  const modelOptions = await fetchModelOptions().catch(() => fallbackModelOptions);
-  const modelDisplayName = getResolvedModelDisplayName(model, modelOptions);
-  const modelContextWindow = getResolvedModelContextWindow(model, modelOptions);
+  const modelConfig = await fetchModelConfig(server, token);
+  const model = modelConfig.defaultModel;
+  const modelDisplayName = getResolvedModelDisplayName(model, modelConfig.options);
+  const modelContextWindow = getResolvedModelContextWindow(model, modelConfig.options);
 
   const workspace = await detectWorkspace();
   const configuredPortalId = stringFlag(flags, 'portal') ?? config.portalId;
@@ -406,8 +433,7 @@ const login = async (flags: Record<string, string | boolean>) => {
   const server = normalizeHttpUrl(stringFlag(flags, 'server') ?? defaultServerUrl);
   const token = stringFlag(flags, 'token') ?? Deno.env.get('WEAVE_AUTH_TOKEN');
   if (!token) throw new Error('Missing auth token. Pass --token or set WEAVE_AUTH_TOKEN.');
-  const model = stringFlag(flags, 'model') ?? Deno.env.get('WEAVE_MODEL');
-  await writeConfig(configPath, { httpServerUrl: server, authToken: token, ...(model ? { model } : {}) });
+  await writeConfig(configPath, { ...(await readConfig(configPath)), httpServerUrl: server, authToken: token });
   console.log(`TUI config: ${configPath}`);
 };
 
@@ -415,10 +441,12 @@ const usage = () => {
   console.log(`weave-tui
 
 Commands:
-  login --server http://localhost:4111 --token <auth-token> [--model openai/gpt-5.5]
-  start [--server http://localhost:4111] [--token <auth-token>] [--portal <portalId>] [--model openai/gpt-5.5]
+  login --server http://localhost:4111 --token <auth-token>
+  start [--server http://localhost:4111] [--token <auth-token>] [--portal <portalId>]
 
-Inside chat: /new starts a draft thread. /threads lists demiplane threads. Ctrl+C twice exits.
+Config: ~/.config/weave/config.json (or $XDG_CONFIG_HOME/weave/config.json)
+
+Inside chat: /new starts a draft thread. /archive archives current thread and starts a draft. /threads lists demiplane threads. Ctrl+C twice exits.
 `);
 };
 

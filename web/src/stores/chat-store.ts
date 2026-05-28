@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { archiveServerThread, createPlaneThread, createServerThread, deleteServerThread, renameServerThread } from '../lib/chat-state-api';
-import { defaultModel } from '../lib/models';
 
 const createUuid = () => {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -78,7 +77,7 @@ export const useChatStore = create<ChatState>()(
       resourceId: createId('browser-user'),
       threadId: initialThread.id,
       threads: [initialThread],
-      selectedModel: defaultModel,
+      selectedModel: '',
       showToolCalls: true,
       runningThreadIds: [],
       completedThreadIds: [],
@@ -242,7 +241,7 @@ export const useChatStore = create<ChatState>()(
         const state = persistedState as Partial<PersistedChatState>;
         return {
           threadId: typeof state.threadId === 'string' ? state.threadId : initialThread.id,
-          selectedModel: defaultModel,
+          selectedModel: typeof state.selectedModel === 'string' ? state.selectedModel : '',
           showToolCalls: typeof state.showToolCalls === 'boolean' ? state.showToolCalls : true,
         };
       },

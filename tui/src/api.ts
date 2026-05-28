@@ -53,6 +53,13 @@ export const createThread = async (server: string, token: string, planeId: strin
   return threadId;
 };
 
+export const archiveThread = async (server: string, token: string, threadId: string) => {
+  await apiFetch(server, token, `/chat-state/threads/${threadId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ archived: true }),
+  });
+};
+
 export const listPortals = async (server: string, token: string) => {
   const response = await apiFetch(server, token, '/portals');
   const body = await response.json() as { portals?: PortalConnection[] };

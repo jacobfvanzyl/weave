@@ -336,7 +336,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
             </button>
             <div className="relative">
               <button
-                className="rounded-md p-1 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground group-hover:opacity-100"
+                className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
                 aria-label={`Open menu for ${thread.title}`}
                 onPointerDown={event => {
                   event.preventDefault();
@@ -576,7 +576,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           </button>
                           <div className="relative">
                             <button
-                              className="rounded-md p-1 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground group-hover:opacity-100"
+                              className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
                               aria-label={`Open menu for ${thread.title}`}
                               onClick={event => {
                                 event.preventDefault();
@@ -640,8 +640,8 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           <SortableItem
                             key={demiplane.id}
                             id={demiplane.id}
-                            handleClassName="top-3 translate-y-0"
                             canDrag={sortedDemiplanes.length > 1}
+                            showHandle={false}
                             className={cn('space-y-1 py-2', demiplaneIndex > 0 && 'border-t border-success/60')}
                           >
                             <div className="flex items-start justify-between gap-2 text-sm font-bold text-success">
@@ -757,7 +757,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                 </button>
                                 <div className="relative">
                                   <button
-                                    className="rounded-md p-1 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground group-hover:opacity-100"
+                                    className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
                                     aria-label={`Open menu for ${thread.title}`}
                                     onClick={event => {
                                       event.preventDefault();

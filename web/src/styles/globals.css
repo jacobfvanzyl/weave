@@ -90,14 +90,19 @@ input {
 
 .shiki-code pre {
   margin: 0;
+  max-width: 100%;
   overflow-x: auto;
   background: transparent !important;
 }
 
 .shiki-code code {
   display: block;
-  min-width: max-content;
   background: transparent;
+}
+
+.chat-message-bubble,
+.chat-message-bubble * {
+  min-width: 0;
 }
 
 @media (max-width: 767px) and (orientation: portrait) {

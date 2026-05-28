@@ -1,7 +1,9 @@
 {
   "tasks": {
     "check": "deno check src/main.ts",
-    "start": "deno run --allow-net --allow-read --allow-env --allow-run src/main.ts"
+    "start": "deno run --allow-net --allow-read --allow-env --allow-run src/main.ts",
+    "build": "deno compile --allow-net --allow-read --allow-write --allow-env --allow-run --output dist/weave src/main.ts",
+    "install": "deno task build && mkdir -p ~/.local/bin && cp dist/weave ~/.local/bin/weave"
   },
   "nodeModulesDir": "auto",
   "imports": {
