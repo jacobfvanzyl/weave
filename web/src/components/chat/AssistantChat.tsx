@@ -19,7 +19,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Clipboard, KeyRound, Loader2, Send } from 'lucide-react';
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
@@ -27,7 +27,7 @@ import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-
 import { chatUrl, getAuthHeaders } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
-import { useChatStore } from '../../stores/chat-store';
+import { useChatStore, type PlanStepStatus, type ThreadPlan, type ThreadPlanStep } from '../../stores/chat-store';
 import { MageHandIcon } from '../icons/MageHandIcon';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -46,6 +46,50 @@ const isDegradedToolCall = ({ toolName, args, result }: Pick<ToolCallMessagePart
   (toolName === 'call' || toolName === 'tool') && isEmptyObject(args) && result === undefined;
 
 const isRenameThreadTool = (toolName: string) => ['renameThreadTool', 'rename-thread'].includes(toolName);
+const isUpdatePlanTool = (toolName: string) => ['updatePlanTool', 'update_plan', 'update-plan'].includes(toolName);
+
+type PlanPayload = {
+  plan: ThreadPlanStep[];
+  completed?: number;
+  total?: number;
+};
+
+const isPlanStepStatus = (value: unknown): value is PlanStepStatus =>
+  value === 'pending' || value === 'in_progress' || value === 'completed';
+
+const getPlanPayload = (result: unknown, args: unknown): PlanPayload | null => {
+  const source = result && typeof result === 'object' ? result : args;
+  if (!source || typeof source !== 'object') return null;
+
+  const record = source as Record<string, unknown>;
+  if (!Array.isArray(record.plan)) return null;
+
+  const plan = record.plan
+    .map(item => {
+      if (!item || typeof item !== 'object') return null;
+      const step = (item as Record<string, unknown>).step;
+      const status = (item as Record<string, unknown>).status;
+      if (typeof step !== 'string' || !isPlanStepStatus(status)) return null;
+      return { step, status };
+    })
+    .filter((item): item is ThreadPlanStep => item !== null);
+
+  if (plan.length === 0) return null;
+
+  return {
+    plan,
+    completed: typeof record.completed === 'number' ? record.completed : undefined,
+    total: typeof record.total === 'number' ? record.total : undefined,
+  };
+};
+
+const toThreadPlan = (payload: PlanPayload, isBusy: boolean): ThreadPlan => ({
+  plan: payload.plan,
+  completed: payload.completed ?? payload.plan.filter(item => item.status === 'completed').length,
+  total: payload.total ?? payload.plan.length,
+  updatedAt: new Date().toISOString(),
+  isBusy,
+});
 
 const Reasoning = ({ text }: ReasoningMessagePartProps) => (
   <Collapsible className="my-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
@@ -115,6 +159,16 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
     }
   }, [display.args, display.result, display.toolName, threadId]);
 
+  useEffect(() => {
+    if (!isUpdatePlanTool(display.toolName)) return;
+
+    const payload = getPlanPayload(display.result, display.args);
+    if (!payload) return;
+
+    const targetThreadId = threadId ?? useChatStore.getState().threadId;
+    useChatStore.getState().setThreadPlan(targetThreadId, toThreadPlan(payload, displayStatus === 'running'));
+  }, [display.args, display.result, display.toolName, displayStatus, threadId]);
+
   if (!isDegradedToolCall(display)) {
     toolCallCache.set(props.toolCallId, {
       toolName: display.toolName,
@@ -124,7 +178,9 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
     });
   }
 
-  if (isRenameThreadTool(display.toolName) || !showToolCalls) return null;
+  if (isRenameThreadTool(display.toolName)) return null;
+  if (isUpdatePlanTool(display.toolName)) return null;
+  if (!showToolCalls) return null;
 
   const chipDetail = getToolChipDetail(display.toolName, display.args);
   const isBusy = displayStatus === 'running';
@@ -333,12 +389,9 @@ const RunningAssistantPlaceholder = () => {
   if (!shouldShow) return null;
 
   return (
-    <div className="w-full px-4 py-3">
-      <div className="chat-message-row flex min-w-0 justify-start gap-3">
-        <div className="chat-message-avatar mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
-          <MageHandIcon className="h-5 w-5" />
-        </div>
-        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-border bg-card px-4 py-3 text-sm leading-6">
+    <div className="w-full px-4 py-3 sm:px-[38px]">
+      <div className="chat-message-row flex min-w-0 justify-start">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] text-sm leading-6">
           <RunningEllipsis />
         </div>
       </div>
@@ -366,13 +419,10 @@ const AssistantMessageContent = () => {
 };
 
 const ThreadMessage = () => (
-  <MessagePrimitive.Root className="w-full px-4 py-3">
+  <MessagePrimitive.Root className="w-full px-4 py-3 sm:px-[38px]">
     <MessagePrimitive.If assistant>
-      <div className="chat-message-row flex min-w-0 justify-start gap-3">
-        <div className="chat-message-avatar mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-yellow">
-          <MageHandIcon className="h-5 w-5" />
-        </div>
-        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-border bg-card px-4 py-3 text-sm leading-6">
+      <div className="chat-message-row flex min-w-0 justify-start">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] text-sm leading-6">
           <AssistantMessageContent />
           <div className="text-red-300">
             <MessagePrimitive.Error />
@@ -381,15 +431,12 @@ const ThreadMessage = () => (
       </div>
     </MessagePrimitive.If>
     <MessagePrimitive.If user>
-      <div className="chat-message-row flex min-w-0 justify-end gap-3">
+      <div className="chat-message-row flex min-w-0 justify-end">
         <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-primary bg-user px-4 py-3 text-sm leading-6 text-user-foreground">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
           <div className="text-red-950">
             <MessagePrimitive.Error />
           </div>
-        </div>
-        <div className="chat-message-avatar mt-1 h-8 w-8 shrink-0 rounded-full bg-user text-center text-xs font-semibold leading-8 text-user-foreground">
-          U
         </div>
       </div>
     </MessagePrimitive.If>
@@ -502,12 +549,14 @@ const SlashHighlightedInput = ({
   knownPromptNames,
   onKeyDown,
   disabled,
+  inputRef,
 }: {
   value: string;
   placeholder: string;
   knownPromptNames: Set<string>;
   onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
   disabled?: boolean;
+  inputRef?: React.Ref<HTMLTextAreaElement>;
 }) => {
   const match = /^(\/[a-zA-Z0-9_-]+)([\s\S]*)$/.exec(value);
   const commandName = match?.[1].slice(1);
@@ -525,6 +574,7 @@ const SlashHighlightedInput = ({
         </div>
       ) : null}
       <ComposerPrimitive.Input
+        ref={inputRef}
         autoFocus={!disabled}
         disabled={disabled}
         placeholder={placeholder}
@@ -540,8 +590,12 @@ const SlashHighlightedInput = ({
 
 const Composer = () => {
   const aui = useAui();
+  const composerRef = useRef<HTMLFormElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
   const isEmpty = useThread(state => state.messages.length === 0 && !state.isLoading);
   const composerText = useAuiState(state => state.composer.text);
+  const [shouldStackControls, setShouldStackControls] = useState(false);
   const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
   const [activeIndex, setActiveIndex] = useState(0);
   const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
@@ -564,6 +618,49 @@ const Composer = () => {
     }))
     .filter(match => slashMatch && match.score > 0)
     .sort((a, b) => b.score - a.score || a.prompt.name.localeCompare(b.prompt.name));
+
+  useLayoutEffect(() => {
+    const composer = composerRef.current;
+    const input = inputRef.current;
+    const controls = controlsRef.current;
+    if (!composer || !input || !controls) return undefined;
+
+    const syncStacking = () => {
+      const composerStyle = window.getComputedStyle(composer);
+      const inputStyle = window.getComputedStyle(input);
+      const composerWidth =
+        composer.clientWidth - parseFloat(composerStyle.paddingLeft || '0') - parseFloat(composerStyle.paddingRight || '0');
+      const rowGap = 12;
+      const visibleControls = Array.from(controls.children).filter(child => {
+        const rect = child.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      const controlsWidth =
+        visibleControls.reduce((width, child) => width + child.getBoundingClientRect().width, 0) +
+        Math.max(0, visibleControls.length - 1) * rowGap;
+      const constrainedTextWidth = Math.max(0, composerWidth - controlsWidth - rowGap);
+
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      if (!context) return;
+
+      context.font = `${inputStyle.fontStyle} ${inputStyle.fontVariant} ${inputStyle.fontWeight} ${inputStyle.fontSize} / ${inputStyle.lineHeight} ${inputStyle.fontFamily}`;
+      const text = composerText || input.placeholder || '';
+      const longestLineWidth = Math.max(
+        0,
+        ...text.split(/\r?\n/).map(line => context.measureText(line || ' ').width),
+      );
+
+      setShouldStackControls(longestLineWidth > constrainedTextWidth);
+    };
+
+    syncStacking();
+
+    const resizeObserver = new ResizeObserver(syncStacking);
+    resizeObserver.observe(composer);
+    resizeObserver.observe(controls);
+    return () => resizeObserver.disconnect();
+  }, [composerText]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -596,11 +693,12 @@ const Composer = () => {
   };
 
   return (
-    <ComposerPrimitive.Root className="relative mx-0 rounded-lg border border-input bg-background px-5 py-3 sm:mx-11">
+    <ComposerPrimitive.Root ref={composerRef} className="relative mx-0 rounded-lg border border-input bg-background px-5 py-3 sm:mx-[22px]">
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
-      <div className="flex min-w-0 items-center gap-3">
+      <div className={cn('flex min-w-0 gap-3', shouldStackControls ? 'flex-col items-stretch' : 'items-center')}>
         <div className="min-w-0 flex-1">
           <SlashHighlightedInput
+            inputRef={inputRef}
             value={composerText}
             placeholder={isChatGPTConnected ? (isEmpty ? emptyPlaceholder : '') : 'Connect ChatGPT to start chatting'}
             knownPromptNames={knownPromptNames}
@@ -608,30 +706,32 @@ const Composer = () => {
             disabled={!isChatGPTConnected}
           />
         </div>
-        <ModelPicker />
-        <AuiIf condition={state => !state.thread.isRunning}>
-          {isChatGPTConnected ? (
-            <ComposerPrimitive.Send render={<Button size="icon-lg" variant="ghost" className="shrink-0 text-blue" />}>
-              <Send size={22} />
-            </ComposerPrimitive.Send>
-          ) : (
-            <Button
-              type="button"
-              aria-label="Connect ChatGPT"
-              onClick={() => void connectChatGPT()}
-              size="icon-lg"
-              variant="ghost"
-              className="shrink-0 text-peach"
-            >
-              <KeyRound size={22} />
-            </Button>
-          )}
-        </AuiIf>
-        <AuiIf condition={state => state.thread.isRunning}>
-          <ComposerPrimitive.Cancel render={<Button size="icon-lg" variant="ghost" className="shrink-0 text-primary" />}>
-            <Loader2 size={22} className="animate-spin" />
-          </ComposerPrimitive.Cancel>
-        </AuiIf>
+        <div ref={controlsRef} className={cn('flex shrink-0 items-center gap-3', shouldStackControls && 'justify-end')}>
+          <ModelPicker />
+          <AuiIf condition={state => !state.thread.isRunning}>
+            {isChatGPTConnected ? (
+              <ComposerPrimitive.Send render={<Button size="icon-lg" variant="ghost" className="shrink-0 text-blue" />}>
+                <Send size={22} />
+              </ComposerPrimitive.Send>
+            ) : (
+              <Button
+                type="button"
+                aria-label="Connect ChatGPT"
+                onClick={() => void connectChatGPT()}
+                size="icon-lg"
+                variant="ghost"
+                className="shrink-0 text-peach"
+              >
+                <KeyRound size={22} />
+              </Button>
+            )}
+          </AuiIf>
+          <AuiIf condition={state => state.thread.isRunning}>
+            <ComposerPrimitive.Cancel render={<Button size="icon-lg" variant="ghost" className="shrink-0 text-primary" />}>
+              <Loader2 size={22} className="animate-spin" />
+            </ComposerPrimitive.Cancel>
+          </AuiIf>
+        </div>
       </div>
     </ComposerPrimitive.Root>
   );

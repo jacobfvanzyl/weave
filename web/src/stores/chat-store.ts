@@ -28,6 +28,21 @@ export type ChatThread = {
   workspacePath?: string;
 };
 
+export type PlanStepStatus = 'pending' | 'in_progress' | 'completed';
+
+export type ThreadPlanStep = {
+  step: string;
+  status: PlanStepStatus;
+};
+
+export type ThreadPlan = {
+  plan: ThreadPlanStep[];
+  completed: number;
+  total: number;
+  updatedAt: string;
+  isBusy?: boolean;
+};
+
 type PersistedChatState = {
   threadId: string;
   selectedModel: string;
@@ -43,9 +58,12 @@ type ChatState = {
   runningThreadIds: string[];
   completedThreadIds: string[];
   deletedThreadIds: string[];
+  threadPlans: Record<string, ThreadPlan | undefined>;
   hasInitializedThreads: boolean;
   setSelectedModel: (model: string) => void;
   setShowToolCalls: (showToolCalls: boolean) => void;
+  setThreadPlan: (threadId: string, plan: ThreadPlan) => void;
+  clearThreadPlan: (threadId: string) => void;
   setServerThreads: (threads: ChatThread[]) => void;
   newThread: (planeId?: string, demiplaneId?: string) => Promise<void>;
   setThreadId: (threadId: string) => void;
@@ -82,9 +100,19 @@ export const useChatStore = create<ChatState>()(
       runningThreadIds: [],
       completedThreadIds: [],
       deletedThreadIds: [],
+      threadPlans: {},
       hasInitializedThreads: false,
       setSelectedModel: selectedModel => set({ selectedModel }),
       setShowToolCalls: showToolCalls => set({ showToolCalls }),
+      setThreadPlan: (threadId, plan) =>
+        set(state => ({
+          threadPlans: { ...state.threadPlans, [threadId]: plan },
+        })),
+      clearThreadPlan: threadId =>
+        set(state => {
+          const { [threadId]: _removed, ...threadPlans } = state.threadPlans;
+          return { threadPlans };
+        }),
       setServerThreads: threads =>
         set(state => {
           const deletedThreadIds = new Set(state.deletedThreadIds);

@@ -6,6 +6,7 @@ import { useChatStore } from '../../stores/chat-store';
 import { Button } from '../ui/button';
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { AssistantChat } from './AssistantChat';
+import { PlanSidebar } from './PlanSidebar';
 import { ThreadSidebar } from './ThreadSidebar';
 
 const isMobilePortraitNow = () => window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
@@ -29,6 +30,7 @@ export const ChatPage = () => {
   const resourceId = useChatStore(state => state.resourceId);
   const threadId = useChatStore(state => state.threadId);
   const threads = useChatStore(state => state.threads);
+  const activePlan = useChatStore(state => state.threadPlans[threadId]);
   const runningThreadIds = useChatStore(state => state.runningThreadIds);
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
@@ -122,17 +124,20 @@ export const ChatPage = () => {
             </MenuPopup>
           </Menu>
         </header>
-        <div className="relative min-h-0 flex-1">
-          {threads
-            .filter(thread => thread.id === threadId || runningThreadIds.includes(thread.id))
-            .map(thread => (
-              <div
-                key={thread.id}
-                className={thread.id === threadId ? 'absolute inset-0' : 'absolute inset-0 hidden'}
-              >
-                <AssistantChat threadId={thread.id} />
-              </div>
-            ))}
+        <div className="flex min-h-0 flex-1">
+          <div className="relative min-h-0 flex-1">
+            {threads
+              .filter(thread => thread.id === threadId || runningThreadIds.includes(thread.id))
+              .map(thread => (
+                <div
+                  key={thread.id}
+                  className={thread.id === threadId ? 'absolute inset-0' : 'absolute inset-0 hidden'}
+                >
+                  <AssistantChat threadId={thread.id} />
+                </div>
+              ))}
+          </div>
+          <PlanSidebar plan={activePlan} />
         </div>
       </main>
     </div>
