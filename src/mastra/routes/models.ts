@@ -3,6 +3,9 @@ import { registerApiRoute } from '@mastra/core/server';
 export type ModelOption = {
   id: string;
   label: string;
+  providerId?: string;
+  providerName?: string;
+  providerLogoUrl?: string;
   contextWindow?: number;
 };
 
@@ -23,6 +26,7 @@ type ModelsDevProvider = {
 type ModelsDevCatalog = Record<string, ModelsDevProvider>;
 
 const modelsDevUrl = 'https://models.dev/api.json';
+const modelsDevLogoUrl = 'https://models.dev/logos';
 const modelsDevCacheTtlMs = 1000 * 60 * 60 * 6;
 let modelsDevCache: { catalog: ModelsDevCatalog; expiresAt: number } | null = null;
 
@@ -81,10 +85,15 @@ const contextWindowForModel = (id: string, catalog?: ModelsDevCatalog) => {
 };
 
 const modelOption = (id: string, catalog?: ModelsDevCatalog, label?: string): ModelOption => {
+  const parts = splitModelId(id);
+  const provider = parts ? catalog?.[parts.providerId] : undefined;
   const contextWindow = contextWindowForModel(id, catalog);
   return {
     id,
     label: label ?? labelForModel(id, catalog),
+    ...(parts ? { providerId: parts.providerId } : {}),
+    ...(provider?.name ? { providerName: provider.name } : parts ? { providerName: fallbackName(parts.providerId) } : {}),
+    ...(parts ? { providerLogoUrl: `${modelsDevLogoUrl}/${encodeURIComponent(parts.providerId)}.svg` } : {}),
     ...(contextWindow ? { contextWindow } : {}),
   };
 };

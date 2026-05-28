@@ -355,7 +355,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
             showHandle={false}
             className={cn(
               'group flex min-h-9 min-w-0 w-[calc(100%+6px)] items-center gap-2 rounded-md border border-transparent py-1 pl-2 pr-1 text-left transition-colors',
-              thread.id === threadId ? 'border-transparent bg-background' : 'hover:bg-background',
+              thread.id === threadId ? 'border-transparent bg-selected-thread' : 'hover:bg-background',
             )}
           >
             <SidebarItemButton
@@ -378,7 +378,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
             <span className="text-success">Planes</span>
             <div className="h-px flex-1 bg-border" />
             <Button
-              className="h-6 w-8 bg-success-button text-background hover:bg-success-button/90"
+              className="h-6 w-8 border-success-button bg-success-button text-background hover:bg-success-button/90"
               size="icon-xs"
               aria-label="Create Plane"
               onClick={() => {
@@ -538,7 +538,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           showHandle={false}
                           className={cn(
                             'group relative -ml-2 flex min-h-8 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left text-[13px] leading-5 transition-colors',
-                            thread.id === threadId ? 'border-transparent bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                            thread.id === threadId ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
                           )}
                         >
                           <SidebarItemButton
@@ -662,7 +662,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                 showHandle={false}
                                 className={cn(
                                   'group relative -ml-2 flex min-h-8 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left text-[13px] leading-5 transition-colors',
-                                  thread.id === threadId ? 'border-transparent bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                                  thread.id === threadId ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
                                 )}
                               >
                                 <SidebarItemButton

@@ -577,9 +577,9 @@ const ThreadMessage = () => (
     </MessagePrimitive.If>
     <MessagePrimitive.If user>
       <div className="chat-message-row flex min-w-0 justify-end">
-        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-primary bg-user px-4 py-3 text-sm leading-6 text-user-foreground">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-primary bg-user px-4 py-2 text-sm leading-6 text-user-foreground">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-3 flex flex-wrap gap-2 empty:hidden">
             <MessageImageAttachments />
           </div>
           <div className="text-red-950">
@@ -602,6 +602,7 @@ const ModelPicker = () => {
   });
   const modelOptions = modelConfig?.options ?? [];
   const activeModel = selectedModel || modelConfig?.defaultModel || '';
+  const activeOption = modelOptions.find(model => model.id === activeModel);
 
   useEffect(() => {
     if (!selectedModel && modelConfig?.defaultModel) setSelectedModel(modelConfig.defaultModel);
@@ -618,11 +619,23 @@ const ModelPicker = () => {
       >
         <SelectTrigger
           aria-label="Model"
-          className="h-9 w-auto max-w-52 border-transparent bg-transparent px-2 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground"
+          className="h-9 w-9 justify-center border-transparent bg-transparent px-0 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground sm:w-auto sm:max-w-52 sm:justify-start sm:px-2"
           variant="ghost"
         >
-          <span className="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-muted-foreground/40 text-[10px] font-semibold">AI</span>
-          <SelectValue className="min-w-0 text-left">
+          {activeOption?.providerLogoUrl ? (
+            <span
+              className="h-5 w-5 shrink-0 bg-current sm:mr-1"
+              style={{
+                WebkitMask: `url("${activeOption.providerLogoUrl}") center / contain no-repeat`,
+                mask: `url("${activeOption.providerLogoUrl}") center / contain no-repeat`,
+              }}
+              title={activeOption.providerName}
+              aria-hidden="true"
+            />
+          ) : (
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-muted-foreground/40 text-[10px] font-semibold sm:mr-1">AI</span>
+          )}
+          <SelectValue className="hidden min-w-0 text-left sm:block">
             {activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : 'Model'}
           </SelectValue>
         </SelectTrigger>
@@ -667,11 +680,11 @@ const ReasoningPicker = () => {
     >
       <SelectTrigger
         aria-label="Reasoning level"
-        className="h-9 w-auto border-transparent bg-transparent px-2 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground"
+        className="h-9 w-9 justify-center border-transparent bg-transparent px-0 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground sm:w-auto sm:justify-start sm:px-2"
         variant="ghost"
       >
         <Brain size={16} className="shrink-0" />
-        <SelectValue className="min-w-0 text-left">{active.label}</SelectValue>
+        <SelectValue className="hidden min-w-0 text-left sm:block">{active.label}</SelectValue>
       </SelectTrigger>
       <SelectPopup align="start" className="max-h-72">
         {reasoningOptions.map(option => (
@@ -941,10 +954,10 @@ const Composer = () => {
           <ModelPicker />
           <ReasoningPicker />
           <ComposerPrimitive.AddAttachment
-            render={<Button type="button" size="sm" variant="ghost" className="h-9 shrink-0 gap-2 px-2 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Attach image" />}
+            render={<Button type="button" size="sm" variant="ghost" className="h-9 w-9 shrink-0 justify-center px-0 text-muted-foreground hover:bg-muted hover:text-foreground sm:w-auto sm:gap-2 sm:px-2" aria-label="Attach image" />}
           >
             <Paperclip size={16} />
-            <span>Attach</span>
+            <span className="hidden sm:inline">Attach</span>
           </ComposerPrimitive.AddAttachment>
           <PlanPanelToggle threadId={threadId} />
         </div>

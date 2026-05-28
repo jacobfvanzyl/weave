@@ -22,6 +22,7 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-user: var(--user);
   --color-user-foreground: var(--user-foreground);
+  --color-selected-thread: var(--selected-thread);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-success-button: var(--success-button);
@@ -67,9 +68,10 @@
   --primary-foreground: #eff1f5;
   --user: #8839ef;
   --user-foreground: #eff1f5;
+  --selected-thread: #ccd0da;
   --success: #40a02b;
   --success-foreground: #40a02b;
-  --success-button: #a6e3a1;
+  --success-button: #40a02b;
   --info: #8839ef;
   --info-foreground: #8839ef;
   --warning: #df8e1d;
@@ -108,6 +110,7 @@
   --primary-foreground: #11111b;
   --user: #cba6f7;
   --user-foreground: #11111b;
+  --selected-thread: #45475a;
   --success: #a6e3a1;
   --success-foreground: #a6e3a1;
   --success-button: #a6e3a1;
@@ -168,8 +171,7 @@ input {
     gap: 0;
   }
 
-  .chat-message-avatar,
-  .model-picker {
+  .chat-message-avatar {
     display: none;
   }
 
