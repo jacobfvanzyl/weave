@@ -19,6 +19,7 @@ import { planesRoutes } from './routes/planes';
 import { portalSocketRoutes } from './routes/portal-socket';
 import { chatgptAuthRoutes } from './routes/chatgpt-auth';
 import { modelRoutes } from './routes/models';
+import { attachmentRoutes } from './routes/attachments';
 import { parseAuthTokens, type SimpleAuthUser } from './auth';
 import { startPortalWebSocketSidecar } from './portal/websocket-sidecar';
 import { ChatGPTCodexGateway } from './providers/chatgpt-codex-gateway';
@@ -49,6 +50,7 @@ export const mastra = new Mastra({
       ...portalSocketRoutes,
       ...chatgptAuthRoutes,
       ...modelRoutes,
+      ...attachmentRoutes,
     ],
   },
   storage: new MastraCompositeStore({

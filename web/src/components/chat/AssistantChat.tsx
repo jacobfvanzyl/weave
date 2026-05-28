@@ -1,6 +1,7 @@
 import {
   AssistantRuntimeProvider,
   AuiIf,
+  AttachmentPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
@@ -11,6 +12,7 @@ import {
 } from '@assistant-ui/react';
 import type { ReasoningMessagePartProps, ToolCallMessagePartProps } from '@assistant-ui/react';
 import type { ThreadMessage } from '@assistant-ui/core';
+import type { AttachmentAdapter } from '@assistant-ui/core';
 import type { UIMessage } from 'ai';
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import ReactMarkdown from 'react-markdown';
@@ -18,7 +20,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clipboard, KeyRound, Loader2, Send } from 'lucide-react';
+import { Check, Clipboard, ImageIcon, KeyRound, Loader2, Paperclip, Send, X } from 'lucide-react';
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
@@ -38,6 +40,48 @@ import { CodeBlock } from './CodeBlock';
 
 const ThreadIdContext = createContext<string | null>(null);
 const toolCallCache = new Map<string, Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result' | 'isError'>>();
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('Could not read image data'));
+    });
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('Could not read image data')));
+    reader.readAsDataURL(file);
+  });
+
+const imageAttachmentAdapter: AttachmentAdapter = {
+  accept: 'image/*',
+  async add({ file }) {
+    if (!file.type.startsWith('image/')) throw new Error('Only image attachments are supported');
+    return {
+      id: crypto.randomUUID(),
+      type: 'image',
+      name: file.name || 'image',
+      file,
+      contentType: file.type,
+      content: [],
+      status: { type: 'requires-action', reason: 'composer-send' },
+    };
+  },
+  async send(attachment) {
+    return {
+      ...attachment,
+      status: { type: 'complete' },
+      content: [
+        {
+          type: 'file',
+          mimeType: attachment.contentType ?? 'image/png',
+          filename: attachment.name,
+          data: await readFileAsDataUrl(attachment.file),
+        },
+      ],
+    };
+  },
+  async remove() {},
+};
 
 const isEmptyObject = (value: unknown) =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
@@ -399,6 +443,107 @@ const RunningAssistantPlaceholder = () => {
   );
 };
 
+const getAttachmentImageUrl = (attachment: unknown) => {
+  const record = attachment && typeof attachment === 'object' ? attachment as Record<string, unknown> : {};
+  const content = Array.isArray(record.content) ? record.content : [];
+  const firstImagePart = content.find(part => {
+    if (!part || typeof part !== 'object') return false;
+    const partRecord = part as Record<string, unknown>;
+    const mediaType = typeof partRecord.mediaType === 'string'
+      ? partRecord.mediaType
+      : typeof partRecord.mimeType === 'string'
+        ? partRecord.mimeType
+        : undefined;
+    return partRecord.type === 'image' || (partRecord.type === 'file' && mediaType?.startsWith('image/'));
+  }) as Record<string, unknown> | undefined;
+
+  if (typeof firstImagePart?.image === 'string') return firstImagePart.image;
+  if (typeof firstImagePart?.url === 'string') return firstImagePart.url;
+  if (typeof firstImagePart?.data === 'string') return firstImagePart.data;
+
+  return undefined;
+};
+
+const ImageAttachmentPreview = ({ attachment, removable = false }: { attachment: unknown; removable?: boolean }) => {
+  const record = attachment && typeof attachment === 'object' ? attachment as Record<string, unknown> : {};
+  const file = typeof File !== 'undefined' && record.file instanceof File ? record.file : undefined;
+  const [objectUrl, setObjectUrl] = useState<string | undefined>();
+  const [fetchedUrl, setFetchedUrl] = useState<string | undefined>();
+  const attachmentImageUrl = getAttachmentImageUrl(attachment);
+  const imageUrl = fetchedUrl ?? attachmentImageUrl ?? objectUrl;
+  const name = typeof record.name === 'string' ? record.name : 'image';
+
+  useEffect(() => {
+    if (!file || !file.type.startsWith('image/')) {
+      setObjectUrl(undefined);
+      return undefined;
+    }
+
+    const url = URL.createObjectURL(file);
+    setObjectUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  useEffect(() => {
+    if (!attachmentImageUrl || attachmentImageUrl.startsWith('data:') || attachmentImageUrl.startsWith('blob:')) {
+      setFetchedUrl(undefined);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let localUrl: string | undefined;
+    void fetch(attachmentImageUrl, { headers: getAuthHeaders() })
+      .then(response => {
+        if (!response.ok) throw new Error(`Attachment fetch failed: ${response.status}`);
+        return response.blob();
+      })
+      .then(blob => {
+        if (cancelled) return;
+        localUrl = URL.createObjectURL(blob);
+        setFetchedUrl(localUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setFetchedUrl(undefined);
+      });
+
+    return () => {
+      cancelled = true;
+      if (localUrl) URL.revokeObjectURL(localUrl);
+    };
+  }, [attachmentImageUrl]);
+
+  return (
+    <AttachmentPrimitive.Root className="group relative h-16 w-16 overflow-hidden rounded-md border border-border bg-muted">
+      {imageUrl ? (
+        <img src={imageUrl} alt={name} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+          <ImageIcon size={18} />
+        </div>
+      )}
+      {removable ? (
+        <AttachmentPrimitive.Remove
+          render={<Button type="button" size="icon-xs" variant="ghost" className="absolute right-1 top-1 h-5 w-5 bg-background/85 opacity-0 shadow-sm transition-opacity group-hover:opacity-100" />}
+        >
+          <X size={12} />
+        </AttachmentPrimitive.Remove>
+      ) : null}
+    </AttachmentPrimitive.Root>
+  );
+};
+
+const ComposerImageAttachments = () => (
+  <ComposerPrimitive.Attachments>
+    {({ attachment }) => <ImageAttachmentPreview attachment={attachment} removable />}
+  </ComposerPrimitive.Attachments>
+);
+
+const MessageImageAttachments = () => (
+  <MessagePrimitive.Attachments>
+    {({ attachment }) => <ImageAttachmentPreview attachment={attachment} />}
+  </MessagePrimitive.Attachments>
+);
+
 const hasRenderableAssistantContent = (message: ThreadMessage) => {
   if (message.role !== 'assistant') return true;
   return message.content.some(part => {
@@ -434,6 +579,9 @@ const ThreadMessage = () => (
       <div className="chat-message-row flex min-w-0 justify-end">
         <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-primary bg-user px-4 py-3 text-sm leading-6 text-user-foreground">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <MessageImageAttachments />
+          </div>
           <div className="text-red-950">
             <MessagePrimitive.Error />
           </div>
@@ -595,6 +743,7 @@ const Composer = () => {
   const controlsRef = useRef<HTMLDivElement>(null);
   const isEmpty = useThread(state => state.messages.length === 0 && !state.isLoading);
   const composerText = useAuiState(state => state.composer.text);
+  const isComposerEmpty = useAuiState(state => state.composer.isEmpty);
   const [shouldStackControls, setShouldStackControls] = useState(false);
   const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -606,6 +755,7 @@ const Composer = () => {
     staleTime: 10_000,
   });
   const isChatGPTConnected = chatgptAuth?.connected === true;
+  const isSendActive = isChatGPTConnected && !isComposerEmpty;
   const knownPromptNames = useMemo(() => new Set(prompts.map(prompt => prompt.name)), [prompts]);
   const promptMatches = prompts
     .map(prompt => ({
@@ -695,6 +845,9 @@ const Composer = () => {
   return (
     <ComposerPrimitive.Root ref={composerRef} className="relative mx-0 rounded-lg border border-input bg-background px-5 py-3 sm:mx-[22px]">
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
+      <div className="mb-3 flex flex-wrap gap-2 empty:hidden">
+        <ComposerImageAttachments />
+      </div>
       <div className={cn('flex min-w-0 gap-3', shouldStackControls ? 'flex-col items-stretch' : 'items-center')}>
         <div className="min-w-0 flex-1">
           <SlashHighlightedInput
@@ -708,9 +861,27 @@ const Composer = () => {
         </div>
         <div ref={controlsRef} className={cn('flex shrink-0 items-center gap-3', shouldStackControls && 'justify-end')}>
           <ModelPicker />
+          <ComposerPrimitive.AddAttachment
+            render={<Button type="button" size="icon-lg" variant="ghost" className="shrink-0 text-blue" aria-label="Attach image" />}
+          >
+            <Paperclip size={20} />
+          </ComposerPrimitive.AddAttachment>
           <AuiIf condition={state => !state.thread.isRunning}>
             {isChatGPTConnected ? (
-              <ComposerPrimitive.Send render={<Button size="icon-lg" variant="ghost" className="shrink-0 text-blue" />}>
+              <ComposerPrimitive.Send
+                render={(
+                  <Button
+                    size="icon-lg"
+                    variant={isSendActive ? 'default' : 'ghost'}
+                    className={cn(
+                      'shrink-0',
+                      isSendActive
+                        ? 'border-mauve bg-mauve text-background hover:bg-mauve/90'
+                        : 'text-blue',
+                    )}
+                  />
+                )}
+              >
                 <Send size={22} />
               </ComposerPrimitive.Send>
             ) : (
@@ -890,6 +1061,7 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
     id: threadId,
     transport,
     messages: initialMessages,
+    adapters: { attachments: imageAttachmentAdapter },
     onFinish: async () => {
       await queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] });
       await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });

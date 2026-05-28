@@ -3,11 +3,13 @@ import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { registerApiRoute } from '@mastra/core/server';
 import { buildChatSystemMessages, type ProjectAgentInstructions } from '../agents/instructions';
 import { requestPortalTool } from '../portal/registry';
+import { attachmentIdFromReference, attachmentModelUrl, attachmentStorage, parseBase64DataUrl, type StoredAttachmentMetadata } from '../attachments';
 
 const agentId = 'mageHandAgent';
 const planeThreadId = (planeId: string) => `__plane__${planeId}`;
 const agentInstructionsRefreshMs = 60_000;
 const activeThreadStreams = new Set<string>();
+const maxImageAttachmentBytes = 10 * 1024 * 1024;
 
 const getMemory = async (mastra: any) => {
   const agent = await mastra?.getAgent(agentId);
@@ -144,6 +146,106 @@ const toSseResponse = (stream: ReadableStream<unknown>) => {
   });
 };
 
+const normalizeMessageImageAttachments = async (
+  messages: unknown,
+  options: { threadId?: string },
+) => {
+  if (!Array.isArray(messages)) return messages;
+  const threadAttachments = options.threadId ? await attachmentStorage.findByThread(options.threadId) : [];
+
+  const newestMatchingAttachment = (part: Record<string, unknown>): StoredAttachmentMetadata | undefined => {
+    const metadata = part.metadata && typeof part.metadata === 'object' ? part.metadata as Record<string, unknown> : {};
+    const attachmentId = typeof metadata.attachmentId === 'string' ? metadata.attachmentId : undefined;
+    const filename = typeof part.filename === 'string' ? part.filename : undefined;
+    const mediaType = typeof part.mediaType === 'string'
+      ? part.mediaType
+      : typeof part.mimeType === 'string'
+        ? part.mimeType
+        : undefined;
+
+    return threadAttachments
+      .filter(attachment =>
+        (attachmentId ? attachment.id === attachmentId : true) &&
+        (filename ? attachment.originalName === filename : true) &&
+        (mediaType ? attachment.mimeType === mediaType.toLowerCase() : true)
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  };
+
+  return Promise.all(messages.map(async message => {
+    if (!message || typeof message !== 'object') return message;
+    const record = message as Record<string, unknown>;
+    if (!Array.isArray(record.parts)) return message;
+    const experimentalAttachments = Array.isArray(record.experimental_attachments)
+      ? record.experimental_attachments.filter(attachment => {
+          if (!attachment || typeof attachment !== 'object') return true;
+          const attachmentRecord = attachment as Record<string, unknown>;
+          const url = typeof attachmentRecord.url === 'string' ? attachmentRecord.url : '';
+          return !url.startsWith('data:') && !attachmentIdFromReference(url);
+        })
+      : [];
+    const nextExperimentalAttachments: Array<Record<string, unknown>> = [...experimentalAttachments];
+
+    const parts = await Promise.all(record.parts.map(async part => {
+      if (!part || typeof part !== 'object') return part;
+      const partRecord = part as Record<string, unknown>;
+      if (partRecord.type !== 'file') return part;
+
+      const rawData = typeof partRecord.data === 'string' ? partRecord.data : undefined;
+      const rawUrl = typeof partRecord.url === 'string' ? partRecord.url : undefined;
+      const mediaType = typeof partRecord.mediaType === 'string'
+        ? partRecord.mediaType
+        : typeof partRecord.mimeType === 'string'
+          ? partRecord.mimeType
+          : undefined;
+      const dataUrl = rawData?.startsWith('data:')
+        ? rawData
+        : rawUrl?.startsWith('data:')
+          ? rawUrl
+          : undefined;
+      if (!dataUrl) {
+        const referencedAttachmentId = rawUrl ? attachmentIdFromReference(rawUrl) : rawData ? attachmentIdFromReference(rawData) : undefined;
+        const stored = mediaType?.startsWith('image/')
+          ? referencedAttachmentId
+            ? threadAttachments.find(attachment => attachment.id === referencedAttachmentId)
+            : newestMatchingAttachment(partRecord)
+          : undefined;
+        if (!stored) return part;
+        nextExperimentalAttachments.push({
+          url: attachmentModelUrl(stored.id),
+          contentType: stored.mimeType,
+        });
+        return null;
+      }
+
+      const parsed = parseBase64DataUrl(dataUrl);
+      if (!parsed || !parsed.mimeType.startsWith('image/')) return part;
+      if (parsed.bytes.byteLength > maxImageAttachmentBytes) {
+        throw new Error(`Image attachment exceeds the ${maxImageAttachmentBytes} byte limit`);
+      }
+
+      const stored = await attachmentStorage.put({
+        bytes: parsed.bytes,
+        mimeType: parsed.mimeType,
+        originalName: typeof partRecord.filename === 'string' ? partRecord.filename : 'image',
+        threadId: options.threadId,
+      });
+
+      nextExperimentalAttachments.push({
+        url: attachmentModelUrl(stored.id),
+        contentType: stored.mimeType,
+      });
+      return null;
+    }));
+
+    return {
+      ...record,
+      parts: parts.filter(part => part !== null),
+      experimental_attachments: nextExperimentalAttachments.length ? nextExperimentalAttachments : undefined,
+    };
+  }));
+};
+
 export const chatRoutes = [
   registerApiRoute('/chat', {
     method: 'POST',
@@ -154,6 +256,9 @@ export const chatRoutes = [
       const contextResourceId = requestContext?.get(MASTRA_RESOURCE_ID_KEY);
       const resourceId = typeof contextResourceId === 'string' ? contextResourceId : undefined;
       const threadId = params?.memory?.thread;
+      params.messages = await normalizeMessageImageAttachments(params.messages, {
+        threadId: typeof threadId === 'string' ? threadId : undefined,
+      });
       const projectInstructions = await getProjectInstructions(mastra, resourceId, threadId, requestContext);
       const isGitDemiplane = requestContext?.get?.('gitDemiplane') === true;
       const isGitProject = requestContext?.get?.('gitProject') === true;

@@ -2,9 +2,17 @@ import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { registerApiRoute } from '@mastra/core/server';
 import type { MastraDBMessage } from '@mastra/core/agent';
 import { getAuthUserFromHeader } from '../auth';
+import { attachmentIdFromReference, attachmentUrlPath } from '../attachments';
 
 const agentId = 'mageHandAgent';
 const hiddenThreadPrefixes = ['__plane__', '__portal__'];
+
+type MastraThread = {
+  id: string;
+  title?: string;
+  updatedAt?: string;
+  metadata?: unknown;
+};
 
 const isHiddenThread = (thread: { id: string; metadata?: unknown }) => {
   const metadata = thread.metadata as Record<string, unknown> | undefined;
@@ -62,9 +70,44 @@ const getToolResult = (part: Record<string, unknown>) => {
   return parseJsonString(invocation?.result ?? invocation?.output ?? part.result ?? part.output);
 };
 
-const toUiPart = (part: MastraDBMessage['content']['parts'][number]) => {
+const absoluteAttachmentUrl = (url: string, origin: string) => {
+  const attachmentId = attachmentIdFromReference(url);
+  if (attachmentId) return `${origin}${attachmentUrlPath(attachmentId)}`;
+  if (/^https?:\/\//i.test(url) || url.startsWith('data:') || url.startsWith('blob:')) return url;
+  if (!url.startsWith('/')) return url;
+  return `${origin}${url}`;
+};
+
+const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: string) => {
   if (part.type === 'text' && typeof (part as { text?: unknown }).text === 'string') {
     return { type: 'text', text: (part as { text: string }).text };
+  }
+
+  if (part.type === 'file') {
+    const record = part as Record<string, unknown>;
+    const metadata = record.metadata && typeof record.metadata === 'object'
+      ? record.metadata as Record<string, unknown>
+      : {};
+    const metadataUrl = typeof metadata.attachmentUrlPath === 'string' ? metadata.attachmentUrlPath : undefined;
+    const recordUrl = typeof record.url === 'string' ? record.url : undefined;
+    const dataUrl = typeof record.data === 'string' && record.data.startsWith('data:') ? record.data : undefined;
+    const url = metadataUrl ?? recordUrl ?? dataUrl;
+    const mediaType = typeof record.mediaType === 'string'
+      ? record.mediaType
+      : typeof record.mimeType === 'string'
+        ? record.mimeType
+        : undefined;
+
+    if (url && mediaType?.startsWith('image/')) {
+      return {
+        type: 'file',
+        url: absoluteAttachmentUrl(url, origin),
+        mediaType,
+        ...(typeof record.filename === 'string' ? { filename: record.filename } : {}),
+      };
+    }
+
+    return null;
   }
 
   if (part.type === 'reasoning') {
@@ -83,7 +126,7 @@ const toUiPart = (part: MastraDBMessage['content']['parts'][number]) => {
 
   const record = part as Record<string, unknown>;
   const hasToolData =
-    part.type === 'tool-call' ||
+    record.type === 'tool-call' ||
     (typeof part.type === 'string' && part.type.startsWith('tool-')) ||
     typeof record.toolCallId === 'string' ||
     typeof record.toolName === 'string';
@@ -109,16 +152,37 @@ const toUiPart = (part: MastraDBMessage['content']['parts'][number]) => {
   };
 };
 
-const toUiMessage = (message: MastraDBMessage) => {
+const toUiAttachmentPart = (attachment: unknown, origin: string) => {
+  if (!attachment || typeof attachment !== 'object') return null;
+  const record = attachment as Record<string, unknown>;
+  const url = typeof record.url === 'string' ? record.url : undefined;
+  const mediaType = typeof record.contentType === 'string' ? record.contentType : undefined;
+  if (!url || !mediaType?.startsWith('image/')) return null;
+
+  const attachmentId = attachmentIdFromReference(url);
+  return {
+    type: 'file',
+    url: absoluteAttachmentUrl(url, origin),
+    mediaType,
+    ...(attachmentId ? { metadata: { attachmentId, attachmentUrlPath: attachmentUrlPath(attachmentId) } } : {}),
+  };
+};
+
+const toUiMessage = (message: MastraDBMessage, origin: string) => {
   const metadata = message.content.metadata as Record<string, unknown> | undefined;
   const originalText = message.role === 'user' && typeof metadata?.slashCommandOriginalText === 'string'
     ? metadata.slashCommandOriginalText
     : undefined;
+  const attachments = Array.isArray(message.content.experimental_attachments)
+    ? message.content.experimental_attachments.map(attachment => toUiAttachmentPart(attachment, origin)).filter(part => part !== null)
+    : [];
 
   return {
     id: message.id,
     role: message.role,
-    parts: originalText ? [{ type: 'text', text: originalText }] : message.content.parts.map(toUiPart).filter(part => part !== null),
+    parts: originalText
+      ? [{ type: 'text', text: originalText }, ...attachments]
+      : [...message.content.parts.map(part => toUiPart(part, origin)).filter(part => part !== null), ...attachments],
     status: message.role === 'assistant' ? { type: 'complete' } : undefined,
     metadata: message.content.metadata,
   };
@@ -223,7 +287,7 @@ export const chatStateRoutes = [
         });
 
         const threads = await Promise.all(
-          result.threads.filter(thread => !isHiddenThread(thread)).map(async thread => {
+          result.threads.filter((thread: MastraThread) => !isHiddenThread(thread)).map(async (thread: MastraThread) => {
             if (thread.title && !['New chat', '...'].includes(thread.title)) return thread;
 
             const messages = await memory.recall({
@@ -292,8 +356,8 @@ export const chatStateRoutes = [
 
         const memory = await getMemory(c);
         const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
-        const visibleThreads = result.threads.filter(thread => !isHiddenThread(thread));
-        const scopedThreads = visibleThreads.filter(thread => {
+        const visibleThreads = result.threads.filter((thread: MastraThread) => !isHiddenThread(thread));
+        const scopedThreads = visibleThreads.filter((thread: MastraThread) => {
           const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
           if (metadata.archived === true) return false;
           if (plain) return metadata.adHoc === true || (metadata.mode !== 'plane' && typeof metadata.planeId !== 'string');
@@ -301,13 +365,13 @@ export const chatStateRoutes = [
           if (scopePlaneId) return metadata.planeId === scopePlaneId && typeof metadata.demiplaneId !== 'string';
           return false;
         });
-        const scopedIds = new Set(scopedThreads.map(thread => thread.id));
-        if (threadIds.length !== scopedIds.size || threadIds.some(id => !scopedIds.has(id))) {
+        const scopedIds = new Set(scopedThreads.map((thread: MastraThread) => thread.id));
+        if (threadIds.length !== scopedIds.size || threadIds.some((id: string) => !scopedIds.has(id))) {
           return c.json({ error: 'threadIds must include all threads in scope' }, 400);
         }
 
-        await Promise.all(threadIds.map(async (id, index) => {
-          const thread = scopedThreads.find(item => item.id === id)!;
+        await Promise.all(threadIds.map(async (id: string, index: number) => {
+          const thread = scopedThreads.find((item: MastraThread) => item.id === id)!;
           const metadata = { ...((thread.metadata ?? {}) as Record<string, unknown>), sortOrder: index };
           await memory.updateThread({ id, title: thread.title, metadata });
         }));
@@ -386,7 +450,8 @@ export const chatStateRoutes = [
           orderBy: { field: 'createdAt', direction: 'ASC' },
         });
 
-        return c.json({ messages: result.messages.map(toUiMessage) });
+        const origin = new URL(c.req.url).origin;
+        return c.json({ messages: result.messages.map((message: MastraDBMessage) => toUiMessage(message, origin)) });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (message.includes('No thread found')) return c.json({ messages: [] });

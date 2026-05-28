@@ -8,6 +8,7 @@ import type {
   LanguageModelV2StreamPart,
   LanguageModelV2Usage,
 } from '@ai-sdk/provider-v5';
+import { attachmentIdFromReference, attachmentStorage } from '../attachments';
 import { getCodexCredentials } from './chatgpt-codex-auth';
 
 const CODEX_URL = 'https://chatgpt.com/backend-api/codex/responses';
@@ -21,14 +22,74 @@ const stringifyToolOutput = (output: unknown): string => {
   return JSON.stringify(output);
 };
 
-const contentText = (message: LanguageModelV2Message): string => {
-  if (message.role === 'system') return message.content;
-  return message.content
-    .flatMap(part => part.type === 'text' ? [part.text] : [])
-    .join('\n');
+type FilePartData = Exclude<LanguageModelV2Message, { role: 'system' }>['content'][number] extends infer Part
+  ? Part extends { type: 'file'; data: infer Data } ? Data : never
+  : never;
+
+const toBase64 = async (data: FilePartData | URL | string | Uint8Array | ArrayBuffer) => {
+  if (data instanceof URL) {
+    const attachmentId = attachmentIdFromReference(data.toString());
+    if (attachmentId) {
+      const attachment = await attachmentStorage.get(attachmentId);
+      return attachment ? Buffer.from(attachment.bytes).toString('base64') : '';
+    }
+
+    return data.toString();
+  }
+
+  if (typeof data === 'string') {
+    const attachmentId = attachmentIdFromReference(data);
+    if (attachmentId) {
+      const attachment = await attachmentStorage.get(attachmentId);
+      return attachment ? Buffer.from(attachment.bytes).toString('base64') : '';
+    }
+
+    return data.startsWith('data:') || data.startsWith('http') ? data : data;
+  }
+  return Buffer.from(data instanceof ArrayBuffer ? new Uint8Array(data) : data).toString('base64');
 };
 
-const toResponsesInput = (prompt: LanguageModelV2CallOptions['prompt']) => {
+const filePartImageUrl = async (part: Extract<Exclude<LanguageModelV2Message, { role: 'system' }>['content'][number], { type: 'file' }>) => {
+  const mediaType = part.mediaType === 'image/*' ? 'image/jpeg' : part.mediaType;
+  const data = await toBase64(part.data);
+  if (!data) return undefined;
+  return data.startsWith('data:') || data.startsWith('http') ? data : `data:${mediaType};base64,${data}`;
+};
+
+const imagePartImageUrl = async (part: { image?: unknown }) => {
+  const image = part.image;
+  if (!(typeof image === 'string' || image instanceof URL || image instanceof Uint8Array || image instanceof ArrayBuffer)) return undefined;
+  const data = await toBase64(image);
+  if (!data) return undefined;
+  return data.startsWith('data:') || data.startsWith('http') ? data : `data:image/jpeg;base64,${data}`;
+};
+
+const toResponsesContent = async (message: Exclude<LanguageModelV2Message, { role: 'system' | 'tool' }>) => {
+  const content: Array<Record<string, unknown>> = [];
+
+  for (const part of message.content) {
+    const rawPart = part as { type?: string; image?: unknown };
+    if (part.type === 'text') {
+      content.push({ type: message.role === 'assistant' ? 'output_text' : 'input_text', text: part.text });
+      continue;
+    }
+
+    if (message.role === 'user' && part.type === 'file' && part.mediaType.startsWith('image/')) {
+      const imageUrl = await filePartImageUrl(part);
+      if (imageUrl) content.push({ type: 'input_image', image_url: imageUrl });
+      continue;
+    }
+
+    if (message.role === 'user' && rawPart.type === 'image') {
+      const imageUrl = await imagePartImageUrl(rawPart);
+      if (imageUrl) content.push({ type: 'input_image', image_url: imageUrl });
+    }
+  }
+
+  return content;
+};
+
+const toResponsesInput = async (prompt: LanguageModelV2CallOptions['prompt']) => {
   const input: Array<Record<string, unknown>> = [];
 
   for (const message of prompt) {
@@ -58,12 +119,12 @@ const toResponsesInput = (prompt: LanguageModelV2CallOptions['prompt']) => {
       }
     }
 
-    const text = contentText(message);
-    if (!text) continue;
+    const content = await toResponsesContent(message);
+    if (!content.length) continue;
 
     input.push({
       role: message.role,
-      content: [{ type: message.role === 'assistant' ? 'output_text' : 'input_text', text }],
+      content,
     });
   }
 
@@ -90,12 +151,12 @@ const getReasoningEffort = (options: LanguageModelV2CallOptions): string | undef
   return typeof effort === 'string' ? effort : undefined;
 };
 
-const buildBody = (modelId: string, options: LanguageModelV2CallOptions) => {
+const buildBody = async (modelId: string, options: LanguageModelV2CallOptions) => {
   const body: Record<string, unknown> = {
     model: modelId,
     store: false,
     stream: true,
-    input: toResponsesInput(options.prompt),
+    input: await toResponsesInput(options.prompt),
     text: { verbosity: 'low' },
     include: ['reasoning.encrypted_content'],
     tool_choice: options.toolChoice?.type === 'none' ? 'none' : 'auto',
@@ -114,6 +175,15 @@ const buildBody = (modelId: string, options: LanguageModelV2CallOptions) => {
   if (effort && effort !== 'off') body.reasoning = { effort: effort === 'minimal' ? 'low' : effort, summary: 'auto' };
 
   return body;
+};
+
+const countInputImages = (input: unknown) => {
+  if (!Array.isArray(input)) return 0;
+  return input.reduce((total, item) => {
+    const content = item && typeof item === 'object' && 'content' in item ? (item as { content?: unknown }).content : undefined;
+    if (!Array.isArray(content)) return total;
+    return total + content.filter(part => part && typeof part === 'object' && (part as { type?: unknown }).type === 'input_image').length;
+  }, 0);
 };
 
 async function* parseSse(response: Response): AsyncGenerator<Record<string, unknown>> {
@@ -168,7 +238,9 @@ const usageFrom = (response: Record<string, unknown> | undefined): LanguageModel
 export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = 'v2' as const;
   readonly provider = 'chatgpt-codex';
-  readonly supportedUrls = {};
+  readonly supportedUrls = {
+    'image/*': [/^data:image\/[a-z0-9.+-]+;base64,/i, /^https:\/\/weave\.local\/attachments\/[^/?#]+$/i],
+  };
 
   constructor(readonly modelId: string) {}
 
@@ -195,13 +267,14 @@ export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
   }
 
   async doStream(options: LanguageModelV2CallOptions) {
-    const body = buildBody(this.modelId, options);
+    const body = await buildBody(this.modelId, options);
     const credentials = await getCodexCredentials();
     console.info('[chatgpt-codex] request', {
       model: this.modelId,
       accountId: credentials.accountId,
       reasoningEffort: getReasoningEffort(options) ?? 'default',
       tools: options.tools?.length ?? 0,
+      inputImages: countInputImages(body.input),
     });
     const headers = new Headers(options.headers as Record<string, string> | undefined);
 
