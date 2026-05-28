@@ -4,7 +4,7 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Check, ChevronUp, Code2, Folder, GripVertical, Link, Loader2, Lock, MessageSquare, Moon, MoreVertical, Plus, RotateCcw, Sun, Trash2, X } from 'lucide-react';
+import { Archive, ChevronUp, Code2, Folder, GripVertical, Link, Lock, Moon, MoreVertical, Plus, RotateCcw, Sun, Trash2, X } from 'lucide-react';
 import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, getAuthUser, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads, type CreatePlaneInput } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { GitPlaneDirectoryPicker } from './GitPlaneDirectoryPicker';
@@ -185,8 +185,6 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
     resourceId,
     threadId,
     threads,
-    runningThreadIds,
-    completedThreadIds,
     newThread,
     setThreadId,
     archiveThread,
@@ -321,7 +319,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+      <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             <div className="-ml-4 h-px flex-1 bg-border" />
@@ -349,7 +347,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
             canDrag={plainThreads.length > 1}
             showHandle={false}
             className={cn(
-              'group flex min-h-9 min-w-0 items-center gap-2 rounded-md border border-transparent px-2 py-1 text-left transition-colors',
+              'group flex min-h-9 min-w-0 w-[calc(100%+6px)] items-center gap-2 rounded-md border border-transparent py-1 pl-2 pr-1 text-left transition-colors',
               thread.id === threadId ? 'border-transparent bg-background' : 'hover:bg-background',
             )}
           >
@@ -360,16 +358,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                 if (closeOnSelect) onClose?.();
               }}
             >
-              <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
-                {runningThreadIds.includes(thread.id) ? (
-                  <Loader2 size={14} className="animate-spin text-primary" />
-                ) : completedThreadIds.includes(thread.id) ? (
-                  <Check size={14} className="text-success" />
-                ) : thread.adHoc ? (
-                  <Code2 size={14} />
-                ) : (
-                  <MessageSquare size={14} />
-                )}
+              <div className="flex min-w-0 items-center text-sm font-medium text-foreground">
                 <span className="min-w-0 flex-1 truncate">{thread.title}</span>
               </div>
             </SidebarItemButton>
@@ -427,7 +416,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                 <>
                 <div
                   ref={dragActivator.ref}
-                  className={cn('flex cursor-grab touch-none select-none items-center gap-2 text-sm font-bold text-mauve active:cursor-grabbing', !isCollapsed && 'mb-2')}
+                  className={cn('flex w-[calc(100%+0.5rem)] cursor-grab touch-none select-none items-center gap-2 text-sm font-bold text-mauve active:cursor-grabbing', !isCollapsed && 'mb-2')}
                   style={{ touchAction: 'none' }}
                   {...dragActivator.attributes}
                   {...dragActivator.listeners}
@@ -437,11 +426,11 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                     onClick={() => togglePlaneCollapsed(plane.id)}
                     aria-expanded={!isCollapsed}
                   >
-                    <ChevronUp size={14} className={cn('shrink-0 text-mauve transition', isCollapsed ? 'rotate-180' : '')} />
+                    <ChevronUp size={14} className={cn('shrink-0 text-success transition', isCollapsed ? 'rotate-180' : '')} />
                     {plane.projectKind === 'git' ? (
-                      <Code2 size={14} className="shrink-0 text-blue" aria-label="Code - Portal Plane" />
+                      <Code2 size={14} className="shrink-0 text-success" aria-label="Code - Portal Plane" />
                     ) : (
-                      <Folder size={14} className="shrink-0 text-blue" aria-label="Standard Plane" />
+                      <Folder size={14} className="shrink-0 text-success" aria-label="Standard Plane" />
                     )}
                     <span className="min-w-0 truncate">{plane.name}</span>
                   </SidebarItemButton>
@@ -483,7 +472,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                         </Button>
                       )}
                       <Menu>
-                        <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-mauve" aria-label={`${plane.name} menu`} />}>
+                        <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-success" aria-label={`${plane.name} menu`} />}>
                           <MoreVertical size={14} />
                         </MenuTrigger>
                         <MenuPopup align="end" sideOffset={4} className="w-44">
@@ -520,7 +509,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                 </div>
                 {!isCollapsed ? (
                   <>
-                    <div className="ml-3 space-y-2 border-l border-border pl-3">
+                    <div className="space-y-2">
                       {plane.projectKind === 'standard' ? (
                         <SortableSection
                           items={standardPlaneThreads.map(thread => thread.id)}
@@ -533,7 +522,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           canDrag={standardPlaneThreads.length > 1}
                           showHandle={false}
                           className={cn(
-                            'group relative flex min-h-8 min-w-0 w-full items-center gap-2 rounded-md border px-2 py-1 text-left text-[13px] leading-5 transition-colors',
+                            'group relative -ml-2 flex min-h-8 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left text-[13px] leading-5 transition-colors',
                             thread.id === threadId ? 'border-transparent bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background',
                           )}
                         >
@@ -544,8 +533,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                               if (closeOnSelect) onClose?.();
                             }}
                           >
-                            <div className="flex min-w-0 items-center gap-2">
-                              {runningThreadIds.includes(thread.id) ? <Loader2 size={13} className="animate-spin" /> : <MessageSquare size={13} />}
+                            <div className="flex min-w-0 items-center">
                               <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">{thread.title}</span>
                             </div>
                           </SidebarItemButton>
@@ -577,7 +565,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                             showHandle={false}
                             className={cn('space-y-1 pt-2 pb-0', demiplaneIndex > 0 && 'border-t border-border')}
                           >
-                            <div className="flex items-start justify-between gap-2 text-sm font-bold text-blue">
+                            <div className="flex w-[calc(100%+0.5rem)] items-start justify-between gap-2 text-sm font-bold text-blue">
                               <div className="min-w-0 flex-1">
                                 <div className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate">{demiplane.name}</span>
@@ -657,7 +645,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                 canDrag={demiplaneThreads.length > 1}
                                 showHandle={false}
                                 className={cn(
-                                  'group relative flex min-h-8 min-w-0 w-full items-center gap-2 rounded-md border px-2 py-1 text-left text-[13px] leading-5 transition-colors',
+                                  'group relative -ml-2 flex min-h-8 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left text-[13px] leading-5 transition-colors',
                                   thread.id === threadId ? 'border-transparent bg-background text-foreground' : 'border-transparent text-foreground hover:bg-background',
                                 )}
                               >
@@ -668,8 +656,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                     if (closeOnSelect) onClose?.();
                                   }}
                                 >
-                                  <div className="flex min-w-0 items-center gap-2">
-                                    {runningThreadIds.includes(thread.id) ? <Loader2 size={13} className="animate-spin" /> : <MessageSquare size={13} />}
+                                  <div className="flex min-w-0 items-center">
                                     <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">{thread.title}</span>
                                   </div>
                                 </SidebarItemButton>
