@@ -10,7 +10,6 @@ import { cn } from '../../lib/cn';
 import { GitPlaneDirectoryPicker } from './GitPlaneDirectoryPicker';
 import { useChatStore } from '../../stores/chat-store';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
-import { MageHandIcon } from '../icons/MageHandIcon';
 import {
   AlertDialog,
   AlertDialogClose,
@@ -193,6 +192,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   } = useChatStore();
   const queryClient = useQueryClient();
   const openPlaneIdsBeforeDragRef = useRef<string[] | null>(null);
+  const suppressSelectionUntilRef = useRef(0);
   const [archivedDialogScopeId, setArchivedDialogScopeId] = useState<string | null>(null);
   const [deletePlaneId, setDeletePlaneId] = useState<string | null>(null);
   const [isCreatePlaneDialogOpen, setIsCreatePlaneDialogOpen] = useState(false);
@@ -237,6 +237,15 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
     openPlaneIdsBeforeDragRef.current = null;
     if (!openPlaneIds) return;
     setCollapsedPlaneIds(sortedPlanes.map(plane => plane.id).filter(planeId => !openPlaneIds.includes(planeId)));
+  };
+  const suppressSelectionAfterDrag = () => {
+    suppressSelectionUntilRef.current = Date.now() + 500;
+  };
+  const shouldSuppressSelection = () => Date.now() < suppressSelectionUntilRef.current;
+  const selectThread = (nextThreadId: string) => {
+    if (shouldSuppressSelection()) return;
+    setThreadId(nextThreadId);
+    if (closeOnSelect) onClose?.();
   };
   const reorderPlainThreads = async (activeId: string, overId: string) => {
     const ordered = moveItem(plainThreads, activeId, overId);
@@ -303,22 +312,6 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
 
   return (
     <aside className="fixed inset-y-0 left-0 z-40 flex w-full shrink-0 flex-col border-r border-border bg-muted p-4 md:static md:z-auto md:w-96">
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <h1 className="flex items-center gap-2 text-lg font-semibold">
-          <MageHandIcon className="h-6 w-6 text-yellow" />
-          <span>Mage Hand</span>
-        </h1>
-        <Button
-          className="md:hidden"
-          size="icon"
-          variant="ghost"
-          aria-label="Close sidebar"
-          onClick={onClose}
-        >
-          <X size={18} />
-        </Button>
-      </div>
-
       <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -337,9 +330,23 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
             >
               <Plus size={14} strokeWidth={3} />
             </Button>
+            <Button
+              className="h-6 w-8 md:hidden"
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Close sidebar"
+              onClick={onClose}
+            >
+              <X size={14} />
+            </Button>
 
           </div>
-        <SortableSection items={plainThreads.map(thread => thread.id)} onReorder={reorderPlainThreads}>
+        <SortableSection
+          items={plainThreads.map(thread => thread.id)}
+          onDragStart={suppressSelectionAfterDrag}
+          onDragEnd={suppressSelectionAfterDrag}
+          onReorder={reorderPlainThreads}
+        >
         {plainThreads.map(thread => (
           <SortableItem
             key={thread.id}
@@ -353,10 +360,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
           >
             <SidebarItemButton
               className="min-w-0 flex-1 items-center text-left"
-              onClick={() => {
-                setThreadId(thread.id);
-                if (closeOnSelect) onClose?.();
-              }}
+              onClick={() => selectThread(thread.id)}
             >
               <div className="flex min-w-0 items-center text-sm font-medium text-foreground">
                 <span className="min-w-0 flex-1 truncate">{thread.title}</span>
@@ -388,8 +392,14 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
           </div>
           <SortableSection
             items={sortedPlanes.map(plane => plane.id)}
-            onDragStart={collapsePlanesForDrag}
-            onDragEnd={restorePlanesAfterDrag}
+            onDragStart={() => {
+              suppressSelectionAfterDrag();
+              collapsePlanesForDrag();
+            }}
+            onDragEnd={() => {
+              restorePlanesAfterDrag();
+              suppressSelectionAfterDrag();
+            }}
             onReorder={async (activeId, overId) => {
               const ordered = moveItem(sortedPlanes, activeId, overId);
               await reorderPlanes(ordered.map(item => item.id));
@@ -423,7 +433,10 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                 >
                   <SidebarItemButton
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                    onClick={() => togglePlaneCollapsed(plane.id)}
+                    onClick={() => {
+                      if (shouldSuppressSelection()) return;
+                      togglePlaneCollapsed(plane.id);
+                    }}
                     aria-expanded={!isCollapsed}
                   >
                     <ChevronUp size={14} className={cn('shrink-0 text-success transition', isCollapsed ? 'rotate-180' : '')} />
@@ -513,6 +526,8 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                       {plane.projectKind === 'standard' ? (
                         <SortableSection
                           items={standardPlaneThreads.map(thread => thread.id)}
+                          onDragStart={suppressSelectionAfterDrag}
+                          onDragEnd={suppressSelectionAfterDrag}
                           onReorder={(activeId, overId) => reorderPlaneThreads(plane.id, activeId, overId)}
                         >
                         {standardPlaneThreads.map(thread => (
@@ -528,10 +543,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                         >
                           <SidebarItemButton
                             className="min-w-0 flex-1 items-center text-left"
-                            onClick={() => {
-                              setThreadId(thread.id);
-                              if (closeOnSelect) onClose?.();
-                            }}
+                            onClick={() => selectThread(thread.id)}
                           >
                             <div className="flex min-w-0 items-center">
                               <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">{thread.title}</span>
@@ -545,6 +557,8 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                       {plane.projectKind === 'git' ? (
                         <SortableSection
                           items={sortedDemiplanes.map(demiplane => demiplane.id)}
+                          onDragStart={suppressSelectionAfterDrag}
+                          onDragEnd={suppressSelectionAfterDrag}
                           onReorder={async (activeId, overId) => {
                             const ordered = moveItem(sortedDemiplanes, activeId, overId);
                             await reorderDemiplanes(plane.id, ordered.map(item => item.id));
@@ -636,6 +650,8 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                             </div>
                             <SortableSection
                               items={demiplaneThreads.map(thread => thread.id)}
+                              onDragStart={suppressSelectionAfterDrag}
+                              onDragEnd={suppressSelectionAfterDrag}
                               onReorder={(activeId, overId) => reorderDemiplaneThreads(plane.id, demiplane.id, activeId, overId)}
                             >
                             {demiplaneThreads.map(thread => (
@@ -651,10 +667,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                               >
                                 <SidebarItemButton
                                   className="min-w-0 flex-1 items-center text-left"
-                                  onClick={() => {
-                                    setThreadId(thread.id);
-                                    if (closeOnSelect) onClose?.();
-                                  }}
+                                  onClick={() => selectThread(thread.id)}
                                 >
                                   <div className="flex min-w-0 items-center">
                                     <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">{thread.title}</span>

@@ -99,6 +99,8 @@ const isPlaneThread = (thread: { id: string; metadata?: unknown }) => {
   return thread.id.startsWith(planeThreadPrefix) || metadata?.kind === 'plane';
 };
 
+const isVisibleUserPlane = (plane: Plane) => !plane.hidden && plane.systemKind !== 'adHoc';
+
 const toPlane = (thread: any): Plane => {
   const metadata = (thread.metadata ?? {}) as Partial<Plane> & { demiplanes?: Demiplane[] };
   const id = typeof metadata.id === 'string' ? metadata.id : thread.id.replace(planeThreadPrefix, '');
@@ -324,7 +326,7 @@ export const planesRoutes = [
           perPage: false,
           orderBy: { field: 'updatedAt', direction: 'DESC' },
         });
-        const planes = result.threads.filter(isPlaneThread).map(toPlane).filter(plane => !plane.hidden && plane.systemKind !== 'adHoc').sort((a, b) =>
+        const planes: Plane[] = result.threads.filter(isPlaneThread).map((thread: any) => toPlane(thread)).filter(isVisibleUserPlane).sort((a: Plane, b: Plane) =>
           (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER)
           || timestampString(b.updatedAt).localeCompare(timestampString(a.updatedAt)),
         );
@@ -377,18 +379,24 @@ export const planesRoutes = [
         const planeIds = Array.isArray(body?.planeIds) ? body.planeIds.filter((id: unknown) => typeof id === 'string') : [];
         const memory = await getMemory(c);
         const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
-        const planeThreads = result.threads.filter(isPlaneThread);
-        const byId = new Map(planeThreads.map(thread => [toPlane(thread).id, thread]));
-        if (planeIds.length !== byId.size || planeIds.some(id => !byId.has(id))) return c.json({ error: 'planeIds must include all planes for this user' }, 400);
+        const visiblePlaneEntries: Array<{ plane: Plane; thread: any }> = result.threads
+          .filter(isPlaneThread)
+          .map((thread: any) => ({ plane: toPlane(thread), thread }))
+          .filter((entry: { plane: Plane; thread: any }) => isVisibleUserPlane(entry.plane));
+        const byId = new Map<string, any>(visiblePlaneEntries.map(entry => [entry.plane.id, entry.thread]));
+        if (planeIds.length !== byId.size || planeIds.some((id: string) => !byId.has(id))) return c.json({ error: 'planeIds must include all visible planes for this user' }, 400);
 
-        await Promise.all(planeIds.map((planeId, index) => {
+        await Promise.all(planeIds.map((planeId: string, index: number) => {
           const thread = byId.get(planeId)!;
           const plane = { ...toPlane(thread), sortOrder: index, updatedAt: nowIso() };
           return savePlane(memory, resourceId, plane);
         }));
 
         const updated = await memory.listThreads({ filter: { resourceId }, perPage: false });
-        const planes = updated.threads.filter(isPlaneThread).map(toPlane).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+        const planes: Plane[] = updated.threads.filter(isPlaneThread).map((thread: any) => toPlane(thread)).filter(isVisibleUserPlane).sort((a: Plane, b: Plane) =>
+          (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER)
+          || timestampString(b.updatedAt).localeCompare(timestampString(a.updatedAt)),
+        );
         return c.json({ planes });
       } catch (error) {
         return errorResponse(c, error);
