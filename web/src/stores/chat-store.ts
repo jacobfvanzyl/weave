@@ -43,10 +43,14 @@ export type ThreadPlan = {
   isBusy?: boolean;
 };
 
+export type ReasoningEffort = 'off' | 'minimal' | 'low' | 'medium' | 'high';
+
 type PersistedChatState = {
   threadId: string;
   selectedModel: string;
+  reasoningEffort: ReasoningEffort;
   showToolCalls: boolean;
+  showPlanPanel: boolean;
 };
 
 type ChatState = {
@@ -54,14 +58,18 @@ type ChatState = {
   threadId: string;
   threads: ChatThread[];
   selectedModel: string;
+  reasoningEffort: ReasoningEffort;
   showToolCalls: boolean;
+  showPlanPanel: boolean;
   runningThreadIds: string[];
   completedThreadIds: string[];
   deletedThreadIds: string[];
   threadPlans: Record<string, ThreadPlan | undefined>;
   hasInitializedThreads: boolean;
   setSelectedModel: (model: string) => void;
+  setReasoningEffort: (reasoningEffort: ReasoningEffort) => void;
   setShowToolCalls: (showToolCalls: boolean) => void;
+  setShowPlanPanel: (showPlanPanel: boolean) => void;
   setThreadPlan: (threadId: string, plan: ThreadPlan) => void;
   clearThreadPlan: (threadId: string) => void;
   setServerThreads: (threads: ChatThread[]) => void;
@@ -96,14 +104,18 @@ export const useChatStore = create<ChatState>()(
       threadId: initialThread.id,
       threads: [initialThread],
       selectedModel: '',
+      reasoningEffort: 'medium',
       showToolCalls: true,
+      showPlanPanel: true,
       runningThreadIds: [],
       completedThreadIds: [],
       deletedThreadIds: [],
       threadPlans: {},
       hasInitializedThreads: false,
       setSelectedModel: selectedModel => set({ selectedModel }),
+      setReasoningEffort: reasoningEffort => set({ reasoningEffort }),
       setShowToolCalls: showToolCalls => set({ showToolCalls }),
+      setShowPlanPanel: showPlanPanel => set({ showPlanPanel }),
       setThreadPlan: (threadId, plan) =>
         set(state => ({
           threadPlans: { ...state.threadPlans, [threadId]: plan },
@@ -264,19 +276,26 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'weave-chat',
-      version: 4,
+      version: 5,
       migrate: persistedState => {
         const state = persistedState as Partial<PersistedChatState>;
+        const reasoningEffort = state.reasoningEffort;
         return {
           threadId: typeof state.threadId === 'string' ? state.threadId : initialThread.id,
           selectedModel: typeof state.selectedModel === 'string' ? state.selectedModel : '',
+          reasoningEffort: reasoningEffort === 'off' || reasoningEffort === 'minimal' || reasoningEffort === 'low' || reasoningEffort === 'medium' || reasoningEffort === 'high'
+            ? reasoningEffort
+            : 'medium',
           showToolCalls: typeof state.showToolCalls === 'boolean' ? state.showToolCalls : true,
+          showPlanPanel: typeof state.showPlanPanel === 'boolean' ? state.showPlanPanel : true,
         };
       },
       partialize: state => ({
         threadId: state.threadId,
         selectedModel: state.selectedModel,
+        reasoningEffort: state.reasoningEffort,
         showToolCalls: state.showToolCalls,
+        showPlanPanel: state.showPlanPanel,
       }),
     },
   ),

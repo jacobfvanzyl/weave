@@ -3,6 +3,7 @@ import { getAuthHeaders, mastraUrl } from './mastra-client';
 export type ModelOption = {
   id: string;
   label: string;
+  contextWindow?: number;
 };
 
 export type ModelConfig = {

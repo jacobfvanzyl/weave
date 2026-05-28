@@ -105,6 +105,43 @@ const routeSubscriptionModel = (model: unknown) => {
   return `chatgpt/codex/${model.slice('openai/'.length)}`;
 };
 
+const normalizeReasoningEffort = (value: unknown) =>
+  value === 'off' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high'
+    ? value
+    : undefined;
+
+const buildProviderOptions = (
+  providerOptions: unknown,
+  options: { reasoningEffort?: string; threadId?: unknown; resourceId?: string },
+) => {
+  const base = providerOptions && typeof providerOptions === 'object'
+    ? providerOptions as Record<string, unknown>
+    : {};
+  const openai = base.openai && typeof base.openai === 'object'
+    ? base.openai as Record<string, unknown>
+    : {};
+
+  return {
+    ...base,
+    ...(options.reasoningEffort
+      ? {
+          openai: {
+            ...openai,
+            reasoningEffort: options.reasoningEffort,
+          },
+        }
+      : {}),
+    ...(typeof options.threadId === 'string'
+      ? {
+          mastraContextUsage: {
+            threadId: options.threadId,
+            ...(options.resourceId ? { resourceId: options.resourceId } : {}),
+          },
+        }
+      : {}),
+  };
+};
+
 const releaseOnStreamClose = (stream: ReadableStream<unknown>, release: () => void) => new ReadableStream<unknown>({
   async start(controller) {
     const reader = stream.getReader();
@@ -270,10 +307,12 @@ export const chatRoutes = [
 
       const agentId = isGitDemiplane ? 'mage-hand-coding' : 'mage-hand';
       const routedModel = routeSubscriptionModel(params?.model);
+      const reasoningEffort = normalizeReasoningEffort(params?.reasoningEffort);
       console.info('[chat] stream request', {
         agentId,
         selectedModel: params?.model,
         routedModel,
+        reasoningEffort: reasoningEffort ?? 'default',
         threadId,
         resourceId,
         chatgptSubscription: true,
@@ -300,6 +339,7 @@ export const chatRoutes = [
           params: {
             ...params,
             model: routedModel,
+            providerOptions: buildProviderOptions(params.providerOptions, { reasoningEffort, threadId, resourceId }),
             system,
             requestContext,
             abortSignal: c.req.raw.signal,

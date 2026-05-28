@@ -3,11 +3,15 @@ import { registerApiRoute } from '@mastra/core/server';
 export type ModelOption = {
   id: string;
   label: string;
+  contextWindow?: number;
 };
 
 type ModelsDevModel = {
   id?: string;
   name?: string;
+  limit?: {
+    context?: number;
+  };
 };
 
 type ModelsDevProvider = {
@@ -52,16 +56,37 @@ const splitModelId = (id: string) => {
 
 const fallbackName = (value: string) => titleCase(value).replace(/\s+(\d)\s+(\d)\b/g, ' $1.$2');
 
+const getCatalogModel = (id: string, catalog?: ModelsDevCatalog) => {
+  const parts = splitModelId(id);
+  if (!parts) return undefined;
+
+  return catalog?.[parts.providerId]?.models?.[parts.modelId];
+};
+
 const labelForModel = (id: string, catalog?: ModelsDevCatalog) => {
   const parts = splitModelId(id);
   if (!parts) return fallbackName(id);
 
   const provider = catalog?.[parts.providerId];
-  const model = provider?.models?.[parts.modelId];
+  const model = getCatalogModel(id, catalog);
   const providerName = provider?.name ?? fallbackName(parts.providerId);
   const modelName = model?.name ?? fallbackName(parts.modelId);
 
   return `${providerName}/${modelName}`;
+};
+
+const contextWindowForModel = (id: string, catalog?: ModelsDevCatalog) => {
+  const context = getCatalogModel(id, catalog)?.limit?.context;
+  return typeof context === 'number' && Number.isFinite(context) && context > 0 ? context : undefined;
+};
+
+const modelOption = (id: string, catalog?: ModelsDevCatalog, label?: string): ModelOption => {
+  const contextWindow = contextWindowForModel(id, catalog);
+  return {
+    id,
+    label: label ?? labelForModel(id, catalog),
+    ...(contextWindow ? { contextWindow } : {}),
+  };
 };
 
 const parseModelOptions = (catalog?: ModelsDevCatalog): ModelOption[] => {
@@ -73,14 +98,15 @@ const parseModelOptions = (catalog?: ModelsDevCatalog): ModelOption[] => {
     if (Array.isArray(parsed)) {
       return parsed
         .map(item => typeof item === 'string'
-          ? { id: item, label: labelForModel(item) }
+          ? modelOption(item, catalog)
           : item && typeof item === 'object' && typeof (item as Record<string, unknown>).id === 'string'
-            ? {
-                id: (item as Record<string, string>).id,
-                label: typeof (item as Record<string, unknown>).label === 'string'
+            ? modelOption(
+                (item as Record<string, string>).id,
+                catalog,
+                typeof (item as Record<string, unknown>).label === 'string'
                   ? (item as Record<string, string>).label
-                  : labelForModel((item as Record<string, string>).id, catalog),
-              }
+                  : undefined,
+              )
             : undefined)
         .filter((item): item is ModelOption => Boolean(item));
     }
@@ -88,7 +114,7 @@ const parseModelOptions = (catalog?: ModelsDevCatalog): ModelOption[] => {
     // Fall through to comma-separated parsing.
   }
 
-  return raw.split(',').map(id => id.trim()).filter(Boolean).map(id => ({ id, label: labelForModel(id, catalog) }));
+  return raw.split(',').map(id => id.trim()).filter(Boolean).map(id => modelOption(id, catalog));
 };
 
 const getModelConfig = async () => {
@@ -105,7 +131,7 @@ const getModelConfig = async () => {
     defaultModel,
     options: options.some(option => option.id === defaultModel)
       ? options
-      : [{ id: defaultModel, label: labelForModel(defaultModel, catalog) }, ...options],
+      : [modelOption(defaultModel, catalog), ...options],
   };
 };
 

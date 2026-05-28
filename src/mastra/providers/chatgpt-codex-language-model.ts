@@ -9,6 +9,7 @@ import type {
   LanguageModelV2Usage,
 } from '@ai-sdk/provider-v5';
 import { attachmentIdFromReference, attachmentStorage } from '../attachments';
+import { recordThreadContextUsage } from '../context-usage';
 import { getCodexCredentials } from './chatgpt-codex-auth';
 
 const CODEX_URL = 'https://chatgpt.com/backend-api/codex/responses';
@@ -151,6 +152,22 @@ const getReasoningEffort = (options: LanguageModelV2CallOptions): string | undef
   return typeof effort === 'string' ? effort : undefined;
 };
 
+const getContextUsageTracking = (options: LanguageModelV2CallOptions) => {
+  const tracking = options.providerOptions?.mastraContextUsage;
+  if (!tracking || typeof tracking !== 'object') return undefined;
+  const record = tracking as Record<string, unknown>;
+  const threadId = typeof record.threadId === 'string' ? record.threadId : undefined;
+  if (!threadId) return undefined;
+
+  return {
+    threadId,
+    resourceId: typeof record.resourceId === 'string' ? record.resourceId : undefined,
+    maxTokens: typeof record.maxTokens === 'number' && Number.isFinite(record.maxTokens) && record.maxTokens > 0
+      ? record.maxTokens
+      : undefined,
+  };
+};
+
 const buildBody = async (modelId: string, options: LanguageModelV2CallOptions) => {
   const body: Record<string, unknown> = {
     model: modelId,
@@ -268,6 +285,7 @@ export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
 
   async doStream(options: LanguageModelV2CallOptions) {
     const body = await buildBody(this.modelId, options);
+    const contextUsageTracking = getContextUsageTracking(options);
     const credentials = await getCodexCredentials();
     console.info('[chatgpt-codex] request', {
       model: this.modelId,
@@ -354,6 +372,17 @@ export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
             if (type === 'response.completed' || type === 'response.done' || type === 'response.incomplete' || type === 'response.failed') {
               const res = event.response as Record<string, unknown> | undefined;
               const usage = usageFrom(res);
+              const usedTokens = usage.totalTokens ?? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0));
+              if (contextUsageTracking && usedTokens > 0) {
+                recordThreadContextUsage({
+                  ...contextUsageTracking,
+                  usedTokens,
+                  totalProcessedTokens: usedTokens,
+                  ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+                  ...(usage.cachedInputTokens !== undefined ? { cachedInputTokens: usage.cachedInputTokens } : {}),
+                  ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+                });
+              }
               console.info('[chatgpt-codex] response completed', {
                 model: modelId,
                 inputTokens: usage.inputTokens,

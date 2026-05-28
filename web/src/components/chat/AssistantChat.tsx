@@ -20,16 +20,16 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clipboard, ImageIcon, KeyRound, Loader2, Paperclip, Send, X } from 'lucide-react';
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { listServerMessages } from '../../lib/chat-state-api';
+import { Brain, Check, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Paperclip, Send, X } from 'lucide-react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { getThreadContextUsage, listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
 import { chatUrl, getAuthHeaders } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
-import { useChatStore, type PlanStepStatus, type ThreadPlan, type ThreadPlanStep } from '../../stores/chat-store';
+import { useChatStore, type PlanStepStatus, type ReasoningEffort, type ThreadPlan, type ThreadPlanStep } from '../../stores/chat-store';
 import { MageHandIcon } from '../icons/MageHandIcon';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -618,10 +618,11 @@ const ModelPicker = () => {
       >
         <SelectTrigger
           aria-label="Model"
-          className="h-10 w-64 border-transparent bg-transparent text-blue shadow-none before:hidden hover:bg-muted"
+          className="h-9 w-auto max-w-52 border-transparent bg-transparent px-2 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground"
           variant="ghost"
         >
-          <SelectValue className="text-right">
+          <span className="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-muted-foreground/40 text-[10px] font-semibold">AI</span>
+          <SelectValue className="min-w-0 text-left">
             {activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : 'Model'}
           </SelectValue>
         </SelectTrigger>
@@ -636,6 +637,129 @@ const ModelPicker = () => {
           ))}
         </SelectPopup>
       </Select>
+    </div>
+  );
+};
+
+const reasoningOptions: Array<{ value: ReasoningEffort; label: string; detail: string }> = [
+  { value: 'off', label: 'Off', detail: 'No reasoning' },
+  { value: 'minimal', label: 'Fast', detail: 'Minimal thinking' },
+  { value: 'low', label: 'Low', detail: 'Light reasoning' },
+  { value: 'medium', label: 'Medium', detail: 'Balanced reasoning' },
+  { value: 'high', label: 'High', detail: 'Deeper reasoning' },
+];
+
+const ReasoningPicker = () => {
+  const isRunning = useThread(state => state.isRunning);
+  const reasoningEffort = useChatStore(state => state.reasoningEffort);
+  const setReasoningEffort = useChatStore(state => state.setReasoningEffort);
+  const active = reasoningOptions.find(option => option.value === reasoningEffort) ?? reasoningOptions[3];
+
+  return (
+    <Select
+      value={active.value}
+      onValueChange={value => {
+        if (value === 'off' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high') {
+          setReasoningEffort(value);
+        }
+      }}
+      disabled={isRunning}
+    >
+      <SelectTrigger
+        aria-label="Reasoning level"
+        className="h-9 w-auto border-transparent bg-transparent px-2 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground"
+        variant="ghost"
+      >
+        <Brain size={16} className="shrink-0" />
+        <SelectValue className="min-w-0 text-left">{active.label}</SelectValue>
+      </SelectTrigger>
+      <SelectPopup align="start" className="max-h-72">
+        {reasoningOptions.map(option => (
+          <SelectItem key={option.value} value={option.value}>
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate">{option.label}</span>
+              <span className="truncate text-xs text-muted-foreground">{option.detail}</span>
+            </span>
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
+  );
+};
+
+const PlanPanelToggle = ({ threadId }: { threadId: string | null }) => {
+  const plan = useChatStore(state => threadId ? state.threadPlans[threadId] : undefined);
+  const showPlanPanel = useChatStore(state => state.showPlanPanel);
+  const setShowPlanPanel = useChatStore(state => state.setShowPlanPanel);
+
+  if (!plan) return null;
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      aria-pressed={showPlanPanel}
+      title={showPlanPanel ? 'Hide plan' : 'Show plan'}
+      onClick={() => setShowPlanPanel(!showPlanPanel)}
+      className={cn(
+        'h-9 shrink-0 gap-2 px-2 text-muted-foreground hover:bg-muted hover:text-foreground',
+        showPlanPanel && 'text-blue',
+      )}
+    >
+      <ListChecks size={16} />
+      <span>Plan</span>
+    </Button>
+  );
+};
+
+const ContextUsageRing = ({ threadId }: { threadId: string | null }) => {
+  const resourceId = useChatStore(state => state.resourceId);
+  const selectedModel = useChatStore(state => state.selectedModel);
+  const { data: modelConfig } = useQuery({
+    queryKey: ['models'],
+    queryFn: fetchModelConfig,
+    staleTime: 1000 * 60 * 5,
+  });
+  const activeModel = selectedModel || modelConfig?.defaultModel || '';
+  const contextWindow = modelConfig?.options.find(model => model.id === activeModel)?.contextWindow;
+  const { data } = useQuery({
+    queryKey: ['thread-context-usage', resourceId, threadId, contextWindow],
+    queryFn: () => getThreadContextUsage(threadId!, contextWindow),
+    enabled: Boolean(threadId),
+    staleTime: 15_000,
+  });
+  const hasPercent = typeof data?.percent === 'number';
+  const rawPercent = data?.percent ?? 0;
+  const clamped = Math.max(0, Math.min(100, rawPercent));
+  const displayedPercent = clamped > 0 && clamped < 1 ? clamped.toFixed(1) : String(Math.round(clamped));
+  const radius = 13;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference * (1 - clamped / 100);
+  const tone = clamped >= 90 ? 'text-destructive' : clamped >= 70 ? 'text-peach' : 'text-muted-foreground';
+  const tokenLabel = data?.source === 'provider' ? 'tokens' : 'estimated tokens';
+
+  return (
+    <div
+      className={cn('relative flex h-9 w-9 shrink-0 items-center justify-center', tone)}
+      title={data?.contextWindow ? `${data.tokens} / ${data.contextWindow} ${tokenLabel}` : `${data?.tokens ?? 0} ${tokenLabel}`}
+      aria-label={hasPercent ? `Context usage ${displayedPercent}%` : 'Context usage unavailable'}
+    >
+      <svg viewBox="0 0 32 32" className="absolute inset-0 h-9 w-9 -rotate-90">
+        <circle cx="16" cy="16" r={radius} fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="3" />
+        <circle
+          cx="16"
+          cy="16"
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="3"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+        />
+      </svg>
+      <span className="text-[10px] font-semibold tabular-nums">{hasPercent ? displayedPercent : '--'}</span>
     </div>
   );
 };
@@ -738,13 +862,12 @@ const SlashHighlightedInput = ({
 
 const Composer = () => {
   const aui = useAui();
+  const threadId = useContext(ThreadIdContext);
   const composerRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const controlsRef = useRef<HTMLDivElement>(null);
   const isEmpty = useThread(state => state.messages.length === 0 && !state.isLoading);
   const composerText = useAuiState(state => state.composer.text);
   const isComposerEmpty = useAuiState(state => state.composer.isEmpty);
-  const [shouldStackControls, setShouldStackControls] = useState(false);
   const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
   const [activeIndex, setActiveIndex] = useState(0);
   const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
@@ -768,49 +891,6 @@ const Composer = () => {
     }))
     .filter(match => slashMatch && match.score > 0)
     .sort((a, b) => b.score - a.score || a.prompt.name.localeCompare(b.prompt.name));
-
-  useLayoutEffect(() => {
-    const composer = composerRef.current;
-    const input = inputRef.current;
-    const controls = controlsRef.current;
-    if (!composer || !input || !controls) return undefined;
-
-    const syncStacking = () => {
-      const composerStyle = window.getComputedStyle(composer);
-      const inputStyle = window.getComputedStyle(input);
-      const composerWidth =
-        composer.clientWidth - parseFloat(composerStyle.paddingLeft || '0') - parseFloat(composerStyle.paddingRight || '0');
-      const rowGap = 12;
-      const visibleControls = Array.from(controls.children).filter(child => {
-        const rect = child.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      });
-      const controlsWidth =
-        visibleControls.reduce((width, child) => width + child.getBoundingClientRect().width, 0) +
-        Math.max(0, visibleControls.length - 1) * rowGap;
-      const constrainedTextWidth = Math.max(0, composerWidth - controlsWidth - rowGap);
-
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d');
-      if (!context) return;
-
-      context.font = `${inputStyle.fontStyle} ${inputStyle.fontVariant} ${inputStyle.fontWeight} ${inputStyle.fontSize} / ${inputStyle.lineHeight} ${inputStyle.fontFamily}`;
-      const text = composerText || input.placeholder || '';
-      const longestLineWidth = Math.max(
-        0,
-        ...text.split(/\r?\n/).map(line => context.measureText(line || ' ').width),
-      );
-
-      setShouldStackControls(longestLineWidth > constrainedTextWidth);
-    };
-
-    syncStacking();
-
-    const resizeObserver = new ResizeObserver(syncStacking);
-    resizeObserver.observe(composer);
-    resizeObserver.observe(controls);
-    return () => resizeObserver.disconnect();
-  }, [composerText]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -843,29 +923,33 @@ const Composer = () => {
   };
 
   return (
-    <ComposerPrimitive.Root ref={composerRef} className="relative mx-0 rounded-lg border border-input bg-background px-5 py-3 sm:mx-[22px]">
+    <ComposerPrimitive.Root ref={composerRef} className="relative mx-0 rounded-xl border border-blue bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)] sm:mx-[22px]">
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
       <div className="mb-3 flex flex-wrap gap-2 empty:hidden">
         <ComposerImageAttachments />
       </div>
-      <div className={cn('flex min-w-0 gap-3', shouldStackControls ? 'flex-col items-stretch' : 'items-center')}>
-        <div className="min-w-0 flex-1">
-          <SlashHighlightedInput
-            inputRef={inputRef}
-            value={composerText}
-            placeholder={isChatGPTConnected ? (isEmpty ? emptyPlaceholder : '') : 'Connect ChatGPT to start chatting'}
-            knownPromptNames={knownPromptNames}
-            onKeyDown={handleKeyDown}
-            disabled={!isChatGPTConnected}
-          />
-        </div>
-        <div ref={controlsRef} className={cn('flex shrink-0 items-center gap-3', shouldStackControls && 'justify-end')}>
+      <SlashHighlightedInput
+        inputRef={inputRef}
+        value={composerText}
+        placeholder={isChatGPTConnected ? (isEmpty ? emptyPlaceholder : 'Ask for follow-up changes or attach images') : 'Connect ChatGPT to start chatting'}
+        knownPromptNames={knownPromptNames}
+        onKeyDown={handleKeyDown}
+        disabled={!isChatGPTConnected}
+      />
+      <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <ModelPicker />
+          <ReasoningPicker />
           <ComposerPrimitive.AddAttachment
-            render={<Button type="button" size="icon-lg" variant="ghost" className="shrink-0 text-blue" aria-label="Attach image" />}
+            render={<Button type="button" size="sm" variant="ghost" className="h-9 shrink-0 gap-2 px-2 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Attach image" />}
           >
-            <Paperclip size={20} />
+            <Paperclip size={16} />
+            <span>Attach</span>
           </ComposerPrimitive.AddAttachment>
+          <PlanPanelToggle threadId={threadId} />
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          <ContextUsageRing threadId={threadId} />
           <AuiIf condition={state => !state.thread.isRunning}>
             {isChatGPTConnected ? (
               <ComposerPrimitive.Send
@@ -874,7 +958,7 @@ const Composer = () => {
                     size="icon-lg"
                     variant={isSendActive ? 'default' : 'ghost'}
                     className={cn(
-                      'shrink-0',
+                      'h-11 w-11 shrink-0 rounded-full',
                       isSendActive
                         ? 'border-mauve bg-mauve text-background hover:bg-mauve/90'
                         : 'text-blue',
@@ -882,7 +966,7 @@ const Composer = () => {
                   />
                 )}
               >
-                <Send size={22} />
+                <Send size={20} />
               </ComposerPrimitive.Send>
             ) : (
               <Button
@@ -891,15 +975,15 @@ const Composer = () => {
                 onClick={() => void connectChatGPT()}
                 size="icon-lg"
                 variant="ghost"
-                className="shrink-0 text-peach"
+                className="h-11 w-11 shrink-0 rounded-full text-peach"
               >
-                <KeyRound size={22} />
+                <KeyRound size={20} />
               </Button>
             )}
           </AuiIf>
           <AuiIf condition={state => state.thread.isRunning}>
-            <ComposerPrimitive.Cancel render={<Button size="icon-lg" variant="ghost" className="shrink-0 text-primary" />}>
-              <Loader2 size={22} className="animate-spin" />
+            <ComposerPrimitive.Cancel render={<Button size="icon-lg" variant="ghost" className="h-11 w-11 shrink-0 rounded-full text-primary" />}>
+              <Loader2 size={20} className="animate-spin" />
             </ComposerPrimitive.Cancel>
           </AuiIf>
         </div>
@@ -1009,7 +1093,7 @@ const Thread = () => {
         <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
         <RunningAssistantPlaceholder />
       </ThreadPrimitive.Viewport>
-      <div ref={composerRef} className="shrink-0 border-t border-border bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+      <div ref={composerRef} className="shrink-0 bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
         <Composer />
       </div>
     </ThreadPrimitive.Root>
@@ -1024,6 +1108,7 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
   const queryClient = useQueryClient();
   const resourceId = useChatStore(state => state.resourceId);
   const selectedModel = useChatStore(state => state.selectedModel);
+  const reasoningEffort = useChatStore(state => state.reasoningEffort);
 
   const transport = useMemo(
     () =>
@@ -1047,6 +1132,7 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
             body: {
               messages: requestMessages,
               ...(selectedModel ? { model: selectedModel } : {}),
+              reasoningEffort,
               memory: {
                 thread: threadId,
               },
@@ -1054,7 +1140,7 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
           };
         },
       }),
-    [selectedModel, threadId],
+    [reasoningEffort, selectedModel, threadId],
   );
 
   const runtime = useChatRuntime({
@@ -1065,6 +1151,7 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
     onFinish: async () => {
       await queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] });
       await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
+      await queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] });
     },
   });
 

@@ -328,3 +328,22 @@ export const listServerMessages = async (threadId: string) => {
 
   return result.messages;
 };
+
+export type ContextUsage = {
+  tokens: number;
+  contextWindow?: number;
+  percent?: number;
+  source?: 'provider' | 'estimate';
+  updatedAt?: string;
+  totalProcessedTokens?: number;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+};
+
+export const getThreadContextUsage = async (threadId: string, contextWindow?: number) => {
+  const params = contextWindow ? `?${new URLSearchParams({ contextWindow: String(contextWindow) })}` : '';
+  return parseJson<ContextUsage>(
+    await fetch(`${mastraUrl}/chat-state/threads/${threadId}/context-usage${params}`, { headers: getAuthHeaders() }),
+  );
+};

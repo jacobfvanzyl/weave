@@ -3,6 +3,7 @@ import { registerApiRoute } from '@mastra/core/server';
 import type { MastraDBMessage } from '@mastra/core/agent';
 import { getAuthUserFromHeader } from '../auth';
 import { attachmentIdFromReference, attachmentUrlPath } from '../attachments';
+import { getThreadContextUsageSnapshot } from '../context-usage';
 
 const agentId = 'mageHandAgent';
 const hiddenThreadPrefixes = ['__plane__', '__portal__'];
@@ -418,17 +419,26 @@ export const chatStateRoutes = [
           perPage: false,
           orderBy: { field: 'createdAt', direction: 'ASC' },
         });
-        const tokens = estimateContextTokens(memory, recalled.messages);
         const queryContextWindow = Number(c.req.query('contextWindow'));
+        const snapshot = getThreadContextUsageSnapshot(threadId, resourceId);
         const contextWindow = Number.isFinite(queryContextWindow) && queryContextWindow > 0
           ? queryContextWindow
-          : typeof memory.MAX_CONTEXT_TOKENS === 'number'
+          : typeof snapshot?.maxTokens === 'number'
+            ? snapshot.maxTokens
+            : typeof memory.MAX_CONTEXT_TOKENS === 'number'
             ? memory.MAX_CONTEXT_TOKENS
             : undefined;
+        const tokens = snapshot?.usedTokens ?? estimateContextTokens(memory, recalled.messages);
         return c.json({
           tokens,
           contextWindow,
           percent: contextWindow ? Math.min(100, (tokens / contextWindow) * 100) : undefined,
+          source: snapshot ? snapshot.source : 'estimate',
+          updatedAt: snapshot?.updatedAt,
+          totalProcessedTokens: snapshot?.totalProcessedTokens,
+          inputTokens: snapshot?.inputTokens,
+          cachedInputTokens: snapshot?.cachedInputTokens,
+          outputTokens: snapshot?.outputTokens,
         });
       } catch (error) {
         return errorResponse(c, error);

@@ -31,6 +31,7 @@ export const ChatPage = () => {
   const threadId = useChatStore(state => state.threadId);
   const threads = useChatStore(state => state.threads);
   const activePlan = useChatStore(state => state.threadPlans[threadId]);
+  const showPlanPanel = useChatStore(state => state.showPlanPanel);
   const runningThreadIds = useChatStore(state => state.runningThreadIds);
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
@@ -137,7 +138,7 @@ export const ChatPage = () => {
                 </div>
               ))}
           </div>
-          <PlanSidebar plan={activePlan} />
+          {showPlanPanel ? <PlanSidebar plan={activePlan} /> : null}
         </div>
       </main>
     </div>
