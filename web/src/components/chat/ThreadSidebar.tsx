@@ -4,12 +4,11 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ChevronUp, Code2, Folder, GripVertical, Link, Lock, Moon, MoreVertical, Plus, RotateCcw, Sun, Trash2, X } from 'lucide-react';
-import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, getAuthUser, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads, type CreatePlaneInput } from '../../lib/chat-state-api';
+import { Archive, ChevronUp, CircleDot, Code2, Folder, GripVertical, Link, Lock, MoreVertical, Plus, RotateCcw, Trash2, X } from 'lucide-react';
+import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads, type CreatePlaneInput } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { GitPlaneDirectoryPicker } from './GitPlaneDirectoryPicker';
 import { useChatStore } from '../../stores/chat-store';
-import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
 import {
   AlertDialog,
   AlertDialogClose,
@@ -199,14 +198,6 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   const [isCreatingPlane, setIsCreatingPlane] = useState(false);
   const [createPlaneError, setCreatePlaneError] = useState<string | null>(null);
   const [collapsedPlaneIds, setCollapsedPlaneIds] = useState<string[]>(loadCollapsedPlaneIds);
-  const mode = useThemeStore(state => state.mode);
-  const toggleMode = useThemeStore(state => state.toggleMode);
-  const resolvedTheme = getResolvedTheme(mode);
-  const { data: authUser } = useQuery({
-    queryKey: ['auth-user'],
-    queryFn: getAuthUser,
-    staleTime: 1000 * 60 * 5,
-  });
   const { data: planes = [] } = useQuery({
     queryKey: ['planes', resourceId],
     queryFn: listPlanes,
@@ -218,7 +209,6 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
     staleTime: 1000 * 6,
     refetchInterval: 1000 * 6,
   });
-  const displayName = authUser?.name ?? '...';
   const onlinePortalCount = portals.filter(portal => portal.status === 'online').length;
   const onlinePortalIds = new Set(portals.filter(portal => portal.status === 'online').map(portal => portal.portalId));
   const plainThreads = sortManual(threads.filter(thread => (!thread.planeId || thread.adHoc) && thread.archived !== true));
@@ -311,7 +301,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   );
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 flex w-full shrink-0 flex-col border-r border-border bg-muted p-4 md:static md:z-auto md:w-96">
+    <aside className="fixed inset-y-0 left-0 z-40 flex w-full shrink-0 flex-col border-r border-border bg-muted p-4 md:static md:z-auto md:w-96 dark:bg-card">
       <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -537,7 +527,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                           canDrag={standardPlaneThreads.length > 1}
                           showHandle={false}
                           className={cn(
-                            'group relative -ml-2 flex min-h-8 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left text-[13px] leading-5 transition-colors',
+                            'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
                             thread.id === threadId ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
                           )}
                         >
@@ -546,7 +536,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                             onClick={() => selectThread(thread.id)}
                           >
                             <div className="flex min-w-0 items-center">
-                              <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">{thread.title}</span>
+                              <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{thread.title}</span>
                             </div>
                           </SidebarItemButton>
                           {renderThreadMenu(thread)}
@@ -661,7 +651,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                 canDrag={demiplaneThreads.length > 1}
                                 showHandle={false}
                                 className={cn(
-                                  'group relative -ml-2 flex min-h-8 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left text-[13px] leading-5 transition-colors',
+                                  'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
                                   thread.id === threadId ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
                                 )}
                               >
@@ -670,7 +660,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                   onClick={() => selectThread(thread.id)}
                                 >
                                   <div className="flex min-w-0 items-center">
-                                    <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">{thread.title}</span>
+                                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{thread.title}</span>
                                   </div>
                                 </SidebarItemButton>
                                 {renderThreadMenu(thread)}
@@ -799,38 +789,16 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
         ) : null}
       </Dialog>
 
-      <Menu>
-        <MenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              className="relative mt-4 min-h-20 w-full justify-start whitespace-normal rounded-lg border border-border bg-background/60 p-4 text-left text-xs text-muted-foreground transition hover:bg-background"
-            />
-          }
+      <div className="mt-4 flex justify-end">
+        <div
+          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground"
+          title={`${onlinePortalCount} online Portal${onlinePortalCount === 1 ? '' : 's'}`}
+          aria-label={`${onlinePortalCount} online Portal${onlinePortalCount === 1 ? '' : 's'}`}
         >
-          <div className="flex items-center justify-between gap-3 font-medium text-foreground">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="h-8 w-8 shrink-0 rounded-full bg-primary/20 text-center text-xs font-semibold leading-8 text-primary">
-                U
-              </div>
-              <div className="min-w-0">
-                <span className="block truncate">{displayName}</span>
-                <span className="mt-1 flex items-center gap-1 text-[11px] font-normal text-muted-foreground">
-                  <span className={cn('h-1.5 w-1.5 rounded-full', onlinePortalCount > 0 ? 'bg-success' : 'bg-muted-foreground')} />
-                  {onlinePortalCount > 0 ? `${onlinePortalCount} Portal${onlinePortalCount === 1 ? '' : 's'} online` : 'No Portal'}
-                </span>
-              </div>
-            </div>
-            <ChevronUp size={14} className="shrink-0 transition data-[popup-open]:rotate-180" />
-          </div>
-        </MenuTrigger>
-        <MenuPopup side="top" align="start" className="w-(--anchor-width)">
-          <MenuItem onClick={toggleMode}>
-            {resolvedTheme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-            <span>{resolvedTheme === 'dark' ? 'Switch to Catppuccin Latte' : 'Switch to Catppuccin Mocha'}</span>
-          </MenuItem>
-        </MenuPopup>
-      </Menu>
+          <CircleDot size={15} className={cn('shrink-0', onlinePortalCount > 0 ? 'text-success' : 'text-muted-foreground')} />
+          <span className="tabular-nums">{onlinePortalCount}</span>
+        </div>
+      </div>
     </aside>
   );
 };

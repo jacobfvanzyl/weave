@@ -165,6 +165,273 @@ const releaseOnStreamClose = (stream: ReadableStream<unknown>, release: () => vo
   },
 });
 
+const bufferedAssistantTextMaxChars = 24_000;
+const bufferedAssistantTextFlushDelayMs = 80;
+const bufferedAssistantTextImmediateMinChars = 32;
+const bufferedAssistantTextSoftMaxChars = 900;
+const bufferedAssistantTextTypes = new Set(['text-delta', 'reasoning-delta']);
+const bufferedAssistantEndTypes: Record<string, string> = {
+  'text-end': 'text',
+  'reasoning-end': 'reasoning',
+};
+
+type BufferedAssistantTextChunk = {
+  type: 'text-delta' | 'reasoning-delta';
+  id: string;
+  delta: string;
+} & Record<string, unknown>;
+
+type BufferedAssistantTextState = {
+  chunk: BufferedAssistantTextChunk;
+  text: string;
+  emittedLength: number;
+  timer: ReturnType<typeof setTimeout> | undefined;
+};
+
+const getStreamChunkType = (chunk: unknown) =>
+  chunk && typeof chunk === 'object' && typeof (chunk as Record<string, unknown>).type === 'string'
+    ? (chunk as Record<string, unknown>).type as string
+    : undefined;
+
+const getStreamChunkId = (chunk: unknown) =>
+  chunk && typeof chunk === 'object' && typeof (chunk as Record<string, unknown>).id === 'string'
+    ? (chunk as Record<string, unknown>).id as string
+    : undefined;
+
+const getBufferedTextKey = (kind: string, id: string) => `${kind}:${id}`;
+
+const isBufferedAssistantTextChunk = (
+  chunk: unknown,
+): chunk is BufferedAssistantTextChunk => {
+  const record = chunk && typeof chunk === 'object' ? chunk as Record<string, unknown> : undefined;
+  return Boolean(
+    record &&
+    typeof record.type === 'string' &&
+    bufferedAssistantTextTypes.has(record.type) &&
+    typeof record.id === 'string' &&
+    typeof record.delta === 'string',
+  );
+};
+
+const hasUnclosedInlineCode = (text: string) => {
+  let openRunLength: number | undefined;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if (char !== '`') continue;
+
+    let runLength = 1;
+    while (text[index + runLength] === '`') runLength += 1;
+
+    if (openRunLength === undefined) openRunLength = runLength;
+    else if (openRunLength === runLength) openRunLength = undefined;
+
+    index += runLength - 1;
+  }
+
+  return openRunLength !== undefined;
+};
+
+const hasIncompleteMarkdownLinkTail = (text: string) => {
+  const tail = text.slice(-240);
+  return (
+    /!?\[[^\]\n]*$/.test(tail) ||
+    /!?\[[^\]\n]*\]$/.test(tail) ||
+    /!?\[[^\]\n]*\]\([^\)\n]*$/.test(tail) ||
+    /<https?:\/\/[^>\s]*$/i.test(tail)
+  );
+};
+
+const getMarkdownTailState = (text: string) => {
+  let inFence = false;
+  let fenceChar = '';
+  let fenceLength = 0;
+  let outsideFenceText = '';
+  const lines = text.match(/[^\n]*(?:\n|$)/g) ?? [];
+
+  for (const rawLine of lines) {
+    if (!rawLine) continue;
+
+    const line = rawLine.replace(/\r?\n$/, '');
+    const fenceMatch = /^(?: {0,3})(`{3,}|~{3,})/.exec(line);
+
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!inFence) {
+        inFence = true;
+        fenceChar = marker[0];
+        fenceLength = marker.length;
+      } else if (marker[0] === fenceChar && marker.length >= fenceLength) {
+        inFence = false;
+      }
+      continue;
+    }
+
+    if (!inFence) outsideFenceText += rawLine;
+  }
+
+  return {
+    inFence,
+    inlineCodeOpen: hasUnclosedInlineCode(outsideFenceText),
+    linkOpen: hasIncompleteMarkdownLinkTail(outsideFenceText),
+  };
+};
+
+const isMarkdownFlushSafe = (text: string, index: number) => {
+  const prefix = text.slice(0, index);
+  const state = getMarkdownTailState(prefix);
+
+  if (state.inFence) return prefix.endsWith('\n');
+  return !state.inlineCodeOpen && !state.linkOpen;
+};
+
+const collectMarkdownFlushCandidates = (text: string, emittedLength: number, includeWordBoundary: boolean) => {
+  const candidates = new Set<number>();
+
+  for (let index = emittedLength + 1; index <= text.length; index += 1) {
+    const previous = text[index - 1];
+    const current = text[index] ?? '';
+
+    if (previous === '\n') {
+      candidates.add(index);
+      continue;
+    }
+
+    if (/[.!?]/.test(previous) && (index === text.length || /[\s"')\]]/.test(current))) {
+      let boundary = index;
+      while (boundary < text.length && /\s/.test(text[boundary])) boundary += 1;
+      candidates.add(boundary);
+      continue;
+    }
+
+    if (includeWordBoundary && /\s/.test(previous)) candidates.add(index);
+  }
+
+  if (includeWordBoundary && text.length - emittedLength >= bufferedAssistantTextSoftMaxChars) {
+    candidates.add(text.length);
+  }
+
+  return [...candidates].sort((left, right) => right - left);
+};
+
+const findMarkdownFlushIndex = (
+  text: string,
+  emittedLength: number,
+  options: { force?: boolean; includeWordBoundary?: boolean; minChars?: number } = {},
+) => {
+  const pendingLength = text.length - emittedLength;
+  if (pendingLength <= 0) return emittedLength;
+  if (options.force || pendingLength >= bufferedAssistantTextMaxChars) return text.length;
+
+  const minFlushIndex = emittedLength + (options.minChars ?? 1);
+  const candidates = collectMarkdownFlushCandidates(text, emittedLength, options.includeWordBoundary ?? false);
+
+  for (const candidate of candidates) {
+    if (candidate < minFlushIndex) continue;
+    if (isMarkdownFlushSafe(text, candidate)) return candidate;
+  }
+
+  return emittedLength;
+};
+
+const bufferAssistantTextStream = (stream: ReadableStream<unknown>) => new ReadableStream<unknown>({
+  async start(controller) {
+    const reader = stream.getReader();
+    const bufferedText = new Map<string, BufferedAssistantTextState>();
+    let isActive = true;
+
+    const clearFlushTimer = (state: BufferedAssistantTextState) => {
+      if (!state.timer) return;
+      clearTimeout(state.timer);
+      state.timer = undefined;
+    };
+
+    const flushKey = (
+      key: string,
+      options: { force?: boolean; includeWordBoundary?: boolean; minChars?: number; removeWhenEmpty?: boolean } = {},
+    ) => {
+      const state = bufferedText.get(key);
+      if (!state) return false;
+
+      const flushIndex = findMarkdownFlushIndex(state.text, state.emittedLength, options);
+      if (flushIndex <= state.emittedLength) return false;
+
+      const delta = state.text.slice(state.emittedLength, flushIndex);
+      state.emittedLength = flushIndex;
+      controller.enqueue({ ...state.chunk, delta });
+
+      if (state.emittedLength >= state.text.length && options.removeWhenEmpty !== false) {
+        clearFlushTimer(state);
+        bufferedText.delete(key);
+      }
+
+      return true;
+    };
+
+    const scheduleFlush = (key: string) => {
+      const state = bufferedText.get(key);
+      if (!state || state.timer) return;
+
+      state.timer = setTimeout(() => {
+        state.timer = undefined;
+        if (!isActive) return;
+
+        flushKey(key, { includeWordBoundary: true });
+      }, bufferedAssistantTextFlushDelayMs);
+    };
+
+    const flushAll = () => {
+      for (const key of [...bufferedText.keys()]) flushKey(key, { force: true });
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (isBufferedAssistantTextChunk(value)) {
+          const key = getBufferedTextKey(value.type === 'text-delta' ? 'text' : 'reasoning', value.id);
+          const state = bufferedText.get(key) ?? { chunk: value, text: '', emittedLength: 0, timer: undefined };
+          state.chunk = value;
+          state.text += value.delta;
+          bufferedText.set(key, state);
+
+          flushKey(key, { minChars: bufferedAssistantTextImmediateMinChars, removeWhenEmpty: false });
+
+          if (state.emittedLength < state.text.length) {
+            scheduleFlush(key);
+          }
+          continue;
+        }
+
+        const type = getStreamChunkType(value);
+        const endKind = type ? bufferedAssistantEndTypes[type] : undefined;
+        const id = getStreamChunkId(value);
+        if (endKind && id) flushKey(getBufferedTextKey(endKind, id), { force: true });
+        if (type === 'finish') flushAll();
+
+        controller.enqueue(value);
+      }
+
+      flushAll();
+      controller.close();
+    } catch (error) {
+      controller.error(error);
+    } finally {
+      isActive = false;
+      for (const state of bufferedText.values()) clearFlushTimer(state);
+      reader.releaseLock();
+    }
+  },
+  cancel(reason) {
+    return stream.cancel(reason).catch(() => undefined);
+  },
+});
+
 const toSseResponse = (stream: ReadableStream<unknown>) => {
   const sseStream = stream.pipeThrough(new TransformStream<unknown, string>({
     transform(chunk, controller) {
@@ -350,7 +617,7 @@ export const chatRoutes = [
           ? releaseOnStreamClose(stream as ReadableStream<unknown>, releaseThreadLock)
           : stream as ReadableStream<unknown>;
 
-        return toSseResponse(lockedStream);
+        return toSseResponse(bufferAssistantTextStream(lockedStream));
       } catch (error) {
         releaseThreadLock();
         throw error;

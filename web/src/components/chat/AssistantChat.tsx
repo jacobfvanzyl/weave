@@ -21,7 +21,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Brain, Check, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Paperclip, Send, X } from 'lucide-react';
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getThreadContextUsage, listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
@@ -30,7 +30,6 @@ import { chatUrl, getAuthHeaders } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
 import { useChatStore, type PlanStepStatus, type ReasoningEffort, type ThreadPlan, type ThreadPlanStep } from '../../stores/chat-store';
-import { MageHandIcon } from '../icons/MageHandIcon';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
@@ -352,7 +351,7 @@ const MarkdownImage = ({ alt, src }: { alt?: string; src?: string }) => {
   );
 };
 
-const MarkdownText = ({ text }: { text: string }) => (
+const MarkdownText = memo(({ text }: { text: string }) => (
   <div className="min-w-0 max-w-full space-y-3 overflow-hidden break-words text-inherit [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -374,9 +373,9 @@ const MarkdownText = ({ text }: { text: string }) => (
           className?.startsWith('language-') ? (
             <CodeBlock className={className}>{String(children)}</CodeBlock>
           ) : (
-            <code className={cn('break-words rounded bg-muted px-1 py-0.5 text-[0.9em]', className)}>{children}</code>
+            <code className={cn('break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]', className)}>{children}</code>
           ),
-        pre: ({ children }) => <div className="my-3 max-w-full overflow-x-auto rounded-md bg-muted p-3 text-xs leading-5">{children}</div>,
+        pre: ({ children }) => <div className="my-3 max-w-full overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs leading-5">{children}</div>,
         blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
         table: ({ children }) => <div className="my-3 max-w-full overflow-x-auto"><table className="w-full border-collapse text-left text-xs">{children}</table></div>,
         thead: ({ children }) => <thead className="border-b border-border bg-muted">{children}</thead>,
@@ -391,7 +390,9 @@ const MarkdownText = ({ text }: { text: string }) => (
       {text}
     </ReactMarkdown>
   </div>
-);
+));
+
+MarkdownText.displayName = 'MarkdownText';
 
 const getAssistantDisplayedText = (message: ThreadMessage) => {
   if (message.role !== 'assistant') return '';
@@ -412,9 +413,10 @@ const findLastMessageIndex = (messages: readonly ThreadMessage[], role: ThreadMe
   return -1;
 };
 
-const RunningEllipsis = () => (
-  <span aria-label="Agent working" className="inline-block animate-pulse text-muted-foreground">
-    ...
+const RunningIndicator = () => (
+  <span aria-label="Agent working" className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+    <Loader2 size={14} className="shrink-0 animate-spin text-primary" />
+    <span>Working...</span>
   </span>
 );
 
@@ -433,10 +435,10 @@ const RunningAssistantPlaceholder = () => {
   if (!shouldShow) return null;
 
   return (
-    <div className="w-full px-4 py-3 sm:px-[38px]">
+    <div className="mx-auto w-full max-w-3xl px-4 py-3 sm:px-[38px]">
       <div className="chat-message-row flex min-w-0 justify-start">
-        <div className="chat-message-bubble min-w-0 max-w-[78%] text-sm leading-6">
-          <RunningEllipsis />
+        <div className="chat-message-bubble min-w-0 max-w-full text-base leading-6">
+          <RunningIndicator />
         </div>
       </div>
     </div>
@@ -554,20 +556,32 @@ const hasRenderableAssistantContent = (message: ThreadMessage) => {
 
 const AssistantMessageContent = () => {
   const message = useMessage();
+  const isRunning = useThread(state => state.isRunning);
+  const assistantText = getAssistantDisplayedText(message);
   const isEmptyAssistantMessage = message.role === 'assistant' && !hasRenderableAssistantContent(message);
+  const isAssistantWaitingForText = message.role === 'assistant' && isRunning && assistantText.length === 0;
 
   if (isEmptyAssistantMessage) {
-    return <RunningEllipsis />;
+    return <RunningIndicator />;
   }
 
-  return <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />;
+  return (
+    <>
+      {isAssistantWaitingForText ? (
+        <div className="mb-3">
+          <RunningIndicator />
+        </div>
+      ) : null}
+      <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
+    </>
+  );
 };
 
 const ThreadMessage = () => (
-  <MessagePrimitive.Root className="w-full px-4 py-3 sm:px-[38px]">
+  <MessagePrimitive.Root className="mx-auto w-full max-w-3xl px-4 py-3 sm:px-[38px]">
     <MessagePrimitive.If assistant>
       <div className="chat-message-row flex min-w-0 justify-start">
-        <div className="chat-message-bubble min-w-0 max-w-[78%] text-sm leading-6">
+        <div className="chat-message-bubble min-w-0 max-w-full text-base leading-6">
           <AssistantMessageContent />
           <div className="text-red-300">
             <MessagePrimitive.Error />
@@ -577,7 +591,7 @@ const ThreadMessage = () => (
     </MessagePrimitive.If>
     <MessagePrimitive.If user>
       <div className="chat-message-row flex min-w-0 justify-end">
-        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-primary bg-user px-4 py-2 text-sm leading-6 text-user-foreground">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-primary bg-user px-4 py-2 text-base leading-6 text-user-foreground">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
           <div className="mt-3 flex flex-wrap gap-2 empty:hidden">
             <MessageImageAttachments />
@@ -745,7 +759,7 @@ const ContextUsageRing = ({ threadId }: { threadId: string | null }) => {
   const hasPercent = typeof data?.percent === 'number';
   const rawPercent = data?.percent ?? 0;
   const clamped = Math.max(0, Math.min(100, rawPercent));
-  const displayedPercent = clamped > 0 && clamped < 1 ? clamped.toFixed(1) : String(Math.round(clamped));
+  const displayedPercent = String(Math.round(clamped));
   const radius = 13;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - clamped / 100);
@@ -936,7 +950,7 @@ const Composer = () => {
   };
 
   return (
-    <ComposerPrimitive.Root ref={composerRef} className="relative mx-0 rounded-xl border border-blue bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)] sm:mx-[22px]">
+    <ComposerPrimitive.Root ref={composerRef} className="relative mx-auto w-full max-w-3xl rounded-xl border border-blue bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)]">
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
       <div className="mb-3 flex flex-wrap gap-2 empty:hidden">
         <ComposerImageAttachments />
@@ -962,7 +976,7 @@ const Composer = () => {
           <PlanPanelToggle threadId={threadId} />
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <ContextUsageRing threadId={threadId} />
+          {isEmpty ? null : <ContextUsageRing threadId={threadId} />}
           <AuiIf condition={state => !state.thread.isRunning}>
             {isChatGPTConnected ? (
               <ComposerPrimitive.Send
@@ -1076,6 +1090,11 @@ const getMessagesVersion = (messages: UIMessage[]) =>
     .join('|');
 
 const Thread = () => {
+  const threadId = useContext(ThreadIdContext);
+  const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
+  const isRunning = useThread(state => state.isRunning);
+  const messages = useThread(state => state.messages);
+  const isEmptyIdleDraft = isDraft && !isRunning && messages.length === 0;
   const composerRef = useRef<HTMLDivElement>(null);
   const [composerHeight, setComposerHeight] = useState(0);
 
@@ -1094,19 +1113,14 @@ const Thread = () => {
 
   return (
     <ThreadPrimitive.Root
-      className="flex h-full flex-col bg-background"
+      className={cn('flex h-full flex-col bg-background', isEmptyIdleDraft && 'justify-center')}
       style={{ '--composer-height': `${composerHeight}px` } as React.CSSProperties}
     >
-      <ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto">
-        <ThreadPrimitive.Empty>
-          <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center px-6 text-center">
-            <MageHandIcon className="h-24 w-24 text-yellow" />
-          </div>
-        </ThreadPrimitive.Empty>
+      <ThreadPrimitive.Viewport className={cn('min-h-0 flex-1 overflow-y-auto', isEmptyIdleDraft && 'hidden')}>
         <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
         <RunningAssistantPlaceholder />
       </ThreadPrimitive.Viewport>
-      <div ref={composerRef} className="shrink-0 bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+      <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
         <Composer />
       </div>
     </ThreadPrimitive.Root>
@@ -1138,7 +1152,9 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
               })
             : messages;
 
-          useChatStore.getState().touchThread(threadId, firstUserText?.slice(0, 64), true);
+          const threadTitle = firstUserText?.slice(0, 64);
+          await useChatStore.getState().ensureThreadPersisted(threadId, threadTitle);
+          useChatStore.getState().touchThread(threadId, threadTitle, true);
 
           return {
             headers: getAuthHeaders(),
@@ -1162,7 +1178,6 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
     messages: initialMessages,
     adapters: { attachments: imageAttachmentAdapter },
     onFinish: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] });
       await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
       await queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] });
     },
@@ -1181,13 +1196,16 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
 
 export const AssistantChat = ({ threadId }: AssistantChatProps) => {
   const resourceId = useChatStore(state => state.resourceId);
+  const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
+  const isRunning = useChatStore(state => state.runningThreadIds.includes(threadId));
   const { data: initialMessages = [], isLoading } = useQuery({
     queryKey: ['thread-messages', resourceId, threadId],
     queryFn: () => listServerMessages(threadId),
+    enabled: !isDraft,
     staleTime: 0,
   });
 
-  if (isLoading) return <div className="h-full bg-background" />;
+  if (!isDraft && isLoading && !isRunning) return <div className="h-full bg-background" />;
 
   return <AssistantChatRuntime key={`${threadId}:${getMessagesVersion(initialMessages)}`} threadId={threadId} initialMessages={initialMessages} />;
 };

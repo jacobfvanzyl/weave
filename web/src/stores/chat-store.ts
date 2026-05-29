@@ -26,6 +26,7 @@ export type ChatThread = {
   archived?: boolean;
   adHoc?: boolean;
   workspacePath?: string;
+  draft?: boolean;
 };
 
 export type PlanStepStatus = 'pending' | 'in_progress' | 'completed';
@@ -74,6 +75,7 @@ type ChatState = {
   clearThreadPlan: (threadId: string) => void;
   setServerThreads: (threads: ChatThread[]) => void;
   newThread: (planeId?: string, demiplaneId?: string) => Promise<void>;
+  ensureThreadPersisted: (threadId: string, title?: string) => Promise<void>;
   setThreadId: (threadId: string) => void;
   archiveThread: (threadId: string) => Promise<void>;
   restoreThread: (threadId: string) => Promise<void>;
@@ -92,8 +94,11 @@ const createLocalThread = (): ChatThread => {
     title: '...',
     createdAt: now,
     updatedAt: now,
+    draft: true,
   };
 };
+
+const isDraftThread = (thread: ChatThread | undefined) => thread?.draft === true;
 
 const initialThread = createLocalThread();
 
@@ -117,9 +122,13 @@ export const useChatStore = create<ChatState>()(
       setShowToolCalls: showToolCalls => set({ showToolCalls }),
       setShowPlanPanel: showPlanPanel => set({ showPlanPanel }),
       setThreadPlan: (threadId, plan) =>
-        set(state => ({
-          threadPlans: { ...state.threadPlans, [threadId]: plan },
-        })),
+        set(state => {
+          const isFirstPlanForThread = !state.threadPlans[threadId];
+          return {
+            threadPlans: { ...state.threadPlans, [threadId]: plan },
+            showPlanPanel: isFirstPlanForThread ? true : state.showPlanPanel,
+          };
+        }),
       clearThreadPlan: threadId =>
         set(state => {
           const { [threadId]: _removed, ...threadPlans } = state.threadPlans;
@@ -156,22 +165,74 @@ export const useChatStore = create<ChatState>()(
         }),
       newThread: async (planeId, demiplaneId) => {
         const localThread = { ...createLocalThread(), planeId, demiplaneId };
-        set(state => ({ threadId: localThread.id, threads: [localThread, ...state.threads] }));
-
-        const serverThread = planeId
-          ? (await createPlaneThread(planeId, localThread.id, demiplaneId)).thread
-          : await createServerThread(localThread.id);
         set(state => ({
-          threadId: serverThread.id,
-          threads: [serverThread, ...state.threads.filter(thread => thread.id !== localThread.id)],
+          threadId: localThread.id,
+          threads: [localThread, ...state.threads.filter(thread => thread.id !== state.threadId || !isDraftThread(thread))],
+        }));
+      },
+      ensureThreadPersisted: async (threadId, title) => {
+        const existing = get().threads.find(thread => thread.id === threadId);
+        if (!isDraftThread(existing)) return;
+
+        const threadTitle = title?.trim() || existing?.title || '...';
+        const now = new Date().toISOString();
+        set(state => ({
+          threads: state.threads.map(thread =>
+            thread.id === threadId
+              ? { ...thread, title: threadTitle, updatedAt: now, draft: false }
+              : thread,
+          ),
+        }));
+
+        const serverThread = existing?.planeId
+          ? (await createPlaneThread(existing.planeId, threadId, existing.demiplaneId, threadTitle)).thread
+          : await createServerThread(threadId, undefined, undefined, threadTitle);
+
+        set(state => ({
+          threads: state.threads.map(thread =>
+            thread.id === threadId
+              ? { ...serverThread, title: thread.title && !['New chat', '...'].includes(thread.title) ? thread.title : serverThread.title }
+              : thread,
+          ),
         }));
       },
       setThreadId: threadId =>
-        set(state => ({
-          threadId,
-          completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
-        })),
+        set(state => {
+          if (state.threadId === threadId) {
+            return {
+              completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
+            };
+          }
+
+          const currentThread = state.threads.find(thread => thread.id === state.threadId);
+          const shouldDiscardCurrentDraft = isDraftThread(currentThread) && state.threads.some(thread => thread.id === threadId);
+
+          return {
+            threadId,
+            threads: shouldDiscardCurrentDraft
+              ? state.threads.filter(thread => thread.id !== state.threadId)
+              : state.threads,
+            runningThreadIds: shouldDiscardCurrentDraft
+              ? state.runningThreadIds.filter(id => id !== state.threadId)
+              : state.runningThreadIds,
+            completedThreadIds: state.completedThreadIds.filter(id => id !== threadId && (!shouldDiscardCurrentDraft || id !== state.threadId)),
+          };
+        }),
       archiveThread: async threadId => {
+        if (isDraftThread(get().threads.find(thread => thread.id === threadId))) {
+          set(state => {
+            const threads = state.threads.filter(thread => thread.id !== threadId);
+            const nextThreads = threads.length > 0 ? threads : [createLocalThread()];
+            return {
+              threads: nextThreads,
+              threadId: state.threadId === threadId ? nextThreads[0].id : state.threadId,
+              runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
+              completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
+            };
+          });
+          return;
+        }
+
         set(state => {
           const nextThreads = state.threads.map(thread => thread.id === threadId ? { ...thread, archived: true } : thread);
           const visibleThreads = nextThreads.filter(thread => !thread.archived);
@@ -192,6 +253,7 @@ export const useChatStore = create<ChatState>()(
       },
       deleteThread: async threadId => {
         const previousState = get();
+        const isDraft = isDraftThread(previousState.threads.find(thread => thread.id === threadId));
 
         set(state => {
           const threads = state.threads.filter(thread => thread.id !== threadId);
@@ -203,9 +265,11 @@ export const useChatStore = create<ChatState>()(
             threadId: nextThreadId,
             runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
             completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
-            deletedThreadIds: state.deletedThreadIds.includes(threadId) ? state.deletedThreadIds : [...state.deletedThreadIds, threadId],
+            deletedThreadIds: isDraft || state.deletedThreadIds.includes(threadId) ? state.deletedThreadIds : [...state.deletedThreadIds, threadId],
           };
         });
+
+        if (isDraft) return;
 
         try {
           await deleteServerThread(threadId);

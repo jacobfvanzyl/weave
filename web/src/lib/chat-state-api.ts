@@ -90,12 +90,12 @@ export const listServerThreads = async () => {
   return result.threads.map(toChatThread);
 };
 
-export const createServerThread = async (threadId: string, planeId?: string, demiplaneId?: string) => {
+export const createServerThread = async (threadId: string, planeId?: string, demiplaneId?: string, title = '...') => {
   const result = await parseJson<{ thread: ServerThread }>(
     await fetch(`${mastraUrl}/chat-state/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title: '...', planeId, demiplaneId }),
+      body: JSON.stringify({ threadId, title, planeId, demiplaneId }),
     }),
   );
 
@@ -299,12 +299,12 @@ export const reorderDemiplanes = async (planeId: string, demiplaneIds: string[])
   return result.plane;
 };
 
-export const createPlaneThread = async (planeId: string, threadId: string, demiplaneId?: string) => {
+export const createPlaneThread = async (planeId: string, threadId: string, demiplaneId?: string, title = '...') => {
   const result = await parseJson<{ thread: ServerThread; demiplane: Demiplane }>(
     await fetch(`${mastraUrl}/planes/${planeId}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title: '...', demiplaneId }),
+      body: JSON.stringify({ threadId, title, demiplaneId }),
     }),
   );
 
