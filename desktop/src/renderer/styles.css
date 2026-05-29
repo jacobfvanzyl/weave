@@ -3,7 +3,15 @@
 @source "./";
 
 :root[data-weave-window-type="electron"] {
-  --weave-desktop-appbar-height: 3.5rem;
+  --weave-desktop-appbar-height: 2.875rem;
+  --weave-desktop-appbar-control-size: 2rem;
+  --weave-desktop-appbar-control-top: calc(
+    (var(--weave-desktop-appbar-height) - var(--weave-desktop-appbar-control-size)) / 2
+  );
+  --weave-desktop-sidebar-action-height: 1.5rem;
+  --weave-desktop-sidebar-padding-top: calc(
+    var(--weave-desktop-appbar-height) - (var(--weave-desktop-sidebar-action-height) / 2)
+  );
   --color-token-foreground: #cdd6f4;
   --color-token-background: #1e1e2e;
   --color-token-background-surface: #181825;
@@ -88,6 +96,7 @@
 
 :root[data-weave-window-type="electron"] header {
   -webkit-app-region: no-drag;
+  height: var(--weave-desktop-appbar-height);
   border-bottom-width: 0 !important;
   border-bottom-color: transparent !important;
   background: color-mix(in srgb, #1e1e2e 86%, transparent);
@@ -130,7 +139,12 @@
 }
 
 :root[data-weave-window-type="electron"] header > .absolute {
+  top: var(--weave-desktop-appbar-control-top);
   z-index: 45;
+}
+
+:root[data-weave-window-type="electron"] header > [data-slot="menu-trigger"].absolute {
+  top: var(--weave-desktop-appbar-control-top);
 }
 
 :root[data-weave-window-type="electron"] main[data-sidebar-open="false"] header > button.absolute.left-4 {
@@ -139,7 +153,7 @@
 
 :root[data-weave-window-type="electron"] .weave-desktop-settings-button {
   position: fixed;
-  top: 0.75rem;
+  top: var(--weave-desktop-appbar-control-top);
   right: 4rem;
   z-index: 45;
   border-color: transparent;
@@ -153,7 +167,7 @@
   background: var(--color-background-surface) !important;
   -webkit-backdrop-filter: blur(22px) saturate(120%);
   backdrop-filter: blur(22px) saturate(120%);
-  padding-top: var(--weave-desktop-appbar-height);
+  padding-top: var(--weave-desktop-sidebar-padding-top);
 }
 
 :root[data-weave-window-type="electron"] ::selection {

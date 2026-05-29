@@ -20,7 +20,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Brain, Check, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Paperclip, Send, X } from 'lucide-react';
+import { Brain, Check, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Send, X } from 'lucide-react';
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getThreadContextUsage, listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
@@ -965,14 +965,13 @@ const Composer = () => {
       />
       <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <ComposerPrimitive.AddAttachment
+            render={<Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Attach image" />}
+          >
+            <Plus size={18} strokeWidth={2.5} />
+          </ComposerPrimitive.AddAttachment>
           <ModelPicker />
           <ReasoningPicker />
-          <ComposerPrimitive.AddAttachment
-            render={<Button type="button" size="sm" variant="ghost" className="h-9 w-9 shrink-0 justify-center px-0 text-muted-foreground hover:bg-muted hover:text-foreground sm:w-auto sm:gap-2 sm:px-2" aria-label="Attach image" />}
-          >
-            <Paperclip size={16} />
-            <span className="hidden sm:inline">Attach</span>
-          </ComposerPrimitive.AddAttachment>
           <PlanPanelToggle threadId={threadId} />
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">

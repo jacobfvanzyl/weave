@@ -307,7 +307,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
     >
       <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="flex items-center gap-2 text-sm font-semibold tracking-wide text-muted-foreground">
             <div className="-ml-4 h-px flex-1 bg-border" />
             <span className="text-primary">Threads</span>
             <div className="h-px flex-1 bg-border" />
@@ -366,7 +366,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
         </div>
 
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="flex items-center gap-2 text-sm font-semibold tracking-wide text-muted-foreground">
             <div className="-ml-4 h-px flex-1 bg-border" />
             <span className="text-success">Planes</span>
             <div className="h-px flex-1 bg-border" />
