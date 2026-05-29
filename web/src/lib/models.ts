@@ -1,4 +1,4 @@
-import { getAuthHeaders, mastraUrl } from './mastra-client';
+import { getAuthHeaders, getMastraUrl } from './mastra-client';
 
 export type ModelOption = {
   id: string;
@@ -15,7 +15,7 @@ export type ModelConfig = {
 };
 
 export const fetchModelConfig = async (): Promise<ModelConfig> => {
-  const response = await fetch(`${mastraUrl}/models`, { headers: getAuthHeaders() });
+  const response = await fetch(`${getMastraUrl()}/models`, { headers: getAuthHeaders() });
   if (!response.ok) throw new Error(`models failed: ${response.status}`);
   return await response.json() as ModelConfig;
 };

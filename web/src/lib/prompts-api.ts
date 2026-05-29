@@ -1,4 +1,4 @@
-import { getAuthHeaders, mastraUrl } from './mastra-client';
+import { getAuthHeaders, getMastraUrl } from './mastra-client';
 
 export type PromptSummary = {
   name: string;
@@ -10,14 +10,14 @@ export type PromptSummary = {
 };
 
 export const listPrompts = async () => {
-  const response = await fetch(`${mastraUrl}/prompts`, { headers: getAuthHeaders() });
+  const response = await fetch(`${getMastraUrl()}/prompts`, { headers: getAuthHeaders() });
   if (!response.ok) throw new Error(`Failed to list prompts: ${response.status}`);
   const data = await response.json() as { prompts?: PromptSummary[] };
   return data.prompts ?? [];
 };
 
 export const expandPrompt = async (name: string, args: string) => {
-  const response = await fetch(`${mastraUrl}/prompts/${encodeURIComponent(name)}/expand`, {
+  const response = await fetch(`${getMastraUrl()}/prompts/${encodeURIComponent(name)}/expand`, {
     method: 'POST',
     headers: { ...getAuthHeaders(), 'content-type': 'application/json' },
     body: JSON.stringify({ arguments: args }),

@@ -79,7 +79,7 @@ export const ChatPage = () => {
           <ThreadSidebar closeOnSelect={isMobilePortrait} onClose={() => setIsSidebarOpen(false)} />
         </>
       ) : null}
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-w-0 flex-1 flex-col" data-sidebar-open={isSidebarOpen ? 'true' : 'false'}>
         <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background px-4">
           <Button
             className="absolute left-4"

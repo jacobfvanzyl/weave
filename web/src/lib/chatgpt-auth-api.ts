@@ -1,4 +1,4 @@
-import { getAuthHeaders, mastraUrl } from './mastra-client';
+import { getAuthHeaders, getMastraUrl } from './mastra-client';
 
 export type ChatGPTAuthStatus = {
   connected: boolean;
@@ -8,13 +8,13 @@ export type ChatGPTAuthStatus = {
 };
 
 export const getChatGPTAuthStatus = async () => {
-  const response = await fetch(`${mastraUrl}/chatgpt/auth-status`, { headers: getAuthHeaders() });
+  const response = await fetch(`${getMastraUrl()}/chatgpt/auth-status`, { headers: getAuthHeaders() });
   if (!response.ok) throw new Error(`ChatGPT auth status failed: ${response.status}`);
   return response.json() as Promise<ChatGPTAuthStatus>;
 };
 
 export const startChatGPTLogin = async () => {
-  const response = await fetch(`${mastraUrl}/chatgpt/login/start`, {
+  const response = await fetch(`${getMastraUrl()}/chatgpt/login/start`, {
     method: 'POST',
     headers: getAuthHeaders(),
   });

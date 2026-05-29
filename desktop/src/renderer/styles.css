@@ -1,0 +1,135 @@
+@import "../../../web/src/styles/globals.css";
+@source "../../../web/src";
+@source "./";
+
+:root[data-weave-window-type="electron"] {
+  --weave-desktop-appbar-height: 3.5rem;
+  --color-token-foreground: #cdd6f4;
+  --color-token-background: #1e1e2e;
+  --color-token-background-surface: #181825;
+  --color-token-background-under: #11111b;
+  --color-token-border: #45475a;
+  --color-token-border-subtle: color-mix(in srgb, #45475a 58%, transparent);
+  --color-token-accent: #cba6f7;
+  --color-token-accent-blue: #89b4fa;
+  --vscode-foreground: var(--color-token-foreground);
+  --vscode-editor-background: #1e1e2e;
+  --vscode-editor-foreground: #cdd6f4;
+  --vscode-sideBar-background: #181825;
+  --vscode-activityBar-background: #11111b;
+  --vscode-panel-background: #1e1e2e;
+  --vscode-button-background: #cba6f7;
+  --vscode-button-foreground: #11111b;
+  --vscode-terminal-ansiBlack: #45475a;
+  --vscode-terminal-ansiRed: #f38ba8;
+  --vscode-terminal-ansiGreen: #a6e3a1;
+  --vscode-terminal-ansiYellow: #f9e2af;
+  --vscode-terminal-ansiBlue: #89b4fa;
+  --vscode-terminal-ansiMagenta: #f5c2e7;
+  --vscode-terminal-ansiCyan: #94e2d5;
+  --vscode-terminal-ansiWhite: #a6adc8;
+  --vscode-terminal-ansiBrightBlack: #585b70;
+  --vscode-terminal-ansiBrightWhite: #bac2de;
+  --color-background-surface-under: var(--color-token-background-under);
+  --color-background-surface: color-mix(in srgb, #181825 86%, transparent);
+  --color-background-elevated-primary: color-mix(in srgb, #313244 74%, transparent);
+  --color-background-editor-opaque: #181825;
+  --background: #1e1e2e;
+  --foreground: #cdd6f4;
+  --card: #181825;
+  --card-foreground: #cdd6f4;
+  --popover: color-mix(in srgb, #181825 94%, #11111b);
+  --popover-foreground: #cdd6f4;
+  --muted: #313244;
+  --muted-foreground: #a6adc8;
+  --secondary: #313244;
+  --secondary-foreground: #cdd6f4;
+  --accent: #45475a;
+  --accent-foreground: #cdd6f4;
+  --border: color-mix(in srgb, #45475a 72%, transparent);
+  --input: #45475a;
+  --ring: #cba6f7;
+  --primary: #cba6f7;
+  --primary-foreground: #11111b;
+  --user: #cba6f7;
+  --user-foreground: #11111b;
+  --selected-thread: color-mix(in srgb, #45475a 82%, #89b4fa);
+}
+
+:root[data-weave-window-type="electron"],
+:root[data-weave-window-type="electron"] body,
+:root[data-weave-window-type="electron"] #root {
+  background: transparent;
+}
+
+:root[data-weave-window-type="electron"] body {
+  overflow: hidden;
+  user-select: none;
+  color-scheme: dark;
+}
+
+:root[data-weave-window-type="electron"] .weave-desktop-shell {
+  height: 100dvh;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #1e1e2e 94%, transparent), #1e1e2e),
+    var(--color-background-surface-under);
+  border: 1px solid color-mix(in srgb, #cdd6f4 10%, transparent);
+}
+
+:root[data-weave-window-type="electron"] header {
+  -webkit-app-region: no-drag;
+  background: color-mix(in srgb, #1e1e2e 86%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+:root[data-weave-window-type="electron"] header::before {
+  position: absolute;
+  inset: 0 8rem 0 4.5rem;
+  z-index: 0;
+  content: "";
+  -webkit-app-region: drag;
+}
+
+:root[data-weave-window-type="electron"] main[data-sidebar-open="false"] header::before {
+  left: 9rem;
+}
+
+:root[data-weave-window-type="electron"] header button,
+:root[data-weave-window-type="electron"] header button *,
+:root[data-weave-window-type="electron"] header [role="button"],
+:root[data-weave-window-type="electron"] header [role="button"] *,
+:root[data-weave-window-type="electron"] input,
+:root[data-weave-window-type="electron"] textarea,
+:root[data-weave-window-type="electron"] [data-slot="button"],
+:root[data-weave-window-type="electron"] [data-slot="menu-trigger"] {
+  -webkit-app-region: no-drag;
+}
+
+:root[data-weave-window-type="electron"] header > .absolute {
+  z-index: 45;
+}
+
+:root[data-weave-window-type="electron"] main[data-sidebar-open="false"] header > button.absolute.left-4 {
+  left: 5rem;
+}
+
+:root[data-weave-window-type="electron"] .weave-desktop-settings-button {
+  position: fixed;
+  top: 0.75rem;
+  right: 4rem;
+  z-index: 45;
+  border-color: transparent;
+  background: transparent;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-weave-window-type="electron"] aside {
+  background: var(--color-background-surface);
+  backdrop-filter: blur(22px);
+  padding-top: var(--weave-desktop-appbar-height);
+}
+
+:root[data-weave-window-type="electron"] ::selection {
+  background: color-mix(in srgb, #cba6f7 34%, transparent);
+}

@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { getAuthHeaders, mastraUrl } from './mastra-client';
+import { getAuthHeaders, getMastraUrl } from './mastra-client';
 import type { ChatThread } from '../stores/chat-store';
 
 type ServerThread = {
@@ -76,7 +76,7 @@ export type AuthUser = {
 
 export const getAuthUser = async () => {
   const result = await parseJson<{ user: AuthUser }>(
-    await fetch(`${mastraUrl}/chat-state/me`, { headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/chat-state/me`, { headers: getAuthHeaders() }),
   );
 
   return result.user;
@@ -84,7 +84,7 @@ export const getAuthUser = async () => {
 
 export const listServerThreads = async () => {
   const result = await parseJson<{ threads: ServerThread[] }>(
-    await fetch(`${mastraUrl}/chat-state/threads`, { headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/chat-state/threads`, { headers: getAuthHeaders() }),
   );
 
   return result.threads.map(toChatThread);
@@ -92,7 +92,7 @@ export const listServerThreads = async () => {
 
 export const createServerThread = async (threadId: string, planeId?: string, demiplaneId?: string, title = '...') => {
   const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(`${mastraUrl}/chat-state/threads`, {
+    await fetch(`${getMastraUrl()}/chat-state/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ threadId, title, planeId, demiplaneId }),
@@ -104,7 +104,7 @@ export const createServerThread = async (threadId: string, planeId?: string, dem
 
 export const archiveServerThread = async (threadId: string, archived = true) => {
   const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(`${mastraUrl}/chat-state/threads/${threadId}`, {
+    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ archived }),
@@ -116,7 +116,7 @@ export const archiveServerThread = async (threadId: string, archived = true) => 
 
 export const renameServerThread = async (threadId: string, title: string) => {
   const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(`${mastraUrl}/chat-state/threads/${threadId}`, {
+    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ title }),
@@ -128,13 +128,13 @@ export const renameServerThread = async (threadId: string, title: string) => {
 
 export const deleteServerThread = async (threadId: string) => {
   await parseJson<{ ok: true }>(
-    await fetch(`${mastraUrl}/chat-state/threads/${threadId}`, { method: 'DELETE', headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}`, { method: 'DELETE', headers: getAuthHeaders() }),
   );
 };
 
 export const listPlanes = async () => {
   const result = await parseJson<{ planes: Plane[] }>(
-    await fetch(`${mastraUrl}/planes`, { headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/planes`, { headers: getAuthHeaders() }),
   );
 
   return result.planes;
@@ -200,7 +200,7 @@ const normalizePortalConnection = (portal: unknown): PortalConnection | undefine
 
 export const listPortals = async () => {
   const result = await parseJson<{ portals: unknown[] }>(
-    await fetch(`${mastraUrl}/portals`, { headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/portals`, { headers: getAuthHeaders() }),
   );
 
   return result.portals.flatMap(portal => normalizePortalConnection(portal) ?? []);
@@ -209,14 +209,14 @@ export const listPortals = async () => {
 export const browsePortal = async (portalId: string, rootId = 'default', path = '') => {
   const params = new URLSearchParams({ rootId, path });
   return parseJson<PortalBrowseResult>(
-    await fetch(`${mastraUrl}/portals/${portalId}/browse?${params}`, { headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/portals/${portalId}/browse?${params}`, { headers: getAuthHeaders() }),
   );
 };
 
 export const createPlane = async (input: string | CreatePlaneInput) => {
   const body = typeof input === 'string' ? { name: input, projectKind: 'standard' } : input;
   const result = await parseJson<{ plane: Plane }>(
-    await fetch(`${mastraUrl}/planes`, {
+    await fetch(`${getMastraUrl()}/planes`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(body),
@@ -228,13 +228,13 @@ export const createPlane = async (input: string | CreatePlaneInput) => {
 
 export const deletePlane = async (planeId: string) => {
   await parseJson<{ ok: true }>(
-    await fetch(`${mastraUrl}/planes/${planeId}`, { method: 'DELETE', headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/planes/${planeId}`, { method: 'DELETE', headers: getAuthHeaders() }),
   );
 };
 
 export const reorderPlanes = async (planeIds: string[]) => {
   const result = await parseJson<{ planes: Plane[] }>(
-    await fetch(`${mastraUrl}/planes/reorder`, {
+    await fetch(`${getMastraUrl()}/planes/reorder`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ planeIds }),
@@ -246,7 +246,7 @@ export const reorderPlanes = async (planeIds: string[]) => {
 
 export const createDemiplane = async (planeId: string, name: string) => {
   const result = await parseJson<{ plane: Plane; demiplane: Demiplane }>(
-    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes`, {
+    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ name }),
@@ -258,7 +258,7 @@ export const createDemiplane = async (planeId: string, name: string) => {
 
 export const adoptDemiplane = async (planeId: string, path: string, name?: string) => {
   const result = await parseJson<{ plane: Plane; demiplane: Demiplane }>(
-    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes/adopt`, {
+    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes/adopt`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ path, name }),
@@ -270,7 +270,7 @@ export const adoptDemiplane = async (planeId: string, path: string, name?: strin
 
 export const deleteDemiplane = async (planeId: string, demiplaneId: string, mode: 'detach' | 'remove') => {
   const result = await parseJson<{ plane: Plane; demiplane: Demiplane; mode: 'detach' | 'remove' }>(
-    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes/${demiplaneId}?mode=${mode}`, {
+    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes/${demiplaneId}?mode=${mode}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }),
@@ -281,7 +281,7 @@ export const deleteDemiplane = async (planeId: string, demiplaneId: string, mode
 
 export const discoverDemiplanes = async (planeId: string) => {
   const result = await parseJson<{ worktrees: Array<Record<string, unknown>> }>(
-    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes/discover`, { headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes/discover`, { headers: getAuthHeaders() }),
   );
 
   return result.worktrees;
@@ -289,7 +289,7 @@ export const discoverDemiplanes = async (planeId: string) => {
 
 export const reorderDemiplanes = async (planeId: string, demiplaneIds: string[]) => {
   const result = await parseJson<{ plane: Plane }>(
-    await fetch(`${mastraUrl}/planes/${planeId}/demiplanes/reorder`, {
+    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes/reorder`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ demiplaneIds }),
@@ -301,7 +301,7 @@ export const reorderDemiplanes = async (planeId: string, demiplaneIds: string[])
 
 export const createPlaneThread = async (planeId: string, threadId: string, demiplaneId?: string, title = '...') => {
   const result = await parseJson<{ thread: ServerThread; demiplane: Demiplane }>(
-    await fetch(`${mastraUrl}/planes/${planeId}/threads`, {
+    await fetch(`${getMastraUrl()}/planes/${planeId}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ threadId, title, demiplaneId }),
@@ -313,7 +313,7 @@ export const createPlaneThread = async (planeId: string, threadId: string, demip
 
 export const reorderThreads = async (scope: { plain?: true; planeId?: string; demiplaneId?: string }, threadIds: string[]) => {
   await parseJson<{ ok: true }>(
-    await fetch(`${mastraUrl}/chat-state/threads/reorder`, {
+    await fetch(`${getMastraUrl()}/chat-state/threads/reorder`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ scope, threadIds }),
@@ -323,7 +323,7 @@ export const reorderThreads = async (scope: { plain?: true; planeId?: string; de
 
 export const listServerMessages = async (threadId: string) => {
   const result = await parseJson<{ messages: UIMessage[] }>(
-    await fetch(`${mastraUrl}/chat-state/threads/${threadId}/messages`, { headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}/messages`, { headers: getAuthHeaders() }),
   );
 
   return result.messages;
@@ -344,6 +344,6 @@ export type ContextUsage = {
 export const getThreadContextUsage = async (threadId: string, contextWindow?: number) => {
   const params = contextWindow ? `?${new URLSearchParams({ contextWindow: String(contextWindow) })}` : '';
   return parseJson<ContextUsage>(
-    await fetch(`${mastraUrl}/chat-state/threads/${threadId}/context-usage${params}`, { headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}/context-usage${params}`, { headers: getAuthHeaders() }),
   );
 };

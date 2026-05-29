@@ -1,6 +1,8 @@
 output.txt
 node_modules
 dist
+desktop/.vite
+desktop/out
 .mastra
 .env.development
 .env

@@ -7,7 +7,11 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "mastra dev",
     "build": "mastra build",
-    "start": "mastra start"
+    "start": "mastra start",
+    "desktop:dev": "npm --prefix desktop run dev",
+    "desktop:package": "npm --prefix desktop run package",
+    "desktop:typecheck": "npm --prefix desktop run typecheck",
+    "desktop:test": "npm --prefix desktop run test"
   },
   "keywords": [],
   "author": "",

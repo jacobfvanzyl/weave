@@ -26,7 +26,7 @@ import { getThreadContextUsage, listServerMessages } from '../../lib/chat-state-
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
-import { chatUrl, getAuthHeaders } from '../../lib/mastra-client';
+import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
 import { useChatStore, type PlanStepStatus, type ReasoningEffort, type ThreadPlan, type ThreadPlanStep } from '../../stores/chat-store';
@@ -1136,11 +1136,12 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
   const resourceId = useChatStore(state => state.resourceId);
   const selectedModel = useChatStore(state => state.selectedModel);
   const reasoningEffort = useChatStore(state => state.reasoningEffort);
+  const chatApi = getChatUrl();
 
   const transport = useMemo(
     () =>
       new AssistantChatTransport({
-        api: chatUrl,
+        api: chatApi,
         async prepareSendMessagesRequest({ messages }) {
           const firstUserText = messages.find(message => message.role === 'user') ? getMessageText(messages.find(message => message.role === 'user')!).trim() : '';
           const lastUserText = getMessageText([...messages].reverse().find(message => message.role === 'user') ?? messages[messages.length - 1]).trim();
@@ -1169,7 +1170,7 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
           };
         },
       }),
-    [reasoningEffort, selectedModel, threadId],
+    [chatApi, reasoningEffort, selectedModel, threadId],
   );
 
   const runtime = useChatRuntime({
