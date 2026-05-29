@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { PanelLeft, Settings } from 'lucide-react';
 import { listPlanes, listServerThreads } from '../../lib/chat-state-api';
@@ -10,6 +10,8 @@ import { PlanSidebar } from './PlanSidebar';
 import { ThreadSidebar } from './ThreadSidebar';
 
 const isMobilePortraitNow = () => window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
+const isElectronWindowNow = () =>
+  typeof document !== 'undefined' && document.documentElement.dataset.weaveWindowType === 'electron';
 
 const useIsMobilePortrait = () => {
   const [isMobilePortrait, setIsMobilePortrait] = useState(() => isMobilePortraitNow());
@@ -36,9 +38,16 @@ export const ChatPage = () => {
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => !isMobilePortraitNow());
+  const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
+  const sidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
   const showToolCalls = useChatStore(state => state.showToolCalls);
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
   const isMobilePortrait = useIsMobilePortrait();
+  const isElectronWindow = isElectronWindowNow();
+  const canPreviewSidebar = isElectronWindow && !isMobilePortrait && !isSidebarOpen;
+  const showSidebarPreview = canPreviewSidebar && isSidebarPreviewOpen;
+  const showPinnedSidebarToggle = isElectronWindow && !isMobilePortrait && isSidebarOpen;
+  const showHeaderSidebarToggle = !isElectronWindow || !isSidebarOpen;
   const activeThread = threads.find(thread => thread.id === threadId);
   const hasThreadTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
   const { data: planes = [] } = useQuery({
@@ -67,6 +76,51 @@ export const ChatPage = () => {
     if (isMobilePortrait && activeThread) setIsSidebarOpen(false);
   }, [activeThread, isMobilePortrait]);
 
+  useEffect(() => {
+    if (isSidebarOpen || isMobilePortrait) setIsSidebarPreviewOpen(false);
+  }, [isMobilePortrait, isSidebarOpen]);
+
+  useEffect(() => () => {
+    if (sidebarPreviewCloseTimeoutRef.current !== undefined) {
+      window.clearTimeout(sidebarPreviewCloseTimeoutRef.current);
+    }
+  }, []);
+
+  const clearSidebarPreviewCloseTimeout = useCallback(() => {
+    if (sidebarPreviewCloseTimeoutRef.current === undefined) return;
+    window.clearTimeout(sidebarPreviewCloseTimeoutRef.current);
+    sidebarPreviewCloseTimeoutRef.current = undefined;
+  }, []);
+
+  const openSidebarPreview = useCallback(() => {
+    if (!canPreviewSidebar) return;
+    clearSidebarPreviewCloseTimeout();
+    setIsSidebarPreviewOpen(true);
+  }, [canPreviewSidebar, clearSidebarPreviewCloseTimeout]);
+
+  const closeSidebarPreview = useCallback(() => {
+    clearSidebarPreviewCloseTimeout();
+    setIsSidebarPreviewOpen(false);
+  }, [clearSidebarPreviewCloseTimeout]);
+
+  const scheduleSidebarPreviewClose = useCallback(() => {
+    clearSidebarPreviewCloseTimeout();
+    sidebarPreviewCloseTimeoutRef.current = window.setTimeout(() => {
+      sidebarPreviewCloseTimeoutRef.current = undefined;
+      setIsSidebarPreviewOpen(false);
+    }, 140);
+  }, [clearSidebarPreviewCloseTimeout]);
+
+  const toggleSidebar = useCallback(() => {
+    closeSidebarPreview();
+    setIsSidebarOpen(open => !open);
+  }, [closeSidebarPreview]);
+
+  const openSidebar = useCallback(() => {
+    closeSidebarPreview();
+    setIsSidebarOpen(true);
+  }, [closeSidebarPreview]);
+
   return (
     <div className="flex h-dvh overflow-hidden">
       {isSidebarOpen ? (
@@ -76,20 +130,57 @@ export const ChatPage = () => {
             aria-label="Close sidebar"
             onClick={() => setIsSidebarOpen(false)}
           />
+          {showPinnedSidebarToggle ? (
+            <Button
+              className="weave-desktop-sidebar-toggle"
+              size="icon"
+              variant="ghost"
+              aria-label="Hide sidebar"
+              onClick={toggleSidebar}
+            >
+              <PanelLeft size={18} />
+            </Button>
+          ) : null}
           <ThreadSidebar closeOnSelect={isMobilePortrait} onClose={() => setIsSidebarOpen(false)} />
         </>
       ) : null}
-      <main className="flex min-w-0 flex-1 flex-col" data-sidebar-open={isSidebarOpen ? 'true' : 'false'}>
-        <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background px-4">
+      {showSidebarPreview ? (
+        <div
+          data-weave-sidebar-preview
+          onMouseEnter={openSidebarPreview}
+          onMouseLeave={scheduleSidebarPreviewClose}
+        >
           <Button
-            className="absolute left-4"
+            className="weave-desktop-sidebar-toggle"
             size="icon"
             variant="ghost"
-            aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-            onClick={() => setIsSidebarOpen(open => !open)}
+            aria-label="Show sidebar"
+            onClick={openSidebar}
           >
             <PanelLeft size={18} />
           </Button>
+          <ThreadSidebar presentation="overlay" closeOnSelect onClose={closeSidebarPreview} />
+        </div>
+      ) : null}
+      <main
+        className="flex min-w-0 flex-1 flex-col"
+        data-sidebar-open={isSidebarOpen ? 'true' : 'false'}
+        data-sidebar-preview-open={showSidebarPreview ? 'true' : 'false'}
+      >
+        <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background px-4">
+          {showHeaderSidebarToggle ? (
+            <Button
+              className="absolute left-4"
+              size="icon"
+              variant="ghost"
+              aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+              onClick={toggleSidebar}
+              onMouseEnter={openSidebarPreview}
+              onMouseLeave={scheduleSidebarPreviewClose}
+            >
+              <PanelLeft size={18} />
+            </Button>
+          ) : null}
           {activePlane || hasThreadTitle ? (
             <h2 className="flex max-w-[60%] items-center justify-center gap-1 truncate text-center text-sm font-semibold text-foreground">
               {activePlane ? (

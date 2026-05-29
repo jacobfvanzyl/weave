@@ -4,7 +4,7 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ChevronUp, CircleDot, Code2, Folder, GripVertical, Link, Lock, MoreVertical, Plus, RotateCcw, Trash2, X } from 'lucide-react';
+import { Archive, ChevronUp, CircleDot, Code2, Folder, GripVertical, Link, Loader2, Lock, MoreVertical, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads, type CreatePlaneInput } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { GitPlaneDirectoryPicker } from './GitPlaneDirectoryPicker';
@@ -176,13 +176,15 @@ const SortableItem = ({
 type ThreadSidebarProps = {
   closeOnSelect?: boolean;
   onClose?: () => void;
+  presentation?: 'inline' | 'overlay';
 };
 
-export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarProps) => {
+export const ThreadSidebar = ({ closeOnSelect = true, onClose, presentation = 'inline' }: ThreadSidebarProps) => {
   const {
     resourceId,
     threadId,
     threads,
+    runningThreadIds,
     newThread,
     setThreadId,
     archiveThread,
@@ -269,6 +271,19 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
       ?? planes.flatMap(plane => plane.demiplanes).find(demiplane => demiplane.id === archivedDialogScopeId)?.name
       ?? 'Archived Threads';
   const deletePlaneTarget = deletePlaneId ? planes.find(plane => plane.id === deletePlaneId) : undefined;
+  const renderThreadRunningSpinner = (thread: typeof threads[number]) => {
+    if (!runningThreadIds.includes(thread.id)) return null;
+
+    return (
+      <span
+        className="flex size-6 shrink-0 items-center justify-center text-primary"
+        role="status"
+        aria-label={`${thread.title} is running`}
+      >
+        <Loader2 size={20} className="animate-spin" aria-hidden="true" />
+      </span>
+    );
+  };
   const renderThreadMenu = (thread: typeof threads[number]) => (
     <Menu>
       <MenuTrigger render={<Button className="shrink-0" size="icon-xs" variant="ghost" aria-label={`Open menu for ${thread.title}`} />}>
@@ -303,7 +318,13 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   return (
     <aside
       data-weave-thread-sidebar
-      className="fixed inset-y-0 left-0 z-40 flex w-full shrink-0 flex-col border-r border-border bg-muted p-4 md:static md:z-auto md:w-96 dark:bg-card"
+      data-weave-thread-sidebar-overlay={presentation === 'overlay' ? 'true' : undefined}
+      className={cn(
+        'fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-muted p-4 dark:bg-card',
+        presentation === 'overlay'
+          ? 'w-96 max-w-[min(24rem,calc(100vw-1rem))]'
+          : 'w-full md:static md:z-auto md:w-96',
+      )}
     >
       <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
         <div className="space-y-2">
@@ -359,6 +380,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                 <span className="min-w-0 flex-1 truncate">{thread.title}</span>
               </div>
             </SidebarItemButton>
+            {renderThreadRunningSpinner(thread)}
             {renderThreadMenu(thread)}
           </SortableItem>
         ))}
@@ -542,6 +564,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                               <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{thread.title}</span>
                             </div>
                           </SidebarItemButton>
+                          {renderThreadRunningSpinner(thread)}
                           {renderThreadMenu(thread)}
                         </SortableItem>
                       ))}
@@ -666,6 +689,7 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
                                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{thread.title}</span>
                                   </div>
                                 </SidebarItemButton>
+                                {renderThreadRunningSpinner(thread)}
                                 {renderThreadMenu(thread)}
                               </SortableItem>
                             ))}

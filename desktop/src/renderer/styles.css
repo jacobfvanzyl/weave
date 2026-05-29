@@ -8,6 +8,7 @@
   --weave-desktop-appbar-control-top: calc(
     (var(--weave-desktop-appbar-height) - var(--weave-desktop-appbar-control-size)) / 2
   );
+  --weave-desktop-sidebar-width: 24rem;
   --weave-desktop-sidebar-action-height: 1.5rem;
   --weave-desktop-sidebar-padding-top: calc(
     var(--weave-desktop-appbar-height) - (var(--weave-desktop-sidebar-action-height) / 2)
@@ -151,6 +152,16 @@
   left: 5rem;
 }
 
+:root[data-weave-window-type="electron"] .weave-desktop-sidebar-toggle {
+  position: fixed;
+  top: calc(var(--weave-desktop-appbar-control-top) + 1px);
+  left: calc(5rem + 1px);
+  z-index: 46;
+  border-color: transparent;
+  background: transparent;
+  -webkit-app-region: no-drag;
+}
+
 :root[data-weave-window-type="electron"] .weave-desktop-settings-button {
   position: fixed;
   top: var(--weave-desktop-appbar-control-top);
@@ -164,12 +175,39 @@
 :root[data-weave-window-type="electron"] aside[data-weave-thread-sidebar] {
   position: relative;
   z-index: 1;
-  background: var(--color-background-surface) !important;
-  -webkit-backdrop-filter: blur(22px) saturate(120%);
-  backdrop-filter: blur(22px) saturate(120%);
+  background: #313244 !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   padding-top: var(--weave-desktop-sidebar-padding-top);
+}
+
+:root[data-weave-window-type="electron"] aside[data-weave-thread-sidebar][data-weave-thread-sidebar-overlay="true"] {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  width: var(--weave-desktop-sidebar-width);
+  max-width: min(var(--weave-desktop-sidebar-width), calc(100vw - 1rem));
+  box-shadow:
+    1px 0 0 0 var(--border),
+    0 20px 25px -5px rgb(0 0 0 / 18%),
+    0 8px 10px -6px rgb(0 0 0 / 18%);
+  animation: weave-desktop-sidebar-preview-in 150ms ease-out;
 }
 
 :root[data-weave-window-type="electron"] ::selection {
   background: color-mix(in srgb, #cba6f7 34%, transparent);
+}
+
+@keyframes weave-desktop-sidebar-preview-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
