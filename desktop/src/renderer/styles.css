@@ -31,7 +31,7 @@
   --vscode-terminal-ansiBrightBlack: #585b70;
   --vscode-terminal-ansiBrightWhite: #bac2de;
   --color-background-surface-under: var(--color-token-background-under);
-  --color-background-surface: color-mix(in srgb, #181825 86%, transparent);
+  --color-background-surface: rgb(30 30 46 / 55%);
   --color-background-elevated-primary: color-mix(in srgb, #313244 74%, transparent);
   --color-background-editor-opaque: #181825;
   --background: #1e1e2e;
@@ -69,17 +69,29 @@
 }
 
 :root[data-weave-window-type="electron"] .weave-desktop-shell {
+  position: relative;
   height: 100dvh;
   overflow: hidden;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, #1e1e2e 94%, transparent), #1e1e2e),
-    var(--color-background-surface-under);
+  isolation: isolate;
+  background: transparent;
   border: 1px solid color-mix(in srgb, #cdd6f4 10%, transparent);
+}
+
+:root[data-weave-window-type="electron"] main[data-sidebar-open] {
+  position: relative;
+  z-index: 2;
+  overflow: hidden;
+  background: var(--background);
+  border-left: 0;
+  box-shadow: 0 2px 4px -1px color-mix(in srgb, #000 18%, transparent);
 }
 
 :root[data-weave-window-type="electron"] header {
   -webkit-app-region: no-drag;
+  border-bottom-width: 0 !important;
+  border-bottom-color: transparent !important;
   background: color-mix(in srgb, #1e1e2e 86%, transparent);
+  -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
 }
 
@@ -93,6 +105,17 @@
 
 :root[data-weave-window-type="electron"] main[data-sidebar-open="false"] header::before {
   left: 9rem;
+}
+
+:root[data-weave-window-type="electron"] header::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  content: "";
+  pointer-events: none;
+  background: var(--border);
 }
 
 :root[data-weave-window-type="electron"] header button,
@@ -124,9 +147,12 @@
   -webkit-app-region: no-drag;
 }
 
-:root[data-weave-window-type="electron"] aside {
-  background: var(--color-background-surface);
-  backdrop-filter: blur(22px);
+:root[data-weave-window-type="electron"] aside[data-weave-thread-sidebar] {
+  position: relative;
+  z-index: 1;
+  background: var(--color-background-surface) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(120%);
+  backdrop-filter: blur(22px) saturate(120%);
   padding-top: var(--weave-desktop-appbar-height);
 }
 

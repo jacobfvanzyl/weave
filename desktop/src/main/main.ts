@@ -97,7 +97,7 @@ const createWindow = () => {
     title: 'Weave',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
-    vibrancy: 'menu',
+    vibrancy: 'sidebar',
     visualEffectState: 'active',
     transparent: true,
     backgroundColor: '#00000000',

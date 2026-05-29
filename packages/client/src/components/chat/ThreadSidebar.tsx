@@ -301,7 +301,10 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose }: ThreadSidebarPr
   );
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 flex w-full shrink-0 flex-col border-r border-border bg-muted p-4 md:static md:z-auto md:w-96 dark:bg-card">
+    <aside
+      data-weave-thread-sidebar
+      className="fixed inset-y-0 left-0 z-40 flex w-full shrink-0 flex-col border-r border-border bg-muted p-4 md:static md:z-auto md:w-96 dark:bg-card"
+    >
       <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
