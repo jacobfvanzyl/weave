@@ -9,16 +9,17 @@ const getDefaultMastraUrl = () => {
 };
 
 const trimTrailingSlash = (value: string) => value.replace(/\/+$/, '');
+const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 
-const initialMastraUrl = import.meta.env.VITE_MASTRA_URL ?? getDefaultMastraUrl();
-const initialAuthToken = import.meta.env.VITE_WEAVE_AUTH_TOKEN ?? null;
+const initialMastraUrl = viteEnv.VITE_MASTRA_URL ?? getDefaultMastraUrl();
+const initialAuthToken = viteEnv.VITE_WEAVE_AUTH_TOKEN ?? null;
 
 let connectionConfig = {
   mastraUrl: trimTrailingSlash(initialMastraUrl),
   authToken: initialAuthToken as string | null,
 };
 
-export const agentId = import.meta.env.VITE_AGENT_ID ?? 'mage-hand';
+export const agentId = viteEnv.VITE_AGENT_ID ?? 'mage-hand';
 
 export const configureMastraConnection = (config: MastraConnectionConfig) => {
   connectionConfig = {

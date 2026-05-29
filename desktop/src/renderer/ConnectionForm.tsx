@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { CheckCircle2, KeyRound, Loader2, Server, Trash2, Wifi } from 'lucide-react';
-import { Button } from '../../../web/src/components/ui/button';
-import { Input } from '../../../web/src/components/ui/input';
-import { Label } from '../../../web/src/components/ui/label';
+import { Button } from '@weave/client/components/ui/button';
+import { Input } from '@weave/client/components/ui/input';
+import { Label } from '@weave/client/components/ui/label';
 import type {
   DesktopConnectionInput,
   DesktopConnectionSettings,

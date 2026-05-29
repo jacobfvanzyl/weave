@@ -6,6 +6,10 @@ import { ConnectionSettingsStore } from './settings-store';
 
 let settingsStore: ConnectionSettingsStore | undefined;
 
+const appName = 'Weave';
+app.setName(appName);
+app.setPath('userData', process.env.WEAVE_DESKTOP_USER_DATA || path.join(app.getPath('appData'), appName));
+
 const getSettingsStore = () => {
   if (!settingsStore) {
     throw new Error('Connection settings store is not initialized.');
@@ -124,7 +128,7 @@ const createWindow = () => {
 
 app.whenReady().then(() => {
   settingsStore = new ConnectionSettingsStore({
-    userDataPath: process.env.WEAVE_DESKTOP_USER_DATA || app.getPath('userData'),
+    userDataPath: app.getPath('userData'),
     encryption: safeStorage,
   });
 

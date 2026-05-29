@@ -9,11 +9,11 @@ import {
 } from 'react';
 import { createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
 import { ServerCog } from 'lucide-react';
-import { ChatPage } from '../../../web/src/components/chat/ChatPage';
-import { Button } from '../../../web/src/components/ui/button';
-import { configureMastraConnection } from '../../../web/src/lib/mastra-client';
-import { queryClient } from '../../../web/src/lib/query-client';
-import { Providers } from '../../../web/src/app/providers';
+import { Providers } from '@weave/client/app/providers';
+import { ChatPage } from '@weave/client/components/chat/ChatPage';
+import { Button } from '@weave/client/components/ui/button';
+import { configureMastraConnection } from '@weave/client/lib/mastra-client';
+import { queryClient } from '@weave/client/lib/query-client';
 import type {
   DesktopConnectionInput,
   DesktopConnectionSettings,

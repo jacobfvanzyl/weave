@@ -13,14 +13,22 @@
     "moduleResolution": "Bundler",
     "baseUrl": ".",
     "paths": {
-      "~/*": ["src/*"],
-      "@/*": ["src/*"]
+      "@weave/client": ["../packages/client/src/index.ts"],
+      "@weave/client/*": ["../packages/client/src/*"],
+      "~/*": ["../packages/client/src/*"],
+      "@/*": ["src/*"],
+      "react": ["node_modules/@types/react"],
+      "react-dom": ["node_modules/@types/react-dom"],
+      "react-dom/client": ["node_modules/@types/react-dom/client.d.ts"],
+      "react/jsx-runtime": ["node_modules/@types/react/jsx-runtime"],
+      "react/jsx-dev-runtime": ["node_modules/@types/react/jsx-dev-runtime"],
+      "*": ["node_modules/*"]
     },
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src"],
+  "include": ["src", "../packages/client/src"],
   "references": []
 }

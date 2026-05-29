@@ -1,8 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { Providers } from '@weave/client/app/providers';
+import '@weave/client/styles/globals.css';
 import { App } from './app/App';
-import { Providers } from './app/providers';
-import './styles/globals.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -1,5 +1,5 @@
-@import "../../../web/src/styles/globals.css";
-@source "../../../web/src";
+@import "@weave/client/styles/globals.css";
+@source "../../../packages/client/src";
 @source "./";
 
 :root[data-weave-window-type="electron"] {

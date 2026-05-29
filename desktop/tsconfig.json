@@ -14,12 +14,15 @@
     "baseUrl": ".",
     "paths": {
       "#/*": ["src/*"],
-      "~/*": ["../web/src/*"],
-      "@/*": ["../web/src/*"],
+      "@weave/client": ["../packages/client/src/index.ts"],
+      "@weave/client/*": ["../packages/client/src/*"],
+      "~/*": ["../packages/client/src/*"],
       "react": ["node_modules/@types/react"],
       "react-dom": ["node_modules/@types/react-dom"],
+      "react-dom/client": ["node_modules/@types/react-dom/client.d.ts"],
       "react/jsx-runtime": ["node_modules/@types/react/jsx-runtime"],
-      "react/jsx-dev-runtime": ["node_modules/@types/react/jsx-dev-runtime"]
+      "react/jsx-dev-runtime": ["node_modules/@types/react/jsx-dev-runtime"],
+      "*": ["node_modules/*"]
     },
     "resolveJsonModule": true,
     "isolatedModules": true,
@@ -27,6 +30,6 @@
     "jsx": "react-jsx",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src", "tests", "forge.env.d.ts", "../web/src"],
+  "include": ["src", "tests", "forge.env.d.ts", "../packages/client/src"],
   "references": []
 }

@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { configureMastraConnection } from '../../../web/src/lib/mastra-client';
+import { configureMastraConnection } from '@weave/client/lib/mastra-client';
 import './styles.css';
 
 const root = document.documentElement;
@@ -14,7 +14,7 @@ const bootstrap = async () => {
   configureMastraConnection({ mastraUrl: settings.mastraUrl, authToken: null });
 
   const { DesktopApp } = await import('./DesktopApp');
-  const { applyTheme, useThemeStore } = await import('../../../web/src/stores/theme-store');
+  const { applyTheme, useThemeStore } = await import('@weave/client/stores/theme-store');
   useThemeStore.getState().setMode('dark');
   applyTheme('dark');
 
