@@ -1,3 +1,5 @@
+import type { TerminalHostEvent, TerminalStartInput, TerminalStartResult } from './terminal';
+
 export type DesktopConnectionSettings = {
   mastraUrl: string;
   hasAuthToken: boolean;
@@ -17,5 +19,11 @@ export type WeaveDesktopBridge = {
   saveConnectionSettings: (input: DesktopConnectionInput) => Promise<DesktopConnectionSettings>;
   testConnection: (input?: DesktopConnectionInput) => Promise<DesktopConnectionTestResult>;
   openExternal: (url: string) => Promise<void>;
-  getPlatform: () => 'darwin';
+  getPlatform: () => NodeJS.Platform;
+  terminalStart: (input: TerminalStartInput) => Promise<TerminalStartResult>;
+  terminalInput: (demiplaneId: string, data: string) => Promise<void>;
+  terminalResize: (demiplaneId: string, cols: number, rows: number) => Promise<void>;
+  terminalClose: (demiplaneId: string) => Promise<void>;
+  terminalDetach: (demiplaneId: string) => Promise<void>;
+  onTerminalEvent: (listener: (event: TerminalHostEvent) => void) => () => void;
 };

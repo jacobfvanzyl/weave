@@ -1,12 +1,14 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import { fileURLToPath, URL } from 'node:url';
 import path from 'node:path';
 import type { Plugin } from 'vite';
+import { createWeaveClientDefines } from '../scripts/client-vite-env';
 
 const desktopSrc = fileURLToPath(new URL('./src', import.meta.url));
 const desktopRoot = fileURLToPath(new URL('.', import.meta.url));
+const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
 const clientSrc = fileURLToPath(new URL('../packages/client/src', import.meta.url));
 const clientRoot = fileURLToPath(new URL('../packages/client', import.meta.url));
 const sharedClientPackages = [
@@ -24,6 +26,7 @@ const sharedClientPackages = [
   'ai',
   'class-variance-authority',
   'clsx',
+  'ghostty-web',
   'lucide-react',
   'react',
   'react-dom',
@@ -53,19 +56,25 @@ const sharedClientDependencyResolver = (): Plugin => ({
   },
 });
 
-export default defineConfig({
-  plugins: [sharedClientDependencyResolver(), react(), tailwindcss()],
-  resolve: {
-    alias: {
-      '#': desktopSrc,
-      '@weave/client': clientSrc,
-      '~': clientSrc,
+export default defineConfig(({ mode }) => {
+  const appEnv = loadEnv(mode, desktopRoot, '');
+  const workspaceEnv = loadEnv(mode, workspaceRoot, '');
+
+  return {
+    define: createWeaveClientDefines({ appEnv, shellEnv: process.env, workspaceEnv }),
+    plugins: [sharedClientDependencyResolver(), react(), tailwindcss()],
+    resolve: {
+      alias: {
+        '#': desktopSrc,
+        '@weave/client': clientSrc,
+        '~': clientSrc,
+      },
+      dedupe: ['react', 'react-dom'],
     },
-    dedupe: ['react', 'react-dom'],
-  },
-  server: {
-    fs: {
-      allow: [desktopRoot, clientRoot],
+    server: {
+      fs: {
+        allow: [desktopRoot, clientRoot],
+      },
     },
-  },
+  };
 });

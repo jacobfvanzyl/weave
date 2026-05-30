@@ -35,6 +35,12 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         return;
       }
 
+      if (request.url === '/planes') {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ planes: [] }));
+        return;
+      }
+
       response.statusCode = 404;
       response.end('not found');
     });

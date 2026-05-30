@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { PanelLeft, Settings } from 'lucide-react';
+import { PanelLeft, Settings, TerminalSquare } from 'lucide-react';
 import { listPlanes, listServerThreads } from '../../lib/chat-state-api';
+import { isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useChatStore } from '../../stores/chat-store';
 import { Button } from '../ui/button';
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { AssistantChat } from './AssistantChat';
 import { PlanSidebar } from './PlanSidebar';
 import { ThreadSidebar } from './ThreadSidebar';
+
+const TerminalPanel = lazy(() => import('./TerminalPanel').then(module => ({ default: module.TerminalPanel })));
 
 const isMobilePortraitNow = () => window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
 const isElectronWindowNow = () =>
@@ -39,6 +42,9 @@ export const ChatPage = () => {
   const newThread = useChatStore(state => state.newThread);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => !isMobilePortraitNow());
   const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  const [isTerminalExpanded, setIsTerminalExpanded] = useState(false);
+  const [activeTerminalDemiplaneIds, setActiveTerminalDemiplaneIds] = useState<Set<string>>(() => new Set());
   const sidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
   const showToolCalls = useChatStore(state => state.showToolCalls);
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
@@ -58,6 +64,19 @@ export const ChatPage = () => {
   const activeDemiplane = activeThread?.demiplaneId
     ? activePlane?.demiplanes.find(demiplane => demiplane.id === activeThread.demiplaneId)
     : undefined;
+  const terminalTarget = isElectronWindow
+    && isDesktopTerminalTransportAvailable()
+    && activePlane?.projectKind === 'git'
+    && activeDemiplane
+    ? {
+        planeId: activePlane.id,
+        demiplaneId: activeDemiplane.id,
+        planeName: activePlane.name,
+        demiplaneName: activeDemiplane.name,
+      }
+    : undefined;
+  const terminalDemiplaneId = terminalTarget?.demiplaneId;
+  const hasActiveTerminal = terminalDemiplaneId ? activeTerminalDemiplaneIds.has(terminalDemiplaneId) : false;
   const { data: serverThreads = [], isFetched } = useQuery({
     queryKey: ['threads', resourceId],
     queryFn: () => listServerThreads(),
@@ -79,6 +98,13 @@ export const ChatPage = () => {
   useEffect(() => {
     if (isSidebarOpen || isMobilePortrait) setIsSidebarPreviewOpen(false);
   }, [isMobilePortrait, isSidebarOpen]);
+
+  useEffect(() => {
+    setIsTerminalExpanded(false);
+    if (!terminalTarget) {
+      setIsTerminalOpen(false);
+    }
+  }, [terminalTarget?.demiplaneId]);
 
   useEffect(() => () => {
     if (sidebarPreviewCloseTimeoutRef.current !== undefined) {
@@ -120,6 +146,32 @@ export const ChatPage = () => {
     closeSidebarPreview();
     setIsSidebarOpen(true);
   }, [closeSidebarPreview]);
+
+  const toggleTerminal = useCallback(() => {
+    if (isTerminalOpen) setIsTerminalExpanded(false);
+    setIsTerminalOpen(open => !open);
+  }, [isTerminalOpen]);
+
+  const hideTerminal = useCallback(() => {
+    setIsTerminalOpen(false);
+    setIsTerminalExpanded(false);
+  }, []);
+
+  const handleTerminalSessionActiveChange = useCallback((isActive: boolean) => {
+    if (!terminalDemiplaneId) return;
+    setActiveTerminalDemiplaneIds(current => {
+      const isCurrentlyActive = current.has(terminalDemiplaneId);
+      if (isCurrentlyActive === isActive) return current;
+
+      const next = new Set(current);
+      if (isActive) {
+        next.add(terminalDemiplaneId);
+      } else {
+        next.delete(terminalDemiplaneId);
+      }
+      return next;
+    });
+  }, [terminalDemiplaneId]);
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -198,6 +250,22 @@ export const ChatPage = () => {
               {hasThreadTitle ? <span className="min-w-0 truncate text-foreground">{activeThread?.title}</span> : null}
             </h2>
           ) : null}
+          {terminalTarget ? (
+            <Button
+              className={[
+                'absolute right-28',
+                isTerminalOpen ? 'bg-accent' : '',
+                hasActiveTerminal ? 'text-mauve' : '',
+              ].filter(Boolean).join(' ')}
+              size="icon"
+              variant="ghost"
+              aria-label={isTerminalOpen ? 'Hide terminal' : 'Show terminal'}
+              data-active={isTerminalOpen ? 'true' : 'false'}
+              onClick={toggleTerminal}
+            >
+              <TerminalSquare size={18} />
+            </Button>
+          ) : null}
           <Menu>
             <MenuTrigger
               className="absolute right-4"
@@ -217,17 +285,30 @@ export const ChatPage = () => {
           </Menu>
         </header>
         <div className="flex min-h-0 flex-1">
-          <div className="relative min-h-0 flex-1">
-            {threads
-              .filter(thread => thread.id === threadId || runningThreadIds.includes(thread.id))
-              .map(thread => (
-                <div
-                  key={thread.id}
-                  className={thread.id === threadId ? 'absolute inset-0' : 'absolute inset-0 hidden'}
-                >
-                  <AssistantChat threadId={thread.id} />
-                </div>
-              ))}
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className={isTerminalExpanded ? 'relative h-0 min-h-0 flex-none overflow-hidden' : 'relative min-h-0 flex-1 overflow-hidden'}>
+              {threads
+                .filter(thread => thread.id === threadId || runningThreadIds.includes(thread.id))
+                .map(thread => (
+                  <div
+                    key={thread.id}
+                    className={thread.id === threadId ? 'absolute inset-0' : 'absolute inset-0 hidden'}
+                  >
+                    <AssistantChat threadId={thread.id} />
+                  </div>
+                ))}
+            </div>
+            {isTerminalOpen && terminalTarget ? (
+              <Suspense fallback={null}>
+                <TerminalPanel
+                  isExpanded={isTerminalExpanded}
+                  onExpandedChange={setIsTerminalExpanded}
+                  onSessionActiveChange={handleTerminalSessionActiveChange}
+                  target={terminalTarget}
+                  onHide={hideTerminal}
+                />
+              </Suspense>
+            ) : null}
           </div>
           {showPlanPanel ? <PlanSidebar plan={activePlan} /> : null}
         </div>

@@ -1,10 +1,20 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, safeStorage, session, shell } from 'electron';
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { DesktopConnectionInput, DesktopConnectionTestResult } from '../shared/desktop-api';
+import type { TerminalStartInput } from '../shared/terminal';
 import { getServerOrigin, isHttpUrl, normalizeMastraUrl, parseDesktopConnectionInput } from '../shared/connection';
 import { ConnectionSettingsStore } from './settings-store';
+import {
+  parseTerminalDemiplaneId,
+  parseTerminalInputData,
+  parseTerminalResize,
+  parseTerminalStartInput,
+  TerminalManager,
+} from './terminal-manager';
 
 let settingsStore: ConnectionSettingsStore | undefined;
+let terminalManager: TerminalManager | undefined;
 
 const appName = 'Weave';
 app.setName(appName);
@@ -75,6 +85,55 @@ const openExternal = async (url: string) => {
   await shell.openExternal(url);
 };
 
+type PlaneListing = {
+  id?: unknown;
+  projectKind?: unknown;
+  demiplanes?: unknown;
+};
+
+type DemiplaneListing = {
+  id?: unknown;
+  path?: unknown;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
+
+const resolveTerminalDemiplane = async (input: TerminalStartInput) => {
+  const store = getSettingsStore();
+  const settings = store.getSettings();
+  const authToken = store.getAuthToken();
+  const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
+  const response = await fetch(`${normalizeMastraUrl(settings.mastraUrl)}/planes`, { headers });
+
+  if (!response.ok) {
+    const error = (await response.text()).trim();
+    throw new Error(error || `Failed to load Planes for terminal: HTTP ${response.status}`);
+  }
+
+  const data = await response.json() as { planes?: PlaneListing[] };
+  const planes = Array.isArray(data.planes) ? data.planes : [];
+  const plane = planes.find(candidate => candidate.id === input.planeId);
+  if (!plane) throw new Error('Plane was not found.');
+  if (plane.projectKind !== 'git') throw new Error('Terminals are only available for Git/code Planes.');
+
+  const demiplanes = Array.isArray(plane.demiplanes) ? plane.demiplanes.filter(isRecord) as DemiplaneListing[] : [];
+  const demiplane = demiplanes.find(candidate => candidate.id === input.demiplaneId);
+  if (!demiplane) throw new Error('Demiplane was not found.');
+  if (typeof demiplane.path !== 'string' || !demiplane.path.trim()) {
+    throw new Error('Demiplane does not have a local workspace path.');
+  }
+
+  return { cwd: await realpath(demiplane.path) };
+};
+
+const getTerminalManager = () => {
+  if (!terminalManager) {
+    terminalManager = new TerminalManager({ resolveDemiplane: resolveTerminalDemiplane });
+  }
+
+  return terminalManager;
+};
+
 const registerIpcHandlers = () => {
   ipcMain.handle('connection:get-settings', () => getSettingsStore().getSettings());
   ipcMain.handle('connection:save-settings', (_event, input: unknown) =>
@@ -84,6 +143,22 @@ const registerIpcHandlers = () => {
     testConnection(input === undefined ? undefined : parseDesktopConnectionInput(input)),
   );
   ipcMain.handle('shell:open-external', (_event, url: string) => openExternal(url));
+  ipcMain.handle('terminal:start', (event, input: unknown) =>
+    getTerminalManager().start(parseTerminalStartInput(input), event.sender),
+  );
+  ipcMain.handle('terminal:input', (_event, demiplaneId: unknown, data: unknown) =>
+    getTerminalManager().input(parseTerminalDemiplaneId(demiplaneId), parseTerminalInputData(data)),
+  );
+  ipcMain.handle('terminal:resize', (_event, demiplaneId: unknown, cols: unknown, rows: unknown) => {
+    const size = parseTerminalResize(cols, rows);
+    return getTerminalManager().resize(parseTerminalDemiplaneId(demiplaneId), size.cols, size.rows);
+  });
+  ipcMain.handle('terminal:close', (_event, demiplaneId: unknown) =>
+    getTerminalManager().close(parseTerminalDemiplaneId(demiplaneId)),
+  );
+  ipcMain.handle('terminal:detach', (event, demiplaneId: unknown) =>
+    getTerminalManager().detach(parseTerminalDemiplaneId(demiplaneId), event.sender),
+  );
 };
 
 const createWindow = () => {
@@ -119,6 +194,11 @@ const createWindow = () => {
     event.preventDefault();
   });
 
+  const webContentsId = mainWindow.webContents.id;
+  mainWindow.webContents.on('destroyed', () => {
+    terminalManager?.detachWebContents(webContentsId);
+  });
+
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
@@ -146,4 +226,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  terminalManager?.dispose();
 });

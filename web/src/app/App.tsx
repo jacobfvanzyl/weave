@@ -1,3 +1,3 @@
-import { ChatPage } from '@weave/client/components/chat/ChatPage';
+import { WebConnectionApp } from '@weave/client/app/web-connection';
 
-export const App = () => <ChatPage />;
+export const App = () => <WebConnectionApp />;

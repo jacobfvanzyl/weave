@@ -3,14 +3,39 @@ import ReactDOM from 'react-dom/client';
 import { configureMastraConnection } from '@weave/client/lib/mastra-client';
 import './styles.css';
 
-const root = document.documentElement;
-root.dataset.theme = 'mocha';
-root.dataset.weaveWindowType = 'electron';
-root.classList.add('dark');
-root.style.colorScheme = 'dark';
+const renderRoot = (children: React.ReactNode) => {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      {children}
+    </React.StrictMode>,
+  );
+};
+
+const renderWebFallback = async () => {
+  const { Providers } = await import('@weave/client/app/providers');
+  const { WebConnectionApp } = await import('@weave/client/app/web-connection');
+
+  renderRoot(
+    <Providers>
+      <WebConnectionApp />
+    </Providers>,
+  );
+};
 
 const bootstrap = async () => {
-  const settings = await window.weaveDesktop.getConnectionSettings();
+  const desktopBridge = window.weaveDesktop;
+  if (!desktopBridge?.getConnectionSettings) {
+    await renderWebFallback();
+    return;
+  }
+
+  const root = document.documentElement;
+  root.dataset.theme = 'mocha';
+  root.dataset.weaveWindowType = 'electron';
+  root.classList.add('dark');
+  root.style.colorScheme = 'dark';
+
+  const settings = await desktopBridge.getConnectionSettings();
   configureMastraConnection({ mastraUrl: settings.mastraUrl, authToken: null });
 
   const { DesktopApp } = await import('./DesktopApp');
@@ -18,11 +43,7 @@ const bootstrap = async () => {
   useThemeStore.getState().setMode('dark');
   applyTheme('dark');
 
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-      <DesktopApp initialSettings={settings} />
-    </React.StrictMode>,
-  );
+  renderRoot(<DesktopApp initialSettings={settings} />);
 };
 
 void bootstrap();
