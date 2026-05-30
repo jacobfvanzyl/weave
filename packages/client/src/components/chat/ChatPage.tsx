@@ -189,7 +189,7 @@ export const ChatPage = () => {
                   {activeDemiplane ? (
                     <>
                       <span className="shrink-0 text-muted-foreground">/</span>
-                      <span className="min-w-0 truncate text-blue">{activeDemiplane.name}</span>
+                      <span className="min-w-0 truncate text-primary">{activeDemiplane.name}</span>
                     </>
                   ) : null}
                   {hasThreadTitle ? <span className="shrink-0 text-muted-foreground">/</span> : null}

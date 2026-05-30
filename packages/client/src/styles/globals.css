@@ -70,7 +70,7 @@
   --ring: #8839ef;
   --primary: #8839ef;
   --primary-foreground: #eff1f5;
-  --user: #8839ef;
+  --user: var(--primary);
   --user-foreground: #eff1f5;
   --selected-thread: #ccd0da;
   --success: #40a02b;
@@ -111,9 +111,9 @@
   --border: #45475a;
   --input: #45475a;
   --ring: #cba6f7;
-  --primary: #cba6f7;
+  --primary: var(--blue);
   --primary-foreground: #11111b;
-  --user: #cba6f7;
+  --user: var(--primary);
   --user-foreground: #11111b;
   --selected-thread: #45475a;
   --success: #a6e3a1;

@@ -58,11 +58,11 @@
   --border: color-mix(in srgb, #45475a 72%, transparent);
   --input: #45475a;
   --ring: #cba6f7;
-  --primary: #cba6f7;
+  --primary: var(--blue);
   --primary-foreground: #11111b;
-  --user: #cba6f7;
+  --user: var(--primary);
   --user-foreground: #11111b;
-  --selected-thread: color-mix(in srgb, #45475a 82%, #89b4fa);
+  --selected-thread: color-mix(in srgb, #45475a 82%, var(--primary));
 }
 
 :root[data-weave-window-type="electron"],
@@ -179,6 +179,10 @@
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   padding-top: var(--weave-desktop-sidebar-padding-top);
+}
+
+:root[data-weave-window-type="electron"] .weave-sidebar-section-heading {
+  background: #313244;
 }
 
 :root[data-weave-window-type="electron"] aside[data-weave-thread-sidebar][data-weave-thread-sidebar-overlay="true"] {

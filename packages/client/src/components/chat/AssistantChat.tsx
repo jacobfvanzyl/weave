@@ -731,7 +731,7 @@ const PlanPanelToggle = ({ threadId }: { threadId: string | null }) => {
       onClick={() => setShowPlanPanel(!showPlanPanel)}
       className={cn(
         'h-9 shrink-0 gap-2 px-2 text-muted-foreground hover:bg-muted hover:text-foreground',
-        showPlanPanel && 'text-blue',
+        showPlanPanel && 'text-primary',
       )}
     >
       <ListChecks size={16} />
@@ -950,7 +950,7 @@ const Composer = () => {
   };
 
   return (
-    <ComposerPrimitive.Root ref={composerRef} className="relative mx-auto w-full max-w-3xl rounded-xl border border-blue bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)]">
+    <ComposerPrimitive.Root ref={composerRef} className="relative mx-auto w-full max-w-3xl rounded-xl border border-primary bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)]">
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
       <div className="mb-3 flex flex-wrap gap-2 empty:hidden">
         <ComposerImageAttachments />
@@ -987,7 +987,7 @@ const Composer = () => {
                       'h-11 w-11 shrink-0 rounded-full',
                       isSendActive
                         ? 'border-mauve bg-mauve text-background hover:bg-mauve/90'
-                        : 'text-blue',
+                        : 'text-primary',
                     )}
                   />
                 )}
