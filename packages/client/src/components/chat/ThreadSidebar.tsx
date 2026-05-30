@@ -196,11 +196,17 @@ const SortableItem = ({
 
 type ThreadSidebarProps = {
   closeOnSelect?: boolean;
+  connectionSettingsButton?: ReactNode;
   onClose?: () => void;
   presentation?: 'inline' | 'overlay';
 };
 
-export const ThreadSidebar = ({ closeOnSelect = true, onClose, presentation = 'inline' }: ThreadSidebarProps) => {
+export const ThreadSidebar = ({
+  closeOnSelect = true,
+  connectionSettingsButton,
+  onClose,
+  presentation = 'inline',
+}: ThreadSidebarProps) => {
   const {
     resourceId,
     threadId,
@@ -848,7 +854,8 @@ export const ThreadSidebar = ({ closeOnSelect = true, onClose, presentation = 'i
         ) : null}
       </Dialog>
 
-      <div className="mt-4 flex justify-end">
+      <div className={cn('mt-4 flex items-center', connectionSettingsButton ? 'justify-start gap-1' : 'justify-end')}>
+        {connectionSettingsButton}
         <div
           className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground"
           title={`${onlinePortalCount} online Portal${onlinePortalCount === 1 ? '' : 's'}`}

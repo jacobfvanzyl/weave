@@ -162,16 +162,6 @@
   -webkit-app-region: no-drag;
 }
 
-:root[data-weave-window-type="electron"] .weave-desktop-settings-button {
-  position: fixed;
-  top: var(--weave-desktop-appbar-control-top);
-  right: 4rem;
-  z-index: 45;
-  border-color: transparent;
-  background: transparent;
-  -webkit-app-region: no-drag;
-}
-
 :root[data-weave-window-type="electron"] aside[data-weave-thread-sidebar] {
   position: relative;
   z-index: 1;

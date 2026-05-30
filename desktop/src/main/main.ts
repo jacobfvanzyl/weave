@@ -2,9 +2,11 @@ import { app, BrowserWindow, ipcMain, nativeTheme, safeStorage, session, shell }
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { DesktopConnectionInput, DesktopConnectionTestResult } from '../shared/desktop-api';
+import type { EditorTarget } from '../shared/editor';
 import type { TerminalStartInput } from '../shared/terminal';
 import { getServerOrigin, isHttpUrl, normalizeMastraUrl, parseDesktopConnectionInput } from '../shared/connection';
 import { ConnectionSettingsStore } from './settings-store';
+import { EditorManager, parseEditorListInput, parseEditorReadInput, parseEditorWriteInput } from './editor-manager';
 import {
   parseTerminalDemiplaneId,
   parseTerminalInputData,
@@ -15,6 +17,7 @@ import {
 
 let settingsStore: ConnectionSettingsStore | undefined;
 let terminalManager: TerminalManager | undefined;
+let editorManager: EditorManager | undefined;
 
 const appName = 'Weave';
 app.setName(appName);
@@ -98,7 +101,7 @@ type DemiplaneListing = {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
 
-const resolveTerminalDemiplane = async (input: TerminalStartInput) => {
+const resolveGitDemiplane = async (input: EditorTarget, featureName: string) => {
   const store = getSettingsStore();
   const settings = store.getSettings();
   const authToken = store.getAuthToken();
@@ -107,14 +110,14 @@ const resolveTerminalDemiplane = async (input: TerminalStartInput) => {
 
   if (!response.ok) {
     const error = (await response.text()).trim();
-    throw new Error(error || `Failed to load Planes for terminal: HTTP ${response.status}`);
+    throw new Error(error || `Failed to load Planes for ${featureName}: HTTP ${response.status}`);
   }
 
   const data = await response.json() as { planes?: PlaneListing[] };
   const planes = Array.isArray(data.planes) ? data.planes : [];
   const plane = planes.find(candidate => candidate.id === input.planeId);
   if (!plane) throw new Error('Plane was not found.');
-  if (plane.projectKind !== 'git') throw new Error('Terminals are only available for Git/code Planes.');
+  if (plane.projectKind !== 'git') throw new Error(`${featureName} is only available for Git/code Planes.`);
 
   const demiplanes = Array.isArray(plane.demiplanes) ? plane.demiplanes.filter(isRecord) as DemiplaneListing[] : [];
   const demiplane = demiplanes.find(candidate => candidate.id === input.demiplaneId);
@@ -126,12 +129,24 @@ const resolveTerminalDemiplane = async (input: TerminalStartInput) => {
   return { cwd: await realpath(demiplane.path) };
 };
 
+const resolveTerminalDemiplane = (input: TerminalStartInput) => resolveGitDemiplane(input, 'terminal');
+
+const resolveEditorDemiplane = (target: EditorTarget) => resolveGitDemiplane(target, 'editor');
+
 const getTerminalManager = () => {
   if (!terminalManager) {
     terminalManager = new TerminalManager({ resolveDemiplane: resolveTerminalDemiplane });
   }
 
   return terminalManager;
+};
+
+const getEditorManager = () => {
+  if (!editorManager) {
+    editorManager = new EditorManager({ resolveDemiplane: resolveEditorDemiplane });
+  }
+
+  return editorManager;
 };
 
 const registerIpcHandlers = () => {
@@ -158,6 +173,15 @@ const registerIpcHandlers = () => {
   );
   ipcMain.handle('terminal:detach', (event, demiplaneId: unknown) =>
     getTerminalManager().detach(parseTerminalDemiplaneId(demiplaneId), event.sender),
+  );
+  ipcMain.handle('editor:list', (_event, input: unknown) =>
+    getEditorManager().list(parseEditorListInput(input)),
+  );
+  ipcMain.handle('editor:read', (_event, input: unknown) =>
+    getEditorManager().read(parseEditorReadInput(input)),
+  );
+  ipcMain.handle('editor:write', (_event, input: unknown) =>
+    getEditorManager().write(parseEditorWriteInput(input)),
   );
 };
 

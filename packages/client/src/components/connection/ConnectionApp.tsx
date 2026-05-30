@@ -24,7 +24,7 @@ type ConnectionAppProps = {
   shellClassName?: string;
   settingsButtonClassName?: string;
   tokenStorageDescription?: string;
-  renderConnected?: () => ReactNode;
+  renderConnected?: (settingsButton: ReactNode) => ReactNode;
 };
 
 export const ConnectionApp = ({
@@ -130,19 +130,27 @@ export const ConnectionApp = ({
     return <ConnectionScreen {...connectionProps} />;
   }
 
+  const settingsButton = (
+    <Button
+      aria-label="Connection settings"
+      className={settingsButtonClassName}
+      size="icon"
+      variant="ghost"
+      onClick={() => setSettingsOpen(true)}
+    >
+      <ServerCog size={17} />
+    </Button>
+  );
+
   return (
     <>
       <div className={shellClassName}>
-        {renderConnected?.() ?? <ChatPage />}
-        <Button
-          aria-label="Connection settings"
-          className={settingsButtonClassName}
-          size="icon"
-          variant="ghost"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <ServerCog size={17} />
-        </Button>
+        {renderConnected?.(settingsButton) ?? (
+          <>
+            <ChatPage />
+            {settingsButton}
+          </>
+        )}
       </div>
       <ConnectionDialog
         {...connectionProps}

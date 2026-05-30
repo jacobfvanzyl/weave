@@ -1,7 +1,8 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { PanelLeft, Settings, TerminalSquare } from 'lucide-react';
+import { Code2, PanelLeft, Settings, TerminalSquare } from 'lucide-react';
 import { listPlanes, listServerThreads } from '../../lib/chat-state-api';
+import { isEditorBackendAvailable } from '../../lib/editor-backend';
 import { isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useChatStore } from '../../stores/chat-store';
 import { Button } from '../ui/button';
@@ -11,6 +12,7 @@ import { PlanSidebar } from './PlanSidebar';
 import { ThreadSidebar } from './ThreadSidebar';
 
 const TerminalPanel = lazy(() => import('./TerminalPanel').then(module => ({ default: module.TerminalPanel })));
+const EditorPanel = lazy(() => import('./EditorPanel').then(module => ({ default: module.EditorPanel })));
 
 const isMobilePortraitNow = () => window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
 const isElectronWindowNow = () =>
@@ -31,7 +33,11 @@ const useIsMobilePortrait = () => {
   return isMobilePortrait;
 };
 
-export const ChatPage = () => {
+type ChatPageProps = {
+  connectionSettingsButton?: ReactNode;
+};
+
+export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const resourceId = useChatStore(state => state.resourceId);
   const threadId = useChatStore(state => state.threadId);
   const threads = useChatStore(state => state.threads);
@@ -44,6 +50,8 @@ export const ChatPage = () => {
   const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isTerminalExpanded, setIsTerminalExpanded] = useState(false);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [isEditorExpanded, setIsEditorExpanded] = useState(false);
   const [activeTerminalDemiplaneIds, setActiveTerminalDemiplaneIds] = useState<Set<string>>(() => new Set());
   const sidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
   const showToolCalls = useChatStore(state => state.showToolCalls);
@@ -64,16 +72,19 @@ export const ChatPage = () => {
   const activeDemiplane = activeThread?.demiplaneId
     ? activePlane?.demiplanes.find(demiplane => demiplane.id === activeThread.demiplaneId)
     : undefined;
-  const terminalTarget = isElectronWindow
-    && isDesktopTerminalTransportAvailable()
-    && activePlane?.projectKind === 'git'
-    && activeDemiplane
+  const activeGitDemiplaneTarget = activePlane?.projectKind === 'git' && activeDemiplane
     ? {
         planeId: activePlane.id,
         demiplaneId: activeDemiplane.id,
         planeName: activePlane.name,
         demiplaneName: activeDemiplane.name,
       }
+    : undefined;
+  const terminalTarget = isElectronWindow && isDesktopTerminalTransportAvailable()
+    ? activeGitDemiplaneTarget
+    : undefined;
+  const editorTarget = isElectronWindow && isEditorBackendAvailable()
+    ? activeGitDemiplaneTarget
     : undefined;
   const terminalDemiplaneId = terminalTarget?.demiplaneId;
   const hasActiveTerminal = terminalDemiplaneId ? activeTerminalDemiplaneIds.has(terminalDemiplaneId) : false;
@@ -105,6 +116,13 @@ export const ChatPage = () => {
       setIsTerminalOpen(false);
     }
   }, [terminalTarget?.demiplaneId]);
+
+  useEffect(() => {
+    setIsEditorExpanded(false);
+    if (!editorTarget) {
+      setIsEditorOpen(false);
+    }
+  }, [editorTarget?.demiplaneId]);
 
   useEffect(() => () => {
     if (sidebarPreviewCloseTimeoutRef.current !== undefined) {
@@ -149,12 +167,34 @@ export const ChatPage = () => {
 
   const toggleTerminal = useCallback(() => {
     if (isTerminalOpen) setIsTerminalExpanded(false);
+    setIsEditorExpanded(false);
     setIsTerminalOpen(open => !open);
   }, [isTerminalOpen]);
 
   const hideTerminal = useCallback(() => {
     setIsTerminalOpen(false);
     setIsTerminalExpanded(false);
+  }, []);
+
+  const toggleEditor = useCallback(() => {
+    if (isEditorOpen) setIsEditorExpanded(false);
+    setIsTerminalExpanded(false);
+    setIsEditorOpen(open => !open);
+  }, [isEditorOpen]);
+
+  const hideEditor = useCallback(() => {
+    setIsEditorOpen(false);
+    setIsEditorExpanded(false);
+  }, []);
+
+  const handleTerminalExpandedChange = useCallback((nextExpanded: boolean) => {
+    setIsTerminalExpanded(nextExpanded);
+    if (nextExpanded) setIsEditorExpanded(false);
+  }, []);
+
+  const handleEditorExpandedChange = useCallback((nextExpanded: boolean) => {
+    setIsEditorExpanded(nextExpanded);
+    if (nextExpanded) setIsTerminalExpanded(false);
   }, []);
 
   const handleTerminalSessionActiveChange = useCallback((isActive: boolean) => {
@@ -193,7 +233,11 @@ export const ChatPage = () => {
               <PanelLeft size={18} />
             </Button>
           ) : null}
-          <ThreadSidebar closeOnSelect={isMobilePortrait} onClose={() => setIsSidebarOpen(false)} />
+          <ThreadSidebar
+            closeOnSelect={isMobilePortrait}
+            connectionSettingsButton={connectionSettingsButton}
+            onClose={() => setIsSidebarOpen(false)}
+          />
         </>
       ) : null}
       {showSidebarPreview ? (
@@ -211,7 +255,12 @@ export const ChatPage = () => {
           >
             <PanelLeft size={18} />
           </Button>
-          <ThreadSidebar presentation="overlay" closeOnSelect onClose={closeSidebarPreview} />
+          <ThreadSidebar
+            presentation="overlay"
+            closeOnSelect
+            connectionSettingsButton={connectionSettingsButton}
+            onClose={closeSidebarPreview}
+          />
         </div>
       ) : null}
       <main
@@ -250,43 +299,55 @@ export const ChatPage = () => {
               {hasThreadTitle ? <span className="min-w-0 truncate text-foreground">{activeThread?.title}</span> : null}
             </h2>
           ) : null}
-          {terminalTarget ? (
-            <Button
-              className={[
-                'absolute right-28',
-                isTerminalOpen ? 'bg-accent' : '',
-                hasActiveTerminal ? 'text-mauve' : '',
-              ].filter(Boolean).join(' ')}
-              size="icon"
-              variant="ghost"
-              aria-label={isTerminalOpen ? 'Hide terminal' : 'Show terminal'}
-              data-active={isTerminalOpen ? 'true' : 'false'}
-              onClick={toggleTerminal}
-            >
-              <TerminalSquare size={18} />
-            </Button>
-          ) : null}
-          <Menu>
-            <MenuTrigger
-              className="absolute right-4"
-              render={<Button size="icon" variant="ghost" aria-label="Chat settings" />}
-            >
-              <Settings size={18} />
-            </MenuTrigger>
-            <MenuPopup align="end" sideOffset={8} className="w-56">
-              <MenuCheckboxItem
-                checked={showToolCalls}
-                variant="switch"
-                onCheckedChange={checked => setShowToolCalls(checked)}
+          <div className="absolute right-4 flex items-center gap-3">
+            {terminalTarget ? (
+              <Button
+                className={[
+                  isTerminalOpen ? 'bg-accent' : '',
+                  hasActiveTerminal ? 'text-mauve' : '',
+                ].filter(Boolean).join(' ')}
+                size="icon"
+                variant="ghost"
+                aria-label={isTerminalOpen ? 'Hide terminal' : 'Show terminal'}
+                data-active={isTerminalOpen ? 'true' : 'false'}
+                onClick={toggleTerminal}
               >
-                Show tool calls
-              </MenuCheckboxItem>
-            </MenuPopup>
-          </Menu>
+                <TerminalSquare size={18} />
+              </Button>
+            ) : null}
+            {editorTarget ? (
+              <Button
+                className={isEditorOpen ? 'bg-accent' : ''}
+                size="icon"
+                variant="ghost"
+                aria-label={isEditorOpen ? 'Hide editor' : 'Show editor'}
+                data-active={isEditorOpen ? 'true' : 'false'}
+                onClick={toggleEditor}
+              >
+                <Code2 size={18} />
+              </Button>
+            ) : null}
+            <Menu>
+              <MenuTrigger
+                render={<Button size="icon" variant="ghost" aria-label="Chat settings" />}
+              >
+                <Settings size={18} />
+              </MenuTrigger>
+              <MenuPopup align="end" sideOffset={8} className="w-56">
+                <MenuCheckboxItem
+                  checked={showToolCalls}
+                  variant="switch"
+                  onCheckedChange={checked => setShowToolCalls(checked)}
+                >
+                  Show tool calls
+                </MenuCheckboxItem>
+              </MenuPopup>
+            </Menu>
+          </div>
         </header>
         <div className="flex min-h-0 flex-1">
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className={isTerminalExpanded ? 'relative h-0 min-h-0 flex-none overflow-hidden' : 'relative min-h-0 flex-1 overflow-hidden'}>
+            <div className={isTerminalExpanded || isEditorExpanded ? 'relative h-0 min-h-0 flex-none overflow-hidden' : 'relative min-h-0 flex-1 overflow-hidden'}>
               {threads
                 .filter(thread => thread.id === threadId || runningThreadIds.includes(thread.id))
                 .map(thread => (
@@ -302,10 +363,20 @@ export const ChatPage = () => {
               <Suspense fallback={null}>
                 <TerminalPanel
                   isExpanded={isTerminalExpanded}
-                  onExpandedChange={setIsTerminalExpanded}
+                  onExpandedChange={handleTerminalExpandedChange}
                   onSessionActiveChange={handleTerminalSessionActiveChange}
                   target={terminalTarget}
                   onHide={hideTerminal}
+                />
+              </Suspense>
+            ) : null}
+            {isEditorOpen && editorTarget ? (
+              <Suspense fallback={null}>
+                <EditorPanel
+                  isExpanded={isEditorExpanded}
+                  onExpandedChange={handleEditorExpandedChange}
+                  target={editorTarget}
+                  onHide={hideEditor}
                 />
               </Suspense>
             ) : null}

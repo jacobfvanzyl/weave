@@ -5,6 +5,7 @@ import type {
   DesktopConnectionTestResult,
   WeaveDesktopBridge,
 } from '../shared/desktop-api';
+import type { EditorFile, EditorListResult, EditorTarget, EditorWriteResult } from '../shared/editor';
 import type { TerminalHostEvent, TerminalStartInput, TerminalStartResult } from '../shared/terminal';
 
 const bridge: WeaveDesktopBridge = {
@@ -30,6 +31,12 @@ const bridge: WeaveDesktopBridge = {
     ipcRenderer.on('terminal:event', wrappedListener);
     return () => ipcRenderer.removeListener('terminal:event', wrappedListener);
   },
+  editorList: (target: EditorTarget, path?: string) =>
+    ipcRenderer.invoke('editor:list', { target, path }) as Promise<EditorListResult>,
+  editorRead: (target: EditorTarget, path: string) =>
+    ipcRenderer.invoke('editor:read', { target, path }) as Promise<EditorFile>,
+  editorWrite: (target: EditorTarget, path: string, content: string, version?: string) =>
+    ipcRenderer.invoke('editor:write', { target, path, content, version }) as Promise<EditorWriteResult>,
 };
 
 contextBridge.exposeInMainWorld('weaveDesktop', bridge);
