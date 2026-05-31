@@ -6,6 +6,7 @@ export type ShortcutCommandId =
   | 'chat.focus'
   | 'thread.new'
   | 'plan.toggle'
+  | 'terminal.globalToggle'
   | 'terminal.toggle'
   | 'terminal.expandToggle'
   | 'editor.toggle'

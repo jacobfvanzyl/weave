@@ -36,6 +36,12 @@ export const defaultShortcutBindings = [
     reservedGlobal: true,
   },
   {
+    commandId: 'terminal.globalToggle',
+    kind: 'leader',
+    sequence: [key(';')],
+    reservedGlobal: true,
+  },
+  {
     commandId: 'terminal.toggle',
     kind: 'leader',
     sequence: [key('t')],

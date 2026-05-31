@@ -589,8 +589,19 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       run: () => setShowPlanPanel(!showPlanPanel),
     },
     {
+      id: 'terminal.globalToggle',
+      label: 'Toggle global terminal',
+      surface: 'terminal',
+      isEnabled: () => hasGeneralTerminalTarget,
+      run: () => {
+        const shouldFocusAfterOpen = !isGeneralTerminalOpen;
+        toggleGeneralTerminal();
+        if (shouldFocusAfterOpen) window.requestAnimationFrame(focusGeneralTerminal);
+      },
+    },
+    {
       id: 'terminal.toggle',
-      label: 'Toggle terminal',
+      label: 'Toggle terminal pane',
       surface: 'terminal',
       isEnabled: () => hasTerminalTarget,
       run: () => {
@@ -601,7 +612,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     },
     {
       id: 'terminal.expandToggle',
-      label: 'Expand terminal',
+      label: 'Expand terminal pane',
       surface: 'terminal',
       isEnabled: () => hasTerminalTarget,
       run: () => {
@@ -611,7 +622,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     },
     {
       id: 'editor.toggle',
-      label: 'Toggle editor',
+      label: 'Toggle editor pane',
       surface: 'editor',
       isEnabled: () => hasEditorTarget,
       run: () => {
@@ -622,7 +633,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     },
     {
       id: 'editor.expandToggle',
-      label: 'Expand editor',
+      label: 'Expand editor pane',
       surface: 'editor',
       isEnabled: () => hasEditorTarget,
       run: () => {
@@ -634,11 +645,14 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     createThreadFromShortcut,
     focusChat,
     focusEditor,
+    focusGeneralTerminal,
     focusSidebar,
     focusTerminal,
     hasEditorTarget,
+    hasGeneralTerminalTarget,
     hasTerminalTarget,
     isEditorOpen,
+    isGeneralTerminalOpen,
     isSidebarOpen,
     isTerminalOpen,
     setShowPlanPanel,
@@ -646,6 +660,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     showSidebarPreview,
     toggleEditor,
     toggleEditorExpanded,
+    toggleGeneralTerminal,
     toggleSidebar,
     toggleTerminal,
     toggleTerminalExpanded,

@@ -102,6 +102,17 @@ describe('shortcut matching', () => {
     expect(findDirectShortcutBinding(bindings, event, contextFor(event))).toBeUndefined();
   });
 
+  it('matches leader semicolon for the global terminal inside text-heavy surfaces', () => {
+    const textTarget = makeTarget({ surface: 'chat', text: true });
+    const textEvent = makeKeyEvent({ key: ';', code: 'Semicolon', target: textTarget });
+
+    expect(findDirectShortcutBinding(defaultShortcutBindings, textEvent, contextFor(textEvent))).toBeUndefined();
+    expect(findLeaderShortcutBinding(defaultShortcutBindings, [textEvent], contextFor(textEvent))).toEqual({
+      type: 'exact',
+      binding: expect.objectContaining({ commandId: 'terminal.globalToggle' }),
+    });
+  });
+
   it('matches leader sequences', () => {
     const terminalToggle = makeKeyEvent({ key: 't' });
     const terminalExpand = makeKeyEvent({ key: 'T', shiftKey: true });

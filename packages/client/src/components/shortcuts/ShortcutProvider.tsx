@@ -66,6 +66,7 @@ const shortcutBindingSortValue = (binding: ShortcutBinding) => {
   if (binding.commandId === 'chat.focus') return 20;
   if (binding.commandId === 'thread.new') return 30;
   if (binding.commandId === 'plan.toggle') return 40;
+  if (binding.commandId === 'terminal.globalToggle') return 45;
   if (binding.commandId === 'terminal.toggle') return 50;
   if (binding.commandId === 'terminal.expandToggle') return 60;
   if (binding.commandId === 'editor.toggle') return 70;
