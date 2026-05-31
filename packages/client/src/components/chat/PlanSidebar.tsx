@@ -28,6 +28,7 @@ export const PlanSidebar = ({ plan }: { plan?: ThreadPlan }) => {
     <aside
       className="pointer-events-auto absolute right-4 top-4 z-20 hidden max-h-[min(70dvh,calc(100%_-_2rem))] w-80 min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card/95 shadow-lg backdrop-blur md:flex"
       data-weave-plan-card
+      data-weave-surface="plan"
     >
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">Plan</h2>

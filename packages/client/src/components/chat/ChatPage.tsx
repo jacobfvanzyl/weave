@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, PanelLeft, Settings, TerminalSquare } from 'lucide-react';
 import { listPlanes, listServerThreads } from '../../lib/chat-state-api';
 import { isEditorBackendAvailable } from '../../lib/editor-backend';
@@ -7,6 +7,8 @@ import { isDesktopTerminalTransportAvailable } from '../../lib/terminal-transpor
 import { useChatStore } from '../../stores/chat-store';
 import { Button } from '../ui/button';
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
+import { ShortcutProvider } from '../shortcuts';
+import type { ShortcutCommand } from '../../lib/shortcuts';
 import { AssistantChat } from './AssistantChat';
 import { PlanSidebar } from './PlanSidebar';
 import { ThreadSidebar } from './ThreadSidebar';
@@ -58,28 +60,33 @@ type ChatPageProps = {
   connectionSettingsButton?: ReactNode;
 };
 
-export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
-  const resourceId = useChatStore(state => state.resourceId);
-  const threadId = useChatStore(state => state.threadId);
-  const threads = useChatStore(state => state.threads);
-  const activePlan = useChatStore(state => state.threadPlans[threadId]);
-  const showPlanPanel = useChatStore(state => state.showPlanPanel);
-  const runningThreadIds = useChatStore(state => state.runningThreadIds);
-  const setServerThreads = useChatStore(state => state.setServerThreads);
-  const newThread = useChatStore(state => state.newThread);
-  const [pageRef, pageWidth] = useMeasuredElementWidth();
+type WindowSurfacesInput = {
+  activeThreadId?: string;
+  editorTargetKey?: string;
+  isElectronWindow: boolean;
+  isMobilePortrait: boolean;
+  pageWidth: number;
+  terminalDemiplaneId?: string;
+};
+
+const useWindowSurfaces = ({
+  activeThreadId,
+  editorTargetKey,
+  isElectronWindow,
+  isMobilePortrait,
+  pageWidth,
+  terminalDemiplaneId,
+}: WindowSurfacesInput) => {
   const [isSidebarPinnedOpen, setIsSidebarPinnedOpen] = useState(() => !isMobilePortraitNow());
   const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isTerminalExpanded, setIsTerminalExpanded] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isEditorExpanded, setIsEditorExpanded] = useState(false);
+  const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
+  const [editorFocusRequest, setEditorFocusRequest] = useState(0);
   const [activeTerminalDemiplaneIds, setActiveTerminalDemiplaneIds] = useState<Set<string>>(() => new Set());
   const sidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
-  const showToolCalls = useChatStore(state => state.showToolCalls);
-  const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
-  const isMobilePortrait = useIsMobilePortrait();
-  const isElectronWindow = isElectronWindowNow();
   const workspaceWidthWithPinnedSidebar = Math.max(0, pageWidth - threadSidebarWidthPx);
   const chatWidthWithPinnedSidebar = isEditorOpen
     ? workspaceWidthWithPinnedSidebar / 2
@@ -93,49 +100,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const showSidebarPreview = canPreviewSidebar && isSidebarPreviewOpen;
   const showPinnedSidebarToggle = isElectronWindow && !isMobilePortrait && isSidebarOpen;
   const showHeaderSidebarToggle = !isElectronWindow || !isSidebarOpen;
-  const activeThread = threads.find(thread => thread.id === threadId);
-  const hasThreadTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
-  const { data: planes = [] } = useQuery({
-    queryKey: ['planes', resourceId],
-    queryFn: () => listPlanes(),
-  });
-  const activePlane = activeThread?.planeId ? planes.find(plane => plane.id === activeThread.planeId) : undefined;
-  const activeDemiplane = activeThread?.demiplaneId
-    ? activePlane?.demiplanes.find(demiplane => demiplane.id === activeThread.demiplaneId)
-    : undefined;
-  const activeGitDemiplaneTarget = activePlane?.projectKind === 'git' && activeDemiplane
-    ? {
-        planeId: activePlane.id,
-        demiplaneId: activeDemiplane.id,
-        planeName: activePlane.name,
-        demiplaneName: activeDemiplane.name,
-      }
-    : undefined;
-  const terminalTarget = isElectronWindow && isDesktopTerminalTransportAvailable()
-    ? activeGitDemiplaneTarget
-    : undefined;
-  const editorTarget = isElectronWindow && isEditorBackendAvailable()
-    ? activeGitDemiplaneTarget
-    : undefined;
-  const terminalDemiplaneId = terminalTarget?.demiplaneId;
+  const hasTerminalTarget = Boolean(terminalDemiplaneId);
+  const hasEditorTarget = Boolean(editorTargetKey);
   const hasActiveTerminal = terminalDemiplaneId ? activeTerminalDemiplaneIds.has(terminalDemiplaneId) : false;
-  const { data: serverThreads = [], isFetched } = useQuery({
-    queryKey: ['threads', resourceId],
-    queryFn: () => listServerThreads(),
-  });
 
   useEffect(() => {
-    if (serverThreads.length > 0) {
-      setServerThreads(serverThreads);
-      return;
-    }
-
-    if (isFetched && serverThreads.length === 0 && threads.length === 0) void newThread();
-  }, [isFetched, newThread, serverThreads, setServerThreads, threads.length]);
-
-  useEffect(() => {
-    if (isMobilePortrait && activeThread) setIsSidebarPinnedOpen(false);
-  }, [activeThread, isMobilePortrait]);
+    if (isMobilePortrait && activeThreadId) setIsSidebarPinnedOpen(false);
+  }, [activeThreadId, isMobilePortrait]);
 
   useEffect(() => {
     if (isSidebarOpen || isMobilePortrait) setIsSidebarPreviewOpen(false);
@@ -143,17 +114,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
 
   useEffect(() => {
     setIsTerminalExpanded(false);
-    if (!terminalTarget) {
-      setIsTerminalOpen(false);
-    }
-  }, [terminalTarget?.demiplaneId]);
+    if (!hasTerminalTarget) setIsTerminalOpen(false);
+  }, [hasTerminalTarget, terminalDemiplaneId]);
 
   useEffect(() => {
     setIsEditorExpanded(false);
-    if (!editorTarget) {
-      setIsEditorOpen(false);
-    }
-  }, [editorTarget?.demiplaneId]);
+    if (!hasEditorTarget) setIsEditorOpen(false);
+  }, [editorTargetKey, hasEditorTarget]);
 
   useEffect(() => () => {
     if (sidebarPreviewCloseTimeoutRef.current !== undefined) {
@@ -210,27 +177,59 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     setIsSidebarPinnedOpen(true);
   }, [clearSidebarPreviewCloseTimeout, wouldAutoHideSidebarIfPinned]);
 
+  const closeSidebar = useCallback(() => {
+    setIsSidebarPinnedOpen(false);
+  }, []);
+
   const toggleTerminal = useCallback(() => {
+    if (!hasTerminalTarget) return;
     if (isTerminalOpen) setIsTerminalExpanded(false);
     setIsEditorExpanded(false);
     setIsTerminalOpen(open => !open);
-  }, [isTerminalOpen]);
+  }, [hasTerminalTarget, isTerminalOpen]);
 
   const hideTerminal = useCallback(() => {
     setIsTerminalOpen(false);
     setIsTerminalExpanded(false);
   }, []);
 
+  const toggleTerminalExpanded = useCallback(() => {
+    if (!hasTerminalTarget) return;
+    setIsEditorExpanded(false);
+    setIsTerminalOpen(true);
+    setIsTerminalExpanded(expanded => !expanded);
+  }, [hasTerminalTarget]);
+
+  const focusTerminal = useCallback(() => {
+    if (!hasTerminalTarget) return;
+    setIsTerminalOpen(true);
+    setTerminalFocusRequest(request => request + 1);
+  }, [hasTerminalTarget]);
+
   const toggleEditor = useCallback(() => {
+    if (!hasEditorTarget) return;
     if (isEditorOpen) setIsEditorExpanded(false);
     setIsTerminalExpanded(false);
     setIsEditorOpen(open => !open);
-  }, [isEditorOpen]);
+  }, [hasEditorTarget, isEditorOpen]);
 
   const hideEditor = useCallback(() => {
     setIsEditorOpen(false);
     setIsEditorExpanded(false);
   }, []);
+
+  const toggleEditorExpanded = useCallback(() => {
+    if (!hasEditorTarget) return;
+    setIsTerminalExpanded(false);
+    setIsEditorOpen(true);
+    setIsEditorExpanded(expanded => !expanded);
+  }, [hasEditorTarget]);
+
+  const focusEditor = useCallback(() => {
+    if (!hasEditorTarget) return;
+    setIsEditorOpen(true);
+    setEditorFocusRequest(request => request + 1);
+  }, [hasEditorTarget]);
 
   const handleTerminalExpandedChange = useCallback((nextExpanded: boolean) => {
     setIsTerminalExpanded(nextExpanded);
@@ -258,14 +257,274 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     });
   }, [terminalDemiplaneId]);
 
+  return {
+    closeSidebar,
+    closeSidebarPreview,
+    editorFocusRequest,
+    focusEditor,
+    focusTerminal,
+    handleEditorExpandedChange,
+    handleTerminalExpandedChange,
+    handleTerminalSessionActiveChange,
+    hasActiveTerminal,
+    hasEditorTarget,
+    hasTerminalTarget,
+    hideEditor,
+    hideTerminal,
+    isEditorExpanded,
+    isEditorOpen,
+    isSidebarAutoHidden,
+    isSidebarOpen,
+    isSidebarPinnedOpen,
+    isTerminalExpanded,
+    isTerminalOpen,
+    openSidebar,
+    openSidebarPreview,
+    scheduleSidebarPreviewClose,
+    shouldClampChatPaneForEditor,
+    showHeaderSidebarToggle,
+    showPinnedSidebarToggle,
+    showSidebarPreview,
+    terminalFocusRequest,
+    toggleEditor,
+    toggleEditorExpanded,
+    toggleSidebar,
+    toggleTerminal,
+    toggleTerminalExpanded,
+  };
+};
+
+export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
+  const resourceId = useChatStore(state => state.resourceId);
+  const threadId = useChatStore(state => state.threadId);
+  const threads = useChatStore(state => state.threads);
+  const activePlan = useChatStore(state => state.threadPlans[threadId]);
+  const showPlanPanel = useChatStore(state => state.showPlanPanel);
+  const runningThreadIds = useChatStore(state => state.runningThreadIds);
+  const setServerThreads = useChatStore(state => state.setServerThreads);
+  const newThread = useChatStore(state => state.newThread);
+  const setShowPlanPanel = useChatStore(state => state.setShowPlanPanel);
+  const queryClient = useQueryClient();
+  const [pageRef, pageWidth] = useMeasuredElementWidth();
+  const sidebarSurfaceRef = useRef<HTMLElement | null>(null);
+  const chatSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const showToolCalls = useChatStore(state => state.showToolCalls);
+  const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
+  const isMobilePortrait = useIsMobilePortrait();
+  const isElectronWindow = isElectronWindowNow();
+  const activeThread = threads.find(thread => thread.id === threadId);
+  const hasThreadTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
+  const { data: planes = [] } = useQuery({
+    queryKey: ['planes', resourceId],
+    queryFn: () => listPlanes(),
+  });
+  const activePlane = activeThread?.planeId ? planes.find(plane => plane.id === activeThread.planeId) : undefined;
+  const activeDemiplane = activeThread?.demiplaneId
+    ? activePlane?.demiplanes.find(demiplane => demiplane.id === activeThread.demiplaneId)
+    : undefined;
+  const activeGitDemiplaneTarget = activePlane?.projectKind === 'git' && activeDemiplane
+    ? {
+        planeId: activePlane.id,
+        demiplaneId: activeDemiplane.id,
+        planeName: activePlane.name,
+        demiplaneName: activeDemiplane.name,
+      }
+    : undefined;
+  const terminalTarget = isElectronWindow && isDesktopTerminalTransportAvailable()
+    ? activeGitDemiplaneTarget
+    : undefined;
+  const editorTarget = isElectronWindow && isEditorBackendAvailable()
+    ? activeGitDemiplaneTarget
+    : undefined;
+  const terminalDemiplaneId = terminalTarget?.demiplaneId;
+  const windowSurfaces = useWindowSurfaces({
+    activeThreadId: activeThread?.id,
+    editorTargetKey: editorTarget?.demiplaneId,
+    isElectronWindow,
+    isMobilePortrait,
+    pageWidth,
+    terminalDemiplaneId,
+  });
+  const {
+    closeSidebar,
+    closeSidebarPreview,
+    editorFocusRequest,
+    focusEditor,
+    focusTerminal,
+    handleEditorExpandedChange,
+    handleTerminalExpandedChange,
+    handleTerminalSessionActiveChange,
+    hasActiveTerminal,
+    hasEditorTarget,
+    hasTerminalTarget,
+    hideEditor,
+    hideTerminal,
+    isEditorExpanded,
+    isEditorOpen,
+    isSidebarAutoHidden,
+    isSidebarOpen,
+    isSidebarPinnedOpen,
+    isTerminalExpanded,
+    isTerminalOpen,
+    openSidebar,
+    openSidebarPreview,
+    scheduleSidebarPreviewClose,
+    shouldClampChatPaneForEditor,
+    showHeaderSidebarToggle,
+    showPinnedSidebarToggle,
+    showSidebarPreview,
+    terminalFocusRequest,
+    toggleEditor,
+    toggleEditorExpanded,
+    toggleSidebar,
+    toggleTerminal,
+    toggleTerminalExpanded,
+  } = windowSurfaces;
+  const { data: serverThreads = [], isFetched } = useQuery({
+    queryKey: ['threads', resourceId],
+    queryFn: () => listServerThreads(),
+  });
+
+  useEffect(() => {
+    if (serverThreads.length > 0) {
+      setServerThreads(serverThreads);
+      return;
+    }
+
+    if (isFetched && serverThreads.length === 0 && threads.length === 0) void newThread();
+  }, [isFetched, newThread, serverThreads, setServerThreads, threads.length]);
+
+  const focusSidebar = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const sidebar = sidebarSurfaceRef.current;
+      const firstControl = sidebar?.querySelector<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+      (firstControl ?? sidebar)?.focus();
+    });
+  }, []);
+
+  const focusChat = useCallback(() => {
+    handleTerminalExpandedChange(false);
+    handleEditorExpandedChange(false);
+    window.requestAnimationFrame(() => {
+      chatSurfaceRef.current
+        ?.querySelector<HTMLTextAreaElement>('[data-weave-active-thread="true"] textarea:not([disabled])')
+        ?.focus();
+    });
+  }, [handleEditorExpandedChange, handleTerminalExpandedChange]);
+
+  const createThreadFromShortcut = useCallback(() => {
+    void newThread()
+      .then(() => queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }))
+      .then(() => focusChat());
+  }, [focusChat, newThread, queryClient, resourceId]);
+
+  const shortcutCommands = useMemo<ShortcutCommand[]>(() => [
+    {
+      id: 'shortcuts.open',
+      label: 'Open shortcuts',
+      surface: 'app',
+      run: () => undefined,
+    },
+    {
+      id: 'sidebar.toggle',
+      label: 'Toggle sidebar',
+      surface: 'sidebar',
+      run: () => {
+        const shouldFocusAfterOpen = !isSidebarOpen && !showSidebarPreview;
+        toggleSidebar();
+        if (shouldFocusAfterOpen) focusSidebar();
+      },
+    },
+    {
+      id: 'chat.focus',
+      label: 'Focus chat',
+      surface: 'chat',
+      run: focusChat,
+    },
+    {
+      id: 'thread.new',
+      label: 'New thread',
+      surface: 'chat',
+      run: createThreadFromShortcut,
+    },
+    {
+      id: 'plan.toggle',
+      label: 'Toggle plan',
+      surface: 'plan',
+      run: () => setShowPlanPanel(!showPlanPanel),
+    },
+    {
+      id: 'terminal.toggle',
+      label: 'Toggle terminal',
+      surface: 'terminal',
+      isEnabled: () => hasTerminalTarget,
+      run: () => {
+        const shouldFocusAfterOpen = !isTerminalOpen;
+        toggleTerminal();
+        if (shouldFocusAfterOpen) window.requestAnimationFrame(focusTerminal);
+      },
+    },
+    {
+      id: 'terminal.expandToggle',
+      label: 'Expand terminal',
+      surface: 'terminal',
+      isEnabled: () => hasTerminalTarget,
+      run: () => {
+        toggleTerminalExpanded();
+        window.requestAnimationFrame(focusTerminal);
+      },
+    },
+    {
+      id: 'editor.toggle',
+      label: 'Toggle editor',
+      surface: 'editor',
+      isEnabled: () => hasEditorTarget,
+      run: () => {
+        const shouldFocusAfterOpen = !isEditorOpen;
+        toggleEditor();
+        if (shouldFocusAfterOpen) window.requestAnimationFrame(focusEditor);
+      },
+    },
+    {
+      id: 'editor.expandToggle',
+      label: 'Expand editor',
+      surface: 'editor',
+      isEnabled: () => hasEditorTarget,
+      run: () => {
+        toggleEditorExpanded();
+        window.requestAnimationFrame(focusEditor);
+      },
+    },
+  ], [
+    createThreadFromShortcut,
+    focusChat,
+    focusEditor,
+    focusSidebar,
+    focusTerminal,
+    hasEditorTarget,
+    hasTerminalTarget,
+    isEditorOpen,
+    isSidebarOpen,
+    isTerminalOpen,
+    setShowPlanPanel,
+    showPlanPanel,
+    showSidebarPreview,
+    toggleEditor,
+    toggleEditorExpanded,
+    toggleSidebar,
+    toggleTerminal,
+    toggleTerminalExpanded,
+  ]);
+
   return (
-    <div ref={pageRef} className="flex h-dvh overflow-hidden">
+    <ShortcutProvider commands={shortcutCommands}>
+      <div ref={pageRef} className="flex h-dvh overflow-hidden" data-weave-surface="app">
       {isSidebarOpen ? (
         <>
           <button
             className="fixed inset-0 z-30 bg-background/80 md:hidden"
             aria-label="Close sidebar"
-            onClick={() => setIsSidebarPinnedOpen(false)}
+            onClick={closeSidebar}
           />
           {showPinnedSidebarToggle ? (
             <Button
@@ -279,9 +538,10 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             </Button>
           ) : null}
           <ThreadSidebar
+            ref={sidebarSurfaceRef}
             closeOnSelect={isMobilePortrait}
             connectionSettingsButton={connectionSettingsButton}
-            onClose={() => setIsSidebarPinnedOpen(false)}
+            onClose={closeSidebar}
           />
         </>
       ) : null}
@@ -301,6 +561,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             <PanelLeft size={18} />
           </Button>
           <ThreadSidebar
+            ref={sidebarSurfaceRef}
             presentation="overlay"
             closeOnSelect
             connectionSettingsButton={connectionSettingsButton}
@@ -402,10 +663,12 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'}
           >
             <div
+              ref={chatSurfaceRef}
               className={isTerminalExpanded
                 ? 'relative h-0 min-h-0 flex-none overflow-hidden'
                 : 'relative min-h-0 flex-1 overflow-hidden'}
               data-weave-chat-pane
+              data-weave-surface="chat"
             >
               {threads
                 .filter(thread => thread.id === threadId || runningThreadIds.includes(thread.id))
@@ -413,6 +676,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                   <div
                     key={thread.id}
                     className={thread.id === threadId ? 'absolute inset-0' : 'absolute inset-0 hidden'}
+                    data-weave-active-thread={thread.id === threadId ? 'true' : 'false'}
                   >
                     <AssistantChat threadId={thread.id} />
                   </div>
@@ -422,6 +686,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             {isTerminalOpen && terminalTarget ? (
               <Suspense fallback={null}>
                 <TerminalPanel
+                  focusRequest={terminalFocusRequest}
                   isExpanded={isTerminalExpanded}
                   onExpandedChange={handleTerminalExpandedChange}
                   onSessionActiveChange={handleTerminalSessionActiveChange}
@@ -434,6 +699,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           {isEditorOpen && editorTarget ? (
             <Suspense fallback={null}>
               <EditorPanel
+                focusRequest={editorFocusRequest}
                 isExpanded={isEditorExpanded}
                 onExpandedChange={handleEditorExpandedChange}
                 target={editorTarget}
@@ -444,5 +710,6 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
         </div>
       </main>
     </div>
+    </ShortcutProvider>
   );
 };

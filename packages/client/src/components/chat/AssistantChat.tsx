@@ -950,7 +950,11 @@ const Composer = () => {
   };
 
   return (
-    <ComposerPrimitive.Root ref={composerRef} className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-primary bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)]">
+    <ComposerPrimitive.Root
+      ref={composerRef}
+      className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-primary bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)]"
+      data-weave-text-surface="true"
+    >
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
       <div className="mb-3 flex flex-wrap gap-2 empty:hidden">
         <ComposerImageAttachments />

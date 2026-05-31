@@ -233,6 +233,8 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
       <div
         ref={containerRef}
         className="relative h-full min-h-0 w-full overflow-hidden outline-none select-text"
+        data-weave-terminal-view
+        data-weave-text-surface="true"
         style={{ caretColor: 'transparent' }}
         onMouseDown={() => terminalRef.current?.focus()}
       />

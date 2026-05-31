@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { forwardRef, useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragStartEvent, type DraggableAttributes } from '@dnd-kit/core';
 import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -201,12 +201,12 @@ type ThreadSidebarProps = {
   presentation?: 'inline' | 'overlay';
 };
 
-export const ThreadSidebar = ({
+export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
   closeOnSelect = true,
   connectionSettingsButton,
   onClose,
   presentation = 'inline',
-}: ThreadSidebarProps) => {
+}, ref) => {
   const {
     resourceId,
     threadId,
@@ -353,8 +353,11 @@ export const ThreadSidebar = ({
 
   return (
     <aside
+      ref={ref}
       data-weave-thread-sidebar
       data-weave-thread-sidebar-overlay={presentation === 'overlay' ? 'true' : undefined}
+      data-weave-surface="sidebar"
+      tabIndex={-1}
       className={cn(
         'fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-muted p-4 dark:bg-card',
         presentation === 'overlay'
@@ -867,4 +870,6 @@ export const ThreadSidebar = ({
       </div>
     </aside>
   );
-};
+});
+
+ThreadSidebar.displayName = 'ThreadSidebar';

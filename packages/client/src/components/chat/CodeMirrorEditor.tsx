@@ -347,7 +347,7 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
     isSyncingRef.current = false;
   }, [value]);
 
-  return <div ref={containerRef} className="h-full min-h-0" />;
+  return <div ref={containerRef} className="h-full min-h-0" data-weave-text-surface="true" />;
 });
 
 CodeMirrorEditor.displayName = 'CodeMirrorEditor';

@@ -13,6 +13,7 @@ type TerminalPanelTarget = {
 };
 
 type TerminalPanelProps = {
+  focusRequest?: number;
   isExpanded: boolean;
   onExpandedChange: (isExpanded: boolean) => void;
   onSessionActiveChange: (isActive: boolean) => void;
@@ -40,6 +41,7 @@ const getTitlePath = (terminalTitle: string | undefined) => {
 };
 
 export const TerminalPanel = ({
+  focusRequest = 0,
   isExpanded,
   onExpandedChange,
   onSessionActiveChange,
@@ -78,6 +80,12 @@ export const TerminalPanel = ({
   }, [onHide]);
 
   useEffect(() => () => clearRevealTimer(), [clearRevealTimer]);
+
+  useEffect(() => {
+    if (focusRequest === 0) return undefined;
+    const animationFrame = window.requestAnimationFrame(() => terminalRef.current?.focus());
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [focusRequest]);
 
   const handleInput = useCallback((data: string) => {
     void transport?.input(target.demiplaneId, data).catch(() => undefined);
@@ -202,8 +210,12 @@ export const TerminalPanel = ({
 
   return (
     <section
-      className={`relative z-10 flex ${isExpanded ? 'h-full' : 'h-[min(34dvh,22rem)]'} min-h-44 shrink-0 flex-col border-t border-border bg-background transition-[height] duration-150 ease-out`}
+      className={[
+        'relative z-10 flex min-h-44 shrink-0 flex-col bg-background transition-[height] duration-150 ease-out',
+        isExpanded ? 'h-full' : 'h-[min(34dvh,22rem)] border-t border-border',
+      ].join(' ')}
       data-weave-terminal-panel
+      data-weave-surface="terminal"
       data-expanded={isExpanded ? 'true' : 'false'}
     >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">

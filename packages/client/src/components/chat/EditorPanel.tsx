@@ -24,6 +24,7 @@ type EditorPanelTarget = EditorTarget & {
 };
 
 type EditorPanelProps = {
+  focusRequest?: number;
   isExpanded: boolean;
   onExpandedChange: (isExpanded: boolean) => void;
   target: EditorPanelTarget;
@@ -49,7 +50,7 @@ const editorModeIndicatorStyles: Record<VimMode, { label: string; foreground: st
   terminal: { label: 'TERMINAL', foreground: '#1e1e2e', background: '#a6e3a1' },
 };
 
-export const EditorPanel = ({ isExpanded, onExpandedChange, target, onHide }: EditorPanelProps) => {
+export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, target, onHide }: EditorPanelProps) => {
   const backend = useMemo<EditorBackend>(() => createEditorBackend(), []);
   const editorTarget = useMemo<EditorTarget>(() => ({
     planeId: target.planeId,
@@ -121,6 +122,12 @@ export const EditorPanel = ({ isExpanded, onExpandedChange, target, onHide }: Ed
     return () => window.cancelAnimationFrame(animationFrame);
   }, [editorFocusRequest, openFile?.path]);
 
+  useEffect(() => {
+    if (focusRequest === 0) return undefined;
+    const animationFrame = window.requestAnimationFrame(() => editorRef.current?.focus());
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [focusRequest]);
+
   const handleOpenEntry = useCallback((entry: EditorEntry) => {
     if (entry.type === 'directory') {
       if (!confirmDiscard()) return;
@@ -174,6 +181,7 @@ export const EditorPanel = ({ isExpanded, onExpandedChange, target, onHide }: Ed
     <section
       className="relative z-10 flex h-full min-h-0 min-w-0 flex-1 basis-0 flex-col border-l border-border bg-background transition-[width] duration-150 ease-out"
       data-weave-editor-panel
+      data-weave-surface="editor"
       data-expanded={isExpanded ? 'true' : 'false'}
     >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
