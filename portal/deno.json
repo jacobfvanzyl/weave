@@ -1,9 +1,15 @@
 {
   "tasks": {
     "check": "deno check src/main.ts",
-    "daemon": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run=bash,git,fd,rg,ls src/main.ts daemon",
+    "native": "deno run --allow-run --allow-env --allow-read scripts/build-native.ts",
+    "test": "deno task native && deno test --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-run src/*_test.ts",
+    "dev": "deno task native && deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-run src/main.ts daemon",
+    "daemon": "deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-run src/main.ts daemon",
     "login": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts login",
-    "build": "deno compile --allow-net --allow-read --allow-write --allow-env --allow-run=bash,git,fd,rg,ls --output dist/portal src/main.ts",
+    "build": "deno run --allow-run --allow-env --allow-read --allow-write scripts/build.ts",
+    "start": "dist/portal daemon",
+    "status": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts status",
+    "stop": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts stop",
     "install": "deno task build && mkdir -p ~/.local/bin && cp dist/portal ~/.local/bin/portal"
   },
   "compilerOptions": {

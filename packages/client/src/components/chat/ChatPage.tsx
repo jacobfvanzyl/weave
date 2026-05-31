@@ -1,9 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, PanelLeft, Settings, TerminalSquare } from 'lucide-react';
-import { listPlanes, listServerThreads } from '../../lib/chat-state-api';
+import { listPlanes, listPortals, listServerThreads } from '../../lib/chat-state-api';
 import { isEditorBackendAvailable } from '../../lib/editor-backend';
-import { isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
+import { isDesktopTerminalTransportAvailable, isTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useChatStore } from '../../stores/chat-store';
 import { Button } from '../ui/button';
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
@@ -381,30 +381,47 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     queryKey: ['planes', resourceId],
     queryFn: () => listPlanes(),
   });
+  const { data: portals = [] } = useQuery({
+    queryKey: ['portals', resourceId],
+    queryFn: listPortals,
+  });
+  const onlinePortals = portals.filter(portal => portal.status === 'online');
+  const onlinePortalIds = new Set(onlinePortals.map(portal => portal.portalId));
+  const defaultGlobalPortal = onlinePortals[0];
+  const defaultGlobalRootId = defaultGlobalPortal?.roots[0]?.id ?? 'default';
   const activePlane = activeThread?.planeId ? planes.find(plane => plane.id === activeThread.planeId) : undefined;
   const activeDemiplane = activeThread?.demiplaneId
     ? activePlane?.demiplanes.find(demiplane => demiplane.id === activeThread.demiplaneId)
     : undefined;
+  const activeDemiplanePortalId = activeDemiplane?.portalId ?? activePlane?.portalId;
   const activeGitDemiplaneTarget = activePlane?.projectKind === 'git' && activeDemiplane
     ? {
         kind: 'demiplane' as const,
         terminalId: activeDemiplane.id,
         planeId: activePlane.id,
         demiplaneId: activeDemiplane.id,
+        portalId: activeDemiplanePortalId,
+        rootId: activePlane.portalRootId,
+        repoPath: activePlane.repoPath,
+        workspacePath: activeDemiplane.path,
         planeName: activePlane.name,
         demiplaneName: activeDemiplane.name,
         title: `${activePlane.name} / ${activeDemiplane.name}`,
       }
     : undefined;
   const hasDesktopTerminalTransport = isDesktopTerminalTransportAvailable();
-  const generalTerminalTarget = isElectronWindow && hasDesktopTerminalTransport
+  const hasAnyTerminalTransport = isTerminalTransportAvailable();
+  const hasOnlinePortalForActiveDemiplane = Boolean(activeDemiplanePortalId && onlinePortalIds.has(activeDemiplanePortalId));
+  const generalTerminalTarget = hasAnyTerminalTransport && (defaultGlobalPortal || (isElectronWindow && hasDesktopTerminalTransport))
     ? {
         kind: 'general' as const,
         terminalId: generalTerminalId,
+        portalId: defaultGlobalPortal?.portalId,
+        rootId: defaultGlobalRootId,
         title: 'Weave Terminal',
       }
     : undefined;
-  const terminalTarget = isElectronWindow && hasDesktopTerminalTransport
+  const terminalTarget = hasAnyTerminalTransport && (hasOnlinePortalForActiveDemiplane || (isElectronWindow && hasDesktopTerminalTransport))
     ? activeGitDemiplaneTarget
     : undefined;
   const editorTarget = isElectronWindow && isEditorBackendAvailable()

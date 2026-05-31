@@ -12,7 +12,9 @@ type GhosttyTerminalViewProps = {
 };
 
 export type GhosttyTerminalHandle = {
+  fit: () => void;
   focus: () => void;
+  getSize: () => { cols: number; rows: number } | undefined;
   write: (data: string) => void;
 };
 
@@ -142,11 +144,16 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
   ({ autoFocus = true, onInput, onResize, onError, onTitleChange }, ref) => {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const terminalRef = useRef<Terminal | null>(null);
+    const fitAddonRef = useRef<FitAddon | null>(null);
     const pendingWritesRef = useRef<string[]>([]);
     const incompleteCursorSequenceRef = useRef('');
 
     useImperativeHandle(ref, () => ({
+      fit: () => fitAddonRef.current?.fit(),
       focus: () => terminalRef.current?.focus(),
+      getSize: () => terminalRef.current
+        ? { cols: terminalRef.current.cols, rows: terminalRef.current.rows }
+        : undefined,
       write: data => {
         const terminal = terminalRef.current;
         if (terminal) {
@@ -179,6 +186,7 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
           theme: getTerminalTheme(),
         });
         fitAddon = new FitAddon();
+        fitAddonRef.current = fitAddon;
         terminal.loadAddon(fitAddon);
         terminal.open(containerRef.current);
         terminalRef.current = terminal;
@@ -223,6 +231,7 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
       return () => {
         disposed = true;
         terminalRef.current = null;
+        fitAddonRef.current = null;
         incompleteCursorSequenceRef.current = '';
         disposeSubscriptions?.();
         fitAddon?.dispose();

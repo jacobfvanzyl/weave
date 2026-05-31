@@ -12,11 +12,12 @@ import {
   parseTerminalId,
   parseTerminalResize,
   parseTerminalStartInput,
-  TerminalManager,
-} from './terminal-manager';
+} from './terminal-input';
+import { PortalSupervisor, PortalTerminalClient } from './portal-terminal-client';
 
 let settingsStore: ConnectionSettingsStore | undefined;
-let terminalManager: TerminalManager | undefined;
+let portalSupervisor: PortalSupervisor | undefined;
+let portalTerminalClient: PortalTerminalClient | undefined;
 let editorManager: EditorManager | undefined;
 
 const appName = 'Weave';
@@ -93,6 +94,9 @@ const openExternal = async (url: string) => {
 type PlaneListing = {
   id?: unknown;
   projectKind?: unknown;
+  portalId?: unknown;
+  portalRootId?: unknown;
+  repoPath?: unknown;
   demiplanes?: unknown;
 };
 
@@ -128,29 +132,44 @@ const resolveGitDemiplane = async (input: EditorTarget, featureName: string) => 
     throw new Error('Demiplane does not have a local workspace path.');
   }
 
-  return { cwd: await realpath(demiplane.path) };
+  return {
+    cwd: await realpath(demiplane.path),
+    portalId: typeof plane.portalId === 'string' ? plane.portalId : undefined,
+    rootId: typeof plane.portalRootId === 'string' ? plane.portalRootId : undefined,
+    repoPath: typeof plane.repoPath === 'string' ? plane.repoPath : undefined,
+  };
 };
 
-const resolveTerminalDemiplane = (input: TerminalStartInput) => {
+const resolveTerminalDemiplane = async (input: TerminalStartInput) => {
   if (!input.planeId || !input.demiplaneId) throw new Error('Plane and Demiplane are required for this terminal.');
-  return resolveGitDemiplane({ planeId: input.planeId, demiplaneId: input.demiplaneId }, 'terminal');
+  const target = await resolveGitDemiplane({ planeId: input.planeId, demiplaneId: input.demiplaneId }, 'terminal');
+  return {
+    ...input,
+    portalId: input.portalId ?? target.portalId,
+    rootId: input.rootId ?? target.rootId,
+    repoPath: input.repoPath ?? target.repoPath,
+    workspacePath: input.workspacePath ?? target.cwd,
+  };
 };
 
 const resolveGeneralTerminal = async (input: TerminalStartInput) => ({
+  ...input,
   cwd: await realpath(input.cwd?.trim() || app.getPath('home')),
 });
 
 const resolveEditorDemiplane = (target: EditorTarget) => resolveGitDemiplane(target, 'editor');
 
-const getTerminalManager = () => {
-  if (!terminalManager) {
-    terminalManager = new TerminalManager({
-      resolveDemiplane: resolveTerminalDemiplane,
-      resolveGeneralTerminal,
+const getPortalTerminalClient = () => {
+  if (!settingsStore) throw new Error('Connection settings store is not initialized.');
+  if (!portalSupervisor) {
+    portalSupervisor = new PortalSupervisor({
+      settingsStore,
+      homePath: app.getPath('home'),
     });
   }
+  if (!portalTerminalClient) portalTerminalClient = new PortalTerminalClient(portalSupervisor);
 
-  return terminalManager;
+  return portalTerminalClient;
 };
 
 const getEditorManager = () => {
@@ -170,21 +189,25 @@ const registerIpcHandlers = () => {
     testConnection(input === undefined ? undefined : parseDesktopConnectionInput(input)),
   );
   ipcMain.handle('shell:open-external', (_event, url: string) => openExternal(url));
-  ipcMain.handle('terminal:start', (event, input: unknown) =>
-    getTerminalManager().start(parseTerminalStartInput(input), event.sender),
-  );
+  ipcMain.handle('terminal:start', async (event, input: unknown) => {
+    const parsed = parseTerminalStartInput(input);
+    const resolved = parsed.kind === 'general'
+      ? await resolveGeneralTerminal(parsed)
+      : await resolveTerminalDemiplane(parsed);
+    return getPortalTerminalClient().start(resolved, event.sender);
+  });
   ipcMain.handle('terminal:input', (_event, terminalId: unknown, data: unknown) =>
-    getTerminalManager().input(parseTerminalId(terminalId), parseTerminalInputData(data)),
+    getPortalTerminalClient().input(parseTerminalId(terminalId), parseTerminalInputData(data)),
   );
   ipcMain.handle('terminal:resize', (_event, terminalId: unknown, cols: unknown, rows: unknown) => {
     const size = parseTerminalResize(cols, rows);
-    return getTerminalManager().resize(parseTerminalId(terminalId), size.cols, size.rows);
+    return getPortalTerminalClient().resize(parseTerminalId(terminalId), size.cols, size.rows);
   });
   ipcMain.handle('terminal:close', (_event, terminalId: unknown) =>
-    getTerminalManager().close(parseTerminalId(terminalId)),
+    getPortalTerminalClient().close(parseTerminalId(terminalId)),
   );
   ipcMain.handle('terminal:detach', (event, terminalId: unknown) =>
-    getTerminalManager().detach(parseTerminalId(terminalId), event.sender),
+    getPortalTerminalClient().detach(parseTerminalId(terminalId), event.sender),
   );
   ipcMain.handle('editor:list', (_event, input: unknown) =>
     getEditorManager().list(parseEditorListInput(input)),
@@ -233,7 +256,7 @@ const createWindow = () => {
 
   const webContentsId = mainWindow.webContents.id;
   mainWindow.webContents.on('destroyed', () => {
-    terminalManager?.detachWebContents(webContentsId);
+    portalTerminalClient?.detachWebContents(webContentsId);
   });
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
@@ -267,5 +290,5 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  terminalManager?.dispose();
+  portalTerminalClient?.dispose();
 });

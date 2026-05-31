@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "electron-forge start",
     "start": "electron-forge start",
+    "prepackage": "npm run --prefix .. portal:build",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
@@ -45,7 +46,6 @@
     "codemirror": "^6.0.2",
     "ghostty-web": "^0.4.0",
     "lucide-react": "^0.561.0",
-    "node-pty": "^1.1.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-markdown": "^10.1.0",

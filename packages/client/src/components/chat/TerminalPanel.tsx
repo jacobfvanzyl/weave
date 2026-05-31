@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, LoaderCircle, Plus, Power, TerminalSquare, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, LoaderCircle, Plus, TerminalSquare, X } from 'lucide-react';
 import { Button } from '../ui/button';
-import { createDesktopTerminalTransport } from '../../lib/terminal-transport';
+import { createTerminalTransport } from '../../lib/terminal-transport';
 import type { TerminalSessionKind, TerminalTransport } from '../../lib/terminal-types';
 import { GhosttyTerminalView, type GhosttyTerminalHandle } from './GhosttyTerminalView';
 
@@ -12,6 +12,10 @@ type TerminalPanelTarget = {
   cwd?: string;
   planeId?: string;
   demiplaneId?: string;
+  portalId?: string;
+  rootId?: string;
+  repoPath?: string;
+  workspacePath?: string;
 };
 
 type TerminalStatus = 'connecting' | 'running' | 'error';
@@ -94,13 +98,14 @@ const TerminalSessionView = ({
   const onSessionActiveChangeRef = useRef(onSessionActiveChange);
   const startedTerminalRef = useRef<string | undefined>(undefined);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const latestSizeRef = useRef<TerminalSize | undefined>(undefined);
   const latestMetaRef = useRef<string | undefined>(undefined);
   const [status, setStatus] = useState<TerminalStatus>('connecting');
   const [cwd, setCwd] = useState<string>();
   const [title, setTitle] = useState<string>();
   const [error, setError] = useState<string>();
   const [isTerminalReady, setIsTerminalReady] = useState(false);
-  const [initialSize, setInitialSize] = useState<TerminalSize>();
+  const [hasMeasuredSize, setHasMeasuredSize] = useState(false);
 
   const clearRevealTimer = useCallback(() => {
     if (revealTimerRef.current === undefined) return;
@@ -145,11 +150,25 @@ const TerminalSessionView = ({
   }, [tab.terminalId, transport]);
 
   const handleResize = useCallback((cols: number, rows: number) => {
-    setInitialSize(current => current?.terminalId === tab.terminalId
-      ? current
-      : { terminalId: tab.terminalId, cols, rows });
+    latestSizeRef.current = { terminalId: tab.terminalId, cols, rows };
+    setHasMeasuredSize(true);
     if (startedTerminalRef.current === tab.terminalId) {
       void transport?.resize(tab.terminalId, cols, rows).catch(() => undefined);
+    }
+  }, [tab.terminalId, transport]);
+
+  const syncTerminalSize = useCallback(() => {
+    terminalRef.current?.fit();
+    const terminalSize = terminalRef.current?.getSize();
+    const nextSize = terminalSize
+      ? { terminalId: tab.terminalId, cols: terminalSize.cols, rows: terminalSize.rows }
+      : latestSizeRef.current;
+    if (!nextSize || nextSize.terminalId !== tab.terminalId) return;
+
+    latestSizeRef.current = nextSize;
+    setHasMeasuredSize(true);
+    if (startedTerminalRef.current === tab.terminalId) {
+      void transport?.resize(tab.terminalId, nextSize.cols, nextSize.rows).catch(() => undefined);
     }
   }, [tab.terminalId, transport]);
 
@@ -169,7 +188,9 @@ const TerminalSessionView = ({
       return undefined;
     }
 
-    const measuredSize = initialSize?.terminalId === tab.terminalId ? initialSize : undefined;
+    const measuredSize = hasMeasuredSize && latestSizeRef.current?.terminalId === tab.terminalId
+      ? latestSizeRef.current
+      : undefined;
 
     setStatus('connecting');
     setError(undefined);
@@ -180,6 +201,12 @@ const TerminalSessionView = ({
 
     if (!measuredSize) return undefined;
 
+    const resizeSyncTimers: number[] = [];
+    let resizeSyncFrame: number | undefined;
+    const scheduleResizeSync = (delayMs: number) => {
+      resizeSyncTimers.push(window.setTimeout(syncTerminalSize, delayMs));
+    };
+
     const unsubscribe = transport.subscribe(event => {
       if (event.terminalId !== tab.terminalId) return;
 
@@ -188,6 +215,7 @@ const TerminalSessionView = ({
         setCwd(event.cwd);
         setError(undefined);
         onSessionActiveChangeRef.current(tab.id, true);
+        syncTerminalSize();
         scheduleTerminalReveal(terminalRevealFallbackMs);
         return;
       }
@@ -223,9 +251,17 @@ const TerminalSessionView = ({
       terminalId: tab.terminalId,
       planeId: target.planeId,
       demiplaneId: target.demiplaneId,
+      portalId: target.portalId,
+      rootId: target.rootId,
+      repoPath: target.repoPath,
+      workspacePath: target.workspacePath,
       cwd: target.cwd,
       cols: measuredSize.cols,
       rows: measuredSize.rows,
+    }).then(() => {
+      resizeSyncFrame = window.requestAnimationFrame(syncTerminalSize);
+      scheduleResizeSync(50);
+      scheduleResizeSync(250);
     }).catch(startError => {
       setStatus('error');
       setError(startError instanceof Error ? startError.message : String(startError));
@@ -237,20 +273,27 @@ const TerminalSessionView = ({
       if (startedTerminalRef.current === tab.terminalId) {
         startedTerminalRef.current = undefined;
       }
+      if (resizeSyncFrame !== undefined) window.cancelAnimationFrame(resizeSyncFrame);
+      resizeSyncTimers.forEach(timer => window.clearTimeout(timer));
       clearRevealTimer();
       unsubscribe();
       void transport.detach(tab.terminalId).catch(() => undefined);
     };
   }, [
     clearRevealTimer,
-    initialSize,
+    hasMeasuredSize,
     scheduleTerminalReveal,
+    syncTerminalSize,
     tab.id,
     tab.terminalId,
     target.cwd,
     target.demiplaneId,
     target.kind,
     target.planeId,
+    target.portalId,
+    target.repoPath,
+    target.rootId,
+    target.workspacePath,
     transport,
   ]);
 
@@ -296,7 +339,7 @@ export const TerminalPanel = ({
   onHide,
   variant = 'pane',
 }: TerminalPanelProps) => {
-  const transport = useMemo<TerminalTransport | undefined>(() => createDesktopTerminalTransport(), []);
+  const transport = useMemo<TerminalTransport | undefined>(() => createTerminalTransport(), []);
   const [activeSessionTabIds, setActiveSessionTabIds] = useState<Set<string>>(() => new Set());
   const activeTab = tabs.find(tab => tab.id === activeTabId) ?? tabs[0];
 
@@ -418,11 +461,6 @@ export const TerminalPanel = ({
     void closeTab(exitedTab);
   }, [closeTab, tabs]);
 
-  const handleCloseActiveTab = useCallback(() => {
-    if (!activeTab) return;
-    void closeTab(activeTab);
-  }, [activeTab, closeTab]);
-
   return (
     <section
       className={variant === 'overlay'
@@ -501,16 +539,6 @@ export const TerminalPanel = ({
             <Plus size={14} />
           </Button>
         </div>
-        <Button
-          className="self-center"
-          size="icon-xs"
-          variant="ghost"
-          aria-label="Stop terminal tab"
-          disabled={!activeTab || activeTab.status === 'connecting'}
-          onClick={handleCloseActiveTab}
-        >
-          <Power size={14} />
-        </Button>
         {variant === 'pane' && onExpandedChange ? (
           <Button
             className="self-center"

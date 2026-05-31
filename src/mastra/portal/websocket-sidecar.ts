@@ -1,6 +1,12 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { connectPortal, disconnectPortal, handlePortalMessage, updatePortal } from './registry';
+import {
+  connectTerminalRelayClient,
+  disconnectTerminalRelayClient,
+  forwardTerminalClientMessage,
+  handleTerminalPortalMessage,
+} from './terminal-relay';
 
 const agentId = 'mageHandAgent';
 const portalThreadPrefix = '__portal__';
@@ -57,7 +63,7 @@ export const startPortalWebSocketSidecar = (mastra: MastraLike) => {
 
   server.on('upgrade', (request, socket, head) => {
     const url = parseRequestUrl(request);
-    if (url.pathname !== '/portals/connect') {
+    if (url.pathname !== '/portals/connect' && url.pathname !== '/terminals/connect') {
       socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
       return;
     }
@@ -69,6 +75,36 @@ export const startPortalWebSocketSidecar = (mastra: MastraLike) => {
 
   wss.on('connection', async (ws, request) => {
     const url = parseRequestUrl(request);
+    if (url.pathname === '/terminals/connect') {
+      const connected = connectTerminalRelayClient({
+        token: url.searchParams.get('token') ?? '',
+        ws: ws as any,
+      });
+
+      if (!connected) {
+        closeUnauthorized(ws, 'invalid terminal token');
+        return;
+      }
+
+      ws.send(JSON.stringify({ type: 'terminal.accepted', clientId: connected.clientId }));
+      ws.on('message', data => {
+        const message = safeParse(data);
+        if (!message) return;
+        try {
+          forwardTerminalClientMessage(connected.clientId, message, connected.token);
+        } catch (error) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            terminalId: typeof message.terminalId === 'string' ? message.terminalId : 'unknown',
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        }
+      });
+      ws.on('close', () => disconnectTerminalRelayClient(connected.clientId));
+      ws.on('error', () => disconnectTerminalRelayClient(connected.clientId));
+      return;
+    }
+
     const portalId = url.searchParams.get('portalId') ?? '';
     const token = url.searchParams.get('token') ?? '';
     const userId = await validatePortalToken(mastra, portalId, token).catch(() => undefined);
@@ -84,6 +120,7 @@ export const startPortalWebSocketSidecar = (mastra: MastraLike) => {
     ws.on('message', data => {
       const message = safeParse(data);
       if (!message) return;
+      if (handleTerminalPortalMessage(message)) return;
       if (handlePortalMessage(message)) return;
 
       if (message.type === 'portal.hello') {

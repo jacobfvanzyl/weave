@@ -33,6 +33,12 @@ export const getPortalConnection = (portalId: string) => {
   return connection ? publicConnection(connection) : undefined;
 };
 
+export const sendPortalMessage = (portalId: string, message: unknown) => {
+  const connection = connections.get(portalId);
+  if (!connection) throw new Error('Portal is offline');
+  connection.ws.send(JSON.stringify(message));
+};
+
 export const findPortalForPlane = (userId: string, planeId: string) =>
   [...connections.values()].find(connection =>
     connection.userId === userId && connection.mounts.some((mount: any) => mount?.planeId === planeId && typeof mount?.localPath === 'string'),

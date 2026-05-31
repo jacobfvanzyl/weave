@@ -5,6 +5,10 @@ export type TerminalStartInput = {
   terminalId: string;
   planeId?: string;
   demiplaneId?: string;
+  portalId?: string;
+  rootId?: string;
+  repoPath?: string;
+  workspacePath?: string;
   cwd?: string;
   cols?: number;
   rows?: number;

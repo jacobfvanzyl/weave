@@ -11,7 +11,13 @@
     "desktop:dev": "npm --prefix desktop run dev",
     "desktop:package": "npm --prefix desktop run package",
     "desktop:typecheck": "npm --prefix desktop run typecheck",
-    "desktop:test": "npm --prefix desktop run test"
+    "desktop:test": "npm --prefix desktop run test",
+    "portal:login": "deno task --config portal/deno.json login",
+    "portal:dev": "deno task --config portal/deno.json dev",
+    "portal:build": "deno task --config portal/deno.json build",
+    "portal:start": "deno task --config portal/deno.json start",
+    "portal:status": "deno task --config portal/deno.json status",
+    "portal:stop": "deno task --config portal/deno.json stop"
   },
   "keywords": [],
   "author": "",

@@ -1,6 +1,7 @@
 output.txt
 node_modules
 dist
+target
 *.tsbuildinfo
 desktop/.vite
 desktop/out
