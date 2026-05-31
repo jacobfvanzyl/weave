@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Weave">
+  <rect x="64" y="64" width="896" height="896" rx="224" fill="#1e1e2e" />
+  <g
+    transform="translate(192 192) scale(26.6666667)"
+    fill="none"
+    stroke="#fab387"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M11.1 7.1a16.55 16.55 0 0 1 10.9 4" />
+    <path d="M12 12a12.6 12.6 0 0 1-8.7 5" />
+    <path d="M16.8 13.6a16.55 16.55 0 0 1-9 7.5" />
+    <path d="M20.7 17a12.8 12.8 0 0 0-8.7-5 13.3 13.3 0 0 1 0-10" />
+    <path d="M6.3 3.8a16.55 16.55 0 0 0 1.9 11.5" />
+    <circle cx="12" cy="12" r="10" />
+  </g>
+</svg>

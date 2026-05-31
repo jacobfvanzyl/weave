@@ -20,6 +20,8 @@ let terminalManager: TerminalManager | undefined;
 let editorManager: EditorManager | undefined;
 
 const appName = 'Weave';
+const devAppIconPath = app.isPackaged ? undefined : path.join(process.cwd(), 'assets', 'icon.png');
+
 app.setName(appName);
 app.setPath('userData', process.env.WEAVE_DESKTOP_USER_DATA || path.join(app.getPath('appData'), appName));
 
@@ -200,6 +202,7 @@ const createWindow = () => {
     visualEffectState: 'active',
     transparent: true,
     backgroundColor: '#00000000',
+    ...(devAppIconPath ? { icon: devAppIconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -238,6 +241,7 @@ app.whenReady().then(() => {
 
   installAuthHeaderInjection();
   registerIpcHandlers();
+  if (devAppIconPath && process.platform === 'darwin') app.dock?.setIcon(devAppIconPath);
   createWindow();
 
   app.on('activate', () => {

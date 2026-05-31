@@ -1,6 +1,7 @@
 @import "@fontsource-variable/dm-sans";
 @import "@fontsource-variable/dm-sans/wght-italic.css";
 @import "tailwindcss";
+@source "../";
 
 @custom-variant dark (&:is(.dark, .dark *));
 

@@ -9,6 +9,7 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     executableName: 'Weave',
+    icon: 'assets/icon',
     name: 'Weave',
   },
   rebuildConfig: {},
