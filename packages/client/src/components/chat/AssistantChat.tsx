@@ -435,7 +435,7 @@ const RunningAssistantPlaceholder = () => {
   if (!shouldShow) return null;
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-3 sm:px-[38px]">
+    <div className="mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
       <div className="chat-message-row flex min-w-0 justify-start">
         <div className="chat-message-bubble min-w-0 max-w-full text-base leading-6">
           <RunningIndicator />
@@ -578,7 +578,7 @@ const AssistantMessageContent = () => {
 };
 
 const ThreadMessage = () => (
-  <MessagePrimitive.Root className="mx-auto w-full max-w-3xl px-4 py-3 sm:px-[38px]">
+  <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
     <MessagePrimitive.If assistant>
       <div className="chat-message-row flex min-w-0 justify-start">
         <div className="chat-message-bubble min-w-0 max-w-full text-base leading-6">
@@ -950,7 +950,7 @@ const Composer = () => {
   };
 
   return (
-    <ComposerPrimitive.Root ref={composerRef} className="relative mx-auto w-full max-w-3xl rounded-xl border border-primary bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)]">
+    <ComposerPrimitive.Root ref={composerRef} className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-primary bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)]">
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
       <div className="mb-3 flex flex-wrap gap-2 empty:hidden">
         <ComposerImageAttachments />

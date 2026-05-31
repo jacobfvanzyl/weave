@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ChevronDown,
   ChevronLeft,
-  ChevronUp,
   Code2,
   File,
   Folder,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   RefreshCw,
   Save,
   X,
@@ -23,6 +23,7 @@ type EditorPanelTarget = EditorTarget & {
 
 type EditorPanelProps = {
   isExpanded: boolean;
+  isBalancedWidth?: boolean;
   onExpandedChange: (isExpanded: boolean) => void;
   target: EditorPanelTarget;
   onHide: () => void;
@@ -36,7 +37,7 @@ const getParentPath = (path: string) => {
 
 const toErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export const EditorPanel = ({ isExpanded, onExpandedChange, target, onHide }: EditorPanelProps) => {
+export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedChange, target, onHide }: EditorPanelProps) => {
   const backend = useMemo<EditorBackend>(() => createEditorBackend(), []);
   const editorTarget = useMemo<EditorTarget>(() => ({
     planeId: target.planeId,
@@ -142,9 +143,10 @@ export const EditorPanel = ({ isExpanded, onExpandedChange, target, onHide }: Ed
 
   return (
     <section
-      className={`relative z-10 flex ${isExpanded ? 'h-full' : 'h-[min(46dvh,34rem)]'} min-h-60 shrink-0 flex-col border-t border-border bg-background transition-[height] duration-150 ease-out`}
+      className={`relative z-10 flex h-full ${isExpanded ? 'min-w-0 flex-1' : isBalancedWidth ? 'min-w-0 flex-1 basis-0' : 'w-[clamp(28rem,44vw,var(--weave-chat-content-max-width))] max-w-full shrink-0'} min-h-0 flex-col border-l border-border bg-background transition-[width] duration-150 ease-out`}
       data-weave-editor-panel
       data-expanded={isExpanded ? 'true' : 'false'}
+      data-balanced-width={isBalancedWidth ? 'true' : 'false'}
     >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
         <Code2 size={15} className="shrink-0 text-primary" />
@@ -181,11 +183,11 @@ export const EditorPanel = ({ isExpanded, onExpandedChange, target, onHide }: Ed
         <Button
           size="icon-xs"
           variant="ghost"
-          aria-label={isExpanded ? 'Collapse editor' : 'Expand editor'}
-          title={isExpanded ? 'Collapse editor' : 'Expand editor'}
+          aria-label={isExpanded ? 'Restore editor column' : 'Expand editor'}
+          title={isExpanded ? 'Restore editor column' : 'Expand editor'}
           onClick={() => onExpandedChange(!isExpanded)}
         >
-          {isExpanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+          {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </Button>
         <Button size="icon-xs" variant="ghost" aria-label="Hide editor" onClick={onHide}>
           <X size={14} />

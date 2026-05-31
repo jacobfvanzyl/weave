@@ -54,6 +54,7 @@
 :root,
 :root[data-theme="latte"] {
   color-scheme: light;
+  --weave-chat-content-max-width: 48rem;
   --background: #eff1f5;
   --foreground: #4c4f69;
   --card: #ffffff;

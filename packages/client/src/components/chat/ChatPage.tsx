@@ -17,6 +17,8 @@ const EditorPanel = lazy(() => import('./EditorPanel').then(module => ({ default
 const isMobilePortraitNow = () => window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
 const isElectronWindowNow = () =>
   typeof document !== 'undefined' && document.documentElement.dataset.weaveWindowType === 'electron';
+const chatContentMaxWidthPx = 48 * 16;
+const threadSidebarWidthPx = 24 * 16;
 
 const useIsMobilePortrait = () => {
   const [isMobilePortrait, setIsMobilePortrait] = useState(() => isMobilePortraitNow());
@@ -33,6 +35,25 @@ const useIsMobilePortrait = () => {
   return isMobilePortrait;
 };
 
+const useMeasuredElementWidth = () => {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(() => window.innerWidth);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return undefined;
+
+    const updateWidth = () => setWidth(element.getBoundingClientRect().width);
+    updateWidth();
+
+    const resizeObserver = new ResizeObserver(updateWidth);
+    resizeObserver.observe(element);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  return [ref, width] as const;
+};
+
 type ChatPageProps = {
   connectionSettingsButton?: ReactNode;
 };
@@ -46,7 +67,8 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const runningThreadIds = useChatStore(state => state.runningThreadIds);
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(() => !isMobilePortraitNow());
+  const [pageRef, pageWidth] = useMeasuredElementWidth();
+  const [isSidebarPinnedOpen, setIsSidebarPinnedOpen] = useState(() => !isMobilePortraitNow());
   const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isTerminalExpanded, setIsTerminalExpanded] = useState(false);
@@ -58,6 +80,10 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
   const isMobilePortrait = useIsMobilePortrait();
   const isElectronWindow = isElectronWindowNow();
+  const workspaceWidthWithPinnedSidebar = Math.max(0, pageWidth - threadSidebarWidthPx);
+  const wouldAutoHideSidebarIfPinned = isEditorOpen && !isMobilePortrait && workspaceWidthWithPinnedSidebar < chatContentMaxWidthPx * 2;
+  const isSidebarAutoHidden = isSidebarPinnedOpen && wouldAutoHideSidebarIfPinned;
+  const isSidebarOpen = isSidebarPinnedOpen && !isSidebarAutoHidden;
   const canPreviewSidebar = isElectronWindow && !isMobilePortrait && !isSidebarOpen;
   const showSidebarPreview = canPreviewSidebar && isSidebarPreviewOpen;
   const showPinnedSidebarToggle = isElectronWindow && !isMobilePortrait && isSidebarOpen;
@@ -103,7 +129,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   }, [isFetched, newThread, serverThreads, setServerThreads, threads.length]);
 
   useEffect(() => {
-    if (isMobilePortrait && activeThread) setIsSidebarOpen(false);
+    if (isMobilePortrait && activeThread) setIsSidebarPinnedOpen(false);
   }, [activeThread, isMobilePortrait]);
 
   useEffect(() => {
@@ -156,14 +182,28 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   }, [clearSidebarPreviewCloseTimeout]);
 
   const toggleSidebar = useCallback(() => {
-    closeSidebarPreview();
-    setIsSidebarOpen(open => !open);
-  }, [closeSidebarPreview]);
+    clearSidebarPreviewCloseTimeout();
+    if (!isSidebarOpen && wouldAutoHideSidebarIfPinned) {
+      setIsSidebarPinnedOpen(true);
+      setIsSidebarPreviewOpen(open => !open);
+      return;
+    }
+
+    setIsSidebarPreviewOpen(false);
+    setIsSidebarPinnedOpen(open => !open);
+  }, [clearSidebarPreviewCloseTimeout, isSidebarOpen, wouldAutoHideSidebarIfPinned]);
 
   const openSidebar = useCallback(() => {
-    closeSidebarPreview();
-    setIsSidebarOpen(true);
-  }, [closeSidebarPreview]);
+    clearSidebarPreviewCloseTimeout();
+    if (wouldAutoHideSidebarIfPinned) {
+      setIsSidebarPinnedOpen(true);
+      setIsSidebarPreviewOpen(true);
+      return;
+    }
+
+    setIsSidebarPreviewOpen(false);
+    setIsSidebarPinnedOpen(true);
+  }, [clearSidebarPreviewCloseTimeout, wouldAutoHideSidebarIfPinned]);
 
   const toggleTerminal = useCallback(() => {
     if (isTerminalOpen) setIsTerminalExpanded(false);
@@ -214,13 +254,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   }, [terminalDemiplaneId]);
 
   return (
-    <div className="flex h-dvh overflow-hidden">
+    <div ref={pageRef} className="flex h-dvh overflow-hidden">
       {isSidebarOpen ? (
         <>
           <button
             className="fixed inset-0 z-30 bg-background/80 md:hidden"
             aria-label="Close sidebar"
-            onClick={() => setIsSidebarOpen(false)}
+            onClick={() => setIsSidebarPinnedOpen(false)}
           />
           {showPinnedSidebarToggle ? (
             <Button
@@ -236,7 +276,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           <ThreadSidebar
             closeOnSelect={isMobilePortrait}
             connectionSettingsButton={connectionSettingsButton}
-            onClose={() => setIsSidebarOpen(false)}
+            onClose={() => setIsSidebarPinnedOpen(false)}
           />
         </>
       ) : null}
@@ -266,6 +306,8 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       <main
         className="flex min-w-0 flex-1 flex-col"
         data-sidebar-open={isSidebarOpen ? 'true' : 'false'}
+        data-sidebar-pinned-open={isSidebarPinnedOpen ? 'true' : 'false'}
+        data-sidebar-auto-hidden={isSidebarAutoHidden ? 'true' : 'false'}
         data-sidebar-preview-open={showSidebarPreview ? 'true' : 'false'}
       >
         <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background px-4">
@@ -346,8 +388,18 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           </div>
         </header>
         <div className="flex min-h-0 flex-1">
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className={isTerminalExpanded || isEditorExpanded ? 'relative h-0 min-h-0 flex-none overflow-hidden' : 'relative min-h-0 flex-1 overflow-hidden'}>
+          <div className={isEditorExpanded
+            ? 'flex w-0 min-w-0 flex-none flex-col overflow-hidden'
+            : isSidebarAutoHidden
+              ? 'flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden'
+            : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'}
+          >
+            <div
+              className={isTerminalExpanded
+                ? 'relative h-0 min-h-0 flex-none overflow-hidden'
+                : 'relative min-h-0 flex-1 overflow-hidden'}
+              data-weave-chat-pane
+            >
               {threads
                 .filter(thread => thread.id === threadId || runningThreadIds.includes(thread.id))
                 .map(thread => (
@@ -358,6 +410,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                     <AssistantChat threadId={thread.id} />
                   </div>
                 ))}
+              {showPlanPanel ? <PlanSidebar plan={activePlan} /> : null}
             </div>
             {isTerminalOpen && terminalTarget ? (
               <Suspense fallback={null}>
@@ -370,18 +423,18 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                 />
               </Suspense>
             ) : null}
-            {isEditorOpen && editorTarget ? (
-              <Suspense fallback={null}>
-                <EditorPanel
-                  isExpanded={isEditorExpanded}
-                  onExpandedChange={handleEditorExpandedChange}
-                  target={editorTarget}
-                  onHide={hideEditor}
-                />
-              </Suspense>
-            ) : null}
           </div>
-          {showPlanPanel ? <PlanSidebar plan={activePlan} /> : null}
+          {isEditorOpen && editorTarget ? (
+            <Suspense fallback={null}>
+              <EditorPanel
+                isExpanded={isEditorExpanded}
+                isBalancedWidth={isSidebarAutoHidden}
+                onExpandedChange={handleEditorExpandedChange}
+                target={editorTarget}
+                onHide={hideEditor}
+              />
+            </Suspense>
+          ) : null}
         </div>
       </main>
     </div>

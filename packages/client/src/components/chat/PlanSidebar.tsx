@@ -25,8 +25,11 @@ export const PlanSidebar = ({ plan }: { plan?: ThreadPlan }) => {
   const isComplete = plan.total > 0 && plan.completed >= plan.total;
 
   return (
-    <aside className="hidden w-80 shrink-0 border-l border-border bg-background md:flex md:flex-col">
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
+    <aside
+      className="pointer-events-auto absolute right-4 top-4 z-20 hidden max-h-[min(70dvh,calc(100%_-_2rem))] w-80 min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card/95 shadow-lg backdrop-blur md:flex"
+      data-weave-plan-card
+    >
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">Plan</h2>
         {plan.isBusy ? <Loader2 size={14} className="shrink-0 animate-spin text-primary" /> : null}
         <Badge size="sm" variant={plan.isBusy ? 'info' : isComplete ? 'success' : 'info'}>
