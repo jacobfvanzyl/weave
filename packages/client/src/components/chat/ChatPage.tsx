@@ -12,6 +12,7 @@ import type { ShortcutCommand } from '../../lib/shortcuts';
 import { AssistantChat } from './AssistantChat';
 import { PlanSidebar } from './PlanSidebar';
 import { ThreadSidebar } from './ThreadSidebar';
+import type { TerminalPanelTab } from './TerminalPanel';
 
 const TerminalPanel = lazy(() => import('./TerminalPanel').then(module => ({ default: module.TerminalPanel })));
 const EditorPanel = lazy(() => import('./EditorPanel').then(module => ({ default: module.EditorPanel })));
@@ -21,6 +22,42 @@ const isElectronWindowNow = () =>
   typeof document !== 'undefined' && document.documentElement.dataset.weaveWindowType === 'electron';
 const chatContentMaxWidthPx = 48 * 16;
 const threadSidebarWidthPx = 24 * 16;
+const generalTerminalId = 'weave-general-terminal';
+
+let terminalPanelTabCounter = 0;
+
+const getPrimaryTerminalTabId = (baseTerminalId: string) => `${baseTerminalId}:primary`;
+
+const createTerminalPanelTab = (
+  baseTerminalId: string,
+  ordinal: number,
+  useBaseTerminalId = false,
+): TerminalPanelTab => {
+  if (useBaseTerminalId) {
+    return {
+      id: getPrimaryTerminalTabId(baseTerminalId),
+      terminalId: baseTerminalId,
+      label: `Terminal ${ordinal}`,
+    };
+  }
+
+  terminalPanelTabCounter += 1;
+  const tabToken = `${Date.now().toString(36)}-${terminalPanelTabCounter.toString(36)}`;
+  return {
+    id: `${baseTerminalId}:tab:${tabToken}`,
+    terminalId: `${baseTerminalId}:tab:${tabToken}`,
+    label: `Terminal ${ordinal}`,
+  };
+};
+
+const TerminalTabCountBadge = ({ count }: { count: number }) => count > 0 ? (
+  <span
+    className="pointer-events-none absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border border-background bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground shadow-sm"
+    data-weave-terminal-count-badge
+  >
+    {count}
+  </span>
+) : null;
 
 const useIsMobilePortrait = () => {
   const [isMobilePortrait, setIsMobilePortrait] = useState(() => isMobilePortraitNow());
@@ -63,6 +100,7 @@ type ChatPageProps = {
 type WindowSurfacesInput = {
   activeThreadId?: string;
   editorTargetKey?: string;
+  hasGeneralTerminalTarget: boolean;
   isElectronWindow: boolean;
   isMobilePortrait: boolean;
   pageWidth: number;
@@ -72,6 +110,7 @@ type WindowSurfacesInput = {
 const useWindowSurfaces = ({
   activeThreadId,
   editorTargetKey,
+  hasGeneralTerminalTarget,
   isElectronWindow,
   isMobilePortrait,
   pageWidth,
@@ -81,11 +120,14 @@ const useWindowSurfaces = ({
   const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isTerminalExpanded, setIsTerminalExpanded] = useState(false);
+  const [isGeneralTerminalOpen, setIsGeneralTerminalOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isEditorExpanded, setIsEditorExpanded] = useState(false);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
+  const [generalTerminalFocusRequest, setGeneralTerminalFocusRequest] = useState(0);
   const [editorFocusRequest, setEditorFocusRequest] = useState(0);
   const [activeTerminalDemiplaneIds, setActiveTerminalDemiplaneIds] = useState<Set<string>>(() => new Set());
+  const [isGeneralTerminalActive, setIsGeneralTerminalActive] = useState(false);
   const sidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
   const workspaceWidthWithPinnedSidebar = Math.max(0, pageWidth - threadSidebarWidthPx);
   const chatWidthWithPinnedSidebar = isEditorOpen
@@ -116,6 +158,13 @@ const useWindowSurfaces = ({
     setIsTerminalExpanded(false);
     if (!hasTerminalTarget) setIsTerminalOpen(false);
   }, [hasTerminalTarget, terminalDemiplaneId]);
+
+  useEffect(() => {
+    if (!hasGeneralTerminalTarget) {
+      setIsGeneralTerminalOpen(false);
+      setIsGeneralTerminalActive(false);
+    }
+  }, [hasGeneralTerminalTarget]);
 
   useEffect(() => {
     setIsEditorExpanded(false);
@@ -165,18 +214,6 @@ const useWindowSurfaces = ({
     setIsSidebarPinnedOpen(open => !open);
   }, [clearSidebarPreviewCloseTimeout, isSidebarOpen, wouldAutoHideSidebarIfPinned]);
 
-  const openSidebar = useCallback(() => {
-    clearSidebarPreviewCloseTimeout();
-    if (wouldAutoHideSidebarIfPinned) {
-      setIsSidebarPinnedOpen(true);
-      setIsSidebarPreviewOpen(true);
-      return;
-    }
-
-    setIsSidebarPreviewOpen(false);
-    setIsSidebarPinnedOpen(true);
-  }, [clearSidebarPreviewCloseTimeout, wouldAutoHideSidebarIfPinned]);
-
   const closeSidebar = useCallback(() => {
     setIsSidebarPinnedOpen(false);
   }, []);
@@ -205,6 +242,21 @@ const useWindowSurfaces = ({
     setIsTerminalOpen(true);
     setTerminalFocusRequest(request => request + 1);
   }, [hasTerminalTarget]);
+
+  const toggleGeneralTerminal = useCallback(() => {
+    if (!hasGeneralTerminalTarget) return;
+    setIsGeneralTerminalOpen(open => !open);
+  }, [hasGeneralTerminalTarget]);
+
+  const hideGeneralTerminal = useCallback(() => {
+    setIsGeneralTerminalOpen(false);
+  }, []);
+
+  const focusGeneralTerminal = useCallback(() => {
+    if (!hasGeneralTerminalTarget) return;
+    setIsGeneralTerminalOpen(true);
+    setGeneralTerminalFocusRequest(request => request + 1);
+  }, [hasGeneralTerminalTarget]);
 
   const toggleEditor = useCallback(() => {
     if (!hasEditorTarget) return;
@@ -257,37 +309,48 @@ const useWindowSurfaces = ({
     });
   }, [terminalDemiplaneId]);
 
+  const handleGeneralTerminalSessionActiveChange = useCallback((isActive: boolean) => {
+    setIsGeneralTerminalActive(isActive);
+  }, []);
+
   return {
     closeSidebar,
     closeSidebarPreview,
     editorFocusRequest,
     focusEditor,
+    focusGeneralTerminal,
     focusTerminal,
     handleEditorExpandedChange,
+    handleGeneralTerminalSessionActiveChange,
     handleTerminalExpandedChange,
     handleTerminalSessionActiveChange,
     hasActiveTerminal,
     hasEditorTarget,
+    hasGeneralTerminalTarget,
     hasTerminalTarget,
     hideEditor,
+    hideGeneralTerminal,
     hideTerminal,
     isEditorExpanded,
     isEditorOpen,
+    isGeneralTerminalActive,
+    isGeneralTerminalOpen,
     isSidebarAutoHidden,
     isSidebarOpen,
     isSidebarPinnedOpen,
     isTerminalExpanded,
     isTerminalOpen,
-    openSidebar,
     openSidebarPreview,
     scheduleSidebarPreviewClose,
     shouldClampChatPaneForEditor,
     showHeaderSidebarToggle,
     showPinnedSidebarToggle,
     showSidebarPreview,
+    generalTerminalFocusRequest,
     terminalFocusRequest,
     toggleEditor,
     toggleEditorExpanded,
+    toggleGeneralTerminal,
     toggleSidebar,
     toggleTerminal,
     toggleTerminalExpanded,
@@ -324,22 +387,43 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     : undefined;
   const activeGitDemiplaneTarget = activePlane?.projectKind === 'git' && activeDemiplane
     ? {
+        kind: 'demiplane' as const,
+        terminalId: activeDemiplane.id,
         planeId: activePlane.id,
         demiplaneId: activeDemiplane.id,
         planeName: activePlane.name,
         demiplaneName: activeDemiplane.name,
+        title: `${activePlane.name} / ${activeDemiplane.name}`,
       }
     : undefined;
-  const terminalTarget = isElectronWindow && isDesktopTerminalTransportAvailable()
+  const hasDesktopTerminalTransport = isDesktopTerminalTransportAvailable();
+  const generalTerminalTarget = isElectronWindow && hasDesktopTerminalTransport
+    ? {
+        kind: 'general' as const,
+        terminalId: generalTerminalId,
+        title: 'Weave Terminal',
+      }
+    : undefined;
+  const terminalTarget = isElectronWindow && hasDesktopTerminalTransport
     ? activeGitDemiplaneTarget
     : undefined;
   const editorTarget = isElectronWindow && isEditorBackendAvailable()
     ? activeGitDemiplaneTarget
     : undefined;
   const terminalDemiplaneId = terminalTarget?.demiplaneId;
+  const terminalTargetKey = terminalTarget?.terminalId;
+  const [generalTerminalTabs, setGeneralTerminalTabs] = useState<TerminalPanelTab[]>(() => [
+    createTerminalPanelTab(generalTerminalId, 1, true),
+  ]);
+  const [activeGeneralTerminalTabId, setActiveGeneralTerminalTabId] = useState(() => getPrimaryTerminalTabId(generalTerminalId));
+  const [terminalTabsByTarget, setTerminalTabsByTarget] = useState<Record<string, TerminalPanelTab[]>>({});
+  const [activeTerminalTabByTarget, setActiveTerminalTabByTarget] = useState<Record<string, string>>({});
+  const [generalTerminalActiveSessionCount, setGeneralTerminalActiveSessionCount] = useState(0);
+  const [terminalActiveSessionCountByTarget, setTerminalActiveSessionCountByTarget] = useState<Record<string, number>>({});
   const windowSurfaces = useWindowSurfaces({
     activeThreadId: activeThread?.id,
     editorTargetKey: editorTarget?.demiplaneId,
+    hasGeneralTerminalTarget: Boolean(generalTerminalTarget),
     isElectronWindow,
     isMobilePortrait,
     pageWidth,
@@ -350,36 +434,87 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     closeSidebarPreview,
     editorFocusRequest,
     focusEditor,
+    focusGeneralTerminal,
     focusTerminal,
     handleEditorExpandedChange,
+    handleGeneralTerminalSessionActiveChange,
     handleTerminalExpandedChange,
     handleTerminalSessionActiveChange,
     hasActiveTerminal,
     hasEditorTarget,
+    hasGeneralTerminalTarget,
     hasTerminalTarget,
     hideEditor,
+    hideGeneralTerminal,
     hideTerminal,
     isEditorExpanded,
     isEditorOpen,
+    isGeneralTerminalActive,
+    isGeneralTerminalOpen,
     isSidebarAutoHidden,
     isSidebarOpen,
     isSidebarPinnedOpen,
     isTerminalExpanded,
     isTerminalOpen,
-    openSidebar,
     openSidebarPreview,
     scheduleSidebarPreviewClose,
     shouldClampChatPaneForEditor,
     showHeaderSidebarToggle,
     showPinnedSidebarToggle,
     showSidebarPreview,
+    generalTerminalFocusRequest,
     terminalFocusRequest,
     toggleEditor,
     toggleEditorExpanded,
+    toggleGeneralTerminal,
     toggleSidebar,
     toggleTerminal,
     toggleTerminalExpanded,
   } = windowSurfaces;
+  useEffect(() => {
+    if (!terminalTargetKey) return;
+    const primaryTab = createTerminalPanelTab(terminalTargetKey, 1, true);
+    setTerminalTabsByTarget(current => {
+      const currentTabs = current[terminalTargetKey];
+      if (currentTabs && currentTabs.length > 0) return current;
+      return { ...current, [terminalTargetKey]: [primaryTab] };
+    });
+    setActiveTerminalTabByTarget(current => current[terminalTargetKey]
+      ? current
+      : { ...current, [terminalTargetKey]: primaryTab.id });
+  }, [terminalTargetKey]);
+
+  const terminalTabs = terminalTargetKey ? terminalTabsByTarget[terminalTargetKey] ?? [] : [];
+  const activeTerminalTabId = terminalTargetKey
+    ? activeTerminalTabByTarget[terminalTargetKey] ?? terminalTabs[0]?.id
+    : undefined;
+  const terminalActiveSessionCount = terminalTargetKey ? terminalActiveSessionCountByTarget[terminalTargetKey] ?? 0 : 0;
+
+  const handleTerminalTabsChange = useCallback((nextTabs: TerminalPanelTab[]) => {
+    if (!terminalTargetKey) return;
+    setTerminalTabsByTarget(current => ({ ...current, [terminalTargetKey]: nextTabs }));
+  }, [terminalTargetKey]);
+
+  const handleTerminalActiveSessionCountChange = useCallback((count: number) => {
+    if (!terminalTargetKey) return;
+    setTerminalActiveSessionCountByTarget(current => {
+      if (current[terminalTargetKey] === count) return current;
+      return { ...current, [terminalTargetKey]: count };
+    });
+  }, [terminalTargetKey]);
+
+  const handleActiveTerminalTabChange = useCallback((tabId: string) => {
+    if (!terminalTargetKey) return;
+    setActiveTerminalTabByTarget(current => ({ ...current, [terminalTargetKey]: tabId }));
+  }, [terminalTargetKey]);
+
+  const createTerminalTab = useCallback((ordinal: number) => (
+    createTerminalPanelTab(terminalTargetKey ?? 'weave-terminal', ordinal)
+  ), [terminalTargetKey]);
+
+  const createGeneralTerminalTab = useCallback((ordinal: number) => (
+    createTerminalPanelTab(generalTerminalId, ordinal)
+  ), []);
   const { data: serverThreads = [], isFetched } = useQuery({
     queryKey: ['threads', resourceId],
     queryFn: () => listServerThreads(),
@@ -551,15 +686,6 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           onMouseEnter={openSidebarPreview}
           onMouseLeave={scheduleSidebarPreviewClose}
         >
-          <Button
-            className="weave-desktop-sidebar-toggle"
-            size="icon"
-            variant="ghost"
-            aria-label="Show sidebar"
-            onClick={openSidebar}
-          >
-            <PanelLeft size={18} />
-          </Button>
           <ThreadSidebar
             ref={sidebarSurfaceRef}
             presentation="overlay"
@@ -567,6 +693,45 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             connectionSettingsButton={connectionSettingsButton}
             onClose={closeSidebarPreview}
           />
+        </div>
+      ) : null}
+      {isElectronWindow && (showHeaderSidebarToggle || generalTerminalTarget) ? (
+        <div
+          className="weave-appbar-left-actions-floating flex items-center gap-3"
+          data-has-sidebar-toggle={showHeaderSidebarToggle ? 'true' : 'false'}
+        >
+          {showHeaderSidebarToggle ? (
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+              onClick={toggleSidebar}
+              onMouseEnter={openSidebarPreview}
+              onMouseLeave={scheduleSidebarPreviewClose}
+            >
+              <PanelLeft size={18} />
+            </Button>
+          ) : null}
+          {generalTerminalTarget ? (
+            <Button
+              className={[
+                isGeneralTerminalOpen ? 'bg-accent' : '',
+                isGeneralTerminalActive ? 'text-mauve' : '',
+              ].filter(Boolean).join(' ')}
+              size="icon"
+              variant="ghost"
+              aria-label={isGeneralTerminalOpen ? 'Hide general terminal' : 'Show general terminal'}
+              data-active={isGeneralTerminalOpen ? 'true' : 'false'}
+              onClick={() => {
+                const shouldFocusAfterOpen = !isGeneralTerminalOpen;
+                toggleGeneralTerminal();
+                if (shouldFocusAfterOpen) window.requestAnimationFrame(focusGeneralTerminal);
+              }}
+            >
+              <TerminalSquare size={18} />
+              <TerminalTabCountBadge count={generalTerminalActiveSessionCount} />
+            </Button>
+          ) : null}
         </div>
       ) : null}
       <main
@@ -577,18 +742,41 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
         data-sidebar-preview-open={showSidebarPreview ? 'true' : 'false'}
       >
         <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background px-4">
-          {showHeaderSidebarToggle ? (
-            <Button
-              className="absolute left-4"
-              size="icon"
-              variant="ghost"
-              aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-              onClick={toggleSidebar}
-              onMouseEnter={openSidebarPreview}
-              onMouseLeave={scheduleSidebarPreviewClose}
-            >
-              <PanelLeft size={18} />
-            </Button>
+          {!isElectronWindow && (showHeaderSidebarToggle || hasGeneralTerminalTarget) ? (
+            <div className="weave-appbar-left-actions absolute left-4 flex items-center gap-3">
+              {showHeaderSidebarToggle ? (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                  onClick={toggleSidebar}
+                  onMouseEnter={openSidebarPreview}
+                  onMouseLeave={scheduleSidebarPreviewClose}
+                >
+                  <PanelLeft size={18} />
+                </Button>
+              ) : null}
+              {generalTerminalTarget ? (
+                <Button
+                  className={[
+                    isGeneralTerminalOpen ? 'bg-accent' : '',
+                    isGeneralTerminalActive ? 'text-mauve' : '',
+                  ].filter(Boolean).join(' ')}
+                  size="icon"
+                  variant="ghost"
+                  aria-label={isGeneralTerminalOpen ? 'Hide general terminal' : 'Show general terminal'}
+                  data-active={isGeneralTerminalOpen ? 'true' : 'false'}
+                  onClick={() => {
+                    const shouldFocusAfterOpen = !isGeneralTerminalOpen;
+                    toggleGeneralTerminal();
+                    if (shouldFocusAfterOpen) window.requestAnimationFrame(focusGeneralTerminal);
+                  }}
+                >
+                  <TerminalSquare size={18} />
+                  <TerminalTabCountBadge count={generalTerminalActiveSessionCount} />
+                </Button>
+              ) : null}
+            </div>
           ) : null}
           {activePlane || hasThreadTitle ? (
             <h2 className="flex max-w-[60%] items-center justify-center gap-1 truncate text-center text-sm font-semibold text-foreground">
@@ -621,6 +809,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                 onClick={toggleTerminal}
               >
                 <TerminalSquare size={18} />
+                <TerminalTabCountBadge count={terminalActiveSessionCount} />
               </Button>
             ) : null}
             {editorTarget ? (
@@ -683,13 +872,19 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                 ))}
               {showPlanPanel ? <PlanSidebar plan={activePlan} /> : null}
             </div>
-            {isTerminalOpen && terminalTarget ? (
+            {isTerminalOpen && terminalTarget && activeTerminalTabId ? (
               <Suspense fallback={null}>
                 <TerminalPanel
+                  activeTabId={activeTerminalTabId}
                   focusRequest={terminalFocusRequest}
                   isExpanded={isTerminalExpanded}
+                  onActiveSessionCountChange={handleTerminalActiveSessionCountChange}
+                  onActiveTabIdChange={handleActiveTerminalTabChange}
+                  onCreateTab={createTerminalTab}
                   onExpandedChange={handleTerminalExpandedChange}
                   onSessionActiveChange={handleTerminalSessionActiveChange}
+                  onTabsChange={handleTerminalTabsChange}
+                  tabs={terminalTabs}
                   target={terminalTarget}
                   onHide={hideTerminal}
                 />
@@ -709,6 +904,34 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           ) : null}
         </div>
       </main>
+      {isGeneralTerminalOpen && generalTerminalTarget ? (
+        <div
+          className="pointer-events-none fixed inset-0 z-50 bg-background/20 backdrop-blur-sm"
+          data-weave-general-terminal-overlay
+        >
+          <div
+            className="pointer-events-auto absolute min-h-0 min-w-0"
+            style={{ inset: 'var(--weave-desktop-window-edge-to-appbar-bottom, 2.875rem)' }}
+          >
+            <Suspense fallback={null}>
+              <TerminalPanel
+                activeTabId={activeGeneralTerminalTabId}
+                focusRequest={generalTerminalFocusRequest}
+                isExpanded={false}
+                onActiveSessionCountChange={setGeneralTerminalActiveSessionCount}
+                onActiveTabIdChange={setActiveGeneralTerminalTabId}
+                onCreateTab={createGeneralTerminalTab}
+                onSessionActiveChange={handleGeneralTerminalSessionActiveChange}
+                onTabsChange={setGeneralTerminalTabs}
+                tabs={generalTerminalTabs}
+                target={generalTerminalTarget}
+                onHide={hideGeneralTerminal}
+                variant="overlay"
+              />
+            </Suspense>
+          </div>
+        </div>
+      ) : null}
     </div>
     </ShortcutProvider>
   );

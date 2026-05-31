@@ -22,10 +22,10 @@ export type WeaveDesktopBridge = {
   openExternal: (url: string) => Promise<void>;
   getPlatform: () => NodeJS.Platform;
   terminalStart: (input: TerminalStartInput) => Promise<TerminalStartResult>;
-  terminalInput: (demiplaneId: string, data: string) => Promise<void>;
-  terminalResize: (demiplaneId: string, cols: number, rows: number) => Promise<void>;
-  terminalClose: (demiplaneId: string) => Promise<void>;
-  terminalDetach: (demiplaneId: string) => Promise<void>;
+  terminalInput: (terminalId: string, data: string) => Promise<void>;
+  terminalResize: (terminalId: string, cols: number, rows: number) => Promise<void>;
+  terminalClose: (terminalId: string) => Promise<void>;
+  terminalDetach: (terminalId: string) => Promise<void>;
   onTerminalEvent: (listener: (event: TerminalHostEvent) => void) => () => void;
   editorList: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
   editorRead: (target: EditorTarget, path: string) => Promise<EditorFile>;

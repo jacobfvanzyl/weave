@@ -4,6 +4,7 @@ import type { ITheme } from 'ghostty-web';
 import ghosttyWasmUrl from 'ghostty-web/ghostty-vt.wasm?url';
 
 type GhosttyTerminalViewProps = {
+  autoFocus?: boolean;
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
   onError?: (message: string) => void;
@@ -138,7 +139,7 @@ const getTerminalFontSize = () => {
 };
 
 export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerminalViewProps>(
-  ({ onInput, onResize, onError, onTitleChange }, ref) => {
+  ({ autoFocus = true, onInput, onResize, onError, onTitleChange }, ref) => {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const pendingWritesRef = useRef<string[]>([]);
@@ -196,7 +197,7 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
           writeTerminalData(terminal, data, incompleteCursorSequenceRef);
         }
 
-        terminal.focus();
+        if (autoFocus) terminal.focus();
 
         return () => {
           dataSubscription.dispose();
@@ -227,7 +228,7 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
         fitAddon?.dispose();
         terminal?.dispose();
       };
-    }, [onError, onInput, onResize, onTitleChange]);
+    }, [autoFocus, onError, onInput, onResize, onTitleChange]);
 
     return (
       <div

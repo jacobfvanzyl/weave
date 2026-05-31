@@ -101,8 +101,35 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     );
     expect(hideSidebarAppRegion === 'drag').toBe(false);
     expect(hideSidebarIconAppRegion === 'drag').toBe(false);
+    const generalTerminalToggle = page.getByRole('button', { name: 'Show general terminal' });
+    await generalTerminalToggle.waitFor({ timeout: 5_000 });
+    await playwrightExpect(generalTerminalToggle.locator('[data-weave-terminal-count-badge]')).toHaveCount(0);
     await page.getByRole('button', { name: 'Hide sidebar' }).click();
     await page.getByRole('button', { name: 'Show sidebar' }).first().waitFor({ timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Show general terminal' }).click();
+    const generalTerminalOverlay = page.locator('[data-weave-general-terminal-overlay]');
+    await playwrightExpect(generalTerminalOverlay).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(generalTerminalOverlay.locator('[data-terminal-kind="general"]')).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(page.getByRole('button', { name: 'Hide general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('1');
+    await generalTerminalOverlay.getByRole('button', { name: 'New terminal tab' }).click();
+    await playwrightExpect(generalTerminalOverlay.getByRole('tab')).toHaveCount(2);
+    await playwrightExpect(page.getByRole('button', { name: 'Hide general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('2');
+    await generalTerminalOverlay.getByRole('button', { name: /^Close / }).nth(1).click();
+    await playwrightExpect(generalTerminalOverlay.getByRole('tab')).toHaveCount(1);
+    await playwrightExpect(page.getByRole('button', { name: 'Hide general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('1');
+    const terminalBounds = await generalTerminalOverlay.locator('[data-weave-terminal-panel]').boundingBox();
+    const appbarBounds = await page.locator('header').boundingBox();
+    const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    if (!terminalBounds || !appbarBounds) throw new Error('Terminal overlay geometry was not measurable.');
+    const appbarBottomFromWindowEdge = appbarBounds.y + appbarBounds.height;
+    expect(terminalBounds.x).toBeCloseTo(appbarBottomFromWindowEdge, 0);
+    expect(terminalBounds.y).toBeCloseTo(appbarBottomFromWindowEdge, 0);
+    expect(viewport.width - terminalBounds.x - terminalBounds.width).toBeCloseTo(appbarBottomFromWindowEdge, 0);
+    expect(viewport.height - terminalBounds.y - terminalBounds.height).toBeCloseTo(appbarBottomFromWindowEdge, 0);
+    await generalTerminalOverlay.getByRole('button', { name: /^Close / }).first().click();
+    await playwrightExpect(generalTerminalOverlay).toBeHidden({ timeout: 5_000 });
+    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveCount(0);
 
     const shortcut = process.platform === 'darwin' ? 'Meta+Shift+K' : 'Control+Shift+K';
     const composer = page.locator('[data-weave-active-thread="true"] textarea');
@@ -130,5 +157,5 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
 
     expect(await page.evaluate(() => typeof window.require)).toBe('undefined');
     expect(await page.locator('body').evaluate(element => getComputedStyle(element).colorScheme)).toBe('dark');
-  }, 30_000);
+  }, 60_000);
 });

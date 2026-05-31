@@ -19,6 +19,7 @@ export type {
 export type {
   TerminalClientMessage,
   TerminalHostEvent,
+  TerminalSessionKind,
   TerminalStartInput,
   TerminalStartResult,
   TerminalTransport,

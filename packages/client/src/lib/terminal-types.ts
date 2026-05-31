@@ -1,20 +1,26 @@
+export type TerminalSessionKind = 'demiplane' | 'general';
+
 export type TerminalStartInput = {
-  planeId: string;
-  demiplaneId: string;
+  kind: TerminalSessionKind;
+  terminalId: string;
+  planeId?: string;
+  demiplaneId?: string;
+  cwd?: string;
   cols?: number;
   rows?: number;
 };
 
 export type TerminalClientMessage =
   | ({ type: 'start' } & TerminalStartInput)
-  | { type: 'input'; demiplaneId: string; data: string }
-  | { type: 'resize'; demiplaneId: string; cols: number; rows: number }
-  | { type: 'close'; demiplaneId: string }
-  | { type: 'detach'; demiplaneId: string };
+  | { type: 'input'; terminalId: string; data: string }
+  | { type: 'resize'; terminalId: string; cols: number; rows: number }
+  | { type: 'close'; terminalId: string }
+  | { type: 'detach'; terminalId: string };
 
 export type TerminalStartedEvent = {
   type: 'started';
-  demiplaneId: string;
+  terminalId: string;
+  demiplaneId?: string;
   sessionId: string;
   cwd: string;
   pid?: number;
@@ -24,11 +30,11 @@ export type TerminalStartedEvent = {
 
 export type TerminalHostEvent =
   | TerminalStartedEvent
-  | { type: 'output'; demiplaneId: string; data: string }
-  | { type: 'replay'; demiplaneId: string; data: string }
-  | { type: 'title'; demiplaneId: string; title: string }
-  | { type: 'exit'; demiplaneId: string; exitCode?: number; signal?: number | string }
-  | { type: 'error'; demiplaneId: string; error: string };
+  | { type: 'output'; terminalId: string; demiplaneId?: string; data: string }
+  | { type: 'replay'; terminalId: string; demiplaneId?: string; data: string }
+  | { type: 'title'; terminalId: string; demiplaneId?: string; title: string }
+  | { type: 'exit'; terminalId: string; demiplaneId?: string; exitCode?: number; signal?: number | string }
+  | { type: 'error'; terminalId: string; demiplaneId?: string; error: string };
 
 export type TerminalStartResult = {
   sessionId: string;
@@ -37,9 +43,9 @@ export type TerminalStartResult = {
 
 export type TerminalTransport = {
   start: (input: TerminalStartInput) => Promise<TerminalStartResult>;
-  input: (demiplaneId: string, data: string) => Promise<void>;
-  resize: (demiplaneId: string, cols: number, rows: number) => Promise<void>;
-  close: (demiplaneId: string) => Promise<void>;
-  detach: (demiplaneId: string) => Promise<void>;
+  input: (terminalId: string, data: string) => Promise<void>;
+  resize: (terminalId: string, cols: number, rows: number) => Promise<void>;
+  close: (terminalId: string) => Promise<void>;
+  detach: (terminalId: string) => Promise<void>;
   subscribe: (listener: (event: TerminalHostEvent) => void) => () => void;
 };

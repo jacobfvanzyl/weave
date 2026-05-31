@@ -7,10 +7,10 @@ import type {
 
 type DesktopTerminalBridge = {
   terminalStart: (input: TerminalStartInput) => Promise<TerminalStartResult>;
-  terminalInput: (demiplaneId: string, data: string) => Promise<void>;
-  terminalResize: (demiplaneId: string, cols: number, rows: number) => Promise<void>;
-  terminalClose: (demiplaneId: string) => Promise<void>;
-  terminalDetach: (demiplaneId: string) => Promise<void>;
+  terminalInput: (terminalId: string, data: string) => Promise<void>;
+  terminalResize: (terminalId: string, cols: number, rows: number) => Promise<void>;
+  terminalClose: (terminalId: string) => Promise<void>;
+  terminalDetach: (terminalId: string) => Promise<void>;
   onTerminalEvent: (listener: (event: TerminalHostEvent) => void) => () => void;
 };
 
@@ -43,10 +43,10 @@ export const createDesktopTerminalTransport = (): TerminalTransport | undefined 
 
   return {
     start: input => bridge.terminalStart(input),
-    input: (demiplaneId, data) => bridge.terminalInput(demiplaneId, data),
-    resize: (demiplaneId, cols, rows) => bridge.terminalResize(demiplaneId, cols, rows),
-    close: demiplaneId => bridge.terminalClose(demiplaneId),
-    detach: demiplaneId => bridge.terminalDetach(demiplaneId),
+    input: (terminalId, data) => bridge.terminalInput(terminalId, data),
+    resize: (terminalId, cols, rows) => bridge.terminalResize(terminalId, cols, rows),
+    close: terminalId => bridge.terminalClose(terminalId),
+    detach: terminalId => bridge.terminalDetach(terminalId),
     subscribe: listener => bridge.onTerminalEvent(listener),
   };
 };

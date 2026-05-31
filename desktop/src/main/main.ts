@@ -8,8 +8,8 @@ import { getServerOrigin, isHttpUrl, normalizeMastraUrl, parseDesktopConnectionI
 import { ConnectionSettingsStore } from './settings-store';
 import { EditorManager, parseEditorListInput, parseEditorReadInput, parseEditorWriteInput } from './editor-manager';
 import {
-  parseTerminalDemiplaneId,
   parseTerminalInputData,
+  parseTerminalId,
   parseTerminalResize,
   parseTerminalStartInput,
   TerminalManager,
@@ -131,13 +131,23 @@ const resolveGitDemiplane = async (input: EditorTarget, featureName: string) => 
   return { cwd: await realpath(demiplane.path) };
 };
 
-const resolveTerminalDemiplane = (input: TerminalStartInput) => resolveGitDemiplane(input, 'terminal');
+const resolveTerminalDemiplane = (input: TerminalStartInput) => {
+  if (!input.planeId || !input.demiplaneId) throw new Error('Plane and Demiplane are required for this terminal.');
+  return resolveGitDemiplane({ planeId: input.planeId, demiplaneId: input.demiplaneId }, 'terminal');
+};
+
+const resolveGeneralTerminal = async (input: TerminalStartInput) => ({
+  cwd: await realpath(input.cwd?.trim() || app.getPath('home')),
+});
 
 const resolveEditorDemiplane = (target: EditorTarget) => resolveGitDemiplane(target, 'editor');
 
 const getTerminalManager = () => {
   if (!terminalManager) {
-    terminalManager = new TerminalManager({ resolveDemiplane: resolveTerminalDemiplane });
+    terminalManager = new TerminalManager({
+      resolveDemiplane: resolveTerminalDemiplane,
+      resolveGeneralTerminal,
+    });
   }
 
   return terminalManager;
@@ -163,18 +173,18 @@ const registerIpcHandlers = () => {
   ipcMain.handle('terminal:start', (event, input: unknown) =>
     getTerminalManager().start(parseTerminalStartInput(input), event.sender),
   );
-  ipcMain.handle('terminal:input', (_event, demiplaneId: unknown, data: unknown) =>
-    getTerminalManager().input(parseTerminalDemiplaneId(demiplaneId), parseTerminalInputData(data)),
+  ipcMain.handle('terminal:input', (_event, terminalId: unknown, data: unknown) =>
+    getTerminalManager().input(parseTerminalId(terminalId), parseTerminalInputData(data)),
   );
-  ipcMain.handle('terminal:resize', (_event, demiplaneId: unknown, cols: unknown, rows: unknown) => {
+  ipcMain.handle('terminal:resize', (_event, terminalId: unknown, cols: unknown, rows: unknown) => {
     const size = parseTerminalResize(cols, rows);
-    return getTerminalManager().resize(parseTerminalDemiplaneId(demiplaneId), size.cols, size.rows);
+    return getTerminalManager().resize(parseTerminalId(terminalId), size.cols, size.rows);
   });
-  ipcMain.handle('terminal:close', (_event, demiplaneId: unknown) =>
-    getTerminalManager().close(parseTerminalDemiplaneId(demiplaneId)),
+  ipcMain.handle('terminal:close', (_event, terminalId: unknown) =>
+    getTerminalManager().close(parseTerminalId(terminalId)),
   );
-  ipcMain.handle('terminal:detach', (event, demiplaneId: unknown) =>
-    getTerminalManager().detach(parseTerminalDemiplaneId(demiplaneId), event.sender),
+  ipcMain.handle('terminal:detach', (event, terminalId: unknown) =>
+    getTerminalManager().detach(parseTerminalId(terminalId), event.sender),
   );
   ipcMain.handle('editor:list', (_event, input: unknown) =>
     getEditorManager().list(parseEditorListInput(input)),

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import os from 'node:os';
 import * as nodePty from 'node-pty';
-import type { TerminalHostEvent, TerminalStartInput, TerminalStartResult } from '../shared/terminal';
+import type { TerminalHostEvent, TerminalSessionKind, TerminalStartInput, TerminalStartResult } from '../shared/terminal';
 
 type Disposable = {
   dispose: () => void;
@@ -47,10 +47,17 @@ type TerminalTarget = {
   cwd: string;
 };
 
+type NormalizedTerminalStartInput = TerminalStartInput & {
+  cols: number;
+  rows: number;
+};
+
 type TerminalSession = {
   sessionId: string;
-  planeId: string;
-  demiplaneId: string;
+  kind: TerminalSessionKind;
+  terminalId: string;
+  planeId?: string;
+  demiplaneId?: string;
   cwd: string;
   pty: TerminalPty;
   cols: number;
@@ -64,7 +71,8 @@ type TerminalSession = {
 };
 
 type TerminalManagerOptions = {
-  resolveDemiplane: (input: TerminalStartInput) => Promise<TerminalTarget>;
+  resolveDemiplane: (input: NormalizedTerminalStartInput) => Promise<TerminalTarget>;
+  resolveGeneralTerminal?: (input: NormalizedTerminalStartInput) => Promise<TerminalTarget>;
   spawner?: TerminalPtySpawner;
   replayLimitBytes?: number;
   outputBatchMs?: number;
@@ -87,17 +95,42 @@ const parseDimension = (value: unknown, fallback: number, min: number, max: numb
   return Math.max(min, Math.min(max, Math.floor(value)));
 };
 
-export const parseTerminalStartInput = (input: unknown): TerminalStartInput => {
+export const parseTerminalStartInput = (input: unknown): NormalizedTerminalStartInput => {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
-  return {
-    planeId: parseIdentifier(record.planeId, 'planeId'),
-    demiplaneId: parseIdentifier(record.demiplaneId, 'demiplaneId'),
+  const isGeneralTerminalRequest = record.kind === 'general'
+    || (
+      record.kind !== 'demiplane'
+      && record.planeId === undefined
+      && record.demiplaneId === undefined
+      && (record.terminalId === 'weave-general-terminal' || typeof record.cwd === 'string')
+    );
+  const kind: TerminalSessionKind = isGeneralTerminalRequest ? 'general' : 'demiplane';
+  const parsedDimensions = {
     cols: parseDimension(record.cols, 80, 10, 400),
     rows: parseDimension(record.rows, 24, 3, 200),
   };
+
+  if (kind === 'general') {
+    return {
+      kind,
+      terminalId: parseIdentifier(record.terminalId ?? 'weave-general-terminal', 'terminalId'),
+      cwd: typeof record.cwd === 'string' && record.cwd.trim() ? record.cwd.trim() : undefined,
+      ...parsedDimensions,
+    };
+  }
+
+  const demiplaneId = parseIdentifier(record.demiplaneId, 'demiplaneId');
+  return {
+    kind,
+    terminalId: parseIdentifier(record.terminalId ?? demiplaneId, 'terminalId'),
+    planeId: parseIdentifier(record.planeId, 'planeId'),
+    demiplaneId,
+    ...parsedDimensions,
+  };
 };
 
-export const parseTerminalDemiplaneId = (value: unknown) => parseIdentifier(value, 'demiplaneId');
+export const parseTerminalId = (value: unknown) => parseIdentifier(value, 'terminalId');
+export const parseTerminalDemiplaneId = parseTerminalId;
 
 export const parseTerminalInputData = (value: unknown) => {
   if (typeof value !== 'string') throw new Error('terminal input data must be a string.');
@@ -124,7 +157,8 @@ const getProcessEnv = (env: NodeJS.ProcessEnv) =>
   Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 
 export class TerminalManager {
-  private readonly resolveDemiplane: (input: TerminalStartInput) => Promise<TerminalTarget>;
+  private readonly resolveDemiplane: (input: NormalizedTerminalStartInput) => Promise<TerminalTarget>;
+  private readonly resolveGeneralTerminal: (input: NormalizedTerminalStartInput) => Promise<TerminalTarget>;
   private readonly spawner: TerminalPtySpawner;
   private readonly replayLimitBytes: number;
   private readonly outputBatchMs: number;
@@ -133,6 +167,9 @@ export class TerminalManager {
 
   constructor(options: TerminalManagerOptions) {
     this.resolveDemiplane = options.resolveDemiplane;
+    this.resolveGeneralTerminal = options.resolveGeneralTerminal ?? (async input => ({
+      cwd: input.cwd || os.homedir() || process.cwd(),
+    }));
     this.spawner = options.spawner ?? defaultSpawner;
     this.replayLimitBytes = options.replayLimitBytes ?? defaultReplayLimitBytes;
     this.outputBatchMs = options.outputBatchMs ?? defaultOutputBatchMs;
@@ -140,28 +177,31 @@ export class TerminalManager {
   }
 
   async start(input: TerminalStartInput, webContents: TerminalWebContents): Promise<TerminalStartResult> {
-    const normalizedInput = {
-      ...input,
-      planeId: parseIdentifier(input.planeId, 'planeId'),
-      demiplaneId: parseIdentifier(input.demiplaneId, 'demiplaneId'),
-      cols: parseDimension(input.cols, 80, 10, 400),
-      rows: parseDimension(input.rows, 24, 3, 200),
-    };
+    const normalizedInput = parseTerminalStartInput(input);
 
     try {
-      const existing = this.sessions.get(normalizedInput.demiplaneId);
+      const existing = this.sessions.get(normalizedInput.terminalId);
       if (existing && !existing.exited) {
         this.attach(existing, webContents);
-        this.resize(normalizedInput.demiplaneId, normalizedInput.cols, normalizedInput.rows);
+        this.resize(normalizedInput.terminalId, normalizedInput.cols, normalizedInput.rows);
         this.sendStarted(existing, webContents);
         this.sendReplay(existing, webContents);
         return { sessionId: existing.sessionId, cwd: existing.cwd };
       }
 
-      const target = await this.resolveDemiplane(normalizedInput);
+      const target = normalizedInput.kind === 'general'
+        ? await this.resolveGeneralTerminal(normalizedInput)
+        : await this.resolveDemiplane(normalizedInput);
       await this.assertDirectory(target.cwd);
 
       const shell = getDefaultShell(os.platform(), this.env);
+      const weaveEnv: Record<string, string> = {
+        WEAVE_WORKSPACE: target.cwd,
+      };
+      if (normalizedInput.kind === 'demiplane') {
+        if (normalizedInput.planeId) weaveEnv.WEAVE_PLANE_ID = normalizedInput.planeId;
+        if (normalizedInput.demiplaneId) weaveEnv.WEAVE_DEMIPLANE_ID = normalizedInput.demiplaneId;
+      }
       const pty = this.spawner(shell.file, shell.args, {
         name: 'xterm-256color',
         cols: normalizedInput.cols,
@@ -171,14 +211,16 @@ export class TerminalManager {
           ...getProcessEnv(this.env),
           TERM: 'xterm-256color',
           COLORTERM: 'truecolor',
-          WEAVE_PLANE_ID: normalizedInput.planeId,
-          WEAVE_DEMIPLANE_ID: normalizedInput.demiplaneId,
-          WEAVE_WORKSPACE: target.cwd,
+          WEAVE_TERMINAL_KIND: normalizedInput.kind,
+          WEAVE_TERMINAL_ID: normalizedInput.terminalId,
+          ...weaveEnv,
         },
       });
 
       const session: TerminalSession = {
         sessionId: randomUUID(),
+        kind: normalizedInput.kind,
+        terminalId: normalizedInput.terminalId,
         planeId: normalizedInput.planeId,
         demiplaneId: normalizedInput.demiplaneId,
         cwd: target.cwd,
@@ -196,12 +238,13 @@ export class TerminalManager {
         pty.onData(data => this.queueOutput(session, data)),
         pty.onExit(event => this.handleExit(session, event)),
       );
-      this.sessions.set(normalizedInput.demiplaneId, session);
+      this.sessions.set(normalizedInput.terminalId, session);
       this.sendStarted(session, webContents);
       return { sessionId: session.sessionId, cwd: session.cwd };
     } catch (error) {
       this.sendEvent(webContents, {
         type: 'error',
+        terminalId: normalizedInput.terminalId,
         demiplaneId: normalizedInput.demiplaneId,
         error: toErrorMessage(error),
       });
@@ -209,14 +252,14 @@ export class TerminalManager {
     }
   }
 
-  input(demiplaneId: string, data: string) {
-    const session = this.sessions.get(demiplaneId);
+  input(terminalId: string, data: string) {
+    const session = this.sessions.get(terminalId);
     if (!session || session.exited) throw new Error('Terminal session is not running.');
     session.pty.write(data);
   }
 
-  resize(demiplaneId: string, cols: number, rows: number) {
-    const session = this.sessions.get(demiplaneId);
+  resize(terminalId: string, cols: number, rows: number) {
+    const session = this.sessions.get(terminalId);
     if (!session || session.exited) return;
     const nextCols = parseDimension(cols, session.cols, 10, 400);
     const nextRows = parseDimension(rows, session.rows, 3, 200);
@@ -227,14 +270,14 @@ export class TerminalManager {
     session.pty.resize(nextCols, nextRows);
   }
 
-  close(demiplaneId: string) {
-    const session = this.sessions.get(demiplaneId);
+  close(terminalId: string) {
+    const session = this.sessions.get(terminalId);
     if (!session || session.exited) return;
     session.pty.kill();
   }
 
-  detach(demiplaneId: string, webContents: TerminalWebContents) {
-    this.sessions.get(demiplaneId)?.subscribers.delete(webContents.id);
+  detach(terminalId: string, webContents: TerminalWebContents) {
+    this.sessions.get(terminalId)?.subscribers.delete(webContents.id);
   }
 
   detachWebContents(webContentsId: number) {
@@ -253,7 +296,7 @@ export class TerminalManager {
 
   private async assertDirectory(cwd: string) {
     const details = await stat(cwd);
-    if (!details.isDirectory()) throw new Error('Demiplane path is not a directory.');
+    if (!details.isDirectory()) throw new Error('Terminal path is not a directory.');
   }
 
   private attach(session: TerminalSession, webContents: TerminalWebContents) {
@@ -263,6 +306,7 @@ export class TerminalManager {
   private sendStarted(session: TerminalSession, webContents: TerminalWebContents) {
     this.sendEvent(webContents, {
       type: 'started',
+      terminalId: session.terminalId,
       demiplaneId: session.demiplaneId,
       sessionId: session.sessionId,
       cwd: session.cwd,
@@ -276,6 +320,7 @@ export class TerminalManager {
     if (!session.replay) return;
     this.sendEvent(webContents, {
       type: 'replay',
+      terminalId: session.terminalId,
       demiplaneId: session.demiplaneId,
       data: session.replay,
     });
@@ -296,7 +341,12 @@ export class TerminalManager {
     const data = session.pendingOutput;
     session.pendingOutput = '';
     this.appendReplay(session, data);
-    this.broadcast(session, { type: 'output', demiplaneId: session.demiplaneId, data });
+    this.broadcast(session, {
+      type: 'output',
+      terminalId: session.terminalId,
+      demiplaneId: session.demiplaneId,
+      data,
+    });
   }
 
   private appendReplay(session: TerminalSession, data: string) {
@@ -314,12 +364,13 @@ export class TerminalManager {
     session.exited = true;
     this.broadcast(session, {
       type: 'exit',
+      terminalId: session.terminalId,
       demiplaneId: session.demiplaneId,
       exitCode: event.exitCode,
       signal: event.signal,
     });
     this.disposeSession(session);
-    this.sessions.delete(session.demiplaneId);
+    this.sessions.delete(session.terminalId);
   }
 
   private disposeSession(session: TerminalSession) {

@@ -18,12 +18,12 @@ const bridge: WeaveDesktopBridge = {
   getPlatform: () => process.platform,
   terminalStart: (input: TerminalStartInput) =>
     ipcRenderer.invoke('terminal:start', input) as Promise<TerminalStartResult>,
-  terminalInput: (demiplaneId: string, data: string) =>
-    ipcRenderer.invoke('terminal:input', demiplaneId, data) as Promise<void>,
-  terminalResize: (demiplaneId: string, cols: number, rows: number) =>
-    ipcRenderer.invoke('terminal:resize', demiplaneId, cols, rows) as Promise<void>,
-  terminalClose: (demiplaneId: string) => ipcRenderer.invoke('terminal:close', demiplaneId) as Promise<void>,
-  terminalDetach: (demiplaneId: string) => ipcRenderer.invoke('terminal:detach', demiplaneId) as Promise<void>,
+  terminalInput: (terminalId: string, data: string) =>
+    ipcRenderer.invoke('terminal:input', terminalId, data) as Promise<void>,
+  terminalResize: (terminalId: string, cols: number, rows: number) =>
+    ipcRenderer.invoke('terminal:resize', terminalId, cols, rows) as Promise<void>,
+  terminalClose: (terminalId: string) => ipcRenderer.invoke('terminal:close', terminalId) as Promise<void>,
+  terminalDetach: (terminalId: string) => ipcRenderer.invoke('terminal:detach', terminalId) as Promise<void>,
   onTerminalEvent: listener => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, terminalEvent: TerminalHostEvent) => {
       listener(terminalEvent);
