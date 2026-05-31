@@ -41,8 +41,15 @@ type PortalRuntimeFile = {
   controlHost?: string;
   controlPort?: number;
   controlToken?: string;
+  controlCapabilities?: string[];
   startedAt?: string;
   updatedAt?: string;
+};
+
+type PortalHealthBody = {
+  httpServerUrl?: string;
+  wsServerUrl?: string;
+  controlCapabilities?: unknown;
 };
 
 type LocalTerminalConnection = {
@@ -63,6 +70,7 @@ type PortalSupervisorOptions = {
 
 const terminalEventChannel = 'terminal:event';
 const defaultPortalWsPort = '4112';
+const requiredControlCapabilities = ['terminal', 'editor'];
 
 const getAvailablePort = () => new Promise<number>((resolve, reject) => {
   const server = net.createServer();
@@ -117,6 +125,12 @@ const writeJsonFile = async (filePath: string, value: unknown) => {
 
 const splitExtraArgs = (value: string | undefined) => value?.split(/\s+/).filter(Boolean) ?? [];
 
+const hasRequiredControlCapabilities = (body: PortalHealthBody | undefined) => {
+  const capabilities = body?.controlCapabilities;
+  if (!Array.isArray(capabilities)) return false;
+  return requiredControlCapabilities.every(capability => capabilities.includes(capability));
+};
+
 export class PortalSupervisor {
   private readonly settingsStore: ConnectionSettingsStore;
   private readonly homePath: string;
@@ -146,7 +160,9 @@ export class PortalSupervisor {
     }
     await this.started;
     if (!this.controlPort || !this.controlToken) throw new Error('Portal control server is not initialized.');
+    const httpUrl = `http://${this.controlHost}:${this.controlPort}`;
     return {
+      httpUrl,
       url: `ws://${this.controlHost}:${this.controlPort}/terminal?token=${encodeURIComponent(this.controlToken)}`,
       token: this.controlToken,
     };
@@ -289,11 +305,24 @@ export class PortalSupervisor {
   private async isHealthy() {
     if (!this.controlPort || !this.controlToken) return false;
     try {
-      const response = await fetch(`http://${this.controlHost}:${this.controlPort}/health?token=${encodeURIComponent(this.controlToken)}`);
-      return response.ok;
+      const body = await this.getHealthBody(this.controlHost, this.controlPort, this.controlToken);
+      return hasRequiredControlCapabilities(body);
     } catch {
       return false;
     }
+  }
+
+  private async getHealthBody(host: string, port: number, token: string) {
+    const response = await fetch(`http://${host}:${port}/health?token=${encodeURIComponent(token)}`);
+    if (!response.ok) return undefined;
+    return await response.json().catch(() => undefined) as PortalHealthBody | undefined;
+  }
+
+  private async shutdownRuntime(runtime: PortalRuntimeFile) {
+    if (!runtime.controlHost || !runtime.controlPort || !runtime.controlToken) return;
+    await fetch(`http://${runtime.controlHost}:${runtime.controlPort}/shutdown?token=${encodeURIComponent(runtime.controlToken)}`)
+      .catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, 250));
   }
 
   private async tryAdoptRuntime(httpServerUrl: string, wsServerUrl: string) {
@@ -310,14 +339,16 @@ export class PortalSupervisor {
     }
 
     try {
-      const url = `http://${runtime.controlHost}:${runtime.controlPort}/health?token=${encodeURIComponent(runtime.controlToken)}`;
-      const response = await fetch(url);
-      if (!response.ok) return false;
-      const body = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+      const body = await this.getHealthBody(runtime.controlHost, runtime.controlPort, runtime.controlToken);
+      if (!body) return false;
       if (typeof body?.httpServerUrl === 'string' && normalizeHttpUrl(body.httpServerUrl) !== httpServerUrl) {
         return false;
       }
       if (typeof body?.wsServerUrl === 'string' && normalizeWsUrl(body.wsServerUrl) !== wsServerUrl) {
+        return false;
+      }
+      if (!hasRequiredControlCapabilities(body)) {
+        await this.shutdownRuntime(runtime);
         return false;
       }
 

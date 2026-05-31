@@ -73,6 +73,7 @@ describe('PortalSupervisor', () => {
             ok: true,
             httpServerUrl: 'http://mastra.test',
             wsServerUrl: 'ws://mastra.test:4112',
+            controlCapabilities: ['terminal', 'editor'],
           }));
           return;
         }
@@ -103,6 +104,7 @@ describe('PortalSupervisor', () => {
           controlHost: '127.0.0.1',
           controlPort: address.port,
           controlToken: token,
+          controlCapabilities: ['terminal', 'editor'],
           startedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         }));
@@ -133,6 +135,69 @@ describe('PortalSupervisor', () => {
       }));
 
       await expect(createSupervisor('http://mastra.test').ensureStarted()).rejects.toThrow('saved auth token');
+    }));
+
+  it('does not adopt a matching runtime that lacks editor control', async () =>
+    withTempPortal(async ({ directory, portalHome }) => {
+      const token = 'old-token';
+      let shutdownRequested = false;
+      const { server, url: controlUrl } = await listen((request, response) => {
+        const url = new URL(request.url ?? '/', controlUrl);
+        if (url.pathname === '/health' && url.searchParams.get('token') === token) {
+          response.setHeader('content-type', 'application/json');
+          response.end(JSON.stringify({
+            ok: true,
+            httpServerUrl: 'http://mastra.test',
+            wsServerUrl: 'ws://mastra.test:4112',
+          }));
+          return;
+        }
+        if (url.pathname === '/shutdown' && url.searchParams.get('token') === token) {
+          shutdownRequested = true;
+          response.setHeader('content-type', 'application/json');
+          response.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        response.statusCode = 401;
+        response.end('unauthorized');
+      });
+
+      try {
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('test server did not bind');
+        await mkdir(portalHome, { recursive: true });
+        await writeFile(path.join(portalHome, 'config.json'), JSON.stringify({
+          httpServerUrl: 'http://mastra.test',
+          wsServerUrl: 'ws://mastra.test:4112',
+          portal: {
+            portalId: 'portal_terminal_only',
+            portalToken: 'portal-token',
+            roots: [{ id: 'default', name: 'Home', path: tmpdir() }],
+          },
+        }));
+        await writeFile(path.join(portalHome, 'runtime.json'), JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          portalId: 'portal_terminal_only',
+          configPath: path.join(portalHome, 'config.json'),
+          httpServerUrl: 'http://mastra.test',
+          wsServerUrl: 'ws://mastra.test:4112',
+          controlHost: '127.0.0.1',
+          controlPort: address.port,
+          controlToken: token,
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }));
+        const fakePortalPath = path.join(directory, 'fake-exit.mjs');
+        await writeFile(fakePortalPath, 'process.exit(0);\n');
+        process.env.WEAVE_PORTAL_COMMAND = process.execPath;
+        process.env.WEAVE_PORTAL_ARGS = fakePortalPath;
+
+        await expect(createSupervisor('http://mastra.test').ensureStarted()).rejects.toThrow('Portal exited');
+        expect(shutdownRequested).toBe(true);
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
     }));
 
   it('ignores stale unreachable runtime files', async () =>
@@ -179,7 +244,7 @@ const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1');
   if (url.pathname === '/health' && url.searchParams.get('token') === token) {
     response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify({ ok: true }));
+    response.end(JSON.stringify({ ok: true, controlCapabilities: ['terminal', 'editor'] }));
     setTimeout(() => server.close(() => process.exit(0)), 10);
     return;
   }

@@ -8,6 +8,7 @@ export type PortalRuntimeFile = {
   controlHost?: string;
   controlPort?: number;
   controlToken?: string;
+  controlCapabilities?: string[];
   startedAt: string;
   updatedAt: string;
 };

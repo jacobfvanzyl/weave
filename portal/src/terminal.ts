@@ -1,3 +1,5 @@
+import type { PortalEditorHost } from './editor.ts';
+
 export type TerminalSessionKind = 'demiplane' | 'general';
 
 export type TerminalStartInput = {
@@ -107,6 +109,8 @@ type NormalizedTerminalStartInput = TerminalStartInput & {
 type TerminalSubscriber = {
   send: (event: TerminalHostEvent) => void;
 };
+
+type PortalEditorControlHost = Pick<PortalEditorHost, 'list' | 'read' | 'write'>;
 
 type TerminalSession = {
   sessionId: string;
@@ -759,6 +763,7 @@ export const isTerminalClientEnvelope = (message: Record<string, unknown>): mess
 
 export const startTerminalControlServer = (input: {
   host: PortalTerminalHost;
+  editor?: PortalEditorControlHost;
   hostname: string;
   port: number;
   token: string;
@@ -772,7 +777,7 @@ export const startTerminalControlServer = (input: {
   };
 
   let server: Deno.HttpServer<Deno.NetAddr>;
-  server = Deno.serve({ hostname: input.hostname, port: input.port }, (request) => {
+  server = Deno.serve({ hostname: input.hostname, port: input.port }, async (request) => {
     const url = new URL(request.url);
     if (!assertToken(request)) return new Response('unauthorized', { status: 401 });
     if (url.pathname === '/health') return Response.json({ ok: true, ...(input.metadata ?? {}) });
@@ -785,6 +790,31 @@ export const startTerminalControlServer = (input: {
       }, 0);
       return Response.json({ ok: true });
     }
+
+    const editorAction = url.pathname === '/editor/list'
+      ? 'list'
+      : url.pathname === '/editor/read'
+      ? 'read'
+      : url.pathname === '/editor/write'
+      ? 'write'
+      : undefined;
+    if (editorAction) {
+      if (!input.editor) return new Response('not found', { status: 404 });
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      try {
+        const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+        const result = editorAction === 'list'
+          ? await input.editor.list(body as Parameters<PortalEditorControlHost['list']>[0])
+          : editorAction === 'read'
+          ? await input.editor.read(body as Parameters<PortalEditorControlHost['read']>[0])
+          : await input.editor.write(body as Parameters<PortalEditorControlHost['write']>[0]);
+        return Response.json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return Response.json({ error: message }, { status: 400 });
+      }
+    }
+
     if (url.pathname !== '/terminal') return new Response('not found', { status: 404 });
 
     const { socket, response } = Deno.upgradeWebSocket(request);

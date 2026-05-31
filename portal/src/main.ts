@@ -1,3 +1,4 @@
+import { PortalEditorHost, type PortalEditorTarget } from './editor.ts';
 import { isTerminalClientEnvelope, PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
 import {
   checkPortalRuntimeHealth,
@@ -59,6 +60,7 @@ const defaultHttpServerUrl = 'http://localhost:4111';
 const defaultWsServerUrl = 'ws://localhost:4112';
 const defaultName = 'Mage Portal';
 const version = '0.1.0';
+const requiredControlCapabilities = ['terminal', 'editor'];
 
 const parseArgs = (args: string[]): ParsedArgs => {
   const [command, ...rest] = args;
@@ -91,6 +93,8 @@ const stringFlag = (flags: Record<string, string | boolean>, key: string) => {
   const value = flags[key];
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
 
 const numberFlag = (flags: Record<string, string | boolean>, key: string) => {
   const value = stringFlag(flags, key);
@@ -693,7 +697,25 @@ const bashTool = async (config: ResolvedPortalConfig, request: Record<string, un
   }
 };
 
-const handleToolCall = async (config: ResolvedPortalConfig, ws: WebSocket, request: Record<string, unknown>) => {
+const editorTargetFromRequest = (request: Record<string, unknown>): PortalEditorTarget => ({
+  planeId: typeof request.planeId === 'string' ? request.planeId : undefined,
+  demiplaneId: typeof request.demiplaneId === 'string' ? request.demiplaneId : undefined,
+  rootId: typeof request.rootId === 'string' ? request.rootId : undefined,
+  repoPath: typeof request.repoPath === 'string' ? request.repoPath : undefined,
+  workspacePath: typeof request.workspacePath === 'string' ? request.workspacePath : undefined,
+});
+
+const editorInputFromToolCall = (request: Record<string, unknown>) => {
+  const args = isRecord(request.args) ? request.args : {};
+  return { target: editorTargetFromRequest(request), ...args };
+};
+
+const handleToolCall = async (
+  config: ResolvedPortalConfig,
+  editorHost: PortalEditorHost,
+  ws: WebSocket,
+  request: Record<string, unknown>,
+) => {
   const id = typeof request.id === 'string' ? request.id : undefined;
   if (!id) return;
 
@@ -706,6 +728,12 @@ const handleToolCall = async (config: ResolvedPortalConfig, ws: WebSocket, reque
       ? await editFileTool(config, request)
       : request.tool === 'bash'
       ? await bashTool(config, request)
+      : request.tool === 'portal.editor.list'
+      ? await editorHost.list(editorInputFromToolCall(request))
+      : request.tool === 'portal.editor.read'
+      ? await editorHost.read(editorInputFromToolCall(request) as Parameters<PortalEditorHost['read']>[0])
+      : request.tool === 'portal.editor.write'
+      ? await editorHost.write(editorInputFromToolCall(request) as Parameters<PortalEditorHost['write']>[0])
       : request.tool === 'portal.fs.list'
       ? await listRootTool(config, request)
       : request.tool === 'portal.fs.stat'
@@ -744,6 +772,9 @@ const getPortalCapabilities = async () => {
     'edit',
     'bash',
     'terminal',
+    'portal.editor.list',
+    'portal.editor.read',
+    'portal.editor.write',
     'portal.fs.list',
     'portal.fs.stat',
     'portal.git.inspect',
@@ -757,9 +788,25 @@ const getPortalCapabilities = async () => {
     : baseCapabilities;
 };
 
+const hasRequiredControlCapabilities = (body: unknown) => {
+  const capabilities = body && typeof body === 'object'
+    ? (body as { controlCapabilities?: unknown }).controlCapabilities
+    : undefined;
+  return Array.isArray(capabilities) &&
+    requiredControlCapabilities.every((capability) => capabilities.includes(capability));
+};
+
+const shutdownRuntime = async (runtime: PortalRuntimeFile | undefined) => {
+  if (!runtime?.controlHost || !runtime.controlPort || !runtime.controlToken) return;
+  const url = new URL(`http://${runtime.controlHost}:${runtime.controlPort}/shutdown`);
+  url.searchParams.set('token', runtime.controlToken);
+  await fetch(url).catch(() => undefined);
+};
+
 const connectOnce = (
   config: ResolvedPortalConfig,
   terminalHost: PortalTerminalHost,
+  editorHost: PortalEditorHost,
   onSocket?: (ws: WebSocket) => void,
 ) =>
   new Promise<void>((resolve, reject) => {
@@ -812,7 +859,7 @@ const connectOnce = (
         return;
       }
 
-      if (message.type === 'tool.call') void handleToolCall(config, ws, message);
+      if (message.type === 'tool.call') void handleToolCall(config, editorHost, ws, message);
     };
 
     ws.onerror = () => {
@@ -842,18 +889,24 @@ const daemon = async (flags: Record<string, string | boolean>) => {
     const existingHealth = await checkPortalRuntimeHealth(existingRuntime);
     if (existingHealth.ok) {
       if (runtimeMatchesServer(existingRuntime, config.httpServerUrl, config.wsServerUrl)) {
-        console.log(`Portal daemon already running: ${existingRuntime.portalId}`);
-        console.log(`Runtime: ${runtimePath}`);
-        return;
+        if (hasRequiredControlCapabilities(existingHealth.body)) {
+          console.log(`Portal daemon already running: ${existingRuntime.portalId}`);
+          console.log(`Runtime: ${runtimePath}`);
+          return;
+        }
+        await shutdownRuntime(existingRuntime);
+        await removePortalRuntime(runtimePath).catch(() => undefined);
+      } else {
+        throw new Error(
+          `Portal daemon is already running for a different server. Run "portal stop" first: ${runtimePath}`,
+        );
       }
-      throw new Error(
-        `Portal daemon is already running for a different server. Run "portal stop" first: ${runtimePath}`,
-      );
     }
     await removePortalRuntime(runtimePath).catch(() => undefined);
   }
 
   const terminalHost = new PortalTerminalHost({ config });
+  const editorHost = new PortalEditorHost({ config });
   const controlToken = noControl ? undefined : stringFlag(flags, 'control-token') ?? crypto.randomUUID();
   const controlPort = noControl ? undefined : numberFlag(flags, 'control-port') ?? 0;
   const controlHost = stringFlag(flags, 'control-host') ?? '127.0.0.1';
@@ -881,6 +934,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   if (controlToken && controlPort !== undefined) {
     controlServer = startTerminalControlServer({
       host: terminalHost,
+      editor: editorHost,
       hostname: controlHost,
       port: controlPort,
       token: controlToken,
@@ -890,6 +944,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
         httpServerUrl: config.httpServerUrl,
         wsServerUrl: config.wsServerUrl,
         runtimePath,
+        controlCapabilities: requiredControlCapabilities,
       },
       onShutdown: requestStop,
     });
@@ -905,6 +960,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
       controlHost,
       controlPort: actualControlPort,
       controlToken,
+      controlCapabilities: requiredControlCapabilities,
       startedAt: now,
       updatedAt: now,
     };
@@ -917,9 +973,9 @@ const daemon = async (flags: Record<string, string | boolean>) => {
     console.log(`Portal home: ${resolvePortalHome()}`);
     console.log(`Config: ${configPath}`);
     console.log(`Runtime: ${runtimePath}`);
-    console.log(`Local terminal control: http://${controlHost}:${actualControlPort}`);
+    console.log(`Local control: http://${controlHost}:${actualControlPort}`);
   } else {
-    console.log('Local terminal control: disabled');
+    console.log('Local control: disabled');
   }
 
   let retryMs = 1_000;
@@ -932,7 +988,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
 
   while (!stopping) {
     try {
-      await connectOnce(config, terminalHost, (ws) => {
+      await connectOnce(config, terminalHost, editorHost, (ws) => {
         activeSocket = ws;
       });
       retryMs = 1_000;

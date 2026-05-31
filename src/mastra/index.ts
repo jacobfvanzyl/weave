@@ -18,6 +18,7 @@ import { promptRoutes } from './routes/prompts';
 import { planesRoutes } from './routes/planes';
 import { portalSocketRoutes } from './routes/portal-socket';
 import { terminalRoutes } from './routes/terminals';
+import { editorRoutes } from './routes/editor';
 import { chatgptAuthRoutes } from './routes/chatgpt-auth';
 import { modelRoutes } from './routes/models';
 import { attachmentRoutes } from './routes/attachments';
@@ -50,6 +51,7 @@ export const mastra = new Mastra({
       ...planesRoutes,
       ...portalSocketRoutes,
       ...terminalRoutes,
+      ...editorRoutes,
       ...chatgptAuthRoutes,
       ...modelRoutes,
       ...attachmentRoutes,

@@ -1,6 +1,10 @@
 export type EditorTarget = {
   planeId: string;
   demiplaneId: string;
+  portalId?: string;
+  rootId?: string;
+  repoPath?: string;
+  workspacePath?: string;
 };
 
 export type EditorEntry = {

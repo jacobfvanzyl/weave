@@ -6,7 +6,8 @@ import type { EditorTarget } from '../shared/editor';
 import type { TerminalStartInput } from '../shared/terminal';
 import { getServerOrigin, isHttpUrl, normalizeMastraUrl, parseDesktopConnectionInput } from '../shared/connection';
 import { ConnectionSettingsStore } from './settings-store';
-import { EditorManager, parseEditorListInput, parseEditorReadInput, parseEditorWriteInput } from './editor-manager';
+import { parseEditorListInput, parseEditorReadInput, parseEditorWriteInput } from './editor-input';
+import { PortalEditorClient } from './portal-editor-client';
 import {
   parseTerminalInputData,
   parseTerminalId,
@@ -18,7 +19,7 @@ import { PortalSupervisor, PortalTerminalClient } from './portal-terminal-client
 let settingsStore: ConnectionSettingsStore | undefined;
 let portalSupervisor: PortalSupervisor | undefined;
 let portalTerminalClient: PortalTerminalClient | undefined;
-let editorManager: EditorManager | undefined;
+let portalEditorClient: PortalEditorClient | undefined;
 
 const appName = 'Weave';
 const devAppIconPath = app.isPackaged ? undefined : path.join(process.cwd(), 'assets', 'icon.png');
@@ -133,7 +134,7 @@ const resolveGitDemiplane = async (input: EditorTarget, featureName: string) => 
   }
 
   return {
-    cwd: await realpath(demiplane.path),
+    cwd: demiplane.path.trim(),
     portalId: typeof plane.portalId === 'string' ? plane.portalId : undefined,
     rootId: typeof plane.portalRootId === 'string' ? plane.portalRootId : undefined,
     repoPath: typeof plane.repoPath === 'string' ? plane.repoPath : undefined,
@@ -172,12 +173,22 @@ const getPortalTerminalClient = () => {
   return portalTerminalClient;
 };
 
-const getEditorManager = () => {
-  if (!editorManager) {
-    editorManager = new EditorManager({ resolveDemiplane: resolveEditorDemiplane });
+const getPortalEditorClient = () => {
+  if (!settingsStore) throw new Error('Connection settings store is not initialized.');
+  if (!portalSupervisor) {
+    portalSupervisor = new PortalSupervisor({
+      settingsStore,
+      homePath: app.getPath('home'),
+    });
+  }
+  if (!portalEditorClient) {
+    portalEditorClient = new PortalEditorClient({
+      supervisor: portalSupervisor,
+      resolveDemiplane: resolveEditorDemiplane,
+    });
   }
 
-  return editorManager;
+  return portalEditorClient;
 };
 
 const registerIpcHandlers = () => {
@@ -210,13 +221,13 @@ const registerIpcHandlers = () => {
     getPortalTerminalClient().detach(parseTerminalId(terminalId), event.sender),
   );
   ipcMain.handle('editor:list', (_event, input: unknown) =>
-    getEditorManager().list(parseEditorListInput(input)),
+    getPortalEditorClient().list(parseEditorListInput(input)),
   );
   ipcMain.handle('editor:read', (_event, input: unknown) =>
-    getEditorManager().read(parseEditorReadInput(input)),
+    getPortalEditorClient().read(parseEditorReadInput(input)),
   );
   ipcMain.handle('editor:write', (_event, input: unknown) =>
-    getEditorManager().write(parseEditorWriteInput(input)),
+    getPortalEditorClient().write(parseEditorWriteInput(input)),
   );
 };
 

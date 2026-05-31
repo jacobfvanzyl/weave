@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, PanelLeft, Settings, TerminalSquare } from 'lucide-react';
 import { listPlanes, listPortals, listServerThreads } from '../../lib/chat-state-api';
-import { isEditorBackendAvailable } from '../../lib/editor-backend';
+import { isDesktopEditorBackendAvailable, isEditorBackendAvailable } from '../../lib/editor-backend';
 import { isDesktopTerminalTransportAvailable, isTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useChatStore } from '../../stores/chat-store';
 import { Button } from '../ui/button';
@@ -424,7 +424,8 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const terminalTarget = hasAnyTerminalTransport && (hasOnlinePortalForActiveDemiplane || (isElectronWindow && hasDesktopTerminalTransport))
     ? activeGitDemiplaneTarget
     : undefined;
-  const editorTarget = isElectronWindow && isEditorBackendAvailable()
+  const hasDesktopEditorBackend = isDesktopEditorBackendAvailable();
+  const editorTarget = isEditorBackendAvailable() && (hasOnlinePortalForActiveDemiplane || (isElectronWindow && hasDesktopEditorBackend))
     ? activeGitDemiplaneTarget
     : undefined;
   const terminalDemiplaneId = terminalTarget?.demiplaneId;

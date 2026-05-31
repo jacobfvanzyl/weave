@@ -1,4 +1,5 @@
 import type { EditorBackend, EditorFile, EditorListResult, EditorTarget, EditorWriteResult } from './editor-types';
+import { getAuthHeaders, getMastraUrl } from './mastra-client';
 
 type DesktopEditorBridge = {
   editorList: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
@@ -26,7 +27,12 @@ const getDesktopBridge = () => {
   return bridge as DesktopEditorBridge;
 };
 
-export const isEditorBackendAvailable = () => Boolean(getDesktopBridge());
+export const isDesktopEditorBackendAvailable = () => Boolean(getDesktopBridge());
+
+export const isWebEditorBackendAvailable = () =>
+  typeof window !== 'undefined' && typeof window.fetch === 'function';
+
+export const isEditorBackendAvailable = () => isDesktopEditorBackendAvailable() || isWebEditorBackendAvailable();
 
 const createUnavailableEditorBackend = (): EditorBackend => ({
   list: async () => {
@@ -42,7 +48,36 @@ const createUnavailableEditorBackend = (): EditorBackend => ({
 
 export const createEditorBackend = (): EditorBackend => {
   const bridge = getDesktopBridge();
-  if (!bridge) return createUnavailableEditorBackend();
+  if (!bridge && !isWebEditorBackendAvailable()) return createUnavailableEditorBackend();
+
+  if (!bridge) {
+    const request = async <T>(action: 'list' | 'read' | 'write', body: unknown): Promise<T> => {
+      const response = await fetch(`${getMastraUrl()}/editor/${action}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(body),
+      });
+      const text = await response.text();
+      const parsed = text
+        ? (() => {
+            try {
+              return JSON.parse(text) as { error?: string } & T;
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined;
+      if (!response.ok) throw new Error(parsed?.error || text || `Editor request failed: HTTP ${response.status}`);
+      if (!parsed) throw new Error('Editor response was empty.');
+      return parsed;
+    };
+
+    return {
+      list: (target, path) => request<EditorListResult>('list', { target, path }),
+      read: (target, path) => request<EditorFile>('read', { target, path }),
+      write: (target, path, content, version) => request<EditorWriteResult>('write', { target, path, content, version }),
+    };
+  }
 
   return {
     list: (target, path) => bridge.editorList(target, path),

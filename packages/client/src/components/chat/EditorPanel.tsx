@@ -55,7 +55,11 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
   const editorTarget = useMemo<EditorTarget>(() => ({
     planeId: target.planeId,
     demiplaneId: target.demiplaneId,
-  }), [target.demiplaneId, target.planeId]);
+    portalId: target.portalId,
+    rootId: target.rootId,
+    repoPath: target.repoPath,
+    workspacePath: target.workspacePath,
+  }), [target.demiplaneId, target.planeId, target.portalId, target.repoPath, target.rootId, target.workspacePath]);
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const [directoryPath, setDirectoryPath] = useState('');
   const [entries, setEntries] = useState<EditorEntry[]>([]);
