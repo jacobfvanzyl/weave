@@ -31,6 +31,7 @@ const sharedClientPackages = [
   '@dnd-kit/utilities',
   '@fontsource-variable/dm-sans',
   '@lezer/highlight',
+  '@replit/codemirror-vim',
   '@tanstack/react-query',
   'ai',
   'class-variance-authority',

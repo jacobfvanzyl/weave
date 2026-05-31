@@ -1,14 +1,25 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import type { Extension } from '@codemirror/state';
-import { EditorView, keymap, type ViewUpdate } from '@codemirror/view';
+import { EditorView, GutterMarker, gutter, gutters, keymap, type ViewUpdate } from '@codemirror/view';
 import { css } from '@codemirror/lang-css';
 import { html } from '@codemirror/lang-html';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
 import { tags as t } from '@lezer/highlight';
+import { getCM, vim } from '@replit/codemirror-vim';
 import { basicSetup } from 'codemirror';
+
+export type VimMode =
+  | 'normal'
+  | 'insert'
+  | 'visual'
+  | 'visualLine'
+  | 'visualBlock'
+  | 'replace'
+  | 'command'
+  | 'terminal';
 
 type CodeMirrorEditorProps = {
   path?: string;
@@ -16,6 +27,16 @@ type CodeMirrorEditorProps = {
   readOnly?: boolean;
   onChange: (value: string) => void;
   onSave?: () => void;
+  onVimModeChange?: (mode: VimMode) => void;
+};
+
+export type CodeMirrorEditorHandle = {
+  focus: () => void;
+};
+
+type VimModeChangeEvent = {
+  mode?: string;
+  subMode?: string;
 };
 
 const catppuccinMocha = {
@@ -68,6 +89,73 @@ const catppuccinMochaHighlightStyle = HighlightStyle.define([
   { tag: [t.invalid], color: catppuccinMocha.red },
 ]);
 
+class RelativeLineNumberMarker extends GutterMarker {
+  constructor(public readonly label: string) {
+    super();
+  }
+
+  eq(other: GutterMarker) {
+    return other instanceof RelativeLineNumberMarker && other.label === this.label;
+  }
+
+  toDOM() {
+    return document.createTextNode(this.label);
+  }
+}
+
+const getLineNumberSpacer = (lineCount: number) => {
+  let last = 9;
+  while (last < lineCount) last = last * 10 + 9;
+  return String(last);
+};
+
+const relativeLineNumbers: Extension = [
+  gutters(),
+  gutter({
+    class: 'cm-lineNumbers cm-relativeLineNumbers',
+    renderEmptyElements: false,
+    lineMarker: (view, line) => {
+      const lineNumber = view.state.doc.lineAt(line.from).number;
+      const cursorLineNumber = view.state.doc.lineAt(view.state.selection.main.head).number;
+      const label = lineNumber === cursorLineNumber ? String(lineNumber) : String(Math.abs(lineNumber - cursorLineNumber));
+      return new RelativeLineNumberMarker(label);
+    },
+    lineMarkerChange: update => update.docChanged || update.selectionSet || update.viewportChanged,
+    initialSpacer: view => new RelativeLineNumberMarker(getLineNumberSpacer(view.state.doc.lines)),
+    updateSpacer: (spacer, update) => {
+      const nextLabel = getLineNumberSpacer(update.view.state.doc.lines);
+      return spacer instanceof RelativeLineNumberMarker && spacer.label === nextLabel
+        ? spacer
+        : new RelativeLineNumberMarker(nextLabel);
+    },
+  }),
+];
+
+// basicSetup starts with an absolute line-number gutter; replace that one with our relative gutter.
+const editorBasicSetup: Extension = Array.isArray(basicSetup)
+  ? (basicSetup as readonly Extension[]).slice(1)
+  : basicSetup;
+
+const toVimMode = (event: VimModeChangeEvent = {}): VimMode => {
+  switch (event.mode) {
+    case 'insert':
+      return 'insert';
+    case 'visual':
+      if (event.subMode === 'linewise') return 'visualLine';
+      if (event.subMode === 'blockwise') return 'visualBlock';
+      return 'visual';
+    case 'replace':
+      return 'replace';
+    case 'command':
+      return 'command';
+    case 'terminal':
+      return 'terminal';
+    case 'normal':
+    default:
+      return 'normal';
+  }
+};
+
 const editorTheme = EditorView.theme({
   '&': {
     height: '100%',
@@ -76,8 +164,8 @@ const editorTheme = EditorView.theme({
   },
   '.cm-scroller': {
     fontFamily: 'var(--font-code)',
-    fontSize: '12px',
-    lineHeight: '1.55',
+    fontSize: 'var(--weave-chat-text-size)',
+    lineHeight: 'var(--weave-chat-line-height)',
   },
   '.cm-content': {
     minHeight: '100%',
@@ -165,13 +253,25 @@ const getLanguageExtension = (filePath: string | undefined): Extension[] => {
   return [];
 };
 
-export const CodeMirrorEditor = ({ path, value, readOnly, onChange, onSave }: CodeMirrorEditorProps) => {
+export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(({
+  path,
+  value,
+  readOnly,
+  onChange,
+  onSave,
+  onVimModeChange,
+}, ref) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
+  const onVimModeChangeRef = useRef(onVimModeChange);
   const isSyncingRef = useRef(false);
   const languageExtensions = useMemo(() => getLanguageExtension(path), [path]);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => viewRef.current?.focus(),
+  }), []);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -180,6 +280,10 @@ export const CodeMirrorEditor = ({ path, value, readOnly, onChange, onSave }: Co
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
+
+  useEffect(() => {
+    onVimModeChangeRef.current = onVimModeChange;
+  }, [onVimModeChange]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -200,7 +304,9 @@ export const CodeMirrorEditor = ({ path, value, readOnly, onChange, onSave }: Co
       doc: value,
       parent: container,
       extensions: [
-        basicSetup,
+        vim({ status: false }),
+        relativeLineNumbers,
+        editorBasicSetup,
         editorTheme,
         syntaxHighlighting(catppuccinMochaHighlightStyle),
         EditorView.lineWrapping,
@@ -212,7 +318,16 @@ export const CodeMirrorEditor = ({ path, value, readOnly, onChange, onSave }: Co
     });
 
     viewRef.current = view;
+    onVimModeChangeRef.current?.('normal');
+
+    const cm = getCM(view);
+    const handleVimModeChange = (event: VimModeChangeEvent) => {
+      onVimModeChangeRef.current?.(toVimMode(event));
+    };
+    cm?.on('vim-mode-change', handleVimModeChange);
+
     return () => {
+      cm?.off('vim-mode-change', handleVimModeChange);
       view.destroy();
       if (viewRef.current === view) viewRef.current = null;
     };
@@ -233,4 +348,6 @@ export const CodeMirrorEditor = ({ path, value, readOnly, onChange, onSave }: Co
   }, [value]);
 
   return <div ref={containerRef} className="h-full min-h-0" />;
-};
+});
+
+CodeMirrorEditor.displayName = 'CodeMirrorEditor';

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   Code2,
@@ -7,6 +7,8 @@ import {
   LoaderCircle,
   Maximize2,
   Minimize2,
+  PanelRightClose,
+  PanelRightOpen,
   RefreshCw,
   Save,
   X,
@@ -14,7 +16,7 @@ import {
 import { createEditorBackend } from '../../lib/editor-backend';
 import type { EditorBackend, EditorEntry, EditorFile, EditorTarget } from '../../lib/editor-types';
 import { Button } from '../ui/button';
-import { CodeMirrorEditor } from './CodeMirrorEditor';
+import { CodeMirrorEditor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
 
 type EditorPanelTarget = EditorTarget & {
   planeName: string;
@@ -23,7 +25,6 @@ type EditorPanelTarget = EditorTarget & {
 
 type EditorPanelProps = {
   isExpanded: boolean;
-  isBalancedWidth?: boolean;
   onExpandedChange: (isExpanded: boolean) => void;
   target: EditorPanelTarget;
   onHide: () => void;
@@ -37,12 +38,24 @@ const getParentPath = (path: string) => {
 
 const toErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedChange, target, onHide }: EditorPanelProps) => {
+const editorModeIndicatorStyles: Record<VimMode, { label: string; foreground: string; background: string }> = {
+  normal: { label: 'NORMAL', foreground: '#181825', background: '#89b4fa' },
+  insert: { label: 'INSERT', foreground: '#1e1e2e', background: '#a6e3a1' },
+  visual: { label: 'VISUAL', foreground: '#1e1e2e', background: '#cba6f7' },
+  visualLine: { label: 'V-LINE', foreground: '#1e1e2e', background: '#cba6f7' },
+  visualBlock: { label: 'V-BLOCK', foreground: '#1e1e2e', background: '#cba6f7' },
+  replace: { label: 'REPLACE', foreground: '#1e1e2e', background: '#f38ba8' },
+  command: { label: 'COMMAND', foreground: '#1e1e2e', background: '#fab387' },
+  terminal: { label: 'TERMINAL', foreground: '#1e1e2e', background: '#a6e3a1' },
+};
+
+export const EditorPanel = ({ isExpanded, onExpandedChange, target, onHide }: EditorPanelProps) => {
   const backend = useMemo<EditorBackend>(() => createEditorBackend(), []);
   const editorTarget = useMemo<EditorTarget>(() => ({
     planeId: target.planeId,
     demiplaneId: target.demiplaneId,
   }), [target.demiplaneId, target.planeId]);
+  const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const [directoryPath, setDirectoryPath] = useState('');
   const [entries, setEntries] = useState<EditorEntry[]>([]);
   const [openFile, setOpenFile] = useState<EditorFile>();
@@ -51,6 +64,9 @@ export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedCha
   const [isDirectoryLoading, setIsDirectoryLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isFileTreeVisible, setIsFileTreeVisible] = useState(true);
+  const [vimMode, setVimMode] = useState<VimMode>('normal');
+  const [editorFocusRequest, setEditorFocusRequest] = useState(0);
   const isDirty = Boolean(openFile && content !== openFile.content);
 
   const confirmDiscard = useCallback(() => !isDirty || window.confirm('Discard unsaved changes?'), [isDirty]);
@@ -70,7 +86,7 @@ export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedCha
     }
   }, [backend, editorTarget]);
 
-  const loadFile = useCallback(async (path: string) => {
+  const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean } = {}) => {
     setIsFileLoading(true);
     setError(undefined);
 
@@ -78,6 +94,7 @@ export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedCha
       const file = await backend.read(editorTarget, path);
       setOpenFile(file);
       setContent(file.content);
+      if (options.focusEditor) setEditorFocusRequest(request => request + 1);
     } catch (loadError) {
       setError(toErrorMessage(loadError));
     } finally {
@@ -94,6 +111,16 @@ export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedCha
     void loadDirectory('');
   }, [loadDirectory, target.demiplaneId, target.planeId]);
 
+  useEffect(() => {
+    if (!openFile) setVimMode('normal');
+  }, [openFile]);
+
+  useEffect(() => {
+    if (editorFocusRequest === 0) return undefined;
+    const animationFrame = window.requestAnimationFrame(() => editorRef.current?.focus());
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [editorFocusRequest, openFile?.path]);
+
   const handleOpenEntry = useCallback((entry: EditorEntry) => {
     if (entry.type === 'directory') {
       if (!confirmDiscard()) return;
@@ -103,7 +130,7 @@ export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedCha
 
     if (entry.type === 'file') {
       if (!confirmDiscard()) return;
-      void loadFile(entry.path);
+      void loadFile(entry.path, { focusEditor: true });
     }
   }, [confirmDiscard, loadDirectory, loadFile]);
 
@@ -140,13 +167,14 @@ export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedCha
       : isDirty
         ? 'modified'
         : undefined;
+  const fileTreeToggleLabel = isFileTreeVisible ? 'Hide file tree' : 'Show file tree';
+  const modeIndicator = editorModeIndicatorStyles[vimMode];
 
   return (
     <section
-      className={`relative z-10 flex h-full ${isExpanded ? 'min-w-0 flex-1' : isBalancedWidth ? 'min-w-0 flex-1 basis-0' : 'w-[clamp(28rem,44vw,var(--weave-chat-content-max-width))] max-w-full shrink-0'} min-h-0 flex-col border-l border-border bg-background transition-[width] duration-150 ease-out`}
+      className="relative z-10 flex h-full min-h-0 min-w-0 flex-1 basis-0 flex-col border-l border-border bg-background transition-[width] duration-150 ease-out"
       data-weave-editor-panel
       data-expanded={isExpanded ? 'true' : 'false'}
-      data-balanced-width={isBalancedWidth ? 'true' : 'false'}
     >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
         <Code2 size={15} className="shrink-0 text-primary" />
@@ -194,61 +222,16 @@ export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedCha
         </Button>
       </div>
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card/70">
-          <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-2">
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              aria-label="Open parent folder"
-              disabled={!directoryPath || isDirectoryLoading}
-              onClick={handleDirectoryUp}
-            >
-              <ChevronLeft size={14} />
-            </Button>
-            <span className="min-w-0 truncate text-[11px] font-medium text-muted-foreground">
-              /{directoryPath}
-            </span>
-            {isDirectoryLoading ? (
-              <LoaderCircle size={13} className="ml-auto shrink-0 animate-spin text-primary" aria-hidden="true" />
-            ) : null}
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-1">
-            {entries.map(entry => {
-              const isSelected = entry.type === 'file' && entry.path === openFile?.path;
-              const isOther = entry.type === 'other';
-              return (
-                <button
-                  key={entry.path}
-                  className={[
-                    'flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-foreground transition-colors',
-                    isSelected ? 'bg-selected-thread' : 'hover:bg-accent',
-                    isOther ? 'cursor-default text-muted-foreground opacity-70' : '',
-                  ].filter(Boolean).join(' ')}
-                  disabled={isOther || isDirectoryLoading || isFileLoading}
-                  title={entry.path}
-                  onClick={() => handleOpenEntry(entry)}
-                >
-                  {entry.type === 'directory' ? (
-                    <Folder size={14} className="shrink-0 text-mauve" />
-                  ) : entry.type === 'file' ? (
-                    <File size={14} className="shrink-0 text-muted-foreground" />
-                  ) : (
-                    <File size={14} className="shrink-0 text-muted-foreground" />
-                  )}
-                  <span className="min-w-0 truncate">{entry.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        </aside>
         <div className="relative min-w-0 flex-1 overflow-hidden bg-background">
           {openFile ? (
             <CodeMirrorEditor
+              ref={editorRef}
               key={openFile.path}
               path={openFile.path}
               value={content}
               onChange={setContent}
               onSave={() => void handleSave()}
+              onVimModeChange={setVimMode}
             />
           ) : (
             <div className="grid h-full place-items-center text-xs text-muted-foreground">
@@ -266,6 +249,79 @@ export const EditorPanel = ({ isExpanded, isBalancedWidth = false, onExpandedCha
             </div>
           ) : null}
         </div>
+        {isFileTreeVisible ? (
+          <aside className="flex w-64 shrink-0 flex-col border-l border-border bg-card/70">
+            <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-2">
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Open parent folder"
+                disabled={!directoryPath || isDirectoryLoading}
+                onClick={handleDirectoryUp}
+              >
+                <ChevronLeft size={14} />
+              </Button>
+              <span className="min-w-0 truncate text-[11px] font-medium text-muted-foreground">
+                /{directoryPath}
+              </span>
+              {isDirectoryLoading ? (
+                <LoaderCircle size={13} className="ml-auto shrink-0 animate-spin text-primary" aria-hidden="true" />
+              ) : null}
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-1">
+              {entries.map(entry => {
+                const isSelected = entry.type === 'file' && entry.path === openFile?.path;
+                const isOther = entry.type === 'other';
+                return (
+                  <button
+                    key={entry.path}
+                    className={[
+                      'flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-foreground transition-colors',
+                      isSelected ? 'bg-selected-thread' : 'hover:bg-accent',
+                      isOther ? 'cursor-default text-muted-foreground opacity-70' : '',
+                    ].filter(Boolean).join(' ')}
+                    disabled={isOther || isDirectoryLoading || isFileLoading}
+                    title={entry.path}
+                    onClick={() => handleOpenEntry(entry)}
+                  >
+                    {entry.type === 'directory' ? (
+                      <Folder size={14} className="shrink-0 text-mauve" />
+                    ) : entry.type === 'file' ? (
+                      <File size={14} className="shrink-0 text-muted-foreground" />
+                    ) : (
+                      <File size={14} className="shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="min-w-0 truncate">{entry.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        ) : null}
+      </div>
+      <div className="flex h-9 shrink-0 items-center gap-2 border-t border-border px-3">
+        <span
+          className="inline-flex h-5 min-w-[4.75rem] shrink-0 items-center justify-center rounded-sm px-2 text-[11px] font-bold"
+          style={{
+            backgroundColor: modeIndicator.background,
+            color: modeIndicator.foreground,
+          }}
+        >
+          {modeIndicator.label}
+        </span>
+        <div className="min-w-0 flex-1" />
+        <Button
+          className={isFileTreeVisible ? 'bg-accent' : ''}
+          size="icon-xs"
+          variant="ghost"
+          aria-label={fileTreeToggleLabel}
+          title={fileTreeToggleLabel}
+          aria-pressed={isFileTreeVisible}
+          data-active={isFileTreeVisible ? 'true' : 'false'}
+          onClick={() => setIsFileTreeVisible(visible => !visible)}
+        >
+          {isFileTreeVisible ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+        </Button>
       </div>
     </section>
   );

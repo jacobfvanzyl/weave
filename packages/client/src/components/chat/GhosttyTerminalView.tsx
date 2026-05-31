@@ -90,6 +90,19 @@ const writeTerminalData = (terminal: Terminal, data: string, incompleteCursorSeq
 const cssVar = (styles: CSSStyleDeclaration, name: string, fallback: string) =>
   styles.getPropertyValue(name).trim() || fallback;
 
+const parseCssPixelLength = (value: string, styles: CSSStyleDeclaration, fallback: number) => {
+  const trimmed = value.trim();
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed)) return fallback;
+
+  if (trimmed.endsWith('rem')) {
+    const rootFontSize = Number.parseFloat(styles.fontSize) || fallback;
+    return parsed * rootFontSize;
+  }
+
+  return parsed;
+};
+
 const getTerminalTheme = (): ITheme => {
   const styles = getComputedStyle(document.documentElement);
   return {
@@ -117,6 +130,11 @@ const getTerminalFontFamily = () => {
     '--font-code',
     '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   );
+};
+
+const getTerminalFontSize = () => {
+  const styles = getComputedStyle(document.documentElement);
+  return parseCssPixelLength(cssVar(styles, '--weave-chat-text-size', '1rem'), styles, 16);
 };
 
 export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerminalViewProps>(
@@ -155,7 +173,7 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
           cursorBlink: true,
           cursorStyle: 'block',
           fontFamily: getTerminalFontFamily(),
-          fontSize: 13,
+          fontSize: getTerminalFontSize(),
           scrollback: 2_000,
           theme: getTerminalTheme(),
         });

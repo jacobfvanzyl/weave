@@ -81,9 +81,14 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const isMobilePortrait = useIsMobilePortrait();
   const isElectronWindow = isElectronWindowNow();
   const workspaceWidthWithPinnedSidebar = Math.max(0, pageWidth - threadSidebarWidthPx);
-  const wouldAutoHideSidebarIfPinned = isEditorOpen && !isMobilePortrait && workspaceWidthWithPinnedSidebar < chatContentMaxWidthPx * 2;
+  const chatWidthWithPinnedSidebar = isEditorOpen
+    ? workspaceWidthWithPinnedSidebar / 2
+    : workspaceWidthWithPinnedSidebar;
+  const wouldAutoHideSidebarIfPinned = isEditorOpen && !isMobilePortrait && chatWidthWithPinnedSidebar < chatContentMaxWidthPx;
   const isSidebarAutoHidden = isSidebarPinnedOpen && wouldAutoHideSidebarIfPinned;
   const isSidebarOpen = isSidebarPinnedOpen && !isSidebarAutoHidden;
+  const workspaceWidth = isSidebarOpen ? workspaceWidthWithPinnedSidebar : pageWidth;
+  const shouldClampChatPaneForEditor = isEditorOpen && !isEditorExpanded && workspaceWidth >= chatContentMaxWidthPx * 2;
   const canPreviewSidebar = isElectronWindow && !isMobilePortrait && !isSidebarOpen;
   const showSidebarPreview = canPreviewSidebar && isSidebarPreviewOpen;
   const showPinnedSidebarToggle = isElectronWindow && !isMobilePortrait && isSidebarOpen;
@@ -390,7 +395,9 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
         <div className="flex min-h-0 flex-1">
           <div className={isEditorExpanded
             ? 'flex w-0 min-w-0 flex-none flex-col overflow-hidden'
-            : isSidebarAutoHidden
+            : shouldClampChatPaneForEditor
+              ? 'flex min-h-0 min-w-0 w-[var(--weave-chat-content-max-width)] max-w-full shrink-0 flex-col overflow-hidden'
+            : isEditorOpen
               ? 'flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden'
             : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'}
           >
@@ -428,7 +435,6 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             <Suspense fallback={null}>
               <EditorPanel
                 isExpanded={isEditorExpanded}
-                isBalancedWidth={isSidebarAutoHidden}
                 onExpandedChange={handleEditorExpandedChange}
                 target={editorTarget}
                 onHide={hideEditor}

@@ -36,6 +36,7 @@
     "@iconify-icons/material-symbols": "^1.2.58",
     "@iconify/react": "^6.0.2",
     "@lezer/highlight": "^1.2.3",
+    "@replit/codemirror-vim": "^6.3.0",
     "@tanstack/react-query": "^5.90.12",
     "@tanstack/react-router": "^1.170.9",
     "ai": "^6.0.53",
