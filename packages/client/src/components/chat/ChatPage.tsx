@@ -697,7 +697,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       ) : null}
       {isElectronWindow && (showHeaderSidebarToggle || generalTerminalTarget) ? (
         <div
-          className="weave-appbar-left-actions-floating flex items-center gap-3"
+          className="weave-appbar-left-actions-floating flex items-center"
           data-has-sidebar-toggle={showHeaderSidebarToggle ? 'true' : 'false'}
         >
           {showHeaderSidebarToggle ? (
@@ -743,7 +743,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       >
         <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background px-4">
           {!isElectronWindow && (showHeaderSidebarToggle || hasGeneralTerminalTarget) ? (
-            <div className="weave-appbar-left-actions absolute left-4 flex items-center gap-3">
+            <div className="weave-appbar-left-actions absolute left-4 flex items-center gap-2">
               {showHeaderSidebarToggle ? (
                 <Button
                   size="icon"

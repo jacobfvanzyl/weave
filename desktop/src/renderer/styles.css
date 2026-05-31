@@ -9,6 +9,8 @@
     var(--weave-desktop-appbar-height) + var(--weave-desktop-window-border-width)
   );
   --weave-desktop-appbar-control-size: 2rem;
+  --weave-desktop-appbar-control-gap: 0rem;
+  --weave-desktop-appbar-control-leading-offset: 0.5rem;
   --weave-desktop-appbar-control-top: calc(
     (var(--weave-desktop-appbar-height) - var(--weave-desktop-appbar-control-size)) / 2
   );
@@ -159,7 +161,7 @@
 :root[data-weave-window-type="electron"] .weave-desktop-sidebar-toggle {
   position: fixed;
   top: calc(var(--weave-desktop-appbar-control-top) + 1px);
-  left: calc(5rem + 1px);
+  left: calc(5rem + var(--weave-desktop-appbar-control-leading-offset) + 1px);
   z-index: 46;
   border-color: transparent;
   background: transparent;
@@ -169,13 +171,20 @@
 :root[data-weave-window-type="electron"] .weave-appbar-left-actions-floating {
   position: fixed;
   top: calc(var(--weave-desktop-appbar-control-top) + 1px);
-  left: calc(5rem + 1px);
+  left: calc(5rem + var(--weave-desktop-appbar-control-leading-offset) + 1px);
   z-index: 47;
+  gap: var(--weave-desktop-appbar-control-gap);
   -webkit-app-region: no-drag;
 }
 
 :root[data-weave-window-type="electron"] .weave-appbar-left-actions-floating[data-has-sidebar-toggle="false"] {
-  left: calc(5rem + var(--weave-desktop-appbar-control-size) + 0.75rem + 1px);
+  left: calc(
+    5rem
+    + var(--weave-desktop-appbar-control-leading-offset)
+    + var(--weave-desktop-appbar-control-size)
+    + var(--weave-desktop-appbar-control-gap)
+    + 1px
+  );
 }
 
 :root[data-weave-window-type="electron"] .weave-appbar-left-actions-floating button,
