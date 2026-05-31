@@ -4,7 +4,7 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, CircleDot, Folder, FolderCode, FolderOpen, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, SquarePen, Trash2, X } from 'lucide-react';
+import { Archive, Folder, FolderCode, FolderOpen, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, Trash2, X } from 'lucide-react';
 import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads, type CreatePlaneInput } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { GitPlaneDirectoryPicker } from './GitPlaneDirectoryPicker';
@@ -861,7 +861,7 @@ export const ThreadSidebar = ({
           title={`${onlinePortalCount} online Portal${onlinePortalCount === 1 ? '' : 's'}`}
           aria-label={`${onlinePortalCount} online Portal${onlinePortalCount === 1 ? '' : 's'}`}
         >
-          <CircleDot size={15} className={cn('shrink-0', onlinePortalCount > 0 ? 'text-success' : 'text-muted-foreground')} />
+          <Shell size={15} className={cn('shrink-0', onlinePortalCount > 0 ? 'text-success' : 'text-muted-foreground')} />
           <span className="tabular-nums">{onlinePortalCount}</span>
         </div>
       </div>
