@@ -17,7 +17,13 @@ import type { TerminalPanelTab } from './TerminalPanel';
 const TerminalPanel = lazy(() => import('./TerminalPanel').then(module => ({ default: module.TerminalPanel })));
 const EditorPanel = lazy(() => import('./EditorPanel').then(module => ({ default: module.EditorPanel })));
 
-const isMobilePortraitNow = () => window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
+const isMobileRuntimeNow = () =>
+  typeof document !== 'undefined' && document.documentElement.dataset.weaveRuntime === 'mobile';
+const isMobilePortraitNow = () => {
+  const isPortrait = window.matchMedia('(orientation: portrait)').matches;
+  if (isMobileRuntimeNow()) return isPortrait;
+  return window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
+};
 const isElectronWindowNow = () =>
   typeof document !== 'undefined' && document.documentElement.dataset.weaveWindowType === 'electron';
 const chatContentMaxWidthPx = 48 * 16;
@@ -63,12 +69,17 @@ const useIsMobilePortrait = () => {
   const [isMobilePortrait, setIsMobilePortrait] = useState(() => isMobilePortraitNow());
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia('(max-width: 767px) and (orientation: portrait)');
-    const sync = () => setIsMobilePortrait(mediaQuery.matches);
+    const portraitQuery = window.matchMedia('(orientation: portrait)');
+    const narrowPortraitQuery = window.matchMedia('(max-width: 767px) and (orientation: portrait)');
+    const sync = () => setIsMobilePortrait(isMobilePortraitNow());
 
     sync();
-    mediaQuery.addEventListener('change', sync);
-    return () => mediaQuery.removeEventListener('change', sync);
+    portraitQuery.addEventListener('change', sync);
+    narrowPortraitQuery.addEventListener('change', sync);
+    return () => {
+      portraitQuery.removeEventListener('change', sync);
+      narrowPortraitQuery.removeEventListener('change', sync);
+    };
   }, []);
 
   return isMobilePortrait;
@@ -98,20 +109,16 @@ type ChatPageProps = {
 };
 
 type WindowSurfacesInput = {
-  activeThreadId?: string;
   editorTargetKey?: string;
   hasGeneralTerminalTarget: boolean;
-  isElectronWindow: boolean;
   isMobilePortrait: boolean;
   pageWidth: number;
   terminalDemiplaneId?: string;
 };
 
 const useWindowSurfaces = ({
-  activeThreadId,
   editorTargetKey,
   hasGeneralTerminalTarget,
-  isElectronWindow,
   isMobilePortrait,
   pageWidth,
   terminalDemiplaneId,
@@ -135,24 +142,24 @@ const useWindowSurfaces = ({
     : workspaceWidthWithPinnedSidebar;
   const wouldAutoHideSidebarIfPinned = isEditorOpen && !isMobilePortrait && chatWidthWithPinnedSidebar < chatContentMaxWidthPx;
   const isSidebarAutoHidden = isSidebarPinnedOpen && wouldAutoHideSidebarIfPinned;
-  const isSidebarOpen = isSidebarPinnedOpen && !isSidebarAutoHidden;
+  const isSidebarOpen = isSidebarPinnedOpen && !isSidebarAutoHidden && !isMobilePortrait;
   const workspaceWidth = isSidebarOpen ? workspaceWidthWithPinnedSidebar : pageWidth;
   const shouldClampChatPaneForEditor = isEditorOpen && !isEditorExpanded && workspaceWidth >= chatContentMaxWidthPx * 2;
-  const canPreviewSidebar = isElectronWindow && !isMobilePortrait && !isSidebarOpen;
+  const canPreviewSidebar = !isSidebarOpen;
   const showSidebarPreview = canPreviewSidebar && isSidebarPreviewOpen;
-  const showPinnedSidebarToggle = isElectronWindow && !isMobilePortrait && isSidebarOpen;
-  const showHeaderSidebarToggle = !isElectronWindow || !isSidebarOpen;
+  const showPinnedSidebarToggle = isSidebarOpen;
+  const showHeaderSidebarToggle = !isSidebarOpen;
   const hasTerminalTarget = Boolean(terminalDemiplaneId);
   const hasEditorTarget = Boolean(editorTargetKey);
   const hasActiveTerminal = terminalDemiplaneId ? activeTerminalDemiplaneIds.has(terminalDemiplaneId) : false;
 
   useEffect(() => {
-    if (isMobilePortrait && activeThreadId) setIsSidebarPinnedOpen(false);
-  }, [activeThreadId, isMobilePortrait]);
+    if (isMobilePortrait) setIsSidebarPinnedOpen(false);
+  }, [isMobilePortrait]);
 
   useEffect(() => {
-    if (isSidebarOpen || isMobilePortrait) setIsSidebarPreviewOpen(false);
-  }, [isMobilePortrait, isSidebarOpen]);
+    if (isSidebarOpen) setIsSidebarPreviewOpen(false);
+  }, [isSidebarOpen]);
 
   useEffect(() => {
     setIsTerminalExpanded(false);
@@ -204,6 +211,12 @@ const useWindowSurfaces = ({
 
   const toggleSidebar = useCallback(() => {
     clearSidebarPreviewCloseTimeout();
+    if (isMobilePortrait) {
+      setIsSidebarPinnedOpen(false);
+      setIsSidebarPreviewOpen(open => !open);
+      return;
+    }
+
     if (!isSidebarOpen && wouldAutoHideSidebarIfPinned) {
       setIsSidebarPinnedOpen(true);
       setIsSidebarPreviewOpen(open => !open);
@@ -212,11 +225,13 @@ const useWindowSurfaces = ({
 
     setIsSidebarPreviewOpen(false);
     setIsSidebarPinnedOpen(open => !open);
-  }, [clearSidebarPreviewCloseTimeout, isSidebarOpen, wouldAutoHideSidebarIfPinned]);
+  }, [clearSidebarPreviewCloseTimeout, isMobilePortrait, isSidebarOpen, wouldAutoHideSidebarIfPinned]);
 
   const closeSidebar = useCallback(() => {
+    clearSidebarPreviewCloseTimeout();
     setIsSidebarPinnedOpen(false);
-  }, []);
+    setIsSidebarPreviewOpen(false);
+  }, [clearSidebarPreviewCloseTimeout]);
 
   const toggleTerminal = useCallback(() => {
     if (!hasTerminalTarget) return;
@@ -439,10 +454,8 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const [generalTerminalActiveSessionCount, setGeneralTerminalActiveSessionCount] = useState(0);
   const [terminalActiveSessionCountByTarget, setTerminalActiveSessionCountByTarget] = useState<Record<string, number>>({});
   const windowSurfaces = useWindowSurfaces({
-    activeThreadId: activeThread?.id,
     editorTargetKey: editorTarget?.demiplaneId,
     hasGeneralTerminalTarget: Boolean(generalTerminalTarget),
-    isElectronWindow,
     isMobilePortrait,
     pageWidth,
     terminalDemiplaneId,
@@ -570,6 +583,11 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       .then(() => queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }))
       .then(() => focusChat());
   }, [focusChat, newThread, queryClient, resourceId]);
+  const handleGeneralTerminalToggle = useCallback(() => {
+    const shouldFocusAfterOpen = !isGeneralTerminalOpen;
+    toggleGeneralTerminal();
+    if (shouldFocusAfterOpen) window.requestAnimationFrame(focusGeneralTerminal);
+  }, [focusGeneralTerminal, isGeneralTerminalOpen, toggleGeneralTerminal]);
 
   const shortcutCommands = useMemo<ShortcutCommand[]>(() => [
     {
@@ -611,11 +629,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       label: 'Toggle global terminal',
       surface: 'terminal',
       isEnabled: () => hasGeneralTerminalTarget,
-      run: () => {
-        const shouldFocusAfterOpen = !isGeneralTerminalOpen;
-        toggleGeneralTerminal();
-        if (shouldFocusAfterOpen) window.requestAnimationFrame(focusGeneralTerminal);
-      },
+      run: handleGeneralTerminalToggle,
     },
     {
       id: 'terminal.toggle',
@@ -663,14 +677,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     createThreadFromShortcut,
     focusChat,
     focusEditor,
-    focusGeneralTerminal,
     focusSidebar,
     focusTerminal,
+    handleGeneralTerminalToggle,
     hasEditorTarget,
     hasGeneralTerminalTarget,
     hasTerminalTarget,
     isEditorOpen,
-    isGeneralTerminalOpen,
     isSidebarOpen,
     isTerminalOpen,
     setShowPlanPanel,
@@ -678,11 +691,49 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     showSidebarPreview,
     toggleEditor,
     toggleEditorExpanded,
-    toggleGeneralTerminal,
     toggleSidebar,
     toggleTerminal,
     toggleTerminalExpanded,
   ]);
+  const isSidebarSurfaceVisible = isSidebarOpen || showSidebarPreview;
+  const shouldRenderFloatingLeftActions = (isElectronWindow || isSidebarSurfaceVisible)
+    && (showHeaderSidebarToggle || showPinnedSidebarToggle || Boolean(generalTerminalTarget));
+  const shouldRenderHeaderLeftActions = !isElectronWindow
+    && !isSidebarSurfaceVisible
+    && (showHeaderSidebarToggle || Boolean(generalTerminalTarget));
+  const sidebarToggleHoverHandlers = isMobilePortrait
+    ? {}
+    : {
+        onMouseEnter: openSidebarPreview,
+        onMouseLeave: scheduleSidebarPreviewClose,
+      };
+  const renderSidebarToggleButton = () => (
+    <Button
+      size="icon"
+      variant="ghost"
+      aria-label={isSidebarOpen || (isMobilePortrait && showSidebarPreview) ? 'Hide sidebar' : 'Show sidebar'}
+      onClick={toggleSidebar}
+      {...sidebarToggleHoverHandlers}
+    >
+      <PanelLeft size={18} />
+    </Button>
+  );
+  const renderGeneralTerminalButton = () => generalTerminalTarget ? (
+    <Button
+      className={[
+        isGeneralTerminalOpen ? 'bg-accent' : '',
+        isGeneralTerminalActive ? 'text-mauve' : '',
+      ].filter(Boolean).join(' ')}
+      size="icon"
+      variant="ghost"
+      aria-label={isGeneralTerminalOpen ? 'Hide general terminal' : 'Show general terminal'}
+      data-active={isGeneralTerminalOpen ? 'true' : 'false'}
+      onClick={handleGeneralTerminalToggle}
+    >
+      <TerminalSquare size={18} />
+      <TerminalTabCountBadge count={generalTerminalActiveSessionCount} />
+    </Button>
+  ) : null;
 
   return (
     <ShortcutProvider commands={shortcutCommands}>
@@ -694,17 +745,6 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             aria-label="Close sidebar"
             onClick={closeSidebar}
           />
-          {showPinnedSidebarToggle ? (
-            <Button
-              className="weave-desktop-sidebar-toggle"
-              size="icon"
-              variant="ghost"
-              aria-label="Hide sidebar"
-              onClick={toggleSidebar}
-            >
-              <PanelLeft size={18} />
-            </Button>
-          ) : null}
           <ThreadSidebar
             ref={sidebarSurfaceRef}
             closeOnSelect={isMobilePortrait}
@@ -716,9 +756,20 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       {showSidebarPreview ? (
         <div
           data-weave-sidebar-preview
-          onMouseEnter={openSidebarPreview}
-          onMouseLeave={scheduleSidebarPreviewClose}
+          {...(!isMobilePortrait
+            ? {
+                onMouseEnter: openSidebarPreview,
+                onMouseLeave: scheduleSidebarPreviewClose,
+              }
+            : {})}
         >
+          {isMobilePortrait ? (
+            <button
+              className="fixed inset-0 z-30 bg-background/80"
+              aria-label="Close sidebar"
+              onClick={closeSidebarPreview}
+            />
+          ) : null}
           <ThreadSidebar
             ref={sidebarSurfaceRef}
             presentation="overlay"
@@ -728,43 +779,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           />
         </div>
       ) : null}
-      {isElectronWindow && (showHeaderSidebarToggle || generalTerminalTarget) ? (
+      {shouldRenderFloatingLeftActions ? (
         <div
           className="weave-appbar-left-actions-floating flex items-center"
-          data-has-sidebar-toggle={showHeaderSidebarToggle ? 'true' : 'false'}
+          data-has-sidebar-toggle={showHeaderSidebarToggle || showPinnedSidebarToggle ? 'true' : 'false'}
         >
-          {showHeaderSidebarToggle ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-              onClick={toggleSidebar}
-              onMouseEnter={openSidebarPreview}
-              onMouseLeave={scheduleSidebarPreviewClose}
-            >
-              <PanelLeft size={18} />
-            </Button>
-          ) : null}
-          {generalTerminalTarget ? (
-            <Button
-              className={[
-                isGeneralTerminalOpen ? 'bg-accent' : '',
-                isGeneralTerminalActive ? 'text-mauve' : '',
-              ].filter(Boolean).join(' ')}
-              size="icon"
-              variant="ghost"
-              aria-label={isGeneralTerminalOpen ? 'Hide general terminal' : 'Show general terminal'}
-              data-active={isGeneralTerminalOpen ? 'true' : 'false'}
-              onClick={() => {
-                const shouldFocusAfterOpen = !isGeneralTerminalOpen;
-                toggleGeneralTerminal();
-                if (shouldFocusAfterOpen) window.requestAnimationFrame(focusGeneralTerminal);
-              }}
-            >
-              <TerminalSquare size={18} />
-              <TerminalTabCountBadge count={generalTerminalActiveSessionCount} />
-            </Button>
-          ) : null}
+          {showHeaderSidebarToggle || showPinnedSidebarToggle ? renderSidebarToggleButton() : null}
+          {renderGeneralTerminalButton()}
         </div>
       ) : null}
       <main
@@ -775,40 +796,10 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
         data-sidebar-preview-open={showSidebarPreview ? 'true' : 'false'}
       >
         <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background px-4">
-          {!isElectronWindow && (showHeaderSidebarToggle || hasGeneralTerminalTarget) ? (
+          {shouldRenderHeaderLeftActions ? (
             <div className="weave-appbar-left-actions absolute left-4 flex items-center gap-2">
-              {showHeaderSidebarToggle ? (
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  aria-label={isSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-                  onClick={toggleSidebar}
-                  onMouseEnter={openSidebarPreview}
-                  onMouseLeave={scheduleSidebarPreviewClose}
-                >
-                  <PanelLeft size={18} />
-                </Button>
-              ) : null}
-              {generalTerminalTarget ? (
-                <Button
-                  className={[
-                    isGeneralTerminalOpen ? 'bg-accent' : '',
-                    isGeneralTerminalActive ? 'text-mauve' : '',
-                  ].filter(Boolean).join(' ')}
-                  size="icon"
-                  variant="ghost"
-                  aria-label={isGeneralTerminalOpen ? 'Hide general terminal' : 'Show general terminal'}
-                  data-active={isGeneralTerminalOpen ? 'true' : 'false'}
-                  onClick={() => {
-                    const shouldFocusAfterOpen = !isGeneralTerminalOpen;
-                    toggleGeneralTerminal();
-                    if (shouldFocusAfterOpen) window.requestAnimationFrame(focusGeneralTerminal);
-                  }}
-                >
-                  <TerminalSquare size={18} />
-                  <TerminalTabCountBadge count={generalTerminalActiveSessionCount} />
-                </Button>
-              ) : null}
+              {showHeaderSidebarToggle ? renderSidebarToggleButton() : null}
+              {renderGeneralTerminalButton()}
             </div>
           ) : null}
           {activePlane || hasThreadTitle ? (

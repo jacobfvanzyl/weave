@@ -1,5 +1,8 @@
 @import "@fontsource-variable/dm-sans";
 @import "@fontsource-variable/dm-sans/wght-italic.css";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/jetbrains-mono/wght-italic.css";
+@import "@azurity/pure-nerd-font/pure-nerd-font.css";
 @import "tailwindcss";
 @source "../";
 
@@ -94,8 +97,8 @@
   --destructive-foreground: #eff1f5;
   --radius: 0.5rem;
   --font-ui: "DM Sans Variable", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-code: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
-    Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-code: "JetBrains Mono Variable", "JetBrains Mono", "Pure Nerd Font", "JetBrainsMono Nerd Font",
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 :root[data-theme="mocha"] {
@@ -137,6 +140,16 @@
   --destructive-foreground: #11111b;
 }
 
+:root {
+  --weave-appbar-height: 3.5rem;
+  --weave-appbar-control-size: 2rem;
+  --weave-appbar-control-top: calc((var(--weave-appbar-height) - var(--weave-appbar-control-size)) / 2);
+  --weave-sidebar-action-height: 1.5rem;
+  --weave-sidebar-padding-top: calc(
+    var(--weave-appbar-height) - (var(--weave-sidebar-action-height) / 2)
+  );
+}
+
 html,
 body,
 #root {
@@ -175,6 +188,22 @@ input {
 .chat-message-bubble,
 .chat-message-bubble * {
   min-width: 0;
+}
+
+.weave-appbar-left-actions-floating {
+  position: fixed;
+  top: var(--weave-appbar-control-top);
+  left: 1rem;
+  z-index: 47;
+  gap: 0.5rem;
+}
+
+.weave-appbar-left-actions-floating button {
+  position: relative;
+}
+
+aside[data-weave-thread-sidebar] {
+  padding-top: var(--weave-sidebar-padding-top);
 }
 
 @media (max-width: 767px) and (orientation: portrait) {

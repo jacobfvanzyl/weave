@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./app/mobile-connection": "./src/app/mobile-connection.tsx",
     "./app/providers": "./src/app/providers.tsx",
     "./app/web-connection": "./src/app/web-connection.tsx",
     "./components/*": "./src/components/*.tsx",
@@ -17,6 +18,7 @@
     "@assistant-ui/core": "^0.2.0",
     "@assistant-ui/react": "^0.14.0",
     "@assistant-ui/react-ai-sdk": "^1.3.23",
+    "@azurity/pure-nerd-font": "^3.0.5",
     "@base-ui/react": "^1.5.0",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.11",
@@ -31,6 +33,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@fontsource-variable/dm-sans": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@lezer/highlight": "^1.2.3",
     "@replit/codemirror-vim": "^6.3.0",
     "@tanstack/react-query": "^5.90.12",
@@ -50,7 +53,13 @@
     "zustand": "^5.0.9"
   },
   "peerDependencies": {
+    "@capacitor/preferences": "^8.0.1",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
+  },
+  "peerDependenciesMeta": {
+    "@capacitor/preferences": {
+      "optional": true
+    }
   }
 }

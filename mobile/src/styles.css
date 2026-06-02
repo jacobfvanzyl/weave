@@ -1,0 +1,8 @@
+@import "@weave/client/styles/globals.css";
+@source "../../packages/client/src";
+@source "./";
+
+:root[data-weave-runtime="mobile"],
+:root[data-weave-runtime="mobile"] body {
+  background: var(--background);
+}
