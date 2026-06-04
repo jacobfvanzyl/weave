@@ -1,5 +1,5 @@
 import { ProcessTerminal, TUI } from 'pi-tui';
-import { archiveThread, createThread, getContextUsage, isConnectionError, listDemiplaneThreads, listMessages, listPortals, normalizeHttpUrl, resolveWorkspace, streamChat } from './api.ts';
+import { archiveThread, createThread, getContextUsage, isConnectionError, listWorkspaceThreads, listMessages, listPortals, normalizeHttpUrl, resolveWorkspace, streamChat } from './api.ts';
 import { WeaveApp } from './components/app.ts';
 import { ResumeList } from './components/resume-list.ts';
 import { defaultConfigPath, defaultServerUrl, parseArgs, readConfig, stringFlag, writeConfig } from './config.ts';
@@ -70,8 +70,8 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
   const terminal = new ProcessTerminal();
   const tui = new TUI(terminal, true);
   const titleFor = (threadTitle?: string) => ({
-    plane: resolved.adHoc ? undefined : resolved.plane?.name ?? 'Plane',
-    demiplane: resolved.demiplane?.name,
+    project: resolved.adHoc ? undefined : resolved.project?.name ?? 'Project',
+    workspace: resolved.workspace?.name,
     thread: threadTitle && !['...', 'New chat'].includes(threadTitle) ? threadTitle : undefined,
   });
   const usageTotalTokens = (usage: TokenUsage | undefined) => usage?.totalTokens
@@ -243,9 +243,9 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
         return;
       }
       if (trimmed === '/threads') {
-        const planeId = resolved.plane?.id;
-        if (!planeId) {
-          state.status = 'Resolved workspace missing plane.id';
+        const projectId = resolved.project?.id;
+        if (!projectId) {
+          state.status = 'Resolved workspace missing project.id';
           requestRender();
           return;
         }
@@ -253,11 +253,11 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
         state.status = 'Loading threads...';
         requestRender();
         try {
-          const threads = await listDemiplaneThreads(server, token, planeId, resolved.demiplane?.id);
+          const threads = await listWorkspaceThreads(server, token, projectId, resolved.workspace?.id);
           markConnected();
           state.status = undefined;
           if (threads.length === 0) {
-            state.status = 'No threads in this demiplane.';
+            state.status = 'No threads in this workspace.';
             requestRender();
             return;
           }
@@ -311,9 +311,9 @@ const chatLoop = async (server: string, token: string, resolved: ResolvedWorkspa
         state.messages.push({ type: 'user', text: trimmed });
         requestRender();
         if (!threadId) {
-          const planeId = resolved.plane?.id;
-          if (!planeId) throw new Error('resolved workspace missing plane.id');
-          threadId = await createThread(server, token, planeId, resolved.demiplane?.id);
+          const projectId = resolved.project?.id;
+          if (!projectId) throw new Error('resolved workspace missing project.id');
+          threadId = await createThread(server, token, projectId, resolved.workspace?.id);
           markConnected();
           state.title = titleFor();
           switchPoller(threadId, []);
@@ -417,14 +417,14 @@ const start = async (flags: Record<string, string | boolean>) => {
     throw error;
   });
   if (!resolved.resolved) {
-    console.error('No Plane/Demiplane resolved for cwd. Open web client or connect Portal, then try again.');
+    console.error('No Project/Workspace resolved for cwd. Open web client or connect Portal, then try again.');
     if (resolved.needsConfirmation) console.error('Remote matched but needs confirmation in web client.');
     Deno.exit(1);
   }
 
   const messages = resolved.thread?.id ? await listMessages(server, token, resolved.thread.id) : [];
   if (resolved.offline) messages.unshift({ id: 'offline', role: 'system', parts: [{ type: 'text', text: '[offline] Portal offline. Chat works; local tools unavailable until reconnect.' }] });
-  if (resolved.adopted) messages.unshift({ id: 'adopted', role: 'system', parts: [{ type: 'text', text: `[adopted] ${resolved.demiplane?.path}` }] });
+  if (resolved.adopted) messages.unshift({ id: 'adopted', role: 'system', parts: [{ type: 'text', text: `[adopted] ${resolved.workspace?.path}` }] });
   await chatLoop(server, token, resolved, messages, model, modelDisplayName, modelContextWindow);
 };
 
@@ -446,7 +446,7 @@ Commands:
 
 Config: ~/.config/weave/config.json (or $XDG_CONFIG_HOME/weave/config.json)
 
-Inside chat: /new starts a draft thread. /archive archives current thread and starts a draft. /threads lists demiplane threads. Ctrl+C twice exits.
+Inside chat: /new starts a draft thread. /archive archives current thread and starts a draft. /threads lists workspace threads. Ctrl+C twice exits.
 `);
 };
 

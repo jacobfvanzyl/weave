@@ -10,8 +10,8 @@ type TerminalPanelTarget = {
   terminalId: string;
   title: string;
   cwd?: string;
-  planeId?: string;
-  demiplaneId?: string;
+  projectId?: string;
+  workspaceId?: string;
   portalId?: string;
   rootId?: string;
   repoPath?: string;
@@ -30,16 +30,17 @@ export type TerminalPanelTab = {
   error?: string | undefined;
 };
 
+export type TerminalPanelTabsChange = TerminalPanelTab[] | ((tabs: TerminalPanelTab[]) => TerminalPanelTab[]);
+
 type TerminalPanelProps = {
   activeTabId?: string;
   focusRequest?: number;
   isExpanded?: boolean;
-  onActiveSessionCountChange?: (count: number) => void;
   onActiveTabIdChange: (tabId: string) => void;
   onCreateTab: (ordinal: number) => TerminalPanelTab;
   onExpandedChange?: (isExpanded: boolean) => void;
   onSessionActiveChange: (isActive: boolean) => void;
-  onTabsChange: (tabs: TerminalPanelTab[]) => void;
+  onTabsChange: (tabs: TerminalPanelTabsChange) => void;
   tabs: TerminalPanelTab[];
   target: TerminalPanelTarget;
   onHide: () => void;
@@ -249,8 +250,8 @@ const TerminalSessionView = ({
     void transport.start({
       kind: target.kind,
       terminalId: tab.terminalId,
-      planeId: target.planeId,
-      demiplaneId: target.demiplaneId,
+      projectId: target.projectId,
+      workspaceId: target.workspaceId,
       portalId: target.portalId,
       rootId: target.rootId,
       repoPath: target.repoPath,
@@ -287,9 +288,9 @@ const TerminalSessionView = ({
     tab.id,
     tab.terminalId,
     target.cwd,
-    target.demiplaneId,
+    target.workspaceId,
     target.kind,
-    target.planeId,
+    target.projectId,
     target.portalId,
     target.repoPath,
     target.rootId,
@@ -328,7 +329,6 @@ export const TerminalPanel = ({
   activeTabId,
   focusRequest = 0,
   isExpanded = false,
-  onActiveSessionCountChange,
   onActiveTabIdChange,
   onCreateTab,
   onExpandedChange,
@@ -342,11 +342,11 @@ export const TerminalPanel = ({
   const transport = useMemo<TerminalTransport | undefined>(() => createTerminalTransport(), []);
   const [activeSessionTabIds, setActiveSessionTabIds] = useState<Set<string>>(() => new Set());
   const activeTab = tabs.find(tab => tab.id === activeTabId) ?? tabs[0];
+  const activeSessionCount = activeSessionTabIds.size;
 
-  const notifyActiveSessionCount = useCallback((count: number) => {
-    onSessionActiveChange(count > 0);
-    onActiveSessionCountChange?.(count);
-  }, [onActiveSessionCountChange, onSessionActiveChange]);
+  useEffect(() => {
+    onSessionActiveChange(activeSessionCount > 0);
+  }, [activeSessionCount, onSessionActiveChange]);
 
   useEffect(() => {
     if (tabs.length > 0) return;
@@ -374,10 +374,9 @@ export const TerminalPanel = ({
         }
       });
       if (!didChange && next.size === current.size) return current;
-      notifyActiveSessionCount(next.size);
       return next;
     });
-  }, [notifyActiveSessionCount, tabs]);
+  }, [tabs]);
 
   const updateTabActiveState = useCallback((tabId: string, isActive: boolean) => {
     setActiveSessionTabIds(current => {
@@ -390,37 +389,38 @@ export const TerminalPanel = ({
       } else {
         next.delete(tabId);
       }
-      notifyActiveSessionCount(next.size);
       return next;
     });
-  }, [notifyActiveSessionCount]);
+  }, []);
 
   const handleTabMetaChange = useCallback((tabId: string, meta: TerminalTabMeta) => {
-    let didChange = false;
-    const nextTabs = tabs.map(tab => {
-      if (tab.id !== tabId) return tab;
-      if (
-        tab.cwd === meta.cwd
-        && tab.error === meta.error
-        && tab.status === meta.status
-        && tab.title === meta.title
-      ) {
-        return tab;
-      }
-      didChange = true;
-      return { ...tab, ...meta };
-    });
+    onTabsChange(currentTabs => {
+      let didChange = false;
+      const nextTabs = currentTabs.map(tab => {
+        if (tab.id !== tabId) return tab;
+        if (
+          tab.cwd === meta.cwd
+          && tab.error === meta.error
+          && tab.status === meta.status
+          && tab.title === meta.title
+        ) {
+          return tab;
+        }
+        didChange = true;
+        return { ...tab, ...meta };
+      });
 
-    if (didChange) onTabsChange(nextTabs);
-  }, [onTabsChange, tabs]);
+      return didChange ? nextTabs : currentTabs;
+    });
+  }, [onTabsChange]);
 
   const createNextTab = useCallback(() => onCreateTab(tabs.length + 1), [onCreateTab, tabs.length]);
 
   const handleAddTab = useCallback(() => {
     const nextTab = createNextTab();
-    onTabsChange([...tabs, nextTab]);
+    onTabsChange(currentTabs => [...currentTabs, nextTab]);
     onActiveTabIdChange(nextTab.id);
-  }, [createNextTab, onActiveTabIdChange, onTabsChange, tabs]);
+  }, [createNextTab, onActiveTabIdChange, onTabsChange]);
 
   const closeTab = useCallback(async (tabToClose: TerminalPanelTab) => {
     try {
@@ -436,6 +436,7 @@ export const TerminalPanel = ({
 
     if (remainingTabs.length === 0) {
       onTabsChange([]);
+      onSessionActiveChange(false);
       onHide();
       return;
     }
@@ -448,6 +449,7 @@ export const TerminalPanel = ({
   }, [
     activeTabId,
     onActiveTabIdChange,
+    onSessionActiveChange,
     onTabsChange,
     onHide,
     tabs,
@@ -464,17 +466,18 @@ export const TerminalPanel = ({
   return (
     <section
       className={variant === 'overlay'
-        ? 'relative z-10 flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border-2 border-[#89b4fa] bg-background shadow-2xl'
+        ? 'relative z-10 flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background p-0.5'
         : [
             'relative z-10 flex min-h-44 shrink-0 flex-col bg-background transition-[height] duration-150 ease-out',
             isExpanded ? 'h-full' : 'h-[min(34dvh,22rem)] border-t border-border',
           ].join(' ')}
       data-weave-terminal-panel
+      data-weave-terminal-panel-variant={variant}
       data-weave-surface="terminal"
       data-terminal-kind={target.kind}
       data-expanded={isExpanded ? 'true' : 'false'}
     >
-      <div className="flex h-9 shrink-0 items-stretch gap-2 border-b border-border px-3">
+      <div className="flex h-14 shrink-0 items-stretch gap-2 border-b border-border px-3" data-weave-terminal-tab-bar>
         <TerminalSquare size={15} className="self-center shrink-0 text-primary" />
         <div
           className="flex min-w-0 flex-1 items-end overflow-x-auto"

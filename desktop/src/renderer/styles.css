@@ -68,7 +68,6 @@
   --primary-foreground: #11111b;
   --user: var(--primary);
   --user-foreground: #11111b;
-  --selected-thread: color-mix(in srgb, #45475a 82%, var(--primary));
 }
 
 :root[data-weave-window-type="electron"],
@@ -195,14 +194,22 @@
 :root[data-weave-window-type="electron"] aside[data-weave-thread-sidebar] {
   position: relative;
   z-index: 1;
-  background: #313244 !important;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   padding-top: var(--weave-desktop-sidebar-padding-top);
 }
 
-:root[data-weave-window-type="electron"] .weave-sidebar-section-heading {
-  background: #313244;
+:root[data-weave-window-type="electron"] [data-weave-terminal-tab-bar] {
+  height: var(--weave-desktop-appbar-height);
+  -webkit-app-region: no-drag;
+}
+
+:root[data-weave-window-type="electron"] [data-weave-terminal-tab-bar] * {
+  -webkit-app-region: no-drag;
+}
+
+:root[data-weave-window-type="electron"] [data-weave-terminal-panel][data-weave-terminal-panel-variant="overlay"] [data-weave-terminal-tab-bar] {
+  padding-left: calc(5rem + var(--weave-desktop-appbar-control-leading-offset) + 1px);
 }
 
 :root[data-weave-window-type="electron"] aside[data-weave-thread-sidebar][data-weave-thread-sidebar-overlay="true"] {

@@ -11,18 +11,20 @@ type ServerThread = {
   metadata?: Record<string, unknown>;
 };
 
-export type Demiplane = {
+export type Workspace = {
   id: string;
-  planeId: string;
+  projectId: string;
   portalId?: string;
   mountId?: string;
   workspaceKind: 'primary' | 'worktree';
-  source?: 'primary' | 'worktrunk' | 'adopted' | 'legacy';
+  source?: 'primary' | 'git' | 'adopted' | 'legacy';
   name: string;
   path?: string;
   status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual' | 'error';
   locked?: boolean;
   branch?: string;
+  head?: string;
+  detached?: boolean;
   baseBranch?: string;
   sortOrder?: number;
   lastError?: string;
@@ -30,11 +32,11 @@ export type Demiplane = {
   updatedAt: string;
 };
 
-export type Plane = {
+export type Project = {
   id: string;
   userId: string;
   name: string;
-  projectKind: 'standard' | 'git';
+  projectKind: 'general' | 'git';
   description?: string;
   portalId?: string;
   portalRootId?: string;
@@ -42,8 +44,9 @@ export type Plane = {
   gitRemote?: string;
   defaultBranch?: string;
   rootPathHint?: string;
+  defaultProfileId?: string;
   sortOrder?: number;
-  demiplanes: Demiplane[];
+  workspaces: Workspace[];
   createdAt: string;
   updatedAt: string;
 };
@@ -54,9 +57,10 @@ const toChatThread = (thread: ServerThread): ChatThread => ({
   createdAt: thread.createdAt,
   updatedAt: thread.updatedAt,
   sortOrder: typeof thread.metadata?.sortOrder === 'number' ? thread.metadata.sortOrder : undefined,
-  planeId: typeof thread.metadata?.planeId === 'string' ? thread.metadata.planeId : undefined,
-  demiplaneId: typeof thread.metadata?.demiplaneId === 'string' ? thread.metadata.demiplaneId : undefined,
+  projectId: typeof thread.metadata?.projectId === 'string' ? thread.metadata.projectId : undefined,
+  workspaceId: typeof thread.metadata?.workspaceId === 'string' ? thread.metadata.workspaceId : undefined,
   archived: thread.metadata?.archived === true,
+  profileId: typeof thread.metadata?.profileId === 'string' ? thread.metadata.profileId : undefined,
   adHoc: thread.metadata?.adHoc === true,
   workspacePath: typeof thread.metadata?.workspacePath === 'string' ? thread.metadata.workspacePath : undefined,
 });
@@ -90,12 +94,24 @@ export const listServerThreads = async () => {
   return result.threads.map(toChatThread);
 };
 
-export const createServerThread = async (threadId: string, planeId?: string, demiplaneId?: string, title = '...') => {
+export const createServerThread = async (threadId: string, projectId?: string, workspaceId?: string, title = '...', profileId?: string) => {
   const result = await parseJson<{ thread: ServerThread }>(
     await fetch(`${getMastraUrl()}/chat-state/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title, planeId, demiplaneId }),
+      body: JSON.stringify({ threadId, title, projectId, workspaceId, profileId }),
+    }),
+  );
+
+  return toChatThread(result.thread);
+};
+
+export const setServerThreadProfile = async (threadId: string, profileId: string | null) => {
+  const result = await parseJson<{ thread: ServerThread }>(
+    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ profileId }),
     }),
   );
 
@@ -132,12 +148,12 @@ export const deleteServerThread = async (threadId: string) => {
   );
 };
 
-export const listPlanes = async () => {
-  const result = await parseJson<{ planes: Plane[] }>(
-    await fetch(`${getMastraUrl()}/planes`, { headers: getAuthHeaders() }),
+export const listProjects = async () => {
+  const result = await parseJson<{ projects: Project[] }>(
+    await fetch(`${getMastraUrl()}/projects`, { headers: getAuthHeaders() }),
   );
 
-  return result.planes;
+  return result.projects;
 };
 
 export type PortalRoot = {
@@ -151,6 +167,7 @@ export type PortalConnection = {
   name?: string;
   roots: PortalRoot[];
   status: 'online' | 'offline';
+  primary?: boolean;
 };
 
 export type PortalBrowseEntry = {
@@ -169,12 +186,29 @@ export type PortalBrowseResult = {
   error?: string;
 };
 
-export type CreatePlaneInput = {
+export type CreateProjectInput = {
   name: string;
-  projectKind?: 'standard' | 'git';
+  projectKind?: 'general' | 'git';
   portalId?: string;
   rootId?: string;
   repoPath?: string;
+};
+
+export type WorkspaceBranchMode = 'newBranch' | 'existingBranch' | 'detached';
+
+export type CreateWorkspaceInput = {
+  name: string;
+  mode?: WorkspaceBranchMode;
+  branch?: string;
+  base?: string;
+  path?: string;
+};
+
+export type UpdateWorkspaceInput = {
+  name?: string;
+  branch?: string;
+  createBranch?: boolean;
+  base?: string;
 };
 
 const normalizePortalRoots = (roots: unknown): PortalRoot[] => Array.isArray(roots)
@@ -195,6 +229,7 @@ const normalizePortalConnection = (portal: unknown): PortalConnection | undefine
     name: typeof record.name === 'string' ? record.name : undefined,
     roots: normalizePortalRoots(record.roots),
     status: record.status === 'online' ? 'online' : 'offline',
+    primary: record.primary === true,
   };
 };
 
@@ -213,64 +248,105 @@ export const browsePortal = async (portalId: string, rootId = 'default', path = 
   );
 };
 
-export const createPlane = async (input: string | CreatePlaneInput) => {
-  const body = typeof input === 'string' ? { name: input, projectKind: 'standard' } : input;
-  const result = await parseJson<{ plane: Plane }>(
-    await fetch(`${getMastraUrl()}/planes`, {
+export const setPrimaryPortal = async (portalId: string) => {
+  const result = await parseJson<{ ok: true; primaryPortalId: string; portals: unknown[] }>(
+    await fetch(`${getMastraUrl()}/portals/${portalId}/primary`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+    }),
+  );
+
+  return {
+    primaryPortalId: result.primaryPortalId,
+    portals: result.portals.flatMap(portal => normalizePortalConnection(portal) ?? []),
+  };
+};
+
+export const createProject = async (input: string | CreateProjectInput) => {
+  const body = typeof input === 'string' ? { name: input, projectKind: 'general' } : input;
+  const result = await parseJson<{ project: Project }>(
+    await fetch(`${getMastraUrl()}/projects`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(body),
     }),
   );
 
-  return result.plane;
+  return result.project;
 };
 
-export const deletePlane = async (planeId: string) => {
+export const deleteProject = async (projectId: string) => {
   await parseJson<{ ok: true }>(
-    await fetch(`${getMastraUrl()}/planes/${planeId}`, { method: 'DELETE', headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/projects/${projectId}`, { method: 'DELETE', headers: getAuthHeaders() }),
   );
 };
 
-export const reorderPlanes = async (planeIds: string[]) => {
-  const result = await parseJson<{ planes: Plane[] }>(
-    await fetch(`${getMastraUrl()}/planes/reorder`, {
+export const setProjectProfile = async (projectId: string, profileId: string | null) => {
+  const result = await parseJson<{ project: Project }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/profile`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ planeIds }),
+      body: JSON.stringify({ profileId }),
     }),
   );
 
-  return result.planes;
+  return result.project;
 };
 
-export const createDemiplane = async (planeId: string, name: string) => {
-  const result = await parseJson<{ plane: Plane; demiplane: Demiplane }>(
-    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes`, {
+export const reorderProjects = async (projectIds: string[]) => {
+  const result = await parseJson<{ projects: Project[] }>(
+    await fetch(`${getMastraUrl()}/projects/reorder`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ projectIds }),
+    }),
+  );
+
+  return result.projects;
+};
+
+export const createWorkspace = async (projectId: string, input: string | CreateWorkspaceInput) => {
+  const body = typeof input === 'string'
+    ? { name: input, mode: 'newBranch' satisfies WorkspaceBranchMode, branch: input }
+    : input;
+  const result = await parseJson<{ project: Project; workspace: Workspace }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(body),
     }),
   );
 
-  return result.demiplane;
+  return result.workspace;
 };
 
-export const adoptDemiplane = async (planeId: string, path: string, name?: string) => {
-  const result = await parseJson<{ plane: Plane; demiplane: Demiplane }>(
-    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes/adopt`, {
+export const updateWorkspace = async (projectId: string, workspaceId: string, input: UpdateWorkspaceInput) => {
+  const result = await parseJson<{ project: Project; workspace: Workspace }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify(input),
+    }),
+  );
+
+  return result.workspace;
+};
+
+export const adoptWorkspace = async (projectId: string, path: string, name?: string) => {
+  const result = await parseJson<{ project: Project; workspace: Workspace }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/adopt`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ path, name }),
     }),
   );
 
-  return result.demiplane;
+  return result.workspace;
 };
 
-export const deleteDemiplane = async (planeId: string, demiplaneId: string, mode: 'detach' | 'remove') => {
-  const result = await parseJson<{ plane: Plane; demiplane: Demiplane; mode: 'detach' | 'remove' }>(
-    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes/${demiplaneId}?mode=${mode}`, {
+export const deleteWorkspace = async (projectId: string, workspaceId: string, mode: 'detach' | 'remove') => {
+  const result = await parseJson<{ project: Project; workspace: Workspace; mode: 'detach' | 'remove' }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}?mode=${mode}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }),
@@ -279,39 +355,39 @@ export const deleteDemiplane = async (planeId: string, demiplaneId: string, mode
   return result;
 };
 
-export const discoverDemiplanes = async (planeId: string) => {
+export const discoverWorkspaces = async (projectId: string) => {
   const result = await parseJson<{ worktrees: Array<Record<string, unknown>> }>(
-    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes/discover`, { headers: getAuthHeaders() }),
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/discover`, { headers: getAuthHeaders() }),
   );
 
   return result.worktrees;
 };
 
-export const reorderDemiplanes = async (planeId: string, demiplaneIds: string[]) => {
-  const result = await parseJson<{ plane: Plane }>(
-    await fetch(`${getMastraUrl()}/planes/${planeId}/demiplanes/reorder`, {
+export const reorderWorkspaces = async (projectId: string, workspaceIds: string[]) => {
+  const result = await parseJson<{ project: Project }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/reorder`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ demiplaneIds }),
+      body: JSON.stringify({ workspaceIds }),
     }),
   );
 
-  return result.plane;
+  return result.project;
 };
 
-export const createPlaneThread = async (planeId: string, threadId: string, demiplaneId?: string, title = '...') => {
-  const result = await parseJson<{ thread: ServerThread; demiplane: Demiplane }>(
-    await fetch(`${getMastraUrl()}/planes/${planeId}/threads`, {
+export const createProjectThread = async (projectId: string, threadId: string, workspaceId?: string, title = '...', profileId?: string) => {
+  const result = await parseJson<{ thread: ServerThread; workspace: Workspace }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title, demiplaneId }),
+      body: JSON.stringify({ threadId, title, workspaceId, profileId }),
     }),
   );
 
-  return { thread: toChatThread(result.thread), demiplane: result.demiplane };
+  return { thread: toChatThread(result.thread), workspace: result.workspace };
 };
 
-export const reorderThreads = async (scope: { plain?: true; planeId?: string; demiplaneId?: string }, threadIds: string[]) => {
+export const reorderThreads = async (scope: { plain?: true; projectId?: string; workspaceId?: string }, threadIds: string[]) => {
   await parseJson<{ ok: true }>(
     await fetch(`${getMastraUrl()}/chat-state/threads/reorder`, {
       method: 'PATCH',

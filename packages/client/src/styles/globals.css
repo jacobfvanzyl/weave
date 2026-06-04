@@ -60,6 +60,7 @@
   --weave-chat-content-max-width: 48rem;
   --weave-chat-text-size: 1rem;
   --weave-chat-line-height: 1.5rem;
+  --weave-terminal-font-size: 1rem;
   --background: #eff1f5;
   --foreground: #4c4f69;
   --card: #ffffff;
@@ -99,6 +100,10 @@
   --font-ui: "DM Sans Variable", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-code: "JetBrains Mono Variable", "JetBrains Mono", "Pure Nerd Font", "JetBrainsMono Nerd Font",
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-terminal: "JetBrainsMono Nerd Font Mono", "JetBrainsMonoNL Nerd Font Mono", "JetBrainsMono Nerd Font",
+    "JetBrainsMonoNL Nerd Font", "JetBrains Mono Variable", "JetBrains Mono", "Pure Nerd Font",
+    "JetBrainsMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
 }
 
 :root[data-theme="mocha"] {
@@ -141,6 +146,9 @@
 }
 
 :root {
+  --weave-safe-area-top: env(safe-area-inset-top, 0px);
+  --weave-safe-area-bottom-raw: env(safe-area-inset-bottom, 0px);
+  --weave-safe-area-bottom: min(var(--weave-safe-area-bottom-raw), 1rem);
   --weave-appbar-height: 3.5rem;
   --weave-appbar-control-size: 2rem;
   --weave-appbar-control-top: calc((var(--weave-appbar-height) - var(--weave-appbar-control-size)) / 2);
@@ -190,9 +198,13 @@ input {
   min-width: 0;
 }
 
+.weave-app-shell {
+  height: 100dvh;
+}
+
 .weave-appbar-left-actions-floating {
   position: fixed;
-  top: var(--weave-appbar-control-top);
+  top: calc(var(--weave-safe-area-top) + var(--weave-appbar-control-top));
   left: 1rem;
   z-index: 47;
   gap: 0.5rem;
@@ -206,7 +218,37 @@ aside[data-weave-thread-sidebar] {
   padding-top: var(--weave-sidebar-padding-top);
 }
 
+aside[data-weave-thread-sidebar]::after,
+[data-weave-general-terminal-overlay]::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: calc(-1 * var(--weave-safe-area-bottom-raw));
+  left: 0;
+  height: var(--weave-safe-area-bottom-raw);
+  pointer-events: none;
+}
+
+aside[data-weave-thread-sidebar]::after {
+  border-right: 1px solid var(--border);
+  background: inherit;
+}
+
+[data-weave-general-terminal-overlay]::after {
+  background: inherit;
+  backdrop-filter: inherit;
+  -webkit-backdrop-filter: inherit;
+}
+
+aside[data-weave-thread-sidebar][data-weave-thread-sidebar-overlay="true"] {
+  padding-top: calc(var(--weave-safe-area-top) + var(--weave-sidebar-padding-top));
+}
+
 @media (max-width: 767px) and (orientation: portrait) {
+  aside[data-weave-thread-sidebar] {
+    padding-top: calc(var(--weave-safe-area-top) + var(--weave-sidebar-padding-top));
+  }
+
   .chat-message-row {
     gap: 0;
   }

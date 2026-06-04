@@ -83,6 +83,6 @@ iterating on Rust.
 
 ## Implemented tools
 
-- `read`, `write`, `edit`, and `bash` under mounted Plane paths.
+- `read`, `write`, `edit`, and `bash` under mounted Project paths.
 - `portal.fs.*`, `portal.git.*`, `portal.agentInstructions.read`, and Worktrunk helpers.
 - `terminal` over Portal local control and the WebSocket relay.

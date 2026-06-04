@@ -18,13 +18,13 @@ export const parseEditorPath = (value: unknown, name = 'path') => {
   const normalizedInput = value.trim().replace(/\\/g, '/');
   if (!normalizedInput || normalizedInput === '.') return '';
   if (path.posix.isAbsolute(normalizedInput) || /^[a-zA-Z]:\//.test(normalizedInput)) {
-    throw new Error(`${name} must be relative to the Demiplane workspace.`);
+    throw new Error(`${name} must be relative to the workspace root.`);
   }
 
   const normalized = path.posix.normalize(normalizedInput);
   if (normalized === '.' || normalized === '') return '';
   if (normalized === '..' || normalized.startsWith('../')) {
-    throw new Error(`${name} cannot escape the Demiplane workspace.`);
+    throw new Error(`${name} cannot escape the workspace root.`);
   }
 
   return normalized.replace(/^\.\//, '');
@@ -33,8 +33,8 @@ export const parseEditorPath = (value: unknown, name = 'path') => {
 export const parseEditorTarget = (value: unknown): EditorTarget => {
   if (!isRecord(value)) throw new Error('target is required.');
   return {
-    planeId: parseIdentifier(value.planeId, 'planeId'),
-    demiplaneId: parseIdentifier(value.demiplaneId, 'demiplaneId'),
+    projectId: parseIdentifier(value.projectId, 'projectId'),
+    workspaceId: parseIdentifier(value.workspaceId, 'workspaceId'),
     portalId: optionalString(value.portalId),
     rootId: optionalString(value.rootId),
     repoPath: optionalString(value.repoPath),

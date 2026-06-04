@@ -61,7 +61,7 @@ Deno.test('PortalEditorHost writes text files and rejects stale saves', async ()
     );
   }));
 
-Deno.test('PortalEditorHost rejects path traversal and symlinks that escape the Demiplane', async () =>
+Deno.test('PortalEditorHost rejects path traversal and symlinks that escape the Workspace', async () =>
   await withEditorHost(async ({ root, outside, host }) => {
     await Deno.writeTextFile(`${outside}/secret.txt`, 'nope');
     await assertRejects(

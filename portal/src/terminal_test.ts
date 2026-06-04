@@ -54,13 +54,16 @@ const withHost = async (
     cwd: string;
     host: PortalTerminalHost;
     ptys: FakePty[];
+    spawnOptions: Array<{ cols: number; rows: number; cwd: string; env: Record<string, string> }>;
   }) => Promise<void>,
 ) => {
   const cwd = await Deno.makeTempDir({ prefix: 'weave-terminal-' });
   const realCwd = await Deno.realPath(cwd);
   const ptys: FakePty[] = [];
-  const spawner: PortalPtySpawner = () => {
+  const spawnOptions: Array<{ cols: number; rows: number; cwd: string; env: Record<string, string> }> = [];
+  const spawner: PortalPtySpawner = (_file, _args, options) => {
     const pty = new FakePty();
+    spawnOptions.push(options);
     ptys.push(pty);
     return pty;
   };
@@ -73,7 +76,7 @@ const withHost = async (
   });
 
   try {
-    await callback({ cwd: realCwd, host, ptys });
+    await callback({ cwd: realCwd, host, ptys, spawnOptions });
   } finally {
     host.dispose();
     await Deno.remove(cwd, { recursive: true });
@@ -85,10 +88,10 @@ Deno.test('PortalTerminalHost reuses sessions and replays output', async () =>
     const firstEvents: TerminalHostEvent[] = [];
     await host.handleClientMessage('client-1', {
       type: 'start',
-      kind: 'demiplane',
+      kind: 'workspace',
       terminalId: 'term-1',
-      planeId: 'plane-1',
-      demiplaneId: 'demiplane-1',
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
       workspacePath: cwd,
       cols: 100,
       rows: 30,
@@ -98,7 +101,7 @@ Deno.test('PortalTerminalHost reuses sessions and replays output', async () =>
     assertEquals(firstEvents[0], {
       type: 'started',
       terminalId: 'term-1',
-      demiplaneId: 'demiplane-1',
+      workspaceId: 'workspace-1',
       sessionId: (firstEvents[0] as any).sessionId,
       cwd,
       pid: 4242,
@@ -111,17 +114,17 @@ Deno.test('PortalTerminalHost reuses sessions and replays output', async () =>
     assertEquals(firstEvents.at(-1), {
       type: 'output',
       terminalId: 'term-1',
-      demiplaneId: 'demiplane-1',
+      workspaceId: 'workspace-1',
       data: 'hello',
     });
 
     const secondEvents: TerminalHostEvent[] = [];
     await host.handleClientMessage('client-2', {
       type: 'start',
-      kind: 'demiplane',
+      kind: 'workspace',
       terminalId: 'term-1',
-      planeId: 'plane-1',
-      demiplaneId: 'demiplane-1',
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
       workspacePath: cwd,
       cols: 120,
       rows: 30,
@@ -133,9 +136,27 @@ Deno.test('PortalTerminalHost reuses sessions and replays output', async () =>
     assertEquals(secondEvents[1], {
       type: 'replay',
       terminalId: 'term-1',
-      demiplaneId: 'demiplane-1',
+      workspaceId: 'workspace-1',
       data: 'hello',
     });
+  }));
+
+Deno.test('PortalTerminalHost exposes project/workspace environment for workspace sessions', async () =>
+  withHost(async ({ cwd, host, spawnOptions }) => {
+    await host.handleClientMessage('client-1', {
+      type: 'start',
+      kind: 'workspace',
+      terminalId: 'term-env',
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      workspacePath: cwd,
+    }, () => undefined);
+
+    assertEquals(spawnOptions[0].env.WEAVE_TERMINAL_KIND, 'workspace');
+    assertEquals(spawnOptions[0].env.WEAVE_PROJECT_ID, 'project-1');
+    assertEquals(spawnOptions[0].env.WEAVE_WORKSPACE_ID, 'workspace-1');
+    assertEquals('WEAVE_PLANE_ID' in spawnOptions[0].env, false);
+    assertEquals('WEAVE_DEMIPLANE_ID' in spawnOptions[0].env, false);
   }));
 
 Deno.test('PortalTerminalHost routes input, resize, detach, close, and exit', async () =>
@@ -188,7 +209,7 @@ Deno.test('PortalTerminalHost routes input, resize, detach, close, and exit', as
     assertEquals(events.at(-1), {
       type: 'exit',
       terminalId: 'general-1',
-      demiplaneId: undefined,
+      workspaceId: undefined,
       exitCode: 0,
       signal: undefined,
     });

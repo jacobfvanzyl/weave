@@ -15,7 +15,7 @@ import {
 } from './lifecycle.ts';
 
 type PortalMount = {
-  planeId: string;
+  projectId: string;
   localPath: string;
 };
 
@@ -39,7 +39,7 @@ type PortalConfig = {
   };
 };
 
-type ResolvedPortalConfig = {
+export type ResolvedPortalConfig = {
   portalId: string;
   portalToken: string;
   httpServerUrl: string;
@@ -123,6 +123,30 @@ const normalizePath = (path: string) => {
 const getParentPath = (path: string) => {
   const slashIndex = path.lastIndexOf('/');
   return slashIndex <= 0 ? '/' : path.slice(0, slashIndex);
+};
+
+const pathBasename = (path: string) => path.split('/').filter(Boolean).pop() || path;
+
+const workspaceSlug = (value: string) => {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return slug || `workspace-${crypto.randomUUID().slice(0, 8)}`;
+};
+
+type WeaveContextScope = 'global' | 'project';
+
+type WeaveContextFileKind = 'config' | 'mcp' | 'profile' | 'prompt' | 'skill' | 'agents';
+
+type WeaveContextFile = {
+  kind: WeaveContextFileKind;
+  path: string;
+  content: string;
+  size: number;
+  updatedAt?: string;
 };
 
 const fileMutationQueues = new Map<string, Promise<unknown>>();
@@ -301,6 +325,122 @@ const readAgentsMd = async (root: string) => {
   };
 };
 
+const maxWeaveContextFileSize = 256_000;
+const maxWeaveContextContentLength = 128_000;
+
+const relativePath = (root: string, target: string) =>
+  target === root ? '' : target.startsWith(`${root}/`) ? target.slice(root.length + 1) : target;
+
+const readWeaveContextFile = async (
+  absolutePath: string,
+  contextPath: string,
+  kind: WeaveContextFileKind,
+): Promise<WeaveContextFile | undefined> => {
+  const info = await Deno.stat(absolutePath).catch(() => undefined);
+  if (!info?.isFile || info.size > maxWeaveContextFileSize) return undefined;
+  const content = await Deno.readTextFile(absolutePath).catch(() => undefined);
+  if (typeof content !== 'string') return undefined;
+  return {
+    kind,
+    path: contextPath,
+    content: content.slice(0, maxWeaveContextContentLength),
+    size: info.size,
+    updatedAt: info.mtime?.toISOString(),
+  };
+};
+
+const listDirEntries = async (path: string) => {
+  const entries: Deno.DirEntry[] = [];
+  try {
+    for await (const entry of Deno.readDir(path)) entries.push(entry);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
+};
+
+const collectTextFiles = async (
+  root: string,
+  contextPrefix: string,
+  kind: WeaveContextFileKind,
+  options: { extensions?: string[]; fileNames?: string[]; maxDepth?: number } = {},
+): Promise<WeaveContextFile[]> => {
+  const maxDepth = options.maxDepth ?? 6;
+  const extensions = options.extensions;
+  const fileNames = options.fileNames;
+  const files: WeaveContextFile[] = [];
+
+  const visit = async (dir: string, depth: number) => {
+    if (depth > maxDepth) return;
+    for (const entry of await listDirEntries(dir)) {
+      const absolutePath = `${dir}/${entry.name}`;
+      if (entry.isDirectory) {
+        await visit(absolutePath, depth + 1);
+        continue;
+      }
+      if (!entry.isFile) continue;
+      if (fileNames && !fileNames.includes(entry.name)) continue;
+      if (extensions && !extensions.some(extension => entry.name.endsWith(extension))) continue;
+
+      const contextPath = `${contextPrefix}/${relativePath(root, absolutePath)}`;
+      const file = await readWeaveContextFile(absolutePath, contextPath, kind);
+      if (file) files.push(file);
+    }
+  };
+
+  await visit(root, 0);
+  return files;
+};
+
+const collectWeaveDirectory = async (
+  dir: string,
+  contextPrefix: string,
+  options: { includeProfiles: boolean; includeConfig: boolean },
+) => {
+  const files: WeaveContextFile[] = [];
+
+  if (options.includeConfig) {
+    const config = await readWeaveContextFile(`${dir}/weave.config.json`, `${contextPrefix}/weave.config.json`, 'config');
+    if (config) files.push(config);
+  }
+
+  const mcp = await readWeaveContextFile(`${dir}/mcp.json`, `${contextPrefix}/mcp.json`, 'mcp');
+  if (mcp) files.push(mcp);
+
+  if (options.includeProfiles) {
+    files.push(...await collectTextFiles(`${dir}/profiles`, `${contextPrefix}/profiles`, 'profile', { extensions: ['.md'], maxDepth: 0 }));
+  }
+
+  files.push(...await collectTextFiles(`${dir}/prompts`, `${contextPrefix}/prompts`, 'prompt', { extensions: ['.md'], maxDepth: 0 }));
+  files.push(...await collectTextFiles(`${dir}/skills`, `${contextPrefix}/skills`, 'skill', { fileNames: ['SKILL.md'], maxDepth: 8 }));
+
+  return files;
+};
+
+const collectAgentInstructionChain = async (gitRoot: string, workspaceRoot: string) => {
+  const root = await Deno.realPath(gitRoot);
+  const target = await Deno.realPath(workspaceRoot);
+  const chain: string[] = [root];
+
+  if (target.startsWith(`${root}/`)) {
+    let current = target;
+    const parents: string[] = [];
+    while (current !== root && current.startsWith(`${root}/`)) {
+      parents.push(current);
+      current = getParentPath(current);
+    }
+    chain.push(...parents.reverse());
+  }
+
+  const files: WeaveContextFile[] = [];
+  for (const dir of chain) {
+    const contextPath = relativePath(root, `${dir}/AGENTS.md`) || 'AGENTS.md';
+    const file = await readWeaveContextFile(`${dir}/AGENTS.md`, contextPath, 'agents');
+    if (file) files.push(file);
+  }
+  return files;
+};
+
 const inspectGit = async (path: string) => {
   const root = await runGit(path, ['rev-parse', '--show-toplevel']);
   const currentBranch = await runGit(root, ['branch', '--show-current']).catch(() => '');
@@ -316,8 +456,8 @@ const resolveWorkspaceRoot = async (config: ResolvedPortalConfig, request: Recor
     return await Deno.realPath(request.workspacePath.trim());
   }
 
-  const mount = typeof request.planeId === 'string'
-    ? (config.mounts ?? []).find((item) => item.planeId === request.planeId)
+  const mount = typeof request.projectId === 'string'
+    ? (config.mounts ?? []).find((item) => item.projectId === request.projectId)
     : undefined;
 
   const root = mount
@@ -326,7 +466,7 @@ const resolveWorkspaceRoot = async (config: ResolvedPortalConfig, request: Recor
     ? (await resolveRootPath(config, request.rootId, request.repoPath)).target
     : undefined;
 
-  if (!root) throw new Error(`Plane is not mounted: ${String(request.planeId)}`);
+  if (!root) throw new Error(`Project is not mounted: ${String(request.projectId)}`);
   return root;
 };
 
@@ -341,7 +481,7 @@ const resolveWorkspacePath = async (
 
   if (mustExist) {
     const candidate = await Deno.realPath(candidatePath);
-    if (candidate !== root && !candidate.startsWith(`${root}/`)) throw new Error('Path escapes Plane mount');
+    if (candidate !== root && !candidate.startsWith(`${root}/`)) throw new Error('Path escapes Project mount');
     return { root, candidate };
   }
 
@@ -351,7 +491,7 @@ const resolveWorkspacePath = async (
     return await Deno.realPath(parentPath);
   });
   const candidate = normalizePath(`${realParent}/${candidatePath.slice(parentPath.length + 1)}`);
-  if (candidate !== root && !candidate.startsWith(`${root}/`)) throw new Error('Path escapes Plane mount');
+  if (candidate !== root && !candidate.startsWith(`${root}/`)) throw new Error('Path escapes Project mount');
   return { root, candidate };
 };
 
@@ -409,6 +549,63 @@ const readAgentInstructionsTool = async (config: ResolvedPortalConfig, request: 
   return { ok: true, agentInstructions };
 };
 
+const collectProjectWeaveDirectories = async (gitRoot: string, workspaceRoot: string) => {
+  const root = await Deno.realPath(gitRoot);
+  const target = await Deno.realPath(workspaceRoot);
+  const chain: string[] = [root];
+
+  if (target.startsWith(`${root}/`)) {
+    let current = target;
+    const parents: string[] = [];
+    while (current !== root && current.startsWith(`${root}/`)) {
+      parents.push(current);
+      current = getParentPath(current);
+    }
+    chain.push(...parents.reverse());
+  }
+
+  const files: WeaveContextFile[] = [];
+  for (const dir of chain) {
+    const weaveDir = `${dir}/.weave`;
+    const prefix = relativePath(root, weaveDir) || '.weave';
+    files.push(...await collectWeaveDirectory(weaveDir, prefix, { includeProfiles: false, includeConfig: false }));
+  }
+
+  return files;
+};
+
+export const discoverGlobalWeaveContext = async () => {
+  const home = Deno.env.get('HOME');
+  if (!home) return { basePath: undefined, files: [] as WeaveContextFile[] };
+  const basePath = normalizePath(`${home}/.config/weave`);
+  const files = await collectWeaveDirectory(basePath, '.config/weave', { includeProfiles: true, includeConfig: true });
+  return { basePath, files };
+};
+
+export const discoverProjectWeaveContext = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const workspaceRoot = await resolveWorkspaceRoot(config, request);
+  const gitRoot = await runGit(workspaceRoot, ['rev-parse', '--show-toplevel']).catch(() => workspaceRoot);
+  const [agents, weaveFiles] = await Promise.all([
+    collectAgentInstructionChain(gitRoot, workspaceRoot),
+    collectProjectWeaveDirectories(gitRoot, workspaceRoot),
+  ]);
+  return { basePath: gitRoot, workspacePath: workspaceRoot, files: [...agents, ...weaveFiles] };
+};
+
+export const discoverWeaveContextTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const args = request.args as Record<string, unknown> | undefined;
+  const scope: WeaveContextScope = args?.scope === 'project' ? 'project' : 'global';
+  const discovered = scope === 'project'
+    ? await discoverProjectWeaveContext(config, request)
+    : await discoverGlobalWeaveContext();
+  return {
+    ok: true,
+    scope,
+    ...discovered,
+    files: discovered.files,
+  };
+};
+
 const normalizeWtWorktree = (item: unknown) => {
   const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
   const commit = record.commit && typeof record.commit === 'object'
@@ -421,6 +618,7 @@ const normalizeWtWorktree = (item: unknown) => {
     branch: typeof record.branch === 'string' ? record.branch : undefined,
     path: typeof record.path === 'string' ? normalizePath(record.path) : undefined,
     commit: typeof commit?.sha === 'string' ? commit.sha : undefined,
+    head: typeof commit?.sha === 'string' ? commit.sha : undefined,
     shortCommit: typeof commit?.short_sha === 'string' ? commit.short_sha : undefined,
     message: typeof commit?.message === 'string' ? commit.message : undefined,
     isMain: record.is_main === true,
@@ -428,6 +626,29 @@ const normalizeWtWorktree = (item: unknown) => {
     detached: worktree?.detached === true,
     statusline: typeof record.statusline === 'string' ? record.statusline.replace(/\u001b\[[0-9;]*m/g, '') : undefined,
   };
+};
+
+const normalizeGitWorktree = async (path: string) => {
+  const realPath = await Deno.realPath(path);
+  const branch = await runGit(realPath, ['branch', '--show-current']).catch(() => '');
+  const commit = await runGit(realPath, ['rev-parse', 'HEAD']).catch(() => undefined);
+  return { path: realPath, branch: branch || undefined, commit, head: commit, detached: !branch };
+};
+
+const resolveNewWorkspacePath = async (root: string, args: Record<string, unknown>, label: string) => {
+  const requestedPath = typeof args.path === 'string' && args.path.trim() ? args.path.trim() : undefined;
+  const target = requestedPath
+    ? normalizePath(requestedPath.startsWith('/') ? requestedPath : `${getParentPath(root)}/${requestedPath}`)
+    : normalizePath(`${getParentPath(root)}/${pathBasename(root)}.${workspaceSlug(label)}`);
+  const parent = getParentPath(target);
+  await Deno.stat(target).then(() => {
+    throw new Error(`Workspace path already exists: ${target}`);
+  }).catch((error) => {
+    if (error instanceof Deno.errors.NotFound) return;
+    throw error;
+  });
+  await Deno.mkdir(parent, { recursive: true });
+  return target;
 };
 
 const worktrunkStatusTool = async () => getWorktrunkStatus();
@@ -449,6 +670,79 @@ const worktrunkCreateTool = async (config: ResolvedPortalConfig, request: Record
   if (base) wtArgs.splice(5, 0, '--base', base);
   const result = await runWtJson(root, wtArgs);
   return { ok: true, worktree: normalizeWtWorktree(result), raw: result };
+};
+
+const gitWorktreeCreateTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const args = request.args as Record<string, unknown> | undefined ?? {};
+  const mode = args.mode === 'existingBranch' || args.mode === 'detached' ? args.mode : 'newBranch';
+  const name = typeof args.name === 'string' && args.name.trim() ? args.name.trim() : undefined;
+  const branch = typeof args.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
+  const base = typeof args.base === 'string' && args.base.trim() ? args.base.trim() : undefined;
+  if (mode !== 'detached' && !branch) throw new Error('Missing branch');
+  const root = await resolveWorkspaceRoot(config, request);
+  const target = await resolveNewWorkspacePath(root, args, name ?? branch ?? base ?? 'detached');
+  const gitArgs = mode === 'newBranch'
+    ? ['worktree', 'add', '-b', branch!, target, base ?? 'HEAD']
+    : mode === 'existingBranch'
+    ? ['worktree', 'add', target, branch!]
+    : ['worktree', 'add', '--detach', target, base ?? 'HEAD'];
+  await runGit(root, gitArgs);
+  return { ok: true, worktree: await normalizeGitWorktree(target) };
+};
+
+const gitWorktreeListTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const root = await resolveWorkspaceRoot(config, request);
+  const stdout = await runGit(root, ['worktree', 'list', '--porcelain']);
+  const records = stdout.split(/\n{2,}/).map((record) => record.trim()).filter(Boolean);
+  const worktrees = records.map((record) => {
+    const fields: Record<string, string | boolean> = {};
+    for (const line of record.split('\n')) {
+      const [key = '', ...rest] = line.split(' ');
+      fields[key] = rest.length ? rest.join(' ') : true;
+    }
+    const branch = typeof fields.branch === 'string'
+      ? fields.branch.replace(/^refs\/heads\//, '')
+      : undefined;
+    const path = typeof fields.worktree === 'string' ? normalizePath(fields.worktree) : undefined;
+    const head = typeof fields.HEAD === 'string' ? fields.HEAD : undefined;
+    return {
+      path,
+      branch,
+      commit: head,
+      head,
+      detached: fields.detached === true || !branch,
+      isCurrent: path === root,
+    };
+  });
+  return { ok: true, worktrees };
+};
+
+const gitWorktreeSwitchTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const args = request.args as Record<string, unknown> | undefined ?? {};
+  const branch = typeof args.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
+  if (!branch) throw new Error('Missing branch');
+  const root = await resolveWorkspaceRoot(config, request);
+  const base = typeof args.base === 'string' && args.base.trim() ? args.base.trim() : undefined;
+  const gitArgs = args.create === true
+    ? ['switch', '-c', branch, ...(base ? [base] : [])]
+    : ['switch', branch];
+  await runGit(root, gitArgs);
+  return { ok: true, worktree: await normalizeGitWorktree(root) };
+};
+
+const gitWorktreeRemoveTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const args = request.args as Record<string, unknown> | undefined ?? {};
+  const target = typeof args.path === 'string' && args.path.trim()
+    ? args.path.trim()
+    : typeof request.workspacePath === 'string' && request.workspacePath.trim()
+    ? request.workspacePath.trim()
+    : undefined;
+  if (!target) throw new Error('Missing path');
+  const root = await resolveWorkspaceRoot(config, { ...request, workspacePath: undefined });
+  const gitArgs = ['worktree', 'remove', target];
+  if (args.force === true) gitArgs.push('--force');
+  await runGit(root, gitArgs);
+  return { ok: true };
 };
 
 const worktrunkRemoveTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
@@ -486,12 +780,12 @@ const gitWorktreeValidateTool = async (config: ResolvedPortalConfig, request: Re
     ? await Deno.realPath(candidateCommonDir)
     : await Deno.realPath(`${candidate}/${candidateCommonDir}`);
   if (normalizedPrimaryCommonDir !== normalizedCandidateCommonDir) {
-    throw new Error('Selected path is not a worktree for this Plane repo');
+    throw new Error('Selected path is not a worktree for this Project repo');
   }
 
   const branch = await runGit(candidate, ['branch', '--show-current']).catch(() => '');
   const commit = await runGit(candidate, ['rev-parse', 'HEAD']).catch(() => undefined);
-  return { ok: true, worktree: { path: candidate, branch: branch || undefined, commit, detached: !branch } };
+  return { ok: true, worktree: { path: candidate, branch: branch || undefined, commit, head: commit, detached: !branch } };
 };
 
 const maxReadLines = 2000;
@@ -527,7 +821,7 @@ const truncateReadContent = (content: string, startLine: number, totalLines: num
 
 const readFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
-  if (typeof request.planeId !== 'string') throw new Error('Missing planeId');
+  if (typeof request.projectId !== 'string') throw new Error('Missing projectId');
   if (typeof args?.path !== 'string') throw new Error('Missing path');
 
   const { candidate: filePath } = await resolveWorkspacePath(config, request, args.path);
@@ -543,7 +837,7 @@ const readFileTool = async (config: ResolvedPortalConfig, request: Record<string
 
 const writeFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
-  if (typeof request.planeId !== 'string') throw new Error('Missing planeId');
+  if (typeof request.projectId !== 'string') throw new Error('Missing projectId');
   if (typeof args?.path !== 'string') throw new Error('Missing path');
   if (typeof args?.content !== 'string') throw new Error('Missing content');
 
@@ -602,7 +896,7 @@ const generateSimpleDiff = (oldContent: string, newContent: string) => {
 
 const editFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
-  if (typeof request.planeId !== 'string') throw new Error('Missing planeId');
+  if (typeof request.projectId !== 'string') throw new Error('Missing projectId');
   if (typeof args?.path !== 'string') throw new Error('Missing path');
   if (!Array.isArray(args?.edits) || args.edits.length === 0) throw new Error('Missing edits');
   const requestedEdits = args.edits;
@@ -670,7 +964,7 @@ const editFileTool = async (config: ResolvedPortalConfig, request: Record<string
 
 const bashTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined;
-  if (typeof request.planeId !== 'string') throw new Error('Missing planeId');
+  if (typeof request.projectId !== 'string') throw new Error('Missing projectId');
   if (typeof args?.command !== 'string' || !args.command.trim()) throw new Error('Missing command');
 
   const root = await resolveWorkspaceRoot(config, request);
@@ -698,8 +992,8 @@ const bashTool = async (config: ResolvedPortalConfig, request: Record<string, un
 };
 
 const editorTargetFromRequest = (request: Record<string, unknown>): PortalEditorTarget => ({
-  planeId: typeof request.planeId === 'string' ? request.planeId : undefined,
-  demiplaneId: typeof request.demiplaneId === 'string' ? request.demiplaneId : undefined,
+  projectId: typeof request.projectId === 'string' ? request.projectId : undefined,
+  workspaceId: typeof request.workspaceId === 'string' ? request.workspaceId : undefined,
   rootId: typeof request.rootId === 'string' ? request.rootId : undefined,
   repoPath: typeof request.repoPath === 'string' ? request.repoPath : undefined,
   workspacePath: typeof request.workspacePath === 'string' ? request.workspacePath : undefined,
@@ -742,6 +1036,8 @@ const handleToolCall = async (
       ? await inspectGitTool(config, request)
       : request.tool === 'portal.agentInstructions.read'
       ? await readAgentInstructionsTool(config, request)
+      : request.tool === 'portal.context.discover'
+      ? await discoverWeaveContextTool(config, request)
       : request.tool === 'portal.worktrunk.status'
       ? await worktrunkStatusTool()
       : request.tool === 'portal.worktrunk.list'
@@ -750,6 +1046,14 @@ const handleToolCall = async (
       ? await worktrunkCreateTool(config, request)
       : request.tool === 'portal.worktrunk.remove'
       ? await worktrunkRemoveTool(config, request)
+      : request.tool === 'portal.git.worktree.create'
+      ? await gitWorktreeCreateTool(config, request)
+      : request.tool === 'portal.git.worktree.list'
+      ? await gitWorktreeListTool(config, request)
+      : request.tool === 'portal.git.worktree.switch'
+      ? await gitWorktreeSwitchTool(config, request)
+      : request.tool === 'portal.git.worktree.remove'
+      ? await gitWorktreeRemoveTool(config, request)
       : request.tool === 'portal.git.worktree.validate'
       ? await gitWorktreeValidateTool(config, request)
       : undefined;
@@ -779,7 +1083,12 @@ const getPortalCapabilities = async () => {
     'portal.fs.stat',
     'portal.git.inspect',
     'portal.agentInstructions.read',
+    'portal.context.discover',
     'portal.git.worktree.validate',
+    'portal.git.worktree.create',
+    'portal.git.worktree.list',
+    'portal.git.worktree.switch',
+    'portal.git.worktree.remove',
     'portal.worktrunk.status',
   ];
   const status = await getWorktrunkStatus().catch(() => ({ installed: false }));
@@ -1022,19 +1331,19 @@ const addRoot = async (flags: Record<string, string | boolean>) => {
   console.log(`Root ${id}: ${realPath}`);
 };
 
-const mountPlane = async (flags: Record<string, string | boolean>) => {
+const mountProject = async (flags: Record<string, string | boolean>) => {
   const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
-  const planeId = stringFlag(flags, 'plane');
+  const projectId = stringFlag(flags, 'project');
   const path = stringFlag(flags, 'path');
-  if (!planeId || !path) throw new Error('mount requires --plane and --path');
+  if (!projectId || !path) throw new Error('mount requires --project and --path');
 
   const config = await readConfig(configPath);
   const realPath = await Deno.realPath(path);
   const portal = config.portal ?? {};
-  const mounts = (portal.mounts ?? []).filter((mount) => mount.planeId !== planeId);
-  config.portal = { ...portal, mounts: [...mounts, { planeId, localPath: realPath }] };
+  const mounts = (portal.mounts ?? []).filter((mount) => mount.projectId !== projectId);
+  config.portal = { ...portal, mounts: [...mounts, { projectId, localPath: realPath }] };
   await writeConfig(configPath, config);
-  console.log(`Mounted ${planeId}: ${realPath}`);
+  console.log(`Mounted ${projectId}: ${realPath}`);
 };
 
 const status = async (flags: Record<string, string | boolean>) => {
@@ -1090,7 +1399,7 @@ const usage = () => {
 Commands:
   login --server http://localhost:4111 --token <auth-token> [--ws-server ws://localhost:4112] [--name <name>]
   root --path /path/to/code [--id default] [--name Code] [--config ~/.config/weave/portal/config.json]
-  mount --plane plane_x --path /path/to/repo [--config ~/.config/weave/portal/config.json]
+  mount --project project_x --path /path/to/repo [--config ~/.config/weave/portal/config.json]
   daemon [--config ~/.config/weave/portal/config.json] [--ws-server ws://localhost:4112] [--control-port 0] [--control-token token] [--no-control]
   status [--config ~/.config/weave/portal/config.json]
   stop
@@ -1103,7 +1412,7 @@ const main = async () => {
   if (command === 'login') return login(flags);
   if (!command || command === 'daemon') return daemon(flags);
   if (command === 'root') return addRoot(flags);
-  if (command === 'mount') return mountPlane(flags);
+  if (command === 'mount') return mountProject(flags);
   if (command === 'status') return status(flags);
   if (command === 'stop') return stop(flags);
 

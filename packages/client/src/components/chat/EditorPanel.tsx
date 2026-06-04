@@ -19,8 +19,8 @@ import { Button } from '../ui/button';
 import { CodeMirrorEditor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
 
 type EditorPanelTarget = EditorTarget & {
-  planeName: string;
-  demiplaneName: string;
+  projectName: string;
+  workspaceName: string;
 };
 
 type EditorPanelProps = {
@@ -53,13 +53,13 @@ const editorModeIndicatorStyles: Record<VimMode, { label: string; foreground: st
 export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, target, onHide }: EditorPanelProps) => {
   const backend = useMemo<EditorBackend>(() => createEditorBackend(), []);
   const editorTarget = useMemo<EditorTarget>(() => ({
-    planeId: target.planeId,
-    demiplaneId: target.demiplaneId,
+    projectId: target.projectId,
+    workspaceId: target.workspaceId,
     portalId: target.portalId,
     rootId: target.rootId,
     repoPath: target.repoPath,
     workspacePath: target.workspacePath,
-  }), [target.demiplaneId, target.planeId, target.portalId, target.repoPath, target.rootId, target.workspacePath]);
+  }), [target.workspaceId, target.projectId, target.portalId, target.repoPath, target.rootId, target.workspacePath]);
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const [directoryPath, setDirectoryPath] = useState('');
   const [entries, setEntries] = useState<EditorEntry[]>([]);
@@ -114,7 +114,7 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
     setContent('');
     setError(undefined);
     void loadDirectory('');
-  }, [loadDirectory, target.demiplaneId, target.planeId]);
+  }, [loadDirectory, target.workspaceId, target.projectId]);
 
   useEffect(() => {
     if (!openFile) setVimMode('normal');
@@ -170,7 +170,7 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
     void loadFile(openFile.path);
   }, [confirmDiscard, loadFile, openFile]);
 
-  const titlePath = openFile?.path ?? `${target.planeName} / ${target.demiplaneName}`;
+  const titlePath = openFile?.path ?? `${target.projectName} / ${target.workspaceName}`;
   const statusLabel = isSaving
     ? 'saving'
     : isFileLoading

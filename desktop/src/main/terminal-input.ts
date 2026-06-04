@@ -21,12 +21,12 @@ export const parseTerminalStartInput = (input: unknown): NormalizedTerminalStart
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
   const isGeneralTerminalRequest = record.kind === 'general'
     || (
-      record.kind !== 'demiplane'
-      && record.planeId === undefined
-      && record.demiplaneId === undefined
+      record.kind !== 'workspace'
+      && record.projectId === undefined
+      && record.workspaceId === undefined
       && (record.terminalId === 'weave-general-terminal' || typeof record.cwd === 'string')
     );
-  const kind: TerminalSessionKind = isGeneralTerminalRequest ? 'general' : 'demiplane';
+  const kind: TerminalSessionKind = isGeneralTerminalRequest ? 'general' : 'workspace';
   const parsedDimensions = {
     cols: parseDimension(record.cols, 80, 10, 400),
     rows: parseDimension(record.rows, 24, 3, 200),
@@ -48,12 +48,12 @@ export const parseTerminalStartInput = (input: unknown): NormalizedTerminalStart
     };
   }
 
-  const demiplaneId = parseIdentifier(record.demiplaneId, 'demiplaneId');
+  const workspaceId = parseIdentifier(record.workspaceId, 'workspaceId');
   return {
     kind,
-    terminalId: parseIdentifier(record.terminalId ?? demiplaneId, 'terminalId'),
-    planeId: parseIdentifier(record.planeId, 'planeId'),
-    demiplaneId,
+    terminalId: parseIdentifier(record.terminalId ?? workspaceId, 'terminalId'),
+    projectId: parseIdentifier(record.projectId, 'projectId'),
+    workspaceId,
     ...common,
   };
 };

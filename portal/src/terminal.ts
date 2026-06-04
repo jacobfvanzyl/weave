@@ -1,12 +1,12 @@
 import type { PortalEditorHost } from './editor.ts';
 
-export type TerminalSessionKind = 'demiplane' | 'general';
+export type TerminalSessionKind = 'workspace' | 'general';
 
 export type TerminalStartInput = {
   kind: TerminalSessionKind;
   terminalId: string;
-  planeId?: string;
-  demiplaneId?: string;
+  projectId?: string;
+  workspaceId?: string;
   portalId?: string;
   rootId?: string;
   repoPath?: string;
@@ -26,7 +26,7 @@ export type TerminalClientMessage =
 export type TerminalStartedEvent = {
   type: 'started';
   terminalId: string;
-  demiplaneId?: string;
+  workspaceId?: string;
   sessionId: string;
   cwd: string;
   pid?: number;
@@ -36,11 +36,11 @@ export type TerminalStartedEvent = {
 
 export type TerminalHostEvent =
   | TerminalStartedEvent
-  | { type: 'output'; terminalId: string; demiplaneId?: string; data: string }
-  | { type: 'replay'; terminalId: string; demiplaneId?: string; data: string }
-  | { type: 'title'; terminalId: string; demiplaneId?: string; title: string }
-  | { type: 'exit'; terminalId: string; demiplaneId?: string; exitCode?: number; signal?: number | string }
-  | { type: 'error'; terminalId: string; demiplaneId?: string; error: string };
+  | { type: 'output'; terminalId: string; workspaceId?: string; data: string }
+  | { type: 'replay'; terminalId: string; workspaceId?: string; data: string }
+  | { type: 'title'; terminalId: string; workspaceId?: string; title: string }
+  | { type: 'exit'; terminalId: string; workspaceId?: string; exitCode?: number; signal?: number | string }
+  | { type: 'error'; terminalId: string; workspaceId?: string; error: string };
 
 export type TerminalClientEnvelope = {
   type: 'terminal.client';
@@ -61,7 +61,7 @@ export type TerminalPortalRoot = {
 };
 
 export type TerminalPortalMount = {
-  planeId: string;
+  projectId: string;
   localPath: string;
 };
 
@@ -116,8 +116,8 @@ type TerminalSession = {
   sessionId: string;
   kind: TerminalSessionKind;
   terminalId: string;
-  planeId?: string;
-  demiplaneId?: string;
+  projectId?: string;
+  workspaceId?: string;
   cwd: string;
   pty: PortalPty;
   cols: number;
@@ -161,12 +161,12 @@ export const parseTerminalStartInput = (input: unknown): NormalizedTerminalStart
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
   const isGeneralTerminalRequest = record.kind === 'general' ||
     (
-      record.kind !== 'demiplane' &&
-      record.planeId === undefined &&
-      record.demiplaneId === undefined &&
+      record.kind !== 'workspace' &&
+      record.projectId === undefined &&
+      record.workspaceId === undefined &&
       (record.terminalId === 'weave-general-terminal' || typeof record.cwd === 'string')
     );
-  const kind: TerminalSessionKind = isGeneralTerminalRequest ? 'general' : 'demiplane';
+  const kind: TerminalSessionKind = isGeneralTerminalRequest ? 'general' : 'workspace';
   const parsedDimensions = {
     cols: parseDimension(record.cols, 80, 10, 400),
     rows: parseDimension(record.rows, 24, 3, 200),
@@ -189,12 +189,12 @@ export const parseTerminalStartInput = (input: unknown): NormalizedTerminalStart
     };
   }
 
-  const demiplaneId = parseIdentifier(record.demiplaneId, 'demiplaneId');
+  const workspaceId = parseIdentifier(record.workspaceId, 'workspaceId');
   return {
     kind,
-    terminalId: parseIdentifier(record.terminalId ?? demiplaneId, 'terminalId'),
-    planeId: parseIdentifier(record.planeId, 'planeId'),
-    demiplaneId,
+    terminalId: parseIdentifier(record.terminalId ?? workspaceId, 'terminalId'),
+    projectId: parseIdentifier(record.projectId, 'projectId'),
+    workspaceId,
     ...common,
   };
 };
@@ -541,9 +541,9 @@ export class PortalTerminalHost {
       const weaveEnv: Record<string, string> = {
         WEAVE_WORKSPACE: cwd,
       };
-      if (normalizedInput.kind === 'demiplane') {
-        if (normalizedInput.planeId) weaveEnv.WEAVE_PLANE_ID = normalizedInput.planeId;
-        if (normalizedInput.demiplaneId) weaveEnv.WEAVE_DEMIPLANE_ID = normalizedInput.demiplaneId;
+      if (normalizedInput.kind === 'workspace') {
+        if (normalizedInput.projectId) weaveEnv.WEAVE_PROJECT_ID = normalizedInput.projectId;
+        if (normalizedInput.workspaceId) weaveEnv.WEAVE_WORKSPACE_ID = normalizedInput.workspaceId;
       }
       const pty = await this.spawner(shell.file, shell.args, {
         cols: normalizedInput.cols,
@@ -563,8 +563,8 @@ export class PortalTerminalHost {
         sessionId: crypto.randomUUID(),
         kind: normalizedInput.kind,
         terminalId: normalizedInput.terminalId,
-        planeId: normalizedInput.planeId,
-        demiplaneId: normalizedInput.demiplaneId,
+        projectId: normalizedInput.projectId,
+        workspaceId: normalizedInput.workspaceId,
         cwd,
         pty,
         cols: normalizedInput.cols,
@@ -587,7 +587,7 @@ export class PortalTerminalHost {
       send({
         type: 'error',
         terminalId: normalizedInput.terminalId,
-        demiplaneId: normalizedInput.demiplaneId,
+        workspaceId: normalizedInput.workspaceId,
         error: toErrorMessage(error),
       });
     }
@@ -633,12 +633,12 @@ export class PortalTerminalHost {
     }
 
     if (input.workspacePath) return await Deno.realPath(input.workspacePath);
-    const mount = (this.config.mounts ?? []).find((item) => item.planeId === input.planeId);
+    const mount = (this.config.mounts ?? []).find((item) => item.projectId === input.projectId);
     if (mount) return await Deno.realPath(mount.localPath);
     if (input.rootId && input.repoPath) {
       return await this.resolveRootPath(input.rootId, input.repoPath).then((result) => result.target);
     }
-    throw new Error(`Plane is not mounted: ${String(input.planeId)}`);
+    throw new Error(`Project is not mounted: ${String(input.projectId)}`);
   }
 
   private async resolveRootPath(rootId: string, path = '') {
@@ -670,7 +670,7 @@ export class PortalTerminalHost {
     send({
       type: 'started',
       terminalId: session.terminalId,
-      demiplaneId: session.demiplaneId,
+      workspaceId: session.workspaceId,
       sessionId: session.sessionId,
       cwd: session.cwd,
       pid: session.pty.pid,
@@ -684,7 +684,7 @@ export class PortalTerminalHost {
     send({
       type: 'replay',
       terminalId: session.terminalId,
-      demiplaneId: session.demiplaneId,
+      workspaceId: session.workspaceId,
       data: session.replay,
     });
   }
@@ -707,7 +707,7 @@ export class PortalTerminalHost {
     this.broadcast(session, {
       type: 'output',
       terminalId: session.terminalId,
-      demiplaneId: session.demiplaneId,
+      workspaceId: session.workspaceId,
       data,
     });
   }
@@ -728,7 +728,7 @@ export class PortalTerminalHost {
     this.broadcast(session, {
       type: 'exit',
       terminalId: session.terminalId,
-      demiplaneId: session.demiplaneId,
+      workspaceId: session.workspaceId,
       exitCode: event.exitCode,
       signal: event.signal,
     });

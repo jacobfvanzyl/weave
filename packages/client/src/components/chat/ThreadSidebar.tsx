@@ -4,11 +4,12 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Folder, FolderCode, FolderOpen, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, Trash2, X } from 'lucide-react';
-import { adoptDemiplane, createDemiplane, createPlane, deleteDemiplane, deletePlane, listPlanes, listPortals, reorderDemiplanes, reorderPlanes, reorderThreads, type CreatePlaneInput } from '../../lib/chat-state-api';
+import { Archive, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, Trash2, X } from 'lucide-react';
+import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, listProjects, listPortals, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type WorkspaceBranchMode } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
-import { GitPlaneDirectoryPicker } from './GitPlaneDirectoryPicker';
+import { GitProjectDirectoryPicker } from './GitProjectDirectoryPicker';
 import { useChatStore } from '../../stores/chat-store';
+import { Alert, AlertDescription } from '../ui/alert';
 import {
   AlertDialog,
   AlertDialogClose,
@@ -23,20 +24,24 @@ import {
   Dialog,
   DialogClose,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogPanel,
   DialogPopup,
   DialogTitle,
 } from '../ui/dialog';
 import { Empty, EmptyDescription } from '../ui/empty';
+import { Field, FieldLabel } from '../ui/field';
+import { Input } from '../ui/input';
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { ScrollArea } from '../ui/scroll-area';
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
 
-const collapsedPlanesStorageKey = 'weave.collapsedPlaneIds';
+const collapsedProjectsStorageKey = 'weave.collapsedProjectIds';
 
-const loadCollapsedPlaneIds = () => {
+const loadCollapsedProjectIds = () => {
   try {
-    const value = window.localStorage.getItem(collapsedPlanesStorageKey);
+    const value = window.localStorage.getItem(collapsedProjectsStorageKey);
     const parsed = value ? JSON.parse(value) : [];
     return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string') : [];
   } catch {
@@ -59,7 +64,7 @@ const moveItem = <T extends { id: string }>(items: T[], activeId: string, overId
   return next;
 };
 
-const demiplaneStatusClass = (status: string, isPortalConnected: boolean) => {
+const workspaceStatusClass = (status: string, isPortalConnected: boolean) => {
   if (!isPortalConnected) return 'bg-destructive';
   if (status === 'ready') return 'bg-success';
   if (status === 'creating') return 'bg-primary animate-pulse';
@@ -67,7 +72,7 @@ const demiplaneStatusClass = (status: string, isPortalConnected: boolean) => {
   return 'bg-destructive';
 };
 
-const getDemiplanePortalId = (plane: { portalId?: string }, demiplane: { portalId?: string }) => demiplane.portalId ?? plane.portalId;
+const getWorkspacePortalId = (project: { portalId?: string }, workspace: { portalId?: string }) => workspace.portalId ?? project.portalId;
 
 const SortableSection = ({
   items,
@@ -219,17 +224,25 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
     deleteThread,
   } = useChatStore();
   const queryClient = useQueryClient();
-  const openPlaneIdsBeforeDragRef = useRef<string[] | null>(null);
+  const openProjectIdsBeforeDragRef = useRef<string[] | null>(null);
   const suppressSelectionUntilRef = useRef(0);
   const [archivedDialogScopeId, setArchivedDialogScopeId] = useState<string | null>(null);
-  const [deletePlaneId, setDeletePlaneId] = useState<string | null>(null);
-  const [isCreatePlaneDialogOpen, setIsCreatePlaneDialogOpen] = useState(false);
-  const [isCreatingPlane, setIsCreatingPlane] = useState(false);
-  const [createPlaneError, setCreatePlaneError] = useState<string | null>(null);
-  const [collapsedPlaneIds, setCollapsedPlaneIds] = useState<string[]>(loadCollapsedPlaneIds);
-  const { data: planes = [] } = useQuery({
-    queryKey: ['planes', resourceId],
-    queryFn: listPlanes,
+  const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
+  const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+  const [createWorkspaceProjectId, setCreateWorkspaceProjectId] = useState<string | null>(null);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceBranchMode>('newBranch');
+  const [workspaceBranch, setWorkspaceBranch] = useState('');
+  const [workspaceBase, setWorkspaceBase] = useState('');
+  const [workspacePath, setWorkspacePath] = useState('');
+  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
+  const [createWorkspaceError, setCreateWorkspaceError] = useState<string | null>(null);
+  const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>(loadCollapsedProjectIds);
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects', resourceId],
+    queryFn: listProjects,
     staleTime: 1000 * 30,
   });
   const { data: portals = [] } = useQuery({
@@ -240,22 +253,22 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
   });
   const onlinePortalCount = portals.filter(portal => portal.status === 'online').length;
   const onlinePortalIds = new Set(portals.filter(portal => portal.status === 'online').map(portal => portal.portalId));
-  const plainThreads = sortManual(threads.filter(thread => (!thread.planeId || thread.adHoc) && thread.archived !== true));
-  const threadsByPlane = new Map(planes.map(plane => [plane.id, sortManual(threads.filter(thread => thread.planeId === plane.id && !thread.adHoc))]));
-  const sortedPlanes = sortManual(planes);
-  const togglePlaneCollapsed = (planeId: string) =>
-    setCollapsedPlaneIds(ids => (ids.includes(planeId) ? ids.filter(id => id !== planeId) : [...ids, planeId]));
-  const collapsePlanesForDrag = () => {
-    openPlaneIdsBeforeDragRef.current = sortedPlanes
-      .map(plane => plane.id)
-      .filter(planeId => !collapsedPlaneIds.includes(planeId));
-    setCollapsedPlaneIds(sortedPlanes.map(plane => plane.id));
+  const plainThreads = sortManual(threads.filter(thread => (!thread.projectId || thread.adHoc) && thread.archived !== true));
+  const threadsByProject = new Map(projects.map(project => [project.id, sortManual(threads.filter(thread => thread.projectId === project.id && !thread.adHoc))]));
+  const sortedProjects = sortManual(projects);
+  const toggleProjectCollapsed = (projectId: string) =>
+    setCollapsedProjectIds(ids => (ids.includes(projectId) ? ids.filter(id => id !== projectId) : [...ids, projectId]));
+  const collapseProjectsForDrag = () => {
+    openProjectIdsBeforeDragRef.current = sortedProjects
+      .map(project => project.id)
+      .filter(projectId => !collapsedProjectIds.includes(projectId));
+    setCollapsedProjectIds(sortedProjects.map(project => project.id));
   };
-  const restorePlanesAfterDrag = () => {
-    const openPlaneIds = openPlaneIdsBeforeDragRef.current;
-    openPlaneIdsBeforeDragRef.current = null;
-    if (!openPlaneIds) return;
-    setCollapsedPlaneIds(sortedPlanes.map(plane => plane.id).filter(planeId => !openPlaneIds.includes(planeId)));
+  const restoreProjectsAfterDrag = () => {
+    const openProjectIds = openProjectIdsBeforeDragRef.current;
+    openProjectIdsBeforeDragRef.current = null;
+    if (!openProjectIds) return;
+    setCollapsedProjectIds(sortedProjects.map(project => project.id).filter(projectId => !openProjectIds.includes(projectId)));
   };
   const suppressSelectionAfterDrag = () => {
     suppressSelectionUntilRef.current = Date.now() + 500;
@@ -271,14 +284,14 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
     await reorderThreads({ plain: true }, ordered.map(thread => thread.id));
     await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
   };
-  const reorderPlaneThreads = async (planeId: string, activeId: string, overId: string) => {
-    const ordered = moveItem((threadsByPlane.get(planeId) ?? []).filter(thread => !thread.demiplaneId && thread.archived !== true), activeId, overId);
-    await reorderThreads({ planeId }, ordered.map(thread => thread.id));
+  const reorderProjectThreads = async (projectId: string, activeId: string, overId: string) => {
+    const ordered = moveItem((threadsByProject.get(projectId) ?? []).filter(thread => !thread.workspaceId && thread.archived !== true), activeId, overId);
+    await reorderThreads({ projectId }, ordered.map(thread => thread.id));
     await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
   };
-  const reorderDemiplaneThreads = async (planeId: string, demiplaneId: string, activeId: string, overId: string) => {
-    const ordered = moveItem((threadsByPlane.get(planeId) ?? []).filter(thread => thread.demiplaneId === demiplaneId && thread.archived !== true), activeId, overId);
-    await reorderThreads({ planeId, demiplaneId }, ordered.map(thread => thread.id));
+  const reorderWorkspaceThreads = async (projectId: string, workspaceId: string, activeId: string, overId: string) => {
+    const ordered = moveItem((threadsByProject.get(projectId) ?? []).filter(thread => thread.workspaceId === workspaceId && thread.archived !== true), activeId, overId);
+    await reorderThreads({ projectId, workspaceId }, ordered.map(thread => thread.id));
     await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
   };
   const createPlainThread = async () => {
@@ -286,27 +299,53 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
     await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
     if (closeOnSelect) onClose?.();
   };
-  const openCreatePlaneDialog = () => {
-    setCreatePlaneError(null);
-    setIsCreatePlaneDialogOpen(true);
+  const openCreateProjectDialog = () => {
+    setCreateProjectError(null);
+    setIsCreateProjectDialogOpen(true);
+  };
+  const openCreateWorkspaceDialog = (projectId: string) => {
+    const project = projects.find(item => item.id === projectId);
+    setWorkspaceName('');
+    setWorkspaceMode('newBranch');
+    setWorkspaceBranch('');
+    setWorkspaceBase(project?.defaultBranch ?? '');
+    setWorkspacePath('');
+    setCreateWorkspaceError(null);
+    setCreateWorkspaceProjectId(projectId);
+  };
+  const closeCreateWorkspaceDialog = () => {
+    if (isCreatingWorkspace) return;
+    setCreateWorkspaceProjectId(null);
+    setCreateWorkspaceError(null);
   };
 
   useEffect(() => {
-    window.localStorage.setItem(collapsedPlanesStorageKey, JSON.stringify(collapsedPlaneIds));
-  }, [collapsedPlaneIds]);
+    window.localStorage.setItem(collapsedProjectsStorageKey, JSON.stringify(collapsedProjectIds));
+  }, [collapsedProjectIds]);
   const archivedDialogThreads = archivedDialogScopeId === 'plain'
-    ? threads.filter(thread => (!thread.planeId || thread.adHoc) && thread.archived)
+    ? threads.filter(thread => (!thread.projectId || thread.adHoc) && thread.archived)
     : threads.filter(thread => {
       if (!archivedDialogScopeId || !thread.archived) return false;
-      if (thread.demiplaneId) return thread.demiplaneId === archivedDialogScopeId;
-      return thread.planeId === archivedDialogScopeId;
+      if (thread.workspaceId) return thread.workspaceId === archivedDialogScopeId;
+      return thread.projectId === archivedDialogScopeId;
     });
   const archivedDialogTitle = archivedDialogScopeId === 'plain'
     ? 'Archived Threads'
-    : planes.find(plane => plane.id === archivedDialogScopeId)?.name
-      ?? planes.flatMap(plane => plane.demiplanes).find(demiplane => demiplane.id === archivedDialogScopeId)?.name
+    : projects.find(project => project.id === archivedDialogScopeId)?.name
+      ?? projects.flatMap(project => project.workspaces).find(workspace => workspace.id === archivedDialogScopeId)?.name
       ?? 'Archived Threads';
-  const deletePlaneTarget = deletePlaneId ? planes.find(plane => plane.id === deletePlaneId) : undefined;
+  const deleteProjectTarget = deleteProjectId ? projects.find(project => project.id === deleteProjectId) : undefined;
+  const createWorkspaceProject = createWorkspaceProjectId ? projects.find(project => project.id === createWorkspaceProjectId) : undefined;
+  const trimmedWorkspaceName = workspaceName.trim();
+  const trimmedWorkspaceBranch = workspaceBranch.trim();
+  const trimmedWorkspaceBase = workspaceBase.trim();
+  const trimmedWorkspacePath = workspacePath.trim();
+  const canCreateWorkspace = Boolean(
+    createWorkspaceProject
+      && trimmedWorkspaceName
+      && !isCreatingWorkspace
+      && (workspaceMode === 'detached' || trimmedWorkspaceBranch),
+  );
   const renderThreadRunningSpinner = (thread: typeof threads[number]) => {
     if (!runningThreadIds.includes(thread.id)) return null;
 
@@ -431,48 +470,47 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
         </div>
 
         <div className="space-y-2">
-          <SidebarSectionHeader label="Planes" labelClassName="text-success">
+          <SidebarSectionHeader label="Projects" labelClassName="text-success">
             <Menu>
-              <MenuTrigger render={<Button className="h-6 w-8 text-foreground" size="icon-xs" variant="ghost" aria-label="Planes menu" />}>
+              <MenuTrigger render={<Button className="h-6 w-8 text-foreground" size="icon-xs" variant="ghost" aria-label="Projects menu" />}>
                 <MoreHorizontal size={14} />
               </MenuTrigger>
               <MenuPopup align="end" sideOffset={4} className="w-36">
-                <MenuItem onClick={openCreatePlaneDialog}>
+                <MenuItem onClick={openCreateProjectDialog}>
                   <Plus size={13} />
-                  Create Plane
+                  Create Project
                 </MenuItem>
               </MenuPopup>
             </Menu>
           </SidebarSectionHeader>
           <SortableSection
-            items={sortedPlanes.map(plane => plane.id)}
+            items={sortedProjects.map(project => project.id)}
             onDragStart={() => {
               suppressSelectionAfterDrag();
-              collapsePlanesForDrag();
+              collapseProjectsForDrag();
             }}
             onDragEnd={() => {
-              restorePlanesAfterDrag();
+              restoreProjectsAfterDrag();
               suppressSelectionAfterDrag();
             }}
             onReorder={async (activeId, overId) => {
-              const ordered = moveItem(sortedPlanes, activeId, overId);
-              await reorderPlanes(ordered.map(item => item.id));
-              await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+              const ordered = moveItem(sortedProjects, activeId, overId);
+              await reorderProjects(ordered.map(item => item.id));
+              await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
             }}
           >
-          {sortedPlanes.map((plane, index) => {
-            const isCollapsed = collapsedPlaneIds.includes(plane.id);
-            const planeThreads = threadsByPlane.get(plane.id) ?? [];
-            const demiplanes = plane.demiplanes.length > 0 ? plane.demiplanes : [];
-            const standardPlaneThreads = planeThreads.filter(thread => !thread.demiplaneId && thread.archived !== true);
-            const sortedDemiplanes = sortManual(demiplanes);
-            const isActivePlane = planeThreads.some(thread => thread.id === threadId);
+          {sortedProjects.map((project, index) => {
+            const isCollapsed = collapsedProjectIds.includes(project.id);
+            const projectThreads = threadsByProject.get(project.id) ?? [];
+            const workspaces = project.workspaces.length > 0 ? project.workspaces : [];
+            const generalProjectThreads = projectThreads.filter(thread => !thread.workspaceId && thread.archived !== true);
+            const sortedWorkspaces = sortManual(workspaces);
 
             return (
               <SortableItem
-                key={plane.id}
-                id={plane.id}
-                canDrag={sortedPlanes.length > 1}
+                key={project.id}
+                id={project.id}
+                canDrag={sortedProjects.length > 1}
                 showHandle={false}
                 className={cn('p-2', index > 0 && 'border-t border-border')}
               >
@@ -489,32 +527,32 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     onClick={() => {
                       if (shouldSuppressSelection()) return;
-                      togglePlaneCollapsed(plane.id);
+                      toggleProjectCollapsed(project.id);
                     }}
                     aria-expanded={!isCollapsed}
                   >
                     {!isCollapsed ? (
-                      <FolderOpen size={16} className="shrink-0 text-success" aria-label="Expanded Plane" />
-                    ) : plane.projectKind === 'git' ? (
-                      <FolderCode size={16} className="shrink-0 text-success" aria-label="Code Plane" />
+                      <FolderOpen size={16} className="shrink-0 text-success" aria-label="Expanded Project" />
+                    ) : project.projectKind === 'git' ? (
+                      <FolderCode size={16} className="shrink-0 text-success" aria-label="Git Project" />
                     ) : (
-                      <Folder size={16} className="shrink-0 text-success" aria-label="Standard Plane" />
+                      <Folder size={16} className="shrink-0 text-success" aria-label="General Project" />
                     )}
-                    <span className="min-w-0 truncate">{plane.name}</span>
+                    <span className="min-w-0 truncate">{project.name}</span>
                   </SidebarItemButton>
                   {!isCollapsed ? (
                     <>
-                      {plane.projectKind === 'standard' ? (
+                      {project.projectKind === 'general' ? (
                         <Button
                           className="h-6 w-8 shrink-0 text-primary"
                           size="icon-xs"
                           variant="ghost"
-                          aria-label={`Create thread in ${plane.name}`}
+                          aria-label={`Create thread in ${project.name}`}
                           onClick={async () => {
-                            await newThread(plane.id);
+                            await newThread(project.id);
                             await Promise.all([
                               queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-                              queryClient.invalidateQueries({ queryKey: ['planes', resourceId] }),
+                              queryClient.invalidateQueries({ queryKey: ['projects', resourceId] }),
                             ]);
                             if (closeOnSelect) onClose?.();
                           }}
@@ -523,24 +561,13 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                         </Button>
                       ) : null}
                       <Menu>
-                        <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-foreground" aria-label={`${plane.name} menu`} />}>
+                        <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-foreground" aria-label={`${project.name} menu`} />}>
                           <MoreHorizontal size={14} />
                         </MenuTrigger>
                         <MenuPopup align="end" sideOffset={4} className="w-44">
-                          {plane.projectKind === 'git' ? (
+                          {project.projectKind === 'git' ? (
                             <>
-                              <MenuItem
-                                onClick={async () => {
-                                  const name = window.prompt('Branch / workspace name');
-                                  if (!name?.trim()) return;
-                                  try {
-                                    await createDemiplane(plane.id, name.trim());
-                                    await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
-                                  } catch (error) {
-                                    window.alert(error instanceof Error ? error.message : String(error));
-                                  }
-                                }}
-                              >
+                              <MenuItem onClick={() => openCreateWorkspaceDialog(project.id)}>
                                 <Plus size={13} />
                                 Create Workspace
                               </MenuItem>
@@ -550,8 +577,8 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                   if (!path?.trim()) return;
                                   const name = window.prompt('Workspace display name (optional)') ?? undefined;
                                   try {
-                                    await adoptDemiplane(plane.id, path.trim(), name?.trim() || undefined);
-                                    await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                                    await adoptWorkspace(project.id, path.trim(), name?.trim() || undefined);
+                                    await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
                                   } catch (error) {
                                     window.alert(error instanceof Error ? error.message : String(error));
                                   }
@@ -562,13 +589,13 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                               </MenuItem>
                             </>
                           ) : null}
-                          <MenuItem onClick={() => setArchivedDialogScopeId(plane.id)}>
+                          <MenuItem onClick={() => setArchivedDialogScopeId(project.id)}>
                             <Archive size={13} />
                             Archived Threads
                           </MenuItem>
-                          <MenuItem variant="destructive" onClick={() => setDeletePlaneId(plane.id)}>
+                          <MenuItem variant="destructive" onClick={() => setDeleteProjectId(project.id)}>
                             <Trash2 size={13} />
-                            Delete Plane
+                            Delete Project
                           </MenuItem>
                         </MenuPopup>
                       </Menu>
@@ -578,18 +605,18 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                 {!isCollapsed ? (
                   <>
                     <div className="space-y-2">
-                      {plane.projectKind === 'standard' ? (
+                      {project.projectKind === 'general' ? (
                         <SortableSection
-                          items={standardPlaneThreads.map(thread => thread.id)}
+                          items={generalProjectThreads.map(thread => thread.id)}
                           onDragStart={suppressSelectionAfterDrag}
                           onDragEnd={suppressSelectionAfterDrag}
-                          onReorder={(activeId, overId) => reorderPlaneThreads(plane.id, activeId, overId)}
+                          onReorder={(activeId, overId) => reorderProjectThreads(project.id, activeId, overId)}
                         >
-                        {standardPlaneThreads.map(thread => (
+                        {generalProjectThreads.map(thread => (
                         <SortableItem
                           key={thread.id}
                           id={thread.id}
-                          canDrag={standardPlaneThreads.length > 1}
+                          canDrag={generalProjectThreads.length > 1}
                           showHandle={false}
                           className={cn(
                             'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
@@ -610,50 +637,57 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                       ))}
                         </SortableSection>
                       ) : null}
-                      {plane.projectKind === 'git' ? (
+                      {project.projectKind === 'git' ? (
+                        <>
+                        <div className="px-2 text-[10px] font-semibold uppercase text-muted-foreground">Workspaces</div>
                         <SortableSection
-                          items={sortedDemiplanes.map(demiplane => demiplane.id)}
+                          items={sortedWorkspaces.map(workspace => workspace.id)}
                           onDragStart={suppressSelectionAfterDrag}
                           onDragEnd={suppressSelectionAfterDrag}
                           onReorder={async (activeId, overId) => {
-                            const ordered = moveItem(sortedDemiplanes, activeId, overId);
-                            await reorderDemiplanes(plane.id, ordered.map(item => item.id));
-                            await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                            const ordered = moveItem(sortedWorkspaces, activeId, overId);
+                            await reorderWorkspaces(project.id, ordered.map(item => item.id));
+                            await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
                           }}
                         >
-                        {sortedDemiplanes.map((demiplane, demiplaneIndex) => {
-                        const demiplaneThreads = planeThreads.filter(thread => thread.demiplaneId === demiplane.id && thread.archived !== true);
-                        const demiplanePortalId = getDemiplanePortalId(plane, demiplane);
-                        const isDemiplanePortalConnected = Boolean(demiplanePortalId && onlinePortalIds.has(demiplanePortalId));
-                        const demiplaneStatusLabel = isDemiplanePortalConnected ? demiplane.status : 'portal offline';
+                        {sortedWorkspaces.map((workspace, workspaceIndex) => {
+                        const workspaceThreads = projectThreads.filter(thread => thread.workspaceId === workspace.id && thread.archived !== true);
+                        const workspacePortalId = getWorkspacePortalId(project, workspace);
+                        const isWorkspacePortalConnected = Boolean(workspacePortalId && onlinePortalIds.has(workspacePortalId));
+                        const workspaceStatusLabel = isWorkspacePortalConnected ? workspace.status : 'portal offline';
 
                         return (
                           <SortableItem
-                            key={demiplane.id}
-                            id={demiplane.id}
-                            canDrag={sortedDemiplanes.length > 1}
+                            key={workspace.id}
+                            id={workspace.id}
+                            canDrag={sortedWorkspaces.length > 1}
                             showHandle={false}
-                            className={cn('space-y-1 pt-2 pb-0', demiplaneIndex > 0 && 'border-t border-border')}
+                            className={cn('space-y-1 pt-2 pb-0', workspaceIndex > 0 && 'border-t border-border')}
                           >
                             <div className="flex w-[calc(100%+0.5rem)] items-start justify-between gap-2 text-sm font-bold text-foreground">
                               <div className="min-w-0 flex-1">
                                 <div className="flex min-w-0 items-center gap-1.5">
-                                  <span className="truncate">{demiplane.name}</span>
-                                  <span className={cn('h-2 w-2 shrink-0 rounded-full', demiplaneStatusClass(demiplane.status, isDemiplanePortalConnected))} title={demiplaneStatusLabel} aria-label={demiplaneStatusLabel} />
-                                  {demiplane.locked || demiplane.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
+                                  <span className="truncate">{workspace.name}</span>
+                                  <span className={cn('h-2 w-2 shrink-0 rounded-full', workspaceStatusClass(workspace.status, isWorkspacePortalConnected))} title={workspaceStatusLabel} aria-label={workspaceStatusLabel} />
+                                  {workspace.locked || workspace.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
                                 </div>
-                                {demiplane.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{demiplane.lastError}</div> : null}
+                                {workspace.branch || workspace.detached ? (
+                                  <div className="truncate text-[10px] font-normal text-muted-foreground">
+                                    {workspace.detached ? `Detached ${workspace.head?.slice(0, 7) ?? 'HEAD'}` : workspace.branch}
+                                  </div>
+                                ) : null}
+                                {workspace.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{workspace.lastError}</div> : null}
                               </div>
                               <Button
                                 className="h-6 w-8 shrink-0 text-primary"
                                 size="icon-xs"
                                 variant="ghost"
-                                aria-label={`Create thread in ${demiplane.name}`}
+                                aria-label={`Create thread in ${workspace.name}`}
                                 onClick={async () => {
-                                  await newThread(plane.id, demiplane.id);
+                                  await newThread(project.id, workspace.id);
                                   await Promise.all([
                                     queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-                                    queryClient.invalidateQueries({ queryKey: ['planes', resourceId] }),
+                                    queryClient.invalidateQueries({ queryKey: ['projects', resourceId] }),
                                   ]);
                                   if (closeOnSelect) onClose?.();
                                 }}
@@ -661,22 +695,43 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                 <SquarePen size={14} />
                               </Button>
                               <Menu>
-                                <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-foreground" aria-label={`${demiplane.name} menu`} />}>
+                                <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-foreground" aria-label={`${workspace.name} menu`} />}>
                                   <MoreHorizontal size={14} />
                                 </MenuTrigger>
                                 <MenuPopup align="end" sideOffset={4} className="w-44">
-                                  <MenuItem onClick={() => setArchivedDialogScopeId(demiplane.id)}>
+                                  <MenuItem onClick={() => setArchivedDialogScopeId(workspace.id)}>
                                     <Archive size={13} />
                                     Archived Threads
                                   </MenuItem>
-                                  {!demiplane.locked && demiplane.workspaceKind !== 'primary' ? (
+                                  <MenuItem
+                                    onClick={async () => {
+                                      const branch = window.prompt('Branch name', workspace.branch ?? '');
+                                      if (!branch?.trim()) return;
+                                      const createBranch = window.confirm('Create as a new branch? Cancel switches to an existing branch.');
+                                      const base = createBranch ? window.prompt('Base ref (optional)', project.defaultBranch ?? workspace.branch ?? '') : undefined;
+                                      try {
+                                        await updateWorkspace(project.id, workspace.id, {
+                                          branch: branch.trim(),
+                                          createBranch,
+                                          base: base?.trim() || undefined,
+                                        });
+                                        await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+                                      } catch (error) {
+                                        window.alert(error instanceof Error ? error.message : String(error));
+                                      }
+                                    }}
+                                  >
+                                    <GitBranch size={13} />
+                                    Switch Branch
+                                  </MenuItem>
+                                  {!workspace.locked && workspace.workspaceKind !== 'primary' ? (
                                     <>
                                       <MenuItem
                                         onClick={async () => {
-                                          if (!window.confirm(`Detach ${demiplane.name} from this Plane? Worktree files stay on disk.`)) return;
+                                          if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk.`)) return;
                                           try {
-                                            await deleteDemiplane(plane.id, demiplane.id, 'detach');
-                                            await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                                            await deleteWorkspace(project.id, workspace.id, 'detach');
+                                            await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
                                           } catch (error) {
                                             window.alert(error instanceof Error ? error.message : String(error));
                                           }
@@ -688,17 +743,17 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                       <MenuItem
                                         variant="destructive"
                                         onClick={async () => {
-                                          if (!window.confirm(`Remove worktree for ${demiplane.name}? This runs wt remove.`)) return;
+                                          if (!window.confirm(`Remove workspace ${workspace.name}? This removes the worktree and leaves the branch alone.`)) return;
                                           try {
-                                            await deleteDemiplane(plane.id, demiplane.id, 'remove');
-                                            await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+                                            await deleteWorkspace(project.id, workspace.id, 'remove');
+                                            await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
                                           } catch (error) {
                                             window.alert(error instanceof Error ? error.message : String(error));
                                           }
                                         }}
                                       >
                                         <Trash2 size={13} />
-                                        Remove Worktree
+                                        Remove Workspace
                                       </MenuItem>
                                     </>
                                   ) : null}
@@ -706,16 +761,16 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                               </Menu>
                             </div>
                             <SortableSection
-                              items={demiplaneThreads.map(thread => thread.id)}
+                              items={workspaceThreads.map(thread => thread.id)}
                               onDragStart={suppressSelectionAfterDrag}
                               onDragEnd={suppressSelectionAfterDrag}
-                              onReorder={(activeId, overId) => reorderDemiplaneThreads(plane.id, demiplane.id, activeId, overId)}
+                              onReorder={(activeId, overId) => reorderWorkspaceThreads(project.id, workspace.id, activeId, overId)}
                             >
-                            {demiplaneThreads.map(thread => (
+                            {workspaceThreads.map(thread => (
                               <SortableItem
                                 key={thread.id}
                                 id={thread.id}
-                                canDrag={demiplaneThreads.length > 1}
+                                canDrag={workspaceThreads.length > 1}
                                 showHandle={false}
                                 className={cn(
                                   'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
@@ -739,8 +794,9 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                         );
                       })}
                         </SortableSection>
+                        </>
                       ) : null}
-                      {planeThreads.length === 0 && plane.projectKind === 'standard' ? <div className="px-2 py-1 text-xs text-muted-foreground">No threads</div> : null}
+                      {projectThreads.length === 0 && project.projectKind === 'general' ? <div className="px-2 py-1 text-xs text-muted-foreground">No threads</div> : null}
                     </div>
                   </>
                 ) : null}
@@ -753,43 +809,156 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
         </div>
       </div>
 
-      {isCreatePlaneDialogOpen ? (
-        <GitPlaneDirectoryPicker
+      {isCreateProjectDialogOpen ? (
+        <GitProjectDirectoryPicker
           portals={portals.filter(portal => portal.status === 'online')}
-          isCreating={isCreatingPlane}
-          createError={createPlaneError}
+          isCreating={isCreatingProject}
+          createError={createProjectError}
           onCancel={() => {
-            setIsCreatePlaneDialogOpen(false);
-            setCreatePlaneError(null);
+            setIsCreateProjectDialogOpen(false);
+            setCreateProjectError(null);
           }}
-          onCreate={async (input: CreatePlaneInput) => {
-            setIsCreatingPlane(true);
-            setCreatePlaneError(null);
+          onCreate={async (input: CreateProjectInput) => {
+            setIsCreatingProject(true);
+            setCreateProjectError(null);
             try {
-              await createPlane(input);
-              setIsCreatePlaneDialogOpen(false);
-              await queryClient.invalidateQueries({ queryKey: ['planes', resourceId] });
+              await createProject(input);
+              setIsCreateProjectDialogOpen(false);
+              await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
             } catch (error) {
-              setCreatePlaneError(error instanceof Error ? error.message : String(error));
+              setCreateProjectError(error instanceof Error ? error.message : String(error));
             } finally {
-              setIsCreatingPlane(false);
+              setIsCreatingProject(false);
             }
           }}
         />
       ) : null}
 
-      <AlertDialog open={Boolean(deletePlaneTarget)} onOpenChange={open => {
-        if (!open) setDeletePlaneId(null);
+      <Dialog open={Boolean(createWorkspaceProject)} onOpenChange={open => {
+        if (!open) closeCreateWorkspaceDialog();
       }}>
-        {deletePlaneTarget ? (
+        {createWorkspaceProject ? (
+          <DialogPopup className="max-w-md" showCloseButton={false}>
+            <DialogHeader className="flex-row items-start justify-between gap-3">
+              <div className="min-w-0">
+                <DialogTitle>Create Workspace</DialogTitle>
+                <DialogDescription className="truncate">{createWorkspaceProject.name}</DialogDescription>
+              </div>
+              <DialogClose render={<Button size="icon-sm" variant="ghost" aria-label="Close create workspace" disabled={isCreatingWorkspace} />}>
+                <X size={16} />
+              </DialogClose>
+            </DialogHeader>
+            <DialogPanel className="grid gap-3 pt-1">
+              <Field>
+                <FieldLabel>Name</FieldLabel>
+                <Input
+                  nativeInput
+                  value={workspaceName}
+                  onChange={event => setWorkspaceName(event.target.value)}
+                  disabled={isCreatingWorkspace}
+                  autoFocus
+                  placeholder="Workspace name"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Branch Action</FieldLabel>
+                <Select
+                  value={workspaceMode}
+                  onValueChange={value => setWorkspaceMode(value === 'existingBranch' || value === 'detached' ? value : 'newBranch')}
+                  disabled={isCreatingWorkspace}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value="newBranch">New branch</SelectItem>
+                    <SelectItem value="existingBranch">Existing branch</SelectItem>
+                    <SelectItem value="detached">Detached checkout</SelectItem>
+                  </SelectPopup>
+                </Select>
+              </Field>
+              {workspaceMode !== 'detached' ? (
+                <Field>
+                  <FieldLabel>{workspaceMode === 'existingBranch' ? 'Branch' : 'New Branch'}</FieldLabel>
+                  <Input
+                    nativeInput
+                    value={workspaceBranch}
+                    onChange={event => setWorkspaceBranch(event.target.value)}
+                    disabled={isCreatingWorkspace}
+                    placeholder={workspaceMode === 'existingBranch' ? 'Existing branch' : 'New branch'}
+                  />
+                </Field>
+              ) : null}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field>
+                  <FieldLabel>{workspaceMode === 'detached' ? 'Commit / Ref' : 'Base'}</FieldLabel>
+                  <Input
+                    nativeInput
+                    value={workspaceBase}
+                    onChange={event => setWorkspaceBase(event.target.value)}
+                    disabled={isCreatingWorkspace}
+                    placeholder={createWorkspaceProject.defaultBranch ?? 'HEAD'}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel>Path</FieldLabel>
+                  <Input
+                    nativeInput
+                    value={workspacePath}
+                    onChange={event => setWorkspacePath(event.target.value)}
+                    disabled={isCreatingWorkspace}
+                    placeholder="Optional"
+                  />
+                </Field>
+              </div>
+              {createWorkspaceError ? <Alert variant="error"><AlertDescription>{createWorkspaceError}</AlertDescription></Alert> : null}
+            </DialogPanel>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeCreateWorkspaceDialog} disabled={isCreatingWorkspace}>Cancel</Button>
+              <Button
+                className="bg-success text-background hover:bg-success/90"
+                disabled={!canCreateWorkspace}
+                onClick={async () => {
+                  const input: CreateWorkspaceInput = {
+                    name: trimmedWorkspaceName,
+                    mode: workspaceMode,
+                    branch: workspaceMode === 'detached' ? undefined : trimmedWorkspaceBranch,
+                    base: trimmedWorkspaceBase || undefined,
+                    path: trimmedWorkspacePath || undefined,
+                  };
+                  setIsCreatingWorkspace(true);
+                  setCreateWorkspaceError(null);
+                  try {
+                    await createWorkspace(createWorkspaceProject.id, input);
+                    setCreateWorkspaceProjectId(null);
+                    await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+                  } catch (error) {
+                    setCreateWorkspaceError(error instanceof Error ? error.message : String(error));
+                  } finally {
+                    setIsCreatingWorkspace(false);
+                  }
+                }}
+              >
+                {isCreatingWorkspace ? <Loader2 size={13} className="animate-spin" /> : null}
+                Create Workspace
+              </Button>
+            </DialogFooter>
+          </DialogPopup>
+        ) : null}
+      </Dialog>
+
+      <AlertDialog open={Boolean(deleteProjectTarget)} onOpenChange={open => {
+        if (!open) setDeleteProjectId(null);
+      }}>
+        {deleteProjectTarget ? (
           <AlertDialogPopup className="max-w-sm">
             <AlertDialogHeader>
               <div className="flex items-start gap-3 text-left">
                 <Trash2 className="mt-0.5 shrink-0 text-destructive" size={18} />
                 <div className="min-w-0">
-                  <AlertDialogTitle>Delete Plane?</AlertDialogTitle>
+                  <AlertDialogTitle>Delete Project?</AlertDialogTitle>
                   <AlertDialogDescription className="mt-1">
-                    This will permanently delete <span className="font-medium text-foreground">{deletePlaneTarget.name}</span>, its workspaces, and all threads in it.
+                    This will permanently delete <span className="font-medium text-foreground">{deleteProjectTarget.name}</span>, its workspaces, and all threads in it.
                   </AlertDialogDescription>
                 </div>
               </div>
@@ -799,10 +968,10 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
               <Button
                 variant="destructive"
                 onClick={async () => {
-                  await deletePlane(deletePlaneTarget.id);
-                  setDeletePlaneId(null);
+                  await deleteProject(deleteProjectTarget.id);
+                  setDeleteProjectId(null);
                   await Promise.all([
-                    queryClient.invalidateQueries({ queryKey: ['planes', resourceId] }),
+                    queryClient.invalidateQueries({ queryKey: ['projects', resourceId] }),
                     queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
                   ]);
                 }}

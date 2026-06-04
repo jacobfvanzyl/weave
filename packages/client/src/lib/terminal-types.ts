@@ -1,10 +1,10 @@
-export type TerminalSessionKind = 'demiplane' | 'general';
+export type TerminalSessionKind = 'workspace' | 'general';
 
 export type TerminalStartInput = {
   kind: TerminalSessionKind;
   terminalId: string;
-  planeId?: string;
-  demiplaneId?: string;
+  projectId?: string;
+  workspaceId?: string;
   portalId?: string;
   rootId?: string;
   repoPath?: string;
@@ -24,7 +24,7 @@ export type TerminalClientMessage =
 export type TerminalStartedEvent = {
   type: 'started';
   terminalId: string;
-  demiplaneId?: string;
+  workspaceId?: string;
   sessionId: string;
   cwd: string;
   pid?: number;
@@ -34,11 +34,11 @@ export type TerminalStartedEvent = {
 
 export type TerminalHostEvent =
   | TerminalStartedEvent
-  | { type: 'output'; terminalId: string; demiplaneId?: string; data: string }
-  | { type: 'replay'; terminalId: string; demiplaneId?: string; data: string }
-  | { type: 'title'; terminalId: string; demiplaneId?: string; title: string }
-  | { type: 'exit'; terminalId: string; demiplaneId?: string; exitCode?: number; signal?: number | string }
-  | { type: 'error'; terminalId: string; demiplaneId?: string; error: string };
+  | { type: 'output'; terminalId: string; workspaceId?: string; data: string }
+  | { type: 'replay'; terminalId: string; workspaceId?: string; data: string }
+  | { type: 'title'; terminalId: string; workspaceId?: string; title: string }
+  | { type: 'exit'; terminalId: string; workspaceId?: string; exitCode?: number; signal?: number | string }
+  | { type: 'error'; terminalId: string; workspaceId?: string; error: string };
 
 export type TerminalStartResult = {
   sessionId: string;

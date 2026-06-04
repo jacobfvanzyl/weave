@@ -92,58 +92,58 @@ const openExternal = async (url: string) => {
   await shell.openExternal(url);
 };
 
-type PlaneListing = {
+type ProjectListing = {
   id?: unknown;
   projectKind?: unknown;
   portalId?: unknown;
   portalRootId?: unknown;
   repoPath?: unknown;
-  demiplanes?: unknown;
+  workspaces?: unknown;
 };
 
-type DemiplaneListing = {
+type WorkspaceListing = {
   id?: unknown;
   path?: unknown;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
 
-const resolveGitDemiplane = async (input: EditorTarget, featureName: string) => {
+const resolveGitWorkspace = async (input: EditorTarget, featureName: string) => {
   const store = getSettingsStore();
   const settings = store.getSettings();
   const authToken = store.getAuthToken();
   const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-  const response = await fetch(`${normalizeMastraUrl(settings.mastraUrl)}/planes`, { headers });
+  const response = await fetch(`${normalizeMastraUrl(settings.mastraUrl)}/projects`, { headers });
 
   if (!response.ok) {
     const error = (await response.text()).trim();
-    throw new Error(error || `Failed to load Planes for ${featureName}: HTTP ${response.status}`);
+    throw new Error(error || `Failed to load Projects for ${featureName}: HTTP ${response.status}`);
   }
 
-  const data = await response.json() as { planes?: PlaneListing[] };
-  const planes = Array.isArray(data.planes) ? data.planes : [];
-  const plane = planes.find(candidate => candidate.id === input.planeId);
-  if (!plane) throw new Error('Plane was not found.');
-  if (plane.projectKind !== 'git') throw new Error(`${featureName} is only available for Git/code Planes.`);
+  const data = await response.json() as { projects?: ProjectListing[] };
+  const projects = Array.isArray(data.projects) ? data.projects : [];
+  const project = projects.find(candidate => candidate.id === input.projectId);
+  if (!project) throw new Error('Project was not found.');
+  if (project.projectKind !== 'git') throw new Error(`${featureName} is only available for Git Projects.`);
 
-  const demiplanes = Array.isArray(plane.demiplanes) ? plane.demiplanes.filter(isRecord) as DemiplaneListing[] : [];
-  const demiplane = demiplanes.find(candidate => candidate.id === input.demiplaneId);
-  if (!demiplane) throw new Error('Demiplane was not found.');
-  if (typeof demiplane.path !== 'string' || !demiplane.path.trim()) {
-    throw new Error('Demiplane does not have a local workspace path.');
+  const workspaces = Array.isArray(project.workspaces) ? project.workspaces.filter(isRecord) as WorkspaceListing[] : [];
+  const workspace = workspaces.find(candidate => candidate.id === input.workspaceId);
+  if (!workspace) throw new Error('Workspace was not found.');
+  if (typeof workspace.path !== 'string' || !workspace.path.trim()) {
+    throw new Error('Workspace does not have a local workspace path.');
   }
 
   return {
-    cwd: demiplane.path.trim(),
-    portalId: typeof plane.portalId === 'string' ? plane.portalId : undefined,
-    rootId: typeof plane.portalRootId === 'string' ? plane.portalRootId : undefined,
-    repoPath: typeof plane.repoPath === 'string' ? plane.repoPath : undefined,
+    cwd: workspace.path.trim(),
+    portalId: typeof project.portalId === 'string' ? project.portalId : undefined,
+    rootId: typeof project.portalRootId === 'string' ? project.portalRootId : undefined,
+    repoPath: typeof project.repoPath === 'string' ? project.repoPath : undefined,
   };
 };
 
-const resolveTerminalDemiplane = async (input: TerminalStartInput) => {
-  if (!input.planeId || !input.demiplaneId) throw new Error('Plane and Demiplane are required for this terminal.');
-  const target = await resolveGitDemiplane({ planeId: input.planeId, demiplaneId: input.demiplaneId }, 'terminal');
+const resolveTerminalWorkspace = async (input: TerminalStartInput) => {
+  if (!input.projectId || !input.workspaceId) throw new Error('Project and Workspace are required for this terminal.');
+  const target = await resolveGitWorkspace({ projectId: input.projectId, workspaceId: input.workspaceId }, 'terminal');
   return {
     ...input,
     portalId: input.portalId ?? target.portalId,
@@ -158,7 +158,7 @@ const resolveGeneralTerminal = async (input: TerminalStartInput) => ({
   cwd: await realpath(input.cwd?.trim() || app.getPath('home')),
 });
 
-const resolveEditorDemiplane = (target: EditorTarget) => resolveGitDemiplane(target, 'editor');
+const resolveEditorWorkspace = (target: EditorTarget) => resolveGitWorkspace(target, 'editor');
 
 const getPortalTerminalClient = () => {
   if (!settingsStore) throw new Error('Connection settings store is not initialized.');
@@ -184,7 +184,7 @@ const getPortalEditorClient = () => {
   if (!portalEditorClient) {
     portalEditorClient = new PortalEditorClient({
       supervisor: portalSupervisor,
-      resolveDemiplane: resolveEditorDemiplane,
+      resolveWorkspace: resolveEditorWorkspace,
     });
   }
 
@@ -204,7 +204,7 @@ const registerIpcHandlers = () => {
     const parsed = parseTerminalStartInput(input);
     const resolved = parsed.kind === 'general'
       ? await resolveGeneralTerminal(parsed)
-      : await resolveTerminalDemiplane(parsed);
+      : await resolveTerminalWorkspace(parsed);
     return getPortalTerminalClient().start(resolved, event.sender);
   });
   ipcMain.handle('terminal:input', (_event, terminalId: unknown, data: unknown) =>

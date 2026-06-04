@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { archiveServerThread, createPlaneThread, createServerThread, deleteServerThread, renameServerThread } from '../lib/chat-state-api';
+import { archiveServerThread, createProjectThread, createServerThread, deleteServerThread, renameServerThread } from '../lib/chat-state-api';
 
 const createUuid = () => {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -21,8 +21,9 @@ export type ChatThread = {
   createdAt: string;
   updatedAt: string;
   sortOrder?: number;
-  planeId?: string;
-  demiplaneId?: string;
+  projectId?: string;
+  workspaceId?: string;
+  profileId?: string;
   archived?: boolean;
   adHoc?: boolean;
   workspacePath?: string;
@@ -73,8 +74,9 @@ type ChatState = {
   setShowPlanPanel: (showPlanPanel: boolean) => void;
   setThreadPlan: (threadId: string, plan: ThreadPlan) => void;
   clearThreadPlan: (threadId: string) => void;
+  setDraftThreadProfile: (threadId: string, profileId: string | null) => void;
   setServerThreads: (threads: ChatThread[]) => void;
-  newThread: (planeId?: string, demiplaneId?: string) => Promise<void>;
+  newThread: (projectId?: string, workspaceId?: string) => Promise<void>;
   ensureThreadPersisted: (threadId: string, title?: string) => Promise<void>;
   setThreadId: (threadId: string) => void;
   archiveThread: (threadId: string) => Promise<void>;
@@ -134,6 +136,14 @@ export const useChatStore = create<ChatState>()(
           const { [threadId]: _removed, ...threadPlans } = state.threadPlans;
           return { threadPlans };
         }),
+      setDraftThreadProfile: (threadId, profileId) =>
+        set(state => ({
+          threads: state.threads.map(thread =>
+            thread.id === threadId && thread.draft === true
+              ? { ...thread, profileId: profileId?.trim() || undefined }
+              : thread,
+          ),
+        })),
       setServerThreads: threads =>
         set(state => {
           const deletedThreadIds = new Set(state.deletedThreadIds);
@@ -163,8 +173,8 @@ export const useChatStore = create<ChatState>()(
             hasInitializedThreads: true,
           };
         }),
-      newThread: async (planeId, demiplaneId) => {
-        const localThread = { ...createLocalThread(), planeId, demiplaneId };
+      newThread: async (projectId, workspaceId) => {
+        const localThread = { ...createLocalThread(), projectId, workspaceId };
         set(state => ({
           threadId: localThread.id,
           threads: [localThread, ...state.threads.filter(thread => thread.id !== state.threadId || !isDraftThread(thread))],
@@ -184,9 +194,9 @@ export const useChatStore = create<ChatState>()(
           ),
         }));
 
-        const serverThread = existing?.planeId
-          ? (await createPlaneThread(existing.planeId, threadId, existing.demiplaneId, threadTitle)).thread
-          : await createServerThread(threadId, undefined, undefined, threadTitle);
+        const serverThread = existing?.projectId
+          ? (await createProjectThread(existing.projectId, threadId, existing.workspaceId, threadTitle, existing.profileId)).thread
+          : await createServerThread(threadId, undefined, undefined, threadTitle, existing?.profileId);
 
         set(state => ({
           threads: state.threads.map(thread =>

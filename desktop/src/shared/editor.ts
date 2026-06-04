@@ -1,6 +1,6 @@
 export type EditorTarget = {
-  planeId: string;
-  demiplaneId: string;
+  projectId: string;
+  workspaceId: string;
   portalId?: string;
   rootId?: string;
   repoPath?: string;

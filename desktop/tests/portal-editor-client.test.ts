@@ -39,7 +39,7 @@ const createClient = (httpUrl: string, token = 'local-token') =>
         url: `${httpUrl.replace(/^http:/, 'ws:')}/terminal?token=${token}`,
       }),
     } as unknown as PortalSupervisor,
-    resolveDemiplane: async () => ({
+    resolveWorkspace: async () => ({
       cwd: '/resolved/workspace',
       portalId: 'portal_123',
       rootId: 'default',
@@ -79,12 +79,12 @@ describe('PortalEditorClient', () => {
 
     try {
       const client = createClient(url);
-      await expect(client.list({ target: { planeId: 'plane-1', demiplaneId: 'demi-1' }, path: '' }))
+      await expect(client.list({ target: { projectId: 'project-1', workspaceId: 'workspace-1' }, path: '' }))
         .resolves.toEqual({ path: '', entries: [{ name: 'README.md', path: 'README.md', type: 'file' }] });
-      await expect(client.read({ target: { planeId: 'plane-1', demiplaneId: 'demi-1' }, path: 'README.md' }))
+      await expect(client.read({ target: { projectId: 'project-1', workspaceId: 'workspace-1' }, path: 'README.md' }))
         .resolves.toEqual({ path: 'README.md', content: 'hello', version: '1:5' });
       await expect(client.write({
-        target: { planeId: 'plane-1', demiplaneId: 'demi-1' },
+        target: { projectId: 'project-1', workspaceId: 'workspace-1' },
         path: 'README.md',
         content: 'updated',
         version: '1:5',
@@ -95,8 +95,8 @@ describe('PortalEditorClient', () => {
         expect(request.authorization).toBe('Bearer local-token');
         expect(request.body).toMatchObject({
           target: {
-            planeId: 'plane-1',
-            demiplaneId: 'demi-1',
+            projectId: 'project-1',
+            workspaceId: 'workspace-1',
             portalId: 'portal_123',
             rootId: 'default',
             repoPath: 'repo',
@@ -119,7 +119,7 @@ describe('PortalEditorClient', () => {
     try {
       const client = createClient(url);
       await expect(client.write({
-        target: { planeId: 'plane-1', demiplaneId: 'demi-1' },
+        target: { projectId: 'project-1', workspaceId: 'workspace-1' },
         path: 'README.md',
         content: 'updated',
         version: 'old',

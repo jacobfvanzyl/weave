@@ -49,9 +49,9 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         return;
       }
 
-      if (request.url === '/planes') {
+      if (request.url === '/projects') {
         response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ planes: [] }));
+        response.end(JSON.stringify({ projects: [] }));
         return;
       }
 
@@ -115,18 +115,59 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await generalTerminalOverlay.getByRole('button', { name: 'New terminal tab' }).click();
     await playwrightExpect(generalTerminalOverlay.getByRole('tab')).toHaveCount(2);
     await playwrightExpect(page.getByRole('button', { name: 'Hide general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('2');
+    const terminalTabCloseAppRegion = await generalTerminalOverlay.getByRole('button', { name: /^Close / }).nth(1).evaluate(element =>
+      getComputedStyle(element).getPropertyValue('-webkit-app-region'),
+    );
+    expect(terminalTabCloseAppRegion === 'drag').toBe(false);
     await generalTerminalOverlay.getByRole('button', { name: /^Close / }).nth(1).click();
     await playwrightExpect(generalTerminalOverlay.getByRole('tab')).toHaveCount(1);
     await playwrightExpect(page.getByRole('button', { name: 'Hide general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('1');
+    await generalTerminalOverlay.getByRole('button', { name: 'Hide terminal' }).click();
+    await playwrightExpect(generalTerminalOverlay).toBeHidden({ timeout: 5_000 });
+    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('1');
+    await page.getByRole('button', { name: 'Show general terminal' }).click();
+    await playwrightExpect(generalTerminalOverlay).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(generalTerminalOverlay.getByRole('tab')).toHaveCount(1);
     const terminalBounds = await generalTerminalOverlay.locator('[data-weave-terminal-panel]').boundingBox();
+    const terminalTabBarBounds = await generalTerminalOverlay.locator('[data-weave-terminal-tab-bar]').boundingBox();
     const appbarBounds = await page.locator('header').boundingBox();
+    const terminalOverlayMetrics = await generalTerminalOverlay.locator('[data-weave-terminal-panel]').evaluate(element => {
+      const panel = element as HTMLElement;
+      const tabBar = panel.querySelector('[data-weave-terminal-tab-bar]');
+      const panelStyle = getComputedStyle(panel);
+      const tabBarStyle = tabBar ? getComputedStyle(tabBar) : undefined;
+      const panelBounds = panel.getBoundingClientRect();
+      const tabBarBounds = tabBar?.getBoundingClientRect();
+      return {
+        borderBottomWidth: panelStyle.borderBottomWidth,
+        borderLeftWidth: panelStyle.borderLeftWidth,
+        borderRightWidth: panelStyle.borderRightWidth,
+        borderTopWidth: panelStyle.borderTopWidth,
+        paddingLeft: Number.parseFloat(panelStyle.paddingLeft),
+        paddingTop: Number.parseFloat(panelStyle.paddingTop),
+        tabBarPaddingLeft: tabBarStyle ? Number.parseFloat(tabBarStyle.paddingLeft) : undefined,
+        tabBarOffsetLeft: tabBarBounds ? tabBarBounds.left - panelBounds.left : undefined,
+        tabBarOffsetTop: tabBarBounds ? tabBarBounds.top - panelBounds.top : undefined,
+      };
+    });
     const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
-    if (!terminalBounds || !appbarBounds) throw new Error('Terminal overlay geometry was not measurable.');
-    const appbarBottomFromWindowEdge = appbarBounds.y + appbarBounds.height;
-    expect(terminalBounds.x).toBeCloseTo(appbarBottomFromWindowEdge, 0);
-    expect(terminalBounds.y).toBeCloseTo(appbarBottomFromWindowEdge, 0);
-    expect(viewport.width - terminalBounds.x - terminalBounds.width).toBeCloseTo(appbarBottomFromWindowEdge, 0);
-    expect(viewport.height - terminalBounds.y - terminalBounds.height).toBeCloseTo(appbarBottomFromWindowEdge, 0);
+    if (!terminalBounds) throw new Error('Terminal overlay geometry was not measurable.');
+    if (!terminalTabBarBounds) throw new Error('Terminal overlay tab bar geometry was not measurable.');
+    if (!appbarBounds) throw new Error('Chat appbar geometry was not measurable.');
+    expect(terminalBounds.x).toBeCloseTo(0, 0);
+    expect(terminalBounds.y).toBeCloseTo(0, 0);
+    expect(terminalBounds.width).toBeCloseTo(viewport.width, 0);
+    expect(terminalBounds.height).toBeCloseTo(viewport.height, 0);
+    expect(terminalOverlayMetrics.borderTopWidth).toBe('0px');
+    expect(terminalOverlayMetrics.borderRightWidth).toBe('0px');
+    expect(terminalOverlayMetrics.borderBottomWidth).toBe('0px');
+    expect(terminalOverlayMetrics.borderLeftWidth).toBe('0px');
+    expect(terminalTabBarBounds.height).toBeCloseTo(appbarBounds.height, 0);
+    expect(terminalOverlayMetrics.paddingTop).toBeCloseTo(2, 0);
+    expect(terminalOverlayMetrics.paddingLeft).toBeCloseTo(2, 0);
+    expect(terminalOverlayMetrics.tabBarOffsetTop).toBeCloseTo(terminalOverlayMetrics.paddingTop, 0);
+    expect(terminalOverlayMetrics.tabBarOffsetLeft).toBeCloseTo(terminalOverlayMetrics.paddingLeft, 0);
+    expect(terminalOverlayMetrics.tabBarPaddingLeft).toBeGreaterThan(80);
     await generalTerminalOverlay.getByRole('button', { name: /^Close / }).first().click();
     await playwrightExpect(generalTerminalOverlay).toBeHidden({ timeout: 5_000 });
     await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveCount(0);

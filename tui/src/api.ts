@@ -33,19 +33,19 @@ export const getContextUsage = async (server: string, token: string, threadId: s
   return await response.json() as { tokens: number; contextWindow?: number; percent?: number };
 };
 
-export const listDemiplaneThreads = async (server: string, token: string, planeId: string, demiplaneId?: string) => {
+export const listWorkspaceThreads = async (server: string, token: string, projectId: string, workspaceId?: string) => {
   const response = await apiFetch(server, token, '/chat-state/threads');
   const body = await response.json() as { threads?: ChatThread[] };
   return (body.threads ?? []).filter(thread => {
     const metadata = thread.metadata ?? {};
-    return metadata.archived !== true && metadata.planeId === planeId && metadata.demiplaneId === demiplaneId;
+    return metadata.archived !== true && metadata.projectId === projectId && metadata.workspaceId === workspaceId;
   });
 };
 
-export const createThread = async (server: string, token: string, planeId: string, demiplaneId?: string) => {
-  const response = await apiFetch(server, token, `/planes/${planeId}/threads`, {
+export const createThread = async (server: string, token: string, projectId: string, workspaceId?: string) => {
+  const response = await apiFetch(server, token, `/projects/${projectId}/threads`, {
     method: 'POST',
-    body: JSON.stringify({ demiplaneId }),
+    body: JSON.stringify({ workspaceId }),
   });
   const body = await response.json() as { thread?: { id?: string } };
   const threadId = body.thread?.id;
@@ -67,7 +67,7 @@ export const listPortals = async (server: string, token: string) => {
 };
 
 export const resolveWorkspace = async (server: string, token: string, workspace: Record<string, unknown>, portalId?: string) => {
-  const response = await apiFetch(server, token, '/planes/resolve-workspace', {
+  const response = await apiFetch(server, token, '/projects/resolve-workspace', {
     method: 'POST',
     body: JSON.stringify({ ...workspace, portalId, allowAdHoc: true, createThread: false }),
   });

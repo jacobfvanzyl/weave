@@ -18,7 +18,7 @@ type EditorResolvedTarget = {
 
 type PortalEditorClientOptions = {
   supervisor: PortalSupervisor;
-  resolveDemiplane: (target: EditorTarget) => Promise<EditorResolvedTarget>;
+  resolveWorkspace: (target: EditorTarget) => Promise<EditorResolvedTarget>;
 };
 
 const parseResponse = async <T>(response: Response): Promise<T> => {
@@ -41,11 +41,11 @@ const parseResponse = async <T>(response: Response): Promise<T> => {
 
 export class PortalEditorClient {
   private readonly supervisor: PortalSupervisor;
-  private readonly resolveDemiplane: (target: EditorTarget) => Promise<EditorResolvedTarget>;
+  private readonly resolveWorkspace: (target: EditorTarget) => Promise<EditorResolvedTarget>;
 
   constructor(options: PortalEditorClientOptions) {
     this.supervisor = options.supervisor;
-    this.resolveDemiplane = options.resolveDemiplane;
+    this.resolveWorkspace = options.resolveWorkspace;
   }
 
   async list(input: EditorListInput): Promise<EditorListResult> {
@@ -72,10 +72,10 @@ export class PortalEditorClient {
   }
 
   private async resolveTarget(target: EditorTarget): Promise<EditorTarget> {
-    const resolved = await this.resolveDemiplane(target);
+    const resolved = await this.resolveWorkspace(target);
     return {
-      planeId: target.planeId,
-      demiplaneId: target.demiplaneId,
+      projectId: target.projectId,
+      workspaceId: target.workspaceId,
       portalId: resolved.portalId ?? target.portalId,
       rootId: resolved.rootId ?? target.rootId,
       repoPath: resolved.repoPath ?? target.repoPath,

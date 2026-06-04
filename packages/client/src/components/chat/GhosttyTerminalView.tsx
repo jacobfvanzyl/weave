@@ -90,6 +90,15 @@ const writeTerminalData = (terminal: Terminal, data: string, incompleteCursorSeq
   terminal.write(data);
 };
 
+const terminalFontFallbackFamily =
+  '"JetBrains Mono", "Pure Nerd Font", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+const terminalFontLoadSamples = [
+  'M',
+  '\u2500\u2502\u250c\u2510\u2514\u2518\u256d\u256e\u2570\u256f',
+  '\ue0b0\ue0b2\ue0b6\ue0b4',
+  '\u25cb\u25cf\u2605\u21a9\u21d4',
+];
+
 const cssVar = (styles: CSSStyleDeclaration, name: string, fallback: string) =>
   styles.getPropertyValue(name).trim() || fallback;
 
@@ -130,14 +139,40 @@ const getTerminalFontFamily = () => {
   const styles = getComputedStyle(document.documentElement);
   return cssVar(
     styles,
-    '--font-code',
-    '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    '--font-terminal',
+    cssVar(styles, '--font-code', terminalFontFallbackFamily),
   );
 };
 
 const getTerminalFontSize = () => {
   const styles = getComputedStyle(document.documentElement);
-  return parseCssPixelLength(cssVar(styles, '--weave-chat-text-size', '1rem'), styles, 16);
+  return parseCssPixelLength(
+    cssVar(styles, '--weave-terminal-font-size', cssVar(styles, '--weave-chat-text-size', '1rem')),
+    styles,
+    16,
+  );
+};
+
+const ensureTerminalFontsReady = async (fontSize: number, fontFamily: string) => {
+  const fonts = document.fonts;
+  if (!fonts) return;
+
+  const fontDeclaration = `${fontSize}px ${fontFamily}`;
+  await Promise.all(
+    terminalFontLoadSamples.map(sample => fonts.load(fontDeclaration, sample)),
+  );
+};
+
+const loadTerminalFontConfig = async () => {
+  const fontFamily = getTerminalFontFamily() || terminalFontFallbackFamily;
+  const fontSize = getTerminalFontSize();
+  const config = { fontFamily, fontSize: Number.isFinite(fontSize) ? fontSize : 16 };
+  try {
+    await ensureTerminalFontsReady(config.fontSize, config.fontFamily);
+  } catch {
+    // Font loading should improve glyph metrics, not block terminal startup.
+  }
+  return config;
 };
 
 export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerminalViewProps>(
@@ -171,7 +206,10 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
       let fitAddon: FitAddon | undefined;
 
       const setup = async () => {
-        const ghostty = await ensureGhosttyReady();
+        const [ghostty, fontConfig] = await Promise.all([
+          ensureGhosttyReady(),
+          loadTerminalFontConfig(),
+        ]);
         if (disposed || !containerRef.current) return;
 
         terminal = new Terminal({
@@ -180,8 +218,8 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
           rows: 24,
           cursorBlink: true,
           cursorStyle: 'block',
-          fontFamily: getTerminalFontFamily(),
-          fontSize: getTerminalFontSize(),
+          fontFamily: fontConfig.fontFamily,
+          fontSize: fontConfig.fontSize,
           scrollback: 2_000,
           theme: getTerminalTheme(),
         });
@@ -242,7 +280,7 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
     return (
       <div
         ref={containerRef}
-        className="relative h-full min-h-0 w-full overflow-hidden outline-none select-text"
+        className="relative grid h-full min-h-0 w-full place-items-center overflow-hidden outline-none select-text"
         data-weave-terminal-view
         data-weave-text-surface="true"
         style={{ caretColor: 'transparent' }}

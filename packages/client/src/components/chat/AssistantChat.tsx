@@ -20,7 +20,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Brain, Check, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Send, X } from 'lucide-react';
+import { Brain, Check, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Send, UserRoundCog, X } from 'lucide-react';
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getThreadContextUsage, listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
@@ -28,8 +28,9 @@ import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
 import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
+import { listProfiles, type DynamicProfileSummary, type ProfileResolutionContext } from '../../lib/profiles-api';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
-import { useChatStore, type PlanStepStatus, type ReasoningEffort, type ThreadPlan, type ThreadPlanStep } from '../../stores/chat-store';
+import { useChatStore, type ChatThread, type PlanStepStatus, type ReasoningEffort, type ThreadPlan, type ThreadPlanStep } from '../../stores/chat-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
@@ -39,6 +40,23 @@ import { CodeBlock } from './CodeBlock';
 
 const ThreadIdContext = createContext<string | null>(null);
 const toolCallCache = new Map<string, Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result' | 'isError'>>();
+
+const fallbackProfile: DynamicProfileSummary = {
+  id: 'builtin-default',
+  name: 'Default',
+  source: 'builtin',
+  tools: [],
+  skills: [],
+  prompts: [],
+  mcp: [],
+};
+
+const profileContextForThread = (threadId: string | null, thread: ChatThread | undefined): ProfileResolutionContext => ({
+  threadId: threadId ?? undefined,
+  projectId: thread?.projectId,
+  workspaceId: thread?.workspaceId,
+  profileId: thread?.profileId,
+});
 
 const readFileAsDataUrl = (file: File) =>
   new Promise<string>((resolve, reject) => {
@@ -668,6 +686,73 @@ const ModelPicker = () => {
   );
 };
 
+const ProfilePicker = () => {
+  const threadId = useContext(ThreadIdContext);
+  const isRunning = useThread(state => state.isRunning);
+  const thread = useChatStore(state => state.threads.find(item => item.id === threadId));
+  const setDraftThreadProfile = useChatStore(state => state.setDraftThreadProfile);
+  const isDraft = thread?.draft === true;
+  const context = useMemo(
+    () => profileContextForThread(threadId, thread),
+    [threadId, thread?.draft, thread?.profileId, thread?.projectId, thread?.workspaceId],
+  );
+  const { data, isError, isLoading } = useQuery({
+    queryKey: ['profiles', context.threadId ?? null, context.projectId ?? null, context.workspaceId ?? null, context.profileId ?? null],
+    queryFn: () => listProfiles(context),
+    enabled: Boolean(threadId),
+    staleTime: 1000 * 60,
+  });
+  const profiles = data?.profiles?.length ? data.profiles : [fallbackProfile];
+  const resolvedProfile = data?.resolved.profile ?? fallbackProfile;
+  const loadedActiveProfileId = data && isDraft && thread?.profileId ? thread.profileId : resolvedProfile.id;
+  const loadedActiveProfile = profiles.find(profile => profile.id === loadedActiveProfileId) ?? resolvedProfile;
+  const activeProfileId = profiles.some(profile => profile.id === loadedActiveProfileId)
+    ? loadedActiveProfileId
+    : loadedActiveProfile.id;
+  const activeProfile = profiles.find(profile => profile.id === activeProfileId) ?? loadedActiveProfile;
+  const profileOptions = profiles.some(profile => profile.id === activeProfile.id)
+    ? profiles
+    : [activeProfile, ...profiles];
+  const disabled = !isDraft || isRunning || isLoading || isError || profileOptions.length === 0;
+  const title = isError
+    ? 'Profile unavailable'
+    : isDraft
+      ? 'Profile'
+      : `Profile locked: ${activeProfile.name}`;
+
+  return (
+    <div className="profile-picker min-w-0 shrink-0">
+      <Select
+        value={activeProfileId}
+        onValueChange={value => {
+          if (threadId && isDraft) setDraftThreadProfile(threadId, value);
+        }}
+        disabled={disabled}
+      >
+        <SelectTrigger
+          aria-label="Profile"
+          title={title}
+          className="h-9 w-9 justify-center border-transparent bg-transparent px-0 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground disabled:opacity-60 sm:w-auto sm:max-w-44 sm:justify-start sm:px-2"
+          variant="ghost"
+        >
+          <UserRoundCog size={16} className="shrink-0 sm:mr-1" />
+          <SelectValue className="hidden min-w-0 text-left sm:block">{activeProfile.name}</SelectValue>
+        </SelectTrigger>
+        <SelectPopup align="start" className="max-h-72">
+          {profileOptions.map(profile => (
+            <SelectItem key={profile.id} value={profile.id}>
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate">{profile.name}</span>
+                <span className="truncate text-xs text-muted-foreground">{profile.description ?? profile.id}</span>
+              </span>
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+    </div>
+  );
+};
+
 const reasoningOptions: Array<{ value: ReasoningEffort; label: string; detail: string }> = [
   { value: 'off', label: 'Off', detail: 'No reasoning' },
   { value: 'minimal', label: 'Fast', detail: 'Minimal thinking' },
@@ -895,10 +980,19 @@ const Composer = () => {
   const isEmpty = useThread(state => state.messages.length === 0 && !state.isLoading);
   const composerText = useAuiState(state => state.composer.text);
   const isComposerEmpty = useAuiState(state => state.composer.isEmpty);
+  const thread = useChatStore(state => state.threads.find(item => item.id === threadId));
   const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
   const [activeIndex, setActiveIndex] = useState(0);
   const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
-  const { data: prompts = [] } = useQuery({ queryKey: ['prompts'], queryFn: listPrompts, staleTime: 1000 * 60 });
+  const promptContext = useMemo(
+    () => profileContextForThread(threadId, thread),
+    [threadId, thread?.draft, thread?.profileId, thread?.projectId, thread?.workspaceId],
+  );
+  const { data: prompts = [] } = useQuery({
+    queryKey: ['prompts', promptContext.threadId ?? null, promptContext.projectId ?? null, promptContext.workspaceId ?? null, promptContext.profileId ?? null],
+    queryFn: () => listPrompts(promptContext),
+    staleTime: 1000 * 60,
+  });
   const { data: chatgptAuth } = useQuery({
     queryKey: ['chatgpt-auth-status'],
     queryFn: getChatGPTAuthStatus,
@@ -975,6 +1069,7 @@ const Composer = () => {
             <Plus size={18} strokeWidth={2.5} />
           </ComposerPrimitive.AddAttachment>
           <ModelPicker />
+          <ProfilePicker />
           <ReasoningPicker />
           <PlanPanelToggle threadId={threadId} />
         </div>
@@ -1123,7 +1218,7 @@ const Thread = () => {
         <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
         <RunningAssistantPlaceholder />
       </ThreadPrimitive.Viewport>
-      <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
+      <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
         <Composer />
       </div>
     </ThreadPrimitive.Root>
@@ -1149,16 +1244,18 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
           const firstUserText = messages.find(message => message.role === 'user') ? getMessageText(messages.find(message => message.role === 'user')!).trim() : '';
           const lastUserText = getMessageText([...messages].reverse().find(message => message.role === 'user') ?? messages[messages.length - 1]).trim();
           const slashCommand = parseSlashCommand(lastUserText);
+          const threadTitle = firstUserText?.slice(0, 64);
+          const threadBeforePersist = useChatStore.getState().threads.find(thread => thread.id === threadId);
+          const promptContext = profileContextForThread(threadId, threadBeforePersist);
+          await useChatStore.getState().ensureThreadPersisted(threadId, threadTitle);
+          useChatStore.getState().touchThread(threadId, threadTitle, true);
+
           const requestMessages = slashCommand
-            ? withLastUserText(messages, await expandPrompt(slashCommand.name, slashCommand.args), {
+            ? withLastUserText(messages, await expandPrompt(slashCommand.name, slashCommand.args, promptContext), {
                 slashCommandOriginalText: lastUserText,
                 slashCommandName: slashCommand.name,
               })
             : messages;
-
-          const threadTitle = firstUserText?.slice(0, 64);
-          await useChatStore.getState().ensureThreadPersisted(threadId, threadTitle);
-          useChatStore.getState().touchThread(threadId, threadTitle, true);
 
           return {
             headers: getAuthHeaders(),

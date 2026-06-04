@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, PanelLeft, Settings, TerminalSquare } from 'lucide-react';
-import { listPlanes, listPortals, listServerThreads } from '../../lib/chat-state-api';
+import { listProjects, listPortals, listServerThreads } from '../../lib/chat-state-api';
 import { isDesktopEditorBackendAvailable, isEditorBackendAvailable } from '../../lib/editor-backend';
 import { isDesktopTerminalTransportAvailable, isTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useChatStore } from '../../stores/chat-store';
@@ -12,18 +12,12 @@ import type { ShortcutCommand } from '../../lib/shortcuts';
 import { AssistantChat } from './AssistantChat';
 import { PlanSidebar } from './PlanSidebar';
 import { ThreadSidebar } from './ThreadSidebar';
-import type { TerminalPanelTab } from './TerminalPanel';
+import type { TerminalPanelTab, TerminalPanelTabsChange } from './TerminalPanel';
 
 const TerminalPanel = lazy(() => import('./TerminalPanel').then(module => ({ default: module.TerminalPanel })));
 const EditorPanel = lazy(() => import('./EditorPanel').then(module => ({ default: module.EditorPanel })));
 
-const isMobileRuntimeNow = () =>
-  typeof document !== 'undefined' && document.documentElement.dataset.weaveRuntime === 'mobile';
-const isMobilePortraitNow = () => {
-  const isPortrait = window.matchMedia('(orientation: portrait)').matches;
-  if (isMobileRuntimeNow()) return isPortrait;
-  return window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
-};
+const isPortraitViewportNow = () => window.innerHeight > window.innerWidth;
 const isElectronWindowNow = () =>
   typeof document !== 'undefined' && document.documentElement.dataset.weaveWindowType === 'electron';
 const chatContentMaxWidthPx = 48 * 16;
@@ -65,24 +59,18 @@ const TerminalTabCountBadge = ({ count }: { count: number }) => count > 0 ? (
   </span>
 ) : null;
 
-const useIsMobilePortrait = () => {
-  const [isMobilePortrait, setIsMobilePortrait] = useState(() => isMobilePortraitNow());
+const useIsPortraitViewport = () => {
+  const [isPortraitViewport, setIsPortraitViewport] = useState(() => isPortraitViewportNow());
 
   useEffect(() => {
-    const portraitQuery = window.matchMedia('(orientation: portrait)');
-    const narrowPortraitQuery = window.matchMedia('(max-width: 767px) and (orientation: portrait)');
-    const sync = () => setIsMobilePortrait(isMobilePortraitNow());
+    const sync = () => setIsPortraitViewport(isPortraitViewportNow());
 
     sync();
-    portraitQuery.addEventListener('change', sync);
-    narrowPortraitQuery.addEventListener('change', sync);
-    return () => {
-      portraitQuery.removeEventListener('change', sync);
-      narrowPortraitQuery.removeEventListener('change', sync);
-    };
+    window.addEventListener('resize', sync);
+    return () => window.removeEventListener('resize', sync);
   }, []);
 
-  return isMobilePortrait;
+  return isPortraitViewport;
 };
 
 const useMeasuredElementWidth = () => {
@@ -111,19 +99,19 @@ type ChatPageProps = {
 type WindowSurfacesInput = {
   editorTargetKey?: string;
   hasGeneralTerminalTarget: boolean;
-  isMobilePortrait: boolean;
+  isPortraitViewport: boolean;
   pageWidth: number;
-  terminalDemiplaneId?: string;
+  terminalWorkspaceId?: string;
 };
 
 const useWindowSurfaces = ({
   editorTargetKey,
   hasGeneralTerminalTarget,
-  isMobilePortrait,
+  isPortraitViewport,
   pageWidth,
-  terminalDemiplaneId,
+  terminalWorkspaceId,
 }: WindowSurfacesInput) => {
-  const [isSidebarPinnedOpen, setIsSidebarPinnedOpen] = useState(() => !isMobilePortraitNow());
+  const [isSidebarPinnedOpen, setIsSidebarPinnedOpen] = useState(() => !isPortraitViewportNow());
   const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isTerminalExpanded, setIsTerminalExpanded] = useState(false);
@@ -133,29 +121,29 @@ const useWindowSurfaces = ({
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const [generalTerminalFocusRequest, setGeneralTerminalFocusRequest] = useState(0);
   const [editorFocusRequest, setEditorFocusRequest] = useState(0);
-  const [activeTerminalDemiplaneIds, setActiveTerminalDemiplaneIds] = useState<Set<string>>(() => new Set());
+  const [activeTerminalWorkspaceIds, setActiveTerminalWorkspaceIds] = useState<Set<string>>(() => new Set());
   const [isGeneralTerminalActive, setIsGeneralTerminalActive] = useState(false);
   const sidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
   const workspaceWidthWithPinnedSidebar = Math.max(0, pageWidth - threadSidebarWidthPx);
   const chatWidthWithPinnedSidebar = isEditorOpen
     ? workspaceWidthWithPinnedSidebar / 2
     : workspaceWidthWithPinnedSidebar;
-  const wouldAutoHideSidebarIfPinned = isEditorOpen && !isMobilePortrait && chatWidthWithPinnedSidebar < chatContentMaxWidthPx;
+  const wouldAutoHideSidebarIfPinned = isEditorOpen && !isPortraitViewport && chatWidthWithPinnedSidebar < chatContentMaxWidthPx;
   const isSidebarAutoHidden = isSidebarPinnedOpen && wouldAutoHideSidebarIfPinned;
-  const isSidebarOpen = isSidebarPinnedOpen && !isSidebarAutoHidden && !isMobilePortrait;
+  const isSidebarOpen = isSidebarPinnedOpen && !isSidebarAutoHidden && !isPortraitViewport;
   const workspaceWidth = isSidebarOpen ? workspaceWidthWithPinnedSidebar : pageWidth;
   const shouldClampChatPaneForEditor = isEditorOpen && !isEditorExpanded && workspaceWidth >= chatContentMaxWidthPx * 2;
   const canPreviewSidebar = !isSidebarOpen;
   const showSidebarPreview = canPreviewSidebar && isSidebarPreviewOpen;
   const showPinnedSidebarToggle = isSidebarOpen;
   const showHeaderSidebarToggle = !isSidebarOpen;
-  const hasTerminalTarget = Boolean(terminalDemiplaneId);
+  const hasTerminalTarget = Boolean(terminalWorkspaceId);
   const hasEditorTarget = Boolean(editorTargetKey);
-  const hasActiveTerminal = terminalDemiplaneId ? activeTerminalDemiplaneIds.has(terminalDemiplaneId) : false;
+  const hasActiveTerminal = terminalWorkspaceId ? activeTerminalWorkspaceIds.has(terminalWorkspaceId) : false;
 
   useEffect(() => {
-    if (isMobilePortrait) setIsSidebarPinnedOpen(false);
-  }, [isMobilePortrait]);
+    if (isPortraitViewport) setIsSidebarPinnedOpen(false);
+  }, [isPortraitViewport]);
 
   useEffect(() => {
     if (isSidebarOpen) setIsSidebarPreviewOpen(false);
@@ -164,7 +152,7 @@ const useWindowSurfaces = ({
   useEffect(() => {
     setIsTerminalExpanded(false);
     if (!hasTerminalTarget) setIsTerminalOpen(false);
-  }, [hasTerminalTarget, terminalDemiplaneId]);
+  }, [hasTerminalTarget, terminalWorkspaceId]);
 
   useEffect(() => {
     if (!hasGeneralTerminalTarget) {
@@ -211,7 +199,7 @@ const useWindowSurfaces = ({
 
   const toggleSidebar = useCallback(() => {
     clearSidebarPreviewCloseTimeout();
-    if (isMobilePortrait) {
+    if (isPortraitViewport) {
       setIsSidebarPinnedOpen(false);
       setIsSidebarPreviewOpen(open => !open);
       return;
@@ -225,7 +213,7 @@ const useWindowSurfaces = ({
 
     setIsSidebarPreviewOpen(false);
     setIsSidebarPinnedOpen(open => !open);
-  }, [clearSidebarPreviewCloseTimeout, isMobilePortrait, isSidebarOpen, wouldAutoHideSidebarIfPinned]);
+  }, [clearSidebarPreviewCloseTimeout, isPortraitViewport, isSidebarOpen, wouldAutoHideSidebarIfPinned]);
 
   const closeSidebar = useCallback(() => {
     clearSidebarPreviewCloseTimeout();
@@ -309,20 +297,20 @@ const useWindowSurfaces = ({
   }, []);
 
   const handleTerminalSessionActiveChange = useCallback((isActive: boolean) => {
-    if (!terminalDemiplaneId) return;
-    setActiveTerminalDemiplaneIds(current => {
-      const isCurrentlyActive = current.has(terminalDemiplaneId);
+    if (!terminalWorkspaceId) return;
+    setActiveTerminalWorkspaceIds(current => {
+      const isCurrentlyActive = current.has(terminalWorkspaceId);
       if (isCurrentlyActive === isActive) return current;
 
       const next = new Set(current);
       if (isActive) {
-        next.add(terminalDemiplaneId);
+        next.add(terminalWorkspaceId);
       } else {
-        next.delete(terminalDemiplaneId);
+        next.delete(terminalWorkspaceId);
       }
       return next;
     });
-  }, [terminalDemiplaneId]);
+  }, [terminalWorkspaceId]);
 
   const handleGeneralTerminalSessionActiveChange = useCallback((isActive: boolean) => {
     setIsGeneralTerminalActive(isActive);
@@ -388,13 +376,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const chatSurfaceRef = useRef<HTMLDivElement | null>(null);
   const showToolCalls = useChatStore(state => state.showToolCalls);
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
-  const isMobilePortrait = useIsMobilePortrait();
+  const isPortraitViewport = useIsPortraitViewport();
   const isElectronWindow = isElectronWindowNow();
   const activeThread = threads.find(thread => thread.id === threadId);
   const hasThreadTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
-  const { data: planes = [] } = useQuery({
-    queryKey: ['planes', resourceId],
-    queryFn: () => listPlanes(),
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects', resourceId],
+    queryFn: () => listProjects(),
   });
   const { data: portals = [] } = useQuery({
     queryKey: ['portals', resourceId],
@@ -404,29 +392,29 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const onlinePortalIds = new Set(onlinePortals.map(portal => portal.portalId));
   const defaultGlobalPortal = onlinePortals[0];
   const defaultGlobalRootId = defaultGlobalPortal?.roots[0]?.id ?? 'default';
-  const activePlane = activeThread?.planeId ? planes.find(plane => plane.id === activeThread.planeId) : undefined;
-  const activeDemiplane = activeThread?.demiplaneId
-    ? activePlane?.demiplanes.find(demiplane => demiplane.id === activeThread.demiplaneId)
+  const activeProject = activeThread?.projectId ? projects.find(project => project.id === activeThread.projectId) : undefined;
+  const activeWorkspace = activeThread?.workspaceId
+    ? activeProject?.workspaces.find(workspace => workspace.id === activeThread.workspaceId)
     : undefined;
-  const activeDemiplanePortalId = activeDemiplane?.portalId ?? activePlane?.portalId;
-  const activeGitDemiplaneTarget = activePlane?.projectKind === 'git' && activeDemiplane
+  const activeWorkspacePortalId = activeWorkspace?.portalId ?? activeProject?.portalId;
+  const activeGitWorkspaceTarget = activeProject?.projectKind === 'git' && activeWorkspace
     ? {
-        kind: 'demiplane' as const,
-        terminalId: activeDemiplane.id,
-        planeId: activePlane.id,
-        demiplaneId: activeDemiplane.id,
-        portalId: activeDemiplanePortalId,
-        rootId: activePlane.portalRootId,
-        repoPath: activePlane.repoPath,
-        workspacePath: activeDemiplane.path,
-        planeName: activePlane.name,
-        demiplaneName: activeDemiplane.name,
-        title: `${activePlane.name} / ${activeDemiplane.name}`,
+        kind: 'workspace' as const,
+        terminalId: activeWorkspace.id,
+        projectId: activeProject.id,
+        workspaceId: activeWorkspace.id,
+        portalId: activeWorkspacePortalId,
+        rootId: activeProject.portalRootId,
+        repoPath: activeProject.repoPath,
+        workspacePath: activeWorkspace.path,
+        projectName: activeProject.name,
+        workspaceName: activeWorkspace.name,
+        title: `${activeProject.name} / ${activeWorkspace.name}`,
       }
     : undefined;
   const hasDesktopTerminalTransport = isDesktopTerminalTransportAvailable();
   const hasAnyTerminalTransport = isTerminalTransportAvailable();
-  const hasOnlinePortalForActiveDemiplane = Boolean(activeDemiplanePortalId && onlinePortalIds.has(activeDemiplanePortalId));
+  const hasOnlinePortalForActiveWorkspace = Boolean(activeWorkspacePortalId && onlinePortalIds.has(activeWorkspacePortalId));
   const generalTerminalTarget = hasAnyTerminalTransport && (defaultGlobalPortal || (isElectronWindow && hasDesktopTerminalTransport))
     ? {
         kind: 'general' as const,
@@ -436,29 +424,25 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
         title: 'Weave Terminal',
       }
     : undefined;
-  const terminalTarget = hasAnyTerminalTransport && (hasOnlinePortalForActiveDemiplane || (isElectronWindow && hasDesktopTerminalTransport))
-    ? activeGitDemiplaneTarget
+  const terminalTarget = hasAnyTerminalTransport && (hasOnlinePortalForActiveWorkspace || (isElectronWindow && hasDesktopTerminalTransport))
+    ? activeGitWorkspaceTarget
     : undefined;
   const hasDesktopEditorBackend = isDesktopEditorBackendAvailable();
-  const editorTarget = isEditorBackendAvailable() && (hasOnlinePortalForActiveDemiplane || (isElectronWindow && hasDesktopEditorBackend))
-    ? activeGitDemiplaneTarget
+  const editorTarget = isEditorBackendAvailable() && (hasOnlinePortalForActiveWorkspace || (isElectronWindow && hasDesktopEditorBackend))
+    ? activeGitWorkspaceTarget
     : undefined;
-  const terminalDemiplaneId = terminalTarget?.demiplaneId;
+  const terminalWorkspaceId = terminalTarget?.workspaceId;
   const terminalTargetKey = terminalTarget?.terminalId;
-  const [generalTerminalTabs, setGeneralTerminalTabs] = useState<TerminalPanelTab[]>(() => [
-    createTerminalPanelTab(generalTerminalId, 1, true),
-  ]);
+  const [generalTerminalTabs, setGeneralTerminalTabs] = useState<TerminalPanelTab[]>(() => []);
   const [activeGeneralTerminalTabId, setActiveGeneralTerminalTabId] = useState(() => getPrimaryTerminalTabId(generalTerminalId));
   const [terminalTabsByTarget, setTerminalTabsByTarget] = useState<Record<string, TerminalPanelTab[]>>({});
   const [activeTerminalTabByTarget, setActiveTerminalTabByTarget] = useState<Record<string, string>>({});
-  const [generalTerminalActiveSessionCount, setGeneralTerminalActiveSessionCount] = useState(0);
-  const [terminalActiveSessionCountByTarget, setTerminalActiveSessionCountByTarget] = useState<Record<string, number>>({});
   const windowSurfaces = useWindowSurfaces({
-    editorTargetKey: editorTarget?.demiplaneId,
+    editorTargetKey: editorTarget?.workspaceId,
     hasGeneralTerminalTarget: Boolean(generalTerminalTarget),
-    isMobilePortrait,
+    isPortraitViewport,
     pageWidth,
-    terminalDemiplaneId,
+    terminalWorkspaceId,
   });
   const {
     closeSidebar,
@@ -502,35 +486,18 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     toggleTerminal,
     toggleTerminalExpanded,
   } = windowSurfaces;
-  useEffect(() => {
-    if (!terminalTargetKey) return;
-    const primaryTab = createTerminalPanelTab(terminalTargetKey, 1, true);
-    setTerminalTabsByTarget(current => {
-      const currentTabs = current[terminalTargetKey];
-      if (currentTabs && currentTabs.length > 0) return current;
-      return { ...current, [terminalTargetKey]: [primaryTab] };
-    });
-    setActiveTerminalTabByTarget(current => current[terminalTargetKey]
-      ? current
-      : { ...current, [terminalTargetKey]: primaryTab.id });
-  }, [terminalTargetKey]);
-
   const terminalTabs = terminalTargetKey ? terminalTabsByTarget[terminalTargetKey] ?? [] : [];
   const activeTerminalTabId = terminalTargetKey
     ? activeTerminalTabByTarget[terminalTargetKey] ?? terminalTabs[0]?.id
     : undefined;
-  const terminalActiveSessionCount = terminalTargetKey ? terminalActiveSessionCountByTarget[terminalTargetKey] ?? 0 : 0;
 
-  const handleTerminalTabsChange = useCallback((nextTabs: TerminalPanelTab[]) => {
+  const handleTerminalTabsChange = useCallback((tabsChange: TerminalPanelTabsChange) => {
     if (!terminalTargetKey) return;
-    setTerminalTabsByTarget(current => ({ ...current, [terminalTargetKey]: nextTabs }));
-  }, [terminalTargetKey]);
-
-  const handleTerminalActiveSessionCountChange = useCallback((count: number) => {
-    if (!terminalTargetKey) return;
-    setTerminalActiveSessionCountByTarget(current => {
-      if (current[terminalTargetKey] === count) return current;
-      return { ...current, [terminalTargetKey]: count };
+    setTerminalTabsByTarget(current => {
+      const currentTabs = current[terminalTargetKey] ?? [];
+      const nextTabs = typeof tabsChange === 'function' ? tabsChange(currentTabs) : tabsChange;
+      if (nextTabs === currentTabs) return current;
+      return { ...current, [terminalTargetKey]: nextTabs };
     });
   }, [terminalTargetKey]);
 
@@ -701,7 +668,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const shouldRenderHeaderLeftActions = !isElectronWindow
     && !isSidebarSurfaceVisible
     && (showHeaderSidebarToggle || Boolean(generalTerminalTarget));
-  const sidebarToggleHoverHandlers = isMobilePortrait
+  const sidebarToggleHoverHandlers = isPortraitViewport
     ? {}
     : {
         onMouseEnter: openSidebarPreview,
@@ -711,7 +678,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     <Button
       size="icon"
       variant="ghost"
-      aria-label={isSidebarOpen || (isMobilePortrait && showSidebarPreview) ? 'Hide sidebar' : 'Show sidebar'}
+      aria-label={isSidebarOpen || (isPortraitViewport && showSidebarPreview) ? 'Hide sidebar' : 'Show sidebar'}
       onClick={toggleSidebar}
       {...sidebarToggleHoverHandlers}
     >
@@ -731,13 +698,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       onClick={handleGeneralTerminalToggle}
     >
       <TerminalSquare size={18} />
-      <TerminalTabCountBadge count={generalTerminalActiveSessionCount} />
+      <TerminalTabCountBadge count={generalTerminalTabs.length} />
     </Button>
   ) : null;
 
   return (
     <ShortcutProvider commands={shortcutCommands}>
-      <div ref={pageRef} className="flex h-dvh overflow-hidden" data-weave-surface="app">
+      <div ref={pageRef} className="weave-app-shell box-border flex overflow-hidden pt-[var(--weave-safe-area-top)]" data-weave-surface="app">
       {isSidebarOpen ? (
         <>
           <button
@@ -747,7 +714,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           />
           <ThreadSidebar
             ref={sidebarSurfaceRef}
-            closeOnSelect={isMobilePortrait}
+            closeOnSelect={isPortraitViewport}
             connectionSettingsButton={connectionSettingsButton}
             onClose={closeSidebar}
           />
@@ -756,14 +723,14 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       {showSidebarPreview ? (
         <div
           data-weave-sidebar-preview
-          {...(!isMobilePortrait
+          {...(!isPortraitViewport
             ? {
                 onMouseEnter: openSidebarPreview,
                 onMouseLeave: scheduleSidebarPreviewClose,
               }
             : {})}
         >
-          {isMobilePortrait ? (
+          {isPortraitViewport ? (
             <button
               className="fixed inset-0 z-30 bg-background/80"
               aria-label="Close sidebar"
@@ -802,15 +769,15 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
               {renderGeneralTerminalButton()}
             </div>
           ) : null}
-          {activePlane || hasThreadTitle ? (
+          {activeProject || hasThreadTitle ? (
             <h2 className="flex max-w-[60%] items-center justify-center gap-1 truncate text-center text-sm font-semibold text-foreground">
-              {activePlane ? (
+              {activeProject ? (
                 <>
-                  <span className="min-w-0 truncate text-mauve">{activePlane.name}</span>
-                  {activeDemiplane ? (
+                  <span className="min-w-0 truncate text-mauve">{activeProject.name}</span>
+                  {activeWorkspace ? (
                     <>
                       <span className="shrink-0 text-muted-foreground">/</span>
-                      <span className="min-w-0 truncate text-primary">{activeDemiplane.name}</span>
+                      <span className="min-w-0 truncate text-primary">{activeWorkspace.name}</span>
                     </>
                   ) : null}
                   {hasThreadTitle ? <span className="shrink-0 text-muted-foreground">/</span> : null}
@@ -833,7 +800,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                 onClick={toggleTerminal}
               >
                 <TerminalSquare size={18} />
-                <TerminalTabCountBadge count={terminalActiveSessionCount} />
+                <TerminalTabCountBadge count={terminalTabs.length} />
               </Button>
             ) : null}
             {editorTarget ? (
@@ -896,13 +863,12 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                 ))}
               {showPlanPanel ? <PlanSidebar plan={activePlan} /> : null}
             </div>
-            {isTerminalOpen && terminalTarget && activeTerminalTabId ? (
+            {isTerminalOpen && terminalTarget ? (
               <Suspense fallback={null}>
                 <TerminalPanel
                   activeTabId={activeTerminalTabId}
                   focusRequest={terminalFocusRequest}
                   isExpanded={isTerminalExpanded}
-                  onActiveSessionCountChange={handleTerminalActiveSessionCountChange}
                   onActiveTabIdChange={handleActiveTerminalTabChange}
                   onCreateTab={createTerminalTab}
                   onExpandedChange={handleTerminalExpandedChange}
@@ -934,15 +900,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           data-weave-general-terminal-overlay
         >
           <div
-            className="pointer-events-auto absolute min-h-0 min-w-0"
-            style={{ inset: 'var(--weave-desktop-window-edge-to-appbar-bottom, 2.875rem)' }}
+            className="pointer-events-auto absolute inset-0 min-h-0 min-w-0"
           >
             <Suspense fallback={null}>
               <TerminalPanel
                 activeTabId={activeGeneralTerminalTabId}
                 focusRequest={generalTerminalFocusRequest}
                 isExpanded={false}
-                onActiveSessionCountChange={setGeneralTerminalActiveSessionCount}
                 onActiveTabIdChange={setActiveGeneralTerminalTabId}
                 onCreateTab={createGeneralTerminalTab}
                 onSessionActiveChange={handleGeneralTerminalSessionActiveChange}

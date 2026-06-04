@@ -5,7 +5,7 @@ export type PortalEditorRoot = {
 };
 
 export type PortalEditorMount = {
-  planeId: string;
+  projectId: string;
   localPath: string;
 };
 
@@ -15,8 +15,8 @@ export type PortalEditorConfig = {
 };
 
 export type PortalEditorTarget = {
-  planeId?: string;
-  demiplaneId?: string;
+  projectId?: string;
+  workspaceId?: string;
   portalId?: string;
   rootId?: string;
   repoPath?: string;
@@ -113,13 +113,13 @@ export const parseEditorPath = (value: unknown, name = 'path') => {
   const normalizedInput = value.trim().replace(/\\/g, '/');
   if (!normalizedInput || normalizedInput === '.') return '';
   if (normalizedInput.startsWith('/') || /^[a-zA-Z]:\//.test(normalizedInput)) {
-    throw new Error(`${name} must be relative to the Demiplane workspace.`);
+    throw new Error(`${name} must be relative to the Workspace workspace.`);
   }
 
   const normalized = normalizePath(normalizedInput);
   if (normalized === '.' || normalized === '') return '';
   if (normalized === '..' || normalized.startsWith('../')) {
-    throw new Error(`${name} cannot escape the Demiplane workspace.`);
+    throw new Error(`${name} cannot escape the Workspace workspace.`);
   }
 
   return normalized.replace(/^\.\//, '');
@@ -254,8 +254,8 @@ export class PortalEditorHost {
     const workspacePath = optionalString(input.workspacePath);
     if (workspacePath) return await Deno.realPath(workspacePath);
 
-    const planeId = optionalString(input.planeId);
-    const mount = planeId ? (this.config.mounts ?? []).find((item) => item.planeId === planeId) : undefined;
+    const projectId = optionalString(input.projectId);
+    const mount = projectId ? (this.config.mounts ?? []).find((item) => item.projectId === projectId) : undefined;
     if (mount) return await Deno.realPath(mount.localPath);
 
     const rootId = optionalString(input.rootId);
@@ -269,7 +269,7 @@ export class PortalEditorHost {
       return target;
     }
 
-    throw new Error(`Plane is not mounted: ${String(input.planeId)}`);
+    throw new Error(`Project is not mounted: ${String(input.projectId)}`);
   }
 
   private async resolveExistingPath(root: string, relativePath: string) {
@@ -280,7 +280,7 @@ export class PortalEditorHost {
     return resolved;
   }
 
-  private assertWithinRoot(root: string, candidate: string, message = 'Editor path cannot escape the Demiplane workspace.') {
+  private assertWithinRoot(root: string, candidate: string, message = 'Editor path cannot escape the Workspace workspace.') {
     const normalizedRoot = trimTrailingSlash(normalizePath(root));
     const normalizedCandidate = trimTrailingSlash(normalizePath(candidate));
     if (normalizedCandidate === normalizedRoot) return;

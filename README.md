@@ -1,30 +1,37 @@
-# weave
+# Weave
 
-Welcome to your new [Mastra](https://mastra.ai/) project! We're excited to see what you'll build.
+Weave is split into a Mastra server plus clients and local runtime pieces.
 
-## Getting Started
+## Layout
 
-Start the development server:
+| Path | Purpose |
+| --- | --- |
+| `server/` | Mastra server, agents, API routes, tools, prompts, Docker files, and server env templates. |
+| `packages/client/` | Shared React client package used by web, desktop, and mobile shells. |
+| `desktop/` | Electron desktop app. |
+| `web/` | Browser web app. |
+| `mobile/` | Capacitor mobile app. |
+| `portal/` | Deno Portal daemon for local terminal/editor/workspace access. |
+| `tui/` | Deno terminal UI. |
+| `docs/` | Architecture notes and implementation plans. |
 
-```shell
-npm run dev
+## Common Commands
+
+Install Node dependencies per package. For the server:
+
+```bash
+npm run server:install
 ```
 
-Open [http://localhost:4111](http://localhost:4111) in your browser to access [Mastra Studio](https://mastra.ai/docs/studio/overview). It provides an interactive UI for building and testing your agents, along with a REST API that exposes your Mastra application as a local service. This lets you start building without worrying about integration right away.
+Run commands from the repo root or directly inside the target package.
 
-You can start editing files inside the `src/mastra` directory. The development server will automatically reload whenever you make changes.
+```bash
+npm run dev
+npm run build
+npm run desktop:typecheck
+npm run desktop:test
+npm run portal:check
+npm run portal:test
+```
 
-## Learn more
-
-To learn more about Mastra, visit our [documentation](https://mastra.ai/docs/). Your bootstrapped project includes example code for [agents](https://mastra.ai/docs/agents/overview), [tools](https://mastra.ai/docs/agents/using-tools), [workflows](https://mastra.ai/docs/workflows/overview), [scorers](https://mastra.ai/docs/evals/overview), and [observability](https://mastra.ai/docs/observability/overview).
-
-If you're new to AI agents, check out our [course](https://mastra.ai/learn) and [YouTube videos](https://youtube.com/@mastra-ai). You can also join our [Discord](https://discord.gg/BTYqqHKUrf) community to get help and share your projects.
-
-## Deploy to the Mastra platform
-
-The [Mastra platform](https://projects.mastra.ai) provides two products for deploying and managing AI applications built with the Mastra framework:
-
-- **Studio**: A hosted visual environment for testing agents, running workflows, and inspecting traces
-- **Server**: A production deployment target that runs your Mastra application as an API server
-
-Learn more in the [Mastra platform documentation](https://mastra.ai/docs/mastra-platform/overview).
+The server `.env`, `.env.example`, Mastra source, and deploy files now live under `server/`.

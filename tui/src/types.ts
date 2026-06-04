@@ -7,7 +7,7 @@ export type TuiConfig = {
     portalId?: string;
     portalToken?: string;
     name?: string;
-    mounts?: Array<{ planeId: string; localPath: string }>;
+    mounts?: Array<{ projectId: string; localPath: string }>;
     roots?: Array<{ id: string; name: string; path: string }>;
   };
 };
@@ -37,8 +37,8 @@ export type PortalConnection = {
 };
 
 export type ResolvedWorkspace = Record<string, any> & {
-  plane?: { id?: string; name?: string };
-  demiplane?: { id?: string; name?: string; path?: string };
+  project?: { id?: string; name?: string };
+  workspace?: { id?: string; name?: string; path?: string };
   thread?: { id?: string };
   adHoc?: boolean;
 };
@@ -87,8 +87,8 @@ export type AppState = {
   modelDisplayName: string;
   contextPercent?: number;
   title: {
-    plane?: string;
-    demiplane?: string;
+    project?: string;
+    workspace?: string;
     thread?: string;
   };
 };
