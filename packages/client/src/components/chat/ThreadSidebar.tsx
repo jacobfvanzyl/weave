@@ -518,7 +518,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                 <>
                 <div
                   ref={dragActivator.ref}
-                  className={cn('flex w-[calc(100%+0.5rem)] cursor-grab touch-none select-none items-center gap-2 text-sm font-bold text-primary active:cursor-grabbing', !isCollapsed && 'mb-2')}
+                  className={cn('flex w-[calc(100%+0.5rem)] cursor-grab touch-none select-none items-center gap-2 text-sm font-bold text-success active:cursor-grabbing', !isCollapsed && 'mb-2')}
                   style={{ touchAction: 'none' }}
                   {...dragActivator.attributes}
                   {...dragActivator.listeners}
@@ -538,7 +538,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                     ) : (
                       <Folder size={16} className="shrink-0 text-success" aria-label="General Project" />
                     )}
-                    <span className="min-w-0 truncate">{project.name}</span>
+                    <span className="min-w-0 truncate text-success">{project.name}</span>
                   </SidebarItemButton>
                   {!isCollapsed ? (
                     <>
@@ -639,7 +639,6 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                       ) : null}
                       {project.projectKind === 'git' ? (
                         <>
-                        <div className="px-2 text-[10px] font-semibold uppercase text-muted-foreground">Workspaces</div>
                         <SortableSection
                           items={sortedWorkspaces.map(workspace => workspace.id)}
                           onDragStart={suppressSelectionAfterDrag}
@@ -667,7 +666,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                             <div className="flex w-[calc(100%+0.5rem)] items-start justify-between gap-2 text-sm font-bold text-foreground">
                               <div className="min-w-0 flex-1">
                                 <div className="flex min-w-0 items-center gap-1.5">
-                                  <span className="truncate">{workspace.name}</span>
+                                  <span className="truncate text-peach">{workspace.name}</span>
                                   <span className={cn('h-2 w-2 shrink-0 rounded-full', workspaceStatusClass(workspace.status, isWorkspacePortalConnected))} title={workspaceStatusLabel} aria-label={workspaceStatusLabel} />
                                   {workspace.locked || workspace.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
                                 </div>

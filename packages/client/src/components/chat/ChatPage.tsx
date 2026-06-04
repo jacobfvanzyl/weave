@@ -773,11 +773,11 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             <h2 className="flex max-w-[60%] items-center justify-center gap-1 truncate text-center text-sm font-semibold text-foreground">
               {activeProject ? (
                 <>
-                  <span className="min-w-0 truncate text-mauve">{activeProject.name}</span>
+                  <span className="min-w-0 truncate text-success">{activeProject.name}</span>
                   {activeWorkspace ? (
                     <>
                       <span className="shrink-0 text-muted-foreground">/</span>
-                      <span className="min-w-0 truncate text-primary">{activeWorkspace.name}</span>
+                      <span className="min-w-0 truncate text-peach">{activeWorkspace.name}</span>
                     </>
                   ) : null}
                   {hasThreadTitle ? <span className="shrink-0 text-muted-foreground">/</span> : null}
