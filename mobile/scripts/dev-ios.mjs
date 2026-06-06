@@ -26,12 +26,14 @@ const hasFlag = name => args.includes(`--${name}`);
 const printHelp = () => {
   console.log(`Usage: npm run dev -- [options]
 
-Starts Vite and launches the iOS simulator with Capacitor live reload.
+Starts Vite and launches iOS with Capacitor live reload.
+Defaults to an iPad simulator when no explicit target is provided.
 
 Options:
-  --target <udid>         Use a specific simulator UDID.
+  --target <udid>         Use a specific iOS target UDID. Does not open Simulator.
   --target-name <name>    Use a specific simulator name.
-  --host <host>           Hostname used by the simulator WebView. Default: localhost.
+  --host <host>           Hostname used by the iOS WebView. Default: localhost.
+                           Use your Mac LAN IP for physical devices.
   --bind-host <host>      Host Vite binds to. Default: 0.0.0.0.
   --port <port>           Vite/live-reload port. Default: 5174.
   --https                 Ask Capacitor to use https for live reload.
@@ -230,8 +232,7 @@ try {
     log(`Using ${simulator.name} (${simulator.udid})`);
   } else if (explicitTarget) {
     selectedTarget = explicitTarget;
-    openSimulatorApp();
-    log(`Using simulator target ${explicitTarget}`);
+    log(`Using iOS target ${explicitTarget}`);
   } else {
     openSimulatorApp();
     log(`Using simulator name "${explicitTargetName}"`);

@@ -50,6 +50,31 @@ const editorModeIndicatorStyles: Record<VimMode, { label: string; foreground: st
   terminal: { label: 'TERMINAL', foreground: '#1e1e2e', background: '#a6e3a1' },
 };
 
+const dockedFileTreeWidthPx = 16 * 16;
+const minimumMainEditorColumns = 80;
+const defaultMinimumMainEditorWidthPx = minimumMainEditorColumns * 8;
+const fileTreeSlideOverCloseDelayMs = 120;
+const columnMeasureText = '0'.repeat(minimumMainEditorColumns);
+
+function useMeasuredElementWidth<T extends HTMLElement>(initialWidth = 0) {
+  const ref = useRef<T | null>(null);
+  const [width, setWidth] = useState(initialWidth);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return undefined;
+
+    const updateWidth = () => setWidth(element.getBoundingClientRect().width);
+    updateWidth();
+
+    const resizeObserver = new ResizeObserver(updateWidth);
+    resizeObserver.observe(element);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  return [ref, width] as const;
+}
+
 export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, target, onHide }: EditorPanelProps) => {
   const backend = useMemo<EditorBackend>(() => createEditorBackend(), []);
   const editorTarget = useMemo<EditorTarget>(() => ({
@@ -61,6 +86,9 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
     workspacePath: target.workspacePath,
   }), [target.workspaceId, target.projectId, target.portalId, target.repoPath, target.rootId, target.workspacePath]);
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
+  const fileTreeSlideOverCloseTimeoutRef = useRef<number | undefined>(undefined);
+  const [editorBodyRef, editorBodyWidth] = useMeasuredElementWidth<HTMLDivElement>(typeof window === 'undefined' ? 0 : window.innerWidth);
+  const [columnMeasureRef, minimumMainEditorWidthPx] = useMeasuredElementWidth<HTMLSpanElement>(defaultMinimumMainEditorWidthPx);
   const [directoryPath, setDirectoryPath] = useState('');
   const [entries, setEntries] = useState<EditorEntry[]>([]);
   const [openFile, setOpenFile] = useState<EditorFile>();
@@ -70,11 +98,44 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isFileTreeVisible, setIsFileTreeVisible] = useState(true);
+  const [isFileTreeSlideOverOpen, setIsFileTreeSlideOverOpen] = useState(false);
   const [vimMode, setVimMode] = useState<VimMode>('normal');
   const [editorFocusRequest, setEditorFocusRequest] = useState(0);
   const isDirty = Boolean(openFile && content !== openFile.content);
+  const shouldPersistFileTreeOpen = !openFile;
+  const canDockFileTree = editorBodyWidth - dockedFileTreeWidthPx >= minimumMainEditorWidthPx;
+  const isFileTreeDocked = (isFileTreeVisible || shouldPersistFileTreeOpen) && canDockFileTree;
+  const isFileTreeSlideOverMode = !canDockFileTree;
+  const isFileTreeSlideOverVisible = isFileTreeSlideOverMode && (isFileTreeSlideOverOpen || shouldPersistFileTreeOpen);
+  const isFileTreeActive = isFileTreeDocked || isFileTreeSlideOverVisible;
 
   const confirmDiscard = useCallback(() => !isDirty || window.confirm('Discard unsaved changes?'), [isDirty]);
+
+  const clearFileTreeSlideOverCloseTimeout = useCallback(() => {
+    if (fileTreeSlideOverCloseTimeoutRef.current === undefined) return;
+    window.clearTimeout(fileTreeSlideOverCloseTimeoutRef.current);
+    fileTreeSlideOverCloseTimeoutRef.current = undefined;
+  }, []);
+
+  const closeFileTreeSlideOver = useCallback(() => {
+    clearFileTreeSlideOverCloseTimeout();
+    setIsFileTreeSlideOverOpen(false);
+  }, [clearFileTreeSlideOverCloseTimeout]);
+
+  const openFileTreeSlideOver = useCallback(() => {
+    if (!isFileTreeSlideOverMode) return;
+    clearFileTreeSlideOverCloseTimeout();
+    setIsFileTreeSlideOverOpen(true);
+  }, [clearFileTreeSlideOverCloseTimeout, isFileTreeSlideOverMode]);
+
+  const scheduleFileTreeSlideOverClose = useCallback(() => {
+    if (!isFileTreeSlideOverMode) return;
+    clearFileTreeSlideOverCloseTimeout();
+    fileTreeSlideOverCloseTimeoutRef.current = window.setTimeout(() => {
+      setIsFileTreeSlideOverOpen(false);
+      fileTreeSlideOverCloseTimeoutRef.current = undefined;
+    }, fileTreeSlideOverCloseDelayMs);
+  }, [clearFileTreeSlideOverCloseTimeout, isFileTreeSlideOverMode]);
 
   const loadDirectory = useCallback(async (nextPath: string) => {
     setIsDirectoryLoading(true);
@@ -113,8 +174,15 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
     setOpenFile(undefined);
     setContent('');
     setError(undefined);
+    closeFileTreeSlideOver();
     void loadDirectory('');
-  }, [loadDirectory, target.workspaceId, target.projectId]);
+  }, [closeFileTreeSlideOver, loadDirectory, target.workspaceId, target.projectId]);
+
+  useEffect(() => {
+    if (canDockFileTree) closeFileTreeSlideOver();
+  }, [canDockFileTree, closeFileTreeSlideOver]);
+
+  useEffect(() => () => clearFileTreeSlideOverCloseTimeout(), [clearFileTreeSlideOverCloseTimeout]);
 
   useEffect(() => {
     if (!openFile) setVimMode('normal');
@@ -132,7 +200,7 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
     return () => window.cancelAnimationFrame(animationFrame);
   }, [focusRequest]);
 
-  const handleOpenEntry = useCallback((entry: EditorEntry) => {
+  const handleOpenEntry = useCallback((entry: EditorEntry, options: { closeSlideOverOnFileOpen?: boolean } = {}) => {
     if (entry.type === 'directory') {
       if (!confirmDiscard()) return;
       void loadDirectory(entry.path);
@@ -142,8 +210,9 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
     if (entry.type === 'file') {
       if (!confirmDiscard()) return;
       void loadFile(entry.path, { focusEditor: true });
+      if (options.closeSlideOverOnFileOpen) closeFileTreeSlideOver();
     }
-  }, [confirmDiscard, loadDirectory, loadFile]);
+  }, [closeFileTreeSlideOver, confirmDiscard, loadDirectory, loadFile]);
 
   const handleDirectoryUp = useCallback(() => {
     if (!directoryPath || !confirmDiscard()) return;
@@ -178,8 +247,71 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
       : isDirty
         ? 'modified'
         : undefined;
-  const fileTreeToggleLabel = isFileTreeVisible ? 'Hide file tree' : 'Show file tree';
+  const fileTreeToggleLabel = isFileTreeSlideOverMode
+    ? 'Open file tree'
+    : isFileTreeVisible ? 'Hide file tree' : 'Show file tree';
   const modeIndicator = editorModeIndicatorStyles[vimMode];
+  const renderFileTree = (presentation: 'docked' | 'slide-over') => {
+    const isSlideOver = presentation === 'slide-over';
+
+    return (
+      <aside
+        className={isSlideOver
+          ? 'absolute bottom-2 right-2 top-2 z-20 flex w-64 max-w-[calc(100%-1rem)] flex-col overflow-hidden rounded-md border border-border bg-card/95 shadow-xl backdrop-blur'
+          : 'flex w-64 shrink-0 flex-col border-l border-border bg-card/70'}
+        data-weave-editor-file-tree
+        data-presentation={presentation}
+        onPointerEnter={isSlideOver ? openFileTreeSlideOver : undefined}
+        onPointerLeave={isSlideOver ? closeFileTreeSlideOver : undefined}
+      >
+        <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-2">
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Open parent folder"
+            disabled={!directoryPath || isDirectoryLoading}
+            onClick={handleDirectoryUp}
+          >
+            <ChevronLeft size={14} />
+          </Button>
+          <span className="min-w-0 truncate text-[11px] font-medium text-muted-foreground">
+            /{directoryPath}
+          </span>
+          {isDirectoryLoading ? (
+            <LoaderCircle size={13} className="ml-auto shrink-0 animate-spin text-primary" aria-hidden="true" />
+          ) : null}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-1">
+          {entries.map(entry => {
+            const isSelected = entry.type === 'file' && entry.path === openFile?.path;
+            const isOther = entry.type === 'other';
+            return (
+              <button
+                key={entry.path}
+                className={[
+                  'flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-foreground transition-colors',
+                  isSelected ? 'bg-selected-thread' : 'hover:bg-accent',
+                  isOther ? 'cursor-default text-muted-foreground opacity-70' : '',
+                ].filter(Boolean).join(' ')}
+                disabled={isOther || isDirectoryLoading || isFileLoading}
+                title={entry.path}
+                onClick={() => handleOpenEntry(entry, { closeSlideOverOnFileOpen: isSlideOver })}
+              >
+                {entry.type === 'directory' ? (
+                  <Folder size={14} className="shrink-0 text-mauve" />
+                ) : entry.type === 'file' ? (
+                  <File size={14} className="shrink-0 text-muted-foreground" />
+                ) : (
+                  <File size={14} className="shrink-0 text-muted-foreground" />
+                )}
+                <span className="min-w-0 truncate">{entry.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+    );
+  };
 
   return (
     <section
@@ -188,6 +320,17 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
       data-weave-surface="editor"
       data-expanded={isExpanded ? 'true' : 'false'}
     >
+      <span
+        ref={columnMeasureRef}
+        aria-hidden="true"
+        className="pointer-events-none invisible absolute left-0 top-0 whitespace-pre"
+        style={{
+          fontFamily: 'var(--font-code)',
+          fontSize: 'var(--weave-chat-text-size)',
+        }}
+      >
+        {columnMeasureText}
+      </span>
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
         <Code2 size={15} className="shrink-0 text-primary" />
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
@@ -233,7 +376,7 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
           <X size={14} />
         </Button>
       </div>
-      <div className="flex min-h-0 flex-1">
+      <div ref={editorBodyRef} className="relative flex min-h-0 flex-1">
         <div className="relative min-w-0 flex-1 overflow-hidden bg-background">
           {openFile ? (
             <CodeMirrorEditor
@@ -261,55 +404,8 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
             </div>
           ) : null}
         </div>
-        {isFileTreeVisible ? (
-          <aside className="flex w-64 shrink-0 flex-col border-l border-border bg-card/70">
-            <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-2">
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label="Open parent folder"
-                disabled={!directoryPath || isDirectoryLoading}
-                onClick={handleDirectoryUp}
-              >
-                <ChevronLeft size={14} />
-              </Button>
-              <span className="min-w-0 truncate text-[11px] font-medium text-muted-foreground">
-                /{directoryPath}
-              </span>
-              {isDirectoryLoading ? (
-                <LoaderCircle size={13} className="ml-auto shrink-0 animate-spin text-primary" aria-hidden="true" />
-              ) : null}
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-1">
-              {entries.map(entry => {
-                const isSelected = entry.type === 'file' && entry.path === openFile?.path;
-                const isOther = entry.type === 'other';
-                return (
-                  <button
-                    key={entry.path}
-                    className={[
-                      'flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-foreground transition-colors',
-                      isSelected ? 'bg-selected-thread' : 'hover:bg-accent',
-                      isOther ? 'cursor-default text-muted-foreground opacity-70' : '',
-                    ].filter(Boolean).join(' ')}
-                    disabled={isOther || isDirectoryLoading || isFileLoading}
-                    title={entry.path}
-                    onClick={() => handleOpenEntry(entry)}
-                  >
-                    {entry.type === 'directory' ? (
-                      <Folder size={14} className="shrink-0 text-mauve" />
-                    ) : entry.type === 'file' ? (
-                      <File size={14} className="shrink-0 text-muted-foreground" />
-                    ) : (
-                      <File size={14} className="shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="min-w-0 truncate">{entry.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </aside>
-        ) : null}
+        {isFileTreeSlideOverVisible ? renderFileTree('slide-over') : null}
+        {isFileTreeDocked ? renderFileTree('docked') : null}
       </div>
       <div className="flex h-9 shrink-0 items-center gap-2 border-t border-border px-3">
         <span
@@ -323,16 +419,27 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
         </span>
         <div className="min-w-0 flex-1" />
         <Button
-          className={isFileTreeVisible ? 'bg-accent' : ''}
+          className={isFileTreeActive ? 'bg-accent' : ''}
           size="icon-xs"
           variant="ghost"
           aria-label={fileTreeToggleLabel}
           title={fileTreeToggleLabel}
-          aria-pressed={isFileTreeVisible}
-          data-active={isFileTreeVisible ? 'true' : 'false'}
-          onClick={() => setIsFileTreeVisible(visible => !visible)}
+          aria-pressed={isFileTreeActive}
+          data-active={isFileTreeActive ? 'true' : 'false'}
+          onPointerEnter={openFileTreeSlideOver}
+          onPointerLeave={scheduleFileTreeSlideOverClose}
+          onFocus={openFileTreeSlideOver}
+          onBlur={scheduleFileTreeSlideOverClose}
+          onClick={() => {
+            if (isFileTreeSlideOverMode) {
+              clearFileTreeSlideOverCloseTimeout();
+              setIsFileTreeSlideOverOpen(true);
+              return;
+            }
+            setIsFileTreeVisible(visible => !visible);
+          }}
         >
-          {isFileTreeVisible ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+          {isFileTreeActive ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
         </Button>
       </div>
     </section>
