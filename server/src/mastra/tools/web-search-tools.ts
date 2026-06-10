@@ -1,6 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import Exa from 'exa-js';
 import { z } from 'zod';
+import { formatToolModelOutput } from './model-output';
 
 const getExaClient = () => {
   const apiKey = process.env.EXA_API_KEY;
@@ -20,6 +21,27 @@ const dateFromRange = (range: 'day' | 'week' | 'month' | 'year') => {
   const days = range === 'day' ? 1 : range === 'week' ? 7 : range === 'month' ? 30 : 365;
   date.setDate(date.getDate() - days);
   return date.toISOString();
+};
+
+const webResultsModelOutput = (heading: string, output: unknown) => {
+  const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+  const results = Array.isArray(result.results) ? result.results as Array<Record<string, unknown>> : [];
+  const body = results.map((item, index) => [
+    `${index + 1}. ${typeof item.title === 'string' ? item.title : 'Untitled'}`,
+    typeof item.url === 'string' ? item.url : undefined,
+    typeof item.publishedDate === 'string' ? `published: ${item.publishedDate}` : undefined,
+    typeof item.content === 'string' ? item.content : undefined,
+  ].filter(Boolean).join('\n')).join('\n\n');
+
+  return formatToolModelOutput(
+    heading,
+    [
+      ['query', result.query],
+      ['results', results.length],
+    ],
+    body,
+    2_000,
+  );
 };
 
 export const webSearchTool = createTool({
@@ -57,18 +79,19 @@ export const webSearchTool = createTool({
       excludeDomains: input.excludeDomains,
       startPublishedDate: input.timeRange ? dateFromRange(input.timeRange) : undefined,
       contents: {
-        text: input.includeText ?? false,
-        summary: input.includeSummary ?? false,
-        highlights: input.includeHighlights ?? true,
+        text: input.includeText ? true : undefined,
+        summary: input.includeSummary ? true : undefined,
+        highlights: input.includeHighlights === false ? undefined : true,
       },
     });
 
     return {
       query: input.query,
       results: response.results.map(result => {
-        const highlights = Array.isArray(result.highlights) ? result.highlights.join('\n') : '';
-        const summary = typeof result.summary === 'string' ? result.summary : '';
-        const text = typeof result.text === 'string' ? result.text : '';
+        const resultContent = result as typeof result & { highlights?: string[]; summary?: string; text?: string };
+        const highlights = Array.isArray(resultContent.highlights) ? resultContent.highlights.join('\n') : '';
+        const summary = typeof resultContent.summary === 'string' ? resultContent.summary : '';
+        const text = typeof resultContent.text === 'string' ? resultContent.text : '';
         const content = summary || highlights || text;
 
         return {
@@ -82,6 +105,7 @@ export const webSearchTool = createTool({
       }),
     };
   },
+  toModelOutput: output => webResultsModelOutput('webSearch', output),
 });
 
 export const webExtractTool = createTool({
@@ -106,15 +130,16 @@ export const webExtractTool = createTool({
   execute: async input => {
     const response = await getClient().getContents(input.urls, {
       text: true,
-      summary: input.includeSummary ?? false,
-      highlights: input.includeHighlights ?? false,
+      summary: input.includeSummary ? true : undefined,
+      highlights: input.includeHighlights ? true : undefined,
     });
 
     return {
       results: response.results.map(result => {
-        const highlights = Array.isArray(result.highlights) ? result.highlights.join('\n') : '';
-        const summary = typeof result.summary === 'string' ? result.summary : '';
-        const text = typeof result.text === 'string' ? result.text : '';
+        const resultContent = result as typeof result & { highlights?: string[]; summary?: string; text?: string };
+        const highlights = Array.isArray(resultContent.highlights) ? resultContent.highlights.join('\n') : '';
+        const summary = typeof resultContent.summary === 'string' ? resultContent.summary : '';
+        const text = typeof resultContent.text === 'string' ? resultContent.text : '';
         const content = text || summary || highlights;
 
         return {
@@ -127,4 +152,5 @@ export const webExtractTool = createTool({
       }),
     };
   },
+  toModelOutput: output => webResultsModelOutput('webExtract', output),
 });

@@ -3,7 +3,10 @@ import { registerApiRoute } from '@mastra/core/server';
 import type { MastraDBMessage } from '@mastra/core/agent';
 import { getAuthUserFromHeader } from '../auth';
 import { attachmentIdFromReference, attachmentUrlPath } from '../attachments';
+import { isCompactToolHistoryTextPart } from '../compact-tool-history-processor';
 import { getThreadContextUsageSnapshot } from '../context-usage';
+import { resolveMemoryPolicy } from '../memory-policy';
+import { resolveProfileContext } from '../profiles/resolver';
 import { isHiddenThread } from './thread-visibility';
 
 const agentId = 'mageHandAgent';
@@ -75,6 +78,8 @@ const absoluteAttachmentUrl = (url: string, origin: string) => {
 };
 
 const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: string) => {
+  if (isCompactToolHistoryTextPart(part)) return null;
+
   if (part.type === 'text' && typeof (part as { text?: unknown }).text === 'string') {
     return { type: 'text', text: (part as { text: string }).text };
   }
@@ -220,6 +225,19 @@ const estimateContextTokens = (memory: any, messages: MastraDBMessage[]) => mess
   return total + (typeof memory.estimateTokens === 'function' ? memory.estimateTokens(text) : Math.ceil(text.length / 4));
 }, 0);
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const contextUsageRecallOptions = (
+  threadId: string,
+  resourceId: string,
+  threadConfig: unknown,
+) => ({
+  threadId,
+  resourceId,
+  ...(isRecord(threadConfig) ? { threadConfig } : {}),
+});
+
 const getThreadTitleFromMessages = (messages: MastraDBMessage[]) => {
   for (const message of messages) {
     const title = getRenameTitle(message);
@@ -229,10 +247,14 @@ const getThreadTitleFromMessages = (messages: MastraDBMessage[]) => {
   return '';
 };
 
-const getMemory = async (c: any) => {
+const getMastra = (c: any) => {
   const mastra = c.get('mastra');
   if (!mastra) throw new Error('Mastra instance missing from route context');
+  return mastra;
+};
 
+const getMemory = async (c: any) => {
+  const mastra = getMastra(c);
   const agent = await mastra.getAgent(agentId);
   const memory = await agent.getMemory();
 
@@ -410,12 +432,15 @@ export const chatStateRoutes = [
       try {
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
+        const mastra = getMastra(c);
         const memory = await getMemory(c);
+        const resolvedProfile = await resolveProfileContext({ mastra, resourceId, threadId });
+        const memoryPolicy = resolveMemoryPolicy({
+          profileMemory: resolvedProfile.profile.memory,
+          threadMetadata: resolvedProfile.threadMetadata,
+        });
         const recalled = await memory.recall({
-          threadId,
-          resourceId,
-          perPage: false,
-          orderBy: { field: 'createdAt', direction: 'ASC' },
+          ...contextUsageRecallOptions(threadId, resourceId, memoryPolicy.options),
         });
         const queryContextWindow = Number(c.req.query('contextWindow'));
         const snapshot = getThreadContextUsageSnapshot(threadId, resourceId);
@@ -437,6 +462,10 @@ export const chatStateRoutes = [
           inputTokens: snapshot?.inputTokens,
           cachedInputTokens: snapshot?.cachedInputTokens,
           outputTokens: snapshot?.outputTokens,
+          memoryPolicy: {
+            options: memoryPolicy.options,
+            status: memoryPolicy.status,
+          },
         });
       } catch (error) {
         return errorResponse(c, error);
@@ -521,3 +550,9 @@ export const chatStateRoutes = [
     },
   }),
 ];
+
+export const __chatStateContextUsageTest = {
+  contextUsageRecallOptions,
+  estimateContextTokens,
+  toUiMessage,
+};

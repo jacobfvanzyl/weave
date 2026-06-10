@@ -1,5 +1,6 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import { formatToolModelOutput } from './model-output';
 
 const maxTitleLength = 64;
 
@@ -40,12 +41,19 @@ export const renameThreadTool = createTool({
       return { title: nextTitle, renamed: false };
     }
 
-    await memory.updateThread({
+    await (memory as any).updateThread({
       id: threadId,
       title: nextTitle,
       metadata: thread.metadata,
     });
 
     return { title: nextTitle, renamed: true };
+  },
+  toModelOutput: output => {
+    const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+    return formatToolModelOutput('rename-thread', [
+      ['renamed', result.renamed],
+      ['title', result.title],
+    ]);
   },
 });

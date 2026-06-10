@@ -9,7 +9,7 @@ import type {
   LanguageModelV2Usage,
 } from '@ai-sdk/provider-v5';
 import { attachmentIdFromReference, attachmentStorage } from '../attachments';
-import { recordThreadContextUsage } from '../context-usage';
+import { contextUsageFromProviderUsage, recordThreadContextUsage } from '../context-usage';
 import { getCodexCredentials } from './chatgpt-codex-auth';
 
 const CODEX_URL = 'https://chatgpt.com/backend-api/codex/responses';
@@ -372,15 +372,11 @@ export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
             if (type === 'response.completed' || type === 'response.done' || type === 'response.incomplete' || type === 'response.failed') {
               const res = event.response as Record<string, unknown> | undefined;
               const usage = usageFrom(res);
-              const usedTokens = usage.totalTokens ?? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0));
-              if (contextUsageTracking && usedTokens > 0) {
+              const contextUsage = contextUsageFromProviderUsage(usage);
+              if (contextUsageTracking && contextUsage) {
                 recordThreadContextUsage({
                   ...contextUsageTracking,
-                  usedTokens,
-                  totalProcessedTokens: usedTokens,
-                  ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
-                  ...(usage.cachedInputTokens !== undefined ? { cachedInputTokens: usage.cachedInputTokens } : {}),
-                  ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+                  ...contextUsage,
                 });
               }
               console.info('[chatgpt-codex] response completed', {

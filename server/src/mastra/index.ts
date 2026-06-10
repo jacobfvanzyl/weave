@@ -1,7 +1,4 @@
 
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { Mastra } from '@mastra/core/mastra';
 import { SimpleAuth } from '@mastra/core/server';
 import { PinoLogger } from '@mastra/loggers';
@@ -26,12 +23,7 @@ import { attachmentRoutes } from './routes/attachments';
 import { parseAuthTokens, type SimpleAuthUser } from './auth';
 import { startPortalWebSocketSidecar } from './portal/websocket-sidecar';
 import { ChatGPTCodexGateway } from './providers/chatgpt-codex-gateway';
-
-const localDataDir = join(process.cwd(), '.data');
-mkdirSync(localDataDir, { recursive: true });
-const localStorageUrl = pathToFileURL(join(localDataDir, 'mastra.db')).href;
-const storageUrl = process.env.TURSO_DATABASE_URL ?? process.env.MASTRA_STORAGE_URL ?? localStorageUrl;
-const storageAuthToken = process.env.TURSO_AUTH_TOKEN ?? process.env.MASTRA_STORAGE_AUTH_TOKEN;
+import { storageAuthToken, storageUrl } from './storage-config';
 
 export const mastra = new Mastra({
   workspace,
@@ -90,4 +82,4 @@ export const mastra = new Mastra({
   }),
 });
 
-startPortalWebSocketSidecar(mastra);
+startPortalWebSocketSidecar(mastra as any);

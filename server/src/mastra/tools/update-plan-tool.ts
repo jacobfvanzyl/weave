@@ -1,5 +1,6 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import { formatToolModelOutput } from './model-output';
 
 const stepStatusSchema = z.enum(['pending', 'in_progress', 'completed']);
 
@@ -78,5 +79,18 @@ export const updatePlanTool = createTool({
     });
 
     return { plan, completed, total, updated: true };
+  },
+  toModelOutput: output => {
+    const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+    const plan = Array.isArray(result.plan) ? result.plan as Array<Record<string, unknown>> : [];
+    return formatToolModelOutput(
+      'update_plan',
+      [
+        ['updated', result.updated],
+        ['completed', result.completed],
+        ['total', result.total],
+      ],
+      plan.map((item, index) => `${index + 1}. [${item.status ?? 'unknown'}] ${item.step ?? ''}`).join('\n'),
+    );
   },
 });

@@ -3,6 +3,7 @@ import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { registerApiRoute } from '@mastra/core/server';
 import { buildChatSystemMessages } from '../agents/instructions';
 import { attachmentIdFromReference, attachmentModelUrl, attachmentStorage, parseBase64DataUrl, type StoredAttachmentMetadata } from '../attachments';
+import { resolveMemoryPolicy } from '../memory-policy';
 import { putProfileContext, resolveProfileContext } from '../profiles/resolver';
 
 const agentId = 'mage-hand';
@@ -469,6 +470,19 @@ const normalizeMessageImageAttachments = async (
   }));
 };
 
+const latestUserMessageOnly = (messages: unknown) => {
+  if (!Array.isArray(messages) || messages.length <= 1) return messages;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as Record<string, unknown> | undefined;
+    if (message && typeof message === 'object' && message.role === 'user') return [message];
+  }
+  return [messages[messages.length - 1]];
+};
+
+export const __chatRouteMemoryTest = {
+  latestUserMessageOnly,
+};
+
 export const chatRoutes = [
   registerApiRoute('/chat', {
     method: 'POST',
@@ -486,6 +500,15 @@ export const chatRoutes = [
         ? await resolveProfileContext({ mastra, resourceId, threadId })
         : undefined;
       if (resolvedProfile) putProfileContext(requestContext, resolvedProfile);
+      const memoryPolicy = resolvedProfile
+        ? resolveMemoryPolicy({
+            profileMemory: resolvedProfile.profile.memory,
+            threadMetadata: resolvedProfile.threadMetadata,
+          })
+        : undefined;
+      if (memoryPolicy?.status.observationalMemory.enabled) {
+        params.messages = latestUserMessageOnly(params.messages);
+      }
       const isProjectWorkspace = Boolean(resolvedProfile?.threadMetadata?.mode === 'project' && resolvedProfile.threadMetadata.workspaceId);
       const isGitProject = resolvedProfile?.projectKind === 'git';
       markGitWorkspaceContext(requestContext, isProjectWorkspace);
@@ -507,6 +530,7 @@ export const chatRoutes = [
         reasoningEffort: reasoningEffort ?? 'default',
         threadId,
         resourceId,
+        memory: memoryPolicy?.status,
         chatgptSubscription: true,
       });
 
@@ -536,7 +560,7 @@ export const chatRoutes = [
               ? {
                   ...params.memory,
                   ...(resourceId ? { resource: resourceId } : {}),
-                  ...(resolvedProfile?.profile.memory ? { options: resolvedProfile.profile.memory } : {}),
+                  ...(memoryPolicy ? { options: memoryPolicy.options } : {}),
                 }
               : params.memory,
             system,

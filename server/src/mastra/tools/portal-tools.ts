@@ -1,6 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { findPortalForProject, requestPortalTool } from '../portal/registry';
+import { formatToolModelOutput } from './model-output';
 
 const offlineMessage = 'This thread is not bound to an active Workspace. Connect a Portal or choose a Project with an online Portal to use local tools.';
 
@@ -63,6 +64,116 @@ const routePortalTool = async (tool: string, args: unknown, context: any, timeou
   });
 };
 
+type PortalBaseOutput = {
+  ok: boolean;
+  error?: string;
+  path?: string;
+  command?: string;
+};
+
+type PortalReadOutput = PortalBaseOutput & {
+  content?: string;
+  offset?: number;
+  limit?: number;
+};
+
+type PortalWriteOutput = PortalBaseOutput & {
+  bytes?: number;
+};
+
+type PortalEditOutput = PortalBaseOutput & {
+  replacements?: number;
+  diff?: string;
+};
+
+type PortalBashOutput = PortalBaseOutput & {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+};
+
+const withPortalMetadata = <T extends PortalBaseOutput>(result: unknown, metadata: Omit<Partial<T>, 'ok' | 'error'>): T => {
+  const record = result && typeof result === 'object' && !Array.isArray(result)
+    ? result as Record<string, unknown>
+    : {};
+  const ok = typeof record.ok === 'boolean' ? record.ok : false;
+  const error = typeof record.error === 'string'
+    ? record.error
+    : ok ? undefined : 'Portal returned an invalid result';
+
+  return {
+    ...record,
+    ok,
+    ...(error ? { error } : {}),
+    ...metadata,
+  } as T;
+};
+
+const portalBaseOutputSchema = {
+  ok: z.boolean(),
+  error: z.string().optional(),
+  path: z.string().optional(),
+  command: z.string().optional(),
+};
+
+export const portalReadModelOutput = (output: unknown) => {
+  const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+  return formatToolModelOutput(
+    'read',
+    [
+      ['ok', result.ok],
+      ['path', result.path],
+      ['offset', result.offset],
+      ['limit', result.limit],
+      ['error', result.error],
+    ],
+    result.content,
+  );
+};
+
+export const portalWriteModelOutput = (output: unknown) => {
+  const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+  return formatToolModelOutput('write', [
+    ['ok', result.ok],
+    ['path', result.path],
+    ['bytes', result.bytes],
+    ['error', result.error],
+  ]);
+};
+
+export const portalEditModelOutput = (output: unknown) => {
+  const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+  return formatToolModelOutput(
+    'edit',
+    [
+      ['ok', result.ok],
+      ['path', result.path],
+      ['replacements', result.replacements],
+      ['error', result.error],
+    ],
+    result.diff,
+  );
+};
+
+export const portalBashModelOutput = (output: unknown) => {
+  const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+  const body = [
+    result.stdout ? `stdout:\n${result.stdout}` : '',
+    result.stderr ? `stderr:\n${result.stderr}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  return formatToolModelOutput(
+    'bash',
+    [
+      ['ok', result.ok],
+      ['command', result.command],
+      ['exitCode', result.exitCode],
+      ['error', result.error],
+    ],
+    body,
+  );
+};
+
 export const portalReadTool = createTool({
   id: 'read',
   description: 'Read the contents of a file from the current Workspace through a connected Portal. Text output is truncated to 2000 lines or 50KB. Use offset/limit for large files. When you need the full file, continue with offset until complete.',
@@ -71,8 +182,18 @@ export const portalReadTool = createTool({
     offset: z.number().optional().describe('Line number to start reading from, 1-indexed'),
     limit: z.number().optional().describe('Maximum number of lines to read'),
   }),
-  outputSchema: z.object({ ok: z.boolean(), content: z.string().optional(), error: z.string().optional() }),
-  execute: async (input, context) => routePortalTool('read', input, context),
+  outputSchema: z.object({
+    ...portalBaseOutputSchema,
+    content: z.string().optional(),
+    offset: z.number().optional(),
+    limit: z.number().optional(),
+  }),
+  execute: async (input, context): Promise<PortalReadOutput> => withPortalMetadata<PortalReadOutput>(await routePortalTool('read', input, context), {
+    path: input.path,
+    ...(input.offset !== undefined ? { offset: input.offset } : {}),
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+  }),
+  toModelOutput: portalReadModelOutput,
 });
 
 export const portalWriteTool = createTool({
@@ -82,8 +203,10 @@ export const portalWriteTool = createTool({
     path: z.string().describe('Path to write, relative to the Workspace root'),
     content: z.string().describe('Full file content'),
   }),
-  outputSchema: z.object({ ok: z.boolean(), bytes: z.number().optional(), error: z.string().optional() }),
-  execute: async (input, context) => routePortalTool('write', input, context),
+  outputSchema: z.object({ ...portalBaseOutputSchema, bytes: z.number().optional() }),
+  execute: async (input, context): Promise<PortalWriteOutput> =>
+    withPortalMetadata<PortalWriteOutput>(await routePortalTool('write', input, context), { path: input.path }),
+  toModelOutput: portalWriteModelOutput,
 });
 
 export const portalEditTool = createTool({
@@ -96,8 +219,14 @@ export const portalEditTool = createTool({
       newText: z.string().describe('Replacement text for this targeted edit.'),
     }).strict()).min(1),
   }),
-  outputSchema: z.object({ ok: z.boolean(), replacements: z.number().optional(), diff: z.string().optional(), error: z.string().optional() }),
-  execute: async (input, context) => routePortalTool('edit', input, context),
+  outputSchema: z.object({
+    ...portalBaseOutputSchema,
+    replacements: z.number().optional(),
+    diff: z.string().optional(),
+  }),
+  execute: async (input, context): Promise<PortalEditOutput> =>
+    withPortalMetadata<PortalEditOutput>(await routePortalTool('edit', input, context), { path: input.path }),
+  toModelOutput: portalEditModelOutput,
 });
 
 export const portalBashTool = createTool({
@@ -107,6 +236,15 @@ export const portalBashTool = createTool({
     command: z.string().describe('Bash command to execute'),
     timeout: z.number().optional().describe('Timeout in seconds'),
   }),
-  outputSchema: z.object({ ok: z.boolean(), stdout: z.string().optional(), stderr: z.string().optional(), exitCode: z.number().optional(), error: z.string().optional() }),
-  execute: async (input, context) => routePortalTool('bash', input, context, input.timeout ? input.timeout * 1000 + 1000 : undefined),
+  outputSchema: z.object({
+    ...portalBaseOutputSchema,
+    stdout: z.string().optional(),
+    stderr: z.string().optional(),
+    exitCode: z.number().optional(),
+  }),
+  execute: async (input, context): Promise<PortalBashOutput> => withPortalMetadata<PortalBashOutput>(
+    await routePortalTool('bash', input, context, input.timeout ? input.timeout * 1000 + 1000 : undefined),
+    { command: input.command },
+  ),
+  toModelOutput: portalBashModelOutput,
 });
