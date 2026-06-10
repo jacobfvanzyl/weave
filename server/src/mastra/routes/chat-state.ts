@@ -77,7 +77,7 @@ const absoluteAttachmentUrl = (url: string, origin: string) => {
   return `${origin}${url}`;
 };
 
-const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: string) => {
+const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: string, messageId: string, partIndex: number) => {
   if (isCompactToolHistoryTextPart(part)) return null;
 
   if (part.type === 'text' && typeof (part as { text?: unknown }).text === 'string') {
@@ -145,7 +145,7 @@ const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: str
         ? getToolInvocation(record)!.toolCallId as string
         : typeof record.toolCallId === 'string'
           ? record.toolCallId
-          : `${toolName}-${Math.random().toString(36).slice(2)}`,
+          : `${messageId}-${partIndex}-${toolName}`,
     state: result === undefined ? 'input-available' : isError ? 'output-error' : 'output-available',
     input: getToolArgs(record),
     output: result,
@@ -183,7 +183,7 @@ const toUiMessage = (message: MastraDBMessage, origin: string) => {
     role: message.role,
     parts: originalText
       ? [{ type: 'text', text: originalText }, ...attachments]
-      : [...message.content.parts.map(part => toUiPart(part, origin)).filter(part => part !== null), ...attachments],
+      : [...message.content.parts.map((part, index) => toUiPart(part, origin, message.id, index)).filter(part => part !== null), ...attachments],
     status: message.role === 'assistant' ? { type: 'complete' } : undefined,
     metadata: message.content.metadata,
   };

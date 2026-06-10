@@ -252,6 +252,170 @@ const usageFrom = (response: Record<string, unknown> | undefined): LanguageModel
   return { inputTokens, outputTokens, totalTokens, cachedInputTokens };
 };
 
+type CodexResponseEvent = Record<string, unknown>;
+
+const getEventItem = (event: CodexResponseEvent) =>
+  event.item && typeof event.item === 'object' ? event.item as Record<string, unknown> : undefined;
+
+const getEventOutputIndex = (event: CodexResponseEvent) =>
+  typeof event.output_index === 'number' ? event.output_index : undefined;
+
+const getEventContentIndex = (event: CodexResponseEvent) =>
+  typeof event.content_index === 'number' ? event.content_index : undefined;
+
+const safeStreamIdSegment = (value: string) => value.replace(/[^a-zA-Z0-9_.:-]/g, '_');
+
+const getTextBaseId = (event: CodexResponseEvent, textItemIdsByOutputIndex: Map<number, string>) => {
+  if (typeof event.item_id === 'string') return event.item_id;
+
+  const outputIndex = getEventOutputIndex(event);
+  if (outputIndex !== undefined) return textItemIdsByOutputIndex.get(outputIndex) ?? `output-${outputIndex}`;
+
+  return 'fallback';
+};
+
+const getTextStreamId = (baseId: string, contentIndex: number | undefined) =>
+  `text-${safeStreamIdSegment(baseId)}${contentIndex === undefined ? '' : `-${contentIndex}`}`;
+
+const createCodexResponseStream = (
+  events: AsyncIterable<CodexResponseEvent>,
+  options: {
+    modelId: string;
+    includeRawChunks?: boolean;
+    onCompletion?: (usage: LanguageModelV2Usage) => void;
+  },
+) => new ReadableStream<LanguageModelV2StreamPart>({
+  async start(controller) {
+    controller.enqueue({ type: 'stream-start', warnings: [] });
+
+    const startedTextIds = new Set<string>();
+    const textBaseIdsByStreamId = new Map<string, string>();
+    const textItemIdsByOutputIndex = new Map<number, string>();
+    const toolNames = new Map<string, string>();
+    const toolCallIdsByItemId = new Map<string, string>();
+
+    const startText = (baseId: string, contentIndex: number | undefined) => {
+      const streamId = getTextStreamId(baseId, contentIndex);
+      if (!startedTextIds.has(streamId)) {
+        startedTextIds.add(streamId);
+        textBaseIdsByStreamId.set(streamId, baseId);
+        controller.enqueue({ type: 'text-start', id: streamId });
+      }
+      return streamId;
+    };
+
+    const endText = (streamId: string) => {
+      if (!startedTextIds.has(streamId)) return;
+      startedTextIds.delete(streamId);
+      textBaseIdsByStreamId.delete(streamId);
+      controller.enqueue({ type: 'text-end', id: streamId });
+    };
+
+    const endTextForEvent = (event: CodexResponseEvent) => {
+      const baseId = getTextBaseId(event, textItemIdsByOutputIndex);
+      const contentIndex = getEventContentIndex(event);
+      if (contentIndex !== undefined) {
+        endText(getTextStreamId(baseId, contentIndex));
+        return;
+      }
+
+      for (const streamId of Array.from(startedTextIds)) {
+        if (textBaseIdsByStreamId.get(streamId) === baseId) endText(streamId);
+      }
+    };
+
+    const endAllText = () => {
+      for (const streamId of Array.from(startedTextIds)) endText(streamId);
+    };
+
+    try {
+      for await (const event of events) {
+        if (options.includeRawChunks) controller.enqueue({ type: 'raw', rawValue: event });
+
+        const type = event.type;
+        if (type === 'response.created' || type === 'response.in_progress') {
+          const res = event.response as Record<string, unknown> | undefined;
+          if (typeof res?.id === 'string') controller.enqueue({ type: 'response-metadata', id: res.id, modelId: options.modelId });
+        }
+
+        if (type === 'response.output_item.added') {
+          const item = getEventItem(event);
+          const outputIndex = getEventOutputIndex(event);
+
+          if (typeof item?.id === 'string' && outputIndex !== undefined && item.type !== 'function_call') {
+            textItemIdsByOutputIndex.set(outputIndex, item.id);
+          }
+
+          if (item?.type === 'function_call' && typeof item.call_id === 'string' && typeof item.name === 'string') {
+            toolNames.set(item.call_id, item.name);
+            if (typeof item.id === 'string') toolCallIdsByItemId.set(item.id, item.call_id);
+            controller.enqueue({ type: 'tool-input-start', id: item.call_id, toolName: item.name });
+          }
+        }
+
+        if (type === 'response.output_text.delta' && typeof event.delta === 'string') {
+          const baseId = getTextBaseId(event, textItemIdsByOutputIndex);
+          const streamId = startText(baseId, getEventContentIndex(event));
+          controller.enqueue({ type: 'text-delta', id: streamId, delta: event.delta });
+        }
+
+        if ((type === 'response.output_text.done' || type === 'response.content_part.done') && typeof event.item_id === 'string') {
+          endTextForEvent(event);
+        }
+
+        if (type === 'response.function_call_arguments.delta' && typeof event.delta === 'string' && typeof event.item_id === 'string') {
+          controller.enqueue({ type: 'tool-input-delta', id: toolCallIdsByItemId.get(event.item_id) ?? event.item_id, delta: event.delta });
+        }
+
+        if (type === 'response.output_item.done') {
+          const item = getEventItem(event);
+          if (item?.type === 'function_call' && typeof item.call_id === 'string') {
+            const toolName = typeof item.name === 'string' ? item.name : toolNames.get(item.call_id) ?? 'unknown';
+            const input = typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {});
+            controller.enqueue({ type: 'tool-input-end', id: item.call_id });
+            controller.enqueue({ type: 'tool-call', toolCallId: item.call_id, toolName, input });
+          } else {
+            endTextForEvent(event);
+          }
+        }
+
+        if (type === 'response.completed' || type === 'response.done' || type === 'response.incomplete' || type === 'response.failed') {
+          const res = event.response as Record<string, unknown> | undefined;
+          const usage = usageFrom(res);
+          options.onCompletion?.(usage);
+          endAllText();
+          controller.enqueue({ type: 'finish', finishReason: finishReason(res?.status), usage });
+          controller.close();
+          return;
+        }
+      }
+
+      endAllText();
+      controller.enqueue({ type: 'finish', finishReason: 'unknown', usage: usageFrom(undefined) });
+      controller.close();
+    } catch (error) {
+      controller.enqueue({ type: 'error', error });
+      controller.close();
+    }
+  },
+});
+
+const collectCodexResponseStreamParts = async (events: CodexResponseEvent[]) => {
+  const stream = createCodexResponseStream((async function* streamEvents() {
+    yield* events;
+  })(), { modelId: 'test-model' });
+  const reader = stream.getReader();
+  const parts: LanguageModelV2StreamPart[] = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+  }
+
+  return parts;
+};
+
 export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = 'v2' as const;
   readonly provider = 'chatgpt-codex';
@@ -320,88 +484,30 @@ export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
 
     console.info('[chatgpt-codex] response stream opened', { model: this.modelId, status: response.status });
 
-    const stream = new ReadableStream<LanguageModelV2StreamPart>({
-      async start(controller) {
-        controller.enqueue({ type: 'stream-start', warnings: [] });
-        const textId = 'text-0';
-        let textStarted = false;
-        const toolNames = new Map<string, string>();
-        const toolCallIdsByItemId = new Map<string, string>();
-
-        try {
-          for await (const event of parseSse(response)) {
-            if (options.includeRawChunks) controller.enqueue({ type: 'raw', rawValue: event });
-
-            const type = event.type;
-            if (type === 'response.created' || type === 'response.in_progress') {
-              const res = event.response as Record<string, unknown> | undefined;
-              if (typeof res?.id === 'string') controller.enqueue({ type: 'response-metadata', id: res.id, modelId });
-            }
-
-            if (type === 'response.output_text.delta' && typeof event.delta === 'string') {
-              if (!textStarted) {
-                controller.enqueue({ type: 'text-start', id: textId });
-                textStarted = true;
-              }
-              controller.enqueue({ type: 'text-delta', id: textId, delta: event.delta });
-            }
-
-            if (type === 'response.output_item.added') {
-              const item = event.item as Record<string, unknown> | undefined;
-              if (item?.type === 'function_call' && typeof item.call_id === 'string' && typeof item.name === 'string') {
-                toolNames.set(item.call_id, item.name);
-                if (typeof item.id === 'string') toolCallIdsByItemId.set(item.id, item.call_id);
-                controller.enqueue({ type: 'tool-input-start', id: item.call_id, toolName: item.name });
-              }
-            }
-
-            if (type === 'response.function_call_arguments.delta' && typeof event.delta === 'string' && typeof event.item_id === 'string') {
-              controller.enqueue({ type: 'tool-input-delta', id: toolCallIdsByItemId.get(event.item_id) ?? event.item_id, delta: event.delta });
-            }
-
-            if (type === 'response.output_item.done') {
-              const item = event.item as Record<string, unknown> | undefined;
-              if (item?.type === 'function_call' && typeof item.call_id === 'string') {
-                const toolName = typeof item.name === 'string' ? item.name : toolNames.get(item.call_id) ?? 'unknown';
-                const input = typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {});
-                controller.enqueue({ type: 'tool-input-end', id: item.call_id });
-                controller.enqueue({ type: 'tool-call', toolCallId: item.call_id, toolName, input });
-              }
-            }
-
-            if (type === 'response.completed' || type === 'response.done' || type === 'response.incomplete' || type === 'response.failed') {
-              const res = event.response as Record<string, unknown> | undefined;
-              const usage = usageFrom(res);
-              const contextUsage = contextUsageFromProviderUsage(usage);
-              if (contextUsageTracking && contextUsage) {
-                recordThreadContextUsage({
-                  ...contextUsageTracking,
-                  ...contextUsage,
-                });
-              }
-              console.info('[chatgpt-codex] response completed', {
-                model: modelId,
-                inputTokens: usage.inputTokens,
-                cachedInputTokens: usage.cachedInputTokens,
-                outputTokens: usage.outputTokens,
-              });
-              if (textStarted) controller.enqueue({ type: 'text-end', id: textId });
-              controller.enqueue({ type: 'finish', finishReason: finishReason(res?.status), usage });
-              controller.close();
-              return;
-            }
-          }
-
-          if (textStarted) controller.enqueue({ type: 'text-end', id: textId });
-          controller.enqueue({ type: 'finish', finishReason: 'unknown', usage: usageFrom(undefined) });
-          controller.close();
-        } catch (error) {
-          controller.enqueue({ type: 'error', error });
-          controller.close();
+    const stream = createCodexResponseStream(parseSse(response), {
+      modelId,
+      includeRawChunks: options.includeRawChunks,
+      onCompletion: usage => {
+        const contextUsage = contextUsageFromProviderUsage(usage);
+        if (contextUsageTracking && contextUsage) {
+          recordThreadContextUsage({
+            ...contextUsageTracking,
+            ...contextUsage,
+          });
         }
+        console.info('[chatgpt-codex] response completed', {
+          model: modelId,
+          inputTokens: usage.inputTokens,
+          cachedInputTokens: usage.cachedInputTokens,
+          outputTokens: usage.outputTokens,
+        });
       },
     });
 
     return { stream, request: { body } };
   }
 }
+
+export const __chatgptCodexLanguageModelTest = {
+  collectCodexResponseStreamParts,
+};

@@ -53,6 +53,7 @@ type PersistedChatState = {
   reasoningEffort: ReasoningEffort;
   showToolCalls: boolean;
   showPlanPanel: boolean;
+  toolActivityCollapsed: Record<string, boolean>;
 };
 
 type ChatState = {
@@ -67,6 +68,7 @@ type ChatState = {
   completedThreadIds: string[];
   deletedThreadIds: string[];
   threadPlans: Record<string, ThreadPlan | undefined>;
+  toolActivityCollapsed: Record<string, boolean>;
   hasInitializedThreads: boolean;
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (reasoningEffort: ReasoningEffort) => void;
@@ -74,6 +76,7 @@ type ChatState = {
   setShowPlanPanel: (showPlanPanel: boolean) => void;
   setThreadPlan: (threadId: string, plan: ThreadPlan) => void;
   clearThreadPlan: (threadId: string) => void;
+  setToolActivityCollapsed: (groupId: string, collapsed: boolean) => void;
   setDraftThreadProfile: (threadId: string, profileId: string | null) => void;
   setServerThreads: (threads: ChatThread[]) => void;
   newThread: (projectId?: string, workspaceId?: string) => Promise<void>;
@@ -118,6 +121,7 @@ export const useChatStore = create<ChatState>()(
       completedThreadIds: [],
       deletedThreadIds: [],
       threadPlans: {},
+      toolActivityCollapsed: {},
       hasInitializedThreads: false,
       setSelectedModel: selectedModel => set({ selectedModel }),
       setReasoningEffort: reasoningEffort => set({ reasoningEffort }),
@@ -136,6 +140,10 @@ export const useChatStore = create<ChatState>()(
           const { [threadId]: _removed, ...threadPlans } = state.threadPlans;
           return { threadPlans };
         }),
+      setToolActivityCollapsed: (groupId, collapsed) =>
+        set(state => ({
+          toolActivityCollapsed: { ...state.toolActivityCollapsed, [groupId]: collapsed },
+        })),
       setDraftThreadProfile: (threadId, profileId) =>
         set(state => ({
           threads: state.threads.map(thread =>
@@ -350,7 +358,7 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'weave-chat',
-      version: 5,
+      version: 6,
       migrate: persistedState => {
         const state = persistedState as Partial<PersistedChatState>;
         const reasoningEffort = state.reasoningEffort;
@@ -362,6 +370,9 @@ export const useChatStore = create<ChatState>()(
             : 'medium',
           showToolCalls: typeof state.showToolCalls === 'boolean' ? state.showToolCalls : true,
           showPlanPanel: typeof state.showPlanPanel === 'boolean' ? state.showPlanPanel : true,
+          toolActivityCollapsed: state.toolActivityCollapsed && typeof state.toolActivityCollapsed === 'object' && !Array.isArray(state.toolActivityCollapsed)
+            ? state.toolActivityCollapsed
+            : {},
         };
       },
       partialize: state => ({
@@ -370,6 +381,7 @@ export const useChatStore = create<ChatState>()(
         reasoningEffort: state.reasoningEffort,
         showToolCalls: state.showToolCalls,
         showPlanPanel: state.showPlanPanel,
+        toolActivityCollapsed: state.toolActivityCollapsed,
       }),
     },
   ),

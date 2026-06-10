@@ -498,6 +498,45 @@ describe('tool model output compaction', () => {
       { type: 'text', text: 'read result:\nThis phrase is part of a normal explanation.' },
     ]);
   });
+
+  it('preserves text/tool/text ordering and deterministic fallback tool ids', () => {
+    const message = {
+      id: 'assistant-ordered',
+      role: 'assistant',
+      threadId: 'thread-1',
+      resourceId: 'resource-1',
+      createdAt: new Date(),
+      content: {
+        parts: [
+          { type: 'text', text: 'I will check that.' },
+          {
+            type: 'tool-call',
+            toolName: 'bash',
+            input: { command: 'pwd' },
+            result: { stdout: '/tmp/project\n' },
+          },
+          { type: 'text', text: 'The project path is `/tmp/project`.' },
+        ],
+      },
+    } as any;
+
+    const first = __chatStateContextUsageTest.toUiMessage(message, 'http://localhost');
+    const second = __chatStateContextUsageTest.toUiMessage(message, 'http://localhost');
+
+    expect(first.parts).toEqual([
+      { type: 'text', text: 'I will check that.' },
+      {
+        type: 'tool-bash',
+        toolCallId: 'assistant-ordered-1-bash',
+        state: 'output-available',
+        input: { command: 'pwd' },
+        output: { stdout: '/tmp/project\n' },
+        errorText: undefined,
+      },
+      { type: 'text', text: 'The project path is `/tmp/project`.' },
+    ]);
+    expect(second.parts[1]).toMatchObject({ toolCallId: 'assistant-ordered-1-bash' });
+  });
 });
 
 describe('observational memory request shaping', () => {

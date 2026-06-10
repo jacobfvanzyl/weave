@@ -20,8 +20,8 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Brain, Check, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Send, UserRoundCog, X } from 'lucide-react';
-import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Brain, Check, ChevronRight, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, SquareTerminal, UserRoundCog, X } from 'lucide-react';
+import { createContext, memo, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getThreadContextUsage, listServerMessages } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
@@ -189,6 +189,120 @@ const getToolResultText = (toolName: string, result: unknown) => {
     if (typeof record.error === 'string') return record.error;
   }
   return JSON.stringify(result, null, 2);
+};
+
+type ToolActivityCall = Pick<ToolCallMessagePartProps, 'toolCallId' | 'toolName' | 'args' | 'result' | 'isError'> & {
+  rawStatus?: string;
+};
+
+const isToolCallRecord = (part: unknown): part is Record<string, unknown> =>
+  Boolean(part && typeof part === 'object' && (part as { type?: unknown }).type === 'tool-call');
+
+const getToolCallRawStatus = (part: Record<string, unknown>) => {
+  const status = part.status && typeof part.status === 'object' ? part.status as Record<string, unknown> : undefined;
+  return typeof status?.type === 'string' ? status.type : undefined;
+};
+
+const toToolActivityCall = (part: unknown): ToolActivityCall | null => {
+  if (!isToolCallRecord(part)) return null;
+  if (typeof part.toolCallId !== 'string' || typeof part.toolName !== 'string') return null;
+
+  return {
+    toolCallId: part.toolCallId,
+    toolName: part.toolName,
+    args: part.args,
+    result: part.result,
+    isError: Boolean(part.isError),
+    rawStatus: getToolCallRawStatus(part),
+  };
+};
+
+const getToolActivityStatus = (call: ToolActivityCall) => {
+  if (call.result !== undefined) return call.isError ? 'error' : 'complete';
+  if (call.rawStatus === 'incomplete') return 'running';
+  return call.rawStatus ?? 'running';
+};
+
+const isHiddenToolCall = (call: ToolActivityCall) => isRenameThreadTool(call.toolName) || isUpdatePlanTool(call.toolName);
+
+const getArgsRecord = (args: unknown) => args && typeof args === 'object' ? args as Record<string, unknown> : {};
+
+const isSearchCommand = (command: string) => /(^|\s|\|)\s*(rg|grep|ag|fd)\b/.test(command.trim());
+const isListCommand = (command: string) => /^(ls|find|tree)\b/.test(command.trim());
+
+const pluralize = (count: number, singular: string, plural = `${singular}s`) =>
+  `${count} ${count === 1 ? singular : plural}`;
+
+const joinSummaryPieces = (pieces: string[]) => pieces.join(', ');
+
+const lowerFirst = (value: string) => value ? `${value[0].toLowerCase()}${value.slice(1)}` : value;
+
+const summarizeToolActivity = (calls: ToolActivityCall[]) => {
+  const readPaths = new Set<string>();
+  let searches = 0;
+  let lists = 0;
+  let commands = 0;
+  let edits = 0;
+  let writes = 0;
+  let pages = 0;
+  let otherTools = 0;
+
+  for (const call of calls) {
+    const args = getArgsRecord(call.args);
+    if (call.toolName === 'read') {
+      const path = typeof args.path === 'string' ? args.path : call.toolCallId;
+      readPaths.add(path);
+      continue;
+    }
+
+    if (call.toolName === 'webSearch') {
+      searches += 1;
+      continue;
+    }
+
+    if (call.toolName === 'webExtract') {
+      pages += Array.isArray(args.urls) ? Math.max(args.urls.length, 1) : 1;
+      continue;
+    }
+
+    if (call.toolName === 'bash') {
+      const command = typeof args.command === 'string' ? args.command : '';
+      if (isSearchCommand(command)) searches += 1;
+      else if (isListCommand(command)) lists += 1;
+      else commands += 1;
+      continue;
+    }
+
+    if (call.toolName === 'edit') {
+      edits += 1;
+      continue;
+    }
+
+    if (call.toolName === 'write') {
+      writes += 1;
+      continue;
+    }
+
+    otherTools += 1;
+  }
+
+  const chunks: string[] = [];
+  const explored = [
+    readPaths.size ? pluralize(readPaths.size, 'file') : '',
+    searches ? pluralize(searches, 'search', 'searches') : '',
+    lists ? pluralize(lists, 'list') : '',
+    pages ? pluralize(pages, 'page') : '',
+  ].filter(Boolean);
+
+  if (explored.length) chunks.push(`Explored ${joinSummaryPieces(explored)}`);
+  if (commands) chunks.push(`Ran ${pluralize(commands, 'command')}`);
+  if (edits) chunks.push(`Edited ${pluralize(edits, 'file')}`);
+  if (writes) chunks.push(`Wrote ${pluralize(writes, 'file')}`);
+  if (otherTools) chunks.push(`Used ${pluralize(otherTools, 'tool')}`);
+
+  return chunks.length
+    ? chunks.map((chunk, index) => index === 0 ? chunk : lowerFirst(chunk)).join(', ')
+    : `Used ${pluralize(calls.length, 'tool')}`;
 };
 
 const ToolCall = (props: ToolCallMessagePartProps) => {
@@ -572,6 +686,87 @@ const hasRenderableAssistantContent = (message: ThreadMessage) => {
   });
 };
 
+const groupToolActivityParts = (part: { type: string }) =>
+  part.type === 'tool-call' ? ['group-tool-activity' as const] : null;
+
+type ToolActivityGroupProps = {
+  indices: readonly number[];
+  children: ReactNode;
+};
+
+const ToolActivityGroup = ({ indices, children }: ToolActivityGroupProps) => {
+  const message = useMessage();
+  const parts = useAuiState(state => state.message.parts);
+  const showToolCalls = useChatStore(state => state.showToolCalls);
+  const storedCollapsed = useChatStore(state => state.toolActivityCollapsed[`${message.id}:${indices[0]}-${indices.at(-1) ?? indices[0]}`]);
+  const setToolActivityCollapsed = useChatStore(state => state.setToolActivityCollapsed);
+
+  const calls = useMemo(
+    () => indices.map(index => toToolActivityCall(parts[index])).filter((call): call is ToolActivityCall => call !== null),
+    [indices, parts],
+  );
+  const visibleCalls = useMemo(() => calls.filter(call => !isHiddenToolCall(call)), [calls]);
+
+  if (!showToolCalls || visibleCalls.length === 0) {
+    return <div className="hidden">{children}</div>;
+  }
+
+  const firstIndex = indices[0] ?? 0;
+  const lastIndex = indices.at(-1) ?? firstIndex;
+  const groupId = `${message.id}:${firstIndex}-${lastIndex}`;
+  const isBusy = visibleCalls.some(call => !['complete', 'error'].includes(getToolActivityStatus(call)));
+  const hasTextAfterGroup = parts.slice(lastIndex + 1).some(part =>
+    part.type === 'text' && typeof (part as { text?: unknown }).text === 'string' && (part as { text: string }).text.trim().length > 0,
+  );
+  const defaultCollapsed = hasTextAfterGroup || (!isBusy && message.status?.type !== 'running');
+  const isCollapsed = storedCollapsed ?? defaultCollapsed;
+  const summary = summarizeToolActivity(visibleCalls);
+  const SummaryIcon = visibleCalls.some(call => call.toolName === 'bash') && !visibleCalls.some(call => ['read', 'webSearch', 'webExtract'].includes(call.toolName))
+    ? SquareTerminal
+    : Search;
+
+  return (
+    <div className="my-2">
+      <button
+        type="button"
+        className="group flex max-w-full items-center gap-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
+        aria-expanded={!isCollapsed}
+        onClick={() => setToolActivityCollapsed(groupId, !isCollapsed)}
+      >
+        <ChevronRight size={15} className={cn('shrink-0 transition-transform', !isCollapsed && 'rotate-90')} />
+        {isBusy ? (
+          <Loader2 size={15} className="shrink-0 animate-spin text-primary" />
+        ) : (
+          <SummaryIcon size={15} className="shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+        )}
+        <span className="min-w-0 truncate">{summary}</span>
+      </button>
+      <div className={cn('mt-2', isCollapsed && 'hidden')} aria-hidden={isCollapsed}>
+        {children}
+      </div>
+    </div>
+  );
+};
+
+const AssistantGroupedContent = () => (
+  <MessagePrimitive.GroupedParts groupBy={groupToolActivityParts}>
+    {({ part, children }) => {
+      switch (part.type) {
+        case 'group-tool-activity':
+          return <ToolActivityGroup indices={part.indices}>{children}</ToolActivityGroup>;
+        case 'text':
+          return <MarkdownText text={part.text} />;
+        case 'reasoning':
+          return <Reasoning {...part} />;
+        case 'tool-call':
+          return <ToolCall {...part} />;
+        default:
+          return null;
+      }
+    }}
+  </MessagePrimitive.GroupedParts>
+);
+
 const AssistantMessageContent = () => {
   const message = useMessage();
   const isRunning = useThread(state => state.isRunning);
@@ -590,7 +785,11 @@ const AssistantMessageContent = () => {
           <RunningIndicator />
         </div>
       ) : null}
-      <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
+      {message.role === 'assistant' ? (
+        <AssistantGroupedContent />
+      ) : (
+        <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
+      )}
     </>
   );
 };
@@ -1182,9 +1381,40 @@ const IdleActiveThreadRefresher = ({ threadId }: { threadId: string }) => {
   return null;
 };
 
+const hashString = (value: string) => {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0;
+  }
+  return `${value.length}:${hash.toString(36)}`;
+};
+
+const getStableValueVersion = (value: unknown) => {
+  if (value === undefined) return 'u';
+  if (typeof value === 'string') return hashString(value);
+
+  try {
+    return hashString(JSON.stringify(value));
+  } catch {
+    return 'unserializable';
+  }
+};
+
+const getPartVersion = (part: UIMessage['parts'][number]) => {
+  const record = part as Record<string, unknown>;
+  return [
+    record.type,
+    getStableValueVersion(record.text),
+    getStableValueVersion(record.state),
+    getStableValueVersion(record.toolCallId),
+    getStableValueVersion(record.input ?? record.args),
+    getStableValueVersion(record.output ?? record.result ?? record.errorText),
+  ].join(':');
+};
+
 const getMessagesVersion = (messages: UIMessage[]) =>
   messages
-    .map(message => `${message.id}:${message.role}:${message.parts?.length ?? 0}:${getMessageText(message).length}`)
+    .map(message => `${message.id}:${message.role}:${message.parts?.length ?? 0}:${message.parts?.map(getPartVersion).join(',') ?? ''}`)
     .join('|');
 
 const Thread = () => {
