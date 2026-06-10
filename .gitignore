@@ -12,5 +12,6 @@ desktop/out
 *.db-*
 *.duckdb
 *.duckdb.*
+server/src/mastra/public/.data/
 .netlify
 .vercel
