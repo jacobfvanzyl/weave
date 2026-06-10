@@ -1,8 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Code2, PanelLeft, Settings, TerminalSquare } from 'lucide-react';
+import { Code2, PanelLeft, PencilRuler, Settings, TerminalSquare } from 'lucide-react';
 import { listProjects, listPortals, listServerThreads } from '../../lib/chat-state-api';
 import { isDesktopEditorBackendAvailable, isEditorBackendAvailable } from '../../lib/editor-backend';
+import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { isDesktopTerminalTransportAvailable, isTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useChatStore } from '../../stores/chat-store';
 import { Button } from '../ui/button';
@@ -16,6 +17,10 @@ import type { TerminalPanelTab, TerminalPanelTabsChange } from './TerminalPanel'
 
 const TerminalPanel = lazy(() => import('./TerminalPanel').then(module => ({ default: module.TerminalPanel })));
 const EditorPanel = lazy(() => import('./EditorPanel').then(module => ({ default: module.EditorPanel })));
+const ExcalidrawOverlay = lazy(() => {
+  configureExcalidrawAssetPath();
+  return import('./ExcalidrawOverlay').then(module => ({ default: module.ExcalidrawOverlay }));
+});
 
 const isPortraitViewportNow = () => window.innerHeight > window.innerWidth;
 const isElectronWindowNow = () =>
@@ -116,6 +121,7 @@ const useWindowSurfaces = ({
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isTerminalExpanded, setIsTerminalExpanded] = useState(false);
   const [isGeneralTerminalOpen, setIsGeneralTerminalOpen] = useState(false);
+  const [isExcalidrawOpen, setIsExcalidrawOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isEditorExpanded, setIsEditorExpanded] = useState(false);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
@@ -261,6 +267,14 @@ const useWindowSurfaces = ({
     setGeneralTerminalFocusRequest(request => request + 1);
   }, [hasGeneralTerminalTarget]);
 
+  const toggleExcalidraw = useCallback(() => {
+    setIsExcalidrawOpen(open => !open);
+  }, []);
+
+  const hideExcalidraw = useCallback(() => {
+    setIsExcalidrawOpen(false);
+  }, []);
+
   const toggleEditor = useCallback(() => {
     if (!hasEditorTarget) return;
     if (isEditorOpen) setIsEditorExpanded(false);
@@ -332,10 +346,12 @@ const useWindowSurfaces = ({
     hasGeneralTerminalTarget,
     hasTerminalTarget,
     hideEditor,
+    hideExcalidraw,
     hideGeneralTerminal,
     hideTerminal,
     isEditorExpanded,
     isEditorOpen,
+    isExcalidrawOpen,
     isGeneralTerminalActive,
     isGeneralTerminalOpen,
     isSidebarAutoHidden,
@@ -353,6 +369,7 @@ const useWindowSurfaces = ({
     terminalFocusRequest,
     toggleEditor,
     toggleEditorExpanded,
+    toggleExcalidraw,
     toggleGeneralTerminal,
     toggleSidebar,
     toggleTerminal,
@@ -460,10 +477,12 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     hasGeneralTerminalTarget,
     hasTerminalTarget,
     hideEditor,
+    hideExcalidraw,
     hideGeneralTerminal,
     hideTerminal,
     isEditorExpanded,
     isEditorOpen,
+    isExcalidrawOpen,
     isGeneralTerminalActive,
     isGeneralTerminalOpen,
     isSidebarAutoHidden,
@@ -481,6 +500,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     terminalFocusRequest,
     toggleEditor,
     toggleEditorExpanded,
+    toggleExcalidraw,
     toggleGeneralTerminal,
     toggleSidebar,
     toggleTerminal,
@@ -663,11 +683,12 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     toggleTerminalExpanded,
   ]);
   const isSidebarSurfaceVisible = isSidebarOpen || showSidebarPreview;
+  const hasExcalidrawSurface = true;
   const shouldRenderFloatingLeftActions = (isElectronWindow || isSidebarSurfaceVisible)
-    && (showHeaderSidebarToggle || showPinnedSidebarToggle || Boolean(generalTerminalTarget));
+    && (showHeaderSidebarToggle || showPinnedSidebarToggle || Boolean(generalTerminalTarget) || hasExcalidrawSurface);
   const shouldRenderHeaderLeftActions = !isElectronWindow
     && !isSidebarSurfaceVisible
-    && (showHeaderSidebarToggle || Boolean(generalTerminalTarget));
+    && (showHeaderSidebarToggle || Boolean(generalTerminalTarget) || hasExcalidrawSurface);
   const sidebarToggleHoverHandlers = isPortraitViewport
     ? {}
     : {
@@ -701,6 +722,18 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       <TerminalTabCountBadge count={generalTerminalTabs.length} />
     </Button>
   ) : null;
+  const renderExcalidrawButton = () => (
+    <Button
+      className={isExcalidrawOpen ? 'bg-accent' : ''}
+      size="icon"
+      variant="ghost"
+      aria-label={isExcalidrawOpen ? 'Hide sketch board' : 'Show sketch board'}
+      data-active={isExcalidrawOpen ? 'true' : 'false'}
+      onClick={toggleExcalidraw}
+    >
+      <PencilRuler size={18} />
+    </Button>
+  );
 
   return (
     <ShortcutProvider commands={shortcutCommands}>
@@ -753,6 +786,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
         >
           {showHeaderSidebarToggle || showPinnedSidebarToggle ? renderSidebarToggleButton() : null}
           {renderGeneralTerminalButton()}
+          {renderExcalidrawButton()}
         </div>
       ) : null}
       <main
@@ -767,6 +801,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             <div className="weave-appbar-left-actions absolute left-4 flex items-center gap-2">
               {showHeaderSidebarToggle ? renderSidebarToggleButton() : null}
               {renderGeneralTerminalButton()}
+              {renderExcalidrawButton()}
             </div>
           ) : null}
           {activeProject || hasThreadTitle ? (
@@ -916,6 +951,20 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                 onHide={hideGeneralTerminal}
                 variant="overlay"
               />
+            </Suspense>
+          </div>
+        </div>
+      ) : null}
+      {isExcalidrawOpen ? (
+        <div
+          className="pointer-events-none fixed inset-0 z-50 bg-background/20 backdrop-blur-sm"
+          data-weave-excalidraw-overlay
+        >
+          <div
+            className="pointer-events-auto absolute inset-0 min-h-0 min-w-0"
+          >
+            <Suspense fallback={null}>
+              <ExcalidrawOverlay onHide={hideExcalidraw} />
             </Suspense>
           </div>
         </div>

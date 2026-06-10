@@ -219,7 +219,8 @@ aside[data-weave-thread-sidebar] {
 }
 
 aside[data-weave-thread-sidebar]::after,
-[data-weave-general-terminal-overlay]::after {
+[data-weave-general-terminal-overlay]::after,
+[data-weave-excalidraw-overlay]::after {
   content: "";
   position: absolute;
   right: 0;
@@ -234,7 +235,8 @@ aside[data-weave-thread-sidebar]::after {
   background: inherit;
 }
 
-[data-weave-general-terminal-overlay]::after {
+[data-weave-general-terminal-overlay]::after,
+[data-weave-excalidraw-overlay]::after {
   background: inherit;
   backdrop-filter: inherit;
   -webkit-backdrop-filter: inherit;
