@@ -547,4 +547,41 @@ describe('observational memory request shaping', () => {
       { role: 'user', content: 'current' },
     ])).toEqual([{ role: 'user', content: 'current' }]);
   });
+
+  it('strips display-only reasoning and data parts before submitting history to Mastra', () => {
+    expect(__chatRouteMemoryTest.sanitizeSubmittedMessagesForMastra([
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        parts: [
+          { type: 'reasoning', text: 'Visible reasoning summary.' },
+          { type: 'data-context-usage', data: { tokens: 12 } },
+          { type: 'text', text: 'Actual response.' },
+        ],
+      },
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        parts: [
+          { type: 'reasoning', text: 'Only display text.' },
+        ],
+      },
+      {
+        id: 'user-1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Continue.' }],
+      },
+    ])).toEqual([
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'Actual response.' }],
+      },
+      {
+        id: 'user-1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Continue.' }],
+      },
+    ]);
+  });
 });

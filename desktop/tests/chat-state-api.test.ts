@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configureMastraConnection } from '../../packages/client/src/lib/mastra-client';
-import { createWorkspace, listProjects, setProjectProfile, setServerThreadProfile, updateWorkspace } from '../../packages/client/src/lib/chat-state-api';
+import { cancelThreadRun, createWorkspace, getThreadRunState, listProjects, setProjectProfile, setServerThreadProfile, updateWorkspace } from '../../packages/client/src/lib/chat-state-api';
 import { listProfiles } from '../../packages/client/src/lib/profiles-api';
 import { expandPrompt, listPrompts } from '../../packages/client/src/lib/prompts-api';
 
@@ -88,6 +88,30 @@ describe('chat-state Project/Workspace API client', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects', {
       headers: { Authorization: 'Bearer token-1' },
     });
+  });
+
+  it('reads and cancels active chat run state', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const run = {
+      active: true,
+      status: 'running',
+      runId: 'run-1',
+      startedAt: '2026-06-10T10:00:00.000Z',
+      updatedAt: '2026-06-10T10:00:01.000Z',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') return jsonResponse({ ok: true, run: { ...run, active: false, status: 'cancelled' } });
+      return jsonResponse({ run });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getThreadRunState('thread-1')).resolves.toEqual(run);
+    await expect(cancelThreadRun('thread-1')).resolves.toMatchObject({ active: false, status: 'cancelled' });
+
+    expect(fetchMock.mock.calls).toEqual([
+      ['http://weave.test/chat/thread-1/run', { headers: { Authorization: 'Bearer token-1' } }],
+      ['http://weave.test/chat/thread-1/cancel', { method: 'POST', headers: { Authorization: 'Bearer token-1' } }],
+    ]);
   });
 
   it('creates workspaces with separate display name and branch action', async () => {

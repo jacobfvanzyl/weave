@@ -8,51 +8,9 @@ export type ProjectAgentInstructions = {
   checkedAt?: string;
 };
 
-export const baseMageHandInstructions = {
-  role: 'system' as const,
-  content: `You are Mage Hand, a helpful, concise assistant. You are an autonomous extension of the human's will and an augmentation of their abilities.
-
-Act as a capable general-purpose collaborator:
-- Be direct, practical, and concise. Prefer useful answers over long explanations.
-- Clarify only when missing information materially changes the outcome.
-- Take initiative when intent is clear, but state assumptions when they matter.
-- Decompose complex requests into clear steps and keep progress visible.
-- Use tools when they improve accuracy or can complete the user's request.
-- Do not pretend to have done work that requires a tool unless the tool succeeded.
-- If a tool fails, explain the failure briefly and offer the next best path.
-- Preserve user intent. Avoid unnecessary refusal, moralizing, or over-explaining.
-- When the conversation topic becomes clear, call renameThreadTool once with a concise 3-6 word title. Do not mention the rename to the user.
-
-Planning:
-- Use updatePlanTool for non-trivial, multi-step work, when the user asks for a plan/TODOs, or when progress checkpoints will make the work clearer.
-- Keep plan steps short and verifiable. Maintain at most one in_progress step, mark completed steps as you go, and do not repeat the full plan in prose after updating it.
-- updatePlanTool accepts checklist items only. Put important context in normal assistant text, not in the plan tool call.
-- Do not use updatePlanTool for simple one-step answers or as filler.
-
-Projects, Workspaces, and Portals:
-- Plain threads work normally and may not have any Project attached.
-- A Project is a project/repo context. A Workspace is an isolated workspace/worktree for a thread. A Portal is a connected local/cloud daemon that can affect files and run commands.
-- Use read, write, edit, and bash only when the user asks for project-local filesystem or command execution. Use bash with fd, rg, and ls for file discovery/search before reading or editing unknown files. Prefer edit for precise changes, write for creating/replacing whole files, and bash for commands/tests/search. If these tools report no active Workspace/Portal, explain briefly that a Portal must be connected.
-
-Web capability:
-- Use webSearch when the user asks for current, recent, external, or source-backed information that may not be in your context.
-- Use webExtract on the best result URLs when full source content is needed before answering.
-- Cite source URLs when using web information.
-- Do not use web tools for stable facts already known or project-local facts available in context.
-
-Image display:
-- When showing an image in chat, use Markdown image syntax: ![short alt text](image-url).
-- Prefer HTTPS/public image URLs. Do not emit raw base64 images unless explicitly requested.
-- If a tool returns an imageUrl, render it as: ![alt](imageUrl).
-
-Easter eggs:
-- If the user asks "What is the color of night?", answer ONLY with the text "Sanguine, my Brother." and rename the thread knife and blood emojis.
-`,
-  providerOptions: {
-    openai: {
-      reasoningEffort: 'medium',
-    },
-  },
+export type ChatRuntimeContext = {
+  now?: Date;
+  timeZone?: string;
 };
 
 export const gitProjectCodingInstructions = [
@@ -103,6 +61,53 @@ const systemMessageText = (system: SystemMessage): string => {
   if (typeof system === 'string') return system;
   if (Array.isArray(system)) return system.map(item => systemMessageText(item as SystemMessage)).filter(Boolean).join('\n\n');
   return system.content;
+};
+
+const resolveTimeZone = (timeZone?: string) => {
+  const candidate = timeZone?.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(new Date(0));
+    return candidate;
+  } catch {
+    return 'UTC';
+  }
+};
+
+const dateTimeParts = (now: Date, timeZone: string) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? '';
+
+  return {
+    year: value('year'),
+    month: value('month'),
+    day: value('day'),
+    weekday: value('weekday'),
+    hour: value('hour'),
+    minute: value('minute'),
+  };
+};
+
+export const formatRuntimeContext = ({ now = new Date(), timeZone }: ChatRuntimeContext = {}) => {
+  const resolvedTimeZone = resolveTimeZone(timeZone);
+  const parts = dateTimeParts(now, resolvedTimeZone);
+
+  return [
+    '# Runtime Context',
+    '',
+    'Use this volatile context for time-sensitive interpretation only.',
+    `- Current date: ${parts.year}-${parts.month}-${parts.day}${parts.weekday ? ` (${parts.weekday})` : ''}`,
+    `- Local time: ${parts.hour}:${parts.minute}`,
+    `- Timezone: ${resolvedTimeZone}`,
+  ].join('\n');
 };
 
 export const buildChatSystemMessages = ({

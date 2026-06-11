@@ -405,6 +405,31 @@ export const listServerMessages = async (threadId: string) => {
   return result.messages;
 };
 
+export type ThreadRunState = {
+  active: boolean;
+  status: 'idle' | 'running' | 'cancelling' | 'completed' | 'cancelled' | 'error';
+  runId?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  error?: string;
+};
+
+export const getThreadRunState = async (threadId: string) => {
+  const result = await parseJson<{ run: ThreadRunState }>(
+    await fetch(`${getMastraUrl()}/chat/${threadId}/run`, { headers: getAuthHeaders() }),
+  );
+
+  return result.run;
+};
+
+export const cancelThreadRun = async (threadId: string) => {
+  const result = await parseJson<{ ok: true; run: ThreadRunState }>(
+    await fetch(`${getMastraUrl()}/chat/${threadId}/cancel`, { method: 'POST', headers: getAuthHeaders() }),
+  );
+
+  return result.run;
+};
+
 export type ContextUsage = {
   tokens: number;
   contextWindow?: number;

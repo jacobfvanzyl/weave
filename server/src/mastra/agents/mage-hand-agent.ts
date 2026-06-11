@@ -5,6 +5,7 @@ import { LibSQLVector } from '@mastra/libsql';
 import { Memory } from '@mastra/memory';
 import { CompactToolHistoryProcessor } from '../compact-tool-history-processor';
 import { getContextTokenLimit, getMemoryCapabilities } from '../memory-policy';
+import { RuntimeContextProcessor } from '../runtime-context-processor';
 import { storageAuthToken, storageUrl } from '../storage-config';
 import { baseWorkspace } from '../workspace';
 import { builtinDefaultProfile, getProfileContext } from '../profiles/resolver';
@@ -73,6 +74,7 @@ export const mageHandAgent = new Agent({
       workspace: baseWorkspace,
       search: { topK: 5, minScore: 0.1 },
     }),
+    new RuntimeContextProcessor(),
   ],
   memory: sharedMemory,
 });

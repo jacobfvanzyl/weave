@@ -52,6 +52,7 @@ type PersistedChatState = {
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
   showToolCalls: boolean;
+  showReasoning: boolean;
   showPlanPanel: boolean;
   toolActivityCollapsed: Record<string, boolean>;
 };
@@ -63,6 +64,7 @@ type ChatState = {
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
   showToolCalls: boolean;
+  showReasoning: boolean;
   showPlanPanel: boolean;
   runningThreadIds: string[];
   completedThreadIds: string[];
@@ -73,6 +75,7 @@ type ChatState = {
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (reasoningEffort: ReasoningEffort) => void;
   setShowToolCalls: (showToolCalls: boolean) => void;
+  setShowReasoning: (showReasoning: boolean) => void;
   setShowPlanPanel: (showPlanPanel: boolean) => void;
   setThreadPlan: (threadId: string, plan: ThreadPlan) => void;
   clearThreadPlan: (threadId: string) => void;
@@ -116,6 +119,7 @@ export const useChatStore = create<ChatState>()(
       selectedModel: '',
       reasoningEffort: 'medium',
       showToolCalls: true,
+      showReasoning: true,
       showPlanPanel: true,
       runningThreadIds: [],
       completedThreadIds: [],
@@ -126,6 +130,7 @@ export const useChatStore = create<ChatState>()(
       setSelectedModel: selectedModel => set({ selectedModel }),
       setReasoningEffort: reasoningEffort => set({ reasoningEffort }),
       setShowToolCalls: showToolCalls => set({ showToolCalls }),
+      setShowReasoning: showReasoning => set({ showReasoning }),
       setShowPlanPanel: showPlanPanel => set({ showPlanPanel }),
       setThreadPlan: (threadId, plan) =>
         set(state => {
@@ -358,7 +363,7 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'weave-chat',
-      version: 6,
+      version: 7,
       migrate: persistedState => {
         const state = persistedState as Partial<PersistedChatState>;
         const reasoningEffort = state.reasoningEffort;
@@ -369,6 +374,7 @@ export const useChatStore = create<ChatState>()(
             ? reasoningEffort
             : 'medium',
           showToolCalls: typeof state.showToolCalls === 'boolean' ? state.showToolCalls : true,
+          showReasoning: typeof state.showReasoning === 'boolean' ? state.showReasoning : true,
           showPlanPanel: typeof state.showPlanPanel === 'boolean' ? state.showPlanPanel : true,
           toolActivityCollapsed: state.toolActivityCollapsed && typeof state.toolActivityCollapsed === 'object' && !Array.isArray(state.toolActivityCollapsed)
             ? state.toolActivityCollapsed
@@ -380,6 +386,7 @@ export const useChatStore = create<ChatState>()(
         selectedModel: state.selectedModel,
         reasoningEffort: state.reasoningEffort,
         showToolCalls: state.showToolCalls,
+        showReasoning: state.showReasoning,
         showPlanPanel: state.showPlanPanel,
         toolActivityCollapsed: state.toolActivityCollapsed,
       }),

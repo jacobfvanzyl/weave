@@ -16,7 +16,7 @@ const cacheHighlight = (key: string, html: string) => {
   if (typeof firstKey === 'string') highlightCache.delete(firstKey);
 };
 
-export const CodeBlock = ({ children, className }: { children: string; className?: string }) => {
+export const CodeBlock = ({ children, className, deferHighlight = false }: { children: string; className?: string; deferHighlight?: boolean }) => {
   const mode = useThemeStore(state => state.mode);
   const resolvedTheme = getResolvedTheme(mode);
   const code = String(children).replace(/\n$/, '');
@@ -27,6 +27,13 @@ export const CodeBlock = ({ children, className }: { children: string; className
 
   useEffect(() => {
     let cancelled = false;
+    if (deferHighlight) {
+      setHtml('');
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const cachedHtml = highlightCache.get(cacheKey);
     if (cachedHtml) {
       setHtml(cachedHtml);
@@ -52,7 +59,7 @@ export const CodeBlock = ({ children, className }: { children: string; className
     return () => {
       cancelled = true;
     };
-  }, [cacheKey, code, language, theme]);
+  }, [cacheKey, code, deferHighlight, language, theme]);
 
   if (!html) {
     return <code className={className}>{children}</code>;

@@ -393,6 +393,8 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const chatSurfaceRef = useRef<HTMLDivElement | null>(null);
   const showToolCalls = useChatStore(state => state.showToolCalls);
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
+  const showReasoning = useChatStore(state => state.showReasoning);
+  const setShowReasoning = useChatStore(state => state.setShowReasoning);
   const isPortraitViewport = useIsPortraitViewport();
   const isElectronWindow = isElectronWindowNow();
   const activeThread = threads.find(thread => thread.id === threadId);
@@ -863,6 +865,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                   onCheckedChange={checked => setShowToolCalls(checked)}
                 >
                   Show tool calls
+                </MenuCheckboxItem>
+                <MenuCheckboxItem
+                  checked={showReasoning}
+                  variant="switch"
+                  onCheckedChange={checked => setShowReasoning(checked)}
+                >
+                  Show reasoning
                 </MenuCheckboxItem>
               </MenuPopup>
             </Menu>

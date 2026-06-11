@@ -198,6 +198,16 @@ input {
   min-width: 0;
 }
 
+.chat-message-shell {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 14rem;
+}
+
+.chat-tool-detail-panel {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 18rem;
+}
+
 .weave-app-shell {
   height: 100dvh;
 }

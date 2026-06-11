@@ -7,6 +7,7 @@ import { isCompactToolHistoryTextPart } from '../compact-tool-history-processor'
 import { getThreadContextUsageSnapshot } from '../context-usage';
 import { resolveMemoryPolicy } from '../memory-policy';
 import { resolveProfileContext } from '../profiles/resolver';
+import { getThreadRunSubmittedUserMessages } from './chat';
 import { isHiddenThread } from './thread-visibility';
 
 const agentId = 'mageHandAgent';
@@ -169,6 +170,77 @@ const toUiAttachmentPart = (attachment: unknown, origin: string) => {
   };
 };
 
+type UiChatMessage = {
+  id: string;
+  role: string;
+  parts: Array<Record<string, unknown>>;
+  status?: { type: string };
+  metadata?: unknown;
+};
+
+const getPendingMessageText = (message: UiChatMessage) => message.parts
+  .map(part => part.type === 'text' && typeof part.text === 'string' ? part.text : '')
+  .join('')
+  .trim();
+
+const getPendingAttachmentSignature = (message: UiChatMessage) => message.parts
+  .filter(part => part.type === 'file')
+  .map(part => `${typeof part.url === 'string' ? part.url : ''}:${typeof part.mediaType === 'string' ? part.mediaType : ''}`)
+  .sort()
+  .join('|');
+
+const getPendingMessageSignature = (message: UiChatMessage) =>
+  `${message.role}:${getPendingMessageText(message)}:${getPendingAttachmentSignature(message)}`;
+
+const mergePendingSubmittedMessages = (messages: UiChatMessage[], pendingMessages: UiChatMessage[]) => {
+  if (pendingMessages.length === 0) return messages;
+
+  const existingIds = new Set(messages.map(message => message.id));
+  const existingSignatures = new Set(messages.map(getPendingMessageSignature));
+  const merged = [...messages];
+
+  for (const pendingMessage of pendingMessages) {
+    const signature = getPendingMessageSignature(pendingMessage);
+    if (existingIds.has(pendingMessage.id) || existingSignatures.has(signature)) continue;
+
+    merged.push(pendingMessage);
+    existingIds.add(pendingMessage.id);
+    existingSignatures.add(signature);
+  }
+
+  return merged;
+};
+
+const toPendingSubmittedMessage = (message: unknown, origin: string, index: number): UiChatMessage | null => {
+  if (!message || typeof message !== 'object') return null;
+
+  const record = message as Record<string, unknown>;
+  if (record.role !== 'user') return null;
+
+  const messageId = typeof record.id === 'string' && record.id.trim()
+    ? record.id
+    : `pending-user-${index}`;
+  const metadata = record.metadata as Record<string, unknown> | undefined;
+  const originalText = typeof metadata?.slashCommandOriginalText === 'string'
+    ? metadata.slashCommandOriginalText
+    : undefined;
+  const attachments = Array.isArray(record.experimental_attachments)
+    ? record.experimental_attachments.map(attachment => toUiAttachmentPart(attachment, origin)).filter(part => part !== null)
+    : [];
+  const parts = Array.isArray(record.parts)
+    ? record.parts.map((part, partIndex) => toUiPart(part as MastraDBMessage['content']['parts'][number], origin, messageId, partIndex)).filter(part => part !== null)
+    : typeof record.content === 'string'
+      ? [{ type: 'text', text: record.content }]
+      : [];
+
+  return {
+    id: messageId,
+    role: 'user',
+    parts: originalText ? [{ type: 'text', text: originalText }, ...attachments] : [...parts, ...attachments],
+    ...(record.metadata !== undefined ? { metadata: record.metadata } : {}),
+  };
+};
+
 const toUiMessage = (message: MastraDBMessage, origin: string) => {
   const metadata = message.content.metadata as Record<string, unknown> | undefined;
   const originalText = message.role === 'user' && typeof metadata?.slashCommandOriginalText === 'string'
@@ -186,7 +258,7 @@ const toUiMessage = (message: MastraDBMessage, origin: string) => {
       : [...message.content.parts.map((part, index) => toUiPart(part, origin, message.id, index)).filter(part => part !== null), ...attachments],
     status: message.role === 'assistant' ? { type: 'complete' } : undefined,
     metadata: message.content.metadata,
-  };
+  } satisfies UiChatMessage;
 };
 
 const getRenameTitle = (message: MastraDBMessage) => {
@@ -488,7 +560,12 @@ export const chatStateRoutes = [
         });
 
         const origin = new URL(c.req.url).origin;
-        return c.json({ messages: result.messages.map((message: MastraDBMessage) => toUiMessage(message, origin)) });
+        const persistedMessages = result.messages.map((message: MastraDBMessage) => toUiMessage(message, origin));
+        const pendingMessages = getThreadRunSubmittedUserMessages(resourceId, threadId)
+          .map((message, index) => toPendingSubmittedMessage(message, origin, index))
+          .filter((message): message is UiChatMessage => message !== null);
+
+        return c.json({ messages: mergePendingSubmittedMessages(persistedMessages, pendingMessages) });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (message.includes('No thread found')) return c.json({ messages: [] });
@@ -555,4 +632,6 @@ export const __chatStateContextUsageTest = {
   contextUsageRecallOptions,
   estimateContextTokens,
   toUiMessage,
+  toPendingSubmittedMessage,
+  mergePendingSubmittedMessages,
 };

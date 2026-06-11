@@ -277,6 +277,23 @@ const getTextBaseId = (event: CodexResponseEvent, textItemIdsByOutputIndex: Map<
 const getTextStreamId = (baseId: string, contentIndex: number | undefined) =>
   `text-${safeStreamIdSegment(baseId)}${contentIndex === undefined ? '' : `-${contentIndex}`}`;
 
+const getReasoningSummaryBaseId = (event: CodexResponseEvent) => {
+  if (typeof event.item_id === 'string') return event.item_id;
+
+  const outputIndex = getEventOutputIndex(event);
+  return outputIndex === undefined ? 'fallback' : `output-${outputIndex}`;
+};
+
+const getReasoningSummaryStreamId = (event: CodexResponseEvent) => {
+  const summaryIndex = typeof event.summary_index === 'number' ? event.summary_index : 0;
+  return `reasoning-summary-${safeStreamIdSegment(getReasoningSummaryBaseId(event))}-${summaryIndex}`;
+};
+
+const getReasoningSummaryPartText = (event: CodexResponseEvent) => {
+  const part = event.part && typeof event.part === 'object' ? event.part as Record<string, unknown> : undefined;
+  return typeof part?.text === 'string' ? part.text : undefined;
+};
+
 const createCodexResponseStream = (
   events: AsyncIterable<CodexResponseEvent>,
   options: {
@@ -289,6 +306,9 @@ const createCodexResponseStream = (
     controller.enqueue({ type: 'stream-start', warnings: [] });
 
     const startedTextIds = new Set<string>();
+    const startedReasoningSummaryIds = new Set<string>();
+    const closedReasoningSummaryIds = new Set<string>();
+    const reasoningSummaryTextById = new Map<string, string>();
     const textBaseIdsByStreamId = new Map<string, string>();
     const textItemIdsByOutputIndex = new Map<number, string>();
     const toolNames = new Map<string, string>();
@@ -302,6 +322,40 @@ const createCodexResponseStream = (
         controller.enqueue({ type: 'text-start', id: streamId });
       }
       return streamId;
+    };
+
+    const startReasoningSummary = (streamId: string) => {
+      if (closedReasoningSummaryIds.has(streamId)) return;
+      if (startedReasoningSummaryIds.has(streamId)) return;
+      startedReasoningSummaryIds.add(streamId);
+      reasoningSummaryTextById.set(streamId, '');
+      controller.enqueue({ type: 'reasoning-start', id: streamId });
+    };
+
+    const appendReasoningSummary = (streamId: string, delta: string) => {
+      if (closedReasoningSummaryIds.has(streamId)) return;
+      if (!delta) return;
+      startReasoningSummary(streamId);
+      if (!startedReasoningSummaryIds.has(streamId)) return;
+      reasoningSummaryTextById.set(streamId, `${reasoningSummaryTextById.get(streamId) ?? ''}${delta}`);
+      controller.enqueue({ type: 'reasoning-delta', id: streamId, delta });
+    };
+
+    const endReasoningSummary = (streamId: string, finalText?: string) => {
+      if (typeof finalText === 'string') {
+        const emittedText = reasoningSummaryTextById.get(streamId) ?? '';
+        if (finalText.startsWith(emittedText)) {
+          appendReasoningSummary(streamId, finalText.slice(emittedText.length));
+        } else if (!emittedText) {
+          appendReasoningSummary(streamId, finalText);
+        }
+      }
+
+      if (!startedReasoningSummaryIds.has(streamId)) return;
+      startedReasoningSummaryIds.delete(streamId);
+      closedReasoningSummaryIds.add(streamId);
+      reasoningSummaryTextById.delete(streamId);
+      controller.enqueue({ type: 'reasoning-end', id: streamId });
     };
 
     const endText = (streamId: string) => {
@@ -326,6 +380,10 @@ const createCodexResponseStream = (
 
     const endAllText = () => {
       for (const streamId of Array.from(startedTextIds)) endText(streamId);
+    };
+
+    const endAllReasoningSummaries = () => {
+      for (const streamId of Array.from(startedReasoningSummaryIds)) endReasoningSummary(streamId);
     };
 
     try {
@@ -359,6 +417,19 @@ const createCodexResponseStream = (
           controller.enqueue({ type: 'text-delta', id: streamId, delta: event.delta });
         }
 
+        if (type === 'response.reasoning_summary_text.delta' && typeof event.delta === 'string') {
+          appendReasoningSummary(getReasoningSummaryStreamId(event), event.delta);
+        }
+
+        if (type === 'response.reasoning_summary_text.done') {
+          const finalText = typeof event.text === 'string' ? event.text : undefined;
+          endReasoningSummary(getReasoningSummaryStreamId(event), finalText);
+        }
+
+        if (type === 'response.reasoning_summary_part.done') {
+          endReasoningSummary(getReasoningSummaryStreamId(event), getReasoningSummaryPartText(event));
+        }
+
         if ((type === 'response.output_text.done' || type === 'response.content_part.done') && typeof event.item_id === 'string') {
           endTextForEvent(event);
         }
@@ -384,6 +455,7 @@ const createCodexResponseStream = (
           const usage = usageFrom(res);
           options.onCompletion?.(usage);
           endAllText();
+          endAllReasoningSummaries();
           controller.enqueue({ type: 'finish', finishReason: finishReason(res?.status), usage });
           controller.close();
           return;
@@ -391,6 +463,7 @@ const createCodexResponseStream = (
       }
 
       endAllText();
+      endAllReasoningSummaries();
       controller.enqueue({ type: 'finish', finishReason: 'unknown', usage: usageFrom(undefined) });
       controller.close();
     } catch (error) {

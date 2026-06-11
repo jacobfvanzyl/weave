@@ -13,16 +13,17 @@ import {
 import type { ReasoningMessagePartProps, ToolCallMessagePartProps } from '@assistant-ui/react';
 import type { ThreadMessage } from '@assistant-ui/core';
 import type { AttachmentAdapter } from '@assistant-ui/core';
-import type { UIMessage } from 'ai';
-import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk';
+import type { ChatTransport, UIMessage } from 'ai';
+import { useChat } from '@ai-sdk/react';
+import { AssistantChatTransport, useAISDKRuntime } from '@assistant-ui/react-ai-sdk';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Brain, Check, ChevronRight, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, SquareTerminal, UserRoundCog, X } from 'lucide-react';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { Brain, Check, ChevronRight, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, UserRoundCog, X } from 'lucide-react';
 import { createContext, memo, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { getThreadContextUsage, listServerMessages } from '../../lib/chat-state-api';
+import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
@@ -30,13 +31,33 @@ import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
 import { listProfiles, type DynamicProfileSummary, type ProfileResolutionContext } from '../../lib/profiles-api';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
-import { useChatStore, type ChatThread, type PlanStepStatus, type ReasoningEffort, type ThreadPlan, type ThreadPlanStep } from '../../stores/chat-store';
+import { useChatStore, type ChatThread, type ReasoningEffort } from '../../stores/chat-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
 import { CommandPanel } from '../ui/command';
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
 import { CodeBlock } from './CodeBlock';
+import {
+  getAssistantContentRanges,
+  getPartType,
+  getReasoningText,
+  isVisibleNonReasoningOutputPart,
+} from './assistant-content-ranges';
+import {
+  getToolActivitySideEffect,
+  getToolActivityStatus,
+  getToolChipDetail,
+  getToolResultText,
+  isDegradedToolCall,
+  isHiddenToolCall,
+  isRenameThreadTool,
+  isUpdatePlanTool,
+  shouldRenderToolActivityChildren,
+  summarizeToolActivity,
+  toToolActivityCall,
+  type ToolActivityCall,
+} from './tool-activity';
 
 const ThreadIdContext = createContext<string | null>(null);
 const toolCallCache = new Map<string, Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result' | 'isError'>>();
@@ -100,213 +121,18 @@ const imageAttachmentAdapter: AttachmentAdapter = {
   async remove() {},
 };
 
-const isEmptyObject = (value: unknown) =>
-  Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
+const Reasoning = ({ text }: ReasoningMessagePartProps) => {
+  const showReasoning = useChatStore(state => state.showReasoning);
+  if (!showReasoning) return null;
 
-const isDegradedToolCall = ({ toolName, args, result }: Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result'>) =>
-  (toolName === 'call' || toolName === 'tool') && isEmptyObject(args) && result === undefined;
-
-const isRenameThreadTool = (toolName: string) => ['renameThreadTool', 'rename-thread'].includes(toolName);
-const isUpdatePlanTool = (toolName: string) => ['updatePlanTool', 'update_plan', 'update-plan'].includes(toolName);
-
-type PlanPayload = {
-  plan: ThreadPlanStep[];
-  completed?: number;
-  total?: number;
-};
-
-const isPlanStepStatus = (value: unknown): value is PlanStepStatus =>
-  value === 'pending' || value === 'in_progress' || value === 'completed';
-
-const getPlanPayload = (result: unknown, args: unknown): PlanPayload | null => {
-  const source = result && typeof result === 'object' ? result : args;
-  if (!source || typeof source !== 'object') return null;
-
-  const record = source as Record<string, unknown>;
-  if (!Array.isArray(record.plan)) return null;
-
-  const plan = record.plan
-    .map(item => {
-      if (!item || typeof item !== 'object') return null;
-      const step = (item as Record<string, unknown>).step;
-      const status = (item as Record<string, unknown>).status;
-      if (typeof step !== 'string' || !isPlanStepStatus(status)) return null;
-      return { step, status };
-    })
-    .filter((item): item is ThreadPlanStep => item !== null);
-
-  if (plan.length === 0) return null;
-
-  return {
-    plan,
-    completed: typeof record.completed === 'number' ? record.completed : undefined,
-    total: typeof record.total === 'number' ? record.total : undefined,
-  };
-};
-
-const toThreadPlan = (payload: PlanPayload, isBusy: boolean): ThreadPlan => ({
-  plan: payload.plan,
-  completed: payload.completed ?? payload.plan.filter(item => item.status === 'completed').length,
-  total: payload.total ?? payload.plan.length,
-  updatedAt: new Date().toISOString(),
-  isBusy,
-});
-
-const Reasoning = ({ text }: ReasoningMessagePartProps) => (
-  <Collapsible className="my-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
-    <CollapsibleTrigger className="flex w-full items-center gap-2 text-left font-medium text-primary">
-      Reasoning
-      <Badge size="sm" variant="info">summary</Badge>
-    </CollapsibleTrigger>
-    <CollapsiblePanel>
-      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 text-[11px] leading-4 text-foreground">
-        {text}
-      </pre>
-    </CollapsiblePanel>
-  </Collapsible>
-);
-
-const getToolChipDetail = (toolName: string, args: unknown) => {
-  const record = args && typeof args === 'object' ? args as Record<string, unknown> : undefined;
-  if (toolName === 'bash' && typeof record?.command === 'string') return record.command;
-  if (['read', 'write', 'edit'].includes(toolName) && typeof record?.path === 'string') return record.path;
-  return '';
-};
-
-const getToolResultText = (toolName: string, result: unknown) => {
-  if (result === undefined) return '';
-  if (typeof result === 'string') return result;
-  if (result && typeof result === 'object') {
-    const record = result as Record<string, unknown>;
-    if (typeof record.content === 'string') return record.content;
-    if (typeof record.text === 'string') return record.text;
-    if (typeof record.stdout === 'string' || typeof record.stderr === 'string') {
-      return [record.stdout, record.stderr].filter(item => typeof item === 'string' && item.trim()).join('\n');
-    }
-    if (typeof record.diff === 'string' && record.diff.trim()) return record.diff;
-    if (toolName === 'write' && typeof record.bytes === 'number') return `Wrote ${record.bytes} bytes.`;
-    if (toolName === 'edit' && typeof record.replacements === 'number') return `Applied ${record.replacements} replacement${record.replacements === 1 ? '' : 's'}.`;
-    if (typeof record.error === 'string') return record.error;
-  }
-  return JSON.stringify(result, null, 2);
-};
-
-type ToolActivityCall = Pick<ToolCallMessagePartProps, 'toolCallId' | 'toolName' | 'args' | 'result' | 'isError'> & {
-  rawStatus?: string;
-};
-
-const isToolCallRecord = (part: unknown): part is Record<string, unknown> =>
-  Boolean(part && typeof part === 'object' && (part as { type?: unknown }).type === 'tool-call');
-
-const getToolCallRawStatus = (part: Record<string, unknown>) => {
-  const status = part.status && typeof part.status === 'object' ? part.status as Record<string, unknown> : undefined;
-  return typeof status?.type === 'string' ? status.type : undefined;
-};
-
-const toToolActivityCall = (part: unknown): ToolActivityCall | null => {
-  if (!isToolCallRecord(part)) return null;
-  if (typeof part.toolCallId !== 'string' || typeof part.toolName !== 'string') return null;
-
-  return {
-    toolCallId: part.toolCallId,
-    toolName: part.toolName,
-    args: part.args,
-    result: part.result,
-    isError: Boolean(part.isError),
-    rawStatus: getToolCallRawStatus(part),
-  };
-};
-
-const getToolActivityStatus = (call: ToolActivityCall) => {
-  if (call.result !== undefined) return call.isError ? 'error' : 'complete';
-  if (call.rawStatus === 'incomplete') return 'running';
-  return call.rawStatus ?? 'running';
-};
-
-const isHiddenToolCall = (call: ToolActivityCall) => isRenameThreadTool(call.toolName) || isUpdatePlanTool(call.toolName);
-
-const getArgsRecord = (args: unknown) => args && typeof args === 'object' ? args as Record<string, unknown> : {};
-
-const isSearchCommand = (command: string) => /(^|\s|\|)\s*(rg|grep|ag|fd)\b/.test(command.trim());
-const isListCommand = (command: string) => /^(ls|find|tree)\b/.test(command.trim());
-
-const pluralize = (count: number, singular: string, plural = `${singular}s`) =>
-  `${count} ${count === 1 ? singular : plural}`;
-
-const joinSummaryPieces = (pieces: string[]) => pieces.join(', ');
-
-const lowerFirst = (value: string) => value ? `${value[0].toLowerCase()}${value.slice(1)}` : value;
-
-const summarizeToolActivity = (calls: ToolActivityCall[]) => {
-  const readPaths = new Set<string>();
-  let searches = 0;
-  let lists = 0;
-  let commands = 0;
-  let edits = 0;
-  let writes = 0;
-  let pages = 0;
-  let otherTools = 0;
-
-  for (const call of calls) {
-    const args = getArgsRecord(call.args);
-    if (call.toolName === 'read') {
-      const path = typeof args.path === 'string' ? args.path : call.toolCallId;
-      readPaths.add(path);
-      continue;
-    }
-
-    if (call.toolName === 'webSearch') {
-      searches += 1;
-      continue;
-    }
-
-    if (call.toolName === 'webExtract') {
-      pages += Array.isArray(args.urls) ? Math.max(args.urls.length, 1) : 1;
-      continue;
-    }
-
-    if (call.toolName === 'bash') {
-      const command = typeof args.command === 'string' ? args.command : '';
-      if (isSearchCommand(command)) searches += 1;
-      else if (isListCommand(command)) lists += 1;
-      else commands += 1;
-      continue;
-    }
-
-    if (call.toolName === 'edit') {
-      edits += 1;
-      continue;
-    }
-
-    if (call.toolName === 'write') {
-      writes += 1;
-      continue;
-    }
-
-    otherTools += 1;
-  }
-
-  const chunks: string[] = [];
-  const explored = [
-    readPaths.size ? pluralize(readPaths.size, 'file') : '',
-    searches ? pluralize(searches, 'search', 'searches') : '',
-    lists ? pluralize(lists, 'list') : '',
-    pages ? pluralize(pages, 'page') : '',
-  ].filter(Boolean);
-
-  if (explored.length) chunks.push(`Explored ${joinSummaryPieces(explored)}`);
-  if (commands) chunks.push(`Ran ${pluralize(commands, 'command')}`);
-  if (edits) chunks.push(`Edited ${pluralize(edits, 'file')}`);
-  if (writes) chunks.push(`Wrote ${pluralize(writes, 'file')}`);
-  if (otherTools) chunks.push(`Used ${pluralize(otherTools, 'tool')}`);
-
-  return chunks.length
-    ? chunks.map((chunk, index) => index === 0 ? chunk : lowerFirst(chunk)).join(', ')
-    : `Used ${pluralize(calls.length, 'tool')}`;
+  return (
+    <div className="my-2 text-muted-foreground/80">
+      <MarkdownText text={text} />
+    </div>
+  );
 };
 
 const ToolCall = (props: ToolCallMessagePartProps) => {
-  const threadId = useContext(ThreadIdContext);
   const showToolCalls = useChatStore(state => state.showToolCalls);
   const cached = toolCallCache.get(props.toolCallId);
   const display = isDegradedToolCall(props) && cached ? { ...props, ...cached } : props;
@@ -317,32 +143,11 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
       ? 'running'
       : rawStatus;
   const [isResultCopied, setIsResultCopied] = useState(false);
-  const resultText = getToolResultText(display.toolName, display.result);
-
-  useEffect(() => {
-    if (!isRenameThreadTool(display.toolName)) return;
-
-    const args = display.args as { title?: unknown } | undefined;
-    const result = display.result as { renamed?: unknown; title?: unknown } | undefined;
-    const title = typeof args?.title === 'string' ? args.title : typeof result?.title === 'string' ? result.title : undefined;
-
-    if (title) {
-      const targetThreadId = threadId ?? useChatStore.getState().threadId;
-      useChatStore.setState(state => ({
-        threads: state.threads.map(thread => (thread.id === targetThreadId ? { ...thread, title } : thread)),
-      }));
-    }
-  }, [display.args, display.result, display.toolName, threadId]);
-
-  useEffect(() => {
-    if (!isUpdatePlanTool(display.toolName)) return;
-
-    const payload = getPlanPayload(display.result, display.args);
-    if (!payload) return;
-
-    const targetThreadId = threadId ?? useChatStore.getState().threadId;
-    useChatStore.getState().setThreadPlan(targetThreadId, toThreadPlan(payload, displayStatus === 'running'));
-  }, [display.args, display.result, display.toolName, displayStatus, threadId]);
+  const [isOpen, setIsOpen] = useState(false);
+  const resultText = useMemo(
+    () => isOpen && display.result !== undefined ? getToolResultText(display.toolName, display.result) : '',
+    [display.result, display.toolName, isOpen],
+  );
 
   if (!isDegradedToolCall(display)) {
     toolCallCache.set(props.toolCallId, {
@@ -361,7 +166,11 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
   const isBusy = displayStatus === 'running';
 
   return (
-    <Collapsible className="my-2 max-w-full overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-xs">
+    <Collapsible
+      open={isOpen}
+      onOpenChange={open => setIsOpen(open)}
+      className="my-2 max-w-full overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-xs"
+    >
       <CollapsibleTrigger className="flex min-w-0 cursor-pointer select-none items-center gap-2 font-medium text-muted-foreground">
         {isBusy ? <Loader2 size={12} className="shrink-0 animate-spin text-primary" /> : null}
         <span className="min-w-0 truncate">
@@ -372,8 +181,8 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
           {displayStatus}
         </Badge>
       </CollapsibleTrigger>
-      {display.result !== undefined ? (
-        <CollapsiblePanel className="mt-2">
+      {display.result !== undefined && isOpen ? (
+        <CollapsiblePanel className="chat-tool-detail-panel mt-2">
           <div className="mb-1 flex justify-end">
             <Button
               size="xs"
@@ -397,6 +206,56 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
       ) : null}
     </Collapsible>
   );
+};
+
+const cacheToolActivityCall = (call: ToolActivityCall) => {
+  if (isDegradedToolCall(call)) return;
+
+  toolCallCache.set(call.toolCallId, {
+    toolName: call.toolName,
+    args: call.args,
+    result: call.result,
+    isError: Boolean(call.isError),
+  });
+};
+
+const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
+  const threadId = useContext(ThreadIdContext);
+  const appliedEffectsRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    if (message.role !== 'assistant') return;
+
+    for (const part of message.content) {
+      const call = toToolActivityCall(part);
+      if (!call) continue;
+
+      cacheToolActivityCall(call);
+
+      const effect = getToolActivitySideEffect(call);
+      if (!effect) continue;
+
+      const effectKey = `${call.toolCallId}:${effect.type}`;
+      const effectVersion = [
+        getToolActivityStatus(call),
+        getStableValueVersion(call.args),
+        getStableValueVersion(call.result),
+      ].join(':');
+      if (appliedEffectsRef.current[effectKey] === effectVersion) continue;
+      appliedEffectsRef.current[effectKey] = effectVersion;
+
+      const targetThreadId = threadId ?? useChatStore.getState().threadId;
+      if (effect.type === 'renameThread') {
+        useChatStore.setState(state => ({
+          threads: state.threads.map(thread => (thread.id === targetThreadId ? { ...thread, title: effect.title } : thread)),
+        }));
+      } else {
+        useChatStore.getState().setThreadPlan(targetThreadId, effect.plan);
+      }
+    }
+  }, [message.content, message.role, threadId]);
+
+  return null;
 };
 
 const emptyThreadPlaceholders = [
@@ -483,7 +342,7 @@ const MarkdownImage = ({ alt, src }: { alt?: string; src?: string }) => {
   );
 };
 
-const MarkdownText = memo(({ text }: { text: string }) => (
+const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string; deferCodeHighlight?: boolean }) => (
   <div className="min-w-0 max-w-full space-y-3 overflow-hidden break-words text-inherit [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -503,7 +362,7 @@ const MarkdownText = memo(({ text }: { text: string }) => (
         a: ({ children, href }) => <a href={href} className="break-all text-primary underline underline-offset-2" target="_blank" rel="noreferrer">{children}</a>,
         code: ({ children, className }) =>
           className?.startsWith('language-') ? (
-            <CodeBlock className={className}>{String(children)}</CodeBlock>
+            <CodeBlock className={className} deferHighlight={deferCodeHighlight}>{String(children)}</CodeBlock>
           ) : (
             <code className={cn('break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]', className)}>{children}</code>
           ),
@@ -526,25 +385,6 @@ const MarkdownText = memo(({ text }: { text: string }) => (
 
 MarkdownText.displayName = 'MarkdownText';
 
-const getAssistantDisplayedText = (message: ThreadMessage) => {
-  if (message.role !== 'assistant') return '';
-
-  return message.content
-    .filter((part): part is { type: 'text' | 'reasoning'; text: string } =>
-      (part.type === 'text' || part.type === 'reasoning') && typeof part.text === 'string',
-    )
-    .map(part => part.text)
-    .join('')
-    .trim();
-};
-
-const findLastMessageIndex = (messages: readonly ThreadMessage[], role: ThreadMessage['role']) => {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === role) return index;
-  }
-  return -1;
-};
-
 const RunningIndicator = () => (
   <span aria-label="Agent working" className="inline-flex items-center gap-2 text-sm text-muted-foreground">
     <Loader2 size={14} className="shrink-0 animate-spin text-primary" />
@@ -552,22 +392,12 @@ const RunningIndicator = () => (
   </span>
 );
 
-const RunningAssistantPlaceholder = () => {
+const RunningIndicatorTail = () => {
   const isRunning = useThread(state => state.isRunning);
-  const messages = useThread(state => state.messages);
-
-  const shouldShow = useMemo(() => {
-    if (!isRunning) return false;
-
-    const lastUserIndex = findLastMessageIndex(messages, 'user');
-    const lastAssistantIndex = findLastMessageIndex(messages, 'assistant');
-    return lastAssistantIndex < lastUserIndex;
-  }, [isRunning, messages]);
-
-  if (!shouldShow) return null;
+  if (!isRunning) return null;
 
   return (
-    <div className="mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
+    <div className="chat-message-shell mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
       <div className="chat-message-row flex min-w-0 justify-start">
         <div className="chat-message-bubble min-w-0 max-w-full text-base leading-6">
           <RunningIndicator />
@@ -678,16 +508,14 @@ const MessageImageAttachments = () => (
   </MessagePrimitive.Attachments>
 );
 
-const hasRenderableAssistantContent = (message: ThreadMessage) => {
+const hasRenderableAssistantContent = (message: ThreadMessage, showReasoning: boolean) => {
   if (message.role !== 'assistant') return true;
   return message.content.some(part => {
-    if ((part.type === 'text' || part.type === 'reasoning') && typeof part.text === 'string') return part.text.trim().length > 0;
+    if (part.type === 'text' && typeof part.text === 'string') return part.text.trim().length > 0;
+    if (part.type === 'reasoning' && showReasoning && typeof part.text === 'string') return part.text.trim().length > 0;
     return part.type.startsWith('tool-') || part.type === 'tool-call';
   });
 };
-
-const groupToolActivityParts = (part: { type: string }) =>
-  part.type === 'tool-call' ? ['group-tool-activity' as const] : null;
 
 type ToolActivityGroupProps = {
   indices: readonly number[];
@@ -698,7 +526,9 @@ const ToolActivityGroup = ({ indices, children }: ToolActivityGroupProps) => {
   const message = useMessage();
   const parts = useAuiState(state => state.message.parts);
   const showToolCalls = useChatStore(state => state.showToolCalls);
-  const storedCollapsed = useChatStore(state => state.toolActivityCollapsed[`${message.id}:${indices[0]}-${indices.at(-1) ?? indices[0]}`]);
+  const firstIndex = indices[0] ?? 0;
+  const groupId = `${message.id}:${firstIndex}`;
+  const storedCollapsed = useChatStore(state => state.toolActivityCollapsed[groupId]);
   const setToolActivityCollapsed = useChatStore(state => state.setToolActivityCollapsed);
 
   const calls = useMemo(
@@ -708,22 +538,17 @@ const ToolActivityGroup = ({ indices, children }: ToolActivityGroupProps) => {
   const visibleCalls = useMemo(() => calls.filter(call => !isHiddenToolCall(call)), [calls]);
 
   if (!showToolCalls || visibleCalls.length === 0) {
-    return <div className="hidden">{children}</div>;
+    return null;
   }
 
-  const firstIndex = indices[0] ?? 0;
-  const lastIndex = indices.at(-1) ?? firstIndex;
-  const groupId = `${message.id}:${firstIndex}-${lastIndex}`;
   const isBusy = visibleCalls.some(call => !['complete', 'error'].includes(getToolActivityStatus(call)));
-  const hasTextAfterGroup = parts.slice(lastIndex + 1).some(part =>
-    part.type === 'text' && typeof (part as { text?: unknown }).text === 'string' && (part as { text: string }).text.trim().length > 0,
-  );
-  const defaultCollapsed = hasTextAfterGroup || (!isBusy && message.status?.type !== 'running');
+  const defaultCollapsed = true;
   const isCollapsed = storedCollapsed ?? defaultCollapsed;
   const summary = summarizeToolActivity(visibleCalls);
   const SummaryIcon = visibleCalls.some(call => call.toolName === 'bash') && !visibleCalls.some(call => ['read', 'webSearch', 'webExtract'].includes(call.toolName))
     ? SquareTerminal
     : Search;
+  const renderChildren = shouldRenderToolActivityChildren(showToolCalls, visibleCalls.length, isCollapsed);
 
   return (
     <div className="my-2">
@@ -741,52 +566,138 @@ const ToolActivityGroup = ({ indices, children }: ToolActivityGroupProps) => {
         )}
         <span className="min-w-0 truncate">{summary}</span>
       </button>
-      <div className={cn('mt-2', isCollapsed && 'hidden')} aria-hidden={isCollapsed}>
-        {children}
-      </div>
+      {renderChildren ? <div className="mt-2">{children}</div> : null}
     </div>
   );
 };
 
-const AssistantGroupedContent = () => (
-  <MessagePrimitive.GroupedParts groupBy={groupToolActivityParts}>
-    {({ part, children }) => {
-      switch (part.type) {
-        case 'group-tool-activity':
-          return <ToolActivityGroup indices={part.indices}>{children}</ToolActivityGroup>;
-        case 'text':
-          return <MarkdownText text={part.text} />;
-        case 'reasoning':
-          return <Reasoning {...part} />;
-        case 'tool-call':
-          return <ToolCall {...part} />;
-        default:
-          return null;
-      }
-    }}
-  </MessagePrimitive.GroupedParts>
+type ReasoningGroupProps = {
+  indices: readonly number[];
+  deferCodeHighlight: boolean;
+};
+
+const normalizeReasoningText = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+const getDedupedReasoningGroupText = (parts: readonly unknown[], indices: readonly number[]) => {
+  const seen = new Set<string>();
+  const sections: string[] = [];
+
+  for (const index of indices) {
+    const text = getReasoningText(parts[index]);
+    if (!text) continue;
+
+    const normalized = normalizeReasoningText(text);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    sections.push(text);
+  }
+
+  return sections.join('\n\n');
+};
+
+const ReasoningTextBlock = ({ text, deferCodeHighlight, className }: { text: string; deferCodeHighlight: boolean; className?: string }) => (
+  <div className={cn('min-w-0 max-w-full text-muted-foreground/80', className)}>
+    <MarkdownText text={text} deferCodeHighlight={deferCodeHighlight} />
+  </div>
 );
+
+const ReasoningGroup = ({ indices, deferCodeHighlight }: ReasoningGroupProps) => {
+  const parts = useAuiState(state => state.message.parts);
+  const showReasoning = useChatStore(state => state.showReasoning);
+  const [isManuallyOpen, setIsManuallyOpen] = useState(false);
+  const text = useMemo(() => getDedupedReasoningGroupText(parts, indices), [indices, parts]);
+  const lastIndex = indices[indices.length - 1] ?? -1;
+  const hasFollowingOutput = useMemo(
+    () => parts.slice(lastIndex + 1).some(isVisibleNonReasoningOutputPart),
+    [lastIndex, parts],
+  );
+
+  if (!showReasoning || !text) return null;
+
+  if (!hasFollowingOutput) {
+    return (
+      <div className="my-2">
+        <ReasoningTextBlock text={text} deferCodeHighlight={deferCodeHighlight} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-2">
+      <button
+        type="button"
+        className="group flex max-w-full items-center gap-2 text-left text-xs font-medium text-muted-foreground/70 transition-colors hover:text-muted-foreground"
+        aria-expanded={isManuallyOpen}
+        onClick={() => setIsManuallyOpen(open => !open)}
+      >
+        <ChevronRight size={13} className={cn('shrink-0 transition-transform', isManuallyOpen && 'rotate-90')} />
+        <span>Reasoning</span>
+      </button>
+      {isManuallyOpen ? <ReasoningTextBlock className="mt-2" text={text} deferCodeHighlight={deferCodeHighlight} /> : null}
+    </div>
+  );
+};
+
+const assistantPartByIndexComponents = {
+  Text: MarkdownText,
+  Reasoning,
+  tools: { Override: ToolCall },
+};
+
+const ToolActivityGroupChildren = ({ indices }: { indices: readonly number[] }) => (
+  <>
+    {indices.map(index => (
+      <MessagePrimitive.PartByIndex key={index} index={index} components={assistantPartByIndexComponents} />
+    ))}
+  </>
+);
+
+const AssistantGroupedContent = ({ deferCodeHighlight }: { deferCodeHighlight: boolean }) => {
+  const parts = useAuiState(state => state.message.parts);
+  const showReasoning = useChatStore(state => state.showReasoning);
+  const ranges = useMemo(() => getAssistantContentRanges(parts, showReasoning), [parts, showReasoning]);
+
+  return (
+    <>
+      {ranges.map(range => {
+        if (range.type === 'reasoning') {
+          return <ReasoningGroup key={`reasoning-${range.indices[0] ?? 0}`} indices={range.indices} deferCodeHighlight={deferCodeHighlight} />;
+        }
+
+        if (range.type === 'tool-activity') {
+          return (
+            <ToolActivityGroup key={`tool-activity-${range.indices[0] ?? 0}`} indices={range.indices}>
+              <ToolActivityGroupChildren indices={range.indices} />
+            </ToolActivityGroup>
+          );
+        }
+
+        const part = parts[range.index];
+        if (getPartType(part) === 'text' && part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') {
+          return <MarkdownText key={range.index} text={(part as { text: string }).text} deferCodeHighlight={deferCodeHighlight} />;
+        }
+
+        return <MessagePrimitive.PartByIndex key={range.index} index={range.index} components={assistantPartByIndexComponents} />;
+      })}
+    </>
+  );
+};
 
 const AssistantMessageContent = () => {
   const message = useMessage();
-  const isRunning = useThread(state => state.isRunning);
-  const assistantText = getAssistantDisplayedText(message);
-  const isEmptyAssistantMessage = message.role === 'assistant' && !hasRenderableAssistantContent(message);
-  const isAssistantWaitingForText = message.role === 'assistant' && isRunning && assistantText.length === 0;
+  const showReasoning = useChatStore(state => state.showReasoning);
+  const isEmptyAssistantMessage = message.role === 'assistant' && !hasRenderableAssistantContent(message, showReasoning);
+  const isAssistantStreaming = message.role === 'assistant' && message.status?.type === 'running';
 
   if (isEmptyAssistantMessage) {
-    return <RunningIndicator />;
+    return <AssistantToolSideEffects message={message} />;
   }
 
   return (
     <>
-      {isAssistantWaitingForText ? (
-        <div className="mb-3">
-          <RunningIndicator />
-        </div>
-      ) : null}
+      <AssistantToolSideEffects message={message} />
       {message.role === 'assistant' ? (
-        <AssistantGroupedContent />
+        <AssistantGroupedContent deferCodeHighlight={isAssistantStreaming} />
       ) : (
         <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
       )}
@@ -795,7 +706,7 @@ const AssistantMessageContent = () => {
 };
 
 const ThreadMessage = () => (
-  <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
+  <MessagePrimitive.Root className="chat-message-shell mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
     <MessagePrimitive.If assistant>
       <div className="chat-message-row flex min-w-0 justify-start">
         <div className="chat-message-bubble min-w-0 max-w-full text-base leading-6">
@@ -1024,6 +935,67 @@ const PlanPanelToggle = ({ threadId }: { threadId: string | null }) => {
   );
 };
 
+type ContextUsageStreamPayload = {
+  tokens: number;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  totalProcessedTokens?: number;
+  updatedAt?: string;
+  source: 'provider';
+};
+
+const finiteNumberFrom = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+const getContextUsageStreamPayload = (dataPart: unknown): ContextUsageStreamPayload | null => {
+  if (!dataPart || typeof dataPart !== 'object') return null;
+  const record = dataPart as Record<string, unknown>;
+  if (record.type !== 'data-context-usage') return null;
+
+  const data = record.data && typeof record.data === 'object'
+    ? record.data as Record<string, unknown>
+    : undefined;
+  const tokens = finiteNumberFrom(data?.tokens);
+  if (!data || tokens === undefined || data.source !== 'provider') return null;
+
+  return {
+    tokens,
+    inputTokens: finiteNumberFrom(data.inputTokens),
+    cachedInputTokens: finiteNumberFrom(data.cachedInputTokens),
+    outputTokens: finiteNumberFrom(data.outputTokens),
+    totalProcessedTokens: finiteNumberFrom(data.totalProcessedTokens),
+    updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : undefined,
+    source: 'provider',
+  };
+};
+
+const applyContextUsageStreamPayload = (
+  queryClient: QueryClient,
+  resourceId: string,
+  threadId: string,
+  payload: ContextUsageStreamPayload,
+) => {
+  queryClient.setQueriesData<ContextUsage>(
+    { queryKey: ['thread-context-usage', resourceId, threadId] },
+    previous => {
+      const contextWindow = previous?.contextWindow;
+      return {
+        ...(previous ?? {}),
+        tokens: payload.tokens,
+        contextWindow,
+        percent: contextWindow ? Math.min(100, (payload.tokens / contextWindow) * 100) : undefined,
+        source: payload.source,
+        updatedAt: payload.updatedAt,
+        totalProcessedTokens: payload.totalProcessedTokens,
+        inputTokens: payload.inputTokens,
+        cachedInputTokens: payload.cachedInputTokens,
+        outputTokens: payload.outputTokens,
+      };
+    },
+  );
+};
+
 const ContextUsageRing = ({ threadId }: { threadId: string | null }) => {
   const resourceId = useChatStore(state => state.resourceId);
   const selectedModel = useChatStore(state => state.selectedModel);
@@ -1174,6 +1146,8 @@ const SlashHighlightedInput = ({
 const Composer = () => {
   const aui = useAui();
   const threadId = useContext(ThreadIdContext);
+  const queryClient = useQueryClient();
+  const resourceId = useChatStore(state => state.resourceId);
   const composerRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const isEmpty = useThread(state => state.messages.length === 0 && !state.isLoading);
@@ -1242,6 +1216,22 @@ const Composer = () => {
     window.open(login.url, 'mage-hand-chatgpt-login', 'width=720,height=820,popup=yes');
   };
 
+  const stopThreadRun = async () => {
+    if (!threadId) return;
+    try {
+      await cancelThreadRun(threadId);
+    } catch (error) {
+      console.error('[chat] failed to cancel thread run', error);
+    } finally {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
+      ]);
+    }
+  };
+
   return (
     <ComposerPrimitive.Root
       ref={composerRef}
@@ -1306,8 +1296,11 @@ const Composer = () => {
             )}
           </AuiIf>
           <AuiIf condition={state => state.thread.isRunning}>
-            <ComposerPrimitive.Cancel render={<Button size="icon-lg" variant="ghost" className="h-11 w-11 shrink-0 rounded-full text-primary" />}>
-              <Loader2 size={20} className="animate-spin" />
+            <ComposerPrimitive.Cancel
+              onClick={() => void stopThreadRun()}
+              render={<Button size="icon-lg" variant="ghost" className="h-11 w-11 shrink-0 rounded-full text-primary" aria-label="Stop generation" title="Stop generation" />}
+            >
+              <Square size={18} fill="currentColor" strokeWidth={2.5} />
             </ComposerPrimitive.Cancel>
           </AuiIf>
         </div>
@@ -1318,11 +1311,19 @@ const Composer = () => {
 
 const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
   const wasRunning = useRef(false);
-  const isRunning = useThread(state => state.isRunning);
+  const resourceId = useChatStore(state => state.resourceId);
+  const isLocalRunning = useThread(state => state.isRunning);
   const activeThreadId = useChatStore(state => state.threadId);
   const setThreadRunning = useChatStore(state => state.setThreadRunning);
   const markThreadCompleted = useChatStore(state => state.markThreadCompleted);
   const clearThreadCompleted = useChatStore(state => state.clearThreadCompleted);
+  const { data: runState } = useQuery({
+    queryKey: ['thread-run', resourceId, threadId],
+    queryFn: () => getThreadRunState(threadId),
+    enabled: activeThreadId === threadId,
+    staleTime: 0,
+  });
+  const isRunning = isLocalRunning || runState?.active === true;
 
   useEffect(() => {
     setThreadRunning(threadId, isRunning);
@@ -1349,7 +1350,7 @@ const IdleActiveThreadRefresher = ({ threadId }: { threadId: string }) => {
   const queryClient = useQueryClient();
   const resourceId = useChatStore(state => state.resourceId);
   const activeThreadId = useChatStore(state => state.threadId);
-  const isRunning = useThread(state => state.isRunning);
+  const isLocalRunning = useThread(state => state.isRunning);
   const composerText = useAuiState(state => state.composer.text);
   const [isComposerIdle, setIsComposerIdle] = useState(true);
 
@@ -1363,20 +1364,23 @@ const IdleActiveThreadRefresher = ({ threadId }: { threadId: string }) => {
     const isActive = activeThreadId === threadId;
     const hasDraft = composerText.trim().length > 0;
     const isVisible = document.visibilityState === 'visible';
-    const canRefresh = isActive && !isRunning && isComposerIdle && !hasDraft && isVisible && navigator.onLine;
+    const canRefresh = isActive && isComposerIdle && !hasDraft && isVisible && navigator.onLine;
 
     if (!canRefresh) return undefined;
 
     const refresh = async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] }),
+        ...(!isLocalRunning
+          ? [queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] })]
+          : []),
         queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
       ]);
     };
 
     const interval = window.setInterval(() => void refresh(), 6000);
     return () => window.clearInterval(interval);
-  }, [activeThreadId, composerText, isComposerIdle, isRunning, queryClient, resourceId, threadId]);
+  }, [activeThreadId, composerText, isComposerIdle, isLocalRunning, queryClient, resourceId, threadId]);
 
   return null;
 };
@@ -1446,7 +1450,7 @@ const Thread = () => {
     >
       <ThreadPrimitive.Viewport className={cn('min-h-0 flex-1 overflow-y-auto', isEmptyIdleDraft && 'hidden')}>
         <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
-        <RunningAssistantPlaceholder />
+        <RunningIndicatorTail />
       </ThreadPrimitive.Viewport>
       <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
         <Composer />
@@ -1459,17 +1463,51 @@ type AssistantChatProps = {
   threadId: string;
 };
 
+const useDynamicChatTransport = <UI_MESSAGE extends UIMessage>(
+  transport: ChatTransport<UI_MESSAGE>,
+): ChatTransport<UI_MESSAGE> => {
+  const transportRef = useRef(transport);
+
+  useEffect(() => {
+    transportRef.current = transport;
+  }, [transport]);
+
+  return useMemo(
+    () =>
+      new Proxy(transportRef.current, {
+        get(_, prop) {
+          const value = transportRef.current[prop as keyof ChatTransport<UI_MESSAGE>];
+          return typeof value === 'function' ? value.bind(transportRef.current) : value;
+        },
+      }),
+    [],
+  );
+};
+
 const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps & { initialMessages: UIMessage[] }) => {
   const queryClient = useQueryClient();
   const resourceId = useChatStore(state => state.resourceId);
   const selectedModel = useChatStore(state => state.selectedModel);
   const reasoningEffort = useChatStore(state => state.reasoningEffort);
   const chatApi = getChatUrl();
+  const resumeRunIdRef = useRef<string | undefined>(undefined);
+  const { data: runState } = useQuery({
+    queryKey: ['thread-run', resourceId, threadId],
+    queryFn: () => getThreadRunState(threadId),
+    enabled: true,
+    staleTime: 0,
+  });
 
-  const transport = useMemo(
+  const currentTransport = useMemo(
     () =>
       new AssistantChatTransport({
         api: chatApi,
+        async prepareReconnectToStreamRequest({ id }) {
+          return {
+            api: `${chatApi}/${id}/stream`,
+            headers: getAuthHeaders(),
+          };
+        },
         async prepareSendMessagesRequest({ messages }) {
           const firstUserText = messages.find(message => message.role === 'user') ? getMessageText(messages.find(message => message.role === 'user')!).trim() : '';
           const lastUserText = getMessageText([...messages].reverse().find(message => message.role === 'user') ?? messages[messages.length - 1]).trim();
@@ -1502,17 +1540,52 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
       }),
     [chatApi, reasoningEffort, selectedModel, threadId],
   );
+  const transport = useDynamicChatTransport(currentTransport);
 
-  const runtime = useChatRuntime({
+  const chat = useChat({
     id: threadId,
     transport,
     messages: initialMessages,
-    adapters: { attachments: imageAttachmentAdapter },
+    resume: true,
+    experimental_throttle: 80,
+    onData: dataPart => {
+      const payload = getContextUsageStreamPayload(dataPart);
+      if (!payload) return;
+      applyContextUsageStreamPayload(queryClient, resourceId, threadId, payload);
+    },
     onFinish: async () => {
       await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
+      await queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] });
+      await queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] });
       await queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] });
     },
+    onError: async error => {
+      console.error('[chat] stream failed', error);
+      await queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] });
+    },
   });
+
+  const runtime = useAISDKRuntime(chat, {
+    adapters: { attachments: imageAttachmentAdapter },
+  });
+
+  if (transport instanceof AssistantChatTransport) transport.setRuntime(runtime);
+
+  useEffect(() => {
+    if (runState?.active !== true) {
+      resumeRunIdRef.current = undefined;
+      return;
+    }
+
+    const runId = runState.runId ?? 'active';
+    if (chat.status !== 'ready' || resumeRunIdRef.current === runId) return;
+
+    resumeRunIdRef.current = runId;
+    void chat.resumeStream().catch(error => {
+      resumeRunIdRef.current = undefined;
+      console.error('[chat] failed to resume active thread run', error);
+    });
+  }, [chat, runState?.active, runState?.runId]);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -1535,7 +1608,6 @@ export const AssistantChat = ({ threadId }: AssistantChatProps) => {
     enabled: !isDraft,
     staleTime: 0,
   });
-
   if (!isDraft && isLoading && !isRunning) return <div className="h-full bg-background" />;
 
   return <AssistantChatRuntime key={`${threadId}:${getMessagesVersion(initialMessages)}`} threadId={threadId} initialMessages={initialMessages} />;

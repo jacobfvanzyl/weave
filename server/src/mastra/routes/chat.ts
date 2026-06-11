@@ -3,12 +3,14 @@ import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { registerApiRoute } from '@mastra/core/server';
 import { buildChatSystemMessages } from '../agents/instructions';
 import { attachmentIdFromReference, attachmentModelUrl, attachmentStorage, parseBase64DataUrl, type StoredAttachmentMetadata } from '../attachments';
+import { subscribeThreadContextUsage, type ThreadContextUsageSnapshot } from '../context-usage';
 import { resolveMemoryPolicy } from '../memory-policy';
 import { putProfileContext, resolveProfileContext } from '../profiles/resolver';
+import { putChatRuntimeContext } from '../runtime-context-processor';
 
 const agentId = 'mage-hand';
-const activeThreadStreams = new Set<string>();
 const maxImageAttachmentBytes = 10 * 1024 * 1024;
+const activeThreadRunCleanupDelayMs = 5 * 60 * 1000;
 
 const markGitWorkspaceContext = (requestContext: any, value: boolean) => {
   requestContext?.set?.('gitWorkspace', value);
@@ -61,29 +63,6 @@ const buildProviderOptions = (
       : {}),
   };
 };
-
-const releaseOnStreamClose = (stream: ReadableStream<unknown>, release: () => void) => new ReadableStream<unknown>({
-  async start(controller) {
-    const reader = stream.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        controller.enqueue(value);
-      }
-      controller.close();
-    } catch (error) {
-      controller.error(error);
-    } finally {
-      release();
-      reader.releaseLock();
-    }
-  },
-  cancel() {
-    release();
-    return stream.cancel().catch(() => undefined);
-  },
-});
 
 const bufferedAssistantTextMaxChars = 24_000;
 const bufferedAssistantTextFlushDelayMs = 80;
@@ -370,6 +349,221 @@ const toSseResponse = (stream: ReadableStream<unknown>) => {
   });
 };
 
+type ActiveThreadRunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'error';
+
+type ActiveThreadRunEvent =
+  | { type: 'chunk'; chunk: unknown }
+  | { type: 'close' }
+  | { type: 'error'; error: unknown };
+
+type ActiveThreadRunListener = (event: ActiveThreadRunEvent) => void;
+
+type ActiveThreadRun = {
+  key: string;
+  resourceId: string;
+  threadId: string;
+  runId: string;
+  status: ActiveThreadRunStatus;
+  startedAt: string;
+  updatedAt: string;
+  controller: AbortController;
+  chunks: unknown[];
+  submittedUserMessages: unknown[];
+  listeners: Set<ActiveThreadRunListener>;
+  contextUsageUnsubscribe?: () => void;
+  cleanupTimer?: ReturnType<typeof setTimeout>;
+  terminalChunkType?: string;
+  error?: string;
+};
+
+const activeThreadRuns = new Map<string, ActiveThreadRun>();
+const activeThreadRunStatuses = new Set<ActiveThreadRunStatus>(['running', 'cancelling']);
+
+const getResourceId = (c: any) => {
+  const resourceId = c.get('requestContext')?.get(MASTRA_RESOURCE_ID_KEY);
+  if (typeof resourceId !== 'string' || !resourceId) throw new Error('Authenticated resource missing');
+  return resourceId;
+};
+
+const threadRunKey = (resourceId: string, threadId: string) => `${resourceId}\0${threadId}`;
+
+const isActiveThreadRun = (run: ActiveThreadRun | undefined) =>
+  Boolean(run && activeThreadRunStatuses.has(run.status));
+
+const getThreadRun = (resourceId: string | undefined, threadId: string | undefined) => {
+  if (!resourceId || !threadId) return undefined;
+  return activeThreadRuns.get(threadRunKey(resourceId, threadId));
+};
+
+const getActiveThreadRun = (resourceId: string | undefined, threadId: string | undefined) => {
+  const run = getThreadRun(resourceId, threadId);
+  return isActiveThreadRun(run) ? run : undefined;
+};
+
+const toThreadRunSnapshot = (run: ActiveThreadRun | undefined) => ({
+  active: isActiveThreadRun(run),
+  status: run?.status ?? 'idle',
+  ...(run
+    ? {
+        runId: run.runId,
+        startedAt: run.startedAt,
+        updatedAt: run.updatedAt,
+        ...(run.error ? { error: run.error } : {}),
+      }
+    : {}),
+});
+
+const toContextUsageChunk = (snapshot: ThreadContextUsageSnapshot) => ({
+  type: 'data-context-usage' as const,
+  transient: true,
+  data: {
+    tokens: snapshot.usedTokens,
+    inputTokens: snapshot.inputTokens,
+    cachedInputTokens: snapshot.cachedInputTokens,
+    outputTokens: snapshot.outputTokens,
+    totalProcessedTokens: snapshot.totalProcessedTokens,
+    updatedAt: snapshot.updatedAt,
+    source: snapshot.source,
+  },
+});
+
+const scheduleThreadRunCleanup = (run: ActiveThreadRun) => {
+  if (run.cleanupTimer) clearTimeout(run.cleanupTimer);
+  run.cleanupTimer = setTimeout(() => {
+    if (activeThreadRuns.get(run.key) === run) activeThreadRuns.delete(run.key);
+  }, activeThreadRunCleanupDelayMs);
+};
+
+const getSubmittedUserMessages = (messages: unknown) => {
+  if (!Array.isArray(messages)) return [];
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as Record<string, unknown> | undefined;
+    if (message && typeof message === 'object' && message.role === 'user') return [message];
+  }
+
+  return [];
+};
+
+export const getThreadRunSubmittedUserMessages = (resourceId: string | undefined, threadId: string | undefined) =>
+  getThreadRun(resourceId, threadId)?.submittedUserMessages ?? [];
+
+const createActiveThreadRun = (resourceId: string, threadId: string, submittedUserMessages: unknown[] = []) => {
+  const key = threadRunKey(resourceId, threadId);
+  const previous = activeThreadRuns.get(key);
+  if (previous?.cleanupTimer) clearTimeout(previous.cleanupTimer);
+  previous?.contextUsageUnsubscribe?.();
+
+  const now = new Date().toISOString();
+  const run: ActiveThreadRun = {
+    key,
+    resourceId,
+    threadId,
+    runId: crypto.randomUUID(),
+    status: 'running',
+    startedAt: now,
+    updatedAt: now,
+    controller: new AbortController(),
+    chunks: [],
+    submittedUserMessages,
+    listeners: new Set(),
+  };
+  run.contextUsageUnsubscribe = subscribeThreadContextUsage(threadId, resourceId, snapshot => {
+    appendThreadRunChunk(run, toContextUsageChunk(snapshot));
+  });
+  activeThreadRuns.set(key, run);
+  return run;
+};
+
+const appendThreadRunChunk = (run: ActiveThreadRun, chunk: unknown) => {
+  if (activeThreadRuns.get(run.key) !== run || !activeThreadRunStatuses.has(run.status)) return;
+
+  const type = getStreamChunkType(chunk);
+  if (type === 'finish' || type === 'abort') run.terminalChunkType = type;
+  run.chunks.push(chunk);
+  run.updatedAt = new Date().toISOString();
+
+  for (const listener of run.listeners) listener({ type: 'chunk', chunk });
+};
+
+const settleThreadRun = (run: ActiveThreadRun, status: Exclude<ActiveThreadRunStatus, 'running' | 'cancelling'>, error?: unknown) => {
+  if (activeThreadRuns.get(run.key) !== run || !activeThreadRunStatuses.has(run.status)) return;
+
+  run.contextUsageUnsubscribe?.();
+  run.contextUsageUnsubscribe = undefined;
+  run.status = status;
+  run.updatedAt = new Date().toISOString();
+  if (error) run.error = error instanceof Error ? error.message : String(error);
+
+  const event: ActiveThreadRunEvent = status === 'error'
+    ? { type: 'error', error: error ?? new Error('Thread run failed') }
+    : { type: 'close' };
+  for (const listener of run.listeners) listener(event);
+  run.listeners.clear();
+  scheduleThreadRunCleanup(run);
+};
+
+const observeThreadRun = (run: ActiveThreadRun) => {
+  let listener: ActiveThreadRunListener | undefined;
+
+  return new ReadableStream<unknown>({
+    start(controller) {
+      for (const chunk of run.chunks) controller.enqueue(chunk);
+
+      if (!activeThreadRunStatuses.has(run.status)) {
+        controller.close();
+        return;
+      }
+
+      listener = event => {
+        if (event.type === 'chunk') {
+          controller.enqueue(event.chunk);
+        } else if (event.type === 'error') {
+          if (listener) run.listeners.delete(listener);
+          controller.error(event.error);
+        } else {
+          if (listener) run.listeners.delete(listener);
+          controller.close();
+        }
+      };
+      run.listeners.add(listener);
+    },
+    cancel() {
+      if (listener) run.listeners.delete(listener);
+    },
+  });
+};
+
+const startThreadRunPump = (run: ActiveThreadRun, stream: ReadableStream<unknown>) => {
+  void (async () => {
+    const reader = stream.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        appendThreadRunChunk(run, value);
+      }
+
+      settleThreadRun(run, run.terminalChunkType === 'abort' ? 'cancelled' : 'completed');
+    } catch (error) {
+      settleThreadRun(run, run.controller.signal.aborted ? 'cancelled' : 'error', error);
+    } finally {
+      reader.releaseLock();
+    }
+  })();
+};
+
+const cancelThreadRun = (run: ActiveThreadRun) => {
+  if (!activeThreadRunStatuses.has(run.status)) return false;
+
+  run.status = 'cancelling';
+  run.updatedAt = new Date().toISOString();
+  appendThreadRunChunk(run, { type: 'abort', reason: 'cancelled' });
+  run.controller.abort('cancelled');
+  settleThreadRun(run, 'cancelled');
+  return true;
+};
+
 const normalizeMessageImageAttachments = async (
   messages: unknown,
   options: { threadId?: string },
@@ -470,6 +664,36 @@ const normalizeMessageImageAttachments = async (
   }));
 };
 
+const isDisplayOnlySubmittedPart = (part: unknown) => {
+  if (!part || typeof part !== 'object') return false;
+  const type = (part as Record<string, unknown>).type;
+  return typeof type === 'string' && (type === 'reasoning' || type === 'redacted-reasoning' || type.startsWith('data-'));
+};
+
+const sanitizeSubmittedMessagesForMastra = (messages: unknown) => {
+  if (!Array.isArray(messages)) return messages;
+
+  return messages
+    .map(message => {
+      if (!message || typeof message !== 'object') return message;
+      const record = message as Record<string, unknown>;
+      if (!Array.isArray(record.parts)) return message;
+
+      const parts = record.parts.filter(part => !isDisplayOnlySubmittedPart(part));
+      if (parts.length === record.parts.length) return message;
+
+      return { ...record, parts };
+    })
+    .filter(message => {
+      if (!message || typeof message !== 'object') return true;
+      const record = message as Record<string, unknown>;
+      if (record.role === 'user') return true;
+      if (!Array.isArray(record.parts)) return true;
+      if (record.parts.length > 0) return true;
+      return typeof record.content === 'string' && record.content.trim().length > 0;
+    });
+};
+
 const latestUserMessageOnly = (messages: unknown) => {
   if (!Array.isArray(messages) || messages.length <= 1) return messages;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -481,21 +705,74 @@ const latestUserMessageOnly = (messages: unknown) => {
 
 export const __chatRouteMemoryTest = {
   latestUserMessageOnly,
+  getSubmittedUserMessages,
+  sanitizeSubmittedMessagesForMastra,
+};
+
+export const __chatRunRegistryTest = {
+  create: createActiveThreadRun,
+  submittedUserMessages: getThreadRunSubmittedUserMessages,
+  append: appendThreadRunChunk,
+  observe: observeThreadRun,
+  cancel: cancelThreadRun,
+  complete: (run: ActiveThreadRun) => settleThreadRun(run, 'completed'),
+  snapshot: toThreadRunSnapshot,
+  get: getThreadRun,
+  clear: () => {
+    for (const run of activeThreadRuns.values()) {
+      if (run.cleanupTimer) clearTimeout(run.cleanupTimer);
+      run.contextUsageUnsubscribe?.();
+      run.listeners.clear();
+      run.controller.abort('test cleanup');
+    }
+    activeThreadRuns.clear();
+  },
 };
 
 export const chatRoutes = [
+  registerApiRoute('/chat/:threadId/stream', {
+    method: 'GET',
+    handler: async c => {
+      const resourceId = getResourceId(c);
+      const threadId = c.req.param('threadId');
+      const run = getActiveThreadRun(resourceId, threadId);
+      if (!run) return new Response(null, { status: 204 });
+
+      return toSseResponse(observeThreadRun(run));
+    },
+  }),
+  registerApiRoute('/chat/:threadId/run', {
+    method: 'GET',
+    handler: async c => {
+      const resourceId = getResourceId(c);
+      const threadId = c.req.param('threadId');
+      return c.json({ run: toThreadRunSnapshot(getThreadRun(resourceId, threadId)) });
+    },
+  }),
+  registerApiRoute('/chat/:threadId/cancel', {
+    method: 'POST',
+    handler: async c => {
+      const resourceId = getResourceId(c);
+      const threadId = c.req.param('threadId');
+      const run = getActiveThreadRun(resourceId, threadId);
+      if (!run) return c.json({ ok: true, run: toThreadRunSnapshot(getThreadRun(resourceId, threadId)) });
+
+      cancelThreadRun(run);
+      return c.json({ ok: true, run: toThreadRunSnapshot(run) });
+    },
+  }),
   registerApiRoute('/chat', {
     method: 'POST',
     handler: async c => {
       const params = await c.req.json();
       const mastra = c.get('mastra');
       const requestContext = c.get('requestContext');
-      const contextResourceId = requestContext?.get(MASTRA_RESOURCE_ID_KEY);
-      const resourceId = typeof contextResourceId === 'string' ? contextResourceId : undefined;
+      const resourceId = getResourceId(c);
+      putChatRuntimeContext(requestContext, { now: new Date() });
       const threadId = params?.memory?.thread;
-      params.messages = await normalizeMessageImageAttachments(params.messages, {
+      params.messages = sanitizeSubmittedMessagesForMastra(await normalizeMessageImageAttachments(params.messages, {
         threadId: typeof threadId === 'string' ? threadId : undefined,
-      });
+      }));
       const resolvedProfile = resourceId
         ? await resolveProfileContext({ mastra, resourceId, threadId })
         : undefined;
@@ -534,23 +811,20 @@ export const chatRoutes = [
         chatgptSubscription: true,
       });
 
-      if (typeof threadId === 'string' && activeThreadStreams.has(threadId)) {
+      if (typeof threadId === 'string' && getActiveThreadRun(resourceId, threadId)) {
         return c.json({ error: 'thread has an active stream' }, 409);
       }
 
-      const releaseThreadLock = () => {
-        if (typeof threadId === 'string') activeThreadStreams.delete(threadId);
-      };
+      const run = typeof threadId === 'string'
+        ? createActiveThreadRun(resourceId, threadId, getSubmittedUserMessages(params.messages))
+        : undefined;
 
-      if (typeof threadId === 'string') {
-        activeThreadStreams.add(threadId);
-        c.req.raw.signal.addEventListener('abort', releaseThreadLock, { once: true });
-      }
       try {
         const stream = await handleChatStream({
           mastra,
           agentId,
           version: 'v6',
+          sendReasoning: true,
           defaultOptions: { maxSteps: 1000 },
           params: {
             ...params,
@@ -565,17 +839,19 @@ export const chatRoutes = [
               : params.memory,
             system,
             requestContext,
-            abortSignal: c.req.raw.signal,
+            abortSignal: run?.controller.signal ?? c.req.raw.signal,
           },
         });
 
-        const lockedStream = typeof threadId === 'string'
-          ? releaseOnStreamClose(stream as ReadableStream<unknown>, releaseThreadLock)
-          : stream as ReadableStream<unknown>;
+        const bufferedStream = bufferAssistantTextStream(stream as ReadableStream<unknown>);
+        if (run) {
+          startThreadRunPump(run, bufferedStream);
+          return toSseResponse(observeThreadRun(run));
+        }
 
-        return toSseResponse(bufferAssistantTextStream(lockedStream));
+        return toSseResponse(bufferedStream);
       } catch (error) {
-        releaseThreadLock();
+        if (run) settleThreadRun(run, 'error', error);
         throw error;
       }
     },

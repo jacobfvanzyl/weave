@@ -18,7 +18,10 @@ type ProviderTokenUsage = {
   cachedInputTokens?: number;
 };
 
+export type ThreadContextUsageListener = (snapshot: ThreadContextUsageSnapshot) => void;
+
 const snapshots = new Map<string, ThreadContextUsageSnapshot>();
+const listeners = new Map<string, Set<ThreadContextUsageListener>>();
 
 const keyFor = (threadId: string, resourceId?: string) => `${resourceId ?? ''}::${threadId}`;
 
@@ -46,14 +49,46 @@ export const contextUsageFromProviderUsage = (usage: ProviderTokenUsage) => {
 };
 
 export const recordThreadContextUsage = (snapshot: Omit<ThreadContextUsageSnapshot, 'updatedAt' | 'source'>) => {
-  if (!positiveFinite(snapshot.usedTokens)) return;
+  if (!positiveFinite(snapshot.usedTokens) || !positiveFinite(snapshot.inputTokens)) return;
 
-  snapshots.set(keyFor(snapshot.threadId, snapshot.resourceId), {
+  const recorded: ThreadContextUsageSnapshot = {
     ...snapshot,
     updatedAt: new Date().toISOString(),
     source: 'provider',
-  });
+  };
+  snapshots.set(keyFor(snapshot.threadId, snapshot.resourceId), recorded);
+
+  const notifyKeys = new Set([keyFor(snapshot.threadId, snapshot.resourceId)]);
+  if (snapshot.resourceId) notifyKeys.add(keyFor(snapshot.threadId));
+
+  for (const key of notifyKeys) {
+    for (const listener of listeners.get(key) ?? []) {
+      try {
+        listener(recorded);
+      } catch (error) {
+        console.error('[context-usage] listener failed', error);
+      }
+    }
+  }
 };
 
 export const getThreadContextUsageSnapshot = (threadId: string, resourceId?: string) =>
   snapshots.get(keyFor(threadId, resourceId)) ?? snapshots.get(keyFor(threadId));
+
+export const subscribeThreadContextUsage = (
+  threadId: string,
+  resourceId: string | undefined,
+  listener: ThreadContextUsageListener,
+) => {
+  const key = keyFor(threadId, resourceId);
+  const keyedListeners = listeners.get(key) ?? new Set<ThreadContextUsageListener>();
+  keyedListeners.add(listener);
+  listeners.set(key, keyedListeners);
+
+  return () => {
+    const currentListeners = listeners.get(key);
+    if (!currentListeners) return;
+    currentListeners.delete(listener);
+    if (currentListeners.size === 0) listeners.delete(key);
+  };
+};
