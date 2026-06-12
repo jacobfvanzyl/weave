@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { getAssistantContentRanges } from '../../packages/client/src/components/chat/assistant-content-ranges';
+import {
+  getAssistantContentRanges,
+  getAutoCollapsedAssistantTextPartIndices,
+} from '../../packages/client/src/components/chat/assistant-content-ranges';
 import {
   getToolActivitySideEffect,
   shouldRenderToolActivityChildren,
@@ -24,6 +27,28 @@ describe('chat tool activity helpers', () => {
       { type: 'reasoning', indices: [1] },
       { type: 'tool-activity', indices: [2] },
     ]);
+  });
+
+  it('selects only trailing final text when an assistant turn has earlier visible work', () => {
+    const parts = [
+      { type: 'reasoning', text: 'I should inspect the repo.' },
+      { type: 'tool-call', toolCallId: 'read-1', toolName: 'read', args: { path: 'a.ts' }, result: 'ok' },
+      { type: 'text', text: 'The fix is implemented.' },
+    ];
+
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, true)).toEqual([2]);
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([2]);
+  });
+
+  it('does not auto-collapse plain text-only turns or turns without a final text response', () => {
+    expect(getAutoCollapsedAssistantTextPartIndices([
+      { type: 'text', text: 'Just the answer.' },
+    ], true)).toEqual([]);
+
+    expect(getAutoCollapsedAssistantTextPartIndices([
+      { type: 'text', text: 'I will inspect that.' },
+      { type: 'tool-call', toolCallId: 'read-1', toolName: 'read', args: { path: 'a.ts' }, result: 'ok' },
+    ], true)).toEqual([]);
   });
 
   it('summarizes collapsed tool activity without requiring child detail rendering', () => {

@@ -22,7 +22,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Brain, Check, ChevronRight, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, UserRoundCog, X } from 'lucide-react';
-import { createContext, memo, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
@@ -39,6 +39,7 @@ import { CommandPanel } from '../ui/command';
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
 import { CodeBlock } from './CodeBlock';
 import {
+  getAutoCollapsedAssistantTextPartIndices,
   getAssistantContentRanges,
   getPartType,
   getReasoningText,
@@ -60,6 +61,25 @@ import {
 } from './tool-activity';
 
 const ThreadIdContext = createContext<string | null>(null);
+type AutoCollapsedTurnIds = Record<string, true>;
+type AutoCollapsedTurnStateProps = {
+  autoCollapseContext: ThreadAutoCollapseContextValue;
+  setIsFollowingBottom: (value: boolean) => void;
+};
+type ThreadAutoCollapseContextValue = {
+  autoCollapsedTurnIds: AutoCollapsedTurnIds;
+  markAssistantTurnRunning: (messageId: string) => void;
+  finishAssistantTurnIfFollowing: (messageId: string, shouldCollapse: boolean) => void;
+  expandCollapsedTurn: (messageId: string) => void;
+  liveAssistantTurnIds: AutoCollapsedTurnIds;
+};
+const ThreadAutoCollapseContext = createContext<ThreadAutoCollapseContextValue>({
+  autoCollapsedTurnIds: {},
+  markAssistantTurnRunning: () => {},
+  finishAssistantTurnIfFollowing: () => {},
+  expandCollapsedTurn: () => {},
+  liveAssistantTurnIds: {},
+});
 const toolCallCache = new Map<string, Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result' | 'isError'>>();
 
 const fallbackProfile: DynamicProfileSummary = {
@@ -652,10 +672,48 @@ const ToolActivityGroupChildren = ({ indices }: { indices: readonly number[] }) 
   </>
 );
 
-const AssistantGroupedContent = ({ deferCodeHighlight }: { deferCodeHighlight: boolean }) => {
+const CollapsedTurnWorkToggle = ({ onExpand }: { onExpand: () => void }) => (
+  <button
+    type="button"
+    className="group mb-2 flex max-w-full items-center gap-2 text-left text-xs font-medium text-muted-foreground/70 transition-colors hover:text-muted-foreground"
+    aria-label="Show hidden work for this turn"
+    onClick={onExpand}
+  >
+    <ChevronRight size={13} className="shrink-0 transition-transform group-hover:translate-x-0.5" />
+    <span>Show work</span>
+  </button>
+);
+
+const AssistantGroupedContent = ({
+  deferCodeHighlight,
+  autoCollapsed,
+  onExpandCollapsedTurn,
+}: {
+  deferCodeHighlight: boolean;
+  autoCollapsed: boolean;
+  onExpandCollapsedTurn: () => void;
+}) => {
   const parts = useAuiState(state => state.message.parts);
   const showReasoning = useChatStore(state => state.showReasoning);
+  const autoCollapsedTextIndices = useMemo(
+    () => autoCollapsed ? getAutoCollapsedAssistantTextPartIndices(parts, showReasoning) : [],
+    [autoCollapsed, parts, showReasoning],
+  );
   const ranges = useMemo(() => getAssistantContentRanges(parts, showReasoning), [parts, showReasoning]);
+
+  if (autoCollapsedTextIndices.length > 0) {
+    return (
+      <>
+        <CollapsedTurnWorkToggle onExpand={onExpandCollapsedTurn} />
+        {autoCollapsedTextIndices.map(index => {
+          const part = parts[index];
+          return getPartType(part) === 'text' && part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string'
+            ? <MarkdownText key={index} text={(part as { text: string }).text} deferCodeHighlight={deferCodeHighlight} />
+            : null;
+        })}
+      </>
+    );
+  }
 
   return (
     <>
@@ -686,8 +744,36 @@ const AssistantGroupedContent = ({ deferCodeHighlight }: { deferCodeHighlight: b
 const AssistantMessageContent = () => {
   const message = useMessage();
   const showReasoning = useChatStore(state => state.showReasoning);
+  const {
+    autoCollapsedTurnIds,
+    expandCollapsedTurn,
+    finishAssistantTurnIfFollowing,
+    liveAssistantTurnIds,
+    markAssistantTurnRunning,
+  } = useContext(ThreadAutoCollapseContext);
   const isEmptyAssistantMessage = message.role === 'assistant' && !hasRenderableAssistantContent(message, showReasoning);
   const isAssistantStreaming = message.role === 'assistant' && message.status?.type === 'running';
+  const previousAssistantStatusRef = useRef(message.role === 'assistant' ? message.status?.type : undefined);
+
+  useEffect(() => {
+    if (message.role !== 'assistant') return;
+
+    const previousStatus = previousAssistantStatusRef.current;
+    const currentStatus = message.status?.type;
+    const isRunning = currentStatus === 'running';
+    if (isRunning) {
+      markAssistantTurnRunning(message.id);
+    }
+
+    const finishedLiveTurn = (previousStatus === 'running' || liveAssistantTurnIds[message.id]) && !isRunning;
+    previousAssistantStatusRef.current = currentStatus;
+
+    if (!finishedLiveTurn) return;
+    finishAssistantTurnIfFollowing(
+      message.id,
+      getAutoCollapsedAssistantTextPartIndices(message.content, showReasoning).length > 0,
+    );
+  }, [finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning, message.content, message.id, message.role, message.status?.type, showReasoning]);
 
   if (isEmptyAssistantMessage) {
     return <AssistantToolSideEffects message={message} />;
@@ -697,7 +783,11 @@ const AssistantMessageContent = () => {
     <>
       <AssistantToolSideEffects message={message} />
       {message.role === 'assistant' ? (
-        <AssistantGroupedContent deferCodeHighlight={isAssistantStreaming} />
+        <AssistantGroupedContent
+          autoCollapsed={Boolean(autoCollapsedTurnIds[message.id]) && !isAssistantStreaming}
+          deferCodeHighlight={isAssistantStreaming}
+          onExpandCollapsedTurn={() => expandCollapsedTurn(message.id)}
+        />
       ) : (
         <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
       )}
@@ -1421,14 +1511,26 @@ const getMessagesVersion = (messages: UIMessage[]) =>
     .map(message => `${message.id}:${message.role}:${message.parts?.length ?? 0}:${message.parts?.map(getPartVersion).join(',') ?? ''}`)
     .join('|');
 
-const Thread = () => {
+const bottomFollowThresholdPx = 64;
+
+const isViewportAtBottom = (element: HTMLElement) =>
+  element.scrollHeight - element.scrollTop - element.clientHeight <= bottomFollowThresholdPx;
+
+const Thread = ({ autoCollapseContext, setIsFollowingBottom }: AutoCollapsedTurnStateProps) => {
   const threadId = useContext(ThreadIdContext);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
   const isRunning = useThread(state => state.isRunning);
   const messages = useThread(state => state.messages);
   const isEmptyIdleDraft = isDraft && !isRunning && messages.length === 0;
   const composerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
+
+  const updateBottomFollowState = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    setIsFollowingBottom(isViewportAtBottom(viewport));
+  }, [setIsFollowingBottom]);
 
   useEffect(() => {
     const composer = composerRef.current;
@@ -1443,19 +1545,30 @@ const Thread = () => {
     return () => resizeObserver.disconnect();
   }, []);
 
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(updateBottomFollowState);
+    return () => window.cancelAnimationFrame(frame);
+  }, [isRunning, messages, updateBottomFollowState]);
+
   return (
-    <ThreadPrimitive.Root
-      className={cn('flex h-full flex-col bg-background', isEmptyIdleDraft && 'justify-center')}
-      style={{ '--composer-height': `${composerHeight}px` } as React.CSSProperties}
-    >
-      <ThreadPrimitive.Viewport className={cn('min-h-0 flex-1 overflow-y-auto', isEmptyIdleDraft && 'hidden')}>
-        <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
-        <RunningIndicatorTail />
-      </ThreadPrimitive.Viewport>
-      <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
-        <Composer />
-      </div>
-    </ThreadPrimitive.Root>
+    <ThreadAutoCollapseContext.Provider value={autoCollapseContext}>
+      <ThreadPrimitive.Root
+        className={cn('flex h-full flex-col bg-background', isEmptyIdleDraft && 'justify-center')}
+        style={{ '--composer-height': `${composerHeight}px` } as React.CSSProperties}
+      >
+        <ThreadPrimitive.Viewport
+          ref={viewportRef}
+          className={cn('min-h-0 flex-1 overflow-y-auto', isEmptyIdleDraft && 'hidden')}
+          onScroll={updateBottomFollowState}
+        >
+          <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
+          <RunningIndicatorTail />
+        </ThreadPrimitive.Viewport>
+        <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
+          <Composer />
+        </div>
+      </ThreadPrimitive.Root>
+    </ThreadAutoCollapseContext.Provider>
   );
 };
 
@@ -1484,7 +1597,12 @@ const useDynamicChatTransport = <UI_MESSAGE extends UIMessage>(
   );
 };
 
-const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps & { initialMessages: UIMessage[] }) => {
+const AssistantChatRuntime = ({
+  threadId,
+  initialMessages,
+  autoCollapseContext,
+  setIsFollowingBottom,
+}: AssistantChatProps & { initialMessages: UIMessage[] } & AutoCollapsedTurnStateProps) => {
   const queryClient = useQueryClient();
   const resourceId = useChatStore(state => state.resourceId);
   const selectedModel = useChatStore(state => state.selectedModel);
@@ -1592,7 +1710,7 @@ const AssistantChatRuntime = ({ threadId, initialMessages }: AssistantChatProps 
       <ThreadIdContext.Provider value={threadId}>
         <ThreadRunningTracker threadId={threadId} />
         <IdleActiveThreadRefresher threadId={threadId} />
-        <Thread />
+        <Thread autoCollapseContext={autoCollapseContext} setIsFollowingBottom={setIsFollowingBottom} />
       </ThreadIdContext.Provider>
     </AssistantRuntimeProvider>
   );
@@ -1602,13 +1720,71 @@ export const AssistantChat = ({ threadId }: AssistantChatProps) => {
   const resourceId = useChatStore(state => state.resourceId);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
   const isRunning = useChatStore(state => state.runningThreadIds.includes(threadId));
+  const [autoCollapsedTurnIds, setAutoCollapsedTurnIds] = useState<AutoCollapsedTurnIds>({});
+  const [liveAssistantTurnIds, setLiveAssistantTurnIds] = useState<AutoCollapsedTurnIds>({});
+  const isFollowingBottomRef = useRef(true);
   const { data: initialMessages = [], isLoading } = useQuery({
     queryKey: ['thread-messages', resourceId, threadId],
     queryFn: () => listServerMessages(threadId),
     enabled: !isDraft,
     staleTime: 0,
   });
+
+  useEffect(() => {
+    setAutoCollapsedTurnIds({});
+    setLiveAssistantTurnIds({});
+    isFollowingBottomRef.current = true;
+  }, [threadId]);
+
+  const setIsFollowingBottom = useCallback((value: boolean) => {
+    isFollowingBottomRef.current = value;
+  }, []);
+
+  const markAssistantTurnRunning = useCallback((messageId: string) => {
+    setLiveAssistantTurnIds(previous => previous[messageId] ? previous : { ...previous, [messageId]: true });
+  }, []);
+
+  const finishAssistantTurnIfFollowing = useCallback((messageId: string, shouldCollapse: boolean) => {
+    setLiveAssistantTurnIds(previous => {
+      if (!previous[messageId]) return previous;
+      const next = { ...previous };
+      delete next[messageId];
+      return next;
+    });
+
+    if (!shouldCollapse || !isFollowingBottomRef.current) return;
+    setAutoCollapsedTurnIds(previous => previous[messageId] ? previous : { ...previous, [messageId]: true });
+  }, []);
+
+  const expandCollapsedTurn = useCallback((messageId: string) => {
+    setAutoCollapsedTurnIds(previous => {
+      if (!previous[messageId]) return previous;
+      const next = { ...previous };
+      delete next[messageId];
+      return next;
+    });
+  }, []);
+
+  const autoCollapseContext = useMemo<ThreadAutoCollapseContextValue>(
+    () => ({
+      autoCollapsedTurnIds,
+      expandCollapsedTurn,
+      finishAssistantTurnIfFollowing,
+      liveAssistantTurnIds,
+      markAssistantTurnRunning,
+    }),
+    [autoCollapsedTurnIds, expandCollapsedTurn, finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning],
+  );
+
   if (!isDraft && isLoading && !isRunning) return <div className="h-full bg-background" />;
 
-  return <AssistantChatRuntime key={`${threadId}:${getMessagesVersion(initialMessages)}`} threadId={threadId} initialMessages={initialMessages} />;
+  return (
+    <AssistantChatRuntime
+      key={`${threadId}:${getMessagesVersion(initialMessages)}`}
+      threadId={threadId}
+      initialMessages={initialMessages}
+      autoCollapseContext={autoCollapseContext}
+      setIsFollowingBottom={setIsFollowingBottom}
+    />
+  );
 };

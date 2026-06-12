@@ -17,8 +17,17 @@ export const getReasoningText = (part: unknown) => {
   return record.type === 'reasoning' && typeof record.text === 'string' ? record.text.trim() : '';
 };
 
+export const getTextPartText = (part: unknown) => {
+  if (!part || typeof part !== 'object') return '';
+  const record = part as Record<string, unknown>;
+  return record.type === 'text' && typeof record.text === 'string' ? record.text.trim() : '';
+};
+
 const isVisibleReasoningPart = (part: unknown) =>
   getPartType(part) === 'reasoning' && getReasoningText(part).length > 0;
+
+const isVisibleTextPart = (part: unknown) =>
+  getPartType(part) === 'text' && getTextPartText(part).length > 0;
 
 const isVisibleToolOutputPart = (part: unknown) => {
   const call = toToolActivityCall(part);
@@ -28,12 +37,49 @@ const isVisibleToolOutputPart = (part: unknown) => {
 export const isVisibleNonReasoningOutputPart = (part: unknown) => {
   const type = getPartType(part);
   if (type === 'reasoning') return false;
-  if (type === 'text') {
-    const text = part && typeof part === 'object' ? (part as Record<string, unknown>).text : undefined;
-    return typeof text === 'string' && text.trim().length > 0;
-  }
+  if (type === 'text') return isVisibleTextPart(part);
   if (type === 'tool-call') return isVisibleToolOutputPart(part);
   return false;
+};
+
+const isVisibleAssistantOutputPart = (part: unknown, showReasoning: boolean) =>
+  isVisibleNonReasoningOutputPart(part) || (showReasoning && isVisibleReasoningPart(part));
+
+export const getAutoCollapsedAssistantTextPartIndices = (
+  parts: readonly unknown[],
+  showReasoning: boolean,
+): number[] => {
+  let finalTextIndex = -1;
+
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (isVisibleTextPart(part)) {
+      finalTextIndex = index;
+      break;
+    }
+
+    if (isVisibleAssistantOutputPart(part, showReasoning)) return [];
+  }
+
+  if (finalTextIndex < 0) return [];
+
+  let firstFinalTextIndex = finalTextIndex;
+  for (let index = finalTextIndex - 1; index >= 0; index -= 1) {
+    if (!isVisibleTextPart(parts[index])) break;
+    firstFinalTextIndex = index;
+  }
+
+  const hasEarlierWork = parts
+    .slice(0, firstFinalTextIndex)
+    .some(part => isVisibleAssistantOutputPart(part, showReasoning));
+  if (!hasEarlierWork) return [];
+
+  const indices: number[] = [];
+  for (let index = firstFinalTextIndex; index <= finalTextIndex; index += 1) {
+    if (isVisibleTextPart(parts[index])) indices.push(index);
+  }
+
+  return indices;
 };
 
 export const getAssistantContentRanges = (parts: readonly unknown[], showReasoning: boolean): AssistantContentRange[] => {
