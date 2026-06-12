@@ -1,7 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { findPortalForProject, requestPortalTool } from '../portal/registry';
-import { formatToolModelOutput } from './model-output';
+import { formatToolModelOutput, getCodeToolModelOutputMaxChars } from './model-output';
 
 const offlineMessage = 'This thread is not bound to an active Workspace. Connect a Portal or choose a Project with an online Portal to use local tools.';
 
@@ -116,7 +116,7 @@ const portalBaseOutputSchema = {
   command: z.string().optional(),
 };
 
-export const portalReadModelOutput = (output: unknown) => {
+export const portalReadModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
   const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
   return formatToolModelOutput(
     'read',
@@ -128,6 +128,7 @@ export const portalReadModelOutput = (output: unknown) => {
       ['error', result.error],
     ],
     result.content,
+    maxChars,
   );
 };
 
@@ -141,7 +142,7 @@ export const portalWriteModelOutput = (output: unknown) => {
   ]);
 };
 
-export const portalEditModelOutput = (output: unknown) => {
+export const portalEditModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
   const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
   return formatToolModelOutput(
     'edit',
@@ -152,10 +153,11 @@ export const portalEditModelOutput = (output: unknown) => {
       ['error', result.error],
     ],
     result.diff,
+    maxChars,
   );
 };
 
-export const portalBashModelOutput = (output: unknown) => {
+export const portalBashModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
   const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
   const body = [
     result.stdout ? `stdout:\n${result.stdout}` : '',
@@ -171,6 +173,7 @@ export const portalBashModelOutput = (output: unknown) => {
       ['error', result.error],
     ],
     body,
+    maxChars,
   );
 };
 

@@ -14,6 +14,8 @@ type PromptMessage = Record<string, unknown> & {
 type PromptPart = Record<string, unknown>;
 
 type CompactToolHistoryOptions = {
+  preserveToolCalls?: number;
+  /** @deprecated Use preserveToolCalls. Kept as a compatibility alias. */
   preserveToolSteps?: number;
   tokenLimit?: number;
 };
@@ -30,7 +32,7 @@ type CompactToolHistoryPart = {
   };
 };
 
-const defaultPreserveToolSteps = 2;
+const defaultPreserveToolCalls = 16;
 const tokensPerMessage = 3.8;
 const tokensPerConversation = 24;
 
@@ -44,6 +46,14 @@ const safeStringify = (value: unknown) => {
     return null;
   }
 };
+
+const positiveInteger = (value: unknown) => {
+  const number = typeof value === 'string' ? Number(value) : value;
+  return typeof number === 'number' && Number.isInteger(number) && number > 0 ? number : undefined;
+};
+
+export const getToolHistoryFullCalls = (env: NodeJS.ProcessEnv = process.env) =>
+  positiveInteger(env.WEAVE_TOOL_HISTORY_FULL_CALLS) ?? defaultPreserveToolCalls;
 
 const getContentParts = (message: PromptMessage): PromptPart[] =>
   Array.isArray(message.content) ? message.content.filter(isRecord) : [];
@@ -147,18 +157,17 @@ export const isCompactToolHistoryTextPart = (part: unknown) => {
   return typeof part.text === 'string' && isLegacyCompactToolHistoryText(part.text);
 };
 
-const getPreservedToolCallIds = (prompt: PromptMessage[], preserveToolSteps: number) => {
-  if (preserveToolSteps <= 0) return new Set<string>();
+const getPreservedToolCallIds = (prompt: PromptMessage[], preserveToolCalls: number) => {
+  if (preserveToolCalls <= 0) return new Set<string>();
 
-  const toolSteps = prompt
+  const toolCallIds = prompt
     .filter(message => message.role === 'assistant')
-    .map(message => getContentParts(message)
+    .flatMap(message => getContentParts(message)
       .filter(isToolCallPart)
       .map(getToolCallId)
-      .filter((id): id is string => typeof id === 'string'))
-    .filter(ids => ids.length > 0);
+      .filter((id): id is string => typeof id === 'string'));
 
-  return new Set(toolSteps.slice(-preserveToolSteps).flat());
+  return new Set(toolCallIds.slice(-preserveToolCalls));
 };
 
 const compactToolResultPart = (part: PromptPart) => {
@@ -212,7 +221,10 @@ export const compactToolHistoryPrompt = (
   prompt: PromptMessage[],
   options: CompactToolHistoryOptions = {},
 ) => {
-  const preserveToolCallIds = getPreservedToolCallIds(prompt, options.preserveToolSteps ?? defaultPreserveToolSteps);
+  const preserveToolCallIds = getPreservedToolCallIds(
+    prompt,
+    options.preserveToolCalls ?? options.preserveToolSteps ?? getToolHistoryFullCalls(),
+  );
   let changed = false;
 
   const nextPrompt = prompt.flatMap(message => {

@@ -1,8 +1,17 @@
 import { createHash } from 'node:crypto';
 
 const defaultMaxChars = 1_600;
+const defaultCodeToolMaxChars = 12_000;
 
 export const hashText = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 12);
+
+const positiveInteger = (value: unknown) => {
+  const number = typeof value === 'string' ? Number(value) : value;
+  return typeof number === 'number' && Number.isInteger(number) && number > 0 ? number : undefined;
+};
+
+export const getCodeToolModelOutputMaxChars = (env: NodeJS.ProcessEnv = process.env) =>
+  positiveInteger(env.WEAVE_CODE_TOOL_MODEL_OUTPUT_MAX_CHARS) ?? defaultCodeToolMaxChars;
 
 export const compactText = (value: unknown, maxChars = defaultMaxChars) => {
   const text = typeof value === 'string' ? value : value === undefined || value === null ? '' : JSON.stringify(value);

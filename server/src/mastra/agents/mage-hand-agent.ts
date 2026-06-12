@@ -3,7 +3,7 @@ import { ModelRouterEmbeddingModel } from '@mastra/core/llm';
 import { SkillSearchProcessor } from '@mastra/core/processors';
 import { LibSQLVector } from '@mastra/libsql';
 import { Memory } from '@mastra/memory';
-import { CompactToolHistoryProcessor } from '../compact-tool-history-processor';
+import { CompactToolHistoryProcessor, getToolHistoryFullCalls } from '../compact-tool-history-processor';
 import { getContextTokenLimit, getMemoryCapabilities } from '../memory-policy';
 import { RuntimeContextProcessor } from '../runtime-context-processor';
 import { storageAuthToken, storageUrl } from '../storage-config';
@@ -69,7 +69,7 @@ export const mageHandAgent = new Agent({
   workspace: baseWorkspace,
   tools: resolveTools,
   inputProcessors: [
-    new CompactToolHistoryProcessor({ preserveToolSteps: 2, tokenLimit: getContextTokenLimit() }),
+    new CompactToolHistoryProcessor({ preserveToolCalls: getToolHistoryFullCalls(), tokenLimit: getContextTokenLimit() }),
     new SkillSearchProcessor({
       workspace: baseWorkspace,
       search: { topK: 5, minScore: 0.1 },

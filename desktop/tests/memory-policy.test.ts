@@ -3,12 +3,14 @@ import {
   CompactToolHistoryProcessor,
   compactToolHistoryPrompt,
   createCompactToolHistoryPart,
+  getToolHistoryFullCalls,
   limitCompactToolHistoryPrompt,
 } from '../../server/src/mastra/compact-tool-history-processor';
 import { resolveMemoryPolicy } from '../../server/src/mastra/memory-policy';
 import { __chatRouteMemoryTest } from '../../server/src/mastra/routes/chat';
 import { __chatStateContextUsageTest } from '../../server/src/mastra/routes/chat-state';
-import { portalReadModelOutput } from '../../server/src/mastra/tools/portal-tools';
+import { getCodeToolModelOutputMaxChars } from '../../server/src/mastra/tools/model-output';
+import { portalBashModelOutput, portalReadModelOutput } from '../../server/src/mastra/tools/portal-tools';
 
 const noMemoryCapabilities = {
   semanticRecall: false,
@@ -18,6 +20,11 @@ const noMemoryCapabilities = {
 const semanticCapabilities = {
   semanticRecall: true,
   observationalMemory: false,
+};
+
+const modelOutputBody = (output: string) => {
+  const bodyStart = output.indexOf('\n\n');
+  return bodyStart === -1 ? '' : output.slice(bodyStart + 2);
 };
 
 describe('memory policy resolution', () => {
@@ -103,8 +110,16 @@ describe('memory policy resolution', () => {
 });
 
 describe('tool model output compaction', () => {
-  it('summarizes large read outputs without returning the full content', () => {
-    const rawContent = 'x'.repeat(3_000);
+  it('resolves code tool model-output cap from defaults and env', () => {
+    expect(getCodeToolModelOutputMaxChars({} as NodeJS.ProcessEnv)).toBe(12_000);
+    expect(getCodeToolModelOutputMaxChars({
+      WEAVE_CODE_TOOL_MODEL_OUTPUT_MAX_CHARS: '4096',
+    } as NodeJS.ProcessEnv)).toBe(4096);
+    expect(getCodeToolModelOutputMaxChars({ WEAVE_CODE_TOOL_MODEL_OUTPUT_MAX_CHARS: 'nope' } as NodeJS.ProcessEnv)).toBe(12_000);
+  });
+
+  it('keeps code read output up to the code-tool cap before truncating', () => {
+    const rawContent = 'x'.repeat(13_000);
     const output = portalReadModelOutput({
       ok: true,
       path: 'src/example.ts',
@@ -112,10 +127,28 @@ describe('tool model output compaction', () => {
     });
 
     expect(output).toContain('path: src/example.ts');
+    expect(output).toContain('contentChars: 13000');
     expect(output).toContain('truncated: true');
     expect(output).toContain('contentHash:');
     expect(output.startsWith('read\n')).toBe(true);
-    expect(output.length).toBeLessThan(rawContent.length);
+    expect(modelOutputBody(output)).toBe(rawContent.slice(0, 12_000));
+  });
+
+  it('keeps bash output up to the code-tool cap before truncating', () => {
+    const stdout = 'b'.repeat(13_000);
+    const rawBody = `stdout:\n${stdout}`;
+    const output = portalBashModelOutput({
+      ok: true,
+      command: 'sed -n 1,260p src/example.ts',
+      stdout,
+      exitCode: 0,
+    });
+
+    expect(output).toContain('command: sed -n 1,260p src/example.ts');
+    expect(output).toContain(`contentChars: ${rawBody.length}`);
+    expect(output).toContain('truncated: true');
+    expect(output).toContain('contentHash:');
+    expect(modelOutputBody(output)).toBe(rawBody.slice(0, 12_000));
   });
 
   it('compacts old provider prompt tool results while preserving recent tool steps', () => {
@@ -200,6 +233,72 @@ describe('tool model output compaction', () => {
       role: 'assistant',
       content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'read', input: { path: 'old.ts' } }],
     });
+  });
+
+  it('resolves full tool-call retention from defaults and env', () => {
+    expect(getToolHistoryFullCalls({} as NodeJS.ProcessEnv)).toBe(16);
+    expect(getToolHistoryFullCalls({ WEAVE_TOOL_HISTORY_FULL_CALLS: '8' } as NodeJS.ProcessEnv)).toBe(8);
+    expect(getToolHistoryFullCalls({ WEAVE_TOOL_HISTORY_FULL_CALLS: 'nope' } as NodeJS.ProcessEnv)).toBe(16);
+  });
+
+  it('preserves the latest 16 individual tool call ids, including parallel calls', () => {
+    const parallelIds = [1, 2, 3];
+    const laterIds = Array.from({ length: 15 }, (_, index) => index + 4);
+    const prompt = [
+      {
+        role: 'assistant',
+        content: parallelIds.map(index => ({
+          type: 'tool-call',
+          toolCallId: `call-${index}`,
+          toolName: 'read',
+          input: { path: `file-${index}.ts` },
+        })),
+      },
+      {
+        role: 'tool',
+        content: parallelIds.map(index => ({
+          type: 'tool-result',
+          toolCallId: `call-${index}`,
+          toolName: 'read',
+          output: { type: 'text', value: `raw call-${index}` },
+        })),
+      },
+      ...laterIds.flatMap(index => [
+        {
+          role: 'assistant',
+          content: [{
+            type: 'tool-call',
+            toolCallId: `call-${index}`,
+            toolName: 'bash',
+            input: { command: `echo ${index}` },
+          }],
+        },
+        {
+          role: 'tool',
+          content: [{
+            type: 'tool-result',
+            toolCallId: `call-${index}`,
+            toolName: 'bash',
+            output: { type: 'text', value: `raw call-${index}` },
+          }],
+        },
+      ]),
+    ];
+
+    const compacted = compactToolHistoryPrompt(prompt as any, {
+      preserveToolCalls: getToolHistoryFullCalls({} as NodeJS.ProcessEnv),
+    }) as any[];
+    const toolResultParts = compacted
+      .filter(message => message.role === 'tool')
+      .flatMap(message => message.content);
+    const fullResultIds = toolResultParts
+      .filter(part => !part.output.value.startsWith('Compact tool result summary'))
+      .map(part => part.toolCallId);
+
+    expect(toolResultParts.find(part => part.toolCallId === 'call-1')?.output.value).toContain('Compact tool result summary');
+    expect(toolResultParts.find(part => part.toolCallId === 'call-2')?.output.value).toContain('Compact tool result summary');
+    expect(toolResultParts.find(part => part.toolCallId === 'call-3')?.output).toEqual({ type: 'text', value: 'raw call-3' });
+    expect(fullResultIds).toEqual(Array.from({ length: 16 }, (_, index) => `call-${index + 3}`));
   });
 
   it('keeps provider prompt tool-call and tool-output pairs when compacting', () => {
