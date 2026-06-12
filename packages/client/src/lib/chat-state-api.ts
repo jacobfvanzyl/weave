@@ -32,6 +32,25 @@ export type Workspace = {
   updatedAt: string;
 };
 
+export type WorkspaceGitState = {
+  projectId: string;
+  workspaceId: string;
+  path?: string;
+  status: Workspace['status'];
+  branch?: string;
+  head?: string;
+  detached?: boolean;
+  checkedAt: string;
+  lastError?: string;
+};
+
+export type WorkspaceBranchOption = {
+  name: string;
+  ref: string;
+  kind: 'local' | 'remote';
+  current?: boolean;
+};
+
 export type Project = {
   id: string;
   userId: string;
@@ -154,6 +173,22 @@ export const listProjects = async () => {
   );
 
   return result.projects;
+};
+
+export const listWorkspaceGitStates = async () => {
+  const result = await parseJson<{ states: WorkspaceGitState[] }>(
+    await fetch(`${getMastraUrl()}/projects/workspaces/git-state`, { headers: getAuthHeaders() }),
+  );
+
+  return result.states;
+};
+
+export const listProjectBranches = async (projectId: string) => {
+  const result = await parseJson<{ branches: WorkspaceBranchOption[] }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/branches`, { headers: getAuthHeaders() }),
+  );
+
+  return result.branches;
 };
 
 export type PortalRoot = {

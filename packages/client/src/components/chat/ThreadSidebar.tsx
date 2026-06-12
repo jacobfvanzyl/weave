@@ -5,8 +5,10 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, Trash2, X } from 'lucide-react';
-import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, listProjects, listPortals, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type WorkspaceBranchMode } from '../../lib/chat-state-api';
+import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, listPortals, listProjectBranches, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type WorkspaceBranchMode } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
+import { createWorkspaceDraftDefaults, getDefaultWorkspaceBase } from '../../lib/workspace-create-defaults';
+import { projectsQueryKey, useProjectsWithLiveGitState, workspaceGitStateQueryKey } from '../../lib/workspace-git-state';
 import { GitProjectDirectoryPicker } from './GitProjectDirectoryPicker';
 import { useChatStore } from '../../stores/chat-store';
 import { Alert, AlertDescription } from '../ui/alert';
@@ -33,6 +35,7 @@ import {
 import { Empty, EmptyDescription } from '../ui/empty';
 import { Field, FieldLabel } from '../ui/field';
 import { Input } from '../ui/input';
+import { Combobox, ComboboxCollection, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList, ComboboxPopup } from '../ui/combobox';
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { ScrollArea } from '../ui/scroll-area';
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
@@ -232,17 +235,22 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [createProjectError, setCreateProjectError] = useState<string | null>(null);
   const [createWorkspaceProjectId, setCreateWorkspaceProjectId] = useState<string | null>(null);
-  const [workspaceName, setWorkspaceName] = useState('');
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceBranchMode>('newBranch');
+  const [workspaceName, setWorkspaceName] = useState(() => createWorkspaceDraftDefaults().name);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceBranchMode>('detached');
   const [workspaceBranch, setWorkspaceBranch] = useState('');
-  const [workspaceBase, setWorkspaceBase] = useState('');
-  const [workspacePath, setWorkspacePath] = useState('');
+  const [workspaceBase, setWorkspaceBase] = useState(() => getDefaultWorkspaceBase());
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [createWorkspaceError, setCreateWorkspaceError] = useState<string | null>(null);
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>(loadCollapsedProjectIds);
-  const { data: projects = [] } = useQuery({
-    queryKey: ['projects', resourceId],
-    queryFn: listProjects,
+  const { projects } = useProjectsWithLiveGitState(resourceId);
+  const createWorkspaceProject = createWorkspaceProjectId ? projects.find(project => project.id === createWorkspaceProjectId) : undefined;
+  const {
+    data: workspaceBranchOptions = [],
+    error: workspaceBranchOptionsError,
+  } = useQuery({
+    queryKey: ['project-branches', resourceId, createWorkspaceProject?.id],
+    queryFn: () => listProjectBranches(createWorkspaceProject!.id),
+    enabled: Boolean(createWorkspaceProject && createWorkspaceProject.projectKind === 'git'),
     staleTime: 1000 * 30,
   });
   const { data: portals = [] } = useQuery({
@@ -251,6 +259,10 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
     staleTime: 1000 * 6,
     refetchInterval: 1000 * 6,
   });
+  const invalidateProjects = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: projectsQueryKey(resourceId) }),
+    queryClient.invalidateQueries({ queryKey: workspaceGitStateQueryKey(resourceId) }),
+  ]);
   const onlinePortalCount = portals.filter(portal => portal.status === 'online').length;
   const onlinePortalIds = new Set(portals.filter(portal => portal.status === 'online').map(portal => portal.portalId));
   const plainThreads = sortManual(threads.filter(thread => (!thread.projectId || thread.adHoc) && thread.archived !== true));
@@ -305,11 +317,11 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
   };
   const openCreateWorkspaceDialog = (projectId: string) => {
     const project = projects.find(item => item.id === projectId);
-    setWorkspaceName('');
-    setWorkspaceMode('newBranch');
-    setWorkspaceBranch('');
-    setWorkspaceBase(project?.defaultBranch ?? '');
-    setWorkspacePath('');
+    const defaults = createWorkspaceDraftDefaults(project?.defaultBranch);
+    setWorkspaceName(defaults.name);
+    setWorkspaceMode(defaults.mode);
+    setWorkspaceBranch(defaults.branch);
+    setWorkspaceBase(defaults.base);
     setCreateWorkspaceError(null);
     setCreateWorkspaceProjectId(projectId);
   };
@@ -335,16 +347,16 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
       ?? projects.flatMap(project => project.workspaces).find(workspace => workspace.id === archivedDialogScopeId)?.name
       ?? 'Archived Threads';
   const deleteProjectTarget = deleteProjectId ? projects.find(project => project.id === deleteProjectId) : undefined;
-  const createWorkspaceProject = createWorkspaceProjectId ? projects.find(project => project.id === createWorkspaceProjectId) : undefined;
   const trimmedWorkspaceName = workspaceName.trim();
   const trimmedWorkspaceBranch = workspaceBranch.trim();
   const trimmedWorkspaceBase = workspaceBase.trim();
-  const trimmedWorkspacePath = workspacePath.trim();
+  const workspaceBranchOptionRefs = workspaceBranchOptions.map(option => option.ref);
+  const workspaceBranchOptionByRef = new Map(workspaceBranchOptions.map(option => [option.ref, option]));
   const canCreateWorkspace = Boolean(
     createWorkspaceProject
       && trimmedWorkspaceName
       && !isCreatingWorkspace
-      && (workspaceMode === 'detached' || trimmedWorkspaceBranch),
+      && (workspaceMode === 'detached' ? trimmedWorkspaceBase : trimmedWorkspaceBranch),
   );
   const renderThreadRunningSpinner = (thread: typeof threads[number]) => {
     if (!runningThreadIds.includes(thread.id)) return null;
@@ -496,7 +508,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
             onReorder={async (activeId, overId) => {
               const ordered = moveItem(sortedProjects, activeId, overId);
               await reorderProjects(ordered.map(item => item.id));
-              await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+              await invalidateProjects();
             }}
           >
           {sortedProjects.map((project, index) => {
@@ -552,7 +564,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                             await newThread(project.id);
                             await Promise.all([
                               queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-                              queryClient.invalidateQueries({ queryKey: ['projects', resourceId] }),
+                              invalidateProjects(),
                             ]);
                             if (closeOnSelect) onClose?.();
                           }}
@@ -578,7 +590,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                   const name = window.prompt('Workspace display name (optional)') ?? undefined;
                                   try {
                                     await adoptWorkspace(project.id, path.trim(), name?.trim() || undefined);
-                                    await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+                                    await invalidateProjects();
                                   } catch (error) {
                                     window.alert(error instanceof Error ? error.message : String(error));
                                   }
@@ -646,7 +658,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                           onReorder={async (activeId, overId) => {
                             const ordered = moveItem(sortedWorkspaces, activeId, overId);
                             await reorderWorkspaces(project.id, ordered.map(item => item.id));
-                            await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+                            await invalidateProjects();
                           }}
                         >
                         {sortedWorkspaces.map((workspace, workspaceIndex) => {
@@ -686,7 +698,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                   await newThread(project.id, workspace.id);
                                   await Promise.all([
                                     queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-                                    queryClient.invalidateQueries({ queryKey: ['projects', resourceId] }),
+                                    invalidateProjects(),
                                   ]);
                                   if (closeOnSelect) onClose?.();
                                 }}
@@ -714,7 +726,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                           createBranch,
                                           base: base?.trim() || undefined,
                                         });
-                                        await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+                                        await invalidateProjects();
                                       } catch (error) {
                                         window.alert(error instanceof Error ? error.message : String(error));
                                       }
@@ -730,7 +742,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                           if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk.`)) return;
                                           try {
                                             await deleteWorkspace(project.id, workspace.id, 'detach');
-                                            await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+                                            await invalidateProjects();
                                           } catch (error) {
                                             window.alert(error instanceof Error ? error.message : String(error));
                                           }
@@ -745,7 +757,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                           if (!window.confirm(`Remove workspace ${workspace.name}? This removes the worktree and leaves the branch alone.`)) return;
                                           try {
                                             await deleteWorkspace(project.id, workspace.id, 'remove');
-                                            await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+                                            await invalidateProjects();
                                           } catch (error) {
                                             window.alert(error instanceof Error ? error.message : String(error));
                                           }
@@ -823,7 +835,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
             try {
               await createProject(input);
               setIsCreateProjectDialogOpen(false);
-              await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+              await invalidateProjects();
             } catch (error) {
               setCreateProjectError(error instanceof Error ? error.message : String(error));
             } finally {
@@ -863,16 +875,22 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                 <FieldLabel>Branch Action</FieldLabel>
                 <Select
                   value={workspaceMode}
-                  onValueChange={value => setWorkspaceMode(value === 'existingBranch' || value === 'detached' ? value : 'newBranch')}
+                  onValueChange={value => {
+                    const nextMode = value === 'existingBranch' || value === 'detached' ? value : 'newBranch';
+                    setWorkspaceMode(nextMode);
+                    if (nextMode === 'detached' && !workspaceBase.trim()) {
+                      setWorkspaceBase(getDefaultWorkspaceBase(createWorkspaceProject.defaultBranch));
+                    }
+                  }}
                   disabled={isCreatingWorkspace}
                 >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectPopup>
+                    <SelectItem value="detached">Detached checkout</SelectItem>
                     <SelectItem value="newBranch">New branch</SelectItem>
                     <SelectItem value="existingBranch">Existing branch</SelectItem>
-                    <SelectItem value="detached">Detached checkout</SelectItem>
                   </SelectPopup>
                 </Select>
               </Field>
@@ -888,26 +906,56 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                   />
                 </Field>
               ) : null}
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3">
                 <Field>
                   <FieldLabel>{workspaceMode === 'detached' ? 'Commit / Ref' : 'Base'}</FieldLabel>
-                  <Input
-                    nativeInput
-                    value={workspaceBase}
-                    onChange={event => setWorkspaceBase(event.target.value)}
-                    disabled={isCreatingWorkspace}
-                    placeholder={createWorkspaceProject.defaultBranch ?? 'HEAD'}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel>Path</FieldLabel>
-                  <Input
-                    nativeInput
-                    value={workspacePath}
-                    onChange={event => setWorkspacePath(event.target.value)}
-                    disabled={isCreatingWorkspace}
-                    placeholder="Optional"
-                  />
+                  {workspaceMode === 'detached' ? (
+                    <Combobox
+                      items={workspaceBranchOptionRefs}
+                      value={workspaceBranchOptionRefs.includes(workspaceBase) ? workspaceBase : null}
+                      inputValue={workspaceBase}
+                      onInputValueChange={value => setWorkspaceBase(value)}
+                      onValueChange={value => {
+                        if (typeof value === 'string') setWorkspaceBase(value);
+                      }}
+                      disabled={isCreatingWorkspace}
+                    >
+                      <ComboboxInput placeholder={getDefaultWorkspaceBase(createWorkspaceProject.defaultBranch)} />
+                      <ComboboxPopup>
+                        <ComboboxEmpty>
+                          {workspaceBranchOptionsError ? 'Unable to load branches' : 'No branches found'}
+                        </ComboboxEmpty>
+                        <ComboboxList>
+                          <ComboboxCollection>
+                            {(ref: string) => {
+                              const option = workspaceBranchOptionByRef.get(ref);
+                              return (
+                                <ComboboxItem key={ref} value={ref}>
+                                  <span className="flex min-w-0 items-center gap-2">
+                                    <span className="truncate">{option?.name ?? ref}</span>
+                                    {option?.kind === 'remote' ? (
+                                      <span className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">origin</span>
+                                    ) : null}
+                                    {option?.current ? (
+                                      <span className="size-1.5 shrink-0 rounded-full bg-success" aria-label="Current branch" />
+                                    ) : null}
+                                  </span>
+                                </ComboboxItem>
+                              );
+                            }}
+                          </ComboboxCollection>
+                        </ComboboxList>
+                      </ComboboxPopup>
+                    </Combobox>
+                  ) : (
+                    <Input
+                      nativeInput
+                      value={workspaceBase}
+                      onChange={event => setWorkspaceBase(event.target.value)}
+                      disabled={isCreatingWorkspace}
+                      placeholder={getDefaultWorkspaceBase(createWorkspaceProject.defaultBranch)}
+                    />
+                  )}
                 </Field>
               </div>
               {createWorkspaceError ? <Alert variant="error"><AlertDescription>{createWorkspaceError}</AlertDescription></Alert> : null}
@@ -923,14 +971,13 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                     mode: workspaceMode,
                     branch: workspaceMode === 'detached' ? undefined : trimmedWorkspaceBranch,
                     base: trimmedWorkspaceBase || undefined,
-                    path: trimmedWorkspacePath || undefined,
                   };
                   setIsCreatingWorkspace(true);
                   setCreateWorkspaceError(null);
                   try {
                     await createWorkspace(createWorkspaceProject.id, input);
                     setCreateWorkspaceProjectId(null);
-                    await queryClient.invalidateQueries({ queryKey: ['projects', resourceId] });
+                    await invalidateProjects();
                   } catch (error) {
                     setCreateWorkspaceError(error instanceof Error ? error.message : String(error));
                   } finally {
@@ -970,7 +1017,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                   await deleteProject(deleteProjectTarget.id);
                   setDeleteProjectId(null);
                   await Promise.all([
-                    queryClient.invalidateQueries({ queryKey: ['projects', resourceId] }),
+                    invalidateProjects(),
                     queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
                   ]);
                 }}

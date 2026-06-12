@@ -1,10 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, PanelLeft, PencilRuler, Settings, TerminalSquare } from 'lucide-react';
-import { listProjects, listPortals, listServerThreads } from '../../lib/chat-state-api';
+import { listPortals, listServerThreads } from '../../lib/chat-state-api';
 import { isDesktopEditorBackendAvailable, isEditorBackendAvailable } from '../../lib/editor-backend';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { isDesktopTerminalTransportAvailable, isTerminalTransportAvailable } from '../../lib/terminal-transport';
+import { useProjectsWithLiveGitState } from '../../lib/workspace-git-state';
 import { useChatStore } from '../../stores/chat-store';
 import { Button } from '../ui/button';
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
@@ -399,10 +400,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const isElectronWindow = isElectronWindowNow();
   const activeThread = threads.find(thread => thread.id === threadId);
   const hasThreadTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
-  const { data: projects = [] } = useQuery({
-    queryKey: ['projects', resourceId],
-    queryFn: () => listProjects(),
-  });
+  const { projects } = useProjectsWithLiveGitState(resourceId);
   const { data: portals = [] } = useQuery({
     queryKey: ['portals', resourceId],
     queryFn: listPortals,

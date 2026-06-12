@@ -27,7 +27,9 @@ const pendingLogins = new Map<string, PendingLogin>();
 let callbackServer: http.Server | undefined;
 
 const base64Url = (input: Buffer | ArrayBuffer) =>
-  Buffer.from(input).toString('base64url');
+  Buffer.isBuffer(input)
+    ? input.toString('base64url')
+    : Buffer.from(new Uint8Array(input)).toString('base64url');
 
 const createVerifier = () => base64Url(randomBytes(32));
 const createChallenge = (verifier: string) => base64Url(createHash('sha256').update(verifier).digest());

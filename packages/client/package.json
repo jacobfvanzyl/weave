@@ -20,6 +20,7 @@
     "@assistant-ui/react-ai-sdk": "^1.3.23",
     "@azurity/pure-nerd-font": "^3.0.5",
     "@base-ui/react": "^1.5.0",
+    "@criblinc/docker-names": "^1.2.2",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.11",
     "@codemirror/lang-javascript": "^6.2.5",

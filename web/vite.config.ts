@@ -17,6 +17,7 @@ const sharedClientPackages = [
   '@assistant-ui/react',
   '@assistant-ui/react-ai-sdk',
   '@base-ui/react',
+  '@criblinc/docker-names',
   '@codemirror/lang-css',
   '@codemirror/lang-html',
   '@codemirror/lang-javascript',

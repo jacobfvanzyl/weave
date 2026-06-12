@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configureMastraConnection } from '../../packages/client/src/lib/mastra-client';
-import { cancelThreadRun, createWorkspace, getThreadRunState, listProjects, setProjectProfile, setServerThreadProfile, updateWorkspace } from '../../packages/client/src/lib/chat-state-api';
+import { cancelThreadRun, createWorkspace, getThreadRunState, listProjectBranches, listProjects, listWorkspaceGitStates, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
+import { createWorkspaceDraftDefaults } from '../../packages/client/src/lib/workspace-create-defaults';
+import { overlayWorkspaceGitState } from '../../packages/client/src/lib/workspace-git-state';
 import { listProfiles } from '../../packages/client/src/lib/profiles-api';
 import { expandPrompt, listPrompts } from '../../packages/client/src/lib/prompts-api';
 
@@ -10,22 +12,19 @@ const jsonResponse = (body: unknown) =>
     headers: { 'content-type': 'application/json' },
   });
 
-const workspace = {
+const workspace: Workspace = {
   id: 'workspace-1',
   projectId: 'project-1',
   workspaceKind: 'worktree',
   source: 'git',
   name: 'Review checkout',
   path: '/repo.review',
-  branch: 'feature/review',
-  head: 'abc1234',
-  detached: false,
   status: 'ready',
   createdAt: '2026-06-03T08:00:00.000Z',
   updatedAt: '2026-06-03T08:00:00.000Z',
 };
 
-const project = {
+const project: Project = {
   id: 'project-1',
   userId: 'user-1',
   name: 'Weave',
@@ -139,20 +138,136 @@ describe('chat-state Project/Workspace API client', () => {
     });
   });
 
-  it('switches branch as a workspace update', async () => {
+  it('creates detached workspaces without branch or path payload fields', async () => {
     configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ project, workspace: { ...workspace, branch: 'main' } }));
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ project, workspace }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(updateWorkspace('project-1', 'workspace-1', {
+    await expect(createWorkspace('project-1', {
+      name: 'clever-lovelace',
+      mode: 'detached',
+      base: 'main',
+    })).resolves.toEqual(workspace);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://weave.test/projects/project-1/workspaces');
+    expect(init).toMatchObject({ method: 'POST' });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: 'clever-lovelace',
+      mode: 'detached',
+      base: 'main',
+    });
+  });
+
+  it('builds workspace creation defaults for detached Docker-style checkouts', () => {
+    const draft = createWorkspaceDraftDefaults('trunk');
+    expect(draft).toMatchObject({
+      mode: 'detached',
+      branch: '',
+      base: 'trunk',
+    });
+    expect(draft.name).toMatch(/^[a-z]+-[a-z]+$/);
+    expect(createWorkspaceDraftDefaults().base).toBe('main');
+  });
+
+  it('switches branch as a workspace update', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ project, workspace }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const updated = await updateWorkspace('project-1', 'workspace-1', {
       branch: 'main',
       createBranch: false,
-    })).resolves.toMatchObject({ id: 'workspace-1', branch: 'main' });
+    });
+    expect(updated).toMatchObject({ id: 'workspace-1' });
+    expect('branch' in updated).toBe(false);
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('http://weave.test/projects/project-1/workspaces/workspace-1');
     expect(init).toMatchObject({ method: 'PATCH' });
     expect(JSON.parse(String(init?.body))).toEqual({ branch: 'main', createBranch: false });
+  });
+
+  it('reads live workspace git-state snapshots', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const states = [{
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      path: '/repo.review',
+      status: 'ready',
+      branch: 'feature/review',
+      head: 'abc1234',
+      detached: false,
+      checkedAt: '2026-06-03T08:01:00.000Z',
+    }];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ states }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listWorkspaceGitStates()).resolves.toEqual(states);
+    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects/workspaces/git-state', {
+      headers: { Authorization: 'Bearer token-1' },
+    });
+  });
+
+  it('reads project branch options', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const branches = [
+      { name: 'main', ref: 'main', kind: 'local', current: true },
+      { name: 'feature/review', ref: 'origin/feature/review', kind: 'remote' },
+    ];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ branches }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listProjectBranches('project-1')).resolves.toEqual(branches);
+    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects/project-1/branches', {
+      headers: { Authorization: 'Bearer token-1' },
+    });
+  });
+
+  it('overlays live git-state and strips stale branch metadata', () => {
+    const legacyProject: Project = {
+      ...project,
+      workspaces: [{
+        ...workspace,
+        branch: 'stale/branch',
+        head: 'old',
+        detached: false,
+        lastError: 'old error',
+      }],
+    };
+
+    const offlineWorkspace = overlayWorkspaceGitState([legacyProject], [{
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      path: '/repo.review',
+      status: 'offline',
+      checkedAt: '2026-06-03T08:01:00.000Z',
+    }])[0].workspaces[0];
+    expect(offlineWorkspace).toMatchObject({
+      id: 'workspace-1',
+      status: 'offline',
+    });
+    expect('branch' in offlineWorkspace).toBe(false);
+    expect('head' in offlineWorkspace).toBe(false);
+    expect('detached' in offlineWorkspace).toBe(false);
+    expect('lastError' in offlineWorkspace).toBe(false);
+
+    const detachedWorkspace = overlayWorkspaceGitState([project], [{
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      path: '/repo.review',
+      status: 'ready',
+      head: 'def5678',
+      detached: true,
+      checkedAt: '2026-06-03T08:02:00.000Z',
+    }])[0].workspaces[0];
+    expect(detachedWorkspace).toMatchObject({
+      id: 'workspace-1',
+      status: 'ready',
+      head: 'def5678',
+      detached: true,
+    });
+    expect('branch' in detachedWorkspace).toBe(false);
   });
 
   it('updates thread and project profile metadata', async () => {

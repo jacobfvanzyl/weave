@@ -2,6 +2,7 @@ import { assertEquals } from 'jsr:@std/assert@1.0.19';
 import {
   discoverGlobalWeaveContext,
   discoverProjectWeaveContext,
+  listGitBranchesTool,
   type ResolvedPortalConfig,
 } from './main.ts';
 
@@ -81,6 +82,35 @@ Deno.test('Portal discovery returns AGENTS.md and .weave files from git root to 
       'mcp:packages/app/.weave/mcp.json',
       'skill:packages/app/.weave/skills/app/SKILL.md',
     ]);
+  } finally {
+    await Deno.remove(repo, { recursive: true }).catch(() => undefined);
+  }
+});
+
+Deno.test('Portal branch listing normalizes local and origin branches', async () => {
+  const repo = await Deno.realPath(await Deno.makeTempDir({ prefix: 'weave-branches-' }));
+  try {
+    await runGit(repo, ['init']);
+    await runGit(repo, ['checkout', '-b', 'main']);
+    await runGit(repo, ['config', 'user.email', 'portal-test@example.com']);
+    await runGit(repo, ['config', 'user.name', 'Portal Test']);
+    await write(`${repo}/README.md`, '# Test\n');
+    await runGit(repo, ['add', 'README.md']);
+    await runGit(repo, ['commit', '-m', 'initial']);
+    await runGit(repo, ['branch', 'feature/local']);
+    await runGit(repo, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    await runGit(repo, ['update-ref', 'refs/remotes/origin/remote-only', 'HEAD']);
+    await runGit(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+
+    const result = await listGitBranchesTool(portalConfig, { workspacePath: repo });
+    assertEquals(result, {
+      ok: true,
+      branches: [
+        { name: 'main', ref: 'main', kind: 'local', current: true },
+        { name: 'feature/local', ref: 'feature/local', kind: 'local', current: false },
+        { name: 'remote-only', ref: 'origin/remote-only', kind: 'remote' },
+      ],
+    });
   } finally {
     await Deno.remove(repo, { recursive: true }).catch(() => undefined);
   }

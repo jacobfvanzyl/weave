@@ -717,6 +717,39 @@ const gitWorktreeListTool = async (config: ResolvedPortalConfig, request: Record
   return { ok: true, worktrees };
 };
 
+export type GitBranchOption = {
+  name: string;
+  ref: string;
+  kind: 'local' | 'remote';
+  current?: boolean;
+};
+
+const normalizeBranchOption = (branch: string, kind: GitBranchOption['kind'], currentBranch: string, localNames: Set<string>): GitBranchOption | undefined => {
+  if (!branch || branch.endsWith('/HEAD')) return undefined;
+  if (kind === 'local') return { name: branch, ref: branch, kind, current: branch === currentBranch };
+  if (!branch.includes('/')) return undefined;
+
+  const name = branch.startsWith('origin/') ? branch.slice('origin/'.length) : branch;
+  if (branch.startsWith('origin/') && localNames.has(name)) return undefined;
+  return { name, ref: branch, kind };
+};
+
+export const listGitBranchesTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const root = await resolveWorkspaceRoot(config, request);
+  const currentBranch = await runGit(root, ['branch', '--show-current']).catch(() => '');
+  const localOutput = await runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']).catch(() => '');
+  const remoteOutput = await runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes']).catch(() => '');
+  const localNames = new Set(localOutput.split('\n').map(line => line.trim()).filter(Boolean));
+  const localBranches = [...localNames].flatMap(branch => normalizeBranchOption(branch, 'local', currentBranch, localNames) ?? []);
+  const remoteBranches = remoteOutput.split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .flatMap(branch => normalizeBranchOption(branch, 'remote', currentBranch, localNames) ?? []);
+  const branches = [...localBranches, ...remoteBranches]
+    .sort((a, b) => Number(b.current === true) - Number(a.current === true) || a.name.localeCompare(b.name));
+  return { ok: true, branches };
+};
+
 const gitWorktreeSwitchTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined ?? {};
   const branch = typeof args.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
@@ -1050,6 +1083,8 @@ const handleToolCall = async (
       ? await gitWorktreeCreateTool(config, request)
       : request.tool === 'portal.git.worktree.list'
       ? await gitWorktreeListTool(config, request)
+      : request.tool === 'portal.git.branches.list'
+      ? await listGitBranchesTool(config, request)
       : request.tool === 'portal.git.worktree.switch'
       ? await gitWorktreeSwitchTool(config, request)
       : request.tool === 'portal.git.worktree.remove'
@@ -1087,6 +1122,7 @@ const getPortalCapabilities = async () => {
     'portal.git.worktree.validate',
     'portal.git.worktree.create',
     'portal.git.worktree.list',
+    'portal.git.branches.list',
     'portal.git.worktree.switch',
     'portal.git.worktree.remove',
     'portal.worktrunk.status',

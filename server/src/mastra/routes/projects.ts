@@ -1,5 +1,6 @@
 import { registerApiRoute } from '@mastra/core/server';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
+import { collectWorkspaceGitStatesForProject, gitFieldsFromWorktree, stripProjectGitState } from '../projects/git-state';
 import { getPortalConnection, listPortalConnections, requestPortalTool } from '../portal/registry';
 
 const agentId = 'mageHandAgent';
@@ -60,6 +61,13 @@ export type Project = {
   updatedAt: string;
 };
 
+type BranchOption = {
+  name: string;
+  ref: string;
+  kind: 'local' | 'remote';
+  current?: boolean;
+};
+
 const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 const nowIso = () => new Date().toISOString();
 const projectThreadId = (projectId: string) => `${projectThreadPrefix}${projectId}`;
@@ -84,6 +92,18 @@ const optionalString = (value: unknown) => (typeof value === 'string' && value.t
 const normalizeBranch = (value: unknown) => optionalString(value)?.replace(/^refs\/heads\//, '');
 const normalizePath = (value: unknown) => optionalString(value)?.replace(/\/+$/, '') || undefined;
 const timestampString = (value: unknown) => typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
+const normalizeBranchOption = (value: unknown): BranchOption | undefined => {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+  const name = optionalString(record?.name);
+  const ref = optionalString(record?.ref);
+  if (!name || !ref) return undefined;
+  return {
+    name,
+    ref,
+    kind: record?.kind === 'remote' ? 'remote' : 'local',
+    current: record?.current === true ? true : undefined,
+  };
+};
 
 const getTopThreadSortOrder = async (memory: any, resourceId: string, projectId: string, workspaceId?: string) => {
   const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
@@ -108,7 +128,7 @@ const isVisibleUserProject = (project: Project) => !project.hidden && project.sy
 const toProject = (thread: any): Project => {
   const metadata = (thread.metadata ?? {}) as Partial<Project> & { workspaces?: Workspace[] };
   const id = typeof metadata.id === 'string' ? metadata.id : thread.id.replace(projectThreadPrefix, '');
-  return {
+  return stripProjectGitState({
     id,
     userId: thread.resourceId,
     name: typeof metadata.name === 'string' ? metadata.name : thread.title || 'Untitled Project',
@@ -128,12 +148,12 @@ const toProject = (thread: any): Project => {
     workspaces: Array.isArray(metadata.workspaces) ? metadata.workspaces : [],
     createdAt: typeof thread.createdAt === 'string' ? thread.createdAt : metadata.createdAt ?? nowIso(),
     updatedAt: typeof thread.updatedAt === 'string' ? thread.updatedAt : metadata.updatedAt ?? nowIso(),
-  };
+  });
 };
 
 const saveProject = async (memory: any, resourceId: string, project: Project) => {
   const threadId = projectThreadId(project.id);
-  const metadata = { kind: 'project', ...project };
+  const metadata = { kind: 'project', ...stripProjectGitState(project) };
   const existing = await memory.getThreadById({ threadId }).catch(() => undefined);
 
   if (existing) {
@@ -177,12 +197,6 @@ const assertUniqueWorkspace = (project: Project, candidate: Pick<Workspace, 'pat
   const duplicatePath = candidatePath && project.workspaces.some(item => item.id !== ignoreId && normalizeWorkspacePath(item) === candidatePath);
   if (duplicatePath) throw new Error('workspace path is already attached to this Project');
 };
-
-const gitFieldsFromWorktree = (worktree: Record<string, unknown>) => ({
-  branch: normalizeBranch(worktree.branch),
-  head: optionalString(worktree.commit) ?? optionalString(worktree.head),
-  detached: worktree.detached === true,
-});
 
 const portalToolError = (result: { ok?: boolean; error?: unknown }) => {
   if (result.ok === false) throw new Error(typeof result.error === 'string' ? result.error : 'Portal tool failed');
@@ -311,7 +325,6 @@ const createGitProject = async (c: any, resourceId: string, baseProject: Project
     name: defaultBranch,
     portalId,
     path: repoRoot,
-    branch: defaultBranch,
     locked: true,
     sortOrder: 0,
     status: 'ready',
@@ -355,6 +368,24 @@ export const projectRoutes = [
           || timestampString(b.updatedAt).localeCompare(timestampString(a.updatedAt)),
         );
         return c.json({ projects });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/projects/workspaces/git-state', {
+    method: 'GET',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const memory = await getMemory(c);
+        const checkedAt = nowIso();
+        const projects = (await getAllProjects(memory, resourceId))
+          .filter(project => project.projectKind === 'git' && isVisibleUserProject(project));
+        const states = (await Promise.all(projects.map(project =>
+          collectWorkspaceGitStatesForProject(project, resourceId, checkedAt, requestPortalTool, getPortalConnection),
+        ))).flat();
+        return c.json({ states });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -495,6 +526,36 @@ export const projectRoutes = [
       }
     },
   }),
+  registerApiRoute('/projects/:projectId/branches', {
+    method: 'GET',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const projectId = c.req.param('projectId');
+        const memory = await getMemory(c);
+        const project = await getProject(memory, resourceId, projectId);
+        if (!project) return c.json({ error: 'project not found' }, 404);
+        assertGitProjectReady(project, resourceId);
+
+        const result = await requestPortalTool({
+          portalId: project.portalId!,
+          projectId,
+          rootId: project.portalRootId,
+          repoPath: project.repoPath,
+          tool: 'portal.git.branches.list',
+          args: {},
+          timeoutMs: 10_000,
+        }) as { ok?: boolean; error?: string; branches?: unknown[] };
+        portalToolError(result);
+        const branches = Array.isArray(result.branches)
+          ? result.branches.flatMap(branch => normalizeBranchOption(branch) ?? [])
+          : [];
+        return c.json({ branches });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
   registerApiRoute('/projects/resolve-workspace', {
     method: 'POST',
     handler: async c => {
@@ -551,7 +612,6 @@ export const projectRoutes = [
                   name: gitFields.branch || validatedPath.split('/').pop() || 'Workspace',
                   portalId: project.portalId,
                   path: validatedPath,
-                  ...gitFields,
                   status: 'ready',
                   locked: false,
                   sortOrder: project.workspaces.length,
@@ -670,7 +730,6 @@ export const projectRoutes = [
         assertUniqueWorkspace(project, { path });
 
         const at = nowIso();
-        const gitFields = gitFieldsFromWorktree(worktree);
         const workspace: Workspace = {
           id: createId('workspace'),
           projectId,
@@ -680,7 +739,6 @@ export const projectRoutes = [
           portalId: project.portalId,
           path,
           baseBranch: base,
-          ...gitFields,
           status: 'ready',
           locked: false,
           sortOrder: project.workspaces.length,
@@ -737,7 +795,6 @@ export const projectRoutes = [
           name,
           portalId: project.portalId,
           path: normalizedPath,
-          ...gitFields,
           status: 'ready',
           locked: false,
           sortOrder: project.workspaces.length,
@@ -789,7 +846,6 @@ export const projectRoutes = [
             timeoutMs: 60_000,
           }) as { ok?: boolean; error?: string; worktree?: Record<string, unknown> };
           portalToolError(result);
-          nextWorkspace = { ...nextWorkspace, ...gitFieldsFromWorktree(result.worktree ?? {}) };
         }
 
         const nextProject = {
