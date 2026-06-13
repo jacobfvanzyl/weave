@@ -1,4 +1,5 @@
 import { PortalEditorHost, type PortalEditorTarget } from './editor.ts';
+import { PortalVaultHost } from './vault.ts';
 import { isTerminalClientEnvelope, PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
 import {
   isWindowClientEnvelope,
@@ -564,6 +565,7 @@ const listRootTool = async (config: ResolvedPortalConfig, request: Record<string
     ok: true,
     rootId,
     path: relativePath,
+    realPath: target,
     entries: entries.sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'directory' ? -1 : 1),
     isGitRepo: Boolean(git),
     git,
@@ -1089,6 +1091,7 @@ const editorInputFromToolCall = (request: Record<string, unknown>) => {
 const handleToolCall = async (
   config: ResolvedPortalConfig,
   editorHost: PortalEditorHost,
+  vaultHost: PortalVaultHost,
   windowHost: PortalWindowHost,
   ws: WebSocket,
   request: Record<string, unknown>,
@@ -1111,6 +1114,20 @@ const handleToolCall = async (
       ? await editorHost.read(editorInputFromToolCall(request) as Parameters<PortalEditorHost['read']>[0])
       : request.tool === 'portal.editor.write'
       ? await editorHost.write(editorInputFromToolCall(request) as Parameters<PortalEditorHost['write']>[0])
+      : request.tool === 'portal.vault.index'
+      ? await vaultHost.index(editorInputFromToolCall(request) as Parameters<PortalVaultHost['index']>[0])
+      : request.tool === 'portal.vault.read'
+      ? await vaultHost.read(editorInputFromToolCall(request) as Parameters<PortalVaultHost['read']>[0])
+      : request.tool === 'portal.vault.write'
+      ? await vaultHost.write(editorInputFromToolCall(request) as Parameters<PortalVaultHost['write']>[0])
+      : request.tool === 'portal.vault.mkdir'
+      ? await vaultHost.mkdir(editorInputFromToolCall(request) as Parameters<PortalVaultHost['mkdir']>[0])
+      : request.tool === 'portal.vault.move'
+      ? await vaultHost.move(editorInputFromToolCall(request) as Parameters<PortalVaultHost['move']>[0])
+      : request.tool === 'portal.vault.delete'
+      ? await vaultHost.delete(editorInputFromToolCall(request) as Parameters<PortalVaultHost['delete']>[0])
+      : request.tool === 'portal.vault.upload'
+      ? await vaultHost.upload(editorInputFromToolCall(request) as Parameters<PortalVaultHost['upload']>[0])
       : request.tool === 'portal.window.list'
       ? await windowHost.list()
       : request.tool === 'portal.fs.list'
@@ -1166,6 +1183,13 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'portal.editor.list',
     'portal.editor.read',
     'portal.editor.write',
+    'portal.vault.index',
+    'portal.vault.read',
+    'portal.vault.write',
+    'portal.vault.mkdir',
+    'portal.vault.move',
+    'portal.vault.delete',
+    'portal.vault.upload',
     'portal.fs.list',
     'portal.fs.stat',
     'portal.git.inspect',
@@ -1205,6 +1229,7 @@ const connectOnce = (
   config: ResolvedPortalConfig,
   terminalHost: PortalTerminalHost,
   editorHost: PortalEditorHost,
+  vaultHost: PortalVaultHost,
   windowHost: PortalWindowHost,
   onSocket?: (ws: WebSocket) => void,
 ) =>
@@ -1265,7 +1290,7 @@ const connectOnce = (
         return;
       }
 
-      if (message.type === 'tool.call') void handleToolCall(config, editorHost, windowHost, ws, message);
+      if (message.type === 'tool.call') void handleToolCall(config, editorHost, vaultHost, windowHost, ws, message);
     };
 
     ws.onerror = () => {
@@ -1315,6 +1340,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
 
   const terminalHost = new PortalTerminalHost({ config });
   const editorHost = new PortalEditorHost({ config });
+  const vaultHost = new PortalVaultHost({ config });
   const windowHost = new PortalWindowHost({ config });
   const controlToken = noControl ? undefined : stringFlag(flags, 'control-token') ?? crypto.randomUUID();
   const controlPort = noControl ? undefined : numberFlag(flags, 'control-port') ?? 0;
@@ -1346,6 +1372,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
     controlServer = startTerminalControlServer({
       host: terminalHost,
       editor: editorHost,
+      vault: vaultHost,
       hostname: controlHost,
       port: controlPort,
       token: controlToken,
@@ -1399,7 +1426,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
 
   while (!stopping) {
     try {
-      await connectOnce(config, terminalHost, editorHost, windowHost, (ws) => {
+      await connectOnce(config, terminalHost, editorHost, vaultHost, windowHost, (ws) => {
         activeSocket = ws;
       });
       retryMs = 1_000;

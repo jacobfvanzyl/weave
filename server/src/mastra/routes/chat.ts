@@ -788,10 +788,12 @@ export const chatRoutes = [
       }
       const isProjectWorkspace = Boolean(resolvedProfile?.threadMetadata?.mode === 'project' && resolvedProfile.threadMetadata.workspaceId);
       const isGitProject = resolvedProfile?.projectKind === 'git';
+      const isNotesProject = resolvedProfile?.projectKind === 'notes';
       markGitWorkspaceContext(requestContext, isProjectWorkspace);
       markGitProjectContext(requestContext, isGitProject);
       const system = buildChatSystemMessages({
         includeGitInstructions: isGitProject,
+        includeNotesInstructions: isNotesProject,
         agentFiles: resolvedProfile?.agentFiles,
         callerSystem: params.system as Parameters<typeof buildChatSystemMessages>[0]['callerSystem'],
       });

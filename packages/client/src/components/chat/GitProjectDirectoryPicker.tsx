@@ -44,7 +44,7 @@ const normalizeBrowseResult = (result: PortalBrowseResult | null, requestedPath:
 
 export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createError, onCancel, onCreate }: GitProjectDirectoryPickerProps) => {
   const [projectName, setProjectName] = useState('');
-  const [projectKind, setProjectKind] = useState<'general' | 'git'>('general');
+  const [projectKind, setProjectKind] = useState<'general' | 'git' | 'notes'>('general');
   const onlinePortals = useMemo(() => portals.filter(portal => portal.status === 'online'), [portals]);
   const [selectedPortalId, setSelectedPortalId] = useState(() => onlinePortals[0]?.portalId ?? '');
   const selectedPortal = onlinePortals.find(portal => portal.portalId === selectedPortalId) ?? onlinePortals[0];
@@ -77,7 +77,7 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
   }, [selectedPortalId, selectedRootId]);
 
   useEffect(() => {
-    if (projectKind !== 'git' || !selectedPortalId || !selectedRootId) return;
+    if ((projectKind !== 'git' && projectKind !== 'notes') || !selectedPortalId || !selectedRootId) return;
     let cancelled = false;
     setIsBrowsing(true);
     setBrowseError(null);
@@ -104,7 +104,9 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
   const displayPath = browseResult?.path ?? path;
   const canCreate = projectKind === 'general'
     ? Boolean(trimmedName && !isCreating)
-    : Boolean(trimmedName && selectedPortal?.portalId && selectedRootId && browseResult?.isGitRepo && !isBrowsing && !isCreating);
+    : projectKind === 'git'
+    ? Boolean(trimmedName && selectedPortal?.portalId && selectedRootId && browseResult?.isGitRepo && !isBrowsing && !isCreating)
+    : Boolean(trimmedName && selectedPortal?.portalId && selectedRootId && browseResult && !isBrowsing && !isCreating);
 
   return (
     <Dialog open onOpenChange={open => {
@@ -114,7 +116,7 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
         <DialogHeader className="flex-row items-start justify-between gap-3">
           <div className="min-w-0">
             <DialogTitle>Create Project</DialogTitle>
-            <DialogDescription>General or Git</DialogDescription>
+            <DialogDescription>General, Code, or Notes</DialogDescription>
           </div>
           <DialogClose render={<Button size="icon-sm" variant="ghost" aria-label="Close directory picker" />}>
             <X size={16} />
@@ -138,7 +140,7 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
             <FieldLabel>Type</FieldLabel>
             <Select
               value={projectKind}
-              onValueChange={value => setProjectKind(value === 'git' ? 'git' : 'general')}
+              onValueChange={value => setProjectKind(value === 'git' || value === 'notes' ? value : 'general')}
               disabled={isCreating}
             >
               <SelectTrigger>
@@ -146,13 +148,14 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
               </SelectTrigger>
               <SelectPopup>
                 <SelectItem value="general">General</SelectItem>
-                <SelectItem value="git">Git</SelectItem>
+                <SelectItem value="git">Code</SelectItem>
+                <SelectItem value="notes">Notes</SelectItem>
               </SelectPopup>
             </Select>
           </Field>
         </div>
 
-        {projectKind === 'git' ? <div className="grid gap-3 sm:grid-cols-2">
+        {projectKind === 'git' || projectKind === 'notes' ? <div className="grid gap-3 sm:grid-cols-2">
           <Field>
             <FieldLabel>Portal</FieldLabel>
             <Select
@@ -187,7 +190,7 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
           </Field>
         </div> : null}
 
-        {projectKind === 'git' ? <div className="rounded-md border border-border bg-muted p-2 text-xs">
+        {projectKind === 'git' || projectKind === 'notes' ? <div className="rounded-md border border-border bg-muted p-2 text-xs">
           <div className="flex items-center justify-between gap-2">
             <span className="min-w-0 truncate text-muted-foreground">/{displayPath}</span>
             {path ? (
@@ -196,12 +199,12 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
               </Button>
             ) : null}
           </div>
-          <div className={cn('mt-2 rounded px-2 py-1', browseResult?.isGitRepo ? 'bg-success/15 text-success' : 'bg-background/60 text-muted-foreground')}>
-            {browseResult?.isGitRepo ? 'Valid git repository root' : 'Select a git repository root'}
+          <div className={cn('mt-2 rounded px-2 py-1', projectKind === 'notes' || browseResult?.isGitRepo ? 'bg-success/15 text-success' : 'bg-background/60 text-muted-foreground')}>
+            {projectKind === 'notes' ? 'Vault folder selected' : browseResult?.isGitRepo ? 'Valid git repository root' : 'Select a git repository root'}
           </div>
         </div> : null}
 
-        {projectKind === 'git' ? <ScrollArea className="min-h-44 flex-1 rounded-md border border-border bg-background">
+        {projectKind === 'git' || projectKind === 'notes' ? <ScrollArea className="min-h-44 flex-1 rounded-md border border-border bg-background">
           <div className="p-1">
           {isBrowsing ? (
             <div className="flex h-32 items-center justify-center gap-2 text-xs text-muted-foreground"><Spinner /> Loading directories</div>
@@ -225,7 +228,7 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
           </div>
         </ScrollArea> : null}
 
-        {projectKind === 'git' && onlinePortals.length === 0 ? <Alert variant="error"><AlertDescription>Connect a Portal before creating a Git Project.</AlertDescription></Alert> : null}
+        {(projectKind === 'git' || projectKind === 'notes') && onlinePortals.length === 0 ? <Alert variant="error"><AlertDescription>Connect a Portal before creating this Project.</AlertDescription></Alert> : null}
 
         {createError ? <Alert variant="error"><AlertDescription>{createError}</AlertDescription></Alert> : null}
         </DialogPanel>
@@ -237,6 +240,7 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
             disabled={!canCreate}
             onClick={() => {
               if (projectKind === 'general') return onCreate({ name: trimmedName, projectKind: 'general' });
+              if (projectKind === 'notes') return selectedPortal && onCreate({ name: trimmedName, projectKind: 'notes', portalId: selectedPortal.portalId, rootId: selectedRootId, vaultPath: displayPath });
               return selectedPortal && onCreate({ name: trimmedName, projectKind: 'git', portalId: selectedPortal.portalId, rootId: selectedRootId, repoPath: displayPath });
             }}
           >

@@ -4,7 +4,7 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ChevronDown, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, Trash2, X } from 'lucide-react';
+import { Archive, ChevronDown, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, Trash2, X } from 'lucide-react';
 import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, listPortals, listProjectBranches, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type WorkspaceBranchMode } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { createWorkspaceDraftDefaults, getDefaultWorkspaceBase } from '../../lib/workspace-create-defaults';
@@ -540,6 +540,8 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                             <FolderOpen size={16} className="shrink-0 text-foreground" aria-label="Expanded Project" />
                           ) : project.projectKind === 'git' ? (
                             <FolderCode size={16} className="shrink-0 text-foreground" aria-label="Git Project" />
+                          ) : project.projectKind === 'notes' ? (
+                            <StickyNote size={16} className="shrink-0 text-foreground" aria-label="Notes Project" />
                           ) : (
                             <Folder size={16} className="shrink-0 text-foreground" aria-label="General Project" />
                           )}
@@ -547,14 +549,14 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                         </SidebarItemButton>
                         {!isCollapsed ? (
                           <>
-                            {project.projectKind === 'general' ? (
+                            {project.projectKind === 'general' || project.projectKind === 'notes' ? (
                               <Button
                                 className="h-6 w-8 shrink-0 text-primary"
                                 size="icon-xs"
                                 variant="ghost"
                                 aria-label={`Create thread in ${project.name}`}
                                 onClick={async () => {
-                                  await newThread(project.id);
+                                  await newThread(project.id, project.projectKind === 'notes' ? project.workspaces[0]?.id : undefined);
                                   await Promise.all([
                                     queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
                                     invalidateProjects(),
@@ -642,7 +644,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                 ))}
                               </SortableSection>
                             ) : null}
-                            {project.projectKind === 'git' ? (
+                            {project.projectKind === 'git' || project.projectKind === 'notes' ? (
                               <div>
                                 <SortableSection
                                   items={sortedWorkspaces.map(workspace => workspace.id)}
@@ -703,28 +705,30 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                                 <Archive size={13} />
                                                 Archived Threads
                                               </MenuItem>
-                                              <MenuItem
-                                                onClick={async () => {
-                                                  const branch = window.prompt('Branch name', workspace.branch ?? '');
-                                                  if (!branch?.trim()) return;
-                                                  const createBranch = window.confirm('Create as a new branch? Cancel switches to an existing branch.');
-                                                  const base = createBranch ? window.prompt('Base ref (optional)', project.defaultBranch ?? workspace.branch ?? '') : undefined;
-                                                  try {
-                                                    await updateWorkspace(project.id, workspace.id, {
-                                                      branch: branch.trim(),
-                                                      createBranch,
-                                                      base: base?.trim() || undefined,
-                                                    });
-                                                    await invalidateProjects();
-                                                  } catch (error) {
-                                                    window.alert(error instanceof Error ? error.message : String(error));
-                                                  }
-                                                }}
-                                              >
-                                                <GitBranch size={13} />
-                                                Switch Branch
-                                              </MenuItem>
-                                              {!workspace.locked && workspace.workspaceKind !== 'primary' ? (
+                                              {project.projectKind === 'git' ? (
+                                                <MenuItem
+                                                  onClick={async () => {
+                                                    const branch = window.prompt('Branch name', workspace.branch ?? '');
+                                                    if (!branch?.trim()) return;
+                                                    const createBranch = window.confirm('Create as a new branch? Cancel switches to an existing branch.');
+                                                    const base = createBranch ? window.prompt('Base ref (optional)', project.defaultBranch ?? workspace.branch ?? '') : undefined;
+                                                    try {
+                                                      await updateWorkspace(project.id, workspace.id, {
+                                                        branch: branch.trim(),
+                                                        createBranch,
+                                                        base: base?.trim() || undefined,
+                                                      });
+                                                      await invalidateProjects();
+                                                    } catch (error) {
+                                                      window.alert(error instanceof Error ? error.message : String(error));
+                                                    }
+                                                  }}
+                                                >
+                                                  <GitBranch size={13} />
+                                                  Switch Branch
+                                                </MenuItem>
+                                              ) : null}
+                                              {project.projectKind === 'git' && !workspace.locked && workspace.workspaceKind !== 'primary' ? (
                                                 <>
                                                   <MenuItem
                                                     onClick={async () => {

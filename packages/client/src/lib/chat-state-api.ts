@@ -17,7 +17,7 @@ export type Workspace = {
   portalId?: string;
   mountId?: string;
   workspaceKind: 'primary' | 'worktree';
-  source?: 'primary' | 'git' | 'adopted' | 'legacy';
+  source?: 'primary' | 'git' | 'notes' | 'adopted' | 'legacy';
   name: string;
   path?: string;
   status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual' | 'error';
@@ -55,11 +55,12 @@ export type Project = {
   id: string;
   userId: string;
   name: string;
-  projectKind: 'general' | 'git';
+  projectKind: 'general' | 'git' | 'notes';
   description?: string;
   portalId?: string;
   portalRootId?: string;
   repoPath?: string;
+  vaultPath?: string;
   gitRemote?: string;
   defaultBranch?: string;
   rootPathHint?: string;
@@ -216,6 +217,7 @@ export type PortalBrowseResult = {
   ok?: boolean;
   rootId: string;
   path: string;
+  realPath?: string;
   entries: PortalBrowseEntry[];
   isGitRepo?: boolean;
   git?: Record<string, unknown>;
@@ -224,10 +226,11 @@ export type PortalBrowseResult = {
 
 export type CreateProjectInput = {
   name: string;
-  projectKind?: 'general' | 'git';
+  projectKind?: 'general' | 'git' | 'notes';
   portalId?: string;
   rootId?: string;
   repoPath?: string;
+  vaultPath?: string;
 };
 
 export type WorkspaceBranchMode = 'newBranch' | 'existingBranch' | 'detached';

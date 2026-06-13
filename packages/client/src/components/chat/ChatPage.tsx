@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Code2, MonitorUp, PanelLeft, PencilRuler, Settings, TerminalSquare } from 'lucide-react';
+import { Code2, MonitorUp, PanelLeft, PencilRuler, Settings, StickyNote, TerminalSquare } from 'lucide-react';
 import { listPortals, listServerThreads } from '../../lib/chat-state-api';
 import { isDesktopEditorBackendAvailable, isEditorBackendAvailable } from '../../lib/editor-backend';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
@@ -18,6 +18,7 @@ import type { TerminalPanelTab, TerminalPanelTabsChange } from './TerminalPanel'
 
 const TerminalPanel = lazy(() => import('./TerminalPanel').then(module => ({ default: module.TerminalPanel })));
 const EditorPanel = lazy(() => import('./EditorPanel').then(module => ({ default: module.EditorPanel })));
+const NotesPanel = lazy(() => import('./NotesPanel').then(module => ({ default: module.NotesPanel })));
 const WindowStreamOverlay = lazy(() => import('./WindowStreamOverlay').then(module => ({ default: module.WindowStreamOverlay })));
 const ExcalidrawOverlay = lazy(() => {
   configureExcalidrawAssetPath();
@@ -430,6 +431,18 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
         title: `${activeProject.name} / ${activeWorkspace.name}`,
       }
     : undefined;
+  const activeNotesWorkspaceTarget = activeProject?.projectKind === 'notes' && activeWorkspace
+    ? {
+        projectId: activeProject.id,
+        workspaceId: activeWorkspace.id,
+        portalId: activeWorkspacePortalId,
+        rootId: activeProject.portalRootId,
+        repoPath: activeProject.vaultPath,
+        workspacePath: activeWorkspace.path,
+        projectName: activeProject.name,
+        workspaceName: activeWorkspace.name,
+      }
+    : undefined;
   const hasDesktopTerminalTransport = isDesktopTerminalTransportAvailable();
   const hasAnyTerminalTransport = isTerminalTransportAvailable();
   const hasOnlinePortalForActiveWorkspace = Boolean(activeWorkspacePortalId && onlinePortalIds.has(activeWorkspacePortalId));
@@ -449,6 +462,8 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const editorTarget = isEditorBackendAvailable() && (hasOnlinePortalForActiveWorkspace || (isElectronWindow && hasDesktopEditorBackend))
     ? activeGitWorkspaceTarget
     : undefined;
+  const notesTarget = hasOnlinePortalForActiveWorkspace ? activeNotesWorkspaceTarget : undefined;
+  const sideEditorTargetKey = editorTarget?.workspaceId ?? notesTarget?.workspaceId;
   const terminalWorkspaceId = terminalTarget?.workspaceId;
   const terminalTargetKey = terminalTarget?.terminalId;
   const [generalTerminalTabs, setGeneralTerminalTabs] = useState<TerminalPanelTab[]>(() => []);
@@ -457,7 +472,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const [activeTerminalTabByTarget, setActiveTerminalTabByTarget] = useState<Record<string, string>>({});
   const [isWindowStreamOpen, setIsWindowStreamOpen] = useState(false);
   const windowSurfaces = useWindowSurfaces({
-    editorTargetKey: editorTarget?.workspaceId,
+    editorTargetKey: sideEditorTargetKey,
     hasGeneralTerminalTarget: Boolean(generalTerminalTarget),
     isPortraitViewport,
     pageWidth,
@@ -859,16 +874,16 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                 <TerminalTabCountBadge count={terminalTabs.length} />
               </Button>
             ) : null}
-            {editorTarget ? (
+            {editorTarget || notesTarget ? (
               <Button
                 className={isEditorOpen ? 'bg-accent' : ''}
                 size="icon"
                 variant="ghost"
-                aria-label={isEditorOpen ? 'Hide editor' : 'Show editor'}
+                aria-label={notesTarget ? (isEditorOpen ? 'Hide notes' : 'Show notes') : (isEditorOpen ? 'Hide editor' : 'Show editor')}
                 data-active={isEditorOpen ? 'true' : 'false'}
                 onClick={toggleEditor}
               >
-                <Code2 size={18} />
+                {notesTarget ? <StickyNote size={18} /> : <Code2 size={18} />}
               </Button>
             ) : null}
             <Menu>
@@ -951,6 +966,16 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                 isExpanded={isEditorExpanded}
                 onExpandedChange={handleEditorExpandedChange}
                 target={editorTarget}
+                onHide={hideEditor}
+              />
+            </Suspense>
+          ) : isEditorOpen && notesTarget ? (
+            <Suspense fallback={null}>
+              <NotesPanel
+                focusRequest={editorFocusRequest}
+                isExpanded={isEditorExpanded}
+                onExpandedChange={handleEditorExpandedChange}
+                target={notesTarget}
                 onHide={hideEditor}
               />
             </Suspense>

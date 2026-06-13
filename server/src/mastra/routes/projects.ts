@@ -16,7 +16,7 @@ export type Workspace = {
   portalId?: string;
   mountId?: string;
   workspaceKind: 'primary' | 'worktree';
-  source?: 'primary' | 'git' | 'adopted' | 'legacy';
+  source?: 'primary' | 'git' | 'notes' | 'adopted' | 'legacy';
   name: string;
   path?: string;
   branch?: string;
@@ -37,11 +37,12 @@ export type Project = {
   id: string;
   userId: string;
   name: string;
-  projectKind: 'general' | 'git';
+  projectKind: 'general' | 'git' | 'notes';
   description?: string;
   portalId?: string;
   portalRootId?: string;
   repoPath?: string;
+  vaultPath?: string;
   gitRemote?: string;
   defaultBranch?: string;
   rootPathHint?: string;
@@ -132,11 +133,12 @@ const toProject = (thread: any): Project => {
     id,
     userId: thread.resourceId,
     name: typeof metadata.name === 'string' ? metadata.name : thread.title || 'Untitled Project',
-    projectKind: metadata.projectKind === 'git' ? 'git' : 'general',
+    projectKind: metadata.projectKind === 'git' || metadata.projectKind === 'notes' ? metadata.projectKind : 'general',
     description: metadata.description,
     portalId: metadata.portalId,
     portalRootId: metadata.portalRootId,
     repoPath: metadata.repoPath,
+    vaultPath: metadata.vaultPath,
     gitRemote: metadata.gitRemote,
     defaultBranch: metadata.defaultBranch,
     rootPathHint: metadata.rootPathHint,
@@ -176,14 +178,14 @@ const errorResponse = (c: any, error: unknown) => {
 };
 
 const assertPortalForUser = (portalId: string | undefined, resourceId: string) => {
-  if (!portalId) throw new Error('portalId is required for git projects');
+  if (!portalId) throw new Error('portalId is required for Portal-backed projects');
   const portal = getPortalConnection(portalId);
   if (!portal || portal.userId !== resourceId) throw new Error('portal is offline or unavailable');
   return portal;
 };
 
 const assertGitProjectReady = (project: Project, resourceId: string) => {
-  if (project.projectKind !== 'git') throw new Error('general projects cannot have workspaces');
+  if (project.projectKind !== 'git') throw new Error('only git projects can have git workspaces');
   assertPortalForUser(project.portalId, resourceId);
   if (!project.portalRootId || !project.repoPath) throw new Error('git project is missing Portal repo binding');
 };
@@ -351,6 +353,47 @@ const createGitProject = async (c: any, resourceId: string, baseProject: Project
   };
 };
 
+const createNotesProject = async (_c: any, resourceId: string, baseProject: Project, body: Record<string, unknown>): Promise<Project> => {
+  const portalId = optionalString(body?.portalId);
+  const rootId = optionalString(body?.rootId);
+  const vaultPath = optionalString(body?.vaultPath ?? body?.repoPath) ?? '';
+  assertPortalForUser(portalId, resourceId);
+  if (!rootId) throw new Error('rootId is required for notes projects');
+
+  const result = await requestPortalTool({
+    portalId: portalId!,
+    tool: 'portal.fs.list',
+    args: { rootId, path: vaultPath },
+    timeoutMs: 10_000,
+  }) as { ok?: boolean; error?: string; path?: string; realPath?: string };
+  portalToolError(result);
+  const realPath = normalizePath(result.realPath);
+  if (!realPath) throw new Error('Selected vault folder could not be resolved.');
+  const at = baseProject.createdAt;
+  const primaryWorkspace: Workspace = {
+    id: createId('workspace'),
+    projectId: baseProject.id,
+    workspaceKind: 'primary',
+    source: 'notes',
+    name: pathBasename(realPath),
+    portalId,
+    path: realPath,
+    locked: true,
+    sortOrder: 0,
+    status: 'ready',
+    createdAt: at,
+    updatedAt: at,
+  };
+
+  return {
+    ...baseProject,
+    portalId,
+    portalRootId: rootId,
+    vaultPath: typeof result.path === 'string' ? result.path : vaultPath,
+    workspaces: [primaryWorkspace],
+  };
+};
+
 export const projectRoutes = [
   registerApiRoute('/projects', {
     method: 'GET',
@@ -400,7 +443,7 @@ export const projectRoutes = [
         const name = cleanName(body?.name);
         if (!name) return c.json({ error: 'name is required' }, 400);
 
-        const projectKind = body?.projectKind === 'git' ? 'git' : 'general';
+        const projectKind = body?.projectKind === 'git' || body?.projectKind === 'notes' ? body.projectKind : 'general';
         const at = nowIso();
         const memory = await getMemory(c);
         const baseProject: Project = {
@@ -416,7 +459,9 @@ export const projectRoutes = [
 
         const project = projectKind === 'general'
           ? baseProject
-          : await createGitProject(c, resourceId, baseProject, body);
+          : projectKind === 'git'
+          ? await createGitProject(c, resourceId, baseProject, body)
+          : await createNotesProject(c, resourceId, baseProject, body);
 
         const thread = await saveProject(memory, resourceId, project);
         return c.json({ project: toProject(thread) });
@@ -944,7 +989,11 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
 
         const at = nowIso();
-        const requestedWorkspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
+        const requestedWorkspaceId = typeof body?.workspaceId === 'string'
+          ? body.workspaceId
+          : project.projectKind === 'notes'
+          ? project.workspaces[0]?.id
+          : undefined;
         const workspace = requestedWorkspaceId
           ? project.workspaces.find(item => item.id === requestedWorkspaceId)
           : undefined;
@@ -952,6 +1001,7 @@ export const projectRoutes = [
         const isAdHoc = project.systemKind === 'adHoc' && workspace?.systemKind === 'adHoc';
         if (project.projectKind === 'general' && requestedWorkspaceId && !isAdHoc) return c.json({ error: 'general projects cannot have workspace threads' }, 400);
         if (project.projectKind === 'git' && !workspace) return c.json({ error: 'git project threads must belong to a workspace' }, 400);
+        if (project.projectKind === 'notes' && !workspace) return c.json({ error: 'notes project threads must belong to the vault workspace' }, 400);
 
         const sortOrder = await getTopThreadSortOrder(memory, resourceId, projectId, workspace?.id);
         const metadata = workspace

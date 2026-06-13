@@ -40,7 +40,7 @@ export type RuntimeProjectContext = {
   thread?: any;
   threadMetadata?: Record<string, unknown>;
   project?: Record<string, any>;
-  projectKind?: 'general' | 'git';
+  projectKind?: 'general' | 'git' | 'notes';
   projectSnapshot?: WeaveContextSnapshot;
   agentFiles: WeaveContextFile[];
 };
@@ -173,7 +173,7 @@ const getNestedString = (value: unknown, path: string[]) => {
   return optionalString(current);
 };
 
-const configuredDefaultProfileId = (config: Record<string, unknown>, projectKind?: 'general' | 'git') =>
+const configuredDefaultProfileId = (config: Record<string, unknown>, projectKind?: 'general' | 'git' | 'notes') =>
   (projectKind
     ? getNestedString(config, ['projectKinds', projectKind, 'profile'])
       ?? getNestedString(config, ['projectKinds', projectKind, 'profileId'])
@@ -190,7 +190,7 @@ const parseProfiles = (snapshot: WeaveContextSnapshot | undefined) =>
 
 const selectProfile = (
   profiles: DynamicProfile[],
-  options: { requestedProfileId?: string; projectKind?: 'general' | 'git'; config: Record<string, unknown> },
+  options: { requestedProfileId?: string; projectKind?: 'general' | 'git' | 'notes'; config: Record<string, unknown> },
 ) => {
   const byId = new Map(profiles.map(profile => [profile.id, profile]));
   const selectedProfileId = options.requestedProfileId
@@ -307,7 +307,7 @@ const getProjectContext = async (
     thread,
     threadMetadata,
     project,
-    projectKind: project.projectKind === 'git' ? 'git' : 'general',
+    projectKind: project.projectKind === 'git' || project.projectKind === 'notes' ? project.projectKind : 'general',
     projectSnapshot,
     agentFiles: projectSnapshot?.files.filter(file => file.kind === 'agents') ?? [],
   };

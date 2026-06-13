@@ -1,4 +1,5 @@
 import type { PortalEditorHost } from './editor.ts';
+import type { PortalVaultHost } from './vault.ts';
 
 export type TerminalSessionKind = 'workspace' | 'general';
 
@@ -764,6 +765,7 @@ export const isTerminalClientEnvelope = (message: Record<string, unknown>): mess
 export const startTerminalControlServer = (input: {
   host: PortalTerminalHost;
   editor?: PortalEditorControlHost;
+  vault?: PortalVaultHost;
   hostname: string;
   port: number;
   token: string;
@@ -808,6 +810,46 @@ export const startTerminalControlServer = (input: {
           : editorAction === 'read'
           ? await input.editor.read(body as Parameters<PortalEditorControlHost['read']>[0])
           : await input.editor.write(body as Parameters<PortalEditorControlHost['write']>[0]);
+        return Response.json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return Response.json({ error: message }, { status: 400 });
+      }
+    }
+
+    const vaultAction = url.pathname === '/vault/index'
+      ? 'index'
+      : url.pathname === '/vault/read'
+      ? 'read'
+      : url.pathname === '/vault/write'
+      ? 'write'
+      : url.pathname === '/vault/mkdir'
+      ? 'mkdir'
+      : url.pathname === '/vault/move'
+      ? 'move'
+      : url.pathname === '/vault/delete'
+      ? 'delete'
+      : url.pathname === '/vault/upload'
+      ? 'upload'
+      : undefined;
+    if (vaultAction) {
+      if (!input.vault) return new Response('not found', { status: 404 });
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      try {
+        const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+        const result = vaultAction === 'index'
+          ? await input.vault.index(body as Parameters<PortalVaultHost['index']>[0])
+          : vaultAction === 'read'
+          ? await input.vault.read(body as Parameters<PortalVaultHost['read']>[0])
+          : vaultAction === 'write'
+          ? await input.vault.write(body as Parameters<PortalVaultHost['write']>[0])
+          : vaultAction === 'mkdir'
+          ? await input.vault.mkdir(body as Parameters<PortalVaultHost['mkdir']>[0])
+          : vaultAction === 'move'
+          ? await input.vault.move(body as Parameters<PortalVaultHost['move']>[0])
+          : vaultAction === 'delete'
+          ? await input.vault.delete(body as Parameters<PortalVaultHost['delete']>[0])
+          : await input.vault.upload(body as Parameters<PortalVaultHost['upload']>[0]);
         return Response.json(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

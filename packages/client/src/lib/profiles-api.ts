@@ -38,7 +38,7 @@ export type ResolvedProfile = {
   requestedProfileId?: string;
   threadProfileId?: string;
   projectDefaultProfileId?: string;
-  projectKind?: 'general' | 'git';
+  projectKind?: 'general' | 'git' | 'notes';
   globalSnapshot?: ResolvedProfileSnapshot;
   projectSnapshot?: ResolvedProfileSnapshot;
   agentFiles: Array<ResolvedProfileSourceFile & { content: string }>;

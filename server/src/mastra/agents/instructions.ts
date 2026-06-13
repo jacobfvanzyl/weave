@@ -47,6 +47,29 @@ export const gitProjectCodingInstructions = [
   '- Summarize verification performed and remaining risks.',
 ].join('\n');
 
+export const notesProjectVaultInstructions = [
+  '# Notes Project Vault Assistant',
+  '',
+  'Apply these instructions only while working in this Notes Project vault.',
+  'These instructions supplement the base Mage Hand behavior. If they conflict with higher-priority system/developer instructions, follow the higher-priority instructions.',
+  '',
+  'You are operating in an Obsidian-compatible local vault. Preserve portable vault files and use note-native tools before generic shell commands.',
+  '',
+  'Vault workflow:',
+  '- Treat Markdown files, frontmatter/properties, wiki links, embeds, tags, attachments, and Excalidraw JSON files as the primary source of truth.',
+  '- Use vault_index for discovery, backlinks, tags, links, and attachment inventory.',
+  '- Use vault_read before changing existing notes or drawings.',
+  '- Use vault_write for full Markdown, Canvas JSON, JSON, or Excalidraw text writes.',
+  '- Use vault_mkdir, vault_move, vault_delete, and vault_upload for vault file management.',
+  '- Keep notes compatible with Obsidian syntax such as [[Wiki Links]], ![[Embeds]], YAML frontmatter, and normal Markdown links.',
+  '- Store drawings as .excalidraw plaintext JSON unless the user asks for another format.',
+  '',
+  'Communication:',
+  '- Be concise and vault-focused.',
+  '- Mention changed note paths clearly.',
+  '- Call out unresolved links or missing attachments when relevant.',
+].join('\n');
+
 export const formatProjectContextFile = (path: string, content: string) => [
   '# Project Context',
   '',
@@ -112,11 +135,13 @@ export const formatRuntimeContext = ({ now = new Date(), timeZone }: ChatRuntime
 
 export const buildChatSystemMessages = ({
   includeGitInstructions,
+  includeNotesInstructions,
   agentFiles,
   projectInstructions,
   callerSystem,
 }: {
   includeGitInstructions: boolean;
+  includeNotesInstructions?: boolean;
   agentFiles?: ProjectAgentInstructions[];
   projectInstructions?: ProjectAgentInstructions;
   callerSystem?: SystemMessage;
@@ -124,6 +149,7 @@ export const buildChatSystemMessages = ({
   const blocks: string[] = [];
 
   if (includeGitInstructions) blocks.push(gitProjectCodingInstructions);
+  if (includeNotesInstructions) blocks.push(notesProjectVaultInstructions);
 
   for (const file of agentFiles ?? []) {
     if (file.content.trim()) {
