@@ -41,7 +41,7 @@ export const ExcalidrawOverlay = ({ onHide }: ExcalidrawOverlayProps) => {
       data-weave-excalidraw-surface
       data-weave-surface="editor"
     >
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3" data-weave-overlay-titlebar>
         <h2 className="min-w-0 truncate text-sm font-semibold text-foreground">Weave Sketch</h2>
         <Button
           className="ml-auto"

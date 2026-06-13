@@ -74,18 +74,24 @@ iterating on Rust.
 ## Window Streaming
 
 On macOS, Portal can launch an Electron Chromium sidecar for window streaming.
-The sidecar is started lazily when the app lists windows or starts a stream. In
-development it defaults to `desktop/node_modules/.bin/electron` and
-`portal/window-host-electron/main.cjs`.
+The sidecar is started lazily when the app lists windows or starts a stream. By
+default, the sidecar uses a ScreenCaptureKit helper for native window capture
+and cursor hiding, then streams a canvas track over Chromium WebRTC. In
+development it defaults to `desktop/node_modules/.bin/electron`,
+`portal/window-host-electron/main.cjs`, and the Swift helper built at
+`portal/native/window-capture-sck/.build/release/weave-window-capture-sck`.
 
 ```bash
+npm run portal:window-capture:smoke
 npm run portal:window-host:smoke
 ```
 
 Use `WEAVE_WINDOW_HOST_ELECTRON` and `WEAVE_WINDOW_HOST_APP` to point Portal at
-another Electron executable or sidecar entrypoint. V1 streams video and opens
-the control data channel, but control messages are logged as no-ops until a
-native input layer is added.
+another Electron executable or sidecar entrypoint. Use
+`WEAVE_WINDOW_CAPTURE_HELPER` to point at another ScreenCaptureKit helper, or
+`WEAVE_WINDOW_CAPTURE_BACKEND=electron` to use the older Electron
+`desktopCapturer` backend. V1 streams video and opens the control data channel,
+but control messages are logged as no-ops until a native input layer is added.
 
 ## Lifecycle
 

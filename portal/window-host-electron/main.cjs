@@ -1,10 +1,14 @@
 const { app, BrowserWindow, desktopCapturer, ipcMain, session } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
+const { spawn } = require('node:child_process');
 
 const textEncoder = new TextEncoder();
 let mainWindow;
 let activeSessionId;
+let captureBackend;
+let sckClient;
 
 const writeJsonLine = (value) => {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -17,6 +21,26 @@ const writeDiagnostic = (message) => {
 const isRecord = (value) => Boolean(value && typeof value === 'object');
 
 const optionalString = (value) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+const normalizeCaptureBackend = (value) => {
+  const normalized = optionalString(value)?.toLowerCase();
+  if (normalized === 'electron') return 'electron';
+  return process.platform === 'darwin' ? 'screencapturekit' : 'electron';
+};
+
+const firstExistingPath = (candidates) => {
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+};
+
+const defaultSckHelperPath = () => firstExistingPath([
+  process.env.WEAVE_WINDOW_CAPTURE_HELPER,
+  path.join(__dirname, '../native/window-capture-sck/.build/release/weave-window-capture-sck'),
+  path.join(__dirname, '../dist/weave-window-capture-sck'),
+  path.join(__dirname, 'weave-window-capture-sck'),
+]);
 
 const toErrorMessage = (error) => {
   if (error instanceof Error && error.message) return error.message;
@@ -46,6 +70,142 @@ const sendSessionEvent = (sessionId, event) => {
     sessionId,
     event: { sessionId, ...event },
   });
+};
+
+class ScreenCaptureKitClient {
+  constructor(options = {}) {
+    this.helperPath = options.helperPath ?? defaultSckHelperPath();
+    this.nextRequestId = 0;
+    this.pending = new Map();
+    this.buffer = Buffer.alloc(0);
+    this.frameListeners = new Set();
+    this.process = undefined;
+  }
+
+  isAvailable() {
+    return Boolean(this.helperPath && fs.existsSync(this.helperPath));
+  }
+
+  onFrame(listener) {
+    this.frameListeners.add(listener);
+    return () => this.frameListeners.delete(listener);
+  }
+
+  async request(type, fields = {}, timeoutMs = 15_000) {
+    await this.ensureStarted();
+    const id = `sck_${++this.nextRequestId}`;
+    const result = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`ScreenCaptureKit helper timed out: ${type}`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timeout });
+    });
+    this.process.stdin.write(`${JSON.stringify({ id, type, ...fields })}\n`);
+    return result;
+  }
+
+  async shutdown() {
+    if (!this.process) return;
+    try {
+      await this.request('shutdown', {}, 1_000);
+    } catch {
+      // The helper may already be gone.
+    }
+    this.process.kill('SIGTERM');
+    this.process = undefined;
+  }
+
+  async ensureStarted() {
+    if (this.process) return;
+    if (!this.isAvailable()) {
+      throw new Error(`ScreenCaptureKit helper is unavailable. Set WEAVE_WINDOW_CAPTURE_HELPER or build ${path.join(__dirname, '../native/window-capture-sck')}.`);
+    }
+
+    this.process = spawn(this.helperPath, [], {
+      cwd: path.dirname(this.helperPath),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    this.process.stdout.on('data', (chunk) => this.handleStdout(chunk));
+    this.process.stderr.on('data', (chunk) => {
+      const text = chunk.toString().trim();
+      if (text) writeDiagnostic(text);
+    });
+    this.process.on('exit', (code, signal) => {
+      const error = new Error(`ScreenCaptureKit helper exited: code=${code} signal=${signal ?? ''}`.trim());
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(error);
+      }
+      this.pending.clear();
+      this.process = undefined;
+    });
+  }
+
+  handleStdout(chunk) {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    while (this.buffer.length >= 8) {
+      const jsonLength = this.buffer.readUInt32LE(0);
+      const payloadLength = this.buffer.readUInt32LE(4);
+      const totalLength = 8 + jsonLength + payloadLength;
+      if (this.buffer.length < totalLength) return;
+
+      const jsonBuffer = this.buffer.subarray(8, 8 + jsonLength);
+      const payload = this.buffer.subarray(8 + jsonLength, totalLength);
+      this.buffer = this.buffer.subarray(totalLength);
+
+      let message;
+      try {
+        message = JSON.parse(jsonBuffer.toString('utf8'));
+      } catch (error) {
+        writeDiagnostic(`ScreenCaptureKit helper emitted invalid frame header: ${toErrorMessage(error)}`);
+        continue;
+      }
+      this.handleMessage(message, payload);
+    }
+  }
+
+  handleMessage(message, payload) {
+    if (typeof message.id === 'string' && this.pending.has(message.id)) {
+      const pending = this.pending.get(message.id);
+      this.pending.delete(message.id);
+      clearTimeout(pending.timeout);
+      if (message.ok === false) {
+        pending.reject(new Error(message.error === undefined ? 'ScreenCaptureKit helper request failed.' : toErrorMessage(message.error)));
+      } else {
+        pending.resolve(message);
+      }
+      return;
+    }
+
+    if (message.type === 'frame') {
+      for (const listener of this.frameListeners) listener(message, Buffer.from(payload));
+      return;
+    }
+
+    if (message.type === 'event' && message.event === 'error') {
+      sendSessionEvent(optionalString(message.sessionId) ?? activeSessionId, {
+        type: 'error',
+        error: optionalString(message.error) ?? 'ScreenCaptureKit capture failed.',
+      });
+    }
+  }
+}
+
+const getCaptureBackend = () => {
+  if (!captureBackend) captureBackend = normalizeCaptureBackend(process.env.WEAVE_WINDOW_CAPTURE_BACKEND);
+  return captureBackend;
+};
+
+const getSckClient = () => {
+  if (!sckClient) {
+    sckClient = new ScreenCaptureKitClient();
+    sckClient.onFrame((frame, payload) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send('window-host:capture-frame', frame, payload);
+    });
+  }
+  return sckClient;
 };
 
 const configurePermissions = () => {
@@ -137,6 +297,11 @@ const callRenderer = async (method, payload) => {
 };
 
 const listWindows = async () => {
+  if (getCaptureBackend() === 'screencapturekit') {
+    const result = await getSckClient().request('windows.list');
+    return Array.isArray(result.windows) ? result.windows : [];
+  }
+
   await app.whenReady();
   const sources = await desktopCapturer.getSources({
     types: ['window'],
@@ -151,6 +316,11 @@ const listWindows = async () => {
 
 const stopActiveSession = async (sessionId = activeSessionId) => {
   if (!sessionId) return;
+  if (getCaptureBackend() === 'screencapturekit' && sckClient) {
+    await sckClient.request('capture.stop', {}, 5_000).catch((error) => {
+      writeDiagnostic(`ScreenCaptureKit stop failed: ${toErrorMessage(error)}`);
+    });
+  }
   try {
     await callRenderer('stopSession', { sessionId });
   } catch (error) {
@@ -196,17 +366,34 @@ const handleMessage = async (message) => {
       await stopActiveSession();
       const windowId = optionalString(message.windowId);
       const sourceId = windowId ?? (await listWindows())[0]?.id;
-      if (!sourceId) throw new Error('No capturable Electron window source was found.');
+      if (!sourceId) throw new Error('No capturable window source was found.');
+      const backend = getCaptureBackend();
 
       activeSessionId = sessionId;
       reply(id);
       void callRenderer('startSession', {
         sessionId,
+        backend,
         sourceId,
         iceServers: Array.isArray(message.iceServers) ? message.iceServers : [],
       }).then((offer) => {
+        if (backend === 'screencapturekit') {
+          return getSckClient().request('capture.start', {
+            sessionId,
+            windowId: sourceId,
+            maxFrameRate: 20,
+            maxDimension: 1920,
+            quality: 0.75,
+          }).then((captureInfo) => {
+            writeDiagnostic(`screencapturekit capture started: window=${sourceId} ${captureInfo.width ?? '?'}x${captureInfo.height ?? '?'} cursor=${captureInfo.showsCursor}`);
+            return offer;
+          });
+        }
+        return offer;
+      }).then((offer) => {
         sendSessionEvent(sessionId, { type: 'offer', offer });
       }).catch((error) => {
+        void stopActiveSession(sessionId);
         sendSessionEvent(sessionId, { type: 'error', error: toErrorMessage(error) });
       });
       return;
@@ -273,6 +460,7 @@ const startCommandLoop = () => {
 
 app.on('before-quit', () => {
   if (activeSessionId) void stopActiveSession(activeSessionId);
+  if (sckClient) void sckClient.shutdown();
 });
 
 app.whenReady().then(() => {

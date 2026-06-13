@@ -7,6 +7,7 @@
     "daemon": "deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-run src/main.ts daemon",
     "login": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts login",
     "build": "deno run --allow-run --allow-env --allow-read --allow-write scripts/build.ts",
+    "window-capture:smoke": "node scripts/window-capture-sck-smoke.mjs",
     "window-host:smoke": "node scripts/window-host-smoke.mjs",
     "window-host:session-smoke": "node scripts/window-host-session-smoke.mjs",
     "start": "dist/portal daemon",

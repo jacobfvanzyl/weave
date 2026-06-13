@@ -71,11 +71,25 @@ const joinPath = (...parts: string[]) => {
   return joined === '' ? '.' : joined;
 };
 
+const dirname = (path: string) => {
+  const index = path.lastIndexOf('/');
+  return index <= 0 ? '/' : path.slice(0, index);
+};
+
 const defaultElectronPath = () =>
   helperPathFromFileUrl(new URL('../../desktop/node_modules/.bin/electron', import.meta.url));
 
 const defaultWindowHostAppPath = () =>
   helperPathFromFileUrl(new URL('../window-host-electron/main.cjs', import.meta.url));
+
+const defaultWindowCaptureHelperPaths = () =>
+  [
+    helperPathFromFileUrl(
+      new URL('../native/window-capture-sck/.build/release/weave-window-capture-sck', import.meta.url),
+    ),
+    helperPathFromFileUrl(new URL('../dist/weave-window-capture-sck', import.meta.url)),
+    joinPath(dirname(Deno.execPath()), 'weave-window-capture-sck'),
+  ].filter((candidate): candidate is string => Boolean(candidate));
 
 const isPathLike = (value: string) => value.includes('/');
 
@@ -110,6 +124,18 @@ const resolveExecutable = async (
   return fallback && await executableExists(fallback) ? fallback : undefined;
 };
 
+const resolveExecutableFromCandidates = async (
+  configured: string | undefined,
+  fallbacks: string[],
+  env: Record<string, string | undefined>,
+) => {
+  if (configured) return await resolveExecutable(configured, undefined, env);
+  for (const fallback of fallbacks) {
+    if (await executableExists(fallback)) return fallback;
+  }
+  return undefined;
+};
+
 const resolveAppPath = async (configured: string | undefined, fallback: string | undefined) => {
   for (const candidate of [configured, fallback]) {
     if (candidate && await appPathExists(candidate)) return candidate;
@@ -117,9 +143,18 @@ const resolveAppPath = async (configured: string | undefined, fallback: string |
   return undefined;
 };
 
+type WindowCaptureBackend = 'screencapturekit' | 'electron';
+
+const resolveWindowCaptureBackend = (env: Record<string, string | undefined>): WindowCaptureBackend => {
+  const configured = optionalString(env.WEAVE_WINDOW_CAPTURE_BACKEND)?.toLowerCase();
+  return configured === 'electron' ? 'electron' : 'screencapturekit';
+};
+
 export type WindowHostRuntime = {
   electronPath: string;
   appPath: string;
+  captureBackend: WindowCaptureBackend;
+  captureHelperPath?: string;
 };
 
 export const resolveWindowHostRuntime = async (
@@ -132,18 +167,31 @@ export const resolveWindowHostRuntime = async (
     env,
   );
   const appPath = await resolveAppPath(optionalString(env.WEAVE_WINDOW_HOST_APP), defaultWindowHostAppPath());
-  return electronPath && appPath ? { electronPath, appPath } : undefined;
+  const captureBackend = resolveWindowCaptureBackend(env);
+  const captureHelperPath = captureBackend === 'screencapturekit'
+    ? await resolveExecutableFromCandidates(
+      optionalString(env.WEAVE_WINDOW_CAPTURE_HELPER),
+      defaultWindowCaptureHelperPaths(),
+      env,
+    )
+    : undefined;
+  if (!electronPath || !appPath) return undefined;
+  if (captureBackend === 'screencapturekit' && !captureHelperPath) return undefined;
+  return { electronPath, appPath, captureBackend, captureHelperPath };
 };
 
 export const isWindowHostAvailable = async (env?: Record<string, string | undefined>) =>
   Boolean(await resolveWindowHostRuntime(env));
 
-const windowHostRuntimeError = (env: Record<string, string | undefined>) => [
-  'Electron window host is unavailable.',
-  'Install desktop dependencies or set WEAVE_WINDOW_HOST_ELECTRON and WEAVE_WINDOW_HOST_APP.',
-  `WEAVE_WINDOW_HOST_ELECTRON=${env.WEAVE_WINDOW_HOST_ELECTRON ?? defaultElectronPath() ?? ''}`,
-  `WEAVE_WINDOW_HOST_APP=${env.WEAVE_WINDOW_HOST_APP ?? defaultWindowHostAppPath() ?? ''}`,
-].join(' ');
+const windowHostRuntimeError = (env: Record<string, string | undefined>) =>
+  [
+    'Electron window host is unavailable.',
+    'Install desktop dependencies and build the ScreenCaptureKit helper, or set WEAVE_WINDOW_HOST_ELECTRON, WEAVE_WINDOW_HOST_APP, WEAVE_WINDOW_CAPTURE_HELPER, or WEAVE_WINDOW_CAPTURE_BACKEND=electron.',
+    `WEAVE_WINDOW_HOST_ELECTRON=${env.WEAVE_WINDOW_HOST_ELECTRON ?? defaultElectronPath() ?? ''}`,
+    `WEAVE_WINDOW_HOST_APP=${env.WEAVE_WINDOW_HOST_APP ?? defaultWindowHostAppPath() ?? ''}`,
+    `WEAVE_WINDOW_CAPTURE_BACKEND=${env.WEAVE_WINDOW_CAPTURE_BACKEND ?? 'screencapturekit'}`,
+    `WEAVE_WINDOW_CAPTURE_HELPER=${env.WEAVE_WINDOW_CAPTURE_HELPER ?? defaultWindowCaptureHelperPaths()[0] ?? ''}`,
+  ].join(' ');
 
 const toErrorMessage = (error: unknown) => {
   if (error instanceof Error && error.message) return error.message;
@@ -231,6 +279,8 @@ class ElectronWindowHostClient {
       stderr: 'piped',
       env: {
         WEAVE_WINDOW_HOST_PROTOCOL: '1',
+        WEAVE_WINDOW_CAPTURE_BACKEND: this.runtime.captureBackend,
+        ...(this.runtime.captureHelperPath ? { WEAVE_WINDOW_CAPTURE_HELPER: this.runtime.captureHelperPath } : {}),
       },
     });
     this.process = command.spawn();
@@ -299,7 +349,11 @@ class ElectronWindowHostClient {
       clearTimeout(pending.timeout);
       this.pending.delete(message.id);
       if (message.ok === false) {
-        pending.reject(new Error(message.error === undefined ? 'Electron window host request failed.' : toErrorMessage(message.error)));
+        pending.reject(
+          new Error(
+            message.error === undefined ? 'Electron window host request failed.' : toErrorMessage(message.error),
+          ),
+        );
       } else {
         pending.resolve(message);
       }

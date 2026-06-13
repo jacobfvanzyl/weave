@@ -212,6 +212,10 @@
   padding-left: calc(5rem + var(--weave-desktop-appbar-control-leading-offset) + 1px);
 }
 
+:root[data-weave-window-type="electron"] [data-weave-overlay-titlebar] {
+  padding-left: calc(5rem + var(--weave-desktop-appbar-control-leading-offset) + 1px);
+}
+
 :root[data-weave-window-type="electron"] aside[data-weave-thread-sidebar][data-weave-thread-sidebar-overlay="true"] {
   position: fixed;
   top: 0;

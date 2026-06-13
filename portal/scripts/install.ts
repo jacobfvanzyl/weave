@@ -17,6 +17,14 @@ const main = async () => {
 
   const portalRoot = pathFromFileUrl(new URL('..', import.meta.url));
   await copyFile(`${portalRoot}/dist/portal`, `${binDir}/portal`);
+
+  if (Deno.build.os === 'darwin') {
+    const helper = `${portalRoot}/dist/weave-window-capture-sck`;
+    const stat = await Deno.stat(helper).catch(() => undefined);
+    if (stat?.isFile) {
+      await copyFile(helper, `${binDir}/weave-window-capture-sck`);
+    }
+  }
 };
 
 if (import.meta.main) await main();

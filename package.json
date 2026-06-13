@@ -22,6 +22,7 @@
     "portal:login": "deno task --config portal/deno.json login",
     "portal:dev": "deno task --config portal/deno.json dev",
     "portal:build": "deno task --config portal/deno.json build",
+    "portal:window-capture:smoke": "deno task --config portal/deno.json window-capture:smoke",
     "portal:window-host:smoke": "deno task --config portal/deno.json window-host:smoke",
     "portal:window-host:session-smoke": "deno task --config portal/deno.json window-host:session-smoke",
     "portal:start": "deno task --config portal/deno.json start",

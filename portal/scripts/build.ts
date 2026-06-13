@@ -9,6 +9,8 @@ const nativeLibraryName = Deno.build.os === 'darwin'
   ? 'libweave_portal_pty.so'
   : undefined;
 
+const windowCaptureHelperName = Deno.build.os === 'darwin' ? 'weave-window-capture-sck' : undefined;
+
 const run = async (args: string[]) => {
   const child = new Deno.Command(Deno.execPath(), {
     cwd: pathFromFileUrl(new URL('..', import.meta.url)),
@@ -23,7 +25,16 @@ const run = async (args: string[]) => {
 const main = async () => {
   if (!nativeLibraryName) throw new Error(`Portal native PTY is not supported on ${Deno.build.os}.`);
 
+  const portalRoot = pathFromFileUrl(new URL('..', import.meta.url));
   await run(['run', '--allow-run', '--allow-env', '--allow-read', 'scripts/build-native.ts']);
+  if (windowCaptureHelperName) {
+    await Deno.mkdir(`${portalRoot}/dist`, { recursive: true });
+    await Deno.copyFile(
+      `${portalRoot}/native/window-capture-sck/.build/release/${windowCaptureHelperName}`,
+      `${portalRoot}/dist/${windowCaptureHelperName}`,
+    );
+    await Deno.chmod(`${portalRoot}/dist/${windowCaptureHelperName}`, 0o755);
+  }
   await run([
     'compile',
     '--allow-net',

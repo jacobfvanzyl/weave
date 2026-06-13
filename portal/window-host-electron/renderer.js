@@ -1,6 +1,7 @@
 const { ipcRenderer } = require('electron');
 
 let currentSession;
+let pendingFrame;
 
 const isRecord = (value) => Boolean(value && typeof value === 'object');
 
@@ -37,8 +38,10 @@ const closeCurrentSession = () => {
   }
   currentSession.controlChannel?.close();
   currentSession.peerConnection?.close();
+  currentSession.canvas?.remove?.();
   const sessionId = currentSession.sessionId;
   currentSession = undefined;
+  pendingFrame = undefined;
   sendEvent(sessionId, { type: 'stopped' });
 };
 
@@ -49,7 +52,7 @@ const assertSession = (sessionId) => {
   return currentSession;
 };
 
-const createCaptureStream = async (sourceId) => {
+const createElectronCaptureStream = async (sourceId) => {
   return await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: {
@@ -60,6 +63,23 @@ const createCaptureStream = async (sourceId) => {
       },
     },
   });
+};
+
+const createCanvasCaptureStream = (frameRate = 20) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1280;
+  canvas.height = 720;
+  canvas.style.display = 'none';
+  document.body.appendChild(canvas);
+  const context = canvas.getContext('2d', { alpha: false, desynchronized: true });
+  if (!context) throw new Error('Could not create ScreenCaptureKit canvas context.');
+  context.fillStyle = '#000';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  return {
+    canvas,
+    context,
+    stream: canvas.captureStream(frameRate),
+  };
 };
 
 const normalizeRemoteDescription = (description) => {
@@ -76,7 +96,11 @@ window.weaveWindowHost = {
     closeCurrentSession();
 
     const sessionId = input.sessionId;
-    const stream = await createCaptureStream(input.sourceId);
+    const backend = input.backend === 'screencapturekit' ? 'screencapturekit' : 'electron';
+    const canvasCapture = backend === 'screencapturekit'
+      ? createCanvasCaptureStream(input.frameRate ?? 20)
+      : undefined;
+    const stream = canvasCapture?.stream ?? await createElectronCaptureStream(input.sourceId);
     const peerConnection = new RTCPeerConnection({
       iceServers: Array.isArray(input.iceServers) ? input.iceServers : [],
     });
@@ -113,7 +137,17 @@ window.weaveWindowHost = {
       peerConnection.addTrack(track, stream);
     }
 
-    currentSession = { sessionId, stream, peerConnection, controlChannel };
+    currentSession = {
+      sessionId,
+      backend,
+      stream,
+      peerConnection,
+      controlChannel,
+      canvas: canvasCapture?.canvas,
+      context: canvasCapture?.context,
+      drawingFrame: false,
+      drawnFrames: 0,
+    };
 
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
@@ -144,6 +178,49 @@ window.weaveWindowHost = {
     closeCurrentSession();
   },
 };
+
+const drawCaptureFrame = async (header, payload) => {
+  const session = currentSession;
+  if (!session || session.backend !== 'screencapturekit') return;
+  if (header.sessionId !== session.sessionId) return;
+  if (!session.canvas || !session.context) return;
+
+  if (session.drawingFrame) {
+    pendingFrame = { header, payload };
+    return;
+  }
+
+  session.drawingFrame = true;
+  try {
+    let nextHeader = header;
+    let nextPayload = payload;
+    do {
+      pendingFrame = undefined;
+      const blob = new Blob([nextPayload], { type: 'image/jpeg' });
+      const image = await createImageBitmap(blob);
+      if (session.canvas.width !== image.width || session.canvas.height !== image.height) {
+        session.canvas.width = image.width;
+        session.canvas.height = image.height;
+      }
+      session.context.drawImage(image, 0, 0, session.canvas.width, session.canvas.height);
+      image.close?.();
+      session.drawnFrames += 1;
+      if (session.drawnFrames === 1 || session.drawnFrames % 120 === 0) {
+        log(`screencapturekit frame: session=${session.sessionId} frames=${session.drawnFrames} size=${session.canvas.width}x${session.canvas.height}`);
+      }
+      nextHeader = pendingFrame?.header;
+      nextPayload = pendingFrame?.payload;
+    } while (nextHeader && nextPayload && currentSession === session);
+  } catch (error) {
+    log(`screencapturekit frame draw failed: ${toErrorMessage(error)}`);
+  } finally {
+    if (currentSession === session) session.drawingFrame = false;
+  }
+};
+
+ipcRenderer.on('window-host:capture-frame', (_event, header, payload) => {
+  void drawCaptureFrame(header, payload);
+});
 
 window.addEventListener('error', (event) => {
   log(`renderer error: ${toErrorMessage(event.error ?? event.message)}`);

@@ -51,6 +51,28 @@ const findCargo = async () => {
   throw new Error('Could not find cargo. Install Rust or set CARGO=/path/to/cargo.');
 };
 
+const findSwift = async () => {
+  const explicit = Deno.env.get('SWIFT')?.trim();
+  if (explicit && await runOutput(explicit, ['--version'])) return explicit;
+  if (await runOutput('swift', ['--version'])) return 'swift';
+  throw new Error('Could not find swift. Install Xcode command line tools or set SWIFT=/path/to/swift.');
+};
+
+const runInherited = async (
+  command: string,
+  options: { cwd: string; args: string[]; env?: Record<string, string> },
+) => {
+  const child = new Deno.Command(command, {
+    cwd: options.cwd,
+    args: options.args,
+    env: options.env,
+    stdout: 'inherit',
+    stderr: 'inherit',
+  }).spawn();
+  const status = await child.status;
+  if (!status.success) Deno.exit(status.code || 1);
+};
+
 const main = async () => {
   const portalRoot = pathFromFileUrl(new URL('..', import.meta.url));
   const manifestPath = pathFromFileUrl(new URL('../native/pty/Cargo.toml', import.meta.url));
@@ -58,15 +80,19 @@ const main = async () => {
   const cargoDir = dirname(cargo);
   const path = `${cargoDir}:${Deno.env.get('PATH') ?? ''}`;
 
-  const child = new Deno.Command(cargo, {
+  await runInherited(cargo, {
     cwd: portalRoot,
     args: ['build', '--manifest-path', manifestPath, '--release'],
     env: { PATH: path },
-    stdout: 'inherit',
-    stderr: 'inherit',
-  }).spawn();
-  const status = await child.status;
-  if (!status.success) Deno.exit(status.code || 1);
+  });
+
+  if (Deno.build.os === 'darwin') {
+    const swift = await findSwift();
+    await runInherited(swift, {
+      cwd: portalRoot,
+      args: ['build', '--package-path', 'native/window-capture-sck', '-c', 'release'],
+    });
+  }
 };
 
 if (import.meta.main) await main();

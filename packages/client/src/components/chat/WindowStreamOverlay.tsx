@@ -33,6 +33,9 @@ const normalizePoint = (element: HTMLElement, event: ReactPointerEvent | ReactWh
   };
 };
 
+const formatWindowLabel = (window: { appName?: string; title?: string; id: string }) =>
+  [window.appName, window.title || window.id].filter(Boolean).join(' - ');
+
 export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProps) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -176,10 +179,13 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
   };
 
   const displayError = error ?? (windowsError ? getWindowStreamErrorMessage(windowsError) : null);
+  const selectedPortalLabel = selectedPortal ? selectedPortal.name || selectedPortal.portalId : undefined;
+  const selectedWindow = windows.find(window => window.id === selectedWindowId);
+  const selectedWindowLabel = selectedWindow ? formatWindowLabel(selectedWindow) : undefined;
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background text-foreground" data-weave-window-stream-overlay>
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-3">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-3" data-weave-overlay-titlebar>
         <div className="flex min-w-0 items-center gap-2">
           <MonitorUp size={18} className="shrink-0 text-primary" />
           <div className="min-w-0">
@@ -192,7 +198,7 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
         <div className="ml-auto flex min-w-0 items-center gap-2">
           <Select value={selectedPortal?.portalId ?? ''} onValueChange={value => setSelectedPortalId(value ?? '')} disabled={Boolean(session)}>
             <SelectTrigger className="h-8 w-40">
-              <SelectValue placeholder="Portal" />
+              <SelectValue placeholder="Portal">{selectedPortalLabel}</SelectValue>
             </SelectTrigger>
             <SelectPopup>
               {capablePortals.map(portal => (
@@ -202,12 +208,14 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
           </Select>
           <Select value={selectedWindowId} onValueChange={value => setSelectedWindowId(value ?? '')} disabled={Boolean(session) || isFetchingWindows || windows.length === 0}>
             <SelectTrigger className="h-8 w-56">
-              <SelectValue placeholder={isFetchingWindows ? 'Loading windows' : 'Window'} />
+              <SelectValue placeholder={isFetchingWindows ? 'Loading windows' : 'Window'}>
+                {selectedWindowLabel}
+              </SelectValue>
             </SelectTrigger>
             <SelectPopup>
               {windows.map(window => (
                 <SelectItem key={window.id} value={window.id}>
-                  {[window.appName, window.title || window.id].filter(Boolean).join(' - ')}
+                  {formatWindowLabel(window)}
                 </SelectItem>
               ))}
             </SelectPopup>
