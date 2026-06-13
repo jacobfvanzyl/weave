@@ -282,9 +282,12 @@ static NSString *NormalizeCodecName(id value) {
 }
 
 static NSString *NormalizeColorMode(id value) {
-    NSString *mode = [(OptionalString(value) ?: @"rec709-full-range") lowercaseString];
-    if ([mode isEqualToString:@"rec709-video-range"]) return @"rec709-video-range";
-    return @"rec709-full-range";
+    NSString *mode = [(OptionalString(value) ?: @"srgb-video-range") lowercaseString];
+    if ([mode isEqualToString:@"srgb-full-range"] ||
+        [mode isEqualToString:@"srgb-video-range"] ||
+        [mode isEqualToString:@"rec709-full-range"] ||
+        [mode isEqualToString:@"rec709-video-range"]) return mode;
+    return @"srgb-video-range";
 }
 
 static NSString *NormalizeControlDelivery(id value) {
@@ -297,18 +300,38 @@ static NSString *NormalizeControlDelivery(id value) {
 }
 
 static OSType PixelFormatForColorMode(NSString *colorMode) {
-    if ([colorMode isEqualToString:@"rec709-video-range"]) {
+    if ([colorMode hasSuffix:@"video-range"]) {
         return kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
     }
     return kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
 }
 
 static NSString *ColorRangeForMode(NSString *colorMode) {
-    return [colorMode isEqualToString:@"rec709-video-range"] ? @"video" : @"full";
+    return [colorMode hasSuffix:@"video-range"] ? @"video" : @"full";
 }
 
 static CFBooleanRef FullRangeFlagForMode(NSString *colorMode) {
-    return [colorMode isEqualToString:@"rec709-video-range"] ? kCFBooleanFalse : kCFBooleanTrue;
+    return [colorMode hasSuffix:@"video-range"] ? kCFBooleanFalse : kCFBooleanTrue;
+}
+
+static BOOL UsesSrgbTransfer(NSString *colorMode) {
+    return [colorMode hasPrefix:@"srgb"];
+}
+
+static CFStringRef ColorSpaceNameForMode(NSString *colorMode) {
+    return UsesSrgbTransfer(colorMode) ? kCGColorSpaceSRGB : kCGColorSpaceITUR_709;
+}
+
+static CFStringRef TransferFunctionForMode(NSString *colorMode) {
+    return UsesSrgbTransfer(colorMode) ? kCVImageBufferTransferFunction_sRGB : kCVImageBufferTransferFunction_ITU_R_709_2;
+}
+
+static NSString *TransferFunctionLabelForMode(NSString *colorMode) {
+    return UsesSrgbTransfer(colorMode) ? @"sRGB" : @"ITU_R_709_2";
+}
+
+static NSString *ColorSpaceLabelForMode(NSString *colorMode) {
+    return UsesSrgbTransfer(colorMode) ? @"sRGB" : @"ITUR_709";
 }
 
 static NSString *FourCharCodeString(OSType code) {
@@ -322,15 +345,15 @@ static NSString *FourCharCodeString(OSType code) {
     return [NSString stringWithUTF8String:chars] ?: [NSString stringWithFormat:@"%u", code];
 }
 
-static void ApplyRec709Attachments(CVImageBufferRef imageBuffer, NSString *colorMode) {
+static void ApplyColorAttachments(CVImageBufferRef imageBuffer, NSString *colorMode) {
     if (!imageBuffer) return;
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_709);
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(ColorSpaceNameForMode(colorMode));
     if (colorSpace) {
         CVBufferSetAttachment(imageBuffer, kCVImageBufferCGColorSpaceKey, colorSpace, kCVAttachmentMode_ShouldPropagate);
         CFRelease(colorSpace);
     }
     CVBufferSetAttachment(imageBuffer, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
-    CVBufferSetAttachment(imageBuffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
+    CVBufferSetAttachment(imageBuffer, kCVImageBufferTransferFunctionKey, TransferFunctionForMode(colorMode), kCVAttachmentMode_ShouldPropagate);
     CVBufferSetAttachment(imageBuffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
     CVBufferSetAttachment(imageBuffer, kCMFormatDescriptionExtension_FullRangeVideo, FullRangeFlagForMode(colorMode), kCVAttachmentMode_ShouldPropagate);
 }
@@ -342,7 +365,7 @@ static NSDictionary *SourceImageBufferAttributes(NSInteger width, NSInteger heig
         (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(pixelFormat),
         (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
         (__bridge NSString *)kCVImageBufferColorPrimariesKey: (__bridge NSString *)kCVImageBufferColorPrimaries_ITU_R_709_2,
-        (__bridge NSString *)kCVImageBufferTransferFunctionKey: (__bridge NSString *)kCVImageBufferTransferFunction_ITU_R_709_2,
+        (__bridge NSString *)kCVImageBufferTransferFunctionKey: (__bridge NSString *)TransferFunctionForMode(colorMode),
         (__bridge NSString *)kCVImageBufferYCbCrMatrixKey: (__bridge NSString *)kCVImageBufferYCbCrMatrix_ITU_R_709_2,
         (__bridge NSString *)kCMFormatDescriptionExtension_FullRangeVideo: (__bridge NSNumber *)FullRangeFlagForMode(colorMode),
     };
@@ -581,6 +604,7 @@ static void CompressionOutputCallback(
 - (BOOL)applyAnswer:(NSDictionary *)answer error:(NSError **)outError;
 - (void)addIceCandidate:(NSDictionary *)candidate;
 - (void)handleControlMessage:(NSDictionary *)message;
+- (void)requestTargetApplicationActivation;
 - (void)stop;
 - (void)handleEncodedSampleBuffer:(CMSampleBufferRef)sampleBuffer
                             status:(OSStatus)status
@@ -907,6 +931,10 @@ static void CompressionOutputCallback(
     }
 
     if (![self startCaptureWithError:outError]) return NO;
+    if (_controlEnabled && [_controlDelivery isEqualToString:@"focus-hid"]) {
+        WriteDiagnostic([NSString stringWithFormat:@"control focus scheduled on stream start: session=%@ pid=%d", _sessionId, _targetPid]);
+        [self requestTargetApplicationActivation];
+    }
     [self sendSessionEvent:@{@"type": @"started"}];
     return YES;
 }
@@ -1195,7 +1223,7 @@ static void CompressionOutputCallback(
     configuration.minimumFrameInterval = CMTimeMake(1, static_cast<int32_t>(_frameRate));
     configuration.pixelFormat = _capturePixelFormat;
     configuration.colorMatrix = kCGDisplayStreamYCbCrMatrix_ITU_R_709_2;
-    configuration.colorSpaceName = kCGColorSpaceITUR_709;
+    configuration.colorSpaceName = ColorSpaceNameForMode(_colorMode);
     configuration.queueDepth = _captureQueueDepth;
     configuration.scalesToFit = _scaleToFit;
     configuration.preservesAspectRatio = _preserveAspectRatio;
@@ -1236,7 +1264,6 @@ static void CompressionOutputCallback(
                                                 static_cast<long>(_frameRate), _showCursor ? @"true" : @"false",
                                                 static_cast<long>(_bitrate), _colorMode,
                                                 FourCharCodeString(_capturePixelFormat)]);
-    [self startIdleRepeatTimer];
     [self startStatsThread];
     return YES;
 }
@@ -1280,7 +1307,7 @@ static void CompressionOutputCallback(
     VTSessionSetProperty(_encoder, kVTCompressionPropertyKey_RealTime, _realtime ? kCFBooleanTrue : kCFBooleanFalse);
     VTSessionSetProperty(_encoder, kVTCompressionPropertyKey_AllowFrameReordering, _allowFrameReordering ? kCFBooleanTrue : kCFBooleanFalse);
     VTSessionSetProperty(_encoder, kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2);
-    VTSessionSetProperty(_encoder, kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_ITU_R_709_2);
+    VTSessionSetProperty(_encoder, kVTCompressionPropertyKey_TransferFunction, TransferFunctionForMode(_colorMode));
     VTSessionSetProperty(_encoder, kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2);
     if ([_codec isEqualToString:@"hevc"]) {
         VTSessionSetProperty(_encoder, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel);
@@ -1413,7 +1440,7 @@ static void CompressionOutputCallback(
     }
     _encodingInFlight.fetch_add(1, std::memory_order_relaxed);
 
-    ApplyRec709Attachments(pixelBuffer, _colorMode);
+    ApplyColorAttachments(pixelBuffer, _colorMode);
     CMTime encodePts = [self nextEncodePresentationTime:presentationTime];
 
     NSMutableDictionary *frameProperties = nil;
@@ -1632,9 +1659,9 @@ static void CompressionOutputCallback(
                 @"pixelFormat": FourCharCodeString(self->_capturePixelFormat),
                 @"colorRange": ColorRangeForMode(self->_colorMode),
                 @"colorPrimaries": @"ITU_R_709_2",
-                @"transferFunction": @"ITU_R_709_2",
+                @"transferFunction": TransferFunctionLabelForMode(self->_colorMode),
                 @"yCbCrMatrix": @"ITU_R_709_2",
-                @"colorSpaceName": @"ITUR_709",
+                @"colorSpaceName": ColorSpaceLabelForMode(self->_colorMode),
                 @"width": @(self->_width),
                 @"height": @(self->_height),
                 @"targetFps": @(self->_frameRate),

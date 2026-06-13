@@ -16,7 +16,7 @@ const smokeCodec = (process.env.WEAVE_WINDOW_STREAM_SMOKE_CODEC || process.env.W
   .toLowerCase();
 const smokeColorMode =
   (process.env.WEAVE_WINDOW_STREAM_SMOKE_COLOR_MODE || process.env.WEAVE_WINDOW_STREAM_COLOR_MODE ||
-    'rec709-full-range').toLowerCase();
+    'srgb-video-range').toLowerCase();
 const electronPath = process.env.WEAVE_WINDOW_HOST_ELECTRON ||
   path.join(repoRoot, 'desktop/node_modules/.bin/electron');
 const answererAppPath = path.join(portalRoot, 'window-host-electron/answerer.cjs');
@@ -213,7 +213,7 @@ try {
       5_000,
     );
     const stats = statsEvent.event.stats ?? {};
-    const expectedPixelFormat = smokeColorMode === 'rec709-video-range' ? '420v' : '420f';
+    const expectedPixelFormat = smokeColorMode.endsWith('video-range') ? '420v' : '420f';
     if (stats.colorMode !== smokeColorMode) {
       throw new Error(`Expected stats.colorMode=${smokeColorMode}, got ${stats.colorMode}`);
     }

@@ -18,7 +18,11 @@ export type WindowStreamBackend = 'electron-sck' | 'native-webrtc';
 export type WindowCaptureBackend = 'screencapturekit' | 'electron';
 export type WindowStreamProfile = 'balanced' | 'quality' | 'performance' | 'low-bandwidth' | 'custom';
 export type WindowStreamCodec = 'h264' | 'hevc' | 'av1';
-export type WindowStreamColorMode = 'rec709-full-range' | 'rec709-video-range';
+export type WindowStreamColorMode =
+  | 'srgb-full-range'
+  | 'srgb-video-range'
+  | 'rec709-full-range'
+  | 'rec709-video-range';
 export type WindowControlDelivery = 'focus-hid' | 'pid-only' | 'pid-then-hid' | 'hid-only';
 export type H264Profile = 'baseline' | 'main' | 'high';
 export type HevcProfile = 'main';
@@ -426,11 +430,11 @@ export const resolveWindowStreamConfig = (
       }),
       colorMode: pickEnum(config, flags, env, {
         label: 'windowStream.capture.colorMode',
-        allowed: ['rec709-full-range', 'rec709-video-range'] as const,
+        allowed: ['srgb-full-range', 'srgb-video-range', 'rec709-full-range', 'rec709-video-range'] as const,
         flag: 'window-stream-color-mode',
         env: 'WEAVE_WINDOW_STREAM_COLOR_MODE',
         configPath: ['capture', 'colorMode'],
-        fallback: 'rec709-full-range',
+        fallback: 'srgb-video-range',
       }),
       pixelFormat: pickEnum(config, flags, env, {
         label: 'windowStream.capture.pixelFormat',

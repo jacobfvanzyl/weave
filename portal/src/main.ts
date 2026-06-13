@@ -1506,7 +1506,7 @@ Commands:
          [--window-stream-backend native-webrtc|electron-sck] [--window-stream-codec h264|hevc|av1]
          [--window-stream-profile balanced|quality|performance|low-bandwidth|custom]
          [--window-stream-max-fps 60] [--window-stream-max-dimension 1920] [--window-stream-bitrate-mbps 20]
-         [--window-stream-color-mode rec709-full-range|rec709-video-range]
+         [--window-stream-color-mode srgb-full-range|srgb-video-range|rec709-full-range|rec709-video-range]
   status [--config ~/.config/weave/portal/config.json]
   stop
 `);

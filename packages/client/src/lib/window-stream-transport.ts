@@ -131,6 +131,7 @@ export const startWindowStreamSession = async (input: {
   const mediaStream = new MediaStream();
   const stateListeners = new Set<(state: RTCPeerConnectionState) => void>();
   const errorListeners = new Set<(error: Error) => void>();
+  let isClosed = false;
 
   const emitState = () => {
     for (const listener of stateListeners) listener(peerConnection.connectionState);
@@ -158,11 +159,14 @@ export const startWindowStreamSession = async (input: {
   };
 
   const close = () => {
+    if (isClosed) return;
+    isClosed = true;
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
     socket.close();
     controlChannel?.close();
     peerConnection.close();
     for (const track of mediaStream.getTracks()) track.stop();
+    emitState();
   };
 
   const sendControl = (message: WindowStreamControlMessage) => {
@@ -208,6 +212,7 @@ export const startWindowStreamSession = async (input: {
     socket.onerror = () => fail(new Error('Window stream signaling failed.'));
     socket.onclose = () => {
       if (!accepted) fail(new Error('Window stream signaling closed before acceptance.'));
+      else if (!isClosed) fail(new Error('Window stream signaling closed.'));
     };
     socket.onmessage = event => {
       void (async () => {

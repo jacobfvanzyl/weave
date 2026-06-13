@@ -10,7 +10,7 @@ Deno.test('window stream config resolves presets and defaults', () => {
   assertEquals(config.bitrateMbps, 20);
   assertEquals(config.encoder.codec, 'hevc');
   assertEquals(config.capture.showCursor, false);
-  assertEquals(config.capture.colorMode, 'rec709-full-range');
+  assertEquals(config.capture.colorMode, 'srgb-video-range');
   assertEquals(config.control.enabled, true);
   assertEquals(config.control.delivery, 'focus-hid');
 });
@@ -31,7 +31,7 @@ Deno.test('window stream config precedence is CLI over env over config over pres
       WEAVE_WINDOW_STREAM_MAX_FPS: '30',
       WEAVE_WINDOW_STREAM_BITRATE_MBPS: '9',
       WEAVE_WINDOW_STREAM_CODEC: 'av1',
-      WEAVE_WINDOW_STREAM_COLOR_MODE: 'rec709-video-range',
+      WEAVE_WINDOW_STREAM_COLOR_MODE: 'srgb-video-range',
       WEAVE_WINDOW_CONTROL_DELIVERY: 'hid-only',
     },
   );
@@ -39,7 +39,7 @@ Deno.test('window stream config precedence is CLI over env over config over pres
   assertEquals(config.maxFps, 60);
   assertEquals(config.bitrateMbps, 9);
   assertEquals(config.encoder.codec, 'hevc');
-  assertEquals(config.capture.colorMode, 'rec709-video-range');
+  assertEquals(config.capture.colorMode, 'srgb-video-range');
   assertEquals(config.control.delivery, 'hid-only');
 });
 
@@ -60,7 +60,7 @@ Deno.test('window stream config parses codec-specific settings', () => {
       capture: {
         showCursor: true,
         queueDepth: 4,
-        colorMode: 'rec709-video-range',
+        colorMode: 'srgb-video-range',
       },
       backpressure: {
         maxInFlightFrames: 5,
@@ -80,7 +80,7 @@ Deno.test('window stream config parses codec-specific settings', () => {
   assertEquals(config.encoder.av1Packetization, 'obu');
   assertEquals(config.capture.showCursor, true);
   assertEquals(config.capture.queueDepth, 4);
-  assertEquals(config.capture.colorMode, 'rec709-video-range');
+  assertEquals(config.capture.colorMode, 'srgb-video-range');
   assertEquals(config.backpressure.maxInFlightFrames, 5);
   assertEquals(config.control.enabled, false);
   assertEquals(config.control.delivery, 'pid-only');

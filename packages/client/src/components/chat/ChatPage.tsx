@@ -512,6 +512,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const activeTerminalTabId = terminalTargetKey
     ? activeTerminalTabByTarget[terminalTargetKey] ?? terminalTabs[0]?.id
     : undefined;
+  const [isWindowStreamActive, setIsWindowStreamActive] = useState(false);
 
   const handleTerminalTabsChange = useCallback((tabsChange: TerminalPanelTabsChange) => {
     if (!terminalTargetKey) return;
@@ -739,11 +740,14 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   );
   const renderWindowStreamButton = () => hasWindowStreamPortal ? (
     <Button
-      className={isWindowStreamOpen ? 'bg-accent' : ''}
+      className={[
+        isWindowStreamOpen ? 'bg-accent' : '',
+        isWindowStreamActive ? 'text-mauve' : '',
+      ].filter(Boolean).join(' ')}
       size="icon"
       variant="ghost"
       aria-label={isWindowStreamOpen ? 'Hide window stream' : 'Show window stream'}
-      data-active={isWindowStreamOpen ? 'true' : 'false'}
+      data-active={isWindowStreamOpen || isWindowStreamActive ? 'true' : 'false'}
       onClick={() => setIsWindowStreamOpen(open => !open)}
     >
       <MonitorUp size={18} />
@@ -993,16 +997,23 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           </div>
         </div>
       ) : null}
-      {isWindowStreamOpen ? (
+      {isWindowStreamOpen || isWindowStreamActive ? (
         <div
-          className="pointer-events-none fixed inset-0 z-50 bg-background/20 backdrop-blur-sm"
+          className={[
+            'pointer-events-none fixed inset-0 z-50 bg-background/20 backdrop-blur-sm',
+            isWindowStreamOpen ? '' : 'hidden',
+          ].filter(Boolean).join(' ')}
           data-weave-window-stream-shell
         >
           <div
             className="pointer-events-auto absolute inset-0 min-h-0 min-w-0"
           >
             <Suspense fallback={null}>
-              <WindowStreamOverlay portals={onlinePortals} onHide={() => setIsWindowStreamOpen(false)} />
+              <WindowStreamOverlay
+                portals={onlinePortals}
+                onHide={() => setIsWindowStreamOpen(false)}
+                onSessionActiveChange={setIsWindowStreamActive}
+              />
             </Suspense>
           </div>
         </div>

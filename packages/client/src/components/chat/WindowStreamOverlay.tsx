@@ -26,6 +26,7 @@ import { Spinner } from '../ui/spinner';
 type WindowStreamOverlayProps = {
   portals: PortalConnection[];
   onHide: () => void;
+  onSessionActiveChange?: (isActive: boolean) => void;
 };
 
 const windowSessionCapability = 'portal.window.session';
@@ -61,12 +62,14 @@ const videoPointFromEvent = (
 const formatWindowLabel = (window: { appName?: string; title?: string; id: string }) =>
   [window.appName, window.title || window.id].filter(Boolean).join(' - ');
 
-export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProps) => {
+export const WindowStreamOverlay = ({ portals, onHide, onSessionActiveChange }: WindowStreamOverlayProps) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const textCaptureRef = useRef<HTMLTextAreaElement | null>(null);
   const activeTouchIdRef = useRef<number | null>(null);
   const lastPointerOrTouchAtRef = useRef(0);
+  const sessionRef = useRef<WindowStreamSession | null>(null);
+  const startRequestRef = useRef(0);
   const capablePortals = useMemo(() => portals.filter(portal =>
     portal.status === 'online' && portal.capabilities.includes(windowSessionCapability)
   ), [portals]);
@@ -75,6 +78,7 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
   const [selectedWindowId, setSelectedWindowId] = useState('');
   const [session, setSession] = useState<WindowStreamSession | null>(null);
   const [connectionState, setConnectionState] = useState<RTCPeerConnectionState>('new');
+  const [streamWindowId, setStreamWindowId] = useState('');
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -96,8 +100,16 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
   }, [capablePortals, selectedPortalId]);
 
   useEffect(() => {
-    setSelectedWindowId(windowId => windows.some(window => window.id === windowId) ? windowId : windows[0]?.id ?? '');
+    setSelectedWindowId(windowId => {
+      if (windowId && (windows.some(window => window.id === windowId) || sessionRef.current)) return windowId;
+      return windows[0]?.id ?? '';
+    });
   }, [windows]);
+
+  useEffect(() => {
+    sessionRef.current = session;
+    onSessionActiveChange?.(Boolean(session));
+  }, [onSessionActiveChange, session]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -107,42 +119,92 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
 
   useEffect(() => {
     if (!session) return undefined;
-    return session.onStateChange(setConnectionState);
+    return session.onStateChange(nextState => {
+      setConnectionState(nextState);
+      if (nextState !== 'closed' && nextState !== 'failed' && nextState !== 'disconnected') return;
+      if (sessionRef.current !== session) return;
+      session.close();
+      sessionRef.current = null;
+      setSession(null);
+      setStreamWindowId('');
+    });
   }, [session]);
 
   useEffect(() => {
     if (!session) return undefined;
-    return session.onError(nextError => setError(getWindowStreamErrorMessage(nextError)));
+    return session.onError(nextError => {
+      setError(getWindowStreamErrorMessage(nextError));
+      if (sessionRef.current !== session) return;
+      session.close();
+      sessionRef.current = null;
+      setSession(null);
+      setStreamWindowId('');
+      setConnectionState('closed');
+    });
   }, [session]);
 
   useEffect(() => () => {
-    session?.close();
-  }, [session]);
+    startRequestRef.current += 1;
+    sessionRef.current?.close();
+    sessionRef.current = null;
+  }, []);
 
-  const start = async () => {
-    if (!selectedPortal) return;
+  const startStream = async (windowId: string) => {
+    const portal = selectedPortal;
+    if (!portal) return;
+    const requestId = startRequestRef.current + 1;
+    startRequestRef.current = requestId;
     setIsStarting(true);
     setError(null);
-    session?.close();
+    sessionRef.current?.close();
+    sessionRef.current = null;
     setSession(null);
+    setConnectionState('new');
+    setStreamWindowId(windowId);
     try {
       const nextSession = await startWindowStreamSession({
-        portalId: selectedPortal.portalId,
-        windowId: selectedWindowId || undefined,
+        portalId: portal.portalId,
+        windowId: windowId || undefined,
       });
+      if (startRequestRef.current !== requestId) {
+        nextSession.close();
+        return;
+      }
+      sessionRef.current = nextSession;
       setSession(nextSession);
+      setStreamWindowId(windowId);
       window.requestAnimationFrame(() => surfaceRef.current?.focus());
     } catch (startError) {
-      setError(getWindowStreamErrorMessage(startError));
+      if (startRequestRef.current === requestId) {
+        setError(getWindowStreamErrorMessage(startError));
+        setStreamWindowId('');
+        setConnectionState('closed');
+      }
     } finally {
-      setIsStarting(false);
+      if (startRequestRef.current === requestId) setIsStarting(false);
     }
   };
 
+  const start = () => {
+    void startStream(selectedWindowId);
+  };
+
   const stop = () => {
-    session?.close();
+    startRequestRef.current += 1;
+    sessionRef.current?.close();
+    sessionRef.current = null;
     setSession(null);
+    setStreamWindowId('');
     setConnectionState('closed');
+    setIsStarting(false);
+  };
+
+  const handleWindowChange = (value: string | null) => {
+    const nextWindowId = value ?? '';
+    setSelectedWindowId(nextWindowId);
+    if (!sessionRef.current && !isStarting) return;
+    if (nextWindowId === streamWindowId) return;
+    void startStream(nextWindowId);
   };
 
   const sendResize = () => {
@@ -351,7 +413,7 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
               ))}
             </SelectPopup>
           </Select>
-          <Select value={selectedWindowId} onValueChange={value => setSelectedWindowId(value ?? '')} disabled={Boolean(session) || isFetchingWindows || windows.length === 0}>
+          <Select value={selectedWindowId} onValueChange={handleWindowChange} disabled={windows.length === 0 || (!session && isFetchingWindows)}>
             <SelectTrigger className="h-8 w-56">
               <SelectValue placeholder={isFetchingWindows ? 'Loading windows' : 'Window'}>
                 {selectedWindowLabel}
