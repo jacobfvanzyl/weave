@@ -25,6 +25,8 @@
     "portal:window-capture:smoke": "deno task --config portal/deno.json window-capture:smoke",
     "portal:window-host:smoke": "deno task --config portal/deno.json window-host:smoke",
     "portal:window-host:session-smoke": "deno task --config portal/deno.json window-host:session-smoke",
+    "portal:window-stream-native:smoke": "deno task --config portal/deno.json window-stream-native:smoke",
+    "portal:window-stream-native:benchmark": "deno task --config portal/deno.json window-stream-native:benchmark",
     "portal:start": "deno task --config portal/deno.json start",
     "portal:status": "deno task --config portal/deno.json status",
     "portal:stop": "deno task --config portal/deno.json stop",

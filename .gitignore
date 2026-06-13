@@ -5,6 +5,7 @@ target
 *.tsbuildinfo
 desktop/.vite
 desktop/out
+portal/native/window-stream-native/build/
 .mastra
 .env.development
 .env

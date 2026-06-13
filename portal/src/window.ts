@@ -30,7 +30,8 @@ export type WindowHostEvent =
   | { type: 'offer'; sessionId: string; offer: { type: 'offer'; sdp: string } }
   | { type: 'ice-candidate'; sessionId: string; candidate: unknown }
   | { type: 'stopped'; sessionId: string }
-  | { type: 'error'; sessionId?: string; error: string };
+  | { type: 'error'; sessionId?: string; error: string }
+  | { type: 'stats'; sessionId: string; stats: Record<string, unknown> };
 
 export type WindowClientEnvelope = {
   type: 'window.client';
@@ -91,6 +92,15 @@ const defaultWindowCaptureHelperPaths = () =>
     joinPath(dirname(Deno.execPath()), 'weave-window-capture-sck'),
   ].filter((candidate): candidate is string => Boolean(candidate));
 
+const defaultNativeWindowStreamHostPaths = () =>
+  [
+    helperPathFromFileUrl(
+      new URL('../native/window-stream-native/build/weave-window-stream-native', import.meta.url),
+    ),
+    helperPathFromFileUrl(new URL('../dist/weave-window-stream-native', import.meta.url)),
+    joinPath(dirname(Deno.execPath()), 'weave-window-stream-native'),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
 const isPathLike = (value: string) => value.includes('/');
 
 const executableExists = async (path: string) => {
@@ -144,23 +154,56 @@ const resolveAppPath = async (configured: string | undefined, fallback: string |
 };
 
 type WindowCaptureBackend = 'screencapturekit' | 'electron';
+type WindowStreamBackend = 'electron-sck' | 'native-webrtc';
 
 const resolveWindowCaptureBackend = (env: Record<string, string | undefined>): WindowCaptureBackend => {
   const configured = optionalString(env.WEAVE_WINDOW_CAPTURE_BACKEND)?.toLowerCase();
   return configured === 'electron' ? 'electron' : 'screencapturekit';
 };
 
+const resolveWindowStreamBackend = (env: Record<string, string | undefined>): WindowStreamBackend => {
+  const configured = optionalString(env.WEAVE_WINDOW_STREAM_BACKEND)?.toLowerCase();
+  return configured === 'electron-sck' ? 'electron-sck' : 'native-webrtc';
+};
+
 export type WindowHostRuntime = {
-  electronPath: string;
-  appPath: string;
-  captureBackend: WindowCaptureBackend;
+  label: string;
+  command: string;
+  args: string[];
+  streamBackend: WindowStreamBackend;
+  env: Record<string, string>;
+  electronPath?: string;
+  appPath?: string;
+  captureBackend?: WindowCaptureBackend;
   captureHelperPath?: string;
+  nativeHostPath?: string;
 };
 
 export const resolveWindowHostRuntime = async (
   env: Record<string, string | undefined> = Deno.env.toObject(),
 ): Promise<WindowHostRuntime | undefined> => {
   if (Deno.build.os !== 'darwin') return undefined;
+  const streamBackend = resolveWindowStreamBackend(env);
+  if (streamBackend === 'native-webrtc') {
+    const nativeHostPath = await resolveExecutableFromCandidates(
+      optionalString(env.WEAVE_WINDOW_STREAM_HOST),
+      defaultNativeWindowStreamHostPaths(),
+      env,
+    );
+    if (!nativeHostPath) return undefined;
+    return {
+      label: 'Native window stream host',
+      command: nativeHostPath,
+      args: [],
+      streamBackend,
+      nativeHostPath,
+      env: {
+        WEAVE_WINDOW_HOST_PROTOCOL: '1',
+        WEAVE_WINDOW_STREAM_BACKEND: 'native-webrtc',
+      },
+    };
+  }
+
   const electronPath = await resolveExecutable(
     optionalString(env.WEAVE_WINDOW_HOST_ELECTRON),
     defaultElectronPath(),
@@ -177,7 +220,22 @@ export const resolveWindowHostRuntime = async (
     : undefined;
   if (!electronPath || !appPath) return undefined;
   if (captureBackend === 'screencapturekit' && !captureHelperPath) return undefined;
-  return { electronPath, appPath, captureBackend, captureHelperPath };
+  return {
+    label: 'Electron window host',
+    command: electronPath,
+    args: [appPath],
+    streamBackend,
+    electronPath,
+    appPath,
+    captureBackend,
+    captureHelperPath,
+    env: {
+      WEAVE_WINDOW_HOST_PROTOCOL: '1',
+      WEAVE_WINDOW_STREAM_BACKEND: 'electron-sck',
+      WEAVE_WINDOW_CAPTURE_BACKEND: captureBackend,
+      ...(captureHelperPath ? { WEAVE_WINDOW_CAPTURE_HELPER: captureHelperPath } : {}),
+    },
+  };
 };
 
 export const isWindowHostAvailable = async (env?: Record<string, string | undefined>) =>
@@ -185,8 +243,10 @@ export const isWindowHostAvailable = async (env?: Record<string, string | undefi
 
 const windowHostRuntimeError = (env: Record<string, string | undefined>) =>
   [
-    'Electron window host is unavailable.',
-    'Install desktop dependencies and build the ScreenCaptureKit helper, or set WEAVE_WINDOW_HOST_ELECTRON, WEAVE_WINDOW_HOST_APP, WEAVE_WINDOW_CAPTURE_HELPER, or WEAVE_WINDOW_CAPTURE_BACKEND=electron.',
+    'Window streaming host is unavailable.',
+    'Install desktop dependencies and build the ScreenCaptureKit helpers, or set WEAVE_WINDOW_STREAM_BACKEND, WEAVE_WINDOW_STREAM_HOST, WEAVE_WINDOW_HOST_ELECTRON, WEAVE_WINDOW_HOST_APP, WEAVE_WINDOW_CAPTURE_HELPER, or WEAVE_WINDOW_CAPTURE_BACKEND=electron.',
+    `WEAVE_WINDOW_STREAM_BACKEND=${env.WEAVE_WINDOW_STREAM_BACKEND ?? 'native-webrtc'}`,
+    `WEAVE_WINDOW_STREAM_HOST=${env.WEAVE_WINDOW_STREAM_HOST ?? defaultNativeWindowStreamHostPaths()[0] ?? ''}`,
     `WEAVE_WINDOW_HOST_ELECTRON=${env.WEAVE_WINDOW_HOST_ELECTRON ?? defaultElectronPath() ?? ''}`,
     `WEAVE_WINDOW_HOST_APP=${env.WEAVE_WINDOW_HOST_APP ?? defaultWindowHostAppPath() ?? ''}`,
     `WEAVE_WINDOW_CAPTURE_BACKEND=${env.WEAVE_WINDOW_CAPTURE_BACKEND ?? 'screencapturekit'}`,
@@ -209,7 +269,7 @@ const toErrorMessage = (error: unknown) => {
   return String(error);
 };
 
-class ElectronWindowHostClient {
+class ProcessWindowHostClient {
   private readonly env: Record<string, string | undefined>;
   private readonly requestTimeoutMs: number;
   private process?: Deno.ChildProcess;
@@ -230,13 +290,13 @@ class ElectronWindowHostClient {
 
   async request(payload: Record<string, unknown>) {
     await this.ensureStarted();
-    if (!this.stdin) throw new Error('Electron window host is not writable.');
+    if (!this.stdin) throw new Error(`${this.runtime?.label ?? 'Window host'} is not writable.`);
     const id = `window_req_${++this.nextRequestId}`;
     const message = { id, ...payload };
     const result = new Promise<Record<string, unknown>>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Electron window host timed out: ${String(payload.type)}`));
+        reject(new Error(`${this.runtime?.label ?? 'Window host'} timed out: ${String(payload.type)}`));
       }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timeout });
     });
@@ -257,7 +317,7 @@ class ElectronWindowHostClient {
   dispose() {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
-      pending.reject(new Error('Electron window host stopped.'));
+      pending.reject(new Error(`${this.runtime?.label ?? 'Window host'} stopped.`));
     }
     this.pending.clear();
     this.sessionListeners.clear();
@@ -272,27 +332,23 @@ class ElectronWindowHostClient {
     this.runtime = await resolveWindowHostRuntime(this.env);
     if (!this.runtime) throw new Error(windowHostRuntimeError(this.env));
 
-    const command = new Deno.Command(this.runtime.electronPath, {
-      args: [this.runtime.appPath],
+    const command = new Deno.Command(this.runtime.command, {
+      args: this.runtime.args,
       stdin: 'piped',
       stdout: 'piped',
       stderr: 'piped',
-      env: {
-        WEAVE_WINDOW_HOST_PROTOCOL: '1',
-        WEAVE_WINDOW_CAPTURE_BACKEND: this.runtime.captureBackend,
-        ...(this.runtime.captureHelperPath ? { WEAVE_WINDOW_CAPTURE_HELPER: this.runtime.captureHelperPath } : {}),
-      },
+      env: this.runtime.env,
     });
     this.process = command.spawn();
     this.stdin = this.process.stdin.getWriter();
     void this.readStdout(this.process.stdout);
     void this.readStderr(this.process.stderr);
     void this.process.status.then((status) => {
-      this.rejectAll(new Error(`Electron window host exited with code ${status.code}.`));
+      this.rejectAll(new Error(`${this.runtime?.label ?? 'Window host'} exited with code ${status.code}.`));
       this.process = undefined;
       this.stdin = undefined;
     }).catch((error) => {
-      this.rejectAll(new Error(`Electron window host failed: ${toErrorMessage(error)}`));
+      this.rejectAll(new Error(`${this.runtime?.label ?? 'Window host'} failed: ${toErrorMessage(error)}`));
       this.process = undefined;
       this.stdin = undefined;
     });
@@ -319,7 +375,7 @@ class ElectronWindowHostClient {
         }
       }
     } catch (error) {
-      this.rejectAll(new Error(`Electron window host stdout failed: ${toErrorMessage(error)}`));
+      this.rejectAll(new Error(`${this.runtime?.label ?? 'Window host'} stdout failed: ${toErrorMessage(error)}`));
     }
   }
 
@@ -351,7 +407,9 @@ class ElectronWindowHostClient {
       if (message.ok === false) {
         pending.reject(
           new Error(
-            message.error === undefined ? 'Electron window host request failed.' : toErrorMessage(message.error),
+            message.error === undefined
+              ? `${this.runtime?.label ?? 'Window host'} request failed.`
+              : toErrorMessage(message.error),
           ),
         );
       } else {
@@ -370,14 +428,14 @@ class ElectronWindowHostClient {
 }
 
 export class PortalWindowHost {
-  private readonly helper: ElectronWindowHostClient;
+  private readonly helper: ProcessWindowHostClient;
   private readonly sessions = new Map<string, WindowSession & { dispose: () => void }>();
 
   constructor(options: {
     config: PortalWindowConfig;
-    helper?: ElectronWindowHostClient;
+    helper?: ProcessWindowHostClient;
   }) {
-    this.helper = options.helper ?? new ElectronWindowHostClient();
+    this.helper = options.helper ?? new ProcessWindowHostClient();
   }
 
   async list(): Promise<{ ok: true; windows: PortalWindowInfo[] }> {

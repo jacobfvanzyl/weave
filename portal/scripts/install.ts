@@ -24,6 +24,12 @@ const main = async () => {
     if (stat?.isFile) {
       await copyFile(helper, `${binDir}/weave-window-capture-sck`);
     }
+
+    const nativeHost = `${portalRoot}/dist/weave-window-stream-native`;
+    const nativeHostStat = await Deno.stat(nativeHost).catch(() => undefined);
+    if (nativeHostStat?.isFile) {
+      await copyFile(nativeHost, `${binDir}/weave-window-stream-native`);
+    }
   }
 };
 

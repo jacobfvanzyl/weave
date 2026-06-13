@@ -10,6 +10,7 @@ const nativeLibraryName = Deno.build.os === 'darwin'
   : undefined;
 
 const windowCaptureHelperName = Deno.build.os === 'darwin' ? 'weave-window-capture-sck' : undefined;
+const nativeWindowStreamHostName = Deno.build.os === 'darwin' ? 'weave-window-stream-native' : undefined;
 
 const run = async (args: string[]) => {
   const child = new Deno.Command(Deno.execPath(), {
@@ -34,6 +35,15 @@ const main = async () => {
       `${portalRoot}/dist/${windowCaptureHelperName}`,
     );
     await Deno.chmod(`${portalRoot}/dist/${windowCaptureHelperName}`, 0o755);
+  }
+  if (nativeWindowStreamHostName) {
+    const nativeHost = `${portalRoot}/native/window-stream-native/build/${nativeWindowStreamHostName}`;
+    const stat = await Deno.stat(nativeHost).catch(() => undefined);
+    if (stat?.isFile) {
+      await Deno.mkdir(`${portalRoot}/dist`, { recursive: true });
+      await Deno.copyFile(nativeHost, `${portalRoot}/dist/${nativeWindowStreamHostName}`);
+      await Deno.chmod(`${portalRoot}/dist/${nativeWindowStreamHostName}`, 0o755);
+    }
   }
   await run([
     'compile',
