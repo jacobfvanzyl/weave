@@ -11,6 +11,8 @@ Deno.test('window stream config resolves presets and defaults', () => {
   assertEquals(config.encoder.codec, 'hevc');
   assertEquals(config.capture.showCursor, false);
   assertEquals(config.capture.colorMode, 'rec709-full-range');
+  assertEquals(config.control.enabled, true);
+  assertEquals(config.control.delivery, 'focus-hid');
 });
 
 Deno.test('window stream config precedence is CLI over env over config over preset', () => {
@@ -30,6 +32,7 @@ Deno.test('window stream config precedence is CLI over env over config over pres
       WEAVE_WINDOW_STREAM_BITRATE_MBPS: '9',
       WEAVE_WINDOW_STREAM_CODEC: 'av1',
       WEAVE_WINDOW_STREAM_COLOR_MODE: 'rec709-video-range',
+      WEAVE_WINDOW_CONTROL_DELIVERY: 'hid-only',
     },
   );
 
@@ -37,6 +40,7 @@ Deno.test('window stream config precedence is CLI over env over config over pres
   assertEquals(config.bitrateMbps, 9);
   assertEquals(config.encoder.codec, 'hevc');
   assertEquals(config.capture.colorMode, 'rec709-video-range');
+  assertEquals(config.control.delivery, 'hid-only');
 });
 
 Deno.test('window stream config preserves legacy bitrate env in bps', () => {
@@ -61,6 +65,10 @@ Deno.test('window stream config parses codec-specific settings', () => {
       backpressure: {
         maxInFlightFrames: 5,
       },
+      control: {
+        enabled: false,
+        delivery: 'pid-only',
+      },
     },
     {},
     {},
@@ -74,6 +82,8 @@ Deno.test('window stream config parses codec-specific settings', () => {
   assertEquals(config.capture.queueDepth, 4);
   assertEquals(config.capture.colorMode, 'rec709-video-range');
   assertEquals(config.backpressure.maxInFlightFrames, 5);
+  assertEquals(config.control.enabled, false);
+  assertEquals(config.control.delivery, 'pid-only');
 });
 
 Deno.test('window stream config rejects invalid codec and ranges', async () => {
@@ -91,5 +101,10 @@ Deno.test('window stream config rejects invalid codec and ranges', async () => {
     async () => resolveWindowStreamConfig({}, { 'window-stream-color-mode': 'p3' }, {}),
     Error,
     'windowStream.capture.colorMode',
+  );
+  await assertRejects(
+    async () => resolveWindowStreamConfig({}, { 'window-control-delivery': 'ax' }, {}),
+    Error,
+    'windowStream.control.delivery',
   );
 });

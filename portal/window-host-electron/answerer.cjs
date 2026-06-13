@@ -75,6 +75,8 @@ const callRenderer = async (method, payload) => {
         };
         peerConnection.ondatachannel = event => {
           if (event.channel.label !== 'control') return;
+          const session = window.__weaveAnswererSessions.get(sessionId) || {};
+          window.__weaveAnswererSessions.set(sessionId, { ...session, peerConnection, controlChannel: event.channel });
           event.channel.onopen = () => {
             ipcRenderer.send('window-answerer:event', { sessionId, event: { type: 'control-open' } });
           };
@@ -97,7 +99,8 @@ const callRenderer = async (method, payload) => {
             if (peerConnection.iceGatheringState === 'complete') resolve();
           };
         });
-        window.__weaveAnswererSessions.set(sessionId, { peerConnection });
+        const current = window.__weaveAnswererSessions.get(sessionId) || {};
+        window.__weaveAnswererSessions.set(sessionId, { ...current, peerConnection });
         return { type: 'answer', sdp: peerConnection.localDescription.sdp };
       }
 
@@ -112,9 +115,17 @@ const callRenderer = async (method, payload) => {
 
       if (method === 'session.close') {
         const session = window.__weaveAnswererSessions.get(input.sessionId || 'answerer');
+        session?.controlChannel?.close?.();
         session?.peerConnection?.close?.();
         window.__weaveAnswererSessions.delete(input.sessionId || 'answerer');
         return { closed: true };
+      }
+
+      if (method === 'control.send') {
+        const session = window.__weaveAnswererSessions.get(input.sessionId || 'answerer');
+        if (!session?.controlChannel || session.controlChannel.readyState !== 'open') return { sent: false };
+        session.controlChannel.send(JSON.stringify(input.message || {}));
+        return { sent: true };
       }
 
       throw new Error('Unsupported renderer method: ' + method);
@@ -155,6 +166,14 @@ const handleMessage = async (message) => {
     if (type === 'session.close') {
       await callRenderer('session.close', { sessionId: optionalString(message.sessionId) });
       reply(id);
+      return;
+    }
+    if (type === 'control.send') {
+      const result = await callRenderer('control.send', {
+        sessionId: optionalString(message.sessionId),
+        message: message.message,
+      });
+      reply(id, true, result);
       return;
     }
     if (type === 'shutdown') {

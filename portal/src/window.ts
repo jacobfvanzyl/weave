@@ -19,6 +19,7 @@ export type WindowCaptureBackend = 'screencapturekit' | 'electron';
 export type WindowStreamProfile = 'balanced' | 'quality' | 'performance' | 'low-bandwidth' | 'custom';
 export type WindowStreamCodec = 'h264' | 'hevc' | 'av1';
 export type WindowStreamColorMode = 'rec709-full-range' | 'rec709-video-range';
+export type WindowControlDelivery = 'focus-hid' | 'pid-only' | 'pid-then-hid' | 'hid-only';
 export type H264Profile = 'baseline' | 'main' | 'high';
 export type HevcProfile = 'main';
 export type Av1Packetization = 'temporal-unit' | 'obu';
@@ -65,6 +66,10 @@ export type WindowStreamConfig = {
   };
   backpressure?: {
     maxInFlightFrames?: number;
+  };
+  control?: {
+    enabled?: boolean;
+    delivery?: WindowControlDelivery;
   };
   electronFallback?: {
     electronPath?: string | null;
@@ -113,6 +118,10 @@ export type ResolvedWindowStreamConfig = {
   };
   backpressure: {
     maxInFlightFrames: number;
+  };
+  control: {
+    enabled: boolean;
+    delivery: WindowControlDelivery;
   };
   electronFallback: {
     electronPath?: string;
@@ -586,6 +595,23 @@ export const resolveWindowStreamConfig = (
         integer: true,
       }),
     },
+    control: {
+      enabled: pickBoolean(config, flags, env, {
+        label: 'windowStream.control.enabled',
+        flag: 'window-control-enabled',
+        env: 'WEAVE_WINDOW_CONTROL_ENABLED',
+        configPath: ['control', 'enabled'],
+        fallback: true,
+      }),
+      delivery: pickEnum(config, flags, env, {
+        label: 'windowStream.control.delivery',
+        allowed: ['focus-hid', 'pid-only', 'pid-then-hid', 'hid-only'] as const,
+        flag: 'window-control-delivery',
+        env: 'WEAVE_WINDOW_CONTROL_DELIVERY',
+        configPath: ['control', 'delivery'],
+        fallback: 'focus-hid',
+      }),
+    },
     electronFallback: {
       electronPath: pickString(config, flags, env, {
         flag: 'window-stream-electron',
@@ -902,6 +928,8 @@ const sessionSettingsFields = (config: ResolvedWindowStreamConfig) => ({
   opaque: config.capture.opaque,
   ignoreGlobalClipSingleWindow: config.capture.ignoreGlobalClipSingleWindow,
   maxInFlightFrames: config.backpressure.maxInFlightFrames,
+  controlEnabled: config.control.enabled,
+  controlDelivery: config.control.delivery,
   electronMaxFrameRate: config.electronFallback.maxFps,
   electronMaxDimension: config.electronFallback.maxDimension,
   electronJpegQuality: config.electronFallback.jpegQuality,

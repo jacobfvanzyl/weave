@@ -199,6 +199,15 @@ try {
         event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'control-open',
       10_000,
     );
+    await answerer.request('control.send', {
+      sessionId,
+      message: {
+        type: 'resize',
+        viewportWidth: 640,
+        viewportHeight: 360,
+        deviceScaleFactor: 1,
+      },
+    });
     const statsEvent = await host.waitEvent(
       (event) => event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'stats',
       5_000,
@@ -213,6 +222,12 @@ try {
     }
     if (typeof stats.repeatedFrames !== 'number' || typeof stats.repeatedFps !== 'number') {
       throw new Error('Expected idle repeat frame stats.');
+    }
+    if (stats.controlDelivery !== 'focus-hid' || typeof stats.controlMessages !== 'number') {
+      throw new Error('Expected native control stats.');
+    }
+    if (stats.controlMessages < 1) {
+      throw new Error('Expected native host to receive a control data channel message.');
     }
     clearInterval(candidateForwarder);
 

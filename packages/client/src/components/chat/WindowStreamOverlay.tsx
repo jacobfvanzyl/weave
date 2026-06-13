@@ -1,8 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent as ReactFormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type Touch as ReactTouch,
+  type TouchEvent as ReactTouchEvent,
+  type WheelEvent as ReactWheelEvent,
+} from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, MonitorUp, Play, Square, X } from 'lucide-react';
 import type { PortalConnection } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
+import { normalizeVideoPoint } from '../../lib/window-stream-control';
 import { getWindowStreamErrorMessage, listWindowStreamWindows, startWindowStreamSession } from '../../lib/window-stream-transport';
 import type { WindowStreamSession } from '../../lib/window-stream-types';
 import { Alert, AlertDescription } from '../ui/alert';
@@ -18,19 +31,31 @@ type WindowStreamOverlayProps = {
 const windowSessionCapability = 'portal.window.session';
 const windowListCapability = 'portal.window.list';
 
-const controlModifiers = (event: ReactKeyboardEvent | ReactPointerEvent) => [
+const controlModifiers = (
+  event: ReactKeyboardEvent | ReactMouseEvent | ReactPointerEvent | ReactTouchEvent | ReactWheelEvent,
+) => [
   event.shiftKey ? 'shift' : undefined,
   event.altKey ? 'alt' : undefined,
   event.metaKey ? 'meta' : undefined,
   event.ctrlKey ? 'ctrl' : undefined,
 ].filter((item): item is string => Boolean(item));
 
-const normalizePoint = (element: HTMLElement, event: ReactPointerEvent | ReactWheelEvent) => {
+const videoPointFromClient = (
+  element: HTMLElement,
+  video: HTMLVideoElement | null,
+  clientX: number,
+  clientY: number,
+) => {
   const bounds = element.getBoundingClientRect();
-  return {
-    x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / Math.max(1, bounds.width))),
-    y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / Math.max(1, bounds.height))),
-  };
+  return normalizeVideoPoint(bounds, video?.videoWidth ?? 0, video?.videoHeight ?? 0, clientX, clientY);
+};
+
+const videoPointFromEvent = (
+  element: HTMLElement,
+  video: HTMLVideoElement | null,
+  event: ReactMouseEvent | ReactPointerEvent | ReactWheelEvent,
+) => {
+  return videoPointFromClient(element, video, event.clientX, event.clientY);
 };
 
 const formatWindowLabel = (window: { appName?: string; title?: string; id: string }) =>
@@ -39,6 +64,9 @@ const formatWindowLabel = (window: { appName?: string; title?: string; id: strin
 export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProps) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const textCaptureRef = useRef<HTMLTextAreaElement | null>(null);
+  const activeTouchIdRef = useRef<number | null>(null);
+  const lastPointerOrTouchAtRef = useRef(0);
   const capablePortals = useMemo(() => portals.filter(portal =>
     portal.status === 'online' && portal.capabilities.includes(windowSessionCapability)
   ), [portals]);
@@ -136,12 +164,53 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
     return () => window.removeEventListener('resize', sendResize);
   }, [session]);
 
+  const focusInputSurface = (pointerType?: string) => {
+    if (pointerType === 'touch') {
+      textCaptureRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    surfaceRef.current?.focus({ preventScroll: true });
+  };
+
   const handlePointer = (event: ReactPointerEvent<HTMLDivElement>, action: 'move' | 'down' | 'up') => {
     if (!session) return;
-    const point = normalizePoint(event.currentTarget, event);
+    if (event.pointerType === 'touch') return;
+    event.preventDefault();
+    lastPointerOrTouchAtRef.current = performance.now();
+    const point = videoPointFromEvent(event.currentTarget, videoRef.current, event);
+    if (!point) return;
     if (action === 'down') {
       event.currentTarget.setPointerCapture(event.pointerId);
-      event.currentTarget.focus();
+      focusInputSurface(event.pointerType);
+      session.sendControl({ type: 'focus' });
+    } else if (action === 'up' && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    session.sendControl({
+      type: 'pointer',
+      action,
+      x: point.x,
+      y: point.y,
+      button: event.button,
+      buttons: event.buttons,
+      clickCount: event.detail,
+      pointerType: event.pointerType,
+      pointerId: event.pointerId,
+      pressure: event.pressure,
+      modifiers: controlModifiers(event),
+    });
+  };
+
+  const sendTouchPointer = (
+    event: ReactTouchEvent<HTMLDivElement>,
+    touch: ReactTouch,
+    action: 'move' | 'down' | 'up',
+  ) => {
+    if (!session) return;
+    const point = videoPointFromClient(event.currentTarget, videoRef.current, touch.clientX, touch.clientY);
+    if (!point) return;
+    if (action === 'down') {
+      focusInputSurface('touch');
       session.sendControl({ type: 'focus' });
     }
     session.sendControl({
@@ -149,18 +218,77 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
       action,
       x: point.x,
       y: point.y,
+      button: 0,
+      buttons: action === 'up' ? 0 : 1,
+      clickCount: action === 'down' ? 1 : undefined,
+      pointerType: 'touch',
+      pointerId: touch.identifier,
+      pressure: typeof (touch as ReactTouch & { force?: number }).force === 'number'
+        ? (touch as ReactTouch & { force?: number }).force
+        : action === 'up'
+        ? 0
+        : 0.5,
       modifiers: controlModifiers(event),
     });
   };
 
-  const handleKey = (event: ReactKeyboardEvent<HTMLDivElement>, action: 'down' | 'up') => {
+  const findChangedTouch = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const activeTouchId = activeTouchIdRef.current;
+    if (activeTouchId === null) return event.changedTouches[0] ?? event.touches[0];
+    return Array.from(event.changedTouches).find(touch => touch.identifier === activeTouchId) ??
+      Array.from(event.touches).find(touch => touch.identifier === activeTouchId);
+  };
+
+  const handleTouch = (event: ReactTouchEvent<HTMLDivElement>, action: 'move' | 'down' | 'up') => {
     if (!session) return;
     event.preventDefault();
+    event.stopPropagation();
+    lastPointerOrTouchAtRef.current = performance.now();
+
+    const touch = action === 'down' && activeTouchIdRef.current === null
+      ? event.changedTouches[0]
+      : findChangedTouch(event);
+    if (!touch) return;
+    if (action === 'down') activeTouchIdRef.current = touch.identifier;
+    sendTouchPointer(event, touch, action);
+    if (action === 'up' && touch.identifier === activeTouchIdRef.current) {
+      activeTouchIdRef.current = null;
+    }
+  };
+
+  const handleClickFallback = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const lastPointerOrTouchAt = lastPointerOrTouchAtRef.current;
+    if (!session || (lastPointerOrTouchAt > 0 && performance.now() - lastPointerOrTouchAt < 750)) return;
+    event.preventDefault();
+    const point = videoPointFromEvent(event.currentTarget, videoRef.current, event);
+    if (!point) return;
+    focusInputSurface('touch');
+    session.sendControl({ type: 'focus' });
+    for (const action of ['down', 'up'] as const) {
+      session.sendControl({
+        type: 'pointer',
+        action,
+        x: point.x,
+        y: point.y,
+        button: 0,
+        buttons: action === 'down' ? 1 : 0,
+        clickCount: 1,
+        pointerType: 'touch',
+        modifiers: controlModifiers(event),
+      });
+    }
+  };
+
+  const handleKey = (event: ReactKeyboardEvent<HTMLElement>, action: 'down' | 'up') => {
+    if (!session) return;
+    event.preventDefault();
+    event.stopPropagation();
     session.sendControl({
       type: 'key',
       action,
       key: event.key,
       code: event.code,
+      repeat: event.repeat,
       modifiers: controlModifiers(event),
     });
   };
@@ -168,13 +296,30 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
   const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (!session) return;
     event.preventDefault();
-    const point = normalizePoint(event.currentTarget, event);
+    const point = videoPointFromEvent(event.currentTarget, videoRef.current, event);
+    if (!point) return;
     session.sendControl({
       type: 'scroll',
       dx: event.deltaX,
       dy: event.deltaY,
       x: point.x,
       y: point.y,
+      deltaMode: event.deltaMode,
+      modifiers: controlModifiers(event),
+    });
+  };
+
+  const handleTextInput = (event: ReactFormEvent<HTMLTextAreaElement>) => {
+    if (!session) return;
+    const target = event.currentTarget;
+    const text = target.value;
+    target.value = '';
+    if (!text) return;
+    session.sendControl({
+      type: 'key',
+      action: 'text',
+      key: text,
+      text,
     });
   };
 
@@ -256,7 +401,7 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
             ref={surfaceRef}
             className={cn(
               'relative h-full w-full outline-none',
-              session ? 'cursor-crosshair' : 'flex items-center justify-center text-sm text-muted-foreground',
+              session ? 'touch-none cursor-crosshair select-none' : 'flex items-center justify-center text-sm text-muted-foreground',
             )}
             tabIndex={0}
             onKeyDown={event => handleKey(event, 'down')}
@@ -266,16 +411,43 @@ export const WindowStreamOverlay = ({ portals, onHide }: WindowStreamOverlayProp
               if (event.buttons) handlePointer(event, 'move');
             }}
             onPointerUp={event => handlePointer(event, 'up')}
+            onPointerCancel={event => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+              if (event.pointerType === 'touch') activeTouchIdRef.current = null;
+            }}
+            onTouchStart={event => handleTouch(event, 'down')}
+            onTouchMove={event => handleTouch(event, 'move')}
+            onTouchEnd={event => handleTouch(event, 'up')}
+            onTouchCancel={event => handleTouch(event, 'up')}
+            onClick={handleClickFallback}
             onWheel={handleWheel}
+            onContextMenu={event => event.preventDefault()}
           >
             {session ? (
-              <video
-                ref={videoRef}
-                className="h-full w-full object-contain"
-                autoPlay
-                muted
-                playsInline
-              />
+              <>
+                <video
+                  ref={videoRef}
+                  className="h-full w-full object-contain"
+                  autoPlay
+                  muted
+                  playsInline
+                />
+                <textarea
+                  ref={textCaptureRef}
+                  className="pointer-events-none absolute left-0 top-0 h-8 w-8 resize-none opacity-0"
+                  aria-hidden="true"
+                  autoCapitalize="off"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  tabIndex={-1}
+                  onInput={handleTextInput}
+                  onKeyDown={event => handleKey(event, 'down')}
+                  onKeyUp={event => handleKey(event, 'up')}
+                />
+              </>
             ) : (
               <span>Select a window and start streaming.</span>
             )}

@@ -15,6 +15,12 @@ export type WindowStreamControlMessage =
     action: 'move' | 'down' | 'up';
     x: number;
     y: number;
+    button?: number;
+    buttons?: number;
+    clickCount?: number;
+    pointerType?: string;
+    pointerId?: number;
+    pressure?: number;
     modifiers?: string[];
   }
   | {
@@ -23,12 +29,17 @@ export type WindowStreamControlMessage =
     dy: number;
     x?: number;
     y?: number;
+    deltaMode?: number;
+    modifiers?: string[];
+    phase?: 'began' | 'changed' | 'ended' | 'momentum';
   }
   | {
     type: 'key';
-    action: 'down' | 'up';
+    action: 'down' | 'up' | 'text';
     key: string;
     code?: string;
+    repeat?: boolean;
+    text?: string;
     modifiers?: string[];
   }
   | { type: 'focus' }

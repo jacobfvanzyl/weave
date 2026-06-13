@@ -287,6 +287,15 @@ static NSString *NormalizeColorMode(id value) {
     return @"rec709-full-range";
 }
 
+static NSString *NormalizeControlDelivery(id value) {
+    NSString *delivery = [(OptionalString(value) ?: @"focus-hid") lowercaseString];
+    if ([delivery isEqualToString:@"focus-hid"] ||
+        [delivery isEqualToString:@"pid-only"] ||
+        [delivery isEqualToString:@"pid-then-hid"] ||
+        [delivery isEqualToString:@"hid-only"]) return delivery;
+    return @"focus-hid";
+}
+
 static OSType PixelFormatForColorMode(NSString *colorMode) {
     if ([colorMode isEqualToString:@"rec709-video-range"]) {
         return kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
@@ -434,6 +443,106 @@ static NSDictionary *ProbeCodec(NSString *codec, BOOL requireHardware) {
     };
 }
 
+static BOOL HasPostEventAccess(BOOL requestIfNeeded) {
+    if (@available(macOS 10.15, *)) {
+        if (CGPreflightPostEventAccess()) return YES;
+        return requestIfNeeded ? CGRequestPostEventAccess() : NO;
+    }
+    return YES;
+}
+
+static BOOL ArrayContainsString(id value, NSString *needle) {
+    NSArray *array = OptionalArray(value);
+    if (!array) return NO;
+    for (id item in array) {
+        NSString *text = [[OptionalString(item) ?: @"" lowercaseString] copy];
+        if ([text isEqualToString:needle]) return YES;
+    }
+    return NO;
+}
+
+static CGEventFlags FlagsFromModifiers(id modifiers) {
+    CGEventFlags flags = 0;
+    if (ArrayContainsString(modifiers, @"shift")) flags |= kCGEventFlagMaskShift;
+    if (ArrayContainsString(modifiers, @"ctrl") || ArrayContainsString(modifiers, @"control")) flags |= kCGEventFlagMaskControl;
+    if (ArrayContainsString(modifiers, @"alt") || ArrayContainsString(modifiers, @"option")) flags |= kCGEventFlagMaskAlternate;
+    if (ArrayContainsString(modifiers, @"meta") || ArrayContainsString(modifiers, @"cmd") || ArrayContainsString(modifiers, @"command")) flags |= kCGEventFlagMaskCommand;
+    return flags;
+}
+
+static double ClampUnitDouble(id value, double fallback) {
+    double number = OptionalDouble(value, fallback);
+    if (!std::isfinite(number)) return fallback;
+    return std::max(0.0, std::min(1.0, number));
+}
+
+static int64_t ClampInteger(id value, int64_t fallback, int64_t minValue, int64_t maxValue) {
+    int64_t number = static_cast<int64_t>(OptionalInteger(value, static_cast<NSInteger>(fallback)));
+    return std::max(minValue, std::min(maxValue, number));
+}
+
+static CGMouseButton MouseButtonFromBrowserButton(NSInteger button) {
+    if (button == 2) return kCGMouseButtonRight;
+    if (button == 1) return kCGMouseButtonCenter;
+    return kCGMouseButtonLeft;
+}
+
+static CGEventType MouseEventTypeForAction(NSString *action, NSInteger button, NSInteger buttons) {
+    CGMouseButton cgButton = MouseButtonFromBrowserButton(button);
+    if ([action isEqualToString:@"down"]) {
+        if (cgButton == kCGMouseButtonRight) return kCGEventRightMouseDown;
+        if (cgButton == kCGMouseButtonCenter) return kCGEventOtherMouseDown;
+        return kCGEventLeftMouseDown;
+    }
+    if ([action isEqualToString:@"up"]) {
+        if (cgButton == kCGMouseButtonRight) return kCGEventRightMouseUp;
+        if (cgButton == kCGMouseButtonCenter) return kCGEventOtherMouseUp;
+        return kCGEventLeftMouseUp;
+    }
+    if ((buttons & 2) != 0) return kCGEventRightMouseDragged;
+    if ((buttons & 4) != 0) return kCGEventOtherMouseDragged;
+    if ((buttons & 1) != 0) return kCGEventLeftMouseDragged;
+    return kCGEventMouseMoved;
+}
+
+static std::optional<CGKeyCode> KeyCodeForDomCode(NSString *code) {
+    NSString *normalized = OptionalString(code);
+    if (!normalized) return std::nullopt;
+
+    static NSDictionary<NSString *, NSNumber *> *mapping = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        mapping = @{
+            @"KeyA": @0, @"KeyS": @1, @"KeyD": @2, @"KeyF": @3, @"KeyH": @4, @"KeyG": @5,
+            @"KeyZ": @6, @"KeyX": @7, @"KeyC": @8, @"KeyV": @9, @"KeyB": @11, @"KeyQ": @12,
+            @"KeyW": @13, @"KeyE": @14, @"KeyR": @15, @"KeyY": @16, @"KeyT": @17, @"Digit1": @18,
+            @"Digit2": @19, @"Digit3": @20, @"Digit4": @21, @"Digit6": @22, @"Digit5": @23,
+            @"Equal": @24, @"Digit9": @25, @"Digit7": @26, @"Minus": @27, @"Digit8": @28,
+            @"Digit0": @29, @"BracketRight": @30, @"KeyO": @31, @"KeyU": @32, @"BracketLeft": @33,
+            @"KeyI": @34, @"KeyP": @35, @"Enter": @36, @"Return": @36, @"KeyL": @37, @"KeyJ": @38,
+            @"Quote": @39, @"KeyK": @40, @"Semicolon": @41, @"Backslash": @42, @"Comma": @43,
+            @"Slash": @44, @"KeyN": @45, @"KeyM": @46, @"Period": @47, @"Tab": @48, @"Space": @49,
+            @"Backquote": @50, @"Backspace": @51, @"Escape": @53, @"MetaRight": @54, @"MetaLeft": @55,
+            @"ShiftLeft": @56, @"CapsLock": @57, @"AltLeft": @58, @"ControlLeft": @59, @"ShiftRight": @60,
+            @"AltRight": @61, @"ControlRight": @62, @"NumpadDecimal": @65, @"NumpadMultiply": @67,
+            @"NumpadAdd": @69, @"NumLock": @71, @"AudioVolumeUp": @72, @"AudioVolumeDown": @73,
+            @"AudioVolumeMute": @74, @"NumpadDivide": @75, @"NumpadEnter": @76, @"NumpadSubtract": @78,
+            @"F18": @79, @"F19": @80, @"NumpadEqual": @81, @"Numpad0": @82, @"Numpad1": @83,
+            @"Numpad2": @84, @"Numpad3": @85, @"Numpad4": @86, @"Numpad5": @87, @"Numpad6": @88,
+            @"Numpad7": @89, @"F20": @90, @"Numpad8": @91, @"Numpad9": @92, @"F5": @96, @"F6": @97,
+            @"F7": @98, @"F3": @99, @"F8": @100, @"F9": @101, @"F11": @103, @"F13": @105,
+            @"F16": @106, @"F14": @107, @"F10": @109, @"ContextMenu": @110, @"F12": @111,
+            @"F15": @113, @"Help": @114, @"Home": @115, @"PageUp": @116, @"Delete": @117,
+            @"F4": @118, @"End": @119, @"F2": @120, @"PageDown": @121, @"F1": @122,
+            @"ArrowLeft": @123, @"ArrowRight": @124, @"ArrowDown": @125, @"ArrowUp": @126,
+        };
+    });
+
+    NSNumber *value = mapping[normalized];
+    if (!value) return std::nullopt;
+    return static_cast<CGKeyCode>(value.unsignedShortValue);
+}
+
 static NSDictionary *CodecProbeReport() {
     return @{
         @"backend": @"native-webrtc",
@@ -471,6 +580,7 @@ static void CompressionOutputCallback(
 - (void)createOfferWithIceServers:(NSArray *)iceServers;
 - (BOOL)applyAnswer:(NSDictionary *)answer error:(NSError **)outError;
 - (void)addIceCandidate:(NSDictionary *)candidate;
+- (void)handleControlMessage:(NSDictionary *)message;
 - (void)stop;
 - (void)handleEncodedSampleBuffer:(CMSampleBufferRef)sampleBuffer
                             status:(OSStatus)status
@@ -482,6 +592,7 @@ static void CompressionOutputCallback(
     NSString *_sessionId;
     NSString *_windowId;
     SCWindow *_window;
+    pid_t _targetPid;
     NSInteger _maxDimension;
     NSInteger _frameRate;
     NSInteger _bitrate;
@@ -510,6 +621,10 @@ static void CompressionOutputCallback(
     BOOL _opaque;
     BOOL _ignoreGlobalClipSingleWindow;
     NSInteger _maxInFlightFrames;
+    BOOL _controlEnabled;
+    NSString *_controlDelivery;
+    BOOL _postEventAccessRequested;
+    BOOL _postEventAccessDeniedReported;
 
     dispatch_queue_t _sampleQueue;
     dispatch_source_t _idleRepeatTimer;
@@ -541,6 +656,13 @@ static void CompressionOutputCallback(
     std::atomic<uint64_t> _encodedBytes;
     std::atomic<uint64_t> _keyframes;
     std::atomic<uint64_t> _pliCount;
+    std::atomic<uint64_t> _controlMessages;
+    std::atomic<uint64_t> _controlPostedPid;
+    std::atomic<uint64_t> _controlPostedHid;
+    std::atomic<uint64_t> _controlDropped;
+    std::atomic<uint64_t> _controlPermissionDenied;
+    std::atomic<uint64_t> _controlFocusRequests;
+    std::atomic<uint64_t> _controlFocusFailures;
 
     std::mutex _encodeDurationsMutex;
     std::vector<double> _encodeDurationsMs;
@@ -555,6 +677,7 @@ static void CompressionOutputCallback(
     _sessionId = [sessionId copy];
     _window = window;
     _windowId = WindowIdString(window);
+    _targetPid = window.owningApplication ? window.owningApplication.processID : 0;
     _maxDimension = std::max<NSInteger>(320, std::min<NSInteger>(4096, OptionalInteger(settings[@"maxDimension"], 1920)));
     _frameRate = std::max<NSInteger>(1, std::min<NSInteger>(60, OptionalInteger(settings[@"maxFrameRate"], 60)));
     _bitrate = std::max<NSInteger>(500000, OptionalInteger(settings[@"bitrate"], 12000000));
@@ -581,6 +704,10 @@ static void CompressionOutputCallback(
     _opaque = OptionalBool(settings[@"opaque"], YES);
     _ignoreGlobalClipSingleWindow = OptionalBool(settings[@"ignoreGlobalClipSingleWindow"], YES);
     _maxInFlightFrames = std::max<NSInteger>(1, std::min<NSInteger>(8, OptionalInteger(settings[@"maxInFlightFrames"], 3)));
+    _controlEnabled = OptionalBool(settings[@"controlEnabled"], YES);
+    _controlDelivery = [NormalizeControlDelivery(settings[@"controlDelivery"]) copy];
+    _postEventAccessRequested = NO;
+    _postEventAccessDeniedReported = NO;
     _sampleQueue = dispatch_queue_create("weave.window-stream-native.samples", DISPATCH_QUEUE_SERIAL);
     _firstPts = kCMTimeInvalid;
     _hasFirstPts = NO;
@@ -600,6 +727,13 @@ static void CompressionOutputCallback(
     _encodedBytes = 0;
     _keyframes = 0;
     _pliCount = 0;
+    _controlMessages = 0;
+    _controlPostedPid = 0;
+    _controlPostedHid = 0;
+    _controlDropped = 0;
+    _controlPermissionDenied = 0;
+    _controlFocusRequests = 0;
+    _controlFocusFailures = 0;
     return self;
 }
 
@@ -725,8 +859,7 @@ static void CompressionOutputCallback(
         @autoreleasepool {
             NSData *data = [NSData dataWithBytes:message.data() length:message.size()];
             NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            NSString *type = OptionalString(json[@"type"]) ?: @"unknown";
-            WriteDiagnostic([NSString stringWithFormat:@"control noop: session=%@ type=%@", weakSession->_sessionId, type]);
+            [weakSession handleControlMessage:OptionalDictionary(json) ?: @{}];
         }
     });
 
@@ -788,6 +921,262 @@ static void CompressionOutputCallback(
     } catch (const std::exception &error) {
         [self sendError:ExceptionMessage(error)];
     }
+}
+
+- (CGPoint)screenPointForControlMessage:(NSDictionary *)message {
+    CGRect frame = _window.frame;
+    double x = ClampUnitDouble(message[@"x"], 0.0);
+    double y = ClampUnitDouble(message[@"y"], 0.0);
+    return CGPointMake(
+        frame.origin.x + frame.size.width * static_cast<CGFloat>(x),
+        frame.origin.y + frame.size.height * static_cast<CGFloat>(y)
+    );
+}
+
+- (BOOL)ensurePostEventAccessForKind:(NSString *)kind {
+    if (HasPostEventAccess(NO)) return YES;
+    if (!_postEventAccessRequested) {
+        _postEventAccessRequested = YES;
+        if (HasPostEventAccess(YES)) return YES;
+    }
+
+    _controlPermissionDenied.fetch_add(1, std::memory_order_relaxed);
+    WriteDiagnostic([NSString stringWithFormat:@"control %@ blocked: session=%@ delivery=%@ macOS post-event access denied", kind, _sessionId, _controlDelivery]);
+    if (!_postEventAccessDeniedReported) {
+        _postEventAccessDeniedReported = YES;
+        [self sendError:@"macOS blocked window control events. Enable Accessibility permission for the app that launched Portal, then restart Portal."];
+    }
+    return NO;
+}
+
+- (void)requestTargetApplicationActivation {
+    if (_targetPid <= 0) {
+        _controlFocusFailures.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    _controlFocusRequests.fetch_add(1, std::memory_order_relaxed);
+    pid_t targetPid = _targetPid;
+    NSString *sessionId = [_sessionId copy];
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+        @autoreleasepool {
+        NSRunningApplication *application = [NSRunningApplication runningApplicationWithProcessIdentifier:targetPid];
+        if (!application) {
+            self->_controlFocusFailures.fetch_add(1, std::memory_order_relaxed);
+            WriteDiagnostic([NSString stringWithFormat:@"control focus failed: session=%@ pid=%d app not found", sessionId, targetPid]);
+            return;
+        }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        BOOL activated = [application activateWithOptions:NSApplicationActivateIgnoringOtherApps | NSApplicationActivateAllWindows];
+#pragma clang diagnostic pop
+        if (!activated) {
+            self->_controlFocusFailures.fetch_add(1, std::memory_order_relaxed);
+            WriteDiagnostic([NSString stringWithFormat:@"control focus failed: session=%@ pid=%d", sessionId, targetPid]);
+            return;
+        }
+        WriteDiagnostic([NSString stringWithFormat:@"control focus requested: session=%@ pid=%d", sessionId, targetPid]);
+        }
+    });
+}
+
+- (void)postControlEvent:(CGEventRef)event kind:(NSString *)kind {
+    if (!event) {
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    if ([_controlDelivery isEqualToString:@"focus-hid"]) {
+        [self requestTargetApplicationActivation];
+        if ([self ensurePostEventAccessForKind:kind]) {
+            CGEventPost(kCGHIDEventTap, event);
+            _controlPostedHid.fetch_add(1, std::memory_order_relaxed);
+            WriteDiagnostic([NSString stringWithFormat:@"control %@ posted via focus-hid: session=%@ pid=%d", kind, _sessionId, _targetPid]);
+            return;
+        }
+        if (_targetPid > 0) {
+            CGEventPostToPid(_targetPid, event);
+            _controlPostedPid.fetch_add(1, std::memory_order_relaxed);
+            WriteDiagnostic([NSString stringWithFormat:@"control %@ fallback posted via pid after focus-hid block: session=%@ pid=%d", kind, _sessionId, _targetPid]);
+            return;
+        }
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    BOOL canPostToPid = _targetPid > 0 && ![_controlDelivery isEqualToString:@"hid-only"];
+    if (canPostToPid) {
+        CGEventPostToPid(_targetPid, event);
+        _controlPostedPid.fetch_add(1, std::memory_order_relaxed);
+        WriteDiagnostic([NSString stringWithFormat:@"control %@ posted via pid: session=%@ pid=%d", kind, _sessionId, _targetPid]);
+        return;
+    }
+
+    if ([_controlDelivery isEqualToString:@"pid-only"]) {
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        WriteDiagnostic([NSString stringWithFormat:@"control %@ dropped: session=%@ no target pid", kind, _sessionId]);
+        return;
+    }
+
+    if (![self ensurePostEventAccessForKind:kind]) {
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    CGEventPost(kCGHIDEventTap, event);
+    _controlPostedHid.fetch_add(1, std::memory_order_relaxed);
+    WriteDiagnostic([NSString stringWithFormat:@"control %@ posted via hid: session=%@", kind, _sessionId]);
+}
+
+- (void)handlePointerControlMessage:(NSDictionary *)message {
+    NSString *action = OptionalString(message[@"action"]) ?: @"move";
+    NSInteger button = OptionalInteger(message[@"button"], 0);
+    NSInteger buttons = OptionalInteger(message[@"buttons"], 0);
+    CGPoint point = [self screenPointForControlMessage:message];
+    CGMouseButton mouseButton = MouseButtonFromBrowserButton(button);
+    CGEventType eventType = MouseEventTypeForAction(action, button, buttons);
+    CGEventRef event = CGEventCreateMouseEvent(nullptr, eventType, point, mouseButton);
+    if (!event) {
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    CGEventSetFlags(event, FlagsFromModifiers(message[@"modifiers"]));
+    CGEventSetIntegerValueField(event, kCGMouseEventButtonNumber, mouseButton);
+    CGEventSetIntegerValueField(event, kCGMouseEventClickState, ClampInteger(message[@"clickCount"], 1, 1, 3));
+    if ([message[@"pressure"] isKindOfClass:[NSNumber class]]) {
+        double pressure = std::max(0.0, std::min(1.0, [message[@"pressure"] doubleValue]));
+        CGEventSetDoubleValueField(event, kCGMouseEventPressure, pressure);
+    }
+    [self postControlEvent:event kind:@"pointer"];
+    CFRelease(event);
+}
+
+- (void)handleScrollControlMessage:(NSDictionary *)message {
+    CGPoint point = [self screenPointForControlMessage:message];
+    double dx = OptionalDouble(message[@"dx"], 0.0);
+    double dy = OptionalDouble(message[@"dy"], 0.0);
+    if (!std::isfinite(dx)) dx = 0.0;
+    if (!std::isfinite(dy)) dy = 0.0;
+
+    int32_t wheel1 = static_cast<int32_t>(std::max(-32767.0, std::min(32767.0, -dy)));
+    int32_t wheel2 = static_cast<int32_t>(std::max(-32767.0, std::min(32767.0, -dx)));
+    CGEventRef event = CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 2, wheel1, wheel2, 0);
+    if (!event) {
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    CGEventSetLocation(event, point);
+    CGEventSetFlags(event, FlagsFromModifiers(message[@"modifiers"]));
+    CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
+    [self postControlEvent:event kind:@"scroll"];
+    CFRelease(event);
+}
+
+- (void)postTextControlMessage:(NSString *)text modifiers:(id)modifiers {
+    if (text.length == 0) {
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    std::vector<UniChar> characters(text.length);
+    [text getCharacters:characters.data() range:NSMakeRange(0, text.length)];
+
+    for (NSNumber *keyDownValue in @[@YES, @NO]) {
+        BOOL keyDown = keyDownValue.boolValue;
+        CGEventRef event = CGEventCreateKeyboardEvent(nullptr, 0, keyDown);
+        if (!event) {
+            _controlDropped.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        CGEventSetFlags(event, FlagsFromModifiers(modifiers));
+        if (keyDown) {
+            CGEventKeyboardSetUnicodeString(event, static_cast<UniCharCount>(characters.size()), characters.data());
+        }
+        [self postControlEvent:event kind:@"text"];
+        CFRelease(event);
+    }
+}
+
+- (void)handleKeyControlMessage:(NSDictionary *)message {
+    NSString *action = OptionalString(message[@"action"]) ?: @"down";
+    if ([action isEqualToString:@"text"]) {
+        [self postTextControlMessage:OptionalString(message[@"text"]) ?: OptionalString(message[@"key"]) ?: @""
+                           modifiers:message[@"modifiers"]];
+        return;
+    }
+
+    BOOL keyDown = ![action isEqualToString:@"up"];
+    auto keyCode = KeyCodeForDomCode(OptionalString(message[@"code"]));
+    if (!keyCode.has_value()) {
+        if (keyDown) {
+            NSString *text = OptionalString(message[@"text"]);
+            if (!text && [OptionalString(message[@"key"]) length] == 1) text = OptionalString(message[@"key"]);
+            if (text) {
+                [self postTextControlMessage:text modifiers:message[@"modifiers"]];
+                return;
+            }
+        }
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        WriteDiagnostic([NSString stringWithFormat:@"control key dropped: session=%@ code=%@", _sessionId, OptionalString(message[@"code"]) ?: @""]);
+        return;
+    }
+
+    CGEventRef event = CGEventCreateKeyboardEvent(nullptr, keyCode.value(), keyDown);
+    if (!event) {
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    CGEventSetFlags(event, FlagsFromModifiers(message[@"modifiers"]));
+    CGEventSetIntegerValueField(event, kCGKeyboardEventAutorepeat, OptionalBool(message[@"repeat"], NO) ? 1 : 0);
+    [self postControlEvent:event kind:@"key"];
+    CFRelease(event);
+}
+
+- (void)handleControlMessage:(NSDictionary *)message {
+    uint64_t controlMessageCount = _controlMessages.fetch_add(1, std::memory_order_relaxed) + 1;
+    NSString *type = OptionalString(message[@"type"]) ?: @"unknown";
+    NSString *action = OptionalString(message[@"action"]) ?: @"";
+    BOOL isNoisyMove = [type isEqualToString:@"pointer"] && [action isEqualToString:@"move"];
+    if (!isNoisyMove || controlMessageCount % 60 == 0) {
+        WriteDiagnostic([NSString stringWithFormat:@"control received: session=%@ type=%@ action=%@ delivery=%@",
+            _sessionId,
+            type,
+            action,
+            _controlDelivery]);
+    }
+
+    if ([type isEqualToString:@"resize"] || [type isEqualToString:@"focus"]) {
+        if ([type isEqualToString:@"focus"] && [_controlDelivery isEqualToString:@"focus-hid"]) {
+            [self requestTargetApplicationActivation];
+        }
+        WriteDiagnostic([NSString stringWithFormat:@"control %@ noted: session=%@", type, _sessionId]);
+        return;
+    }
+
+    if (!_controlEnabled) {
+        _controlDropped.fetch_add(1, std::memory_order_relaxed);
+        WriteDiagnostic([NSString stringWithFormat:@"control dropped disabled: session=%@ type=%@", _sessionId, type]);
+        return;
+    }
+
+    if ([type isEqualToString:@"pointer"]) {
+        [self handlePointerControlMessage:message];
+        return;
+    }
+    if ([type isEqualToString:@"scroll"]) {
+        [self handleScrollControlMessage:message];
+        return;
+    }
+    if ([type isEqualToString:@"key"]) {
+        [self handleKeyControlMessage:message];
+        return;
+    }
+
+    _controlDropped.fetch_add(1, std::memory_order_relaxed);
+    WriteDiagnostic([NSString stringWithFormat:@"control unsupported: session=%@ type=%@", _sessionId, type]);
 }
 
 - (BOOL)startCaptureWithError:(NSError **)outError {
@@ -1262,6 +1651,17 @@ static void CompressionOutputCallback(
                 @"encodeP95Ms": @(p95),
                 @"keyframes": @(self->_keyframes.load(std::memory_order_relaxed)),
                 @"pliCount": @(self->_pliCount.load(std::memory_order_relaxed)),
+                @"controlEnabled": @(self->_controlEnabled),
+                @"controlDelivery": self->_controlDelivery,
+                @"controlTargetPid": @(self->_targetPid),
+                @"controlMessages": @(self->_controlMessages.load(std::memory_order_relaxed)),
+                @"controlPostedPid": @(self->_controlPostedPid.load(std::memory_order_relaxed)),
+                @"controlPostedHid": @(self->_controlPostedHid.load(std::memory_order_relaxed)),
+                @"controlDropped": @(self->_controlDropped.load(std::memory_order_relaxed)),
+                @"controlPermissionDenied": @(self->_controlPermissionDenied.load(std::memory_order_relaxed)),
+                @"controlFocusRequests": @(self->_controlFocusRequests.load(std::memory_order_relaxed)),
+                @"controlFocusFailures": @(self->_controlFocusFailures.load(std::memory_order_relaxed)),
+                @"controlPostEventAccess": @(HasPostEventAccess(NO)),
                 @"captureQueueDepth": @(self->_captureQueueDepth),
                 @"maxInFlightFrames": @(self->_maxInFlightFrames),
                 @"showCursor": @(self->_showCursor),
