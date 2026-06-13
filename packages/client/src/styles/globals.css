@@ -1,5 +1,3 @@
-@import "@fontsource-variable/dm-sans";
-@import "@fontsource-variable/dm-sans/wght-italic.css";
 @import "@fontsource-variable/jetbrains-mono";
 @import "@fontsource-variable/jetbrains-mono/wght-italic.css";
 @import "@azurity/pure-nerd-font/pure-nerd-font.css";
@@ -97,9 +95,9 @@
   --destructive: #d20f39;
   --destructive-foreground: #eff1f5;
   --radius: 0.5rem;
-  --font-ui: "DM Sans Variable", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-code: "JetBrains Mono Variable", "JetBrains Mono", "Pure Nerd Font", "JetBrainsMono Nerd Font",
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-code: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
   --font-terminal: "JetBrainsMono Nerd Font Mono", "JetBrainsMonoNL Nerd Font Mono", "JetBrainsMono Nerd Font",
     "JetBrainsMonoNL Nerd Font", "JetBrains Mono Variable", "JetBrains Mono", "Pure Nerd Font",
     "JetBrainsMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",

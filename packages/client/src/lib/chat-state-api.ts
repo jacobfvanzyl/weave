@@ -200,6 +200,7 @@ export type PortalConnection = {
   portalId: string;
   userId: string;
   name?: string;
+  capabilities: string[];
   roots: PortalRoot[];
   status: 'online' | 'offline';
   primary?: boolean;
@@ -262,6 +263,7 @@ const normalizePortalConnection = (portal: unknown): PortalConnection | undefine
     portalId: record.portalId,
     userId: record.userId,
     name: typeof record.name === 'string' ? record.name : undefined,
+    capabilities: Array.isArray(record.capabilities) ? record.capabilities.filter((item): item is string => typeof item === 'string') : [],
     roots: normalizePortalRoots(record.roots),
     status: record.status === 'online' ? 'online' : 'offline',
     primary: record.primary === true,

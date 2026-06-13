@@ -16,6 +16,7 @@ import { profileRoutes } from './routes/profiles';
 import { projectRoutes } from './routes/projects';
 import { portalSocketRoutes } from './routes/portal-socket';
 import { terminalRoutes } from './routes/terminals';
+import { windowSessionRoutes } from './routes/window-sessions';
 import { editorRoutes } from './routes/editor';
 import { chatgptAuthRoutes } from './routes/chatgpt-auth';
 import { modelRoutes } from './routes/models';
@@ -60,6 +61,7 @@ export const mastra = new Mastra({
       ...projectRoutes,
       ...portalSocketRoutes,
       ...terminalRoutes,
+      ...windowSessionRoutes,
       ...editorRoutes,
       ...chatgptAuthRoutes,
       ...modelRoutes,

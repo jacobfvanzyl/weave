@@ -7,6 +7,12 @@ import {
   forwardTerminalClientMessage,
   handleTerminalPortalMessage,
 } from './terminal-relay';
+import {
+  connectWindowRelayClient,
+  disconnectWindowRelayClient,
+  forwardWindowClientMessage,
+  handleWindowPortalMessage,
+} from './window-relay';
 
 const agentId = 'mageHandAgent';
 const portalThreadPrefix = '__portal__';
@@ -63,7 +69,7 @@ export const startPortalWebSocketSidecar = (mastra: MastraLike) => {
 
   server.on('upgrade', (request, socket, head) => {
     const url = parseRequestUrl(request);
-    if (url.pathname !== '/portals/connect' && url.pathname !== '/terminals/connect') {
+    if (url.pathname !== '/portals/connect' && url.pathname !== '/terminals/connect' && url.pathname !== '/windows/connect') {
       socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
       return;
     }
@@ -105,6 +111,41 @@ export const startPortalWebSocketSidecar = (mastra: MastraLike) => {
       return;
     }
 
+    if (url.pathname === '/windows/connect') {
+      const connected = connectWindowRelayClient({
+        token: url.searchParams.get('token') ?? '',
+        ws: ws as any,
+      });
+
+      if (!connected) {
+        closeUnauthorized(ws, 'invalid window session token');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        type: 'window.accepted',
+        clientId: connected.clientId,
+        sessionId: connected.token.sessionId,
+        portalId: connected.token.portalId,
+      }));
+      ws.on('message', data => {
+        const message = safeParse(data);
+        if (!message) return;
+        try {
+          forwardWindowClientMessage(connected.clientId, message);
+        } catch (error) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            sessionId: connected.token.sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        }
+      });
+      ws.on('close', () => disconnectWindowRelayClient(connected.clientId));
+      ws.on('error', () => disconnectWindowRelayClient(connected.clientId));
+      return;
+    }
+
     const portalId = url.searchParams.get('portalId') ?? '';
     const token = url.searchParams.get('token') ?? '';
     const userId = await validatePortalToken(mastra, portalId, token).catch(() => undefined);
@@ -121,6 +162,7 @@ export const startPortalWebSocketSidecar = (mastra: MastraLike) => {
       const message = safeParse(data);
       if (!message) return;
       if (handleTerminalPortalMessage(message)) return;
+      if (handleWindowPortalMessage(message)) return;
       if (handlePortalMessage(message)) return;
 
       if (message.type === 'portal.hello') {

@@ -1,5 +1,6 @@
 import { PortalEditorHost, type PortalEditorTarget } from './editor.ts';
 import { isTerminalClientEnvelope, PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
+import { isWindowClientEnvelope, isWindowHostAvailable, PortalWindowHost } from './window.ts';
 import {
   checkPortalRuntimeHealth,
   getPortalConfigPath,
@@ -61,6 +62,10 @@ const defaultWsServerUrl = 'ws://localhost:4112';
 const defaultName = 'Mage Portal';
 const version = '0.1.0';
 const requiredControlCapabilities = ['terminal', 'editor'];
+const macWindowCapabilities = ['portal.window.list', 'portal.window.session'];
+
+const getWindowCapabilities = async () => await isWindowHostAvailable() ? macWindowCapabilities : [];
+const getControlCapabilities = async () => [...requiredControlCapabilities, ...await getWindowCapabilities()];
 
 const parseArgs = (args: string[]): ParsedArgs => {
   const [command, ...rest] = args;
@@ -1040,6 +1045,7 @@ const editorInputFromToolCall = (request: Record<string, unknown>) => {
 const handleToolCall = async (
   config: ResolvedPortalConfig,
   editorHost: PortalEditorHost,
+  windowHost: PortalWindowHost,
   ws: WebSocket,
   request: Record<string, unknown>,
 ) => {
@@ -1061,6 +1067,8 @@ const handleToolCall = async (
       ? await editorHost.read(editorInputFromToolCall(request) as Parameters<PortalEditorHost['read']>[0])
       : request.tool === 'portal.editor.write'
       ? await editorHost.write(editorInputFromToolCall(request) as Parameters<PortalEditorHost['write']>[0])
+      : request.tool === 'portal.window.list'
+      ? await windowHost.list()
       : request.tool === 'portal.fs.list'
       ? await listRootTool(config, request)
       : request.tool === 'portal.fs.stat'
@@ -1128,9 +1136,10 @@ const getPortalCapabilities = async () => {
     'portal.worktrunk.status',
   ];
   const status = await getWorktrunkStatus().catch(() => ({ installed: false }));
-  return status.installed
+  const capabilities = status.installed
     ? [...baseCapabilities, 'portal.worktrunk.list', 'portal.worktrunk.create', 'portal.worktrunk.remove']
     : baseCapabilities;
+  return [...capabilities, ...await getWindowCapabilities()];
 };
 
 const hasRequiredControlCapabilities = (body: unknown) => {
@@ -1152,6 +1161,7 @@ const connectOnce = (
   config: ResolvedPortalConfig,
   terminalHost: PortalTerminalHost,
   editorHost: PortalEditorHost,
+  windowHost: PortalWindowHost,
   onSocket?: (ws: WebSocket) => void,
 ) =>
   new Promise<void>((resolve, reject) => {
@@ -1204,7 +1214,14 @@ const connectOnce = (
         return;
       }
 
-      if (message.type === 'tool.call') void handleToolCall(config, editorHost, ws, message);
+      if (isWindowClientEnvelope(message)) {
+        void windowHost.handleClientMessage(message.clientId, message.message, (windowEvent) => {
+          ws.send(JSON.stringify({ type: 'window.event', clientId: message.clientId, event: windowEvent }));
+        });
+        return;
+      }
+
+      if (message.type === 'tool.call') void handleToolCall(config, editorHost, windowHost, ws, message);
     };
 
     ws.onerror = () => {
@@ -1215,6 +1232,7 @@ const connectOnce = (
     ws.onclose = (event) => {
       cleanup();
       terminalHost.detachClientsByPrefix('relay:');
+      windowHost.detachClientsByPrefix('window:');
       console.log(`Socket closed: ${event.code} ${event.reason}`.trim());
       resolve();
     };
@@ -1252,6 +1270,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
 
   const terminalHost = new PortalTerminalHost({ config });
   const editorHost = new PortalEditorHost({ config });
+  const windowHost = new PortalWindowHost({ config });
   const controlToken = noControl ? undefined : stringFlag(flags, 'control-token') ?? crypto.randomUUID();
   const controlPort = noControl ? undefined : numberFlag(flags, 'control-port') ?? 0;
   const controlHost = stringFlag(flags, 'control-host') ?? '127.0.0.1';
@@ -1260,10 +1279,12 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   let runtimeInterval: ReturnType<typeof setInterval> | undefined;
   let controlServer: Deno.HttpServer<Deno.NetAddr> | undefined;
   let runtime: PortalRuntimeFile | undefined;
+  const controlCapabilities = await getControlCapabilities();
 
   const cleanup = async () => {
     if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
     terminalHost.dispose();
+    windowHost.dispose();
     activeSocket?.close();
     if (controlServer) await controlServer.shutdown().catch(() => undefined);
     await removePortalRuntime(runtimePath).catch(() => undefined);
@@ -1289,7 +1310,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
         httpServerUrl: config.httpServerUrl,
         wsServerUrl: config.wsServerUrl,
         runtimePath,
-        controlCapabilities: requiredControlCapabilities,
+        controlCapabilities,
       },
       onShutdown: requestStop,
     });
@@ -1305,7 +1326,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
       controlHost,
       controlPort: actualControlPort,
       controlToken,
-      controlCapabilities: requiredControlCapabilities,
+      controlCapabilities,
       startedAt: now,
       updatedAt: now,
     };
@@ -1333,7 +1354,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
 
   while (!stopping) {
     try {
-      await connectOnce(config, terminalHost, editorHost, (ws) => {
+      await connectOnce(config, terminalHost, editorHost, windowHost, (ws) => {
         activeSocket = ws;
       });
       retryMs = 1_000;

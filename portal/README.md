@@ -71,6 +71,22 @@ deno task --config portal/deno.json native
 `WEAVE_PORTAL_PTY_LIB_PATH` can point Portal at a locally built library while
 iterating on Rust.
 
+## Window Streaming
+
+On macOS, Portal can launch an Electron Chromium sidecar for window streaming.
+The sidecar is started lazily when the app lists windows or starts a stream. In
+development it defaults to `desktop/node_modules/.bin/electron` and
+`portal/window-host-electron/main.cjs`.
+
+```bash
+npm run portal:window-host:smoke
+```
+
+Use `WEAVE_WINDOW_HOST_ELECTRON` and `WEAVE_WINDOW_HOST_APP` to point Portal at
+another Electron executable or sidecar entrypoint. V1 streams video and opens
+the control data channel, but control messages are logged as no-ops until a
+native input layer is added.
+
 ## Lifecycle
 
 1. `login` calls `POST /portals/token` using normal app auth.

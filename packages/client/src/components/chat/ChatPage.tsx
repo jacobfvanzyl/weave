@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Code2, PanelLeft, PencilRuler, Settings, TerminalSquare } from 'lucide-react';
+import { Code2, MonitorUp, PanelLeft, PencilRuler, Settings, TerminalSquare } from 'lucide-react';
 import { listPortals, listServerThreads } from '../../lib/chat-state-api';
 import { isDesktopEditorBackendAvailable, isEditorBackendAvailable } from '../../lib/editor-backend';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
@@ -18,6 +18,7 @@ import type { TerminalPanelTab, TerminalPanelTabsChange } from './TerminalPanel'
 
 const TerminalPanel = lazy(() => import('./TerminalPanel').then(module => ({ default: module.TerminalPanel })));
 const EditorPanel = lazy(() => import('./EditorPanel').then(module => ({ default: module.EditorPanel })));
+const WindowStreamOverlay = lazy(() => import('./WindowStreamOverlay').then(module => ({ default: module.WindowStreamOverlay })));
 const ExcalidrawOverlay = lazy(() => {
   configureExcalidrawAssetPath();
   return import('./ExcalidrawOverlay').then(module => ({ default: module.ExcalidrawOverlay }));
@@ -454,6 +455,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const [activeGeneralTerminalTabId, setActiveGeneralTerminalTabId] = useState(() => getPrimaryTerminalTabId(generalTerminalId));
   const [terminalTabsByTarget, setTerminalTabsByTarget] = useState<Record<string, TerminalPanelTab[]>>({});
   const [activeTerminalTabByTarget, setActiveTerminalTabByTarget] = useState<Record<string, string>>({});
+  const [isWindowStreamOpen, setIsWindowStreamOpen] = useState(false);
   const windowSurfaces = useWindowSurfaces({
     editorTargetKey: editorTarget?.workspaceId,
     hasGeneralTerminalTarget: Boolean(generalTerminalTarget),
@@ -684,6 +686,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   ]);
   const isSidebarSurfaceVisible = isSidebarOpen || showSidebarPreview;
   const hasExcalidrawSurface = true;
+  const hasWindowStreamPortal = onlinePortals.some(portal => portal.capabilities.includes('portal.window.session'));
   const shouldRenderFloatingLeftActions = (isElectronWindow || isSidebarSurfaceVisible)
     && (showHeaderSidebarToggle || showPinnedSidebarToggle || Boolean(generalTerminalTarget) || hasExcalidrawSurface);
   const shouldRenderHeaderLeftActions = !isElectronWindow
@@ -734,6 +737,18 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       <PencilRuler size={18} />
     </Button>
   );
+  const renderWindowStreamButton = () => hasWindowStreamPortal ? (
+    <Button
+      className={isWindowStreamOpen ? 'bg-accent' : ''}
+      size="icon"
+      variant="ghost"
+      aria-label={isWindowStreamOpen ? 'Hide window stream' : 'Show window stream'}
+      data-active={isWindowStreamOpen ? 'true' : 'false'}
+      onClick={() => setIsWindowStreamOpen(open => !open)}
+    >
+      <MonitorUp size={18} />
+    </Button>
+  ) : null;
 
   return (
     <ShortcutProvider commands={shortcutCommands}>
@@ -787,6 +802,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           {showHeaderSidebarToggle || showPinnedSidebarToggle ? renderSidebarToggleButton() : null}
           {renderGeneralTerminalButton()}
           {renderExcalidrawButton()}
+          {renderWindowStreamButton()}
         </div>
       ) : null}
       <main
@@ -802,6 +818,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
               {showHeaderSidebarToggle ? renderSidebarToggleButton() : null}
               {renderGeneralTerminalButton()}
               {renderExcalidrawButton()}
+              {renderWindowStreamButton()}
             </div>
           ) : null}
           {activeProject || hasThreadTitle ? (
@@ -972,6 +989,20 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
           >
             <Suspense fallback={null}>
               <ExcalidrawOverlay onHide={hideExcalidraw} />
+            </Suspense>
+          </div>
+        </div>
+      ) : null}
+      {isWindowStreamOpen ? (
+        <div
+          className="pointer-events-none fixed inset-0 z-50 bg-background/20 backdrop-blur-sm"
+          data-weave-window-stream-shell
+        >
+          <div
+            className="pointer-events-auto absolute inset-0 min-h-0 min-w-0"
+          >
+            <Suspense fallback={null}>
+              <WindowStreamOverlay portals={onlinePortals} onHide={() => setIsWindowStreamOpen(false)} />
             </Suspense>
           </div>
         </div>

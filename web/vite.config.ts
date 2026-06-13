@@ -31,7 +31,6 @@ const sharedClientPackages = [
   '@dnd-kit/sortable',
   '@dnd-kit/utilities',
   '@excalidraw/excalidraw',
-  '@fontsource-variable/dm-sans',
   '@lezer/highlight',
   '@replit/codemirror-vim',
   '@tanstack/react-query',
