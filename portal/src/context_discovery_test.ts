@@ -5,6 +5,7 @@ import {
   listGitBranchesTool,
   type ResolvedPortalConfig,
 } from './main.ts';
+import { resolveWindowStreamConfig } from './window.ts';
 
 const portalConfig: ResolvedPortalConfig = {
   portalId: 'portal_test',
@@ -12,6 +13,7 @@ const portalConfig: ResolvedPortalConfig = {
   httpServerUrl: 'http://localhost:4111',
   wsServerUrl: 'ws://localhost:4112',
   name: 'Test Portal',
+  windowStream: resolveWindowStreamConfig(),
   mounts: [],
   roots: [],
 };
@@ -40,7 +42,7 @@ Deno.test('Portal discovery reads ~/.config/weave profiles, prompts, skills, MCP
 
     const result = await discoverGlobalWeaveContext();
     assertEquals(result.basePath, `${home}/.config/weave`);
-    assertEquals(result.files.map(file => `${file.kind}:${file.path}`).sort(), [
+    assertEquals(result.files.map((file) => `${file.kind}:${file.path}`).sort(), [
       'config:.config/weave/weave.config.json',
       'mcp:.config/weave/mcp.json',
       'profile:.config/weave/profiles/default.md',
@@ -73,7 +75,7 @@ Deno.test('Portal discovery returns AGENTS.md and .weave files from git root to 
     const result = await discoverProjectWeaveContext(portalConfig, { workspacePath: workspace });
     assertEquals(result.basePath, repo);
     assertEquals(result.workspacePath, workspace);
-    assertEquals(result.files.map(file => `${file.kind}:${file.path}`), [
+    assertEquals(result.files.map((file) => `${file.kind}:${file.path}`), [
       'agents:AGENTS.md',
       'agents:packages/AGENTS.md',
       'agents:packages/app/AGENTS.md',

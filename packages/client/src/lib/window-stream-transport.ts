@@ -66,6 +66,18 @@ const normalizeLocalDescription = (description: RTCSessionDescriptionInit): RTCS
   return { type, sdp: sdp.endsWith('\r\n') ? sdp : `${sdp}\r\n` };
 };
 
+const getVideoCodecCapabilities = () => {
+  if (typeof RTCRtpReceiver === 'undefined' || typeof RTCRtpReceiver.getCapabilities !== 'function') return [];
+  return (RTCRtpReceiver.getCapabilities('video')?.codecs ?? []).flatMap(codec => {
+    if (!codec.mimeType?.toLowerCase().startsWith('video/')) return [];
+    return [{
+      mimeType: codec.mimeType,
+      clockRate: codec.clockRate,
+      sdpFmtpLine: codec.sdpFmtpLine,
+    }];
+  });
+};
+
 const normalizeWindow = (value: unknown): WindowStreamInfo[] => {
   if (!isRecord(value)) return [];
   const id = optionalString(value.id);
@@ -202,7 +214,7 @@ export const startWindowStreamSession = async (input: {
         const message = JSON.parse(String(event.data)) as Record<string, unknown>;
         if (message.type === 'window.accepted') {
           accepted = true;
-          socket.send(JSON.stringify({ type: 'start' }));
+          socket.send(JSON.stringify({ type: 'start', videoCodecs: getVideoCodecCapabilities() }));
           return;
         }
 

@@ -72,6 +72,20 @@ const sanitizeIceCandidate = (value: unknown) => {
   };
 };
 
+const sanitizeVideoCodecs = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(entry => {
+    if (!isRecord(entry)) return [];
+    const mimeType = optionalString(entry.mimeType);
+    if (!mimeType) return [];
+    return [{
+      mimeType,
+      clockRate: typeof entry.clockRate === 'number' ? entry.clockRate : undefined,
+      sdpFmtpLine: optionalString(entry.sdpFmtpLine),
+    }];
+  });
+};
+
 const sanitizeViewerMessage = (
   rawMessage: Record<string, unknown>,
   token: WindowSessionTokenRecord,
@@ -82,6 +96,7 @@ const sanitizeViewerMessage = (
       sessionId: token.sessionId,
       windowId: token.windowId,
       iceServers: [] as unknown[],
+      videoCodecs: sanitizeVideoCodecs(rawMessage.videoCodecs),
     };
   }
 

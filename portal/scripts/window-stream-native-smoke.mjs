@@ -12,6 +12,11 @@ const repoRoot = path.resolve(portalRoot, '..');
 
 const hostPath = process.env.WEAVE_WINDOW_STREAM_HOST ||
   path.join(portalRoot, 'native/window-stream-native/build/weave-window-stream-native');
+const smokeCodec = (process.env.WEAVE_WINDOW_STREAM_SMOKE_CODEC || process.env.WEAVE_WINDOW_STREAM_CODEC || 'hevc')
+  .toLowerCase();
+const smokeColorMode =
+  (process.env.WEAVE_WINDOW_STREAM_SMOKE_COLOR_MODE || process.env.WEAVE_WINDOW_STREAM_COLOR_MODE ||
+    'rec709-full-range').toLowerCase();
 const electronPath = process.env.WEAVE_WINDOW_HOST_ELECTRON ||
   path.join(repoRoot, 'desktop/node_modules/.bin/electron');
 const answererAppPath = path.join(portalRoot, 'window-host-electron/answerer.cjs');
@@ -127,62 +132,98 @@ const answerer = createJsonProcess('answerer', electronPath, [answererAppPath]);
 let candidateForwarder;
 
 try {
-  const list = await host.request('windows.list');
-  const source = Array.isArray(list.windows) ? list.windows[0] : undefined;
-  if (!source?.id) throw new Error('No capturable ScreenCaptureKit window source was found.');
-
-  const sessionId = `native_smoke_${Date.now()}`;
-  await host.request('session.start', {
-    sessionId,
-    windowId: source.id,
-    iceServers: [],
-    maxFrameRate: 60,
-    maxDimension: 1280,
-  });
-
-  const offerEvent = await host.waitEvent(
-    (event) => event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'offer',
-  );
-
-  const forwardHostCandidates = async () => {
-    const candidates = host.drainEvents(
-      (event) =>
-        event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'ice-candidate',
-    );
-    for (const event of candidates) {
-      await answerer.request('candidate.add', { sessionId, candidate: event.event.candidate }, 2_000).catch(() =>
-        undefined
+  const probe = await host.request('codec.probe');
+  const codecs = Array.isArray(probe.codecs) ? probe.codecs : [];
+  const h264 = codecs.find((codec) => codec.codec === 'h264');
+  if (!h264?.defaultAvailable) throw new Error('Native codec probe did not report H.264 support.');
+  const selectedProbe = codecs.find((codec) => codec.codec === smokeCodec);
+  if (!selectedProbe) throw new Error(`Native codec probe did not report ${smokeCodec}.`);
+  if (smokeCodec === 'av1' && !selectedProbe.hardwareRequiredAvailable) {
+    console.log(`PASS native window stream smoke: AV1 unavailable as expected (${selectedProbe.hardwareRequiredStatus}).`);
+  } else {
+    if (!selectedProbe.hardwareRequiredAvailable && !selectedProbe.defaultAvailable) {
+      throw new Error(
+        `Native codec probe reports ${smokeCodec} unavailable: hardware=${selectedProbe.hardwareRequiredStatus} default=${selectedProbe.defaultStatus}`,
       );
     }
-  };
 
-  await forwardHostCandidates();
-  const answerResponse = await answerer.request('answer.create', {
-    sessionId,
-    offer: offerEvent.event.offer,
-    sanitizeOffer: true,
-  });
+    const list = await host.request('windows.list');
+    const source = Array.isArray(list.windows) ? list.windows[0] : undefined;
+    if (!source?.id) throw new Error('No capturable ScreenCaptureKit window source was found.');
 
-  candidateForwarder = setInterval(() => {
-    void forwardHostCandidates();
-  }, 25);
+    const sessionId = `native_smoke_${Date.now()}`;
+    await host.request('session.start', {
+      sessionId,
+      windowId: source.id,
+      iceServers: [],
+      maxFrameRate: 60,
+      maxDimension: 1280,
+      codec: smokeCodec,
+      colorMode: smokeColorMode,
+    });
 
-  await host.request('session.answer', { sessionId, answer: answerResponse.answer });
-  await host.waitEvent(
-    (event) => event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'started',
-    10_000,
-  );
-  await answerer.waitEvent(
-    (event) => event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'control-open',
-    10_000,
-  );
-  clearInterval(candidateForwarder);
+    const offerEvent = await host.waitEvent(
+      (event) => event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'offer',
+    );
 
-  await host.request('session.stop', { sessionId }).catch(() => undefined);
-  await answerer.request('session.close', { sessionId }).catch(() => undefined);
-  console.log(
-    `PASS native window stream smoke: ${source.appName ? `${source.appName} - ` : ''}${source.title ?? source.id}`,
-  );
+    const forwardHostCandidates = async () => {
+      const candidates = host.drainEvents(
+        (event) =>
+          event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'ice-candidate',
+      );
+      for (const event of candidates) {
+        await answerer.request('candidate.add', { sessionId, candidate: event.event.candidate }, 2_000).catch(() =>
+          undefined
+        );
+      }
+    };
+
+    await forwardHostCandidates();
+    const answerResponse = await answerer.request('answer.create', {
+      sessionId,
+      offer: offerEvent.event.offer,
+      sanitizeOffer: true,
+    });
+
+    candidateForwarder = setInterval(() => {
+      void forwardHostCandidates();
+    }, 25);
+
+    await host.request('session.answer', { sessionId, answer: answerResponse.answer });
+    await host.waitEvent(
+      (event) => event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'started',
+      10_000,
+    );
+    await answerer.waitEvent(
+      (event) =>
+        event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'control-open',
+      10_000,
+    );
+    const statsEvent = await host.waitEvent(
+      (event) => event.type === 'session.event' && event.sessionId === sessionId && event.event?.type === 'stats',
+      5_000,
+    );
+    const stats = statsEvent.event.stats ?? {};
+    const expectedPixelFormat = smokeColorMode === 'rec709-video-range' ? '420v' : '420f';
+    if (stats.colorMode !== smokeColorMode) {
+      throw new Error(`Expected stats.colorMode=${smokeColorMode}, got ${stats.colorMode}`);
+    }
+    if (stats.pixelFormat !== expectedPixelFormat) {
+      throw new Error(`Expected stats.pixelFormat=${expectedPixelFormat}, got ${stats.pixelFormat}`);
+    }
+    if (typeof stats.repeatedFrames !== 'number' || typeof stats.repeatedFps !== 'number') {
+      throw new Error('Expected idle repeat frame stats.');
+    }
+    clearInterval(candidateForwarder);
+
+    await host.request('session.stop', { sessionId }).catch(() => undefined);
+    await answerer.request('session.close', { sessionId }).catch(() => undefined);
+    console.log(
+      `PASS native window stream smoke: codec=${smokeCodec} ${
+        source.appName ? `${source.appName} - ` : ''
+      }${source.title ?? source.id}`,
+    );
+  }
 } catch (error) {
   console.error(`FAIL native window stream smoke: ${error instanceof Error ? error.message : String(error)}`);
   const hostStderr = host.stderr().trim();

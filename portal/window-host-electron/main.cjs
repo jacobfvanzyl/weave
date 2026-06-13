@@ -22,6 +22,11 @@ const isRecord = (value) => Boolean(value && typeof value === 'object');
 
 const optionalString = (value) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
+const optionalNumber = (value, fallback) => {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
 const normalizeCaptureBackend = (value) => {
   const normalized = optionalString(value)?.toLowerCase();
   if (normalized === 'electron') return 'electron';
@@ -376,14 +381,15 @@ const handleMessage = async (message) => {
         backend,
         sourceId,
         iceServers: Array.isArray(message.iceServers) ? message.iceServers : [],
+        frameRate: optionalNumber(message.electronMaxFrameRate, 20),
       }).then((offer) => {
         if (backend === 'screencapturekit') {
           return getSckClient().request('capture.start', {
             sessionId,
             windowId: sourceId,
-            maxFrameRate: 20,
-            maxDimension: 1920,
-            quality: 0.75,
+            maxFrameRate: optionalNumber(message.electronMaxFrameRate, 20),
+            maxDimension: optionalNumber(message.electronMaxDimension, 1920),
+            quality: optionalNumber(message.electronJpegQuality, 0.75),
           }).then((captureInfo) => {
             writeDiagnostic(`screencapturekit capture started: window=${sourceId} ${captureInfo.width ?? '?'}x${captureInfo.height ?? '?'} cursor=${captureInfo.showsCursor}`);
             return offer;

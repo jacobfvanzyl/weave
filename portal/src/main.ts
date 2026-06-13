@@ -1,6 +1,13 @@
 import { PortalEditorHost, type PortalEditorTarget } from './editor.ts';
 import { isTerminalClientEnvelope, PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
-import { isWindowClientEnvelope, isWindowHostAvailable, PortalWindowHost } from './window.ts';
+import {
+  isWindowClientEnvelope,
+  isWindowHostAvailable,
+  PortalWindowHost,
+  type ResolvedWindowStreamConfig,
+  resolveWindowStreamConfig,
+  type WindowStreamConfig,
+} from './window.ts';
 import {
   checkPortalRuntimeHealth,
   getPortalConfigPath,
@@ -31,6 +38,7 @@ type PortalConfig = {
   wsServerUrl?: string;
   authToken?: string;
   portalId?: string;
+  windowStream?: WindowStreamConfig;
   portal?: {
     portalId?: string;
     portalToken?: string;
@@ -46,6 +54,7 @@ export type ResolvedPortalConfig = {
   httpServerUrl: string;
   wsServerUrl: string;
   name: string;
+  windowStream: ResolvedWindowStreamConfig;
   mounts?: PortalMount[];
   roots?: PortalRoot[];
 };
@@ -64,8 +73,12 @@ const version = '0.1.0';
 const requiredControlCapabilities = ['terminal', 'editor'];
 const macWindowCapabilities = ['portal.window.list', 'portal.window.session'];
 
-const getWindowCapabilities = async () => await isWindowHostAvailable() ? macWindowCapabilities : [];
-const getControlCapabilities = async () => [...requiredControlCapabilities, ...await getWindowCapabilities()];
+const getWindowCapabilities = async (windowStream: ResolvedWindowStreamConfig) =>
+  await isWindowHostAvailable(undefined, windowStream) ? macWindowCapabilities : [];
+const getControlCapabilities = async (windowStream: ResolvedWindowStreamConfig) => [
+  ...requiredControlCapabilities,
+  ...await getWindowCapabilities(windowStream),
+];
 
 const parseArgs = (args: string[]): ParsedArgs => {
   const [command, ...rest] = args;
@@ -175,7 +188,10 @@ const readConfig = async (path: string): Promise<PortalConfig> => {
   return JSON.parse(content) as PortalConfig;
 };
 
-const resolvePortalConfig = (config: PortalConfig): ResolvedPortalConfig => {
+const resolvePortalConfig = (
+  config: PortalConfig,
+  windowStream = resolveWindowStreamConfig(config.windowStream),
+): ResolvedPortalConfig => {
   const portal = config.portal ?? {};
   if (!portal.portalId || !portal.portalToken) throw new Error('Portal is not logged in. Run portal login first.');
   return {
@@ -184,6 +200,7 @@ const resolvePortalConfig = (config: PortalConfig): ResolvedPortalConfig => {
     httpServerUrl: normalizeHttpUrl(config.httpServerUrl ?? defaultHttpServerUrl),
     wsServerUrl: normalizeWsUrl(config.wsServerUrl ?? defaultWsServerUrl),
     name: portal.name ?? defaultName,
+    windowStream,
     mounts: portal.mounts,
     roots: portal.roots,
   };
@@ -385,7 +402,7 @@ const collectTextFiles = async (
       }
       if (!entry.isFile) continue;
       if (fileNames && !fileNames.includes(entry.name)) continue;
-      if (extensions && !extensions.some(extension => entry.name.endsWith(extension))) continue;
+      if (extensions && !extensions.some((extension) => entry.name.endsWith(extension))) continue;
 
       const contextPath = `${contextPrefix}/${relativePath(root, absolutePath)}`;
       const file = await readWeaveContextFile(absolutePath, contextPath, kind);
@@ -405,7 +422,11 @@ const collectWeaveDirectory = async (
   const files: WeaveContextFile[] = [];
 
   if (options.includeConfig) {
-    const config = await readWeaveContextFile(`${dir}/weave.config.json`, `${contextPrefix}/weave.config.json`, 'config');
+    const config = await readWeaveContextFile(
+      `${dir}/weave.config.json`,
+      `${contextPrefix}/weave.config.json`,
+      'config',
+    );
     if (config) files.push(config);
   }
 
@@ -413,11 +434,26 @@ const collectWeaveDirectory = async (
   if (mcp) files.push(mcp);
 
   if (options.includeProfiles) {
-    files.push(...await collectTextFiles(`${dir}/profiles`, `${contextPrefix}/profiles`, 'profile', { extensions: ['.md'], maxDepth: 0 }));
+    files.push(
+      ...await collectTextFiles(`${dir}/profiles`, `${contextPrefix}/profiles`, 'profile', {
+        extensions: ['.md'],
+        maxDepth: 0,
+      }),
+    );
   }
 
-  files.push(...await collectTextFiles(`${dir}/prompts`, `${contextPrefix}/prompts`, 'prompt', { extensions: ['.md'], maxDepth: 0 }));
-  files.push(...await collectTextFiles(`${dir}/skills`, `${contextPrefix}/skills`, 'skill', { fileNames: ['SKILL.md'], maxDepth: 8 }));
+  files.push(
+    ...await collectTextFiles(`${dir}/prompts`, `${contextPrefix}/prompts`, 'prompt', {
+      extensions: ['.md'],
+      maxDepth: 0,
+    }),
+  );
+  files.push(
+    ...await collectTextFiles(`${dir}/skills`, `${contextPrefix}/skills`, 'skill', {
+      fileNames: ['SKILL.md'],
+      maxDepth: 8,
+    }),
+  );
 
   return files;
 };
@@ -705,9 +741,7 @@ const gitWorktreeListTool = async (config: ResolvedPortalConfig, request: Record
       const [key = '', ...rest] = line.split(' ');
       fields[key] = rest.length ? rest.join(' ') : true;
     }
-    const branch = typeof fields.branch === 'string'
-      ? fields.branch.replace(/^refs\/heads\//, '')
-      : undefined;
+    const branch = typeof fields.branch === 'string' ? fields.branch.replace(/^refs\/heads\//, '') : undefined;
     const path = typeof fields.worktree === 'string' ? normalizePath(fields.worktree) : undefined;
     const head = typeof fields.HEAD === 'string' ? fields.HEAD : undefined;
     return {
@@ -729,7 +763,12 @@ export type GitBranchOption = {
   current?: boolean;
 };
 
-const normalizeBranchOption = (branch: string, kind: GitBranchOption['kind'], currentBranch: string, localNames: Set<string>): GitBranchOption | undefined => {
+const normalizeBranchOption = (
+  branch: string,
+  kind: GitBranchOption['kind'],
+  currentBranch: string,
+  localNames: Set<string>,
+): GitBranchOption | undefined => {
   if (!branch || branch.endsWith('/HEAD')) return undefined;
   if (kind === 'local') return { name: branch, ref: branch, kind, current: branch === currentBranch };
   if (!branch.includes('/')) return undefined;
@@ -743,13 +782,17 @@ export const listGitBranchesTool = async (config: ResolvedPortalConfig, request:
   const root = await resolveWorkspaceRoot(config, request);
   const currentBranch = await runGit(root, ['branch', '--show-current']).catch(() => '');
   const localOutput = await runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']).catch(() => '');
-  const remoteOutput = await runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes']).catch(() => '');
-  const localNames = new Set(localOutput.split('\n').map(line => line.trim()).filter(Boolean));
-  const localBranches = [...localNames].flatMap(branch => normalizeBranchOption(branch, 'local', currentBranch, localNames) ?? []);
+  const remoteOutput = await runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes']).catch(() =>
+    ''
+  );
+  const localNames = new Set(localOutput.split('\n').map((line) => line.trim()).filter(Boolean));
+  const localBranches = [...localNames].flatMap((branch) =>
+    normalizeBranchOption(branch, 'local', currentBranch, localNames) ?? []
+  );
   const remoteBranches = remoteOutput.split('\n')
-    .map(line => line.trim())
+    .map((line) => line.trim())
     .filter(Boolean)
-    .flatMap(branch => normalizeBranchOption(branch, 'remote', currentBranch, localNames) ?? []);
+    .flatMap((branch) => normalizeBranchOption(branch, 'remote', currentBranch, localNames) ?? []);
   const branches = [...localBranches, ...remoteBranches]
     .sort((a, b) => Number(b.current === true) - Number(a.current === true) || a.name.localeCompare(b.name));
   return { ok: true, branches };
@@ -761,9 +804,7 @@ const gitWorktreeSwitchTool = async (config: ResolvedPortalConfig, request: Reco
   if (!branch) throw new Error('Missing branch');
   const root = await resolveWorkspaceRoot(config, request);
   const base = typeof args.base === 'string' && args.base.trim() ? args.base.trim() : undefined;
-  const gitArgs = args.create === true
-    ? ['switch', '-c', branch, ...(base ? [base] : [])]
-    : ['switch', branch];
+  const gitArgs = args.create === true ? ['switch', '-c', branch, ...(base ? [base] : [])] : ['switch', branch];
   await runGit(root, gitArgs);
   return { ok: true, worktree: await normalizeGitWorktree(root) };
 };
@@ -823,7 +864,10 @@ const gitWorktreeValidateTool = async (config: ResolvedPortalConfig, request: Re
 
   const branch = await runGit(candidate, ['branch', '--show-current']).catch(() => '');
   const commit = await runGit(candidate, ['rev-parse', 'HEAD']).catch(() => undefined);
-  return { ok: true, worktree: { path: candidate, branch: branch || undefined, commit, head: commit, detached: !branch } };
+  return {
+    ok: true,
+    worktree: { path: candidate, branch: branch || undefined, commit, head: commit, detached: !branch },
+  };
 };
 
 const maxReadLines = 2000;
@@ -1112,7 +1156,7 @@ const handleToolCall = async (
   }
 };
 
-const getPortalCapabilities = async () => {
+const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
   const baseCapabilities = [
     'read',
     'write',
@@ -1139,7 +1183,7 @@ const getPortalCapabilities = async () => {
   const capabilities = status.installed
     ? [...baseCapabilities, 'portal.worktrunk.list', 'portal.worktrunk.create', 'portal.worktrunk.remove']
     : baseCapabilities;
-  return [...capabilities, ...await getWindowCapabilities()];
+  return [...capabilities, ...await getWindowCapabilities(config.windowStream)];
 };
 
 const hasRequiredControlCapabilities = (body: unknown) => {
@@ -1192,7 +1236,7 @@ const connectOnce = (
           type: 'portal.hello',
           name: config.name,
           version,
-          capabilities: await getPortalCapabilities(),
+          capabilities: await getPortalCapabilities(config),
           mounts: config.mounts ?? [],
           roots: getRoots(config).map((root) => ({ id: root.id, name: root.name })),
         }));
@@ -1242,7 +1286,8 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
   const runtimePath = stringFlag(flags, 'runtime') ?? defaultRuntimePath;
   const rawConfig = await readConfig(configPath);
-  const config = resolvePortalConfig(rawConfig);
+  const windowStream = resolveWindowStreamConfig(rawConfig.windowStream, flags);
+  const config = resolvePortalConfig(rawConfig, windowStream);
   config.wsServerUrl = normalizeWsUrl(stringFlag(flags, 'ws-server') ?? config.wsServerUrl);
   config.name = stringFlag(flags, 'name') ?? config.name;
   const noControl = flags['no-control'] === true;
@@ -1279,7 +1324,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   let runtimeInterval: ReturnType<typeof setInterval> | undefined;
   let controlServer: Deno.HttpServer<Deno.NetAddr> | undefined;
   let runtime: PortalRuntimeFile | undefined;
-  const controlCapabilities = await getControlCapabilities();
+  const controlCapabilities = await getControlCapabilities(windowStream);
 
   const cleanup = async () => {
     if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
@@ -1458,6 +1503,10 @@ Commands:
   root --path /path/to/code [--id default] [--name Code] [--config ~/.config/weave/portal/config.json]
   mount --project project_x --path /path/to/repo [--config ~/.config/weave/portal/config.json]
   daemon [--config ~/.config/weave/portal/config.json] [--ws-server ws://localhost:4112] [--control-port 0] [--control-token token] [--no-control]
+         [--window-stream-backend native-webrtc|electron-sck] [--window-stream-codec h264|hevc|av1]
+         [--window-stream-profile balanced|quality|performance|low-bandwidth|custom]
+         [--window-stream-max-fps 60] [--window-stream-max-dimension 1920] [--window-stream-bitrate-mbps 20]
+         [--window-stream-color-mode rec709-full-range|rec709-video-range]
   status [--config ~/.config/weave/portal/config.json]
   stop
 `);

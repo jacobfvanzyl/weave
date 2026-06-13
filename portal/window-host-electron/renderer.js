@@ -52,14 +52,14 @@ const assertSession = (sessionId) => {
   return currentSession;
 };
 
-const createElectronCaptureStream = async (sourceId) => {
+const createElectronCaptureStream = async (sourceId, frameRate = 30) => {
   return await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: {
       mandatory: {
         chromeMediaSource: 'desktop',
         chromeMediaSourceId: sourceId,
-        maxFrameRate: 30,
+        maxFrameRate: frameRate,
       },
     },
   });
@@ -97,10 +97,11 @@ window.weaveWindowHost = {
 
     const sessionId = input.sessionId;
     const backend = input.backend === 'screencapturekit' ? 'screencapturekit' : 'electron';
+    const frameRate = input.frameRate ?? (backend === 'screencapturekit' ? 20 : 30);
     const canvasCapture = backend === 'screencapturekit'
-      ? createCanvasCaptureStream(input.frameRate ?? 20)
+      ? createCanvasCaptureStream(frameRate)
       : undefined;
-    const stream = canvasCapture?.stream ?? await createElectronCaptureStream(input.sourceId);
+    const stream = canvasCapture?.stream ?? await createElectronCaptureStream(input.sourceId, frameRate);
     const peerConnection = new RTCPeerConnection({
       iceServers: Array.isArray(input.iceServers) ? input.iceServers : [],
     });
