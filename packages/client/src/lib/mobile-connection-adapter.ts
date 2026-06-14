@@ -54,8 +54,10 @@ const getBuildMastraUrl = () => normalizeMastraUrl(
     : processEnv.VITE_MASTRA_URL ?? DEFAULT_MASTRA_URL,
 );
 
+const isTruthyEnvFlag = (value: unknown) => value === true || value === 'true' || value === '1';
+
 const isDevConnectionOverride = () =>
-  (viteEnv.DEV === true || viteEnv.DEV === 'true' || processEnv.DEV === 'true')
+  (isTruthyEnvFlag(viteEnv.DEV) || isTruthyEnvFlag(processEnv.DEV))
   && (viteEnv.VITE_WEAVE_DEV_CONNECTION_OVERRIDE === '1' || processEnv.VITE_WEAVE_DEV_CONNECTION_OVERRIDE === '1');
 
 let cachedPersistedSettings: PersistedMobileConnectionSettings | undefined;

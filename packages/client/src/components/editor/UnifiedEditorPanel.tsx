@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from 'react';
-import { Excalidraw } from '@excalidraw/excalidraw';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
+import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { CaptureUpdateAction, Excalidraw, restore as restoreExcalidrawData, serializeAsJSON as serializeExcalidrawAsJSON } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import {
   ChevronDown,
@@ -30,6 +34,7 @@ import { createEditorBackend } from '../../lib/editor-backend';
 import type { EditorEntry, EditorMode, EditorTarget, OpenBuffer } from '../../lib/editor-types';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { getNoteFileDisplayName } from '../../lib/note-display';
+import { getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
 import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
 import { createVaultBackend, type VaultAttachment, type VaultIndexResult, type VaultNote, type VaultTarget } from '../../lib/vault-backend';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
@@ -37,7 +42,7 @@ import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../ui/dialog';
 import { Input } from '../ui/input';
-import { CodeMirrorEditor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
+import { CodeMirrorEditor, editorCanvasBackgroundColor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
 
 export type UnifiedEditorTarget = EditorTarget & {
   projectName: string;
@@ -63,7 +68,11 @@ type CreatePathDialogState = {
 type RenameState = {
   path: string;
   value: string;
-  origin: 'explorer' | 'titlebar';
+  origin: 'explorer' | 'tab';
+};
+
+type EditorBuffer = OpenBuffer & {
+  value: string;
 };
 
 type TreeNode = {
@@ -83,6 +92,7 @@ type TreeNode = {
 type ExcalidrawComponentProps = ComponentProps<typeof Excalidraw>;
 type ExcalidrawImperativeAPI = Parameters<NonNullable<ExcalidrawComponentProps['excalidrawAPI']>>[0];
 type ExcalidrawChangeHandler = NonNullable<ExcalidrawComponentProps['onChange']>;
+type RestoredExcalidrawData = ReturnType<typeof restoreExcalidrawData>;
 
 const toErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const isMarkdownPath = (path: string | undefined) => Boolean(path && /\.(md|markdown)$/i.test(path));
@@ -114,12 +124,48 @@ const getRenameDisplayName = (path: string, mode: EditorMode) => {
   return getBasename(path);
 };
 
+const getEditorFileLabel = (path: string, mode: EditorMode) => {
+  if (mode === 'notes' && isMarkdownPath(path)) return getNoteFileDisplayName(path);
+  if (mode === 'notes' && isExcalidrawPath(path)) return getBasename(path).replace(/\.excalidraw$/i, '');
+  return getBasename(path);
+};
+
+const getExplorerFileLabel = (path: string, mode: EditorMode) => {
+  if (mode === 'notes' && isExcalidrawPath(path)) return getBasename(path).replace(/\.excalidraw$/i, '');
+  return getEditorFileLabel(path, mode);
+};
+
 const explorerRailWidthPx = 20 * 16;
 const minimumMainEditorColumns = 80;
 const defaultMinimumMainEditorWidthPx = minimumMainEditorColumns * 8;
 const explorerSlideOverCloseDelayMs = 120;
 const explorerFileOpenSingleClickDelayMs = 450;
 const editorColumnMeasureText = '0'.repeat(minimumMainEditorColumns);
+
+const getBufferDirty = (buffer: EditorBuffer | undefined) => Boolean(buffer && buffer.value !== buffer.content);
+
+const createLoadedBuffer = (
+  file: { path: string; content: string; version: string; size?: number; mtimeMs?: number },
+  mediaType?: string,
+): EditorBuffer => {
+  const content = mediaType === 'excalidraw' ? normalizeExcalidrawContent(file.content) : file.content;
+  return {
+    path: file.path,
+    content,
+    value: content,
+    version: file.version,
+    size: file.size,
+    mtimeMs: file.mtimeMs,
+    mediaType,
+    dirty: false,
+  };
+};
+
+const withBufferValue = (buffer: EditorBuffer, value: string): EditorBuffer => ({
+  ...buffer,
+  value,
+  dirty: value !== buffer.content,
+});
 
 function useMeasuredElementWidth<T extends HTMLElement>(initialWidth = 0) {
   const ref = useRef<T | null>(null);
@@ -140,14 +186,57 @@ function useMeasuredElementWidth<T extends HTMLElement>(initialWidth = 0) {
   return [ref, width] as const;
 }
 
-const createEmptyExcalidrawFile = () => JSON.stringify({
-  type: 'excalidraw',
-  version: 2,
-  source: 'weave',
-  elements: [],
-  appState: {},
-  files: {},
-}, null, 2);
+const createEmptyExcalidrawFile = () => serializeExcalidrawAsJSON(
+  [],
+  { viewBackgroundColor: editorCanvasBackgroundColor },
+  {},
+  'local',
+);
+
+const excalidrawDarkFilteredEditorBackgroundColor = '#eeeeff';
+
+const isDefaultExcalidrawBackground = (value: unknown) => {
+  if (typeof value !== 'string') return true;
+  const normalized = value.trim().toLowerCase();
+  return !normalized || normalized === '#fff' || normalized === '#ffffff' || normalized === 'white' || normalized === 'transparent';
+};
+
+const getExcalidrawAppStateWithEditorBackground = (appState: unknown) => {
+  const appStateRecord = appState && typeof appState === 'object'
+    ? { ...(appState as Record<string, unknown>) }
+    : {};
+  const hasStoredBackground = Object.prototype.hasOwnProperty.call(appStateRecord, 'viewBackgroundColor');
+  if (!hasStoredBackground || isDefaultExcalidrawBackground(appStateRecord.viewBackgroundColor)) {
+    appStateRecord.viewBackgroundColor = editorCanvasBackgroundColor;
+  }
+  return appStateRecord;
+};
+
+const isEditorCanvasBackground = (value: unknown) => (
+  typeof value === 'string' && value.trim().toLowerCase() === editorCanvasBackgroundColor
+);
+
+const isDarkFilteredEditorCanvasBackground = (value: unknown) => (
+  typeof value === 'string' && value.trim().toLowerCase() === excalidrawDarkFilteredEditorBackgroundColor
+);
+
+const getExcalidrawRuntimeAppState = (appState: RestoredExcalidrawData['appState'], theme: 'light' | 'dark') => {
+  const runtimeAppState = { ...appState };
+  // Excalidraw dark mode applies invert(93%) hue-rotate(180deg) to canvas pixels.
+  // Feed it the pre-filtered equivalent so the visible canvas matches CodeMirror.
+  if (theme === 'dark' && isEditorCanvasBackground(runtimeAppState.viewBackgroundColor)) {
+    runtimeAppState.viewBackgroundColor = excalidrawDarkFilteredEditorBackgroundColor;
+  }
+  return runtimeAppState;
+};
+
+const getExcalidrawStoredAppState = (appState: Parameters<typeof serializeExcalidrawAsJSON>[1]) => {
+  const storedAppState = { ...appState };
+  if (isDarkFilteredEditorCanvasBackground(storedAppState.viewBackgroundColor)) {
+    storedAppState.viewBackgroundColor = editorCanvasBackgroundColor;
+  }
+  return storedAppState;
+};
 
 const formatDrawingTimestamp = (date: Date) => {
   const pad = (value: number) => value.toString().padStart(2, '0');
@@ -166,30 +255,47 @@ const formatDrawingTimestamp = (date: Date) => {
   ].join('');
 };
 
-const parseExcalidrawInitialData = (content: string): ExcalidrawComponentProps['initialData'] => {
+const parseExcalidrawStoredData = (content: string): RestoredExcalidrawData => {
   try {
     const parsed = content ? JSON.parse(content) as Record<string, unknown> : {};
-    return {
-      elements: Array.isArray(parsed.elements) ? parsed.elements as any : [],
-      appState: parsed.appState && typeof parsed.appState === 'object' ? parsed.appState as any : {},
-      files: parsed.files && typeof parsed.files === 'object' ? parsed.files as any : {},
-    };
+    const elements = Array.isArray(parsed.elements) ? parsed.elements as any : [];
+    return restoreExcalidrawData(
+      {
+        elements,
+        appState: getExcalidrawAppStateWithEditorBackground(parsed.appState) as any,
+        files: parsed.files && typeof parsed.files === 'object' ? parsed.files as any : {},
+      },
+      { viewBackgroundColor: editorCanvasBackgroundColor },
+      null,
+    );
   } catch {
-    return { elements: [], appState: {}, files: {} };
+    return restoreExcalidrawData(
+      { elements: [], appState: { viewBackgroundColor: editorCanvasBackgroundColor }, files: {} },
+      { viewBackgroundColor: editorCanvasBackgroundColor },
+      null,
+    );
   }
 };
 
-const serializeExcalidrawScene = ([elements, appState, files]: Parameters<ExcalidrawChangeHandler>) => JSON.stringify({
-  type: 'excalidraw',
-  version: 2,
-  source: 'weave',
-  elements,
-  appState: {
-    ...appState,
-    collaborators: undefined,
-  },
-  files,
-}, null, 2);
+const parseExcalidrawInitialData = (content: string, theme: 'light' | 'dark'): RestoredExcalidrawData => {
+  const storedData = parseExcalidrawStoredData(content);
+  return {
+    ...storedData,
+    appState: getExcalidrawRuntimeAppState(storedData.appState, theme),
+  };
+};
+
+const serializeExcalidrawScene = ([elements, appState, files]: Parameters<ExcalidrawChangeHandler>) => (
+  serializeExcalidrawAsJSON(elements, getExcalidrawStoredAppState(appState), files, 'local')
+);
+
+const serializeRestoredExcalidrawData = (data: RestoredExcalidrawData) => (
+  serializeExcalidrawAsJSON(data.elements, getExcalidrawStoredAppState(data.appState), data.files, 'local')
+);
+
+function normalizeExcalidrawContent(content: string) {
+  return serializeRestoredExcalidrawData(parseExcalidrawStoredData(content));
+}
 
 const editorModeIndicatorStyles: Record<VimMode, { label: string; foreground: string; background: string }> = {
   normal: { label: 'NORMAL', foreground: '#181825', background: '#89b4fa' },
@@ -354,6 +460,104 @@ const PropertyRow = ({ label, children }: { label: string; children: ReactNode }
   </div>
 );
 
+type SortableEditorTabProps = {
+  canClose: boolean;
+  isDirty: boolean;
+  isRenaming: boolean;
+  isSelected: boolean;
+  icon: ReactNode;
+  label: string;
+  onClose: () => void;
+  onRename: () => void;
+  onSelect: () => void;
+  renameInput?: ReactNode;
+  tab: EditorTab;
+};
+
+const SortableEditorTab = ({
+  canClose,
+  isDirty,
+  isRenaming,
+  isSelected,
+  icon,
+  label,
+  onClose,
+  onRename,
+  onSelect,
+  renameInput,
+  tab,
+}: SortableEditorTabProps) => {
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
+  const { role: _sortableRole, ...sortableAttributes } = attributes;
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        'relative -ml-px flex h-7 min-w-36 max-w-64 shrink-0 items-center overflow-hidden rounded-t-md rounded-b-none border border-b-0 text-xs first:ml-0',
+        isSelected
+          ? 'z-10 border-primary/40 bg-primary/10 text-foreground'
+          : 'z-0 border-border bg-transparent text-muted-foreground hover:z-10 hover:bg-primary/5 hover:text-foreground',
+        isDragging && 'z-20 opacity-90 shadow-lg',
+      )}
+      style={style}
+      data-weave-editor-tab={tab.path}
+    >
+      {isRenaming ? (
+        <div className="min-w-0 flex-1 px-1">{renameInput}</div>
+      ) : (
+        <button
+          ref={setActivatorNodeRef}
+          type="button"
+          className="flex h-full min-w-0 flex-1 cursor-grab items-center overflow-hidden px-2 text-left active:cursor-grabbing"
+          role="tab"
+          aria-selected={isSelected}
+          title={tab.path}
+          style={{ touchAction: 'none' }}
+          onClick={onSelect}
+          onDoubleClick={event => {
+            event.preventDefault();
+            event.stopPropagation();
+            onRename();
+          }}
+          {...sortableAttributes}
+          {...listeners}
+        >
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">{icon}</span>
+            <span className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap [direction:rtl] [text-align:left]">
+              <span className="[direction:ltr] [unicode-bidi:isolate]">
+                {label}
+              </span>
+            </span>
+            <span
+              className={cn('h-1.5 w-1.5 shrink-0 rounded-full', isDirty ? 'bg-mauve' : 'bg-transparent')}
+              aria-hidden="true"
+            />
+          </span>
+        </button>
+      )}
+      {canClose ? (
+        <button
+          type="button"
+          className="grid h-7 w-7 shrink-0 place-items-center text-muted-foreground hover:text-foreground"
+          aria-label={`Close ${label}`}
+          onClick={event => {
+            event.stopPropagation();
+            onClose();
+          }}
+        >
+          <X size={12} />
+        </button>
+      ) : null}
+    </div>
+  );
+};
+
 export const UnifiedEditorPanel = ({
   followRequest,
   focusRequest = 0,
@@ -374,9 +578,22 @@ export const UnifiedEditorPanel = ({
     workspacePath: target.workspacePath,
   }), [target.portalId, target.projectId, target.repoPath, target.rootId, target.workspaceId, target.workspacePath]);
   const vaultTarget = editorTarget as VaultTarget;
+  const editorTabTargetKey = useMemo(() => (
+    getEditorTabTargetKey(mode, target.projectId, target.workspaceId)
+  ), [mode, target.projectId, target.workspaceId]);
+  const editorTabSet = useEditorTabStore(state => state.editorTabsByTarget[editorTabTargetKey]);
+  const editorTabs = editorTabSet?.tabs ?? [];
+  const activeEditorTabId = editorTabSet?.activeTabId;
+  const closePersistedEditorTab = useEditorTabStore(state => state.closeEditorTab);
+  const openPersistedEditorTab = useEditorTabStore(state => state.openEditorTab);
+  const renamePersistedEditorTab = useEditorTabStore(state => state.renameEditorTab);
+  const reorderEditorTabs = useEditorTabStore(state => state.reorderEditorTabs);
+  const setActiveEditorTab = useEditorTabStore(state => state.setActiveEditorTab);
+  const setPersistedEditorTabs = useEditorTabStore(state => state.setEditorTabs);
   const resolvedTheme = getResolvedTheme(useThemeStore(state => state.mode));
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const excalidrawApiRef = useRef<ExcalidrawImperativeAPI | null>(null);
+  const skippedInitialExcalidrawChangeKeyRef = useRef<string | undefined>(undefined);
   const excalidrawResizeFrameRef = useRef<number | undefined>(undefined);
   const excalidrawResizeTimeoutRef = useRef<number | undefined>(undefined);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -396,8 +613,8 @@ export const UnifiedEditorPanel = ({
   const [codeDirectories, setCodeDirectories] = useState<Record<string, EditorEntry[]>>({});
   const [vaultIndex, setVaultIndex] = useState<VaultIndexResult>();
   const [selectedNode, setSelectedNode] = useState<TreeNode>();
-  const [openBuffer, setOpenBuffer] = useState<OpenBuffer>();
-  const [content, setContent] = useState('');
+  const [buffersByTabId, setBuffersByTabId] = useState<Record<string, EditorBuffer | undefined>>({});
+  const [failedBufferTabIds, setFailedBufferTabIds] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string>();
   const [isExplorerLoading, setIsExplorerLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
@@ -408,23 +625,38 @@ export const UnifiedEditorPanel = ({
   const [createPathDialog, setCreatePathDialog] = useState<CreatePathDialogState>();
   const [renameState, setRenameState] = useState<RenameState>();
   const [bufferFocusRequest, setBufferFocusRequest] = useState(0);
-  const isDirty = Boolean(openBuffer && content !== openBuffer.content);
-  const shouldPersistExplorerOpen = !openBuffer;
+  const activeEditorTab = editorTabs.find(tab => tab.id === activeEditorTabId) ?? editorTabs[0];
+  const openBuffer = activeEditorTab ? buffersByTabId[activeEditorTab.id] : undefined;
+  const activePath = openBuffer?.path ?? activeEditorTab?.path;
+  const content = openBuffer?.value ?? '';
+  const isDirty = getBufferDirty(openBuffer);
+  const hasDirtyBuffers = Object.values(buffersByTabId).some(getBufferDirty);
+  const shouldPersistExplorerOpen = !activeEditorTab;
   const canDockExplorer = editorBodyWidth - explorerRailWidthPx >= minimumMainEditorWidthPx;
   const isExplorerSlideOverMode = !canDockExplorer;
   const isExplorerDocked = (isExplorerVisible || shouldPersistExplorerOpen) && canDockExplorer;
   const isExplorerSlideOverVisible = isExplorerSlideOverMode && (isExplorerSlideOverOpen || shouldPersistExplorerOpen);
   const isExplorerActive = isExplorerDocked || isExplorerSlideOverVisible;
   const modeIndicator = editorModeIndicatorStyles[vimMode];
-  const titlePath = openBuffer ? (mode === 'notes' ? getNoteFileDisplayName(openBuffer.path) : getBasename(openBuffer.path)) : undefined;
-  const statusLabel = isSaving ? 'saving' : isFileLoading ? 'loading' : isDirty ? 'modified' : undefined;
-  const activeNote = openBuffer
-    ? vaultIndex?.notes.find(note => note.path === openBuffer.path)
+  const statusLabel = isSaving ? 'saving' : isFileLoading ? 'loading' : undefined;
+  const activeNote = activePath
+    ? vaultIndex?.notes.find(note => note.path === activePath)
     : selectedNode?.note;
-  const activeAttachment = openBuffer
-    ? vaultIndex?.attachments.find(attachment => attachment.path === openBuffer.path)
+  const activeAttachment = activePath
+    ? vaultIndex?.attachments.find(attachment => attachment.path === activePath)
     : selectedNode?.attachment;
   const activeBacklinks = activeNote ? vaultIndex?.backlinks[activeNote.path] ?? [] : [];
+  const excalidrawInitialData = useMemo(() => {
+    if (!openBuffer || mode !== 'notes' || !isExcalidrawPath(openBuffer.path)) return undefined;
+    return parseExcalidrawInitialData(openBuffer.value, resolvedTheme);
+  }, [mode, openBuffer?.path, openBuffer?.version, resolvedTheme]);
+  const excalidrawBufferKey = openBuffer && mode === 'notes' && isExcalidrawPath(openBuffer.path)
+    ? `${openBuffer.path}:${openBuffer.version}`
+    : undefined;
+  const excalidrawInitialSerialized = useMemo(() => (
+    excalidrawInitialData ? serializeRestoredExcalidrawData(excalidrawInitialData) : undefined
+  ), [excalidrawInitialData]);
+  const excalidrawViewBackgroundColor = excalidrawInitialData?.appState.viewBackgroundColor ?? editorCanvasBackgroundColor;
 
   const tree = useMemo(() => (
     mode === 'code'
@@ -438,8 +670,35 @@ export const UnifiedEditorPanel = ({
     label: getNoteFileDisplayName(note.path),
     detail: note.title && note.title !== getNoteFileDisplayName(note.path) ? `${note.path} · ${note.title}` : note.path,
   })), [vaultIndex?.notes]);
+  const editorTabSensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 5 } }),
+  );
 
-  const confirmDiscard = useCallback(() => !isDirty || window.confirm('Discard unsaved changes?'), [isDirty]);
+  const confirmDiscardBuffer = useCallback((buffer: EditorBuffer | undefined, label = 'this file') => (
+    !getBufferDirty(buffer) || window.confirm(`Discard unsaved changes to ${label}?`)
+  ), []);
+
+  const confirmDiscardAllDirty = useCallback(() => (
+    !hasDirtyBuffers || window.confirm('Discard unsaved editor changes?')
+  ), [hasDirtyBuffers]);
+
+  const updateBuffer = useCallback((tabId: string, updater: (buffer: EditorBuffer) => EditorBuffer) => {
+    setBuffersByTabId(current => {
+      const buffer = current[tabId];
+      if (!buffer) return current;
+      const nextBuffer = updater(buffer);
+      if (nextBuffer === buffer) return current;
+      return { ...current, [tabId]: nextBuffer };
+    });
+  }, []);
+
+  const setActiveBufferValue = useCallback((value: string) => {
+    if (!activeEditorTab) return;
+    updateBuffer(activeEditorTab.id, buffer => (
+      value === buffer.value ? buffer : withBufferValue(buffer, value)
+    ));
+  }, [activeEditorTab, updateBuffer]);
 
   const scheduleExcalidrawResize = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -461,6 +720,23 @@ export const UnifiedEditorPanel = ({
     excalidrawApiRef.current = api;
     scheduleExcalidrawResize();
   }, [scheduleExcalidrawResize]);
+
+  useEffect(() => {
+    if (!excalidrawBufferKey) return;
+    excalidrawApiRef.current?.updateScene({
+      appState: { viewBackgroundColor: excalidrawViewBackgroundColor },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+  }, [excalidrawBufferKey, excalidrawViewBackgroundColor]);
+
+  const handleExcalidrawChange = useCallback((...snapshot: Parameters<ExcalidrawChangeHandler>) => {
+    const serializedScene = serializeExcalidrawScene(snapshot);
+    if (excalidrawBufferKey && skippedInitialExcalidrawChangeKeyRef.current !== excalidrawBufferKey) {
+      skippedInitialExcalidrawChangeKeyRef.current = excalidrawBufferKey;
+      if (serializedScene === excalidrawInitialSerialized) return;
+    }
+    setActiveBufferValue(serializedScene);
+  }, [excalidrawBufferKey, excalidrawInitialSerialized, setActiveBufferValue]);
 
   const focusEditorSurface = useCallback(() => {
     if (mode === 'notes' && isExcalidrawPath(openBuffer?.path)) {
@@ -529,9 +805,9 @@ export const UnifiedEditorPanel = ({
   }, [clearExplorerSlideOverCloseTimeout, isExplorerSlideOverMode]);
 
   const handleHidePanel = useCallback(() => {
-    if (!confirmDiscard()) return;
+    if (!confirmDiscardAllDirty()) return;
     onHide();
-  }, [confirmDiscard, onHide]);
+  }, [confirmDiscardAllDirty, onHide]);
 
   const startRename = useCallback((path: string, origin: RenameState['origin']) => {
     if (!path) return;
@@ -586,12 +862,23 @@ export const UnifiedEditorPanel = ({
   }, [codeBackend, editorTarget, expandedPaths, mode, vaultBackend, vaultTarget]);
 
   const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean } = {}) => {
-    if (!confirmDiscard()) return false;
-    if (mode === 'notes' && !isNotesOpenablePath(path)) {
-      setSelectedNode(tree.children.find(node => node.path === path));
-      return false;
+    if (mode === 'notes' && !isNotesOpenablePath(path)) return false;
+
+    const existingTab = editorTabs.find(tab => tab.path === path);
+    if (existingTab && buffersByTabId[existingTab.id]) {
+      setActiveEditorTab(editorTabTargetKey, existingTab.id);
+      if (options.focusEditor ?? true) setBufferFocusRequest(request => request + 1);
+      return true;
     }
 
+    const tab = existingTab ?? openPersistedEditorTab(editorTabTargetKey, path);
+    if (existingTab) setActiveEditorTab(editorTabTargetKey, existingTab.id);
+    setFailedBufferTabIds(current => {
+      if (!current.has(tab.id)) return current;
+      const next = new Set(current);
+      next.delete(tab.id);
+      return next;
+    });
     setIsFileLoading(true);
     setError(undefined);
     try {
@@ -601,25 +888,43 @@ export const UnifiedEditorPanel = ({
       const mediaType = mode === 'notes'
         ? isExcalidrawPath(file.path) ? 'excalidraw' : 'markdown'
         : undefined;
-      setOpenBuffer({
-        path: file.path,
-        content: file.content,
-        version: file.version,
-        size: file.size,
-        mtimeMs: file.mtimeMs,
-        mediaType,
-        dirty: false,
+      const loadedBuffer = createLoadedBuffer(file, mediaType);
+      const loadedTab = file.path === tab.path ? tab : openPersistedEditorTab(editorTabTargetKey, file.path);
+      setBuffersByTabId(current => {
+        const next = { ...current, [loadedTab.id]: loadedBuffer };
+        if (loadedTab.id !== tab.id) delete next[tab.id];
+        return next;
       });
-      setContent(file.content);
+      setFailedBufferTabIds(current => {
+        if (!current.has(loadedTab.id) && !current.has(tab.id)) return current;
+        const next = new Set(current);
+        next.delete(loadedTab.id);
+        next.delete(tab.id);
+        return next;
+      });
       if (options.focusEditor ?? true) setBufferFocusRequest(request => request + 1);
       return true;
     } catch (loadError) {
       setError(toErrorMessage(loadError));
+      setFailedBufferTabIds(current => new Set(current).add(tab.id));
+      if (!existingTab) closePersistedEditorTab(editorTabTargetKey, tab.id);
       return false;
     } finally {
       setIsFileLoading(false);
     }
-  }, [codeBackend, confirmDiscard, editorTarget, mode, tree.children, vaultBackend, vaultTarget]);
+  }, [
+    buffersByTabId,
+    closePersistedEditorTab,
+    codeBackend,
+    editorTabTargetKey,
+    editorTabs,
+    editorTarget,
+    mode,
+    openPersistedEditorTab,
+    setActiveEditorTab,
+    vaultBackend,
+    vaultTarget,
+  ]);
 
   useEffect(() => {
     configureExcalidrawAssetPath();
@@ -643,12 +948,24 @@ export const UnifiedEditorPanel = ({
     setCodeDirectories({});
     setVaultIndex(undefined);
     setSelectedNode(undefined);
-    setOpenBuffer(undefined);
-    setContent('');
+    setBuffersByTabId({});
+    setFailedBufferTabIds(new Set());
     setError(undefined);
     setVimMode('normal');
     setBufferFocusRequest(0);
   }, [clearPendingFileOpen, mode, target.projectId, target.workspaceId]);
+
+  useEffect(() => {
+    if (activeEditorTabId || editorTabs.length === 0) return;
+    setActiveEditorTab(editorTabTargetKey, editorTabs[0].id);
+  }, [activeEditorTabId, editorTabTargetKey, editorTabs, setActiveEditorTab]);
+
+  useEffect(() => {
+    if (!activeEditorTab) return;
+    if (buffersByTabId[activeEditorTab.id]) return;
+    if (failedBufferTabIds.has(activeEditorTab.id)) return;
+    void loadFile(activeEditorTab.path, { focusEditor: false });
+  }, [activeEditorTab, buffersByTabId, failedBufferTabIds, loadFile]);
 
   useEffect(() => {
     if (mode === 'code') {
@@ -693,18 +1010,12 @@ export const UnifiedEditorPanel = ({
       return cancelReveal;
     }
 
-    if (isDirty) {
-      setError(`Follow writes skipped ${followRequest.path}; the current editor buffer has unsaved changes.`);
-      pendingRevealRef.current = undefined;
-      return;
-    }
-
     void loadFile(followRequest.path, { focusEditor: false }).then(loaded => {
       if (!loaded && pendingRevealRef.current?.requestId === followRequest.id) {
         pendingRevealRef.current = undefined;
       }
     });
-  }, [followRequest, isDirty, loadFile, mode, openBuffer?.path, revealLineWithoutFocus, target.workspaceId]);
+  }, [followRequest, loadFile, mode, openBuffer?.path, revealLineWithoutFocus, target.workspaceId]);
 
   useEffect(() => {
     const pendingReveal = pendingRevealRef.current;
@@ -773,21 +1084,29 @@ export const UnifiedEditorPanel = ({
   }, [mode, startRename]);
 
   const handleSave = useCallback(async () => {
-    if (!openBuffer || !isDirty) return;
+    if (!openBuffer || !activeEditorTab || !isDirty) return;
     setIsSaving(true);
     setError(undefined);
     try {
       const result = mode === 'code'
-        ? await codeBackend.write(editorTarget, openBuffer.path, content, openBuffer.version)
-        : await vaultBackend.write(vaultTarget, openBuffer.path, content, openBuffer.version);
-      setOpenBuffer({
+        ? await codeBackend.write(editorTarget, openBuffer.path, openBuffer.value, openBuffer.version)
+        : await vaultBackend.write(vaultTarget, openBuffer.path, openBuffer.value, openBuffer.version);
+      const nextBuffer: EditorBuffer = {
         ...openBuffer,
         path: result.path,
-        content,
+        content: openBuffer.value,
+        value: openBuffer.value,
         version: result.version,
         size: result.size,
         mtimeMs: result.mtimeMs,
         dirty: false,
+      };
+      const nextTabId = getEditorTabId(editorTabTargetKey, result.path);
+      if (result.path !== openBuffer.path) renamePersistedEditorTab(editorTabTargetKey, openBuffer.path, result.path);
+      setBuffersByTabId(current => {
+        const next = { ...current, [nextTabId]: nextBuffer };
+        if (nextTabId !== activeEditorTab.id) delete next[activeEditorTab.id];
+        return next;
       });
       await refreshExplorer();
     } catch (saveError) {
@@ -795,12 +1114,34 @@ export const UnifiedEditorPanel = ({
     } finally {
       setIsSaving(false);
     }
-  }, [codeBackend, content, editorTarget, isDirty, mode, openBuffer, refreshExplorer, vaultBackend, vaultTarget]);
+  }, [activeEditorTab, codeBackend, editorTabTargetKey, editorTarget, isDirty, mode, openBuffer, refreshExplorer, renamePersistedEditorTab, vaultBackend, vaultTarget]);
 
-  const handleReload = useCallback(() => {
-    if (!openBuffer || !confirmDiscard()) return;
-    void loadFile(openBuffer.path);
-  }, [confirmDiscard, loadFile, openBuffer]);
+  const handleReload = useCallback(async () => {
+    if (!openBuffer || !activeEditorTab || !confirmDiscardBuffer(openBuffer, openBuffer.path)) return;
+    setIsFileLoading(true);
+    setError(undefined);
+    try {
+      const file = mode === 'code'
+        ? await codeBackend.read(editorTarget, openBuffer.path)
+        : await vaultBackend.read(vaultTarget, openBuffer.path);
+      const mediaType = mode === 'notes'
+        ? isExcalidrawPath(file.path) ? 'excalidraw' : 'markdown'
+        : undefined;
+      const nextBuffer = createLoadedBuffer(file, mediaType);
+      const nextTabId = getEditorTabId(editorTabTargetKey, file.path);
+      if (file.path !== openBuffer.path) renamePersistedEditorTab(editorTabTargetKey, openBuffer.path, file.path);
+      setBuffersByTabId(current => {
+        const next = { ...current, [nextTabId]: nextBuffer };
+        if (nextTabId !== activeEditorTab.id) delete next[activeEditorTab.id];
+        return next;
+      });
+      setBufferFocusRequest(request => request + 1);
+    } catch (reloadError) {
+      setError(toErrorMessage(reloadError));
+    } finally {
+      setIsFileLoading(false);
+    }
+  }, [activeEditorTab, codeBackend, confirmDiscardBuffer, editorTabTargetKey, editorTarget, mode, openBuffer, renamePersistedEditorTab, vaultBackend, vaultTarget]);
 
   const cancelRename = useCallback(() => {
     renameCancelRef.current = true;
@@ -832,28 +1173,61 @@ export const UnifiedEditorPanel = ({
     setError(undefined);
     renameCommitInFlightRef.current = true;
     try {
+      const sourceTab = editorTabs.find(tab => tab.path === sourcePath);
+      const sourceBuffer = sourceTab ? buffersByTabId[sourceTab.id] : undefined;
       if (mode === 'code') await codeBackend.move(editorTarget, sourcePath, targetPath);
       else await vaultBackend.move(vaultTarget, sourcePath, targetPath);
 
       setSelectedNode(undefined);
-      if (openBuffer?.path === sourcePath) {
+      if (sourceTab) {
         if (mode === 'code' || isNotesOpenablePath(targetPath)) {
+          const targetTabId = getEditorTabId(editorTabTargetKey, targetPath);
+          renamePersistedEditorTab(editorTabTargetKey, sourcePath, targetPath);
+          const mediaType = mode === 'notes' ? isExcalidrawPath(targetPath) ? 'excalidraw' : 'markdown' : undefined;
+          if (sourceBuffer && getBufferDirty(sourceBuffer)) {
+            setBuffersByTabId(current => {
+              const next = {
+                ...current,
+                [targetTabId]: {
+                  ...sourceBuffer,
+                  path: targetPath,
+                  mediaType,
+                  dirty: true,
+                },
+              };
+              delete next[sourceTab.id];
+              return next;
+            });
+          } else {
+            const file = mode === 'code'
+              ? await codeBackend.read(editorTarget, targetPath)
+              : await vaultBackend.read(vaultTarget, targetPath);
+            setBuffersByTabId(current => {
+              const next = {
+                ...current,
+                [targetTabId]: createLoadedBuffer(file, mediaType),
+              };
+              delete next[sourceTab.id];
+              return next;
+            });
+          }
+        } else {
+          closePersistedEditorTab(editorTabTargetKey, sourceTab.id);
+          setBuffersByTabId(current => {
+            const next = { ...current };
+            delete next[sourceTab.id];
+            return next;
+          });
+        }
+      } else if (openBuffer?.path === sourcePath && (mode === 'code' || isNotesOpenablePath(targetPath))) {
           const file = mode === 'code'
             ? await codeBackend.read(editorTarget, targetPath)
             : await vaultBackend.read(vaultTarget, targetPath);
-          setOpenBuffer({
-            path: file.path,
-            content: file.content,
-            version: file.version,
-            size: file.size,
-            mtimeMs: file.mtimeMs,
-            mediaType: mode === 'notes' ? isExcalidrawPath(file.path) ? 'excalidraw' : 'markdown' : undefined,
-            dirty: false,
-          });
-        } else {
-          setOpenBuffer(undefined);
-          setContent('');
-        }
+          const tab = openPersistedEditorTab(editorTabTargetKey, file.path);
+          setBuffersByTabId(current => ({
+            ...current,
+            [tab.id]: createLoadedBuffer(file, mode === 'notes' ? isExcalidrawPath(file.path) ? 'excalidraw' : 'markdown' : undefined),
+          }));
       }
 
       setExpandedPaths(current => new Set([...current, getParentPath(targetPath)]));
@@ -865,7 +1239,22 @@ export const UnifiedEditorPanel = ({
     } finally {
       renameCommitInFlightRef.current = false;
     }
-  }, [codeBackend, editorTarget, mode, openBuffer?.path, refreshExplorer, renameState, vaultBackend, vaultTarget]);
+  }, [
+    buffersByTabId,
+    closePersistedEditorTab,
+    codeBackend,
+    editorTabTargetKey,
+    editorTabs,
+    editorTarget,
+    mode,
+    openBuffer?.path,
+    openPersistedEditorTab,
+    refreshExplorer,
+    renamePersistedEditorTab,
+    renameState,
+    vaultBackend,
+    vaultTarget,
+  ]);
 
   const openCreatePathDialog = useCallback((kind: CreatePathKind) => {
     setError(undefined);
@@ -874,7 +1263,7 @@ export const UnifiedEditorPanel = ({
 
   const createFile = useCallback(async (rawPath: string) => {
     const path = mode === 'notes' ? normalizeMarkdownPath(rawPath) : normalizeRelativePath(rawPath);
-    if (!path || !confirmDiscard()) return false;
+    if (!path) return false;
 
     const nextContent = '';
     setError(undefined);
@@ -882,16 +1271,17 @@ export const UnifiedEditorPanel = ({
       const result = mode === 'code'
         ? await codeBackend.write(editorTarget, path, nextContent)
         : await vaultBackend.write(vaultTarget, path, nextContent);
-      setOpenBuffer({
-        path: result.path,
-        content: nextContent,
-        version: result.version,
-        size: result.size,
-        mtimeMs: result.mtimeMs,
-        mediaType: mode === 'notes' ? 'markdown' : undefined,
-        dirty: false,
-      });
-      setContent(nextContent);
+      const tab = openPersistedEditorTab(editorTabTargetKey, result.path);
+      setBuffersByTabId(current => ({
+        ...current,
+        [tab.id]: createLoadedBuffer({
+          path: result.path,
+          content: nextContent,
+          version: result.version,
+          size: result.size,
+          mtimeMs: result.mtimeMs,
+        }, mode === 'notes' ? 'markdown' : undefined),
+      }));
       setBufferFocusRequest(request => request + 1);
       setExpandedPaths(current => new Set([...current, getParentPath(result.path)]));
       closeExplorerSlideOver();
@@ -901,27 +1291,28 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(createError));
       return false;
     }
-  }, [closeExplorerSlideOver, codeBackend, confirmDiscard, editorTarget, mode, refreshExplorer, vaultBackend, vaultTarget]);
+  }, [closeExplorerSlideOver, codeBackend, editorTabTargetKey, editorTarget, mode, openPersistedEditorTab, refreshExplorer, vaultBackend, vaultTarget]);
 
   const createDrawing = useCallback(async (rawPath: string) => {
     const path = normalizeRelativePath(rawPath);
     const drawingPath = !path ? '' : /\.excalidraw$/i.test(path) ? path : `${path}.excalidraw`;
-    if (!drawingPath || !confirmDiscard()) return false;
+    if (!drawingPath) return false;
 
     const drawingContent = createEmptyExcalidrawFile();
     setError(undefined);
     try {
       const result = await vaultBackend.write(vaultTarget, drawingPath, drawingContent);
-      setOpenBuffer({
-        path: result.path,
-        content: drawingContent,
-        version: result.version,
-        size: result.size,
-        mtimeMs: result.mtimeMs,
-        mediaType: 'excalidraw',
-        dirty: false,
-      });
-      setContent(drawingContent);
+      const tab = openPersistedEditorTab(editorTabTargetKey, result.path);
+      setBuffersByTabId(current => ({
+        ...current,
+        [tab.id]: createLoadedBuffer({
+          path: result.path,
+          content: drawingContent,
+          version: result.version,
+          size: result.size,
+          mtimeMs: result.mtimeMs,
+        }, 'excalidraw'),
+      }));
       setBufferFocusRequest(request => request + 1);
       setExpandedPaths(current => new Set([...current, getParentPath(result.path)]));
       closeExplorerSlideOver();
@@ -932,7 +1323,7 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(createError));
       return false;
     }
-  }, [closeExplorerSlideOver, confirmDiscard, refreshExplorer, scheduleExcalidrawResize, vaultBackend, vaultTarget]);
+  }, [closeExplorerSlideOver, editorTabTargetKey, openPersistedEditorTab, refreshExplorer, scheduleExcalidrawResize, vaultBackend, vaultTarget]);
 
   const getSelectedCreateDirectory = useCallback(() => {
     if (!selectedNode) return '';
@@ -982,26 +1373,50 @@ export const UnifiedEditorPanel = ({
   }, [createDrawing, createFile, createFolder, createPathDialog]);
 
   const deleteSelected = useCallback(async () => {
-    const sourcePath = selectedNode?.path || openBuffer?.path;
+    const sourcePath = selectedNode?.path || activePath;
     if (!sourcePath) return;
     clearPendingFileOpen();
     const isDirectory = selectedNode?.type === 'directory';
     if (!window.confirm(`Delete ${sourcePath}${isDirectory ? ' and everything inside it' : ''}?`)) return;
-    if (openBuffer?.path === sourcePath && !confirmDiscard()) return;
+    const affectedTabs = editorTabs.filter(tab => tab.path === sourcePath || (isDirectory && tab.path.startsWith(`${sourcePath}/`)));
+    const hasDirtyAffectedTab = affectedTabs.some(tab => getBufferDirty(buffersByTabId[tab.id]));
+    if (hasDirtyAffectedTab && !window.confirm(`Discard unsaved changes in ${affectedTabs.length === 1 ? affectedTabs[0].path : 'deleted files'}?`)) return;
     setError(undefined);
     try {
       if (mode === 'code') await codeBackend.delete(editorTarget, sourcePath, isDirectory);
       else await vaultBackend.delete(vaultTarget, sourcePath, isDirectory);
       setSelectedNode(undefined);
-      if (openBuffer?.path === sourcePath || (isDirectory && openBuffer?.path.startsWith(`${sourcePath}/`))) {
-        setOpenBuffer(undefined);
-        setContent('');
+      if (affectedTabs.length > 0) {
+        const affectedTabIds = new Set(affectedTabs.map(tab => tab.id));
+        setPersistedEditorTabs(editorTabTargetKey, currentTabs => currentTabs.filter(tab => !affectedTabIds.has(tab.id)));
+        setBuffersByTabId(current => {
+          const next = { ...current };
+          affectedTabIds.forEach(tabId => {
+            delete next[tabId];
+          });
+          return next;
+        });
       }
       await refreshExplorer();
     } catch (deleteError) {
       setError(toErrorMessage(deleteError));
     }
-  }, [clearPendingFileOpen, codeBackend, confirmDiscard, editorTarget, mode, openBuffer?.path, refreshExplorer, selectedNode?.path, selectedNode?.type, vaultBackend, vaultTarget]);
+  }, [
+    activePath,
+    buffersByTabId,
+    clearPendingFileOpen,
+    codeBackend,
+    editorTabTargetKey,
+    editorTabs,
+    editorTarget,
+    mode,
+    refreshExplorer,
+    selectedNode?.path,
+    selectedNode?.type,
+    setPersistedEditorTabs,
+    vaultBackend,
+    vaultTarget,
+  ]);
 
   const uploadAttachment = useCallback(async (file: globalThis.File | undefined) => {
     if (!file || mode !== 'notes') return;
@@ -1061,7 +1476,7 @@ export const UnifiedEditorPanel = ({
   const renderTreeNode = (node: TreeNode, depth: number): ReactNode => {
     const isRoot = depth === -1;
     const isExpandedNode = expandedPaths.has(node.path);
-    const isActive = openBuffer?.path === node.path || selectedNode?.path === node.path;
+    const isActive = activePath === node.path || selectedNode?.path === node.path;
     const isDirectory = node.type === 'directory';
     const isRenaming = !isDirectory && renameState?.origin === 'explorer' && renameState.path === node.path;
     if (isRoot) return node.children.map(child => renderTreeNode(child, 0));
@@ -1078,7 +1493,9 @@ export const UnifiedEditorPanel = ({
     ) : (
       <FileIcon size={14} className="shrink-0 text-muted-foreground" />
     );
-    const rowLabel = node.note ? getNoteFileDisplayName(node.note.path) : node.name;
+    const rowLabel = isDirectory
+      ? node.name
+      : node.note ? getNoteFileDisplayName(node.note.path) : getExplorerFileLabel(node.path, mode);
 
     return (
       <div key={node.id} className="relative">
@@ -1121,7 +1538,7 @@ export const UnifiedEditorPanel = ({
   };
 
   const renderProperties = () => {
-    const path = openBuffer?.path ?? selectedNode?.path;
+    const path = activePath ?? selectedNode?.path;
     const size = openBuffer?.size ?? selectedNode?.size;
     const mtimeMs = openBuffer?.mtimeMs ?? selectedNode?.mtimeMs;
     const mediaType = openBuffer?.mediaType ?? selectedNode?.mediaType ?? selectedNode?.type;
@@ -1195,15 +1612,21 @@ export const UnifiedEditorPanel = ({
     }
     if (mode === 'notes' && isExcalidrawPath(openBuffer.path)) {
       return (
-        <Excalidraw
-          autoFocus
-          excalidrawAPI={handleExcalidrawApi}
-          key={openBuffer.path}
-          initialData={parseExcalidrawInitialData(openBuffer.content)}
-          name={openBuffer.path}
-          onChange={(...snapshot) => setContent(serializeExcalidrawScene(snapshot))}
-          theme={resolvedTheme}
-        />
+        <div
+          className="h-full w-full"
+          data-weave-editor-excalidraw
+          style={{ '--weave-excalidraw-background': editorCanvasBackgroundColor } as CSSProperties}
+        >
+          <Excalidraw
+            autoFocus
+            excalidrawAPI={handleExcalidrawApi}
+            key={`${openBuffer.path}:${openBuffer.version}`}
+            initialData={excalidrawInitialData}
+            name={openBuffer.path}
+            onChange={handleExcalidrawChange}
+            theme={resolvedTheme}
+          />
+        </div>
       );
     }
 
@@ -1215,13 +1638,81 @@ export const UnifiedEditorPanel = ({
         path={openBuffer.path}
         value={content}
         wikiLinkSuggestions={noteSuggestions}
-        onChange={setContent}
+        onChange={setActiveBufferValue}
         onOpenWikiLink={openWikiLink}
         onSave={() => void handleSave()}
         onVimModeChange={setVimMode}
       />
     );
   };
+
+  const handleEditorTabDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    reorderEditorTabs(editorTabTargetKey, String(active.id), String(over.id));
+  }, [editorTabTargetKey, reorderEditorTabs]);
+
+  const selectEditorTab = useCallback((tab: EditorTab) => {
+    setActiveEditorTab(editorTabTargetKey, tab.id);
+    if (buffersByTabId[tab.id]) setBufferFocusRequest(request => request + 1);
+  }, [buffersByTabId, editorTabTargetKey, setActiveEditorTab]);
+
+  const closeEditorTab = useCallback((tab: EditorTab) => {
+    const buffer = buffersByTabId[tab.id];
+    if (!confirmDiscardBuffer(buffer, tab.path)) return;
+    closePersistedEditorTab(editorTabTargetKey, tab.id);
+    setBuffersByTabId(current => {
+      if (!current[tab.id]) return current;
+      const next = { ...current };
+      delete next[tab.id];
+      return next;
+    });
+    setFailedBufferTabIds(current => {
+      if (!current.has(tab.id)) return current;
+      const next = new Set(current);
+      next.delete(tab.id);
+      return next;
+    });
+  }, [buffersByTabId, closePersistedEditorTab, confirmDiscardBuffer, editorTabTargetKey]);
+
+  const renderEditorTabs = () => (
+    <DndContext
+      collisionDetection={closestCenter}
+      modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+      sensors={editorTabSensors}
+      onDragEnd={handleEditorTabDragEnd}
+    >
+      <SortableContext items={editorTabs.map(tab => tab.id)} strategy={horizontalListSortingStrategy}>
+        {editorTabs.map(tab => {
+          const isSelected = tab.id === activeEditorTab?.id;
+          const tabBuffer = buffersByTabId[tab.id];
+          const label = getEditorFileLabel(tab.path, mode);
+          const isRenaming = renameState?.origin === 'tab' && renameState.path === tab.path;
+          const icon = mode === 'notes'
+            ? isExcalidrawPath(tab.path)
+              ? <PencilRuler size={12} className="text-primary" />
+              : <StickyNote size={12} className="text-muted-foreground" />
+            : <FileIcon size={12} className="text-muted-foreground" />;
+          return (
+            <SortableEditorTab
+              key={tab.id}
+              canClose
+              isDirty={getBufferDirty(tabBuffer)}
+              isRenaming={isRenaming}
+              isSelected={isSelected}
+              icon={icon}
+              label={label}
+              renameInput={isRenaming ? renderRenameInput('h-5 w-full') : undefined}
+              tab={tab}
+              onClose={() => closeEditorTab(tab)}
+              onRename={() => startRename(tab.path, 'tab')}
+              onSelect={() => selectEditorTab(tab)}
+            />
+          );
+        })}
+      </SortableContext>
+    </DndContext>
+  );
 
   const explorerToggleLabel = isExplorerSlideOverMode
     ? 'Open explorer'
@@ -1300,7 +1791,7 @@ export const UnifiedEditorPanel = ({
                 </>
               ) : null}
               <div className="min-w-0 flex-1" />
-              <Button size="icon-xs" variant="ghost" aria-label="Delete selected item" title="Delete selected item" disabled={!selectedNode && !openBuffer} onClick={() => void deleteSelected()}>
+              <Button size="icon-xs" variant="ghost" aria-label="Delete selected item" title="Delete selected item" disabled={!selectedNode && !activePath} onClick={() => void deleteSelected()}>
                 <Trash2 size={14} />
               </Button>
               <Button size="icon-xs" variant="ghost" aria-label="Refresh explorer" title="Refresh explorer" disabled={isExplorerLoading} onClick={() => void refreshExplorer()}>
@@ -1371,38 +1862,18 @@ export const UnifiedEditorPanel = ({
         >
           {editorColumnMeasureText}
         </span>
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3" data-weave-editor-titlebar>
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3" data-weave-editor-titlebar data-weave-editor-tab-bar>
           {mode === 'notes' ? <StickyNote size={15} className="shrink-0 text-primary" /> : <Code2 size={15} className="shrink-0 text-primary" />}
-          <div className="flex min-w-0 flex-1 items-baseline gap-2">
-            {titlePath && openBuffer ? (
-              renameState?.origin === 'titlebar' && renameState.path === openBuffer.path ? (
-                renderRenameInput('max-w-80 flex-1')
-              ) : (
-                <button
-                  type="button"
-                  className="min-w-0 cursor-text truncate rounded-sm px-1 text-left text-xs font-semibold text-foreground hover:bg-accent"
-                  title={openBuffer.path}
-                  onClick={event => {
-                    if (event.detail > 1) startRename(openBuffer.path, 'titlebar');
-                  }}
-                  onDoubleClick={event => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    startRename(openBuffer.path, 'titlebar');
-                  }}
-                  onMouseDown={event => {
-                    if (event.detail < 2) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    startRename(openBuffer.path, 'titlebar');
-                  }}
-                >
-                  {titlePath}
-                </button>
-              )
-            ) : null}
-            {statusLabel ? <span className="shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span> : null}
+          <div
+            className="flex min-w-0 flex-1 items-end self-stretch overflow-x-auto pt-2"
+            role="tablist"
+            aria-label={mode === 'notes' ? 'Open notes' : 'Open code buffers'}
+          >
+            {editorTabs.length > 0 ? renderEditorTabs() : (
+              <div className="self-center text-xs text-muted-foreground">No open files</div>
+            )}
           </div>
+          {statusLabel ? <span className="self-center shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span> : null}
           <Button size="icon-xs" variant="ghost" aria-label="Save buffer" title="Save buffer" disabled={!openBuffer || !isDirty || isSaving} onClick={() => void handleSave()}>
             <Save size={14} />
           </Button>
@@ -1443,9 +1914,7 @@ export const UnifiedEditorPanel = ({
           >
             {modeIndicator.label}
           </span>
-          <div className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-            {openBuffer?.path ?? (mode === 'notes' ? 'Vault' : 'Workspace')}
-          </div>
+          <div className="min-w-0 flex-1" aria-hidden="true" />
           <Button
             className={isExplorerActive ? 'bg-accent' : undefined}
             size="icon-xs"

@@ -210,6 +210,98 @@ input {
   height: 100dvh;
 }
 
+[data-weave-editor-excalidraw] {
+  background: var(--weave-excalidraw-background);
+}
+
+[data-weave-editor-excalidraw] .excalidraw,
+[data-weave-editor-excalidraw] .excalidraw.theme--dark.theme--dark-background-none,
+[data-weave-editor-excalidraw] .excalidraw__canvas-wrapper {
+  background: var(--weave-excalidraw-background);
+}
+
+:root[data-theme="mocha"] :where(
+  [data-weave-editor-excalidraw],
+  [data-weave-excalidraw-surface]
+) .excalidraw {
+  --island-bg-color: #313244;
+  --popup-bg-color: #313244;
+  --default-border-color: #45475a;
+  --button-border: #45475a;
+  --button-hover-border: #585b70;
+  --button-active-border: #cba6f7;
+  --button-bg: transparent;
+  --button-hover-bg: #45475a;
+  --button-active-bg: #585b70;
+  --button-selected-bg: #45475a;
+  --button-selected-border: #cba6f7;
+  --button-selected-hover-bg: #585b70;
+  --button-color: #cdd6f4;
+  --button-hover-color: #f5e0dc;
+  --icon-fill-color: #cdd6f4;
+  --keybinding-color: #a6adc8;
+  --color-primary: #cba6f7;
+  --color-primary-darker: #b4befe;
+  --color-primary-darkest: #f5c2e7;
+  --color-primary-light: #45475a;
+  --color-primary-light-darker: #313244;
+  --color-primary-hover: #b4befe;
+  --color-on-primary-container: #cba6f7;
+  --color-surface-primary-container: #45475a;
+  --color-surface-high: #45475a;
+  --color-surface-low: #313244;
+  --color-surface-mid: #181825;
+  --color-surface-lowest: #45475a;
+  --color-on-surface: #cdd6f4;
+  --color-border-outline: #585b70;
+  --color-border-outline-variant: #45475a;
+  --color-brand-active: #cba6f7;
+  --color-brand-hover: #b4befe;
+  --color-muted: #bac2de;
+  --color-muted-darker: #a6adc8;
+  --color-muted-darkest: #7f849c;
+  --button-gray-1: #313244;
+  --button-gray-2: #45475a;
+  --button-gray-3: #585b70;
+  --input-bg-color: #181825;
+  --input-border-color: #45475a;
+  --input-hover-bg-color: #313244;
+  --input-label-color: #bac2de;
+  --scrollbar-thumb: #45475a;
+  --scrollbar-thumb-hover: #585b70;
+  --shadow-island: 0 0 0 1px #45475a, 0 16px 36px rgba(17, 17, 27, 0.28);
+}
+
+:root[data-theme="mocha"] :where(
+  [data-weave-editor-excalidraw],
+  [data-weave-excalidraw-surface]
+) .excalidraw :is(.Island, .main-menu-trigger, .sidebar-trigger, .help-icon) {
+  box-shadow: 0 0 0 1px #45475a, 0 12px 28px rgba(17, 17, 27, 0.22);
+}
+
+:root[data-theme="mocha"] :where(
+  [data-weave-editor-excalidraw],
+  [data-weave-excalidraw-surface]
+) .excalidraw :is(.main-menu-trigger, .sidebar-trigger, .help-icon) {
+  background-color: #313244;
+  color: #cdd6f4;
+}
+
+:root[data-theme="mocha"] :where(
+  [data-weave-editor-excalidraw],
+  [data-weave-excalidraw-surface]
+) .excalidraw :is(.main-menu-trigger, .sidebar-trigger, .help-icon):hover {
+  background-color: #45475a;
+  color: #f5e0dc;
+}
+
+:root[data-theme="mocha"] :where(
+  [data-weave-editor-excalidraw],
+  [data-weave-excalidraw-surface]
+) .excalidraw :is(.ToolIcon__keybinding, .HintViewer) {
+  color: #a6adc8;
+}
+
 .weave-appbar-left-actions-floating {
   position: fixed;
   top: calc(var(--weave-safe-area-top) + var(--weave-appbar-control-top));

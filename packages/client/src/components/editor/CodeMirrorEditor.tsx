@@ -81,6 +81,8 @@ const catppuccinMocha = {
   crust: '#11111b',
 };
 
+export const editorCanvasBackgroundColor = catppuccinMocha.base;
+
 const catppuccinMochaHighlightStyle = HighlightStyle.define([
   { tag: [t.keyword, t.modifier, t.operatorKeyword, t.controlKeyword, t.moduleKeyword], color: catppuccinMocha.mauve },
   { tag: [t.name, t.deleted, t.character, t.macroName], color: catppuccinMocha.red },
@@ -172,7 +174,7 @@ const toVimMode = (event: VimModeChangeEvent = {}): VimMode => {
 const editorTheme = EditorView.theme({
   '&': {
     height: '100%',
-    backgroundColor: catppuccinMocha.base,
+    backgroundColor: editorCanvasBackgroundColor,
     color: catppuccinMocha.text,
   },
   '.cm-scroller': {
