@@ -1,5 +1,6 @@
 export { Providers } from './app/providers';
 export { WebConnectionApp } from './app/web-connection';
+export { WeaveAppShell } from './components/app-shell/WeaveAppShell';
 export { ChatPage } from './components/chat/ChatPage';
 export { ConnectionApp } from './components/connection/ConnectionApp';
 export { ShortcutProvider, useShortcutController } from './components/shortcuts';

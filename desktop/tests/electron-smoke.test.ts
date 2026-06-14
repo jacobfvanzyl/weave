@@ -55,6 +55,24 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         return;
       }
 
+      if (request.url === '/portals') {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          portals: [
+            {
+              portalId: 'smoke-portal',
+              userId: 'smoke-user',
+              name: 'Smoke Portal',
+              status: 'online',
+              capabilities: ['portal.terminal.session', 'portal.window.session'],
+              roots: [{ id: 'default', name: 'Default' }],
+              primary: true,
+            },
+          ],
+        }));
+        return;
+      }
+
       response.statusCode = 404;
       response.end('not found');
     });
@@ -106,6 +124,12 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await playwrightExpect(generalTerminalToggle.locator('[data-weave-terminal-count-badge]')).toHaveCount(0);
     await page.getByRole('button', { name: 'Hide sidebar' }).click();
     await page.getByRole('button', { name: 'Show sidebar' }).first().waitFor({ timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Show window stream' }).click();
+    const windowStreamOverlay = page.locator('[data-weave-window-stream-overlay]');
+    await playwrightExpect(windowStreamOverlay).toBeVisible({ timeout: 5_000 });
+    await windowStreamOverlay.getByRole('button', { name: 'Hide window stream' }).click();
+    await playwrightExpect(windowStreamOverlay).toBeHidden({ timeout: 5_000 });
 
     await page.getByRole('button', { name: 'Show general terminal' }).click();
     const generalTerminalOverlay = page.locator('[data-weave-general-terminal-overlay]');

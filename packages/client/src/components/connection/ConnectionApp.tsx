@@ -10,7 +10,7 @@ import type {
 import { configureMastraConnection } from '../../lib/mastra-client';
 import { queryClient } from '../../lib/query-client';
 import { Button } from '../ui/button';
-import { ChatPage } from '../chat/ChatPage';
+import { WeaveAppShell } from '../app-shell/WeaveAppShell';
 import { ConnectionDialog, ConnectionScreen } from './ConnectionForm';
 
 const fallbackSettings: ConnectionSettings = {
@@ -147,7 +147,7 @@ export const ConnectionApp = ({
       <div className={shellClassName}>
         {renderConnected?.(settingsButton) ?? (
           <>
-            <ChatPage />
+            <WeaveAppShell />
             {settingsButton}
           </>
         )}

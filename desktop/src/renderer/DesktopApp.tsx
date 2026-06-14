@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Providers } from '@weave/client/app/providers';
-import { ChatPage } from '@weave/client';
+import { WeaveAppShell } from '@weave/client';
 import { ConnectionApp } from '@weave/client/components/connection/ConnectionApp';
 import type { ConnectionAdapter } from '@weave/client/lib/connection-types';
 import type {
@@ -27,7 +27,7 @@ export const DesktopApp = ({ initialSettings }: { initialSettings: DesktopConnec
         settingsButtonClassName="h-8 w-8 text-muted-foreground hover:text-foreground"
         tokenStorageDescription="Tokens are encrypted by the main process when available."
         renderConnected={connectionSettingsButton => (
-          <ChatPage connectionSettingsButton={connectionSettingsButton} />
+          <WeaveAppShell connectionSettingsButton={connectionSettingsButton} />
         )}
       />
     </Providers>

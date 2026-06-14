@@ -32,6 +32,7 @@ import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from
 import { listProfiles, type DynamicProfileSummary, type ProfileResolutionContext } from '../../lib/profiles-api';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
 import { useChatStore, type ChatThread, type ReasoningEffort } from '../../stores/chat-store';
+import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
@@ -264,7 +265,7 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
       if (appliedEffectsRef.current[effectKey] === effectVersion) continue;
       appliedEffectsRef.current[effectKey] = effectVersion;
 
-      const targetThreadId = threadId ?? useChatStore.getState().threadId;
+      const targetThreadId = threadId ?? useWorkspaceSurfaceStore.getState().threadId;
       if (effect.type === 'renameThread') {
         useChatStore.setState(state => ({
           threads: state.threads.map(thread => (thread.id === targetThreadId ? { ...thread, title: effect.title } : thread)),
@@ -1403,7 +1404,7 @@ const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
   const wasRunning = useRef(false);
   const resourceId = useChatStore(state => state.resourceId);
   const isLocalRunning = useThread(state => state.isRunning);
-  const activeThreadId = useChatStore(state => state.threadId);
+  const activeThreadId = useWorkspaceSurfaceStore(state => state.threadId);
   const setThreadRunning = useChatStore(state => state.setThreadRunning);
   const markThreadCompleted = useChatStore(state => state.markThreadCompleted);
   const clearThreadCompleted = useChatStore(state => state.clearThreadCompleted);
@@ -1439,7 +1440,7 @@ const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
 const IdleActiveThreadRefresher = ({ threadId }: { threadId: string }) => {
   const queryClient = useQueryClient();
   const resourceId = useChatStore(state => state.resourceId);
-  const activeThreadId = useChatStore(state => state.threadId);
+  const activeThreadId = useWorkspaceSurfaceStore(state => state.threadId);
   const isLocalRunning = useThread(state => state.isRunning);
   const composerText = useAuiState(state => state.composer.text);
   const [isComposerIdle, setIsComposerIdle] = useState(true);

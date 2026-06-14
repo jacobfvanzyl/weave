@@ -61,12 +61,14 @@ const createStorage = (): Storage => {
 const loadFreshChatStore = async () => {
   vi.resetModules();
   vi.stubGlobal('localStorage', createStorage());
-  const [storeModule, mastraClient] = await Promise.all([
+  const [storeModule, surfaceModule, mastraClient] = await Promise.all([
     import('../../packages/client/src/stores/chat-store'),
+    import('../../packages/client/src/stores/workspace-surface-store'),
     import('../../packages/client/src/lib/mastra-client'),
   ]);
   return {
     useChatStore: storeModule.useChatStore,
+    useWorkspaceSurfaceStore: surfaceModule.useWorkspaceSurfaceStore,
     configureFreshMastraConnection: mastraClient.configureMastraConnection,
   };
 };
@@ -349,10 +351,10 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('sets profiles only on local draft threads', async () => {
-    const { useChatStore } = await loadFreshChatStore();
+    const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
     const now = '2026-06-03T08:00:00.000Z';
+    useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread' });
     useChatStore.setState({
-      threadId: 'draft-thread',
       threads: [
         { id: 'draft-thread', title: 'Draft', createdAt: now, updatedAt: now, draft: true },
         { id: 'server-thread', title: 'Started', createdAt: now, updatedAt: now, profileId: 'research' },
@@ -369,7 +371,7 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('sends draft profileId when first persisting a plain thread', async () => {
-    const { useChatStore, configureFreshMastraConnection } = await loadFreshChatStore();
+    const { useChatStore, useWorkspaceSurfaceStore, configureFreshMastraConnection } = await loadFreshChatStore();
     configureFreshMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
     const now = '2026-06-03T08:00:00.000Z';
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
@@ -383,9 +385,9 @@ describe('chat-state Project/Workspace API client', () => {
       },
     }));
     vi.stubGlobal('fetch', fetchMock);
+    useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread' });
     useChatStore.setState({
       resourceId: 'browser-user-test',
-      threadId: 'draft-thread',
       threads: [{ id: 'draft-thread', title: '...', createdAt: now, updatedAt: now, draft: true, profileId: 'coding' }],
     });
 
@@ -404,7 +406,7 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('sends draft profileId when first persisting a project thread', async () => {
-    const { useChatStore, configureFreshMastraConnection } = await loadFreshChatStore();
+    const { useChatStore, useWorkspaceSurfaceStore, configureFreshMastraConnection } = await loadFreshChatStore();
     configureFreshMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
     const now = '2026-06-03T08:00:00.000Z';
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
@@ -419,9 +421,9 @@ describe('chat-state Project/Workspace API client', () => {
       workspace,
     }));
     vi.stubGlobal('fetch', fetchMock);
+    useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread', workspaceId: 'workspace-1' });
     useChatStore.setState({
       resourceId: 'browser-user-test',
-      threadId: 'draft-thread',
       threads: [{
         id: 'draft-thread',
         title: '...',
