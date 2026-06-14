@@ -111,7 +111,7 @@ type TerminalSubscriber = {
   send: (event: TerminalHostEvent) => void;
 };
 
-type PortalEditorControlHost = Pick<PortalEditorHost, 'list' | 'read' | 'write'>;
+type PortalEditorControlHost = Pick<PortalEditorHost, 'list' | 'read' | 'write' | 'mkdir' | 'move' | 'delete'>;
 
 type TerminalSession = {
   sessionId: string;
@@ -152,6 +152,12 @@ const parseIdentifier = (value: unknown, name: string) => {
 };
 
 const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+const isAbsolutePath = (path: string) => path.startsWith('/');
+const expandHomePath = (path: string) => {
+  if (path === '~') return Deno.env.get('HOME') ?? path;
+  if (path.startsWith('~/')) return `${Deno.env.get('HOME') ?? '~'}${path.slice(1)}`;
+  return path;
+};
 
 const parseDimension = (value: unknown, fallback: number, min: number, max: number) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
@@ -646,7 +652,10 @@ export class PortalTerminalHost {
     const root = (this.config.roots?.length ? this.config.roots : defaultRoots()).find((item) => item.id === rootId);
     if (!root) throw new Error(`Unknown root: ${rootId}`);
     const rootPath = await Deno.realPath(root.path);
-    const target = path ? await Deno.realPath(`${rootPath}/${path}`) : rootPath;
+    const normalizedPath = expandHomePath(path.trim());
+    const target = normalizedPath
+      ? await Deno.realPath(isAbsolutePath(normalizedPath) ? normalizedPath : `${rootPath}/${normalizedPath}`)
+      : rootPath;
     if (target !== rootPath && !target.startsWith(`${rootPath}/`)) throw new Error('Path escapes Portal root');
     return { rootPath, target };
   }
@@ -799,6 +808,12 @@ export const startTerminalControlServer = (input: {
       ? 'read'
       : url.pathname === '/editor/write'
       ? 'write'
+      : url.pathname === '/editor/mkdir'
+      ? 'mkdir'
+      : url.pathname === '/editor/move'
+      ? 'move'
+      : url.pathname === '/editor/delete'
+      ? 'delete'
       : undefined;
     if (editorAction) {
       if (!input.editor) return new Response('not found', { status: 404 });
@@ -809,7 +824,13 @@ export const startTerminalControlServer = (input: {
           ? await input.editor.list(body as Parameters<PortalEditorControlHost['list']>[0])
           : editorAction === 'read'
           ? await input.editor.read(body as Parameters<PortalEditorControlHost['read']>[0])
-          : await input.editor.write(body as Parameters<PortalEditorControlHost['write']>[0]);
+          : editorAction === 'write'
+          ? await input.editor.write(body as Parameters<PortalEditorControlHost['write']>[0])
+          : editorAction === 'mkdir'
+          ? await input.editor.mkdir(body as Parameters<PortalEditorControlHost['mkdir']>[0])
+          : editorAction === 'move'
+          ? await input.editor.move(body as Parameters<PortalEditorControlHost['move']>[0])
+          : await input.editor.delete(body as Parameters<PortalEditorControlHost['delete']>[0]);
         return Response.json(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

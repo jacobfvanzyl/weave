@@ -35,6 +35,8 @@ export type EditorFile = {
   path: string;
   content: string;
   version: string;
+  size?: number;
+  mtimeMs?: number;
 };
 
 export type EditorWriteInput = {
@@ -47,4 +49,29 @@ export type EditorWriteInput = {
 export type EditorWriteResult = {
   path: string;
   version: string;
+  size?: number;
+  mtimeMs?: number;
+};
+
+export type EditorMkdirInput = {
+  target: EditorTarget;
+  path: string;
+};
+
+export type EditorMoveInput = {
+  target: EditorTarget;
+  fromPath: string;
+  toPath: string;
+  overwrite?: boolean;
+};
+
+export type EditorDeleteInput = {
+  target: EditorTarget;
+  path: string;
+  recursive?: boolean;
+};
+
+export type EditorOperationResult = {
+  ok: true;
+  path?: string;
 };

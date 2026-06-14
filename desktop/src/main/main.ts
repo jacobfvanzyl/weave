@@ -6,7 +6,14 @@ import type { EditorTarget } from '../shared/editor';
 import type { TerminalStartInput } from '../shared/terminal';
 import { getServerOrigin, isHttpUrl, normalizeMastraUrl, parseDesktopConnectionInput } from '../shared/connection';
 import { ConnectionSettingsStore } from './settings-store';
-import { parseEditorListInput, parseEditorReadInput, parseEditorWriteInput } from './editor-input';
+import {
+  parseEditorDeleteInput,
+  parseEditorListInput,
+  parseEditorMkdirInput,
+  parseEditorMoveInput,
+  parseEditorReadInput,
+  parseEditorWriteInput,
+} from './editor-input';
 import { PortalEditorClient } from './portal-editor-client';
 import {
   parseTerminalInputData,
@@ -228,6 +235,15 @@ const registerIpcHandlers = () => {
   );
   ipcMain.handle('editor:write', (_event, input: unknown) =>
     getPortalEditorClient().write(parseEditorWriteInput(input)),
+  );
+  ipcMain.handle('editor:mkdir', (_event, input: unknown) =>
+    getPortalEditorClient().mkdir(parseEditorMkdirInput(input)),
+  );
+  ipcMain.handle('editor:move', (_event, input: unknown) =>
+    getPortalEditorClient().move(parseEditorMoveInput(input)),
+  );
+  ipcMain.handle('editor:delete', (_event, input: unknown) =>
+    getPortalEditorClient().delete(parseEditorDeleteInput(input)),
   );
 };
 

@@ -228,6 +228,7 @@ const setPrimaryPortalId = async (memory: any, resourceId: string, portalId: str
 };
 
 const pathBasename = (path: string) => path.split('/').filter(Boolean).pop() || path;
+const isRootedPath = (path: string) => path.startsWith('/') || path === '~' || path.startsWith('~/');
 
 const validateAdHocPath = async (resourceId: string, portalId: string, workspacePath: string) => {
   assertPortalForUser(portalId, resourceId);
@@ -360,15 +361,22 @@ const createNotesProject = async (_c: any, resourceId: string, baseProject: Proj
   assertPortalForUser(portalId, resourceId);
   if (!rootId) throw new Error('rootId is required for notes projects');
 
-  const result = await requestPortalTool({
-    portalId: portalId!,
-    tool: 'portal.fs.list',
-    args: { rootId, path: vaultPath },
-    timeoutMs: 10_000,
-  }) as { ok?: boolean; error?: string; path?: string; realPath?: string };
+  const result = isRootedPath(vaultPath)
+    ? await requestPortalTool({
+        portalId: portalId!,
+        tool: 'portal.fs.stat',
+        args: { rootId, path: vaultPath },
+        timeoutMs: 10_000,
+      }) as { ok?: boolean; error?: string; path?: string; isDirectory?: boolean }
+    : await requestPortalTool({
+        portalId: portalId!,
+        tool: 'portal.fs.list',
+        args: { rootId, path: vaultPath },
+        timeoutMs: 10_000,
+      }) as { ok?: boolean; error?: string; path?: string; realPath?: string; isDirectory?: boolean };
   portalToolError(result);
-  const realPath = normalizePath(result.realPath);
-  if (!realPath) throw new Error('Selected vault folder could not be resolved.');
+  const realPath = normalizePath(isRootedPath(vaultPath) ? result.path : result.realPath);
+  if (!realPath || result.isDirectory === false) throw new Error('Selected vault folder could not be resolved. Restart Portal and select the folder again.');
   const at = baseProject.createdAt;
   const primaryWorkspace: Workspace = {
     id: createId('workspace'),
@@ -389,7 +397,7 @@ const createNotesProject = async (_c: any, resourceId: string, baseProject: Proj
     ...baseProject,
     portalId,
     portalRootId: rootId,
-    vaultPath: typeof result.path === 'string' ? result.path : vaultPath,
+    vaultPath: realPath,
     workspaces: [primaryWorkspace],
   };
 };

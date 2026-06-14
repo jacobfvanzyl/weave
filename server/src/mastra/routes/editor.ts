@@ -118,7 +118,7 @@ const resolveEditorTarget = async (c: any, resourceId: string, body: Record<stri
 const cleanPortalResult = (result: unknown) => {
   const record = result && typeof result === 'object' ? result as Record<string, unknown> : {};
   if (record.ok === false) throw new Error(typeof record.error === 'string' ? record.error : 'Portal editor request failed.');
-  const { id: _id, type: _type, ok: _ok, ...body } = record;
+  const { id: _id, type: _type, ...body } = record;
   return body;
 };
 
@@ -164,6 +164,27 @@ export const editorRoutes = [
       path: optionalString(body.path) ?? '',
       content: typeof body.content === 'string' ? body.content : undefined,
       version: optionalString(body.version),
+    })),
+  }),
+  registerApiRoute('/editor/mkdir', {
+    method: 'POST',
+    handler: async c => handleEditorRoute(c, 'portal.editor.mkdir', body => ({
+      path: optionalString(body.path) ?? '',
+    })),
+  }),
+  registerApiRoute('/editor/move', {
+    method: 'POST',
+    handler: async c => handleEditorRoute(c, 'portal.editor.move', body => ({
+      fromPath: optionalString(body.fromPath) ?? '',
+      toPath: optionalString(body.toPath) ?? '',
+      overwrite: body.overwrite === true,
+    })),
+  }),
+  registerApiRoute('/editor/delete', {
+    method: 'POST',
+    handler: async c => handleEditorRoute(c, 'portal.editor.delete', body => ({
+      path: optionalString(body.path) ?? '',
+      recursive: body.recursive === true,
     })),
   }),
 ];

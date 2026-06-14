@@ -9,7 +9,6 @@ const nativeLibraryName = Deno.build.os === 'darwin'
   ? 'libweave_portal_pty.so'
   : undefined;
 
-const windowCaptureHelperName = Deno.build.os === 'darwin' ? 'weave-window-capture-sck' : undefined;
 const nativeWindowStreamHostName = Deno.build.os === 'darwin' ? 'weave-window-stream-native' : undefined;
 
 const run = async (args: string[]) => {
@@ -28,14 +27,6 @@ const main = async () => {
 
   const portalRoot = pathFromFileUrl(new URL('..', import.meta.url));
   await run(['run', '--allow-run', '--allow-env', '--allow-read', 'scripts/build-native.ts']);
-  if (windowCaptureHelperName) {
-    await Deno.mkdir(`${portalRoot}/dist`, { recursive: true });
-    await Deno.copyFile(
-      `${portalRoot}/native/window-capture-sck/.build/release/${windowCaptureHelperName}`,
-      `${portalRoot}/dist/${windowCaptureHelperName}`,
-    );
-    await Deno.chmod(`${portalRoot}/dist/${windowCaptureHelperName}`, 0o755);
-  }
   if (nativeWindowStreamHostName) {
     const nativeHost = `${portalRoot}/native/window-stream-native/build/${nativeWindowStreamHostName}`;
     const stat = await Deno.stat(nativeHost).catch(() => undefined);

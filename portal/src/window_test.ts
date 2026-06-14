@@ -30,7 +30,7 @@ Deno.test('window stream config precedence is CLI over env over config over pres
     {
       WEAVE_WINDOW_STREAM_MAX_FPS: '30',
       WEAVE_WINDOW_STREAM_BITRATE_MBPS: '9',
-      WEAVE_WINDOW_STREAM_CODEC: 'av1',
+      WEAVE_WINDOW_STREAM_CODEC: 'h264',
       WEAVE_WINDOW_STREAM_COLOR_MODE: 'srgb-video-range',
       WEAVE_WINDOW_CONTROL_DELIVERY: 'hid-only',
     },
@@ -55,7 +55,6 @@ Deno.test('window stream config parses codec-specific settings', () => {
         codec: 'hevc',
         hevcLevelId: 186,
         hevcTierFlag: 1,
-        av1Packetization: 'obu',
       },
       capture: {
         showCursor: true,
@@ -77,7 +76,6 @@ Deno.test('window stream config parses codec-specific settings', () => {
   assertEquals(config.encoder.codec, 'hevc');
   assertEquals(config.encoder.hevcLevelId, 186);
   assertEquals(config.encoder.hevcTierFlag, 1);
-  assertEquals(config.encoder.av1Packetization, 'obu');
   assertEquals(config.capture.showCursor, true);
   assertEquals(config.capture.queueDepth, 4);
   assertEquals(config.capture.colorMode, 'srgb-video-range');
@@ -106,5 +104,15 @@ Deno.test('window stream config rejects invalid codec and ranges', async () => {
     async () => resolveWindowStreamConfig({}, { 'window-control-delivery': 'ax' }, {}),
     Error,
     'windowStream.control.delivery',
+  );
+  await assertRejects(
+    async () => resolveWindowStreamConfig({}, { 'window-stream-backend': 'electron-sck' }, {}),
+    Error,
+    'windowStream.backend',
+  );
+  await assertRejects(
+    async () => resolveWindowStreamConfig({}, { 'window-stream-codec': 'av1' }, {}),
+    Error,
+    'windowStream.encoder.codec',
   );
 });

@@ -1,10 +1,13 @@
-import type { EditorBackend, EditorFile, EditorListResult, EditorTarget, EditorWriteResult } from './editor-types';
+import type { EditorBackend, EditorFile, EditorListResult, EditorTarget, EditorWriteResult, FileOperationResult } from './editor-types';
 import { getAuthHeaders, getMastraUrl } from './mastra-client';
 
 type DesktopEditorBridge = {
   editorList: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
   editorRead: (target: EditorTarget, path: string) => Promise<EditorFile>;
   editorWrite: (target: EditorTarget, path: string, content: string, version?: string) => Promise<EditorWriteResult>;
+  editorMkdir: (target: EditorTarget, path: string) => Promise<FileOperationResult>;
+  editorMove: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<FileOperationResult>;
+  editorDelete: (target: EditorTarget, path: string, recursive?: boolean) => Promise<FileOperationResult>;
 };
 
 type WindowWithDesktopEditor = Window & {
@@ -20,6 +23,9 @@ const getDesktopBridge = () => {
     typeof bridge?.editorList !== 'function'
     || typeof bridge.editorRead !== 'function'
     || typeof bridge.editorWrite !== 'function'
+    || typeof bridge.editorMkdir !== 'function'
+    || typeof bridge.editorMove !== 'function'
+    || typeof bridge.editorDelete !== 'function'
   ) {
     return undefined;
   }
@@ -44,6 +50,15 @@ const createUnavailableEditorBackend = (): EditorBackend => ({
   write: async () => {
     throw new Error(unavailableError);
   },
+  mkdir: async () => {
+    throw new Error(unavailableError);
+  },
+  move: async () => {
+    throw new Error(unavailableError);
+  },
+  delete: async () => {
+    throw new Error(unavailableError);
+  },
 });
 
 export const createEditorBackend = (): EditorBackend => {
@@ -51,7 +66,7 @@ export const createEditorBackend = (): EditorBackend => {
   if (!bridge && !isWebEditorBackendAvailable()) return createUnavailableEditorBackend();
 
   if (!bridge) {
-    const request = async <T>(action: 'list' | 'read' | 'write', body: unknown): Promise<T> => {
+    const request = async <T>(action: 'list' | 'read' | 'write' | 'mkdir' | 'move' | 'delete', body: unknown): Promise<T> => {
       const response = await fetch(`${getMastraUrl()}/editor/${action}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...getAuthHeaders() },
@@ -76,6 +91,9 @@ export const createEditorBackend = (): EditorBackend => {
       list: (target, path) => request<EditorListResult>('list', { target, path }),
       read: (target, path) => request<EditorFile>('read', { target, path }),
       write: (target, path, content, version) => request<EditorWriteResult>('write', { target, path, content, version }),
+      mkdir: (target, path) => request<FileOperationResult>('mkdir', { target, path }),
+      move: (target, fromPath, toPath, overwrite) => request<FileOperationResult>('move', { target, fromPath, toPath, overwrite }),
+      delete: (target, path, recursive) => request<FileOperationResult>('delete', { target, path, recursive }),
     };
   }
 
@@ -83,5 +101,8 @@ export const createEditorBackend = (): EditorBackend => {
     list: (target, path) => bridge.editorList(target, path),
     read: (target, path) => bridge.editorRead(target, path),
     write: (target, path, content, version) => bridge.editorWrite(target, path, content, version),
+    mkdir: (target, path) => bridge.editorMkdir(target, path),
+    move: (target, fromPath, toPath, overwrite) => bridge.editorMove(target, fromPath, toPath, overwrite),
+    delete: (target, path, recursive) => bridge.editorDelete(target, path, recursive),
   };
 };

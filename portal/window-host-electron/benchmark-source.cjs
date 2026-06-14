@@ -51,9 +51,9 @@ const html = encodeURIComponent(`
         context.fillStyle = '#f4f7ff';
         context.font = Math.round(32 * devicePixelRatio) + 'px system-ui, sans-serif';
         context.fillText('60fps ScreenCaptureKit source ' + frame, 32 * devicePixelRatio, 56 * devicePixelRatio);
-        requestAnimationFrame(draw);
       };
-      requestAnimationFrame(draw);
+      draw();
+      setInterval(draw, 1000 / 60);
     </script>
   </body>
 </html>
@@ -71,6 +71,9 @@ const createWindow = async () => {
     },
   });
   await window.loadURL(`data:text/html,${html}`);
+  window.show();
+  window.focus();
+  window.moveTop();
   writeJsonLine({ type: 'ready', title });
 };
 

@@ -1,5 +1,5 @@
 import type { TerminalHostEvent, TerminalStartInput, TerminalStartResult } from './terminal';
-import type { EditorFile, EditorListResult, EditorTarget, EditorWriteResult } from './editor';
+import type { EditorFile, EditorListResult, EditorOperationResult, EditorTarget, EditorWriteResult } from './editor';
 
 export type DesktopConnectionSettings = {
   mastraUrl: string;
@@ -30,4 +30,7 @@ export type WeaveDesktopBridge = {
   editorList: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
   editorRead: (target: EditorTarget, path: string) => Promise<EditorFile>;
   editorWrite: (target: EditorTarget, path: string, content: string, version?: string) => Promise<EditorWriteResult>;
+  editorMkdir: (target: EditorTarget, path: string) => Promise<EditorOperationResult>;
+  editorMove: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<EditorOperationResult>;
+  editorDelete: (target: EditorTarget, path: string, recursive?: boolean) => Promise<EditorOperationResult>;
 };

@@ -12,7 +12,7 @@ const repoRoot = path.resolve(portalRoot, '..');
 
 const hostPath = process.env.WEAVE_WINDOW_STREAM_HOST ||
   path.join(portalRoot, 'native/window-stream-native/build/weave-window-stream-native');
-const electronPath = process.env.WEAVE_WINDOW_HOST_ELECTRON ||
+const electronPath = process.env.WEAVE_WINDOW_STREAM_TEST_ELECTRON ||
   path.join(repoRoot, 'desktop/node_modules/.bin/electron');
 const answererAppPath = path.join(portalRoot, 'window-host-electron/answerer.cjs');
 const benchmarkSourceAppPath = path.join(portalRoot, 'window-host-electron/benchmark-source.cjs');

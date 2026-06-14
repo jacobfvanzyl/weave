@@ -203,11 +203,12 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
 }, ref) => {
   const {
     resourceId,
-    threadId,
+    activeSurface,
     threads,
     runningThreadIds,
     newThread,
-    setThreadId,
+    selectThread: selectThreadSurface,
+    selectWorkspace,
     archiveThread,
     restoreThread,
     deleteThread,
@@ -271,9 +272,17 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
     suppressSelectionUntilRef.current = Date.now() + 500;
   };
   const shouldSuppressSelection = () => Date.now() < suppressSelectionUntilRef.current;
+  const isThreadActive = (nextThreadId: string) => activeSurface.kind === 'thread' && activeSurface.threadId === nextThreadId;
+  const isWorkspaceActive = (projectId: string, workspaceId: string) =>
+    activeSurface.kind === 'workspace' && activeSurface.projectId === projectId && activeSurface.workspaceId === workspaceId;
   const selectThread = (nextThreadId: string) => {
     if (shouldSuppressSelection()) return;
-    setThreadId(nextThreadId);
+    selectThreadSurface(nextThreadId);
+    if (closeOnSelect) onClose?.();
+  };
+  const selectWorkspaceSurface = (projectId: string, workspaceId: string | undefined) => {
+    if (!workspaceId || shouldSuppressSelection()) return;
+    selectWorkspace(projectId, workspaceId);
     if (closeOnSelect) onClose?.();
   };
   const reorderPlainThreads = async (activeId: string, overId: string) => {
@@ -448,7 +457,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
             showHandle={false}
             className={cn(
               'group flex min-h-9 min-w-0 w-[calc(100%+6px)] items-center gap-2 rounded-md border border-transparent py-1 pl-2 pr-1 text-left transition-colors',
-              thread.id === threadId ? 'border-transparent bg-selected-thread' : 'hover:bg-background',
+              isThreadActive(thread.id) ? 'border-transparent bg-selected-thread' : 'hover:bg-background',
             )}
           >
             <SidebarItemButton
@@ -502,6 +511,11 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
               const workspaces = project.workspaces.length > 0 ? project.workspaces : [];
               const generalProjectThreads = projectThreads.filter(thread => !thread.workspaceId && thread.archived !== true);
               const sortedWorkspaces = sortManual(workspaces);
+              const notesWorkspace = project.projectKind === 'notes' ? sortedWorkspaces[0] : undefined;
+              const notesThreads = notesWorkspace
+                ? projectThreads.filter(thread => thread.workspaceId === notesWorkspace.id && thread.archived !== true)
+                : [];
+              const isNotesProjectActive = Boolean(notesWorkspace && isWorkspaceActive(project.id, notesWorkspace.id));
 
               return (
                 <SortableItem
@@ -509,33 +523,52 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                   id={project.id}
                   canDrag={sortedProjects.length > 1}
                   showHandle={false}
-                  className="p-2"
+                  className="-ml-2 py-2"
                 >
                   {dragActivator => (
                     <>
                       <div
                         ref={dragActivator.ref}
                         className={cn(
-                          'flex w-[calc(100%+0.5rem)] cursor-grab touch-none select-none items-center gap-2 text-sm font-normal text-foreground active:cursor-grabbing',
+                          'flex w-full cursor-grab touch-none select-none items-center gap-2 text-sm font-normal text-foreground active:cursor-grabbing',
                           !isCollapsed && 'mb-2',
                         )}
                         style={{ touchAction: 'none' }}
                         {...dragActivator.attributes}
                         {...dragActivator.listeners}
                       >
-                        <SidebarItemButton
-                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                          onClick={() => {
+                        <Button
+                          className="h-6 w-6 shrink-0 text-muted-foreground/80"
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-expanded={!isCollapsed}
+                          aria-label={isCollapsed ? `Expand ${project.name}` : `Collapse ${project.name}`}
+                          onClick={event => {
+                            event.stopPropagation();
                             if (shouldSuppressSelection()) return;
                             toggleProjectCollapsed(project.id);
                           }}
-                          aria-expanded={!isCollapsed}
                         >
                           <ChevronDown
                             size={15}
-                            className={cn('shrink-0 text-muted-foreground/80 transition-transform', isCollapsed && '-rotate-90')}
+                            className={cn('transition-transform', isCollapsed && '-rotate-90')}
                             aria-hidden="true"
                           />
+                        </Button>
+                        <SidebarItemButton
+                          className={cn(
+                            'flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left',
+                            isNotesProjectActive && 'bg-selected-thread',
+                          )}
+                          onClick={() => {
+                            if (project.projectKind === 'notes') {
+                              selectWorkspaceSurface(project.id, notesWorkspace?.id);
+                              return;
+                            }
+                            if (shouldSuppressSelection()) return;
+                            toggleProjectCollapsed(project.id);
+                          }}
+                        >
                           {!isCollapsed ? (
                             <FolderOpen size={16} className="shrink-0 text-foreground" aria-label="Expanded Project" />
                           ) : project.projectKind === 'git' ? (
@@ -596,7 +629,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                     </MenuItem>
                                   </>
                                 ) : null}
-                                <MenuItem onClick={() => setArchivedDialogScopeId(project.id)}>
+                                <MenuItem onClick={() => setArchivedDialogScopeId(project.projectKind === 'notes' ? notesWorkspace?.id ?? project.id : project.id)}>
                                   <Archive size={13} />
                                   Archived Threads
                                 </MenuItem>
@@ -611,7 +644,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                       </div>
                       {!isCollapsed ? (
                         <>
-                          <div className="relative space-y-2 pl-4 before:absolute before:bottom-1 before:left-0 before:top-0 before:w-px before:bg-border/70">
+                    <div className="relative space-y-2 pl-6 before:absolute before:bottom-1 before:left-3 before:top-0 before:w-px before:bg-success/70">
                             {project.projectKind === 'general' ? (
                               <SortableSection
                                 items={generalProjectThreads.map(thread => thread.id)}
@@ -626,8 +659,8 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                     canDrag={generalProjectThreads.length > 1}
                                     showHandle={false}
                                     className={cn(
-                                      'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
-                                      thread.id === threadId ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                                      'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
+                                      isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
                                     )}
                                   >
                                     <SidebarItemButton
@@ -644,7 +677,39 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                 ))}
                               </SortableSection>
                             ) : null}
-                            {project.projectKind === 'git' || project.projectKind === 'notes' ? (
+                            {project.projectKind === 'notes' && notesWorkspace ? (
+                              <SortableSection
+                                items={notesThreads.map(thread => thread.id)}
+                                onDragStart={suppressSelectionAfterDrag}
+                                onDragEnd={suppressSelectionAfterDrag}
+                                onReorder={(activeId, overId) => reorderWorkspaceThreads(project.id, notesWorkspace.id, activeId, overId)}
+                              >
+                                {notesThreads.map(thread => (
+                                  <SortableItem
+                                    key={thread.id}
+                                    id={thread.id}
+                                    canDrag={notesThreads.length > 1}
+                                    showHandle={false}
+                                    className={cn(
+                                      'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
+                                      isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                                    )}
+                                  >
+                                    <SidebarItemButton
+                                      className="min-w-0 flex-1 items-center text-left"
+                                      onClick={() => selectThread(thread.id)}
+                                    >
+                                      <div className="flex min-w-0 items-center pl-4">
+                                        <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
+                                      </div>
+                                    </SidebarItemButton>
+                                    {renderThreadRunningSpinner(thread)}
+                                    {renderThreadMenu(thread)}
+                                  </SortableItem>
+                                ))}
+                              </SortableSection>
+                            ) : null}
+                            {project.projectKind === 'git' ? (
                               <div>
                                 <SortableSection
                                   items={sortedWorkspaces.map(workspace => workspace.id)}
@@ -667,19 +732,31 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                         showHandle={false}
                                         className="space-y-1 pt-2 pb-0"
                                       >
-                                        <div className="flex w-[calc(100%+0.5rem)] items-start justify-between gap-2 text-sm font-normal text-foreground">
+                                        <div
+                                          className={cn(
+                                            'flex min-h-14 min-w-0 w-[calc(100%+0.5rem)] -ml-2 items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left text-sm font-normal transition-colors',
+                                            isWorkspaceActive(project.id, workspace.id)
+                                              ? 'border-transparent bg-selected-thread text-foreground'
+                                              : 'border-transparent text-foreground hover:bg-background',
+                                          )}
+                                        >
+                                          <SidebarItemButton
+                                            className="min-w-0 flex-1 items-center rounded-md px-2 py-2 text-left"
+                                            onClick={() => selectWorkspaceSurface(project.id, workspace.id)}
+                                          >
                                           <div className="min-w-0 flex-1">
                                             <div className="flex min-w-0 items-center gap-1.5">
                                               <span className="truncate text-foreground">{workspace.name}</span>
                                               {workspace.locked || workspace.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
                                             </div>
                                             {workspace.branch || workspace.detached ? (
-                                              <div className="truncate text-[10px] font-normal text-muted-foreground">
+                                              <div className="truncate text-[10px] font-normal text-mauve">
                                                 {workspace.detached ? `Detached ${workspace.head?.slice(0, 7) ?? 'HEAD'}` : workspace.branch}
                                               </div>
                                             ) : null}
                                             {workspace.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{workspace.lastError}</div> : null}
                                           </div>
+                                          </SidebarItemButton>
                                           <Button
                                             className="h-6 w-8 shrink-0 text-primary"
                                             size="icon-xs"
@@ -768,7 +845,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                           className={cn(
                                             'relative',
                                             workspaceThreads.length > 0
-                                              && 'before:absolute before:bottom-1 before:left-0 before:top-1 before:w-px before:bg-border/50',
+                                  && 'before:absolute before:bottom-1 before:left-2 before:top-1 before:w-px before:bg-peach/70',
                                           )}
                                         >
                                           <SortableSection
@@ -784,8 +861,8 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                                                 canDrag={workspaceThreads.length > 1}
                                                 showHandle={false}
                                                 className={cn(
-                                                  'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+1.25rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
-                                                  thread.id === threadId ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                                                  'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
+                                                  isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
                                                 )}
                                               >
                                                 <SidebarItemButton
@@ -933,7 +1010,7 @@ export const ThreadSidebar = forwardRef<HTMLElement, ThreadSidebarProps>(({
                               return (
                                 <ComboboxItem key={ref} value={ref}>
                                   <span className="flex min-w-0 items-center gap-2">
-                                    <span className="truncate">{option?.name ?? ref}</span>
+                                    <span className="truncate text-mauve">{option?.name ?? ref}</span>
                                     {option?.kind === 'remote' ? (
                                       <span className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">origin</span>
                                     ) : null}

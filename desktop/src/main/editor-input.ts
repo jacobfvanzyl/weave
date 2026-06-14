@@ -1,5 +1,13 @@
 import path from 'node:path';
-import type { EditorListInput, EditorReadInput, EditorTarget, EditorWriteInput } from '../shared/editor';
+import type {
+  EditorDeleteInput,
+  EditorListInput,
+  EditorMkdirInput,
+  EditorMoveInput,
+  EditorReadInput,
+  EditorTarget,
+  EditorWriteInput,
+} from '../shared/editor';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
 
@@ -68,5 +76,34 @@ export const parseEditorWriteInput = (input: unknown): EditorWriteInput => {
     path: parseEditorPath(input.path),
     content: input.content,
     version: input.version,
+  };
+};
+
+export const parseEditorMkdirInput = (input: unknown): EditorMkdirInput => {
+  if (!isRecord(input)) throw new Error('editor mkdir input is required.');
+  return {
+    target: parseEditorTarget(input.target),
+    path: parseEditorPath(input.path),
+  };
+};
+
+export const parseEditorMoveInput = (input: unknown): EditorMoveInput => {
+  if (!isRecord(input)) throw new Error('editor move input is required.');
+  if (input.overwrite !== undefined && typeof input.overwrite !== 'boolean') throw new Error('overwrite must be a boolean.');
+  return {
+    target: parseEditorTarget(input.target),
+    fromPath: parseEditorPath(input.fromPath, 'fromPath'),
+    toPath: parseEditorPath(input.toPath, 'toPath'),
+    overwrite: input.overwrite,
+  };
+};
+
+export const parseEditorDeleteInput = (input: unknown): EditorDeleteInput => {
+  if (!isRecord(input)) throw new Error('editor delete input is required.');
+  if (input.recursive !== undefined && typeof input.recursive !== 'boolean') throw new Error('recursive must be a boolean.');
+  return {
+    target: parseEditorTarget(input.target),
+    path: parseEditorPath(input.path),
+    recursive: input.recursive,
   };
 };

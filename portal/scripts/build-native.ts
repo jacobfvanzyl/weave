@@ -51,13 +51,6 @@ const findCargo = async () => {
   throw new Error('Could not find cargo. Install Rust or set CARGO=/path/to/cargo.');
 };
 
-const findSwift = async () => {
-  const explicit = Deno.env.get('SWIFT')?.trim();
-  if (explicit && await runOutput(explicit, ['--version'])) return explicit;
-  if (await runOutput('swift', ['--version'])) return 'swift';
-  throw new Error('Could not find swift. Install Xcode command line tools or set SWIFT=/path/to/swift.');
-};
-
 const findCmake = async () => {
   const explicit = Deno.env.get('CMAKE')?.trim();
   if (explicit && await runOutput(explicit, ['--version'])) return explicit;
@@ -105,34 +98,23 @@ const main = async () => {
   });
 
   if (Deno.build.os === 'darwin') {
-    const swift = await findSwift();
-    await runInherited(swift, {
+    const cmake = await findCmake();
+    const sourceDir = `${portalRoot}/native/window-stream-native`;
+    const buildDir = `${sourceDir}/build`;
+    await runInherited(cmake, {
       cwd: portalRoot,
-      args: ['build', '--package-path', 'native/window-capture-sck', '-c', 'release'],
+      args: [
+        '-S',
+        sourceDir,
+        '-B',
+        buildDir,
+        '-DCMAKE_BUILD_TYPE=Release',
+      ],
     });
-
-    const configuredWindowStreamBackend = Deno.env.get('WEAVE_WINDOW_STREAM_BACKEND')?.trim().toLowerCase();
-    const shouldBuildNativeWindowStream = configuredWindowStreamBackend !== 'electron-sck' ||
-      Deno.env.get('WEAVE_BUILD_WINDOW_STREAM_NATIVE') === '1';
-    if (shouldBuildNativeWindowStream) {
-      const cmake = await findCmake();
-      const sourceDir = `${portalRoot}/native/window-stream-native`;
-      const buildDir = `${sourceDir}/build`;
-      await runInherited(cmake, {
-        cwd: portalRoot,
-        args: [
-          '-S',
-          sourceDir,
-          '-B',
-          buildDir,
-          '-DCMAKE_BUILD_TYPE=Release',
-        ],
-      });
-      await runInherited(cmake, {
-        cwd: portalRoot,
-        args: ['--build', buildDir, '--config', 'Release'],
-      });
-    }
+    await runInherited(cmake, {
+      cwd: portalRoot,
+      args: ['--build', buildDir, '--config', 'Release'],
+    });
   }
 };
 

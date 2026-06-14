@@ -7,19 +7,16 @@
 #import <VideoToolbox/VideoToolbox.h>
 
 #include <rtc/rtc.hpp>
-#include <rtc/av1rtppacketizer.hpp>
 #include <rtc/h265rtppacketizer.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -32,9 +29,6 @@
 using Clock = std::chrono::steady_clock;
 
 static std::mutex gOutputMutex;
-static constexpr double IdleRepeatIntervalSeconds = 0.5;
-static constexpr double IdleRepeatAfterSeconds = 0.45;
-static constexpr int32_t MediaTimeScale = 90000;
 
 static NSString *StringFromStd(const std::string &value) {
     return [[NSString alloc] initWithBytes:value.data() length:value.size() encoding:NSUTF8StringEncoding] ?: @"";
@@ -277,7 +271,7 @@ static void AppendLengthPrefixedNal(NSMutableData *data, const uint8_t *bytes, s
 static NSString *NormalizeCodecName(id value) {
     NSString *codec = [(OptionalString(value) ?: @"hevc") lowercaseString];
     if ([codec isEqualToString:@"h265"]) return @"hevc";
-    if ([codec isEqualToString:@"hevc"] || [codec isEqualToString:@"av1"]) return codec;
+    if ([codec isEqualToString:@"hevc"]) return codec;
     return @"h264";
 }
 
@@ -406,13 +400,6 @@ static NSString *HevcFmtp(NSInteger levelId, NSInteger tierFlag, NSString *txMod
                                       static_cast<long>(tierFlag),
                                       static_cast<long>(levelId),
                                       OptionalString(txMode) ?: @"SRST"];
-}
-
-static NSString *Av1Fmtp(NSInteger profile, NSInteger levelIdx, NSInteger tier) {
-    return [NSString stringWithFormat:@"profile=%ld;level-idx=%ld;tier=%ld",
-                                      static_cast<long>(profile),
-                                      static_cast<long>(levelIdx),
-                                      static_cast<long>(tier)];
 }
 
 static NSDictionary *ProbeCodec(NSString *codec, BOOL requireHardware) {
@@ -629,10 +616,6 @@ static void CompressionOutputCallback(
     NSInteger _hevcLevelId;
     NSInteger _hevcTierFlag;
     NSString *_hevcTxMode;
-    NSInteger _av1Profile;
-    NSInteger _av1LevelIdx;
-    NSInteger _av1Tier;
-    NSString *_av1Packetization;
     BOOL _realtime;
     BOOL _hardwareAcceleration;
     BOOL _allowFrameReordering;
@@ -651,17 +634,12 @@ static void CompressionOutputCallback(
     BOOL _postEventAccessDeniedReported;
 
     dispatch_queue_t _sampleQueue;
-    dispatch_source_t _idleRepeatTimer;
     SCStream *_stream;
     VTCompressionSessionRef _encoder;
     CMTime _firstPts;
     BOOL _hasFirstPts;
     CMTime _lastEncodePts;
     BOOL _hasLastEncodePts;
-    CVPixelBufferRef _lastPixelBuffer;
-    Clock::time_point _lastRealFrameAt;
-    Clock::time_point _lastIdleKeyframeAt;
-    std::mutex _lastPixelBufferMutex;
 
     std::shared_ptr<rtc::PeerConnection> _peerConnection;
     std::shared_ptr<rtc::Track> _track;
@@ -675,7 +653,6 @@ static void CompressionOutputCallback(
     std::atomic<uint64_t> _captureFrames;
     std::atomic<uint64_t> _encodedFrames;
     std::atomic<uint64_t> _sentFrames;
-    std::atomic<uint64_t> _repeatedFrames;
     std::atomic<uint64_t> _droppedFrames;
     std::atomic<uint64_t> _encodedBytes;
     std::atomic<uint64_t> _keyframes;
@@ -712,10 +689,6 @@ static void CompressionOutputCallback(
     _hevcLevelId = std::max<NSInteger>(1, std::min<NSInteger>(255, OptionalInteger(settings[@"hevcLevelId"], 180)));
     _hevcTierFlag = OptionalInteger(settings[@"hevcTierFlag"], 0) == 1 ? 1 : 0;
     _hevcTxMode = [(OptionalString(settings[@"hevcTxMode"]) ?: @"SRST") copy];
-    _av1Profile = std::max<NSInteger>(0, std::min<NSInteger>(2, OptionalInteger(settings[@"av1Profile"], 0)));
-    _av1LevelIdx = std::max<NSInteger>(0, std::min<NSInteger>(31, OptionalInteger(settings[@"av1LevelIdx"], 5)));
-    _av1Tier = OptionalInteger(settings[@"av1Tier"], 0) == 1 ? 1 : 0;
-    _av1Packetization = [[(OptionalString(settings[@"av1Packetization"]) ?: @"temporal-unit") lowercaseString] copy];
     _realtime = OptionalBool(settings[@"realtime"], YES);
     _hardwareAcceleration = OptionalBool(settings[@"hardwareAcceleration"], YES);
     _allowFrameReordering = OptionalBool(settings[@"allowFrameReordering"], NO);
@@ -737,16 +710,12 @@ static void CompressionOutputCallback(
     _hasFirstPts = NO;
     _lastEncodePts = kCMTimeInvalid;
     _hasLastEncodePts = NO;
-    _lastPixelBuffer = nullptr;
-    _lastRealFrameAt = Clock::now();
-    _lastIdleKeyframeAt = Clock::time_point::min();
     _stopping = false;
     _forceKeyframe = true;
     _encodingInFlight = 0;
     _captureFrames = 0;
     _encodedFrames = 0;
     _sentFrames = 0;
-    _repeatedFrames = 0;
     _droppedFrames = 0;
     _encodedBytes = 0;
     _keyframes = 0;
@@ -842,8 +811,6 @@ static void CompressionOutputCallback(
     auto video = rtc::Description::Video("video");
     if ([_codec isEqualToString:@"hevc"]) {
         video.addH265Codec(payloadType, StdFromString(HevcFmtp(_hevcLevelId, _hevcTierFlag, _hevcTxMode)));
-    } else if ([_codec isEqualToString:@"av1"]) {
-        video.addAV1Codec(payloadType, StdFromString(Av1Fmtp(_av1Profile, _av1LevelIdx, _av1Tier)));
     } else {
         video.addH264Codec(payloadType, StdFromString(H264Fmtp(_h264Profile)));
     }
@@ -853,11 +820,6 @@ static void CompressionOutputCallback(
     std::shared_ptr<rtc::RtpPacketizer> packetizer;
     if ([_codec isEqualToString:@"hevc"]) {
         packetizer = std::make_shared<rtc::H265RtpPacketizer>(rtc::NalUnit::Separator::Length, rtpConfig);
-    } else if ([_codec isEqualToString:@"av1"]) {
-        rtc::AV1RtpPacketizer::Packetization packetization = [_av1Packetization isEqualToString:@"obu"]
-            ? rtc::AV1RtpPacketizer::Packetization::Obu
-            : rtc::AV1RtpPacketizer::Packetization::TemporalUnit;
-        packetizer = std::make_shared<rtc::AV1RtpPacketizer>(packetization, rtpConfig);
     } else {
         packetizer = std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::Length, rtpConfig);
     }
@@ -1329,11 +1291,6 @@ static void CompressionOutputCallback(
 
     if (_statsThread.joinable()) _statsThread.join();
 
-    if (_idleRepeatTimer) {
-        dispatch_source_cancel(_idleRepeatTimer);
-        _idleRepeatTimer = nil;
-    }
-
     if (_stream) {
         __block BOOL didFinish = NO;
         dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
@@ -1373,14 +1330,6 @@ static void CompressionOutputCallback(
         _senderReporter.reset();
     }
 
-    CVPixelBufferRef lastPixelBuffer = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(_lastPixelBufferMutex);
-        lastPixelBuffer = _lastPixelBuffer;
-        _lastPixelBuffer = nullptr;
-    }
-    if (lastPixelBuffer) CVPixelBufferRelease(lastPixelBuffer);
-
     [self sendSessionEvent:@{@"type": @"stopped"}];
 }
 
@@ -1388,25 +1337,10 @@ static void CompressionOutputCallback(
     [self sendError:NSErrorMessage(error)];
 }
 
-- (void)startIdleRepeatTimer {
-    if (_idleRepeatTimer) return;
-    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _sampleQueue);
-    uint64_t intervalNs = static_cast<uint64_t>(IdleRepeatIntervalSeconds * NSEC_PER_SEC);
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, intervalNs), intervalNs, 50 * NSEC_PER_MSEC);
-    __weak WindowStreamNativeSession *weakSelf = self;
-    dispatch_source_set_event_handler(timer, ^{
-        WindowStreamNativeSession *strongSelf = weakSelf;
-        if (strongSelf) [strongSelf repeatLastFrameIfIdle];
-    });
-    _idleRepeatTimer = timer;
-    dispatch_resume(timer);
-}
-
 - (CMTime)nextEncodePresentationTime:(CMTime)candidate {
     CMTime frameDuration = CMTimeMake(1, static_cast<int32_t>(_frameRate));
-    CMTime idleRepeatDuration = CMTimeMakeWithSeconds(IdleRepeatIntervalSeconds, MediaTimeScale);
     if (!CMTIME_IS_VALID(candidate)) {
-        candidate = _hasLastEncodePts ? CMTimeAdd(_lastEncodePts, idleRepeatDuration) : kCMTimeZero;
+        candidate = _hasLastEncodePts ? CMTimeAdd(_lastEncodePts, frameDuration) : kCMTimeZero;
     }
     if (_hasLastEncodePts && CMTimeCompare(candidate, _lastEncodePts) <= 0) {
         candidate = CMTimeAdd(_lastEncodePts, frameDuration);
@@ -1416,21 +1350,7 @@ static void CompressionOutputCallback(
     return candidate;
 }
 
-- (void)rememberLastRealPixelBuffer:(CVPixelBufferRef)pixelBuffer {
-    if (!pixelBuffer) return;
-    CVPixelBufferRetain(pixelBuffer);
-    CVPixelBufferRef previous = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(_lastPixelBufferMutex);
-        previous = _lastPixelBuffer;
-        _lastPixelBuffer = pixelBuffer;
-        _lastRealFrameAt = Clock::now();
-        _lastIdleKeyframeAt = Clock::time_point::min();
-    }
-    if (previous) CVPixelBufferRelease(previous);
-}
-
-- (BOOL)encodePixelBuffer:(CVPixelBufferRef)pixelBuffer presentationTime:(CMTime)presentationTime repeated:(BOOL)repeated {
+- (BOOL)encodePixelBuffer:(CVPixelBufferRef)pixelBuffer presentationTime:(CMTime)presentationTime {
     if (!pixelBuffer || !_encoder || _stopping) return NO;
 
     int inFlight = _encodingInFlight.load(std::memory_order_relaxed);
@@ -1464,33 +1384,7 @@ static void CompressionOutputCallback(
         _droppedFrames.fetch_add(1, std::memory_order_relaxed);
         return NO;
     }
-    if (repeated) _repeatedFrames.fetch_add(1, std::memory_order_relaxed);
     return YES;
-}
-
-- (void)repeatLastFrameIfIdle {
-    if (_stopping || !_encoder) return;
-
-    CVPixelBufferRef pixelBuffer = nullptr;
-    BOOL shouldForceKeyframe = NO;
-    auto now = Clock::now();
-    {
-        std::lock_guard<std::mutex> lock(_lastPixelBufferMutex);
-        if (!_lastPixelBuffer) return;
-        double idleSeconds = std::chrono::duration<double>(now - _lastRealFrameAt).count();
-        if (idleSeconds < IdleRepeatAfterSeconds) return;
-        double keyframeAgeSeconds = _lastIdleKeyframeAt == Clock::time_point::min()
-            ? std::numeric_limits<double>::infinity()
-            : std::chrono::duration<double>(now - _lastIdleKeyframeAt).count();
-        shouldForceKeyframe = keyframeAgeSeconds >= _keyframeIntervalSeconds;
-        if (shouldForceKeyframe) _lastIdleKeyframeAt = now;
-        pixelBuffer = _lastPixelBuffer;
-        CVPixelBufferRetain(pixelBuffer);
-    }
-
-    if (shouldForceKeyframe) _forceKeyframe = true;
-    [self encodePixelBuffer:pixelBuffer presentationTime:kCMTimeInvalid repeated:YES];
-    CVPixelBufferRelease(pixelBuffer);
 }
 
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type {
@@ -1511,8 +1405,7 @@ static void CompressionOutputCallback(
     CMTime relativePts = CMTimeSubtract(pts, _firstPts);
     if (!CMTIME_IS_VALID(relativePts) || CMTimeCompare(relativePts, kCMTimeZero) < 0) relativePts = kCMTimeZero;
 
-    [self rememberLastRealPixelBuffer:pixelBuffer];
-    [self encodePixelBuffer:pixelBuffer presentationTime:relativePts repeated:NO];
+    [self encodePixelBuffer:pixelBuffer presentationTime:relativePts];
 }
 
 - (void)handleEncodedSampleBuffer:(CMSampleBufferRef)sampleBuffer
@@ -1618,7 +1511,6 @@ static void CompressionOutputCallback(
         uint64_t lastCapture = 0;
         uint64_t lastEncoded = 0;
         uint64_t lastSent = 0;
-        uint64_t lastRepeated = 0;
         uint64_t lastDropped = 0;
         uint64_t lastBytes = 0;
         auto lastAt = Clock::now();
@@ -1632,7 +1524,6 @@ static void CompressionOutputCallback(
             uint64_t capture = self->_captureFrames.load(std::memory_order_relaxed);
             uint64_t encoded = self->_encodedFrames.load(std::memory_order_relaxed);
             uint64_t sent = self->_sentFrames.load(std::memory_order_relaxed);
-            uint64_t repeated = self->_repeatedFrames.load(std::memory_order_relaxed);
             uint64_t dropped = self->_droppedFrames.load(std::memory_order_relaxed);
             uint64_t bytes = self->_encodedBytes.load(std::memory_order_relaxed);
 
@@ -1646,8 +1537,6 @@ static void CompressionOutputCallback(
             double p95 = durations.empty() ? 0.0 : durations[std::min(durations.size() - 1, static_cast<size_t>(std::floor(durations.size() * 0.95)))];
             NSString *fmtp = [self->_codec isEqualToString:@"hevc"]
                 ? HevcFmtp(self->_hevcLevelId, self->_hevcTierFlag, self->_hevcTxMode)
-                : [self->_codec isEqualToString:@"av1"]
-                ? Av1Fmtp(self->_av1Profile, self->_av1LevelIdx, self->_av1Tier)
                 : H264Fmtp(self->_h264Profile);
 
             NSDictionary *stats = @{
@@ -1669,8 +1558,6 @@ static void CompressionOutputCallback(
                 @"captureFps": @((capture - lastCapture) / elapsed),
                 @"encodeFps": @((encoded - lastEncoded) / elapsed),
                 @"sendFps": @((sent - lastSent) / elapsed),
-                @"repeatedFrames": @(repeated),
-                @"repeatedFps": @((repeated - lastRepeated) / elapsed),
                 @"droppedFrames": @(dropped),
                 @"droppedFps": @((dropped - lastDropped) / elapsed),
                 @"encodedBitrate": @(((bytes - lastBytes) * 8.0) / elapsed),
@@ -1703,7 +1590,6 @@ static void CompressionOutputCallback(
             lastCapture = capture;
             lastEncoded = encoded;
             lastSent = sent;
-            lastRepeated = repeated;
             lastDropped = dropped;
             lastBytes = bytes;
         }
@@ -1790,7 +1676,7 @@ static void CompressionOutputCallback(
         NSString *bitrateEnv = OptionalString([NSProcessInfo processInfo].environment[@"WEAVE_WINDOW_STREAM_BITRATE"]);
         if (!settings[@"bitrate"]) settings[@"bitrate"] = @(bitrateEnv ? bitrateEnv.integerValue : 12000000);
         NSString *codec = NormalizeCodecName(settings[@"codec"]);
-        BOOL requireHardware = OptionalBool(settings[@"hardwareAcceleration"], YES) || [codec isEqualToString:@"av1"];
+        BOOL requireHardware = OptionalBool(settings[@"hardwareAcceleration"], YES);
         NSDictionary *probe = ProbeCodec(codec, requireHardware);
         BOOL available = requireHardware
             ? [probe[@"hardwareRequiredAvailable"] boolValue]
@@ -1833,11 +1719,6 @@ static void CompressionOutputCallback(
 
     if ([type isEqualToString:@"session.ice-candidate"]) {
         if (_activeSession) [_activeSession addIceCandidate:OptionalDictionary(message[@"candidate"]) ?: @{}];
-        [self reply:requestId ok:YES fields:@{@"backend": @"native-webrtc"}];
-        return YES;
-    }
-
-    if ([type isEqualToString:@"session.ready"]) {
         [self reply:requestId ok:YES fields:@{@"backend": @"native-webrtc"}];
         return YES;
     }

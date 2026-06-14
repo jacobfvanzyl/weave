@@ -1,4 +1,13 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import {
+  atomicMarkdownSyntax,
+  imageBlocks,
+  inlinePreview,
+  tables,
+  wikiLinks,
+  type WikiLinkSuggestion,
+} from '@atomic-editor/editor';
+import '@atomic-editor/editor/styles.css';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import type { Extension } from '@codemirror/state';
 import { EditorView, GutterMarker, gutter, gutters, keymap, type ViewUpdate } from '@codemirror/view';
@@ -22,10 +31,13 @@ export type VimMode =
   | 'terminal';
 
 type CodeMirrorEditorProps = {
+  editorMode?: 'code' | 'notes';
   path?: string;
   value: string;
   readOnly?: boolean;
+  wikiLinkSuggestions?: WikiLinkSuggestion[];
   onChange: (value: string) => void;
+  onOpenWikiLink?: (target: string) => void;
   onSave?: () => void;
   onVimModeChange?: (mode: VimMode) => void;
 };
@@ -254,20 +266,70 @@ const getLanguageExtension = (filePath: string | undefined): Extension[] => {
 };
 
 export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(({
+  editorMode = 'code',
   path,
   value,
   readOnly,
+  wikiLinkSuggestions = [],
   onChange,
+  onOpenWikiLink,
   onSave,
   onVimModeChange,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const onOpenWikiLinkRef = useRef(onOpenWikiLink);
   const onSaveRef = useRef(onSave);
   const onVimModeChangeRef = useRef(onVimModeChange);
+  const wikiLinkSuggestionsRef = useRef(wikiLinkSuggestions);
   const isSyncingRef = useRef(false);
   const languageExtensions = useMemo(() => getLanguageExtension(path), [path]);
+  const notesMarkdownExtensions = useMemo<Extension[]>(() => {
+    const isNotesMarkdown = editorMode === 'notes' && /\.(md|mdx|markdown)$/i.test(path ?? '');
+    if (!isNotesMarkdown) return [];
+
+    const openExternalLink = (url: string) => {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    };
+    const findSuggestion = (target: string) => {
+      const normalizedTarget = target.replace(/\.(md|markdown)$/i, '').toLowerCase();
+      return wikiLinkSuggestionsRef.current.find(suggestion => {
+        const normalizedSuggestion = suggestion.target.replace(/\.(md|markdown)$/i, '').toLowerCase();
+        return normalizedSuggestion === normalizedTarget || suggestion.label.toLowerCase() === normalizedTarget;
+      });
+    };
+
+    return [
+      atomicMarkdownSyntax,
+      inlinePreview({ onLinkClick: openExternalLink }),
+      tables({ onLinkClick: openExternalLink }),
+      imageBlocks(),
+      wikiLinks({
+        openOnClick: true,
+        suggest: async query => {
+          const lowerQuery = query.trim().toLowerCase();
+          return wikiLinkSuggestionsRef.current
+            .filter(suggestion =>
+              !lowerQuery
+              || suggestion.target.toLowerCase().includes(lowerQuery)
+              || suggestion.label.toLowerCase().includes(lowerQuery)
+              || suggestion.detail?.toLowerCase().includes(lowerQuery),
+            )
+            .slice(0, 50);
+        },
+        resolve: async target => {
+          const suggestion = findSuggestion(target);
+          if (!suggestion) return { target, label: target, status: 'missing' };
+          return { target: suggestion.target, label: suggestion.label, status: 'resolved' };
+        },
+        onOpen: target => {
+          const suggestion = findSuggestion(target);
+          onOpenWikiLinkRef.current?.(suggestion?.target ?? target);
+        },
+      }),
+    ];
+  }, [editorMode, path]);
 
   useImperativeHandle(ref, () => ({
     focus: () => viewRef.current?.focus(),
@@ -278,12 +340,20 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
   }, [onChange]);
 
   useEffect(() => {
+    onOpenWikiLinkRef.current = onOpenWikiLink;
+  }, [onOpenWikiLink]);
+
+  useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
 
   useEffect(() => {
     onVimModeChangeRef.current = onVimModeChange;
   }, [onVimModeChange]);
+
+  useEffect(() => {
+    wikiLinkSuggestionsRef.current = wikiLinkSuggestions;
+  }, [wikiLinkSuggestions]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -314,6 +384,7 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
         saveKeymap,
         updateListener,
         ...languageExtensions,
+        ...notesMarkdownExtensions,
       ],
     });
 
@@ -331,7 +402,7 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
       view.destroy();
       if (viewRef.current === view) viewRef.current = null;
     };
-  }, [languageExtensions, path, readOnly]);
+  }, [languageExtensions, notesMarkdownExtensions, path, readOnly]);
 
   useEffect(() => {
     const view = viewRef.current;

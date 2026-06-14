@@ -4,6 +4,7 @@ export type ShortcutCommandId =
   | 'shortcuts.open'
   | 'sidebar.toggle'
   | 'chat.focus'
+  | 'chat.toggle'
   | 'thread.new'
   | 'plan.toggle'
   | 'terminal.globalToggle'

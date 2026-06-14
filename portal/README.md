@@ -76,20 +76,10 @@ iterating on Rust.
 On macOS, Portal can stream individual windows over direct WebRTC. The default
 backend is `native-webrtc`. Portal launches
 `portal/native/window-stream-native/build/weave-window-stream-native` directly:
-ScreenCaptureKit frames go into VideoToolbox H.264, and libdatachannel owns the
-WebRTC media/data-channel transport.
-
-The fallback backend is available with `WEAVE_WINDOW_STREAM_BACKEND=electron-sck`:
-Portal lazily starts an Electron Chromium sidecar, which uses a Swift
-ScreenCaptureKit helper for native window capture and cursor hiding, then
-streams a canvas track over Chromium WebRTC. In development it defaults to
-`desktop/node_modules/.bin/electron`, `portal/window-host-electron/main.cjs`,
-and the Swift helper built at
-`portal/native/window-capture-sck/.build/release/weave-window-capture-sck`.
+ScreenCaptureKit frames go into VideoToolbox H.264/HEVC, and libdatachannel owns
+the WebRTC media/data-channel transport.
 
 ```bash
-npm run portal:window-capture:smoke
-npm run portal:window-host:smoke
 npm run portal:window-stream-native:smoke
 npm run portal:window-stream-native:benchmark
 ```
@@ -101,13 +91,6 @@ deno task --config portal/deno.json native
 ```
 
 Use `WEAVE_WINDOW_STREAM_HOST` to point at another native executable.
-Use `WEAVE_WINDOW_HOST_ELECTRON` and `WEAVE_WINDOW_HOST_APP` to point Portal at
-another Electron executable or sidecar entrypoint. Use
-`WEAVE_WINDOW_CAPTURE_HELPER` to point at another ScreenCaptureKit helper, or
-`WEAVE_WINDOW_CAPTURE_BACKEND=electron` to use the older Electron
-`desktopCapturer` backend inside `electron-sck`. V1 streams video and opens the
-control data channel, but control messages are logged as no-ops until a native
-input layer is added.
 
 ## Lifecycle
 

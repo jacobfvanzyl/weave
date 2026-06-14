@@ -1,7 +1,11 @@
 import type {
   EditorFile,
+  EditorDeleteInput,
   EditorListInput,
   EditorListResult,
+  EditorMkdirInput,
+  EditorMoveInput,
+  EditorOperationResult,
   EditorReadInput,
   EditorTarget,
   EditorWriteInput,
@@ -71,6 +75,30 @@ export class PortalEditorClient {
     });
   }
 
+  async mkdir(input: EditorMkdirInput): Promise<EditorOperationResult> {
+    return await this.callPortal<EditorOperationResult>('mkdir', {
+      target: await this.resolveTarget(input.target),
+      path: input.path,
+    });
+  }
+
+  async move(input: EditorMoveInput): Promise<EditorOperationResult> {
+    return await this.callPortal<EditorOperationResult>('move', {
+      target: await this.resolveTarget(input.target),
+      fromPath: input.fromPath,
+      toPath: input.toPath,
+      overwrite: input.overwrite,
+    });
+  }
+
+  async delete(input: EditorDeleteInput): Promise<EditorOperationResult> {
+    return await this.callPortal<EditorOperationResult>('delete', {
+      target: await this.resolveTarget(input.target),
+      path: input.path,
+      recursive: input.recursive,
+    });
+  }
+
   private async resolveTarget(target: EditorTarget): Promise<EditorTarget> {
     const resolved = await this.resolveWorkspace(target);
     return {
@@ -83,7 +111,7 @@ export class PortalEditorClient {
     };
   }
 
-  private async callPortal<T>(action: 'list' | 'read' | 'write', body: unknown): Promise<T> {
+  private async callPortal<T>(action: 'list' | 'read' | 'write' | 'mkdir' | 'move' | 'delete', body: unknown): Promise<T> {
     const control = await this.supervisor.ensureStarted();
     return await parseResponse<T>(
       await fetch(`${control.httpUrl}/editor/${action}`, {

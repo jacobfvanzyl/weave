@@ -19,12 +19,6 @@ const main = async () => {
   await copyFile(`${portalRoot}/dist/portal`, `${binDir}/portal`);
 
   if (Deno.build.os === 'darwin') {
-    const helper = `${portalRoot}/dist/weave-window-capture-sck`;
-    const stat = await Deno.stat(helper).catch(() => undefined);
-    if (stat?.isFile) {
-      await copyFile(helper, `${binDir}/weave-window-capture-sck`);
-    }
-
     const nativeHost = `${portalRoot}/dist/weave-window-stream-native`;
     const nativeHostStat = await Deno.stat(nativeHost).catch(() => undefined);
     if (nativeHostStat?.isFile) {

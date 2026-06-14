@@ -265,11 +265,21 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const getRoots = (config: Pick<ResolvedPortalConfig, 'roots'>) =>
   config.roots?.length ? config.roots : [{ id: 'default', name: 'Default', path: Deno.env.get('HOME') ?? '.' }];
 
+const isAbsolutePath = (path: string) => path.startsWith('/');
+const expandHomePath = (path: string) => {
+  if (path === '~') return Deno.env.get('HOME') ?? path;
+  if (path.startsWith('~/')) return `${Deno.env.get('HOME') ?? '~'}${path.slice(1)}`;
+  return path;
+};
+
 const resolveRootPath = async (config: ResolvedPortalConfig, rootId: string, path = '') => {
   const root = getRoots(config).find((item) => item.id === rootId);
   if (!root) throw new Error(`Unknown root: ${rootId}`);
   const rootPath = await Deno.realPath(root.path);
-  const target = path ? await Deno.realPath(`${rootPath}/${path}`) : rootPath;
+  const normalizedPath = expandHomePath(path.trim());
+  const target = normalizedPath
+    ? await Deno.realPath(isAbsolutePath(normalizedPath) ? normalizedPath : `${rootPath}/${normalizedPath}`)
+    : rootPath;
   if (target !== rootPath && !target.startsWith(`${rootPath}/`)) throw new Error('Path escapes Portal root');
   return { rootPath, target };
 };
@@ -537,11 +547,12 @@ const resolveWorkspacePath = async (
   return { root, candidate };
 };
 
-const pathStatTool = async (_config: PortalConfig, request: Record<string, unknown>) => {
+const pathStatTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = (request.args ?? {}) as Record<string, unknown>;
-  const path = typeof args.path === 'string' ? args.path.trim() : '';
+  const path = typeof args.path === 'string' ? expandHomePath(args.path.trim()) : '';
   if (!path) return { ok: false, error: 'path is required' };
-  const realPath = await Deno.realPath(path);
+  const rootId = typeof args.rootId === 'string' && args.rootId.trim() ? args.rootId.trim() : undefined;
+  const realPath = rootId ? (await resolveRootPath(config, rootId, path)).target : await Deno.realPath(path);
   const stat = await Deno.stat(realPath);
   return { ok: true, path: realPath, isDirectory: stat.isDirectory, isFile: stat.isFile, isSymlink: stat.isSymlink };
 };
@@ -1114,6 +1125,12 @@ const handleToolCall = async (
       ? await editorHost.read(editorInputFromToolCall(request) as Parameters<PortalEditorHost['read']>[0])
       : request.tool === 'portal.editor.write'
       ? await editorHost.write(editorInputFromToolCall(request) as Parameters<PortalEditorHost['write']>[0])
+      : request.tool === 'portal.editor.mkdir'
+      ? await editorHost.mkdir(editorInputFromToolCall(request) as Parameters<PortalEditorHost['mkdir']>[0])
+      : request.tool === 'portal.editor.move'
+      ? await editorHost.move(editorInputFromToolCall(request) as Parameters<PortalEditorHost['move']>[0])
+      : request.tool === 'portal.editor.delete'
+      ? await editorHost.delete(editorInputFromToolCall(request) as Parameters<PortalEditorHost['delete']>[0])
       : request.tool === 'portal.vault.index'
       ? await vaultHost.index(editorInputFromToolCall(request) as Parameters<PortalVaultHost['index']>[0])
       : request.tool === 'portal.vault.read'
@@ -1183,6 +1200,9 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'portal.editor.list',
     'portal.editor.read',
     'portal.editor.write',
+    'portal.editor.mkdir',
+    'portal.editor.move',
+    'portal.editor.delete',
     'portal.vault.index',
     'portal.vault.read',
     'portal.vault.write',
@@ -1530,7 +1550,7 @@ Commands:
   root --path /path/to/code [--id default] [--name Code] [--config ~/.config/weave/portal/config.json]
   mount --project project_x --path /path/to/repo [--config ~/.config/weave/portal/config.json]
   daemon [--config ~/.config/weave/portal/config.json] [--ws-server ws://localhost:4112] [--control-port 0] [--control-token token] [--no-control]
-         [--window-stream-backend native-webrtc|electron-sck] [--window-stream-codec h264|hevc|av1]
+         [--window-stream-backend native-webrtc] [--window-stream-codec h264|hevc]
          [--window-stream-profile balanced|quality|performance|low-bandwidth|custom]
          [--window-stream-max-fps 60] [--window-stream-max-dimension 1920] [--window-stream-bitrate-mbps 20]
          [--window-stream-color-mode srgb-full-range|srgb-video-range|rec709-full-range|rec709-video-range]

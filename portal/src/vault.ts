@@ -60,6 +60,8 @@ export type PortalVaultFile = {
   path: string;
   content: string;
   version: string;
+  size?: number;
+  mtimeMs?: number;
 };
 
 export type PortalVaultWriteInput = {
@@ -72,6 +74,8 @@ export type PortalVaultWriteInput = {
 export type PortalVaultWriteResult = {
   path: string;
   version: string;
+  size?: number;
+  mtimeMs?: number;
 };
 
 export type PortalVaultMkdirInput = {
@@ -140,6 +144,12 @@ const joinPath = (base: string, path: string) => path ? normalizePath(`${trimTra
 const getParentPath = (path: string) => path.split('/').filter(Boolean).slice(0, -1).join('/');
 const getBasename = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 const removeExtension = (name: string) => name.replace(/\.[^.]+$/, '');
+const isAbsolutePath = (path: string) => path.startsWith('/');
+const expandHomePath = (path: string) => {
+  if (path === '~') return Deno.env.get('HOME') ?? path;
+  if (path.startsWith('~/')) return `${Deno.env.get('HOME') ?? '~'}${path.slice(1)}`;
+  return path;
+};
 
 export const parseVaultPath = (value: unknown, name = 'path') => {
   if (value === undefined || value === null || value === '') return '';
@@ -365,7 +375,7 @@ export class PortalVaultHost {
     if (details.size > this.maxReadBytes) throw new Error('File is too large to open in the vault editor.');
 
     const bytes = await Deno.readFile(filePath);
-    return { path: relativePath, content: decodeUtf8(bytes), version: getFileVersion(details) };
+    return { path: relativePath, content: decodeUtf8(bytes), version: getFileVersion(details), size: details.size, mtimeMs: details.mtime?.getTime() };
   }
 
   async write(input: PortalVaultWriteInput): Promise<PortalVaultWriteResult> {
@@ -381,7 +391,7 @@ export class PortalVaultHost {
     await this.assertExpectedVersion(filePath, record.version);
     await Deno.writeTextFile(filePath, record.content);
     const nextDetails = await Deno.stat(filePath);
-    return { path: relativePath, version: getFileVersion(nextDetails) };
+    return { path: relativePath, version: getFileVersion(nextDetails), size: nextDetails.size, mtimeMs: nextDetails.mtime?.getTime() };
   }
 
   async mkdir(input: PortalVaultMkdirInput): Promise<PortalVaultOperationResult> {
@@ -453,7 +463,7 @@ export class PortalVaultHost {
 
   private async resolveWorkspaceRoot(input: Record<string, unknown>) {
     const workspacePath = optionalString(input.workspacePath);
-    if (workspacePath) return await Deno.realPath(workspacePath);
+    if (workspacePath) return await Deno.realPath(expandHomePath(workspacePath));
 
     const projectId = optionalString(input.projectId);
     const mount = projectId ? (this.config.mounts ?? []).find((item) => item.projectId === projectId) : undefined;
@@ -465,7 +475,8 @@ export class PortalVaultHost {
       const root = getRoots(this.config).find((item) => item.id === rootId);
       if (!root) throw new Error(`Unknown root: ${rootId}`);
       const rootPath = await Deno.realPath(root.path);
-      const target = await Deno.realPath(joinPath(rootPath, parseVaultPath(repoPath, 'repoPath')));
+      const normalizedRepoPath = expandHomePath(repoPath);
+      const target = await Deno.realPath(isAbsolutePath(normalizedRepoPath) ? normalizedRepoPath : joinPath(rootPath, parseVaultPath(repoPath, 'repoPath')));
       this.assertWithinRoot(rootPath, target, 'Path escapes Portal root');
       return target;
     }

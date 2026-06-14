@@ -48,7 +48,7 @@ const createClient = (httpUrl: string, token = 'local-token') =>
   });
 
 describe('PortalEditorClient', () => {
-  it('routes list/read/write through Portal local control', async () => {
+  it('routes editor operations through Portal local control', async () => {
     const requests: Array<{ url?: string; authorization?: string; body: Record<string, unknown> }> = [];
     const { server, url } = await listen(async (request, response) => {
       const body = await readBody(request);
@@ -71,6 +71,12 @@ describe('PortalEditorClient', () => {
         response.end(JSON.stringify({ path: 'README.md', content: 'hello', version: '1:5' }));
       } else if (request.url === '/editor/write') {
         response.end(JSON.stringify({ path: 'README.md', version: '2:7' }));
+      } else if (request.url === '/editor/mkdir') {
+        response.end(JSON.stringify({ ok: true, path: 'src' }));
+      } else if (request.url === '/editor/move') {
+        response.end(JSON.stringify({ ok: true, path: 'src/README.md' }));
+      } else if (request.url === '/editor/delete') {
+        response.end(JSON.stringify({ ok: true, path: 'src/README.md' }));
       } else {
         response.statusCode = 404;
         response.end(JSON.stringify({ error: 'not found' }));
@@ -89,8 +95,18 @@ describe('PortalEditorClient', () => {
         content: 'updated',
         version: '1:5',
       })).resolves.toEqual({ path: 'README.md', version: '2:7' });
+      await expect(client.mkdir({ target: { projectId: 'project-1', workspaceId: 'workspace-1' }, path: 'src' }))
+        .resolves.toEqual({ ok: true, path: 'src' });
+      await expect(client.move({
+        target: { projectId: 'project-1', workspaceId: 'workspace-1' },
+        fromPath: 'README.md',
+        toPath: 'src/README.md',
+        overwrite: true,
+      })).resolves.toEqual({ ok: true, path: 'src/README.md' });
+      await expect(client.delete({ target: { projectId: 'project-1', workspaceId: 'workspace-1' }, path: 'src/README.md' }))
+        .resolves.toEqual({ ok: true, path: 'src/README.md' });
 
-      expect(requests).toHaveLength(3);
+      expect(requests).toHaveLength(6);
       for (const request of requests) {
         expect(request.authorization).toBe('Bearer local-token');
         expect(request.body).toMatchObject({
@@ -104,6 +120,15 @@ describe('PortalEditorClient', () => {
           },
         });
       }
+      expect(requests.map(request => request.url)).toEqual([
+        '/editor/list',
+        '/editor/read',
+        '/editor/write',
+        '/editor/mkdir',
+        '/editor/move',
+        '/editor/delete',
+      ]);
+      expect(requests[4].body).toMatchObject({ fromPath: 'README.md', toPath: 'src/README.md', overwrite: true });
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()));
     }

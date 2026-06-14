@@ -51,6 +51,8 @@ export type PortalEditorFile = {
   path: string;
   content: string;
   version: string;
+  size?: number;
+  mtimeMs?: number;
 };
 
 export type PortalEditorWriteInput = {
@@ -63,6 +65,31 @@ export type PortalEditorWriteInput = {
 export type PortalEditorWriteResult = {
   path: string;
   version: string;
+  size?: number;
+  mtimeMs?: number;
+};
+
+export type PortalEditorMkdirInput = {
+  target?: PortalEditorTarget;
+  path: string;
+} & PortalEditorTarget;
+
+export type PortalEditorMoveInput = {
+  target?: PortalEditorTarget;
+  fromPath: string;
+  toPath: string;
+  overwrite?: boolean;
+} & PortalEditorTarget;
+
+export type PortalEditorDeleteInput = {
+  target?: PortalEditorTarget;
+  path: string;
+  recursive?: boolean;
+} & PortalEditorTarget;
+
+export type PortalEditorOperationResult = {
+  ok: true;
+  path?: string;
 };
 
 export type PortalEditorHostOptions = {
@@ -214,6 +241,8 @@ export class PortalEditorHost {
       path: relativePath,
       content: decodeUtf8(bytes),
       version: getFileVersion(details),
+      size: details.size,
+      mtimeMs: details.mtime?.getTime(),
     };
   }
 
@@ -247,7 +276,69 @@ export class PortalEditorHost {
 
     await Deno.writeTextFile(filePath, record.content);
     const nextDetails = await Deno.stat(filePath);
-    return { path: relativePath, version: getFileVersion(nextDetails) };
+    return { path: relativePath, version: getFileVersion(nextDetails), size: nextDetails.size, mtimeMs: nextDetails.mtime?.getTime() };
+  }
+
+  async mkdir(input: PortalEditorMkdirInput): Promise<PortalEditorOperationResult> {
+    const record = flattenInput(input);
+    const root = await this.resolveWorkspaceRoot(record);
+    const relativePath = parseEditorPath(record.path);
+    if (!relativePath) throw new Error('path is required.');
+
+    let currentPath = root;
+    for (const segment of relativePath.split('/').filter(Boolean)) {
+      const nextPath = joinPath(currentPath, segment);
+      this.assertWithinRoot(root, nextPath);
+
+      const details = await this.statMaybe(nextPath);
+      if (details) {
+        const realPath = await Deno.realPath(nextPath);
+        this.assertWithinRoot(root, realPath);
+        if (!details.isDirectory) throw new Error('Editor path is not a directory.');
+        currentPath = realPath;
+        continue;
+      }
+
+      await Deno.mkdir(nextPath);
+      currentPath = nextPath;
+    }
+    return { ok: true, path: relativePath };
+  }
+
+  async move(input: PortalEditorMoveInput): Promise<PortalEditorOperationResult> {
+    const record = flattenInput(input);
+    const root = await this.resolveWorkspaceRoot(record);
+    const fromPath = parseEditorPath(record.fromPath, 'fromPath');
+    const toPath = parseEditorPath(record.toPath, 'toPath');
+    if (!fromPath || !toPath) throw new Error('fromPath and toPath are required.');
+    if (record.overwrite !== undefined && typeof record.overwrite !== 'boolean') throw new Error('overwrite must be a boolean.');
+    if (fromPath === toPath) return { ok: true, path: toPath };
+
+    const sourcePath = await this.resolveExistingPath(root, fromPath);
+    const targetParentPath = await this.resolveExistingPath(root, getParentPath(toPath));
+    const targetPath = joinPath(targetParentPath, getBasename(toPath));
+    this.assertWithinRoot(root, targetPath);
+    await Deno.rename(sourcePath, targetPath).catch(async (error) => {
+      if (!record.overwrite) throw error;
+      await Deno.remove(targetPath, { recursive: true }).catch((removeError) => {
+        if (removeError instanceof Deno.errors.NotFound) return;
+        throw removeError;
+      });
+      await Deno.rename(sourcePath, targetPath);
+    });
+    return { ok: true, path: toPath };
+  }
+
+  async delete(input: PortalEditorDeleteInput): Promise<PortalEditorOperationResult> {
+    const record = flattenInput(input);
+    const root = await this.resolveWorkspaceRoot(record);
+    const relativePath = parseEditorPath(record.path);
+    if (!relativePath) throw new Error('path is required.');
+    if (record.recursive !== undefined && typeof record.recursive !== 'boolean') throw new Error('recursive must be a boolean.');
+
+    const targetPath = await this.resolveExistingPath(root, relativePath);
+    await Deno.remove(targetPath, { recursive: record.recursive === true });
+    return { ok: true, path: relativePath };
   }
 
   private async resolveWorkspaceRoot(input: Record<string, unknown>) {

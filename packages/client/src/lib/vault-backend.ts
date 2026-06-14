@@ -46,11 +46,15 @@ export type VaultFile = {
   path: string;
   content: string;
   version: string;
+  size?: number;
+  mtimeMs?: number;
 };
 
 export type VaultWriteResult = {
   path: string;
   version: string;
+  size?: number;
+  mtimeMs?: number;
 };
 
 export type VaultBackend = {

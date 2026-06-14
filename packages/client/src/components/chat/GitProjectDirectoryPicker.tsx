@@ -102,6 +102,7 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
   const directories = (browseResult?.entries ?? []).filter(entry => entry.type === 'directory');
   const trimmedName = projectName.trim();
   const displayPath = browseResult?.path ?? path;
+  const selectedPath = browseResult?.realPath ?? displayPath;
   const canCreate = projectKind === 'general'
     ? Boolean(trimmedName && !isCreating)
     : projectKind === 'git'
@@ -240,7 +241,7 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
             disabled={!canCreate}
             onClick={() => {
               if (projectKind === 'general') return onCreate({ name: trimmedName, projectKind: 'general' });
-              if (projectKind === 'notes') return selectedPortal && onCreate({ name: trimmedName, projectKind: 'notes', portalId: selectedPortal.portalId, rootId: selectedRootId, vaultPath: displayPath });
+              if (projectKind === 'notes') return selectedPortal && onCreate({ name: trimmedName, projectKind: 'notes', portalId: selectedPortal.portalId, rootId: selectedRootId, vaultPath: selectedPath });
               return selectedPortal && onCreate({ name: trimmedName, projectKind: 'git', portalId: selectedPortal.portalId, rootId: selectedRootId, repoPath: displayPath });
             }}
           >

@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Code2, MonitorUp, PanelLeft, PencilRuler, Settings, StickyNote, TerminalSquare } from 'lucide-react';
+import { Code2, Maximize2, MessageSquare, Minimize2, MonitorUp, PanelLeft, PencilRuler, Settings, StickyNote, TerminalSquare, X } from 'lucide-react';
 import { listPortals, listServerThreads } from '../../lib/chat-state-api';
 import { isDesktopEditorBackendAvailable, isEditorBackendAvailable } from '../../lib/editor-backend';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { isDesktopTerminalTransportAvailable, isTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useProjectsWithLiveGitState } from '../../lib/workspace-git-state';
-import { useChatStore } from '../../stores/chat-store';
+import { useChatStore, type MainPane } from '../../stores/chat-store';
 import { Button } from '../ui/button';
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { ShortcutProvider } from '../shortcuts';
@@ -17,8 +17,7 @@ import { ThreadSidebar } from './ThreadSidebar';
 import type { TerminalPanelTab, TerminalPanelTabsChange } from './TerminalPanel';
 
 const TerminalPanel = lazy(() => import('./TerminalPanel').then(module => ({ default: module.TerminalPanel })));
-const EditorPanel = lazy(() => import('./EditorPanel').then(module => ({ default: module.EditorPanel })));
-const NotesPanel = lazy(() => import('./NotesPanel').then(module => ({ default: module.NotesPanel })));
+const UnifiedEditorPanel = lazy(() => import('./UnifiedEditorPanel').then(module => ({ default: module.UnifiedEditorPanel })));
 const WindowStreamOverlay = lazy(() => import('./WindowStreamOverlay').then(module => ({ default: module.WindowStreamOverlay })));
 const ExcalidrawOverlay = lazy(() => {
   configureExcalidrawAssetPath();
@@ -30,6 +29,9 @@ const isElectronWindowNow = () =>
   typeof document !== 'undefined' && document.documentElement.dataset.weaveWindowType === 'electron';
 const chatContentMaxWidthPx = 48 * 16;
 const threadSidebarWidthPx = 24 * 16;
+const minimumMainEditorColumns = 80;
+const defaultMinimumMainEditorWidthPx = minimumMainEditorColumns * 8;
+const editorColumnMeasureText = '0'.repeat(minimumMainEditorColumns);
 const generalTerminalId = 'weave-general-terminal';
 
 let terminalPanelTabCounter = 0;
@@ -81,9 +83,9 @@ const useIsPortraitViewport = () => {
   return isPortraitViewport;
 };
 
-const useMeasuredElementWidth = () => {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState(() => window.innerWidth);
+const useMeasuredElementWidth = <T extends HTMLElement = HTMLDivElement>(initialWidth = typeof window === 'undefined' ? 0 : window.innerWidth) => {
+  const ref = useRef<T | null>(null);
+  const [width, setWidth] = useState(initialWidth);
 
   useEffect(() => {
     const element = ref.current;
@@ -106,18 +108,24 @@ type ChatPageProps = {
 
 type WindowSurfacesInput = {
   editorTargetKey?: string;
+  hasEditorTarget: boolean;
   hasGeneralTerminalTarget: boolean;
   isPortraitViewport: boolean;
+  maximizedPane: MainPane | null;
   pageWidth: number;
   terminalWorkspaceId?: string;
+  visibleMainPaneMinimumWidthPx: number;
 };
 
 const useWindowSurfaces = ({
   editorTargetKey,
+  hasEditorTarget,
   hasGeneralTerminalTarget,
   isPortraitViewport,
+  maximizedPane,
   pageWidth,
   terminalWorkspaceId,
+  visibleMainPaneMinimumWidthPx,
 }: WindowSurfacesInput) => {
   const [isSidebarPinnedOpen, setIsSidebarPinnedOpen] = useState(() => !isPortraitViewportNow());
   const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
@@ -125,8 +133,6 @@ const useWindowSurfaces = ({
   const [isTerminalExpanded, setIsTerminalExpanded] = useState(false);
   const [isGeneralTerminalOpen, setIsGeneralTerminalOpen] = useState(false);
   const [isExcalidrawOpen, setIsExcalidrawOpen] = useState(false);
-  const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [isEditorExpanded, setIsEditorExpanded] = useState(false);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const [generalTerminalFocusRequest, setGeneralTerminalFocusRequest] = useState(0);
   const [editorFocusRequest, setEditorFocusRequest] = useState(0);
@@ -134,25 +140,17 @@ const useWindowSurfaces = ({
   const [isGeneralTerminalActive, setIsGeneralTerminalActive] = useState(false);
   const sidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
   const workspaceWidthWithPinnedSidebar = Math.max(0, pageWidth - threadSidebarWidthPx);
-  const chatWidthWithPinnedSidebar = isEditorOpen
-    ? workspaceWidthWithPinnedSidebar / 2
-    : workspaceWidthWithPinnedSidebar;
-  const wouldAutoHideSidebarIfPinned = isEditorOpen && !isPortraitViewport && chatWidthWithPinnedSidebar < chatContentMaxWidthPx;
-  const isSidebarAutoHidden = isSidebarPinnedOpen && wouldAutoHideSidebarIfPinned;
-  const isSidebarOpen = isSidebarPinnedOpen && !isSidebarAutoHidden && !isPortraitViewport;
-  const workspaceWidth = isSidebarOpen ? workspaceWidthWithPinnedSidebar : pageWidth;
-  const shouldClampChatPaneForEditor = isEditorOpen && !isEditorExpanded && workspaceWidth >= chatContentMaxWidthPx * 2;
+  const canPinSidebarWithMainPanes = !isPortraitViewport
+    && maximizedPane === null
+    && workspaceWidthWithPinnedSidebar >= visibleMainPaneMinimumWidthPx;
+  const isSidebarAutoHidden = isSidebarPinnedOpen && !canPinSidebarWithMainPanes;
+  const isSidebarOpen = isSidebarPinnedOpen && canPinSidebarWithMainPanes;
   const canPreviewSidebar = !isSidebarOpen;
   const showSidebarPreview = canPreviewSidebar && isSidebarPreviewOpen;
   const showPinnedSidebarToggle = isSidebarOpen;
   const showHeaderSidebarToggle = !isSidebarOpen;
   const hasTerminalTarget = Boolean(terminalWorkspaceId);
-  const hasEditorTarget = Boolean(editorTargetKey);
   const hasActiveTerminal = terminalWorkspaceId ? activeTerminalWorkspaceIds.has(terminalWorkspaceId) : false;
-
-  useEffect(() => {
-    if (isPortraitViewport) setIsSidebarPinnedOpen(false);
-  }, [isPortraitViewport]);
 
   useEffect(() => {
     if (isSidebarOpen) setIsSidebarPreviewOpen(false);
@@ -171,8 +169,7 @@ const useWindowSurfaces = ({
   }, [hasGeneralTerminalTarget]);
 
   useEffect(() => {
-    setIsEditorExpanded(false);
-    if (!hasEditorTarget) setIsEditorOpen(false);
+    if (!hasEditorTarget) return;
   }, [editorTargetKey, hasEditorTarget]);
 
   useEffect(() => () => {
@@ -214,7 +211,7 @@ const useWindowSurfaces = ({
       return;
     }
 
-    if (!isSidebarOpen && wouldAutoHideSidebarIfPinned) {
+    if (!canPinSidebarWithMainPanes) {
       setIsSidebarPinnedOpen(true);
       setIsSidebarPreviewOpen(open => !open);
       return;
@@ -222,7 +219,7 @@ const useWindowSurfaces = ({
 
     setIsSidebarPreviewOpen(false);
     setIsSidebarPinnedOpen(open => !open);
-  }, [clearSidebarPreviewCloseTimeout, isPortraitViewport, isSidebarOpen, wouldAutoHideSidebarIfPinned]);
+  }, [canPinSidebarWithMainPanes, clearSidebarPreviewCloseTimeout, isPortraitViewport, isSidebarOpen]);
 
   const closeSidebar = useCallback(() => {
     clearSidebarPreviewCloseTimeout();
@@ -233,7 +230,6 @@ const useWindowSurfaces = ({
   const toggleTerminal = useCallback(() => {
     if (!hasTerminalTarget) return;
     if (isTerminalOpen) setIsTerminalExpanded(false);
-    setIsEditorExpanded(false);
     setIsTerminalOpen(open => !open);
   }, [hasTerminalTarget, isTerminalOpen]);
 
@@ -244,7 +240,6 @@ const useWindowSurfaces = ({
 
   const toggleTerminalExpanded = useCallback(() => {
     if (!hasTerminalTarget) return;
-    setIsEditorExpanded(false);
     setIsTerminalOpen(true);
     setIsTerminalExpanded(expanded => !expanded);
   }, [hasTerminalTarget]);
@@ -278,39 +273,13 @@ const useWindowSurfaces = ({
     setIsExcalidrawOpen(false);
   }, []);
 
-  const toggleEditor = useCallback(() => {
-    if (!hasEditorTarget) return;
-    if (isEditorOpen) setIsEditorExpanded(false);
-    setIsTerminalExpanded(false);
-    setIsEditorOpen(open => !open);
-  }, [hasEditorTarget, isEditorOpen]);
-
-  const hideEditor = useCallback(() => {
-    setIsEditorOpen(false);
-    setIsEditorExpanded(false);
-  }, []);
-
-  const toggleEditorExpanded = useCallback(() => {
-    if (!hasEditorTarget) return;
-    setIsTerminalExpanded(false);
-    setIsEditorOpen(true);
-    setIsEditorExpanded(expanded => !expanded);
-  }, [hasEditorTarget]);
-
   const focusEditor = useCallback(() => {
     if (!hasEditorTarget) return;
-    setIsEditorOpen(true);
     setEditorFocusRequest(request => request + 1);
   }, [hasEditorTarget]);
 
   const handleTerminalExpandedChange = useCallback((nextExpanded: boolean) => {
     setIsTerminalExpanded(nextExpanded);
-    if (nextExpanded) setIsEditorExpanded(false);
-  }, []);
-
-  const handleEditorExpandedChange = useCallback((nextExpanded: boolean) => {
-    setIsEditorExpanded(nextExpanded);
-    if (nextExpanded) setIsTerminalExpanded(false);
   }, []);
 
   const handleTerminalSessionActiveChange = useCallback((isActive: boolean) => {
@@ -340,7 +309,6 @@ const useWindowSurfaces = ({
     focusEditor,
     focusGeneralTerminal,
     focusTerminal,
-    handleEditorExpandedChange,
     handleGeneralTerminalSessionActiveChange,
     handleTerminalExpandedChange,
     handleTerminalSessionActiveChange,
@@ -348,12 +316,9 @@ const useWindowSurfaces = ({
     hasEditorTarget,
     hasGeneralTerminalTarget,
     hasTerminalTarget,
-    hideEditor,
     hideExcalidraw,
     hideGeneralTerminal,
     hideTerminal,
-    isEditorExpanded,
-    isEditorOpen,
     isExcalidrawOpen,
     isGeneralTerminalActive,
     isGeneralTerminalOpen,
@@ -364,14 +329,11 @@ const useWindowSurfaces = ({
     isTerminalOpen,
     openSidebarPreview,
     scheduleSidebarPreviewClose,
-    shouldClampChatPaneForEditor,
     showHeaderSidebarToggle,
     showPinnedSidebarToggle,
     showSidebarPreview,
     generalTerminalFocusRequest,
     terminalFocusRequest,
-    toggleEditor,
-    toggleEditorExpanded,
     toggleExcalidraw,
     toggleGeneralTerminal,
     toggleSidebar,
@@ -383,15 +345,24 @@ const useWindowSurfaces = ({
 export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const resourceId = useChatStore(state => state.resourceId);
   const threadId = useChatStore(state => state.threadId);
+  const activeSurface = useChatStore(state => state.activeSurface);
   const threads = useChatStore(state => state.threads);
-  const activePlan = useChatStore(state => state.threadPlans[threadId]);
+  const threadPlans = useChatStore(state => state.threadPlans);
   const showPlanPanel = useChatStore(state => state.showPlanPanel);
   const runningThreadIds = useChatStore(state => state.runningThreadIds);
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
   const setShowPlanPanel = useChatStore(state => state.setShowPlanPanel);
+  const paneVisibility = useChatStore(state => state.paneVisibility);
+  const maximizedPane = useChatStore(state => state.maximizedPane);
+  const openPane = useChatStore(state => state.openPane);
+  const closePane = useChatStore(state => state.closePane);
+  const togglePane = useChatStore(state => state.togglePane);
+  const toggleMaximizedPane = useChatStore(state => state.toggleMaximizedPane);
+  const restoreMaximizedPane = useChatStore(state => state.restoreMaximizedPane);
   const queryClient = useQueryClient();
   const [pageRef, pageWidth] = useMeasuredElementWidth();
+  const [editorMinimumMeasureRef, editorMinimumWidthPx] = useMeasuredElementWidth<HTMLSpanElement>(defaultMinimumMainEditorWidthPx);
   const sidebarSurfaceRef = useRef<HTMLElement | null>(null);
   const chatSurfaceRef = useRef<HTMLDivElement | null>(null);
   const showToolCalls = useChatStore(state => state.showToolCalls);
@@ -400,7 +371,12 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const setShowReasoning = useChatStore(state => state.setShowReasoning);
   const isPortraitViewport = useIsPortraitViewport();
   const isElectronWindow = isElectronWindowNow();
-  const activeThread = threads.find(thread => thread.id === threadId);
+  const activeThreadId = activeSurface.kind === 'thread' ? activeSurface.threadId : threadId;
+  const activeThread = activeSurface.kind === 'thread' ? threads.find(thread => thread.id === activeThreadId) : undefined;
+  const activePlan = threadPlans[activeThreadId];
+  const hasChatPaneTarget = activeSurface.kind === 'thread';
+  const showChatPane = hasChatPaneTarget && paneVisibility.chatOpen;
+  const isChatMaximized = maximizedPane === 'chat';
   const hasThreadTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
   const { projects } = useProjectsWithLiveGitState(resourceId);
   const { data: portals = [] } = useQuery({
@@ -411,9 +387,11 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const onlinePortalIds = new Set(onlinePortals.map(portal => portal.portalId));
   const defaultGlobalPortal = onlinePortals[0];
   const defaultGlobalRootId = defaultGlobalPortal?.roots[0]?.id ?? 'default';
-  const activeProject = activeThread?.projectId ? projects.find(project => project.id === activeThread.projectId) : undefined;
-  const activeWorkspace = activeThread?.workspaceId
-    ? activeProject?.workspaces.find(workspace => workspace.id === activeThread.workspaceId)
+  const activeProjectId = activeSurface.kind === 'workspace' ? activeSurface.projectId : activeThread?.projectId;
+  const activeWorkspaceId = activeSurface.kind === 'workspace' ? activeSurface.workspaceId : activeThread?.workspaceId;
+  const activeProject = activeProjectId ? projects.find(project => project.id === activeProjectId) : undefined;
+  const activeWorkspace = activeWorkspaceId
+    ? activeProject?.workspaces.find(workspace => workspace.id === activeWorkspaceId)
     : undefined;
   const activeWorkspacePortalId = activeWorkspace?.portalId ?? activeProject?.portalId;
   const activeGitWorkspaceTarget = activeProject?.projectKind === 'git' && activeWorkspace
@@ -455,7 +433,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
         title: 'Weave Terminal',
       }
     : undefined;
-  const terminalTarget = hasAnyTerminalTransport && (hasOnlinePortalForActiveWorkspace || (isElectronWindow && hasDesktopTerminalTransport))
+  const terminalTarget = showChatPane && hasAnyTerminalTransport && (hasOnlinePortalForActiveWorkspace || (isElectronWindow && hasDesktopTerminalTransport))
     ? activeGitWorkspaceTarget
     : undefined;
   const hasDesktopEditorBackend = isDesktopEditorBackendAvailable();
@@ -463,7 +441,12 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     ? activeGitWorkspaceTarget
     : undefined;
   const notesTarget = hasOnlinePortalForActiveWorkspace ? activeNotesWorkspaceTarget : undefined;
-  const sideEditorTargetKey = editorTarget?.workspaceId ?? notesTarget?.workspaceId;
+  const hasEditorPaneTarget = Boolean(editorTarget || notesTarget);
+  const showEditorPane = hasEditorPaneTarget && paneVisibility.editorOpen;
+  const isEditorMaximized = maximizedPane === 'editor';
+  const visibleMainPaneMinimumWidthPx = (showChatPane ? chatContentMaxWidthPx : 0)
+    + (showEditorPane ? editorMinimumWidthPx : 0);
+  const sideEditorTargetKey = editorTarget ? `code:${editorTarget.workspaceId}` : notesTarget ? `notes:${notesTarget.workspaceId}` : undefined;
   const terminalWorkspaceId = terminalTarget?.workspaceId;
   const terminalTargetKey = terminalTarget?.terminalId;
   const [generalTerminalTabs, setGeneralTerminalTabs] = useState<TerminalPanelTab[]>(() => []);
@@ -473,10 +456,13 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
   const [isWindowStreamOpen, setIsWindowStreamOpen] = useState(false);
   const windowSurfaces = useWindowSurfaces({
     editorTargetKey: sideEditorTargetKey,
+    hasEditorTarget: hasEditorPaneTarget,
     hasGeneralTerminalTarget: Boolean(generalTerminalTarget),
     isPortraitViewport,
+    maximizedPane,
     pageWidth,
     terminalWorkspaceId,
+    visibleMainPaneMinimumWidthPx,
   });
   const {
     closeSidebar,
@@ -485,7 +471,6 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     focusEditor,
     focusGeneralTerminal,
     focusTerminal,
-    handleEditorExpandedChange,
     handleGeneralTerminalSessionActiveChange,
     handleTerminalExpandedChange,
     handleTerminalSessionActiveChange,
@@ -493,12 +478,9 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     hasEditorTarget,
     hasGeneralTerminalTarget,
     hasTerminalTarget,
-    hideEditor,
     hideExcalidraw,
     hideGeneralTerminal,
     hideTerminal,
-    isEditorExpanded,
-    isEditorOpen,
     isExcalidrawOpen,
     isGeneralTerminalActive,
     isGeneralTerminalOpen,
@@ -509,14 +491,11 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     isTerminalOpen,
     openSidebarPreview,
     scheduleSidebarPreviewClose,
-    shouldClampChatPaneForEditor,
     showHeaderSidebarToggle,
     showPinnedSidebarToggle,
     showSidebarPreview,
     generalTerminalFocusRequest,
     terminalFocusRequest,
-    toggleEditor,
-    toggleEditorExpanded,
     toggleExcalidraw,
     toggleGeneralTerminal,
     toggleSidebar,
@@ -575,24 +554,48 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
 
   const focusChat = useCallback(() => {
     handleTerminalExpandedChange(false);
-    handleEditorExpandedChange(false);
+    if (hasChatPaneTarget) openPane('chat');
     window.requestAnimationFrame(() => {
       chatSurfaceRef.current
         ?.querySelector<HTMLTextAreaElement>('[data-weave-active-thread="true"] textarea:not([disabled])')
         ?.focus();
     });
-  }, [handleEditorExpandedChange, handleTerminalExpandedChange]);
+  }, [handleTerminalExpandedChange, hasChatPaneTarget, openPane]);
 
   const createThreadFromShortcut = useCallback(() => {
-    void newThread()
+    const projectId = activeSurface.kind === 'workspace' ? activeSurface.projectId : activeThread?.projectId;
+    const workspaceId = activeSurface.kind === 'workspace' ? activeSurface.workspaceId : activeThread?.workspaceId;
+    void newThread(projectId, workspaceId)
       .then(() => queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }))
       .then(() => focusChat());
-  }, [focusChat, newThread, queryClient, resourceId]);
+  }, [activeSurface, activeThread?.projectId, activeThread?.workspaceId, focusChat, newThread, queryClient, resourceId]);
   const handleGeneralTerminalToggle = useCallback(() => {
     const shouldFocusAfterOpen = !isGeneralTerminalOpen;
     toggleGeneralTerminal();
     if (shouldFocusAfterOpen) window.requestAnimationFrame(focusGeneralTerminal);
   }, [focusGeneralTerminal, isGeneralTerminalOpen, toggleGeneralTerminal]);
+
+  const handleChatPaneToggle = useCallback(() => {
+    if (!hasChatPaneTarget) return;
+    const shouldFocusAfterOpen = !showChatPane;
+    togglePane('chat');
+    if (shouldFocusAfterOpen) window.requestAnimationFrame(focusChat);
+  }, [focusChat, hasChatPaneTarget, showChatPane, togglePane]);
+
+  const handleEditorPaneToggle = useCallback(() => {
+    if (!hasEditorPaneTarget) return;
+    const shouldFocusAfterOpen = !showEditorPane;
+    togglePane('editor');
+    if (shouldFocusAfterOpen) window.requestAnimationFrame(focusEditor);
+  }, [focusEditor, hasEditorPaneTarget, showEditorPane, togglePane]);
+
+  const handleMainPaneMaximizeToggle = useCallback((pane: MainPane) => {
+    if (pane === 'chat' && !hasChatPaneTarget) return;
+    if (pane === 'editor' && !hasEditorPaneTarget) return;
+    toggleMaximizedPane(pane);
+    if (pane === 'chat') window.requestAnimationFrame(focusChat);
+    else window.requestAnimationFrame(focusEditor);
+  }, [focusChat, focusEditor, hasChatPaneTarget, hasEditorPaneTarget, toggleMaximizedPane]);
 
   const shortcutCommands = useMemo<ShortcutCommand[]>(() => [
     {
@@ -615,7 +618,15 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       id: 'chat.focus',
       label: 'Focus chat',
       surface: 'chat',
+      isEnabled: () => hasChatPaneTarget,
       run: focusChat,
+    },
+    {
+      id: 'chat.toggle',
+      label: 'Toggle chat pane',
+      surface: 'chat',
+      isEnabled: () => hasChatPaneTarget,
+      run: handleChatPaneToggle,
     },
     {
       id: 'thread.new',
@@ -663,9 +674,7 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       surface: 'editor',
       isEnabled: () => hasEditorTarget,
       run: () => {
-        const shouldFocusAfterOpen = !isEditorOpen;
-        toggleEditor();
-        if (shouldFocusAfterOpen) window.requestAnimationFrame(focusEditor);
+        handleEditorPaneToggle();
       },
     },
     {
@@ -674,32 +683,35 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
       surface: 'editor',
       isEnabled: () => hasEditorTarget,
       run: () => {
-        toggleEditorExpanded();
-        window.requestAnimationFrame(focusEditor);
+        handleMainPaneMaximizeToggle('editor');
       },
     },
   ], [
     createThreadFromShortcut,
     focusChat,
-    focusEditor,
     focusSidebar,
     focusTerminal,
+    handleChatPaneToggle,
+    handleEditorPaneToggle,
     handleGeneralTerminalToggle,
+    handleMainPaneMaximizeToggle,
+    hasChatPaneTarget,
     hasEditorTarget,
     hasGeneralTerminalTarget,
     hasTerminalTarget,
-    isEditorOpen,
     isSidebarOpen,
     isTerminalOpen,
     setShowPlanPanel,
     showPlanPanel,
     showSidebarPreview,
-    toggleEditor,
-    toggleEditorExpanded,
     toggleSidebar,
     toggleTerminal,
     toggleTerminalExpanded,
   ]);
+  useEffect(() => {
+    if (activeSurface.kind !== 'workspace' || !sideEditorTargetKey || !showEditorPane) return;
+    focusEditor();
+  }, [activeSurface, focusEditor, showEditorPane, sideEditorTargetKey]);
   const isSidebarSurfaceVisible = isSidebarOpen || showSidebarPreview;
   const hasExcalidrawSurface = true;
   const hasWindowStreamPortal = onlinePortals.some(portal => portal.capabilities.includes('portal.window.session'));
@@ -769,10 +781,17 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
     </Button>
   ) : null;
 
-  return (
-    <ShortcutProvider commands={shortcutCommands}>
-      <div ref={pageRef} className="weave-app-shell box-border flex overflow-hidden pt-[var(--weave-safe-area-top)]" data-weave-surface="app">
-      {isSidebarOpen ? (
+	  return (
+	    <ShortcutProvider commands={shortcutCommands}>
+	      <div ref={pageRef} className="weave-app-shell box-border flex overflow-hidden pt-[var(--weave-safe-area-top)]" data-weave-surface="app">
+	      <span
+	        ref={editorMinimumMeasureRef}
+	        className="pointer-events-none fixed -left-[9999px] -top-[9999px] font-mono text-sm opacity-0"
+	        aria-hidden="true"
+	      >
+	        {editorColumnMeasureText}
+	      </span>
+	      {isSidebarOpen ? (
         <>
           <button
             className="fixed inset-0 z-30 bg-background/80 md:hidden"
@@ -857,9 +876,21 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
               {hasThreadTitle ? <span className="min-w-0 truncate text-foreground">{activeThread?.title}</span> : null}
             </h2>
           ) : null}
-          <div className="absolute right-4 flex items-center gap-3">
-            {terminalTarget ? (
-              <Button
+	          <div className="absolute right-4 flex items-center gap-3">
+	            {hasChatPaneTarget ? (
+	              <Button
+	                className={showChatPane ? 'bg-accent' : ''}
+	                size="icon"
+	                variant="ghost"
+	                aria-label={showChatPane ? 'Hide chat' : 'Show chat'}
+	                data-active={showChatPane ? 'true' : 'false'}
+	                onClick={handleChatPaneToggle}
+	              >
+	                <MessageSquare size={18} />
+	              </Button>
+	            ) : null}
+	            {terminalTarget ? (
+	              <Button
                 className={[
                   isTerminalOpen ? 'bg-accent' : '',
                   hasActiveTerminal ? 'text-mauve' : '',
@@ -874,16 +905,16 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
                 <TerminalTabCountBadge count={terminalTabs.length} />
               </Button>
             ) : null}
-            {editorTarget || notesTarget ? (
-              <Button
-                className={isEditorOpen ? 'bg-accent' : ''}
-                size="icon"
-                variant="ghost"
-                aria-label={notesTarget ? (isEditorOpen ? 'Hide notes' : 'Show notes') : (isEditorOpen ? 'Hide editor' : 'Show editor')}
-                data-active={isEditorOpen ? 'true' : 'false'}
-                onClick={toggleEditor}
-              >
-                {notesTarget ? <StickyNote size={18} /> : <Code2 size={18} />}
+	            {editorTarget || notesTarget ? (
+	              <Button
+	                className={showEditorPane ? 'bg-accent' : ''}
+	                size="icon"
+	                variant="ghost"
+	                aria-label={notesTarget ? (showEditorPane ? 'Hide notes' : 'Show notes') : (showEditorPane ? 'Hide editor' : 'Show editor')}
+	                data-active={showEditorPane ? 'true' : 'false'}
+	                onClick={handleEditorPaneToggle}
+	              >
+	                {notesTarget ? <StickyNote size={18} /> : <Code2 size={18} />}
               </Button>
             ) : null}
             <Menu>
@@ -911,75 +942,112 @@ export const ChatPage = ({ connectionSettingsButton }: ChatPageProps = {}) => {
             </Menu>
           </div>
         </header>
-        <div className="flex min-h-0 flex-1">
-          <div className={isEditorExpanded
-            ? 'flex w-0 min-w-0 flex-none flex-col overflow-hidden'
-            : shouldClampChatPaneForEditor
-              ? 'flex min-h-0 min-w-0 w-[var(--weave-chat-content-max-width)] max-w-full shrink-0 flex-col overflow-hidden'
-            : isEditorOpen
-              ? 'flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden'
-            : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'}
-          >
-            <div
-              ref={chatSurfaceRef}
-              className={isTerminalExpanded
-                ? 'relative h-0 min-h-0 flex-none overflow-hidden'
-                : 'relative min-h-0 flex-1 overflow-hidden'}
-              data-weave-chat-pane
-              data-weave-surface="chat"
-            >
-              {threads
-                .filter(thread => thread.id === threadId || runningThreadIds.includes(thread.id))
-                .map(thread => (
-                  <div
-                    key={thread.id}
-                    className={thread.id === threadId ? 'absolute inset-0' : 'absolute inset-0 hidden'}
-                    data-weave-active-thread={thread.id === threadId ? 'true' : 'false'}
-                  >
-                    <AssistantChat threadId={thread.id} />
-                  </div>
-                ))}
-              {showPlanPanel ? <PlanSidebar plan={activePlan} /> : null}
+	        <div className="flex min-h-0 flex-1">
+	          {showChatPane ? (
+	            <div
+	              className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
+	              data-weave-main-pane="chat"
+	              data-maximized={isChatMaximized ? 'true' : 'false'}
+	            >
+	              <div
+	                ref={chatSurfaceRef}
+                className={isTerminalExpanded
+                  ? 'relative h-0 min-h-0 flex-none overflow-hidden'
+                  : 'relative min-h-0 flex-1 overflow-hidden'}
+	                data-weave-chat-pane
+	                data-weave-surface="chat"
+	              >
+	                <div className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-md border border-border bg-background/85 p-1 shadow-sm backdrop-blur">
+	                  <Button
+	                    size="icon-xs"
+	                    variant="ghost"
+	                    aria-label={isChatMaximized ? 'Restore chat pane' : 'Maximize chat pane'}
+	                    title={isChatMaximized ? 'Restore chat pane' : 'Maximize chat pane'}
+	                    onClick={() => handleMainPaneMaximizeToggle('chat')}
+	                  >
+	                    {isChatMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+	                  </Button>
+	                  <Button
+	                    size="icon-xs"
+	                    variant="ghost"
+	                    aria-label="Close chat pane"
+	                    title="Close chat pane"
+	                    onClick={() => closePane('chat')}
+	                  >
+	                    <X size={14} />
+	                  </Button>
+	                </div>
+	                {threads
+                  .filter(thread => thread.id === activeThreadId || runningThreadIds.includes(thread.id))
+                  .map(thread => (
+                    <div
+                      key={thread.id}
+                      className={thread.id === activeThreadId ? 'absolute inset-0' : 'absolute inset-0 hidden'}
+                      data-weave-active-thread={thread.id === activeThreadId ? 'true' : 'false'}
+                    >
+                      <AssistantChat threadId={thread.id} />
+                    </div>
+                  ))}
+                {showPlanPanel ? <PlanSidebar plan={activePlan} /> : null}
+              </div>
+              {isTerminalOpen && terminalTarget ? (
+                <Suspense fallback={null}>
+                  <TerminalPanel
+                    activeTabId={activeTerminalTabId}
+                    focusRequest={terminalFocusRequest}
+                    isExpanded={isTerminalExpanded}
+                    onActiveTabIdChange={handleActiveTerminalTabChange}
+                    onCreateTab={createTerminalTab}
+                    onExpandedChange={handleTerminalExpandedChange}
+                    onSessionActiveChange={handleTerminalSessionActiveChange}
+                    onTabsChange={handleTerminalTabsChange}
+                    tabs={terminalTabs}
+                    target={terminalTarget}
+                    onHide={hideTerminal}
+                  />
+                </Suspense>
+              ) : null}
             </div>
-            {isTerminalOpen && terminalTarget ? (
-              <Suspense fallback={null}>
-                <TerminalPanel
-                  activeTabId={activeTerminalTabId}
-                  focusRequest={terminalFocusRequest}
-                  isExpanded={isTerminalExpanded}
-                  onActiveTabIdChange={handleActiveTerminalTabChange}
-                  onCreateTab={createTerminalTab}
-                  onExpandedChange={handleTerminalExpandedChange}
-                  onSessionActiveChange={handleTerminalSessionActiveChange}
-                  onTabsChange={handleTerminalTabsChange}
-                  tabs={terminalTabs}
-                  target={terminalTarget}
-                  onHide={hideTerminal}
-                />
-              </Suspense>
-            ) : null}
-          </div>
-          {isEditorOpen && editorTarget ? (
-            <Suspense fallback={null}>
-              <EditorPanel
-                focusRequest={editorFocusRequest}
-                isExpanded={isEditorExpanded}
-                onExpandedChange={handleEditorExpandedChange}
-                target={editorTarget}
-                onHide={hideEditor}
-              />
-            </Suspense>
-          ) : isEditorOpen && notesTarget ? (
-            <Suspense fallback={null}>
-              <NotesPanel
-                focusRequest={editorFocusRequest}
-                isExpanded={isEditorExpanded}
-                onExpandedChange={handleEditorExpandedChange}
-                target={notesTarget}
-                onHide={hideEditor}
-              />
-            </Suspense>
           ) : null}
+	          {showEditorPane && (editorTarget || notesTarget) ? (
+	            <Suspense fallback={null}>
+	              <UnifiedEditorPanel
+	                focusRequest={editorFocusRequest}
+	                isExpanded={isEditorMaximized}
+	                mode={notesTarget ? 'notes' : 'code'}
+	                onExpandedChange={nextExpanded => {
+	                  if (nextExpanded) handleMainPaneMaximizeToggle('editor');
+	                  else restoreMaximizedPane();
+	                }}
+	                target={(notesTarget ?? editorTarget)!}
+	                onHide={() => closePane('editor')}
+	              />
+	            </Suspense>
+	          ) : null}
+	          {!showChatPane && !showEditorPane ? (
+	            <div className="grid min-h-0 min-w-0 flex-1 place-items-center bg-background text-xs text-muted-foreground">
+	              <div className="flex flex-col items-center gap-3">
+	                <div>No pane is open</div>
+	                <div className="flex flex-wrap items-center justify-center gap-2">
+	                  {hasChatPaneTarget ? (
+	                    <Button size="sm" variant="outline" onClick={() => openPane('chat')}>
+	                      <MessageSquare size={14} />
+	                      Open Chat
+	                    </Button>
+	                  ) : null}
+	                  {hasEditorPaneTarget ? (
+	                    <Button size="sm" variant="outline" onClick={() => {
+	                      openPane('editor');
+	                      window.requestAnimationFrame(focusEditor);
+	                    }}>
+	                      {notesTarget ? <StickyNote size={14} /> : <Code2 size={14} />}
+	                      Open Editor
+	                    </Button>
+	                  ) : null}
+	                </div>
+	              </div>
+	            </div>
+	          ) : null}
         </div>
       </main>
       {isGeneralTerminalOpen && generalTerminalTarget ? (
