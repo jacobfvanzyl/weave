@@ -14,6 +14,15 @@ export type PaneVisibility = {
   terminalOpen: boolean;
 };
 
+export type EditorFollowRequest = {
+  id: number;
+  threadId: string;
+  workspaceId: string;
+  path: string;
+  line: number;
+  toolCallId: string;
+};
+
 export type ThreadSurfaceContext = {
   id: string;
   workspaceId?: string;
@@ -35,6 +44,7 @@ type WorkspaceSurfaceState = {
   threadId: string;
   activeSurface: ActiveSurface;
   paneVisibility: PaneVisibility;
+  editorFollowRequest?: EditorFollowRequest;
   maximizedPane: MainPane | null;
   preMaximizePaneVisibility?: PaneVisibility;
   selectThread: (threadId: string, thread?: ThreadSurfaceContext) => void;
@@ -45,6 +55,7 @@ type WorkspaceSurfaceState = {
   togglePane: (pane: MainPane) => void;
   toggleMaximizedPane: (pane: MainPane) => void;
   restoreMaximizedPane: () => void;
+  requestEditorFollow: (request: Omit<EditorFollowRequest, 'id'>) => void;
   restoreSurfaceSnapshot: (snapshot: WorkspaceSurfaceSnapshot) => void;
 };
 
@@ -65,12 +76,22 @@ export const getPaneVisibilityForThread = (thread: ThreadSurfaceContext | undefi
 
 export const getEditorOnlyPaneVisibility = (): PaneVisibility => ({ chatOpen: false, editorOpen: true, terminalOpen: false });
 
+let editorFollowRequestId = 0;
+
 const setPaneOpen = (paneVisibility: PaneVisibility, pane: MainPane, open: boolean): PaneVisibility => (
   pane === 'chat'
     ? { ...paneVisibility, chatOpen: open }
     : pane === 'editor'
       ? { ...paneVisibility, editorOpen: open }
       : { ...paneVisibility, terminalOpen: open }
+);
+
+const isPaneOpen = (paneVisibility: PaneVisibility, pane: MainPane) => (
+  pane === 'chat'
+    ? paneVisibility.chatOpen
+    : pane === 'editor'
+      ? paneVisibility.editorOpen
+      : paneVisibility.terminalOpen
 );
 
 const isPersistedActiveSurface = (value: unknown): value is ActiveSurface => {
@@ -154,6 +175,7 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
   persist(
     (set, get) => ({
       ...getInitialPersistedSurfaceState(),
+      editorFollowRequest: undefined,
       selectThread: (threadId, thread) =>
         set({
           threadId,
@@ -204,11 +226,13 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
           };
         }),
       openPane: pane =>
-        set(state => ({
-          paneVisibility: setPaneOpen(state.paneVisibility, pane, true),
-          maximizedPane: null,
-          preMaximizePaneVisibility: undefined,
-        })),
+        set(state => isPaneOpen(state.paneVisibility, pane)
+          ? state
+          : {
+              paneVisibility: setPaneOpen(state.paneVisibility, pane, true),
+              maximizedPane: null,
+              preMaximizePaneVisibility: undefined,
+            }),
       closePane: pane =>
         set(state => {
           const restoredVisibility = state.maximizedPane === pane && state.preMaximizePaneVisibility
@@ -222,11 +246,7 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
         }),
       togglePane: pane =>
         set(state => {
-          const isOpen = pane === 'chat'
-            ? state.paneVisibility.chatOpen
-            : pane === 'editor'
-              ? state.paneVisibility.editorOpen
-              : state.paneVisibility.terminalOpen;
+          const isOpen = isPaneOpen(state.paneVisibility, pane);
           const restoredVisibility = state.maximizedPane && state.preMaximizePaneVisibility
             ? state.preMaximizePaneVisibility
             : state.paneVisibility;
@@ -266,6 +286,22 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
               preMaximizePaneVisibility: undefined,
             }
           : state),
+      requestEditorFollow: request =>
+        set(state => ({
+          editorFollowRequest: {
+            ...request,
+            id: editorFollowRequestId += 1,
+          },
+          paneVisibility: setPaneOpen(
+            state.maximizedPane && state.preMaximizePaneVisibility
+              ? state.preMaximizePaneVisibility
+              : state.paneVisibility,
+            'editor',
+            true,
+          ),
+          maximizedPane: null,
+          preMaximizePaneVisibility: undefined,
+        })),
       restoreSurfaceSnapshot: snapshot => set(snapshot),
     }),
     {

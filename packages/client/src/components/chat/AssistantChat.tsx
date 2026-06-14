@@ -21,7 +21,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Brain, Check, ChevronRight, Clipboard, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, UserRoundCog, X } from 'lucide-react';
+import { Brain, Check, ChevronRight, Clipboard, Crosshair, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, UserRoundCog, X } from 'lucide-react';
 import { createContext, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
@@ -48,6 +48,7 @@ import {
 } from './assistant-content-ranges';
 import {
   getToolActivitySideEffect,
+  getToolActivityFollowTarget,
   getToolActivityStatus,
   getToolChipDetail,
   getToolResultText,
@@ -242,6 +243,11 @@ const cacheToolActivityCall = (call: ToolActivityCall) => {
 
 const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
   const threadId = useContext(ThreadIdContext);
+  const followWrites = useChatStore(state => state.followWrites);
+  const threadWorkspaceId = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.workspaceId);
+  const activeThreadId = useWorkspaceSurfaceStore(state => state.threadId);
+  const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
+  const requestEditorFollow = useWorkspaceSurfaceStore(state => state.requestEditorFollow);
   const appliedEffectsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
@@ -254,27 +260,49 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
       cacheToolActivityCall(call);
 
       const effect = getToolActivitySideEffect(call);
-      if (!effect) continue;
+      if (effect) {
+        const effectKey = `${call.toolCallId}:${effect.type}`;
+        const effectVersion = [
+          getToolActivityStatus(call),
+          getStableValueVersion(call.args),
+          getStableValueVersion(call.result),
+        ].join(':');
+        if (appliedEffectsRef.current[effectKey] !== effectVersion) {
+          appliedEffectsRef.current[effectKey] = effectVersion;
 
-      const effectKey = `${call.toolCallId}:${effect.type}`;
-      const effectVersion = [
+          const targetThreadId = threadId ?? useWorkspaceSurfaceStore.getState().threadId;
+          if (effect.type === 'renameThread') {
+            useChatStore.setState(state => ({
+              threads: state.threads.map(thread => (thread.id === targetThreadId ? { ...thread, title: effect.title } : thread)),
+            }));
+          } else {
+            useChatStore.getState().setThreadPlan(targetThreadId, effect.plan);
+          }
+        }
+      }
+
+      const followTarget = getToolActivityFollowTarget(call);
+      if (!followTarget || !followWrites || !threadId || !threadWorkspaceId) continue;
+      if (activeThreadId !== threadId || activeSurface.kind !== 'thread') continue;
+
+      const followKey = `${call.toolCallId}:followWrite`;
+      const followVersion = [
         getToolActivityStatus(call),
         getStableValueVersion(call.args),
         getStableValueVersion(call.result),
       ].join(':');
-      if (appliedEffectsRef.current[effectKey] === effectVersion) continue;
-      appliedEffectsRef.current[effectKey] = effectVersion;
+      if (appliedEffectsRef.current[followKey] === followVersion) continue;
+      appliedEffectsRef.current[followKey] = followVersion;
 
-      const targetThreadId = threadId ?? useWorkspaceSurfaceStore.getState().threadId;
-      if (effect.type === 'renameThread') {
-        useChatStore.setState(state => ({
-          threads: state.threads.map(thread => (thread.id === targetThreadId ? { ...thread, title: effect.title } : thread)),
-        }));
-      } else {
-        useChatStore.getState().setThreadPlan(targetThreadId, effect.plan);
-      }
+      requestEditorFollow({
+        threadId,
+        workspaceId: threadWorkspaceId,
+        path: followTarget.path,
+        line: followTarget.line,
+        toolCallId: followTarget.toolCallId,
+      });
     }
-  }, [message.content, message.role, threadId]);
+  }, [activeSurface.kind, activeThreadId, followWrites, message.content, message.role, requestEditorFollow, threadId, threadWorkspaceId]);
 
   return null;
 };
@@ -1026,6 +1054,31 @@ const PlanPanelToggle = ({ threadId }: { threadId: string | null }) => {
   );
 };
 
+const FollowWritesToggle = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
+  const followWrites = useChatStore(state => state.followWrites);
+  const setFollowWrites = useChatStore(state => state.setFollowWrites);
+
+  if (!canFollowWrites) return null;
+
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant="ghost"
+      aria-label={followWrites ? 'Disable follow writes' : 'Enable follow writes'}
+      aria-pressed={followWrites}
+      title={followWrites ? 'Disable follow writes' : 'Enable follow writes'}
+      onClick={() => setFollowWrites(!followWrites)}
+      className={cn(
+        'h-9 w-9 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground',
+        followWrites && 'text-mauve hover:text-mauve',
+      )}
+    >
+      <Crosshair size={16} />
+    </Button>
+  );
+};
+
 type ContextUsageStreamPayload = {
   tokens: number;
   inputTokens?: number;
@@ -1234,7 +1287,7 @@ const SlashHighlightedInput = ({
   );
 };
 
-const Composer = () => {
+const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   const aui = useAui();
   const threadId = useContext(ThreadIdContext);
   const queryClient = useQueryClient();
@@ -1352,6 +1405,7 @@ const Composer = () => {
           <ProfilePicker />
           <ReasoningPicker />
           <PlanPanelToggle threadId={threadId} />
+          <FollowWritesToggle canFollowWrites={canFollowWrites} />
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {isEmpty ? null : <ContextUsageRing threadId={threadId} />}
@@ -1517,7 +1571,11 @@ const bottomFollowThresholdPx = 64;
 const isViewportAtBottom = (element: HTMLElement) =>
   element.scrollHeight - element.scrollTop - element.clientHeight <= bottomFollowThresholdPx;
 
-const Thread = ({ autoCollapseContext, setIsFollowingBottom }: AutoCollapsedTurnStateProps) => {
+const Thread = ({
+  autoCollapseContext,
+  canFollowWrites,
+  setIsFollowingBottom,
+}: AutoCollapsedTurnStateProps & { canFollowWrites: boolean }) => {
   const threadId = useContext(ThreadIdContext);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
   const isRunning = useThread(state => state.isRunning);
@@ -1566,7 +1624,7 @@ const Thread = ({ autoCollapseContext, setIsFollowingBottom }: AutoCollapsedTurn
           <RunningIndicatorTail />
         </ThreadPrimitive.Viewport>
         <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
-          <Composer />
+          <Composer canFollowWrites={canFollowWrites} />
         </div>
       </ThreadPrimitive.Root>
     </ThreadAutoCollapseContext.Provider>
@@ -1574,6 +1632,7 @@ const Thread = ({ autoCollapseContext, setIsFollowingBottom }: AutoCollapsedTurn
 };
 
 type AssistantChatProps = {
+  canFollowWrites: boolean;
   threadId: string;
 };
 
@@ -1599,6 +1658,7 @@ const useDynamicChatTransport = <UI_MESSAGE extends UIMessage>(
 };
 
 const AssistantChatRuntime = ({
+  canFollowWrites,
   threadId,
   initialMessages,
   autoCollapseContext,
@@ -1711,13 +1771,17 @@ const AssistantChatRuntime = ({
       <ThreadIdContext.Provider value={threadId}>
         <ThreadRunningTracker threadId={threadId} />
         <IdleActiveThreadRefresher threadId={threadId} />
-        <Thread autoCollapseContext={autoCollapseContext} setIsFollowingBottom={setIsFollowingBottom} />
+        <Thread
+          autoCollapseContext={autoCollapseContext}
+          canFollowWrites={canFollowWrites}
+          setIsFollowingBottom={setIsFollowingBottom}
+        />
       </ThreadIdContext.Provider>
     </AssistantRuntimeProvider>
   );
 };
 
-export const AssistantChat = ({ threadId }: AssistantChatProps) => {
+export const AssistantChat = ({ canFollowWrites, threadId }: AssistantChatProps) => {
   const resourceId = useChatStore(state => state.resourceId);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
   const isRunning = useChatStore(state => state.runningThreadIds.includes(threadId));
@@ -1782,6 +1846,7 @@ export const AssistantChat = ({ threadId }: AssistantChatProps) => {
   return (
     <AssistantChatRuntime
       key={`${threadId}:${getMessagesVersion(initialMessages)}`}
+      canFollowWrites={canFollowWrites}
       threadId={threadId}
       initialMessages={initialMessages}
       autoCollapseContext={autoCollapseContext}

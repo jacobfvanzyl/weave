@@ -100,4 +100,63 @@ describe('workspace surface store', () => {
       preMaximizePaneVisibility: undefined,
     });
   });
+
+  it('keeps a maximized pane restorable when focus opens the already-open pane', async () => {
+    const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
+
+    useWorkspaceSurfaceStore.getState().selectThread('thread-1', { id: 'thread-1', workspaceId: 'workspace-1' });
+    useWorkspaceSurfaceStore.getState().openPane('terminal');
+    useWorkspaceSurfaceStore.getState().toggleMaximizedPane('chat');
+    useWorkspaceSurfaceStore.getState().openPane('chat');
+
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      paneVisibility: { chatOpen: true, editorOpen: false, terminalOpen: false },
+      maximizedPane: 'chat',
+      preMaximizePaneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: true },
+    });
+
+    useWorkspaceSurfaceStore.getState().toggleMaximizedPane('chat');
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      paneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: true },
+      maximizedPane: null,
+      preMaximizePaneVisibility: undefined,
+    });
+  });
+
+  it('stores editor follow requests ephemerally and opens the editor pane', async () => {
+    const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
+
+    useWorkspaceSurfaceStore.getState().selectThread('thread-1', { id: 'thread-1', workspaceId: 'workspace-1' });
+    useWorkspaceSurfaceStore.getState().closePane('editor');
+    useWorkspaceSurfaceStore.getState().requestEditorFollow({
+      threadId: 'thread-1',
+      workspaceId: 'workspace-1',
+      path: 'src/file.ts',
+      line: 12,
+      toolCallId: 'edit-1',
+    });
+
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      paneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: false },
+      maximizedPane: null,
+      editorFollowRequest: {
+        threadId: 'thread-1',
+        workspaceId: 'workspace-1',
+        path: 'src/file.ts',
+        line: 12,
+        toolCallId: 'edit-1',
+      },
+    });
+
+    const firstRequestId = useWorkspaceSurfaceStore.getState().editorFollowRequest?.id;
+    useWorkspaceSurfaceStore.getState().requestEditorFollow({
+      threadId: 'thread-1',
+      workspaceId: 'workspace-1',
+      path: 'src/other.ts',
+      line: 1,
+      toolCallId: 'write-1',
+    });
+
+    expect(useWorkspaceSurfaceStore.getState().editorFollowRequest?.id).toBeGreaterThan(firstRequestId ?? 0);
+  });
 });

@@ -46,6 +46,7 @@ export type ReasoningEffort = 'off' | 'minimal' | 'low' | 'medium' | 'high';
 type PersistedChatState = {
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  followWrites: boolean;
   showToolCalls: boolean;
   showReasoning: boolean;
   showPlanPanel: boolean;
@@ -57,6 +58,7 @@ type ChatState = {
   threads: ChatThread[];
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  followWrites: boolean;
   showToolCalls: boolean;
   showReasoning: boolean;
   showPlanPanel: boolean;
@@ -68,6 +70,7 @@ type ChatState = {
   hasInitializedThreads: boolean;
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (reasoningEffort: ReasoningEffort) => void;
+  setFollowWrites: (followWrites: boolean) => void;
   setShowToolCalls: (showToolCalls: boolean) => void;
   setShowReasoning: (showReasoning: boolean) => void;
   setShowPlanPanel: (showPlanPanel: boolean) => void;
@@ -122,6 +125,7 @@ export const useChatStore = create<ChatState>()(
       threads: [initialThread],
       selectedModel: '',
       reasoningEffort: 'medium',
+      followWrites: false,
       showToolCalls: true,
       showReasoning: true,
       showPlanPanel: true,
@@ -133,6 +137,7 @@ export const useChatStore = create<ChatState>()(
       hasInitializedThreads: false,
       setSelectedModel: selectedModel => set({ selectedModel }),
       setReasoningEffort: reasoningEffort => set({ reasoningEffort }),
+      setFollowWrites: followWrites => set({ followWrites }),
       setShowToolCalls: showToolCalls => set({ showToolCalls }),
       setShowReasoning: showReasoning => set({ showReasoning }),
       setShowPlanPanel: showPlanPanel => set({ showPlanPanel }),
@@ -369,7 +374,7 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'weave-chat',
-      version: 11,
+      version: 12,
       migrate: persistedState => {
         const state = persistedState as Partial<PersistedChatState>;
         const reasoningEffort = state.reasoningEffort;
@@ -378,6 +383,7 @@ export const useChatStore = create<ChatState>()(
           reasoningEffort: reasoningEffort === 'off' || reasoningEffort === 'minimal' || reasoningEffort === 'low' || reasoningEffort === 'medium' || reasoningEffort === 'high'
             ? reasoningEffort
             : 'medium',
+          followWrites: typeof state.followWrites === 'boolean' ? state.followWrites : false,
           showToolCalls: typeof state.showToolCalls === 'boolean' ? state.showToolCalls : true,
           showReasoning: typeof state.showReasoning === 'boolean' ? state.showReasoning : true,
           showPlanPanel: typeof state.showPlanPanel === 'boolean' ? state.showPlanPanel : true,
@@ -389,6 +395,7 @@ export const useChatStore = create<ChatState>()(
       partialize: state => ({
         selectedModel: state.selectedModel,
         reasoningEffort: state.reasoningEffort,
+        followWrites: state.followWrites,
         showToolCalls: state.showToolCalls,
         showReasoning: state.showReasoning,
         showPlanPanel: state.showPlanPanel,

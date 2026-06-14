@@ -4,6 +4,7 @@ import {
   getAutoCollapsedAssistantTextPartIndices,
 } from '../../packages/client/src/components/chat/assistant-content-ranges';
 import {
+  getToolActivityFollowTarget,
   getToolActivitySideEffect,
   shouldRenderToolActivityChildren,
   summarizeToolActivity,
@@ -104,5 +105,67 @@ describe('chat tool activity helpers', () => {
         isBusy: true,
       },
     });
+  });
+
+  it('extracts follow-write targets from successful write and edit tool calls', () => {
+    expect(getToolActivityFollowTarget({
+      toolCallId: 'write-1',
+      toolName: 'write',
+      args: { path: 'src/new.ts' },
+      result: { ok: true, bytes: 42 },
+    })).toEqual({ path: 'src/new.ts', line: 1, toolCallId: 'write-1' });
+
+    expect(getToolActivityFollowTarget({
+      toolCallId: 'edit-1',
+      toolName: 'edit',
+      args: { path: 'src/existing.ts' },
+      result: {
+        ok: true,
+        diff: [
+          '--- a/src/existing.ts',
+          '+++ b/src/existing.ts',
+          '@@ -10,6 +24,8 @@ export const value = 1;',
+          '+export const next = 2;',
+        ].join('\n'),
+      },
+    })).toEqual({ path: 'src/existing.ts', line: 24, toolCallId: 'edit-1' });
+  });
+
+  it('ignores failed or unrelated follow-write calls and falls back for malformed diffs', () => {
+    expect(getToolActivityFollowTarget({
+      toolCallId: 'read-1',
+      toolName: 'read',
+      args: { path: 'src/file.ts' },
+      result: { ok: true },
+    })).toBeNull();
+
+    expect(getToolActivityFollowTarget({
+      toolCallId: 'write-2',
+      toolName: 'write',
+      args: { path: 'src/file.ts' },
+      result: { ok: false, error: 'nope' },
+      isError: true,
+    })).toBeNull();
+
+    expect(getToolActivityFollowTarget({
+      toolCallId: 'write-2b',
+      toolName: 'write',
+      args: { path: 'src/file.ts' },
+      result: { ok: false, error: 'nope' },
+    })).toBeNull();
+
+    expect(getToolActivityFollowTarget({
+      toolCallId: 'write-3',
+      toolName: 'write',
+      args: {},
+      result: { ok: true },
+    })).toBeNull();
+
+    expect(getToolActivityFollowTarget({
+      toolCallId: 'edit-2',
+      toolName: 'edit',
+      args: { path: 'src/file.ts' },
+      result: { ok: true, diff: 'not a unified diff' },
+    })).toEqual({ path: 'src/file.ts', line: 1, toolCallId: 'edit-2' });
   });
 });

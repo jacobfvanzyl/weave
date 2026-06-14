@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Code2, MessageSquare, MonitorUp, PanelLeft, Settings, StickyNote, TerminalSquare } from 'lucide-react';
+import { Code2, MessageSquare, MonitorUp, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
 import { useChatStore } from '../../stores/chat-store';
 import { useAppShellStore } from '../../stores/app-shell-store';
 import { useTerminalStore, createTerminalPanelTab, generalTerminalId } from '../../stores/terminal-store';
 import { useWorkspaceSurfaceStore, type MainPane } from '../../stores/workspace-surface-store';
 import { Button } from '../ui/button';
-import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { ShortcutProvider } from '../shortcuts';
 import { AppSidebarHost } from './AppSidebarHost';
 import { useAppShortcuts } from './useAppShortcuts';
@@ -55,6 +54,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const setShowPlanPanel = useChatStore(state => state.setShowPlanPanel);
   const paneVisibility = useWorkspaceSurfaceStore(state => state.paneVisibility);
   const maximizedPane = useWorkspaceSurfaceStore(state => state.maximizedPane);
+  const editorFollowRequest = useWorkspaceSurfaceStore(state => state.editorFollowRequest);
   const openPane = useWorkspaceSurfaceStore(state => state.openPane);
   const closePane = useWorkspaceSurfaceStore(state => state.closePane);
   const togglePane = useWorkspaceSurfaceStore(state => state.togglePane);
@@ -64,10 +64,6 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const { editorMinimumMeasureRef, editorMinimumWidthPx, pageRef, pageWidth } = useMainPaneMetrics();
   const sidebarSurfaceRef = useRef<HTMLElement | null>(null);
   const chatSurfaceRef = useRef<HTMLDivElement | null>(null);
-  const showToolCalls = useChatStore(state => state.showToolCalls);
-  const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
-  const showReasoning = useChatStore(state => state.showReasoning);
-  const setShowReasoning = useChatStore(state => state.setShowReasoning);
   const isPortraitViewport = useIsPortraitViewport();
   const isElectronWindow = isElectronWindowNow();
   const {
@@ -91,6 +87,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     threads,
   });
   const activePlan = threadPlans[activeThreadId];
+  const canFollowWrites = Boolean(editorTarget && activeThread?.workspaceId && activeSurface.kind === 'thread');
   const showChatPane = hasChatPaneTarget && paneVisibility.chatOpen;
   const isChatMaximized = maximizedPane === 'chat';
   const hasEditorPaneTarget = Boolean(editorTarget || notesTarget);
@@ -388,6 +385,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
       surfaceRef={chatSurfaceRef}
       terminalSlot={showTerminalInChatPane ? renderTerminalPanel('pane') : undefined}
       threads={threads}
+      canFollowWrites={canFollowWrites}
       onClose={() => closePane('chat')}
       onMaximizeToggle={() => handleMainPaneMaximizeToggle('chat')}
     />
@@ -406,6 +404,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
 
   const renderEditorPane = () => showEditorPane && (editorTarget || notesTarget) ? (
     <EditorPane
+      followRequest={editorFollowRequest}
       focusRequest={editorFocusRequest}
       isMaximized={isEditorMaximized}
       mode={notesTarget ? 'notes' : 'code'}
@@ -469,29 +468,6 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
           {notesTarget ? <StickyNote size={18} /> : <Code2 size={18} />}
         </Button>
       ) : null}
-      <Menu>
-        <MenuTrigger
-          render={<Button size="icon" variant="ghost" aria-label="Chat settings" />}
-        >
-          <Settings size={18} />
-        </MenuTrigger>
-        <MenuPopup align="end" sideOffset={8} className="w-56">
-          <MenuCheckboxItem
-            checked={showToolCalls}
-            variant="switch"
-            onCheckedChange={checked => setShowToolCalls(checked)}
-          >
-            Show tool calls
-          </MenuCheckboxItem>
-          <MenuCheckboxItem
-            checked={showReasoning}
-            variant="switch"
-            onCheckedChange={checked => setShowReasoning(checked)}
-          >
-            Show reasoning
-          </MenuCheckboxItem>
-        </MenuPopup>
-      </Menu>
     </>
   );
   const emptyMainPaneState = (

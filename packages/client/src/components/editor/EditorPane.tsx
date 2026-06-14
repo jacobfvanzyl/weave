@@ -1,10 +1,12 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import type { EditorMode } from '../../lib/editor-types';
+import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
 import type { UnifiedEditorTarget } from './UnifiedEditorPanel';
 
 const UnifiedEditorPanel = lazy(() => import('./UnifiedEditorPanel').then(module => ({ default: module.UnifiedEditorPanel })));
 
 type EditorPaneProps = {
+  followRequest?: EditorFollowRequest;
   focusRequest: number;
   isMaximized: boolean;
   mode: EditorMode;
@@ -15,6 +17,7 @@ type EditorPaneProps = {
 };
 
 export const EditorPane = ({
+  followRequest,
   focusRequest,
   isMaximized,
   mode,
@@ -32,6 +35,7 @@ export const EditorPane = ({
     <div className="min-h-0 flex-1 overflow-hidden">
       <Suspense fallback={null}>
         <UnifiedEditorPanel
+          followRequest={followRequest}
           focusRequest={focusRequest}
           isExpanded={isMaximized}
           mode={mode}

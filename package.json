@@ -31,7 +31,7 @@
     "web:dev": "npm --prefix web run dev",
     "web:build": "npm --prefix web run build",
     "mobile:install": "npm --prefix mobile ci",
-    "mobile:dev": "npm --prefix mobile run dev",
+    "mobile:dev": "npm --prefix mobile run dev --",
     "mobile:build": "npm --prefix mobile run build",
     "mobile:cap:sync": "npm --prefix mobile run cap:sync",
     "tui:check": "deno task --config tui/deno.json check",

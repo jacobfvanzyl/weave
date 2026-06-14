@@ -9,7 +9,9 @@ type PersistedMobileConnectionSettings = {
 const MOBILE_CONNECTION_STORAGE_KEY = 'weave.connection.v1';
 const DEFAULT_MASTRA_URL = 'http://localhost:4111';
 const CONNECTION_TEST_TIMEOUT_MS = 5_000;
-const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | boolean | undefined> }).env ?? {};
+const processEnv = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } })
+  .process?.env ?? {};
 
 const hasProtocol = (value: string) => /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(value);
 
@@ -39,18 +41,32 @@ const normalizeMastraUrl = (input?: string) => {
 
 const getBuildAuthToken = () => {
   if (typeof __WEAVE_AUTH_TOKEN__ === 'string') return trimToken(__WEAVE_AUTH_TOKEN__);
-  return trimToken(viteEnv.VITE_WEAVE_AUTH_TOKEN);
+  return trimToken(
+    typeof viteEnv.VITE_WEAVE_AUTH_TOKEN === 'string'
+      ? viteEnv.VITE_WEAVE_AUTH_TOKEN
+      : processEnv.VITE_WEAVE_AUTH_TOKEN,
+  );
 };
 
-const getBuildMastraUrl = () => normalizeMastraUrl(viteEnv.VITE_MASTRA_URL ?? DEFAULT_MASTRA_URL);
+const getBuildMastraUrl = () => normalizeMastraUrl(
+  typeof viteEnv.VITE_MASTRA_URL === 'string'
+    ? viteEnv.VITE_MASTRA_URL
+    : processEnv.VITE_MASTRA_URL ?? DEFAULT_MASTRA_URL,
+);
+
+const isDevConnectionOverride = () =>
+  (viteEnv.DEV === true || viteEnv.DEV === 'true' || processEnv.DEV === 'true')
+  && (viteEnv.VITE_WEAVE_DEV_CONNECTION_OVERRIDE === '1' || processEnv.VITE_WEAVE_DEV_CONNECTION_OVERRIDE === '1');
 
 let cachedPersistedSettings: PersistedMobileConnectionSettings | undefined;
 let cachedAuthToken: string | undefined = getBuildAuthToken();
 
 const getAuthToken = (settings = cachedPersistedSettings) => {
+  const buildAuthToken = getBuildAuthToken();
+  if (isDevConnectionOverride() && buildAuthToken) return buildAuthToken;
   if (typeof settings?.authToken === 'string') return trimToken(settings.authToken);
   if (settings?.authToken === null) return undefined;
-  return getBuildAuthToken();
+  return buildAuthToken;
 };
 
 const coercePersistedSettings = (value: unknown): PersistedMobileConnectionSettings =>
@@ -91,7 +107,9 @@ const createTimeoutSignal = () => {
 const getSettings = async (): Promise<ConnectionSettings> => {
   const persisted = await readPersistedSettings();
   return {
-    mastraUrl: normalizeMastraUrl(persisted.mastraUrl ?? getBuildMastraUrl()),
+    mastraUrl: isDevConnectionOverride()
+      ? getBuildMastraUrl()
+      : normalizeMastraUrl(persisted.mastraUrl ?? getBuildMastraUrl()),
     hasAuthToken: Boolean(getAuthToken(persisted)),
   };
 };

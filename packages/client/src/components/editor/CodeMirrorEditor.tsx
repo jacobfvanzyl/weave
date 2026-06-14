@@ -44,6 +44,7 @@ type CodeMirrorEditorProps = {
 
 export type CodeMirrorEditorHandle = {
   focus: () => void;
+  revealLine: (line: number, options?: { focus?: boolean }) => void;
 };
 
 type VimModeChangeEvent = {
@@ -333,6 +334,18 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
 
   useImperativeHandle(ref, () => ({
     focus: () => viewRef.current?.focus(),
+    revealLine: (line, options = {}) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const requestedLine = Number.isFinite(line) ? Math.floor(line) : 1;
+      const lineNumber = Math.max(1, Math.min(view.state.doc.lines, requestedLine));
+      const targetLine = view.state.doc.line(lineNumber);
+      view.dispatch({
+        ...(options.focus ? { selection: { anchor: targetLine.from } } : {}),
+        effects: EditorView.scrollIntoView(targetLine.from, { y: 'center' }),
+      });
+      if (options.focus) view.focus();
+    },
   }), []);
 
   useEffect(() => {

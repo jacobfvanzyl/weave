@@ -32,6 +32,12 @@ export type ToolActivitySideEffect =
   | { type: 'renameThread'; title: string }
   | { type: 'updatePlan'; plan: ToolActivityPlan };
 
+export type ToolActivityFollowTarget = {
+  path: string;
+  line: number;
+  toolCallId: string;
+};
+
 export const isEmptyObject = (value: unknown) =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
 
@@ -134,6 +140,33 @@ export const getToolActivityStatus = (call: ToolActivityCall) => {
 export const isHiddenToolCall = (call: ToolActivityCall) => isRenameThreadTool(call.toolName) || isUpdatePlanTool(call.toolName);
 
 export const getArgsRecord = (args: unknown) => args && typeof args === 'object' ? args as Record<string, unknown> : {};
+
+const getFirstUnifiedDiffNewLine = (diff: unknown) => {
+  if (typeof diff !== 'string') return undefined;
+  const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/m.exec(diff);
+  if (!match) return undefined;
+  const line = Number(match[1]);
+  return Number.isInteger(line) && line > 0 ? line : undefined;
+};
+
+export const getToolActivityFollowTarget = (call: ToolActivityCall): ToolActivityFollowTarget | null => {
+  if (call.isError || getToolActivityStatus(call) !== 'complete') return null;
+  if (call.toolName !== 'write' && call.toolName !== 'edit') return null;
+
+  const args = getArgsRecord(call.args);
+  const path = typeof args.path === 'string' && args.path.trim()
+    ? args.path.trim()
+    : undefined;
+  if (!path) return null;
+
+  const result = call.result && typeof call.result === 'object' ? call.result as Record<string, unknown> : {};
+  if (result.ok === false) return null;
+  return {
+    path,
+    line: call.toolName === 'edit' ? getFirstUnifiedDiffNewLine(result.diff) ?? 1 : 1,
+    toolCallId: call.toolCallId,
+  };
+};
 
 const isSearchCommand = (command: string) => /(^|\s|\|)\s*(rg|grep|ag|fd)\b/.test(command.trim());
 const isListCommand = (command: string) => /^(ls|find|tree)\b/.test(command.trim());

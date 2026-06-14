@@ -30,6 +30,7 @@ import { createEditorBackend } from '../../lib/editor-backend';
 import type { EditorEntry, EditorMode, EditorTarget, OpenBuffer } from '../../lib/editor-types';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { getNoteFileDisplayName } from '../../lib/note-display';
+import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
 import { createVaultBackend, type VaultAttachment, type VaultIndexResult, type VaultNote, type VaultTarget } from '../../lib/vault-backend';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
 import { Badge } from '../ui/badge';
@@ -44,6 +45,7 @@ export type UnifiedEditorTarget = EditorTarget & {
 };
 
 type UnifiedEditorPanelProps = {
+  followRequest?: EditorFollowRequest;
   focusRequest?: number;
   isExpanded: boolean;
   mode: EditorMode;
@@ -353,6 +355,7 @@ const PropertyRow = ({ label, children }: { label: string; children: ReactNode }
 );
 
 export const UnifiedEditorPanel = ({
+  followRequest,
   focusRequest = 0,
   isExpanded,
   mode,
@@ -381,6 +384,10 @@ export const UnifiedEditorPanel = ({
   const fileOpenClickTimeoutRef = useRef<number | undefined>(undefined);
   const renameCommitInFlightRef = useRef(false);
   const renameCancelRef = useRef(false);
+  const pendingRevealRef = useRef<{ requestId: number; path: string; line: number } | undefined>(
+    undefined,
+  );
+  const handledFollowRequestIdRef = useRef<number | undefined>(undefined);
   const [editorBodyRef, editorBodyWidth] = useMeasuredElementWidth<HTMLDivElement>(typeof window === 'undefined' ? 0 : window.innerWidth);
   const [columnMeasureRef, minimumMainEditorWidthPx] = useMeasuredElementWidth<HTMLSpanElement>(defaultMinimumMainEditorWidthPx);
   const [activeTab, setActiveTab] = useState<ExplorerTab>('explorer');
@@ -400,6 +407,7 @@ export const UnifiedEditorPanel = ({
   const [vimMode, setVimMode] = useState<VimMode>('normal');
   const [createPathDialog, setCreatePathDialog] = useState<CreatePathDialogState>();
   const [renameState, setRenameState] = useState<RenameState>();
+  const [bufferFocusRequest, setBufferFocusRequest] = useState(0);
   const isDirty = Boolean(openBuffer && content !== openBuffer.content);
   const shouldPersistExplorerOpen = !openBuffer;
   const canDockExplorer = editorBodyWidth - explorerRailWidthPx >= minimumMainEditorWidthPx;
@@ -453,6 +461,31 @@ export const UnifiedEditorPanel = ({
     excalidrawApiRef.current = api;
     scheduleExcalidrawResize();
   }, [scheduleExcalidrawResize]);
+
+  const focusEditorSurface = useCallback(() => {
+    if (mode === 'notes' && isExcalidrawPath(openBuffer?.path)) {
+      const fallbackTarget = editorBodyRef.current;
+      const focusTarget = fallbackTarget?.querySelector<HTMLElement>('[contenteditable="true"], textarea, input, canvas, .excalidraw') ?? fallbackTarget;
+      focusTarget?.focus({ preventScroll: true });
+      scheduleExcalidrawResize();
+      return;
+    }
+
+    editorRef.current?.focus();
+  }, [editorBodyRef, mode, openBuffer?.path, scheduleExcalidrawResize]);
+
+  const revealLineWithoutFocus = useCallback((line: number) => {
+    let secondFrame: number | undefined;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        editorRef.current?.revealLine(line, { focus: false });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) window.cancelAnimationFrame(secondFrame);
+    };
+  }, []);
 
   const clearExplorerSlideOverCloseTimeout = useCallback(() => {
     if (explorerSlideOverCloseTimeoutRef.current === undefined) return;
@@ -552,11 +585,11 @@ export const UnifiedEditorPanel = ({
     }
   }, [codeBackend, editorTarget, expandedPaths, mode, vaultBackend, vaultTarget]);
 
-  const loadFile = useCallback(async (path: string) => {
-    if (!confirmDiscard()) return;
+  const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean } = {}) => {
+    if (!confirmDiscard()) return false;
     if (mode === 'notes' && !isNotesOpenablePath(path)) {
       setSelectedNode(tree.children.find(node => node.path === path));
-      return;
+      return false;
     }
 
     setIsFileLoading(true);
@@ -578,9 +611,11 @@ export const UnifiedEditorPanel = ({
         dirty: false,
       });
       setContent(file.content);
-      window.requestAnimationFrame(() => editorRef.current?.focus());
+      if (options.focusEditor ?? true) setBufferFocusRequest(request => request + 1);
+      return true;
     } catch (loadError) {
       setError(toErrorMessage(loadError));
+      return false;
     } finally {
       setIsFileLoading(false);
     }
@@ -612,6 +647,7 @@ export const UnifiedEditorPanel = ({
     setContent('');
     setError(undefined);
     setVimMode('normal');
+    setBufferFocusRequest(0);
   }, [clearPendingFileOpen, mode, target.projectId, target.workspaceId]);
 
   useEffect(() => {
@@ -624,9 +660,71 @@ export const UnifiedEditorPanel = ({
 
   useEffect(() => {
     if (focusRequest === 0) return undefined;
-    const animationFrame = window.requestAnimationFrame(() => editorRef.current?.focus());
+    const animationFrame = window.requestAnimationFrame(focusEditorSurface);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [focusRequest]);
+  }, [focusEditorSurface, focusRequest]);
+
+  useEffect(() => {
+    if (bufferFocusRequest === 0 || !openBuffer) return undefined;
+
+    let secondFrame: number | undefined;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(focusEditorSurface);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [bufferFocusRequest, focusEditorSurface, openBuffer?.path]);
+
+  useEffect(() => {
+    if (!followRequest || mode !== 'code' || followRequest.workspaceId !== target.workspaceId) return;
+    if (handledFollowRequestIdRef.current === followRequest.id) return;
+    handledFollowRequestIdRef.current = followRequest.id;
+
+    const requestedLine = Number.isFinite(followRequest.line) ? Math.floor(followRequest.line) : 1;
+    const line = Math.max(1, requestedLine);
+    pendingRevealRef.current = { requestId: followRequest.id, path: followRequest.path, line };
+
+    if (openBuffer?.path === followRequest.path) {
+      const cancelReveal = revealLineWithoutFocus(line);
+      pendingRevealRef.current = undefined;
+      return cancelReveal;
+    }
+
+    if (isDirty) {
+      setError(`Follow writes skipped ${followRequest.path}; the current editor buffer has unsaved changes.`);
+      pendingRevealRef.current = undefined;
+      return;
+    }
+
+    void loadFile(followRequest.path, { focusEditor: false }).then(loaded => {
+      if (!loaded && pendingRevealRef.current?.requestId === followRequest.id) {
+        pendingRevealRef.current = undefined;
+      }
+    });
+  }, [followRequest, isDirty, loadFile, mode, openBuffer?.path, revealLineWithoutFocus, target.workspaceId]);
+
+  useEffect(() => {
+    const pendingReveal = pendingRevealRef.current;
+    if (!pendingReveal || openBuffer?.path !== pendingReveal.path) return undefined;
+
+    let secondFrame: number | undefined;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        editorRef.current?.revealLine(pendingReveal.line, { focus: false });
+        if (pendingRevealRef.current?.requestId === pendingReveal.requestId) {
+          pendingRevealRef.current = undefined;
+        }
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [content, openBuffer?.path]);
 
   useEffect(() => {
     if (canDockExplorer) closeExplorerSlideOver();
@@ -794,6 +892,7 @@ export const UnifiedEditorPanel = ({
         dirty: false,
       });
       setContent(nextContent);
+      setBufferFocusRequest(request => request + 1);
       setExpandedPaths(current => new Set([...current, getParentPath(result.path)]));
       closeExplorerSlideOver();
       await refreshExplorer();
@@ -823,6 +922,7 @@ export const UnifiedEditorPanel = ({
         dirty: false,
       });
       setContent(drawingContent);
+      setBufferFocusRequest(request => request + 1);
       setExpandedPaths(current => new Set([...current, getParentPath(result.path)]));
       closeExplorerSlideOver();
       scheduleExcalidrawResize();
