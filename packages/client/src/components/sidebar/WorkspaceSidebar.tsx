@@ -5,7 +5,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ChevronDown, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, Trash2, X } from 'lucide-react';
-import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, listPortals, listProjectBranches, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type WorkspaceBranchMode } from '../../lib/chat-state-api';
+import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, discoverWorkspaces, listPortals, listProjectBranches, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type DiscoveredWorktree, type WorkspaceBranchMode } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { createWorkspaceDraftDefaults, getDefaultWorkspaceBase } from '../../lib/workspace-create-defaults';
 import { projectsQueryKey, useProjectsWithLiveGitState, workspaceGitStateQueryKey } from '../../lib/workspace-git-state';
@@ -66,6 +66,18 @@ const moveItem = <T extends { id: string }>(items: T[], activeId: string, overId
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item);
   return next;
+};
+
+const normalizeWorkspacePath = (path: string | null | undefined) => path?.trim().replace(/\/+$/, '').toLowerCase() || '';
+
+const pathBasename = (path: string | undefined) => path?.split('/').filter(Boolean).pop() || '';
+
+const getDiscoveredWorktreeName = (worktree: DiscoveredWorktree) =>
+  worktree.branch?.trim() || pathBasename(worktree.path) || 'Workspace';
+
+const getDiscoveredWorktreeState = (worktree: DiscoveredWorktree) => {
+  if (worktree.detached) return `Detached ${(worktree.head ?? worktree.commit)?.slice(0, 7) ?? 'HEAD'}`;
+  return worktree.branch || 'No branch';
 };
 
 const SortableSection = ({
@@ -229,9 +241,15 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   const [workspaceBase, setWorkspaceBase] = useState(() => getDefaultWorkspaceBase());
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [createWorkspaceError, setCreateWorkspaceError] = useState<string | null>(null);
+  const [attachWorkspaceProjectId, setAttachWorkspaceProjectId] = useState<string | null>(null);
+  const [attachWorkspacePath, setAttachWorkspacePath] = useState<string | null>(null);
+  const [attachWorkspaceName, setAttachWorkspaceName] = useState('');
+  const [isAttachingWorkspace, setIsAttachingWorkspace] = useState(false);
+  const [attachWorkspaceError, setAttachWorkspaceError] = useState<string | null>(null);
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>(loadCollapsedProjectIds);
   const { projects } = useProjectsWithLiveGitState(resourceId);
   const createWorkspaceProject = createWorkspaceProjectId ? projects.find(project => project.id === createWorkspaceProjectId) : undefined;
+  const attachWorkspaceProject = attachWorkspaceProjectId ? projects.find(project => project.id === attachWorkspaceProjectId) : undefined;
   const {
     data: workspaceBranchOptions = [],
     error: workspaceBranchOptionsError,
@@ -240,6 +258,16 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     queryFn: () => listProjectBranches(createWorkspaceProject!.id),
     enabled: Boolean(createWorkspaceProject && createWorkspaceProject.projectKind === 'git'),
     staleTime: 1000 * 30,
+  });
+  const {
+    data: discoveredWorktrees = [],
+    error: discoverWorkspaceError,
+    isLoading: isDiscoveringWorkspaces,
+  } = useQuery({
+    queryKey: ['project-worktrees', resourceId, attachWorkspaceProject?.id],
+    queryFn: () => discoverWorkspaces(attachWorkspaceProject!.id),
+    enabled: Boolean(attachWorkspaceProject && attachWorkspaceProject.projectKind === 'git'),
+    staleTime: 1000 * 10,
   });
   const { data: portals = [] } = useQuery({
     queryKey: ['portals', resourceId],
@@ -325,6 +353,19 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     setCreateWorkspaceProjectId(null);
     setCreateWorkspaceError(null);
   };
+  const openAttachWorkspaceDialog = (projectId: string) => {
+    setAttachWorkspacePath(null);
+    setAttachWorkspaceName('');
+    setAttachWorkspaceError(null);
+    setAttachWorkspaceProjectId(projectId);
+  };
+  const closeAttachWorkspaceDialog = () => {
+    if (isAttachingWorkspace) return;
+    setAttachWorkspaceProjectId(null);
+    setAttachWorkspacePath(null);
+    setAttachWorkspaceName('');
+    setAttachWorkspaceError(null);
+  };
 
   useEffect(() => {
     window.localStorage.setItem(collapsedProjectsStorageKey, JSON.stringify(collapsedProjectIds));
@@ -342,9 +383,20 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       ?? projects.flatMap(project => project.workspaces).find(workspace => workspace.id === archivedDialogScopeId)?.name
       ?? 'Archived Threads';
   const deleteProjectTarget = deleteProjectId ? projects.find(project => project.id === deleteProjectId) : undefined;
+  const attachedWorkspacePaths = new Set(
+    projects.flatMap(project => project.workspaces)
+      .map(workspace => normalizeWorkspacePath(workspace.path))
+      .filter(Boolean),
+  );
+  const unattachedWorktrees = discoveredWorktrees.filter(worktree => {
+    const path = normalizeWorkspacePath(worktree.path);
+    return path && !worktree.adopted && !attachedWorkspacePaths.has(path);
+  });
+  const selectedAttachWorktree = unattachedWorktrees.find(worktree => normalizeWorkspacePath(worktree.path) === normalizeWorkspacePath(attachWorkspacePath));
   const trimmedWorkspaceName = workspaceName.trim();
   const trimmedWorkspaceBranch = workspaceBranch.trim();
   const trimmedWorkspaceBase = workspaceBase.trim();
+  const trimmedAttachWorkspaceName = attachWorkspaceName.trim();
   const workspaceBranchOptionRefs = workspaceBranchOptions.map(option => option.ref);
   const workspaceBranchOptionByRef = new Map(workspaceBranchOptions.map(option => [option.ref, option]));
   const canCreateWorkspace = Boolean(
@@ -353,6 +405,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       && !isCreatingWorkspace
       && (workspaceMode === 'detached' ? trimmedWorkspaceBase : trimmedWorkspaceBranch),
   );
+  const canAttachWorkspace = Boolean(attachWorkspaceProject && selectedAttachWorktree?.path && !isAttachingWorkspace);
   const renderThreadRunningSpinner = (thread: typeof threads[number]) => {
     if (!runningThreadIds.includes(thread.id)) return null;
 
@@ -612,28 +665,18 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                       <Plus size={13} />
                                       Create Workspace
                                     </MenuItem>
-                                    <MenuItem
-                                      onClick={async () => {
-                                        const path = window.prompt('Existing worktree path');
-                                        if (!path?.trim()) return;
-                                        const name = window.prompt('Workspace display name (optional)') ?? undefined;
-                                        try {
-                                          await adoptWorkspace(project.id, path.trim(), name?.trim() || undefined);
-                                          await invalidateProjects();
-                                        } catch (error) {
-                                          window.alert(error instanceof Error ? error.message : String(error));
-                                        }
-                                      }}
-                                    >
+                                    <MenuItem onClick={() => openAttachWorkspaceDialog(project.id)}>
                                       <Link size={13} />
                                       Attach Workspace
                                     </MenuItem>
                                   </>
                                 ) : null}
-                                <MenuItem onClick={() => setArchivedDialogScopeId(project.projectKind === 'notes' ? notesWorkspace?.id ?? project.id : project.id)}>
-                                  <Archive size={13} />
-                                  Archived Threads
-                                </MenuItem>
+                                {project.projectKind !== 'git' ? (
+                                  <MenuItem onClick={() => setArchivedDialogScopeId(project.projectKind === 'notes' ? notesWorkspace?.id ?? project.id : project.id)}>
+                                    <Archive size={13} />
+                                    Archived Threads
+                                  </MenuItem>
+                                ) : null}
                                 <MenuItem variant="destructive" onClick={() => setDeleteProjectId(project.id)}>
                                   <Trash2 size={13} />
                                   Delete Project
@@ -1066,6 +1109,114 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
               >
                 {isCreatingWorkspace ? <Loader2 size={13} className="animate-spin" /> : null}
                 Create Workspace
+              </Button>
+            </DialogFooter>
+          </DialogPopup>
+        ) : null}
+      </Dialog>
+
+      <Dialog open={Boolean(attachWorkspaceProject)} onOpenChange={open => {
+        if (!open) closeAttachWorkspaceDialog();
+      }}>
+        {attachWorkspaceProject ? (
+          <DialogPopup className="max-w-lg" showCloseButton={false}>
+            <DialogHeader className="flex-row items-start justify-between gap-3">
+              <div className="min-w-0">
+                <DialogTitle>Attach Workspace</DialogTitle>
+                <DialogDescription className="truncate">{attachWorkspaceProject.name}</DialogDescription>
+              </div>
+              <DialogClose render={<Button size="icon-sm" variant="ghost" aria-label="Close attach workspace" disabled={isAttachingWorkspace} />}>
+                <X size={16} />
+              </DialogClose>
+            </DialogHeader>
+            <DialogPanel className="grid gap-3 pt-1">
+              {discoverWorkspaceError ? (
+                <Alert variant="error">
+                  <AlertDescription>{discoverWorkspaceError instanceof Error ? discoverWorkspaceError.message : String(discoverWorkspaceError)}</AlertDescription>
+                </Alert>
+              ) : null}
+              <ScrollArea className="max-h-72">
+                <div className="space-y-2 pr-2">
+                  {isDiscoveringWorkspaces ? (
+                    <div className="flex items-center gap-2 rounded-md border border-border/70 p-3 text-sm text-muted-foreground">
+                      <Loader2 size={14} className="animate-spin" />
+                      Loading worktrees
+                    </div>
+                  ) : discoverWorkspaceError ? null : unattachedWorktrees.length === 0 ? (
+                    <Empty className="rounded-md border border-border/70 p-3">
+                      <EmptyDescription>No unattached worktrees</EmptyDescription>
+                    </Empty>
+                  ) : unattachedWorktrees.map(worktree => {
+                    const path = worktree.path ?? '';
+                    const isSelected = normalizeWorkspacePath(path) === normalizeWorkspacePath(attachWorkspacePath);
+
+                    return (
+                      <Button
+                        key={path}
+                        className={cn(
+                          'h-auto w-full justify-start rounded-md border p-3 text-left shadow-none',
+                          isSelected
+                            ? 'border-success/70 bg-selected-thread text-foreground'
+                            : 'border-border/70 bg-background text-foreground hover:bg-muted',
+                        )}
+                        variant="ghost"
+                        onClick={() => {
+                          setAttachWorkspacePath(path);
+                          setAttachWorkspaceName(getDiscoveredWorktreeName(worktree));
+                          setAttachWorkspaceError(null);
+                        }}
+                      >
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <GitBranch size={13} className="shrink-0 text-mauve" />
+                            <span className="min-w-0 truncate text-sm font-medium">{getDiscoveredWorktreeState(worktree)}</span>
+                          </div>
+                          <div className="truncate text-xs font-normal text-muted-foreground">{path}</div>
+                        </div>
+                      </Button>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+              <Field>
+                <FieldLabel>Name</FieldLabel>
+                <Input
+                  nativeInput
+                  value={attachWorkspaceName}
+                  onChange={event => setAttachWorkspaceName(event.target.value)}
+                  disabled={isAttachingWorkspace || !selectedAttachWorktree}
+                  placeholder="Workspace name"
+                />
+              </Field>
+              {attachWorkspaceError ? <Alert variant="error"><AlertDescription>{attachWorkspaceError}</AlertDescription></Alert> : null}
+            </DialogPanel>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeAttachWorkspaceDialog} disabled={isAttachingWorkspace}>Cancel</Button>
+              <Button
+                className="bg-success text-background hover:bg-success/90"
+                disabled={!canAttachWorkspace}
+                onClick={async () => {
+                  if (!attachWorkspaceProject || !selectedAttachWorktree?.path) return;
+                  setIsAttachingWorkspace(true);
+                  setAttachWorkspaceError(null);
+                  try {
+                    await adoptWorkspace(attachWorkspaceProject.id, selectedAttachWorktree.path, trimmedAttachWorkspaceName || undefined);
+                    setAttachWorkspaceProjectId(null);
+                    setAttachWorkspacePath(null);
+                    setAttachWorkspaceName('');
+                    await Promise.all([
+                      invalidateProjects(),
+                      queryClient.invalidateQueries({ queryKey: ['project-worktrees', resourceId, attachWorkspaceProject.id] }),
+                    ]);
+                  } catch (error) {
+                    setAttachWorkspaceError(error instanceof Error ? error.message : String(error));
+                  } finally {
+                    setIsAttachingWorkspace(false);
+                  }
+                }}
+              >
+                {isAttachingWorkspace ? <Loader2 size={13} className="animate-spin" /> : null}
+                Attach Workspace
               </Button>
             </DialogFooter>
           </DialogPopup>

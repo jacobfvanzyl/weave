@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configureMastraConnection } from '../../packages/client/src/lib/mastra-client';
-import { cancelThreadRun, createWorkspace, getThreadRunState, listProjectBranches, listProjects, listWorkspaceGitStates, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
+import { cancelThreadRun, createWorkspace, discoverWorkspaces, getThreadRunState, listProjectBranches, listProjects, listWorkspaceGitStates, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
 import { createWorkspaceDraftDefaults } from '../../packages/client/src/lib/workspace-create-defaults';
 import { overlayWorkspaceGitState } from '../../packages/client/src/lib/workspace-git-state';
 import { listProfiles } from '../../packages/client/src/lib/profiles-api';
@@ -222,6 +222,36 @@ describe('chat-state Project/Workspace API client', () => {
 
     await expect(listProjectBranches('project-1')).resolves.toEqual(branches);
     expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects/project-1/branches', {
+      headers: { Authorization: 'Bearer token-1' },
+    });
+  });
+
+  it('discovers project worktrees with adoption metadata', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const worktrees = [
+      {
+        path: '/repo',
+        branch: 'main',
+        commit: 'abc1234',
+        head: 'abc1234',
+        detached: false,
+        adopted: true,
+        workspaceId: 'workspace-1',
+      },
+      {
+        path: '/repo.review',
+        branch: 'feature/review',
+        commit: 'def5678',
+        head: 'def5678',
+        detached: false,
+        adopted: false,
+      },
+    ];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ worktrees }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(discoverWorkspaces('project-1')).resolves.toEqual(worktrees);
+    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects/project-1/workspaces/discover', {
       headers: { Authorization: 'Bearer token-1' },
     });
   });

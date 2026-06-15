@@ -45,7 +45,7 @@ export const ChatPane = ({
       data-weave-main-pane="chat"
       data-maximized={isMaximized ? 'true' : 'false'}
     >
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
         <MessageSquare size={15} className="shrink-0 text-primary" />
         <div className="min-w-0 flex-1" />
         <Menu>

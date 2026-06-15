@@ -1869,9 +1869,7 @@ export const UnifiedEditorPanel = ({
             role="tablist"
             aria-label={mode === 'notes' ? 'Open notes' : 'Open code buffers'}
           >
-            {editorTabs.length > 0 ? renderEditorTabs() : (
-              <div className="self-center text-xs text-muted-foreground">No open files</div>
-            )}
+            {editorTabs.length > 0 ? renderEditorTabs() : null}
           </div>
           {statusLabel ? <span className="self-center shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span> : null}
           <Button size="icon-xs" variant="ghost" aria-label="Save buffer" title="Save buffer" disabled={!openBuffer || !isDirty || isSaving} onClick={() => void handleSave()}>

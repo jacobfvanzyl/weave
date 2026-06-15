@@ -51,6 +51,16 @@ export type WorkspaceBranchOption = {
   current?: boolean;
 };
 
+export type DiscoveredWorktree = {
+  path?: string;
+  branch?: string;
+  commit?: string;
+  head?: string;
+  detached?: boolean;
+  adopted?: boolean;
+  workspaceId?: string;
+};
+
 export type Project = {
   id: string;
   userId: string;
@@ -396,7 +406,7 @@ export const deleteWorkspace = async (projectId: string, workspaceId: string, mo
 };
 
 export const discoverWorkspaces = async (projectId: string) => {
-  const result = await parseJson<{ worktrees: Array<Record<string, unknown>> }>(
+  const result = await parseJson<{ worktrees: DiscoveredWorktree[] }>(
     await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/discover`, { headers: getAuthHeaders() }),
   );
 
