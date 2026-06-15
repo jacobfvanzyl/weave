@@ -117,6 +117,82 @@ describe('PortalSupervisor', () => {
       }
     }));
 
+  it('refreshes cached local control when the adopted runtime is restarted', async () =>
+    withTempPortal(async ({ portalHome }) => {
+      const startControlServer = async (token: string) => {
+        const { server, url: controlUrl } = await listen((request, response) => {
+          const url = new URL(request.url ?? '/', controlUrl);
+          if (url.pathname === '/health' && url.searchParams.get('token') === token) {
+            response.setHeader('content-type', 'application/json');
+            response.end(JSON.stringify({
+              ok: true,
+              httpServerUrl: 'http://mastra.test',
+              wsServerUrl: 'ws://mastra.test:4112',
+              controlCapabilities: ['terminal', 'editor'],
+            }));
+            return;
+          }
+          response.statusCode = 401;
+          response.end('unauthorized');
+        });
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('test server did not bind');
+        return { server, port: address.port, token };
+      };
+
+      const writeRuntime = async (runtime: { port: number; token: string; portalId: string }) => {
+        await writeFile(path.join(portalHome, 'runtime.json'), JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          portalId: runtime.portalId,
+          configPath: path.join(portalHome, 'config.json'),
+          httpServerUrl: 'http://mastra.test',
+          wsServerUrl: 'ws://mastra.test:4112',
+          controlHost: '127.0.0.1',
+          controlPort: runtime.port,
+          controlToken: runtime.token,
+          controlCapabilities: ['terminal', 'editor'],
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }));
+      };
+
+      const first = await startControlServer('first-token');
+      let firstClosed = false;
+      let second: Awaited<ReturnType<typeof startControlServer>> | undefined;
+      try {
+        await mkdir(portalHome, { recursive: true });
+        await writeFile(path.join(portalHome, 'config.json'), JSON.stringify({
+          httpServerUrl: 'http://mastra.test',
+          wsServerUrl: 'ws://mastra.test:4112',
+          portal: {
+            portalId: 'portal_first',
+            portalToken: 'portal-token',
+            roots: [{ id: 'default', name: 'Home', path: tmpdir() }],
+          },
+        }));
+        await writeRuntime({ port: first.port, token: first.token, portalId: 'portal_first' });
+
+        const supervisor = createSupervisor('http://mastra.test', 'unused-token');
+        const firstControl = await supervisor.ensureStarted();
+        expect(firstControl.url).toBe(`ws://127.0.0.1:${first.port}/terminal?token=${first.token}`);
+
+        await new Promise<void>(resolve => first.server.close(() => resolve()));
+        firstClosed = true;
+        const restarted = await startControlServer('second-token');
+        second = restarted;
+        await writeRuntime({ port: restarted.port, token: restarted.token, portalId: 'portal_second' });
+
+        const refreshedControl = await supervisor.ensureStarted();
+        expect(refreshedControl.url).toBe(`ws://127.0.0.1:${restarted.port}/terminal?token=${restarted.token}`);
+        expect(refreshedControl.token).toBe(restarted.token);
+      } finally {
+        if (!firstClosed) await new Promise<void>(resolve => first.server.close(() => resolve()));
+        const secondServer = second?.server;
+        if (secondServer) await new Promise<void>(resolve => secondServer.close(() => resolve()));
+      }
+    }));
+
   it('ignores mismatched runtime files', async () =>
     withTempPortal(async ({ portalHome }) => {
       await mkdir(portalHome, { recursive: true });

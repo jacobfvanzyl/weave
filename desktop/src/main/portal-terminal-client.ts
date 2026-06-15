@@ -152,13 +152,11 @@ export class PortalSupervisor {
   }
 
   async ensureStarted() {
-    if (!this.started) {
-      this.started = this.start().catch(error => {
-        this.started = undefined;
-        throw error;
-      });
+    await this.ensureStartedOnce();
+    if (!(await this.isHealthy())) {
+      this.resetControlState();
+      await this.ensureStartedOnce();
     }
-    await this.started;
     if (!this.controlPort || !this.controlToken) throw new Error('Portal control server is not initialized.');
     const httpUrl = `http://${this.controlHost}:${this.controlPort}`;
     return {
@@ -166,6 +164,27 @@ export class PortalSupervisor {
       url: `ws://${this.controlHost}:${this.controlPort}/terminal?token=${encodeURIComponent(this.controlToken)}`,
       token: this.controlToken,
     };
+  }
+
+  private async ensureStartedOnce() {
+    if (!this.started) {
+      this.started = this.start().catch(error => {
+        this.started = undefined;
+        throw error;
+      });
+    }
+    await this.started;
+  }
+
+  private resetControlState() {
+    if (this.process && this.process.exitCode === null) {
+      this.process.kill();
+    }
+    this.process = undefined;
+    this.started = undefined;
+    this.controlHost = '127.0.0.1';
+    this.controlPort = undefined;
+    this.controlToken = undefined;
   }
 
   private async start() {

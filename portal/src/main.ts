@@ -961,7 +961,12 @@ const countOccurrences = (content: string, text: string) => {
   return count;
 };
 
-const generateSimpleDiff = (oldContent: string, newContent: string) => {
+const formatUnifiedRange = (startIndex: number, length: number) => {
+  const startLine = length === 0 ? startIndex : startIndex + 1;
+  return length === 1 ? String(startLine) : `${startLine},${length}`;
+};
+
+export const generateUnifiedDiff = (oldContent: string, newContent: string) => {
   const oldLines = oldContent.split('\n');
   const newLines = newContent.split('\n');
   let prefix = 0;
@@ -977,15 +982,24 @@ const generateSimpleDiff = (oldContent: string, newContent: string) => {
   const start = Math.max(0, prefix - 3);
   const endOld = Math.min(oldLines.length - 1, oldSuffix + 3);
   const endNew = Math.min(newLines.length - 1, newSuffix + 3);
+  const oldRangeLength = endOld >= start ? endOld - start + 1 : 0;
+  const newRangeLength = endNew >= start ? endNew - start + 1 : 0;
   const output: string[] = [];
-  for (let i = start; i <= endOld; i += 1) {
-    if (i < prefix || i > oldSuffix) output.push(` ${i + 1} ${oldLines[i]}`);
-    else output.push(`-${i + 1} ${oldLines[i]}`);
+
+  output.push(`@@ -${formatUnifiedRange(start, oldRangeLength)} +${formatUnifiedRange(start, newRangeLength)} @@`);
+  for (let i = start; i < prefix; i += 1) {
+    output.push(` ${oldLines[i]}`);
   }
-  for (let i = prefix; i <= newSuffix; i += 1) output.push(`+${i + 1} ${newLines[i]}`);
-  if (endNew > newSuffix) {
-    for (let i = Math.max(prefix, newSuffix + 1); i <= endNew; i += 1) output.push(` ${i + 1} ${newLines[i]}`);
+  for (let i = prefix; i <= oldSuffix; i += 1) {
+    output.push(`-${oldLines[i]}`);
   }
+  for (let i = prefix; i <= newSuffix; i += 1) {
+    output.push(`+${newLines[i]}`);
+  }
+  for (let i = Math.max(prefix, newSuffix + 1); i <= endNew; i += 1) {
+    output.push(` ${newLines[i]}`);
+  }
+
   return output.join('\n');
 };
 
@@ -1053,7 +1067,7 @@ const editFileTool = async (config: ResolvedPortalConfig, request: Record<string
     }
 
     await Deno.writeTextFile(filePath, bom + restoreLineEndings(nextContent, lineEnding));
-    return { ok: true, replacements: matchedEdits.length, diff: generateSimpleDiff(content, nextContent) };
+    return { ok: true, replacements: matchedEdits.length, diff: generateUnifiedDiff(content, nextContent) };
   });
 };
 
