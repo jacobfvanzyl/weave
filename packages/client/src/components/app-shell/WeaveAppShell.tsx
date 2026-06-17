@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, MessageSquare, MonitorUp, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
+import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useChatStore } from '../../stores/chat-store';
 import { useAppShellStore } from '../../stores/app-shell-store';
-import { useTerminalStore, createTerminalPanelTab, generalTerminalId } from '../../stores/terminal-store';
+import { generalTerminalId, useTerminalStore } from '../../stores/terminal-store';
 import { useWorkspaceSurfaceStore, type MainPane } from '../../stores/workspace-surface-store';
 import { Button } from '../ui/button';
 import { ShortcutProvider } from '../shortcuts';
@@ -15,7 +16,8 @@ import { ChatPane } from '../chat/ChatPane';
 import { EditorPane } from '../editor/EditorPane';
 import { GlobalTerminalOverlay } from '../terminal/GlobalTerminalOverlay';
 import { TerminalPaneHost } from '../terminal/TerminalPaneHost';
-import type { TerminalPanelTabsChange } from '../terminal/TerminalPanel';
+import type { TerminalPanelTab, TerminalPanelTabsChange, TerminalPanelTarget } from '../terminal/TerminalPanel';
+import type { TerminalTargetInput, TerminalTransport, TerminalWindowRecord } from '../../lib/terminal-types';
 import { WindowStreamOverlayHost } from '../window-stream/WindowStreamOverlayHost';
 import { WorkspaceMainContent } from '../workspace/WorkspaceMainContent';
 import {
@@ -36,6 +38,40 @@ const TerminalTabCountBadge = ({ count }: { count: number }) => count > 0 ? (
     {count}
   </span>
 ) : null;
+const terminalProcessRefreshMs = 2_000;
+const terminalSnapshotRefreshMs = 5_000;
+
+const terminalTargetInput = (target: TerminalPanelTarget): TerminalTargetInput => ({
+  kind: target.kind,
+  projectId: target.projectId,
+  workspaceId: target.workspaceId,
+  portalId: target.portalId,
+  rootId: target.rootId,
+  repoPath: target.repoPath,
+  workspacePath: target.workspacePath,
+  cwd: target.cwd,
+});
+
+const isTerminalWindowForTarget = (window: TerminalWindowRecord, target: TerminalPanelTarget) => {
+  if (window.kind !== target.kind) return false;
+  if (target.kind === 'workspace') {
+    return window.projectId === target.projectId && window.workspaceId === target.workspaceId;
+  }
+
+  if (target.portalId && window.portalId && window.portalId !== target.portalId) return false;
+  if (target.rootId && window.rootId && window.rootId !== target.rootId) return false;
+  return true;
+};
+
+const terminalSyncKey = (target?: TerminalPanelTarget) => target ? [
+  target.kind,
+  target.portalId ?? '',
+  target.rootId ?? '',
+  target.projectId ?? '',
+  target.workspaceId ?? '',
+  target.workspacePath ?? '',
+  target.cwd ?? '',
+].join(':') : undefined;
 
 type WeaveAppShellProps = {
   connectionSettingsButton?: ReactNode;
@@ -117,12 +153,22 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const sideEditorTargetKey = editorTarget ? `code:${editorTarget.workspaceId}` : notesTarget ? `notes:${notesTarget.workspaceId}` : undefined;
   const terminalWorkspaceId = terminalTarget?.workspaceId;
   const terminalTargetKey = terminalTarget?.terminalId;
+  const terminalTransport = useMemo<TerminalTransport | undefined>(() => createTerminalTransport(), []);
+  const [terminalSyncingTargets, setTerminalSyncingTargets] = useState<Set<string>>(() => new Set());
+  const [terminalSyncErrors, setTerminalSyncErrors] = useState<Record<string, string | undefined>>({});
+  const terminalSyncSequenceRef = useRef(0);
+  const latestTerminalSyncByTargetRef = useRef<Map<string, number>>(new Map());
   const generalTerminalTabs = useTerminalStore(state => state.generalTerminalTabs);
   const setGeneralTerminalTabs = useTerminalStore(state => state.setGeneralTerminalTabs);
+  const setGeneralTerminalWindows = useTerminalStore(state => state.setGeneralTerminalWindows);
+  const refreshGeneralTerminalWindowMetadata = useTerminalStore(state => state.refreshGeneralTerminalWindowMetadata);
   const activeGeneralTerminalTabId = useTerminalStore(state => state.activeGeneralTerminalTabId);
   const setActiveGeneralTerminalTabId = useTerminalStore(state => state.setActiveGeneralTerminalTabId);
   const terminalTabsByTarget = useTerminalStore(state => state.terminalTabsByTarget);
   const setTerminalTabs = useTerminalStore(state => state.setTerminalTabs);
+  const setTerminalWindows = useTerminalStore(state => state.setTerminalWindows);
+  const refreshWorkspaceTerminalWindowMetadata = useTerminalStore(state => state.refreshTerminalWindowMetadata);
+  const setTerminalSnapshotWindows = useTerminalStore(state => state.setTerminalSnapshotWindows);
   const activeTerminalTabByTarget = useTerminalStore(state => state.activeTerminalTabByTarget);
   const setActiveTerminalTab = useTerminalStore(state => state.setActiveTerminalTab);
   const isWindowStreamOpen = useAppShellStore(state => state.isWindowStreamOpen);
@@ -172,6 +218,43 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const activeTerminalTabId = terminalTargetKey
     ? activeTerminalTabByTarget[terminalTargetKey] ?? terminalTabs[0]?.id
     : undefined;
+  const generalTerminalSyncTarget = useMemo<TerminalPanelTarget | undefined>(() => generalTerminalTarget ? ({
+    kind: 'general',
+    terminalId: generalTerminalId,
+    portalId: generalTerminalTarget.portalId,
+    rootId: generalTerminalTarget.rootId,
+    title: generalTerminalTarget.title,
+  }) : undefined, [
+    generalTerminalTarget?.portalId,
+    generalTerminalTarget?.rootId,
+    generalTerminalTarget?.title,
+  ]);
+  const workspaceTerminalSyncTarget = useMemo<TerminalPanelTarget | undefined>(() => terminalTarget ? ({
+    kind: 'workspace',
+    terminalId: terminalTarget.terminalId,
+    projectId: terminalTarget.projectId,
+    workspaceId: terminalTarget.workspaceId,
+    portalId: terminalTarget.portalId,
+    rootId: terminalTarget.rootId,
+    repoPath: terminalTarget.repoPath,
+    workspacePath: terminalTarget.workspacePath,
+    title: terminalTarget.title,
+  }) : undefined, [
+    terminalTarget?.portalId,
+    terminalTarget?.projectId,
+    terminalTarget?.repoPath,
+    terminalTarget?.rootId,
+    terminalTarget?.terminalId,
+    terminalTarget?.title,
+    terminalTarget?.workspaceId,
+    terminalTarget?.workspacePath,
+  ]);
+  const generalSyncKey = terminalSyncKey(generalTerminalSyncTarget);
+  const workspaceSyncKey = terminalSyncKey(workspaceTerminalSyncTarget);
+  const isGeneralTerminalSyncing = generalSyncKey ? terminalSyncingTargets.has(generalSyncKey) : false;
+  const isWorkspaceTerminalSyncing = workspaceSyncKey ? terminalSyncingTargets.has(workspaceSyncKey) : false;
+  const generalTerminalError = generalSyncKey ? terminalSyncErrors[generalSyncKey] : undefined;
+  const workspaceTerminalError = workspaceSyncKey ? terminalSyncErrors[workspaceSyncKey] : undefined;
   const handleTerminalTabsChange = useCallback((tabsChange: TerminalPanelTabsChange) => {
     if (!terminalTargetKey) return;
     setTerminalTabs(terminalTargetKey, tabsChange);
@@ -182,13 +265,241 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     setActiveTerminalTab(terminalTargetKey, tabId);
   }, [setActiveTerminalTab, terminalTargetKey]);
 
-  const createTerminalTab = useCallback((ordinal: number) => (
-    createTerminalPanelTab(terminalTargetKey ?? 'weave-terminal', ordinal)
-  ), [terminalTargetKey]);
+  const setTerminalTargetSyncing = useCallback((key: string, isSyncing: boolean) => {
+    setTerminalSyncingTargets(current => {
+      const next = new Set(current);
+      if (isSyncing) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
 
-  const createGeneralTerminalTab = useCallback((ordinal: number) => (
-    createTerminalPanelTab(generalTerminalId, ordinal)
-  ), []);
+  const setTerminalTargetError = useCallback((key: string, error?: string) => {
+    setTerminalSyncErrors(current => {
+      if (current[key] === error) return current;
+      return { ...current, [key]: error };
+    });
+  }, []);
+
+  const beginTerminalSync = useCallback((key: string) => {
+    terminalSyncSequenceRef.current += 1;
+    const sequence = terminalSyncSequenceRef.current;
+    latestTerminalSyncByTargetRef.current.set(key, sequence);
+    return sequence;
+  }, []);
+
+  const isLatestTerminalSync = useCallback((key: string, sequence: number) =>
+    latestTerminalSyncByTargetRef.current.get(key) === sequence, []);
+
+  const applyTerminalWindows = useCallback((target: TerminalPanelTarget, windows: TerminalWindowRecord[]) => {
+    if (target.kind === 'general') {
+      setGeneralTerminalWindows(windows);
+      return;
+    }
+    setTerminalWindows(target.terminalId, windows);
+  }, [setGeneralTerminalWindows, setTerminalWindows]);
+
+  const refreshTerminalWindowMetadata = useCallback((target: TerminalPanelTarget, windows: TerminalWindowRecord[]) => {
+    if (target.kind === 'general') {
+      refreshGeneralTerminalWindowMetadata(windows);
+      return;
+    }
+    refreshWorkspaceTerminalWindowMetadata(target.terminalId, windows);
+  }, [refreshGeneralTerminalWindowMetadata, refreshWorkspaceTerminalWindowMetadata]);
+
+  const refreshTerminalSnapshotWindows = useCallback(async () => {
+    if (!terminalTransport || !isDesktopTerminalTransportAvailable()) return;
+    try {
+      setTerminalSnapshotWindows(await terminalTransport.snapshot());
+    } catch {
+      // Full snapshots are opportunistic; visible terminal panes surface target-specific errors.
+    }
+  }, [setTerminalSnapshotWindows, terminalTransport]);
+
+  const listTerminalWindowsForTarget = useCallback(async (target: TerminalPanelTarget) => {
+    if (!terminalTransport) throw new Error('Terminal transport is unavailable in this client.');
+    const input = terminalTargetInput(target);
+    const windows = await terminalTransport.snapshot(input);
+    if (isDesktopTerminalTransportAvailable()) setTerminalSnapshotWindows(windows);
+    return windows.filter(window => isTerminalWindowForTarget(window, target));
+  }, [setTerminalSnapshotWindows, terminalTransport]);
+
+  const refreshTerminalProcessNames = useCallback(async (target: TerminalPanelTarget | undefined) => {
+    if (!target) return;
+    const key = terminalSyncKey(target);
+    if (!key) return;
+    const syncSequenceAtStart = latestTerminalSyncByTargetRef.current.get(key);
+    try {
+      const windows = await listTerminalWindowsForTarget(target);
+      if (latestTerminalSyncByTargetRef.current.get(key) !== syncSequenceAtStart) return;
+      refreshTerminalWindowMetadata(target, windows);
+    } catch {
+      // Process-name refresh is opportunistic; visible sync paths surface errors.
+    }
+  }, [listTerminalWindowsForTarget, refreshTerminalWindowMetadata]);
+
+  const syncTerminalTarget = useCallback(async (
+    target: TerminalPanelTarget | undefined,
+    options: { ensure?: boolean; preferredActiveTabId?: string; requiredWindow?: TerminalWindowRecord } = {},
+  ) => {
+    if (!target) return [];
+    const key = terminalSyncKey(target);
+    if (!key) return [];
+    const sequence = beginTerminalSync(key);
+    setTerminalTargetSyncing(key, true);
+    setTerminalTargetError(key, undefined);
+    try {
+      if (!terminalTransport) throw new Error('Terminal transport is unavailable in this client.');
+      let windows = await listTerminalWindowsForTarget(target);
+      if (options.ensure && windows.length === 0) {
+        const created = await terminalTransport.create(terminalTargetInput(target));
+        windows = await listTerminalWindowsForTarget(target);
+        if (!windows.some(window => window.terminalId === created.terminalId)) windows = [created];
+      }
+      const requiredWindow = options.requiredWindow;
+      if (
+        requiredWindow
+        && isTerminalWindowForTarget(requiredWindow, target)
+        && !windows.some(window => window.terminalId === requiredWindow.terminalId)
+      ) {
+        windows = [...windows, requiredWindow];
+      }
+      if (!isLatestTerminalSync(key, sequence)) return undefined;
+      applyTerminalWindows(target, windows);
+      const preferredActiveTabId = options.preferredActiveTabId;
+      if (preferredActiveTabId && windows.some(window => window.terminalId === preferredActiveTabId)) {
+        if (target.kind === 'general') setActiveGeneralTerminalTabId(preferredActiveTabId);
+        else setActiveTerminalTab(target.terminalId, preferredActiveTabId);
+      }
+      return windows;
+    } catch (error) {
+      if (isLatestTerminalSync(key, sequence)) {
+        setTerminalTargetError(key, error instanceof Error ? error.message : String(error));
+        return [];
+      }
+      return undefined;
+    } finally {
+      if (isLatestTerminalSync(key, sequence)) setTerminalTargetSyncing(key, false);
+    }
+  }, [
+    applyTerminalWindows,
+    beginTerminalSync,
+    isLatestTerminalSync,
+    listTerminalWindowsForTarget,
+    setActiveGeneralTerminalTabId,
+    setActiveTerminalTab,
+    setTerminalTargetError,
+    setTerminalTargetSyncing,
+    terminalTransport,
+  ]);
+
+  const addTerminalTabForTarget = useCallback(async (target: TerminalPanelTarget | undefined) => {
+    if (!target || !terminalTransport) return;
+    const key = terminalSyncKey(target);
+    const sequence = key ? beginTerminalSync(key) : undefined;
+    if (key) {
+      setTerminalTargetSyncing(key, true);
+      setTerminalTargetError(key, undefined);
+    }
+    try {
+      const created = await terminalTransport.create(terminalTargetInput(target));
+      await syncTerminalTarget(target, { preferredActiveTabId: created.terminalId, requiredWindow: created });
+    } catch (error) {
+      if (key && sequence !== undefined && isLatestTerminalSync(key, sequence)) {
+        setTerminalTargetError(key, error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (key && sequence !== undefined && isLatestTerminalSync(key, sequence)) setTerminalTargetSyncing(key, false);
+    }
+  }, [
+    beginTerminalSync,
+    isLatestTerminalSync,
+    setTerminalTargetError,
+    setTerminalTargetSyncing,
+    syncTerminalTarget,
+    terminalTransport,
+  ]);
+
+  const closeTerminalTabForTarget = useCallback(async (
+    target: TerminalPanelTarget | undefined,
+    tab: TerminalPanelTab,
+    onEmpty: () => void,
+  ) => {
+    if (!target || !terminalTransport) return;
+    const key = terminalSyncKey(target);
+    if (key) {
+      beginTerminalSync(key);
+      setTerminalTargetSyncing(key, true);
+      setTerminalTargetError(key, undefined);
+    }
+    try {
+      await terminalTransport.close(tab.terminalId);
+    } catch {
+      // Reconciliation below decides what still exists.
+    }
+    const windows = await syncTerminalTarget(target);
+    if (windows?.length === 0) onEmpty();
+  }, [
+    beginTerminalSync,
+    setTerminalTargetError,
+    setTerminalTargetSyncing,
+    syncTerminalTarget,
+    terminalTransport,
+  ]);
+
+  const handleTerminalExitForTarget = useCallback(async (
+    target: TerminalPanelTarget | undefined,
+    onEmpty: () => void,
+  ) => {
+    if (!target) return;
+    const windows = await syncTerminalTarget(target);
+    if (windows?.length === 0) onEmpty();
+  }, [syncTerminalTarget]);
+
+  useEffect(() => {
+    if (!generalTerminalSyncTarget) return;
+    void syncTerminalTarget(generalTerminalSyncTarget, { ensure: isGeneralTerminalOpen });
+  }, [generalSyncKey, generalTerminalSyncTarget, isGeneralTerminalOpen, syncTerminalTarget]);
+
+  useEffect(() => {
+    if (!workspaceTerminalSyncTarget) return;
+    void syncTerminalTarget(workspaceTerminalSyncTarget, { ensure: showTerminalPane });
+  }, [showTerminalPane, syncTerminalTarget, workspaceSyncKey, workspaceTerminalSyncTarget]);
+
+  useEffect(() => {
+    void refreshTerminalSnapshotWindows();
+  }, [refreshTerminalSnapshotWindows]);
+
+  useEffect(() => {
+    if (!terminalTransport || !isDesktopTerminalTransportAvailable()) return undefined;
+    const interval = window.setInterval(() => {
+      void refreshTerminalSnapshotWindows();
+    }, terminalSnapshotRefreshMs);
+    return () => window.clearInterval(interval);
+  }, [refreshTerminalSnapshotWindows, terminalTransport]);
+
+  useEffect(() => {
+    if (!terminalTransport || !isDesktopTerminalTransportAvailable()) return undefined;
+    return terminalTransport.subscribe(event => {
+      if (event.type === 'created' || event.type === 'exit') void refreshTerminalSnapshotWindows();
+    });
+  }, [refreshTerminalSnapshotWindows, terminalTransport]);
+
+  useEffect(() => {
+    if (!generalTerminalSyncTarget || !isGeneralTerminalOpen) return undefined;
+    const interval = window.setInterval(() => {
+      void refreshTerminalProcessNames(generalTerminalSyncTarget);
+    }, terminalProcessRefreshMs);
+    return () => window.clearInterval(interval);
+  }, [generalSyncKey, generalTerminalSyncTarget, isGeneralTerminalOpen, refreshTerminalProcessNames]);
+
+  useEffect(() => {
+    if (!workspaceTerminalSyncTarget || !showTerminalPane) return undefined;
+    const interval = window.setInterval(() => {
+      void refreshTerminalProcessNames(workspaceTerminalSyncTarget);
+    }, terminalProcessRefreshMs);
+    return () => window.clearInterval(interval);
+  }, [refreshTerminalProcessNames, showTerminalPane, workspaceSyncKey, workspaceTerminalSyncTarget]);
   const { data: serverThreads = [], isFetched } = useQuery({
     queryKey: ['threads', resourceId],
     queryFn: () => listServerThreads(),
@@ -328,7 +639,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     <Button
       className={[
         isGeneralTerminalOpen ? 'bg-accent' : '',
-        isGeneralTerminalActive ? 'text-mauve' : '',
+        isGeneralTerminalActive ? 'text-peach' : '',
       ].filter(Boolean).join(' ')}
       size="icon"
       variant="ghost"
@@ -360,10 +671,14 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     <TerminalPaneHost
       activeTabId={activeTerminalTabId}
       canToggleMaximized={canToggleTerminalMaximized}
+      error={workspaceTerminalError}
       focusRequest={terminalFocusRequest}
+      isSyncing={isWorkspaceTerminalSyncing}
       isEffectivelyMaximized={isTerminalEffectivelyMaximized}
       onActiveTabIdChange={handleActiveTerminalTabChange}
-      onCreateTab={createTerminalTab}
+      onAddTab={() => void addTerminalTabForTarget(workspaceTerminalSyncTarget)}
+      onCloseTab={tab => void closeTerminalTabForTarget(workspaceTerminalSyncTarget, tab, () => closePane('terminal'))}
+      onExit={() => void handleTerminalExitForTarget(workspaceTerminalSyncTarget, () => closePane('terminal'))}
       onHide={() => closePane('terminal')}
       onMaximizeToggle={() => handleMainPaneMaximizeToggle('terminal')}
       onRestoreMaximized={restoreMaximizedPane}
@@ -371,6 +686,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
       onTabsChange={handleTerminalTabsChange}
       tabs={terminalTabs}
       target={terminalTarget}
+      transport={terminalTransport}
       variant={variant}
     />
   ) : null;
@@ -444,7 +760,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
         <Button
           className={[
             showTerminalPane ? 'bg-accent' : '',
-            hasActiveTerminal ? 'text-mauve' : '',
+            hasActiveTerminal ? 'text-peach' : '',
           ].filter(Boolean).join(' ')}
           size="icon"
           variant="ghost"
@@ -553,15 +869,20 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
       />
       <GlobalTerminalOverlay
         activeTabId={activeGeneralTerminalTabId}
+        error={generalTerminalError}
         focusRequest={generalTerminalFocusRequest}
         isOpen={isGeneralTerminalOpen}
+        isSyncing={isGeneralTerminalSyncing}
         onActiveTabIdChange={setActiveGeneralTerminalTabId}
-        onCreateTab={createGeneralTerminalTab}
+        onAddTab={() => void addTerminalTabForTarget(generalTerminalSyncTarget)}
+        onCloseTab={tab => void closeTerminalTabForTarget(generalTerminalSyncTarget, tab, hideGeneralTerminal)}
+        onExit={() => void handleTerminalExitForTarget(generalTerminalSyncTarget, hideGeneralTerminal)}
         onHide={hideGeneralTerminal}
         onSessionActiveChange={handleGeneralTerminalSessionActiveChange}
         onTabsChange={setGeneralTerminalTabs}
         tabs={generalTerminalTabs}
         target={generalTerminalTarget}
+        transport={terminalTransport}
       />
       <WindowStreamOverlayHost
         isActive={isWindowStreamActive}

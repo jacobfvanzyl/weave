@@ -6,6 +6,7 @@ import {
   getToolHistoryFullCalls,
   limitCompactToolHistoryPrompt,
 } from '../../server/src/mastra/compact-tool-history-processor';
+import { CurrentTurnImageProcessor } from '../../server/src/mastra/current-turn-image-processor';
 import { resolveMemoryPolicy } from '../../server/src/mastra/memory-policy';
 import { __chatRouteMemoryTest } from '../../server/src/mastra/routes/chat';
 import { __chatStateContextUsageTest } from '../../server/src/mastra/routes/chat-state';
@@ -26,6 +27,15 @@ const modelOutputBody = (output: string) => {
   const bodyStart = output.indexOf('\n\n');
   return bodyStart === -1 ? '' : output.slice(bodyStart + 2);
 };
+
+const countImageParts = (prompt: any[]) => prompt.reduce((total, message) => {
+  const parts = Array.isArray(message.content) ? message.content : [];
+  return total + parts.filter((part: any) => (
+    part?.type === 'image' ||
+    part?.type === 'input_image' ||
+    (part?.type === 'file' && typeof part.mediaType === 'string' && part.mediaType.startsWith('image/'))
+  )).length;
+}, 0);
 
 describe('memory policy resolution', () => {
   it('strips semantic recall when embedding env is unavailable', () => {
@@ -638,6 +648,75 @@ describe('tool model output compaction', () => {
   });
 });
 
+describe('current-turn image prompt shaping', () => {
+  const imagePart = { type: 'file', mediaType: 'image/png', data: 'data:image/png;base64,aGVsbG8=' };
+  const pdfPart = { type: 'file', mediaType: 'application/pdf', data: 'data:application/pdf;base64,cGRm' };
+
+  it('strips historical user images while preserving historical text', () => {
+    const processor = new CurrentTurnImageProcessor();
+    const prompt = [
+      { role: 'user', content: [{ type: 'text', text: 'Earlier text' }, imagePart] },
+      { role: 'assistant', content: [{ type: 'text', text: 'Earlier reply' }] },
+      { role: 'user', content: [{ type: 'text', text: 'Current text' }] },
+    ];
+
+    const result = processor.processLLMRequest({ prompt, stepNumber: 0 } as any) as any;
+
+    expect(countImageParts(result.prompt)).toBe(0);
+    expect(result.prompt[0].content).toEqual([{ type: 'text', text: 'Earlier text' }]);
+    expect(result.prompt.at(-1)).toEqual({ role: 'user', content: [{ type: 'text', text: 'Current text' }] });
+    expect(prompt[0].content).toContain(imagePart);
+  });
+
+  it('keeps only the latest user image on the initial model call', () => {
+    const processor = new CurrentTurnImageProcessor();
+    const prompt = [
+      { role: 'user', content: [imagePart] },
+      { role: 'assistant', content: [{ type: 'text', text: 'Earlier reply' }] },
+      { role: 'user', content: [{ type: 'text', text: 'Look at this' }, { ...imagePart, data: 'data:image/png;base64,bmV3' }] },
+    ];
+
+    const result = processor.processLLMRequest({ prompt, stepNumber: 0 } as any) as any;
+
+    expect(countImageParts(result.prompt)).toBe(1);
+    expect(result.prompt.includes(prompt[0])).toBe(false);
+    expect(result.prompt.at(-1).content).toEqual([
+      { type: 'text', text: 'Look at this' },
+      { ...imagePart, data: 'data:image/png;base64,bmV3' },
+    ]);
+  });
+
+  it('strips the latest user image on tool-continuation model calls', () => {
+    const processor = new CurrentTurnImageProcessor();
+    const prompt = [
+      { role: 'user', content: [{ type: 'text', text: 'Look at this' }, imagePart] },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'read', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call-1', toolName: 'read', output: 'ok' }] },
+    ];
+
+    const result = processor.processLLMRequest({ prompt, stepNumber: 1 } as any) as any;
+
+    expect(countImageParts(result.prompt)).toBe(0);
+    expect(result.prompt[0]).toEqual({ role: 'user', content: [{ type: 'text', text: 'Look at this' }] });
+    expect(result.prompt.slice(1)).toEqual(prompt.slice(1));
+  });
+
+  it('preserves assistant tool content and non-image files', () => {
+    const processor = new CurrentTurnImageProcessor();
+    const prompt = [
+      { role: 'user', content: [{ type: 'text', text: 'Earlier text' }, pdfPart, imagePart] },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'read', input: { path: 'a.ts' } }] },
+      { role: 'user', content: [{ type: 'text', text: 'Current text' }] },
+    ];
+
+    const result = processor.processLLMRequest({ prompt, stepNumber: 0 } as any) as any;
+
+    expect(result.prompt[0].content).toEqual([{ type: 'text', text: 'Earlier text' }, pdfPart]);
+    expect(result.prompt[1]).toEqual(prompt[1]);
+    expect(result.prompt[2]).toEqual(prompt[2]);
+  });
+});
+
 describe('observational memory request shaping', () => {
   it('keeps only the latest user message when server-side memory owns history', () => {
     expect(__chatRouteMemoryTest.latestUserMessageOnly([
@@ -645,6 +724,81 @@ describe('observational memory request shaping', () => {
       { role: 'assistant', content: 'reply' },
       { role: 'user', content: 'current' },
     ])).toEqual([{ role: 'user', content: 'current' }]);
+  });
+
+  it('trims memory-backed submitted history before image normalization', () => {
+    const current = {
+      role: 'user',
+      parts: [
+        { type: 'text', text: 'Current image' },
+        { type: 'file', mimeType: 'image/png', filename: 'current.png', data: 'data:image/png;base64,Y3VycmVudA==' },
+      ],
+    };
+    const messages = [
+      {
+        role: 'user',
+        parts: [
+          { type: 'text', text: 'Old image' },
+          { type: 'file', mimeType: 'image/png', filename: 'old.png', data: 'data:image/png;base64,b2xk' },
+        ],
+      },
+      { role: 'assistant', parts: [{ type: 'text', text: 'Reply' }] },
+      current,
+    ];
+
+    expect(__chatRouteMemoryTest.submittedMessagesForMemory(messages, 'thread-1')).toEqual([current]);
+    expect(__chatRouteMemoryTest.submittedMessagesForMemory(messages, undefined)).toBe(messages);
+  });
+
+  it('stores a current data-url image attachment and exposes it as a pending UI file part', async () => {
+    const storedPayloads: any[] = [];
+    const normalized = await __chatRouteMemoryTest.normalizeMessageImageAttachments([
+      {
+        id: 'user-current',
+        role: 'user',
+        parts: [
+          { type: 'text', text: 'Current image' },
+          { type: 'file', mimeType: 'image/png', filename: 'current.png', data: 'data:image/png;base64,Y3VycmVudA==' },
+        ],
+      },
+    ], {
+      threadId: 'thread-1',
+      storage: {
+        findByThread: async () => [],
+        put: async (payload: any) => {
+          storedPayloads.push(payload);
+          return {
+            id: 'att_current',
+            urlPath: '/attachments/att_current',
+            mimeType: payload.mimeType,
+            sizeBytes: payload.bytes.byteLength,
+            originalName: payload.originalName,
+          };
+        },
+      },
+    }) as any[];
+
+    expect(storedPayloads).toHaveLength(1);
+    expect(storedPayloads[0]).toMatchObject({
+      mimeType: 'image/png',
+      originalName: 'current.png',
+      threadId: 'thread-1',
+    });
+    expect(normalized[0]).toMatchObject({
+      parts: [{ type: 'text', text: 'Current image' }],
+      experimental_attachments: [{ url: 'https://weave.local/attachments/att_current', contentType: 'image/png' }],
+    });
+
+    const pending = __chatStateContextUsageTest.toPendingSubmittedMessage(normalized[0], 'http://localhost', 0);
+    expect(pending?.parts).toEqual([
+      { type: 'text', text: 'Current image' },
+      {
+        type: 'file',
+        url: 'http://localhost/attachments/att_current',
+        mediaType: 'image/png',
+        metadata: { attachmentId: 'att_current', attachmentUrlPath: '/attachments/att_current' },
+      },
+    ]);
   });
 
   it('strips display-only reasoning and data parts before submitting history to Mastra', () => {

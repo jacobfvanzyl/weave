@@ -15,6 +15,8 @@ const originalEnv = {
   WEAVE_PORTAL_WS_PORT: process.env.WEAVE_PORTAL_WS_PORT,
 };
 
+const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth'];
+
 const restoreEnv = () => {
   for (const [key, value] of Object.entries(originalEnv)) {
     if (value === undefined) delete process.env[key];
@@ -73,7 +75,7 @@ describe('PortalSupervisor', () => {
             ok: true,
             httpServerUrl: 'http://mastra.test',
             wsServerUrl: 'ws://mastra.test:4112',
-            controlCapabilities: ['terminal', 'editor'],
+            controlCapabilities: requiredControlCapabilities,
           }));
           return;
         }
@@ -104,7 +106,7 @@ describe('PortalSupervisor', () => {
           controlHost: '127.0.0.1',
           controlPort: address.port,
           controlToken: token,
-          controlCapabilities: ['terminal', 'editor'],
+          controlCapabilities: requiredControlCapabilities,
           startedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         }));
@@ -128,7 +130,7 @@ describe('PortalSupervisor', () => {
               ok: true,
               httpServerUrl: 'http://mastra.test',
               wsServerUrl: 'ws://mastra.test:4112',
-              controlCapabilities: ['terminal', 'editor'],
+              controlCapabilities: requiredControlCapabilities,
             }));
             return;
           }
@@ -151,7 +153,7 @@ describe('PortalSupervisor', () => {
           controlHost: '127.0.0.1',
           controlPort: runtime.port,
           controlToken: runtime.token,
-          controlCapabilities: ['terminal', 'editor'],
+          controlCapabilities: requiredControlCapabilities,
           startedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         }));
@@ -213,7 +215,7 @@ describe('PortalSupervisor', () => {
       await expect(createSupervisor('http://mastra.test').ensureStarted()).rejects.toThrow('saved auth token');
     }));
 
-  it('does not adopt a matching runtime that lacks editor control', async () =>
+  it('does not adopt a matching runtime that lacks tmux source-of-truth control', async () =>
     withTempPortal(async ({ directory, portalHome }) => {
       const token = 'old-token';
       let shutdownRequested = false;
@@ -225,6 +227,7 @@ describe('PortalSupervisor', () => {
             ok: true,
             httpServerUrl: 'http://mastra.test',
             wsServerUrl: 'ws://mastra.test:4112',
+            controlCapabilities: ['terminal', 'editor'],
           }));
           return;
         }
@@ -320,7 +323,7 @@ const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1');
   if (url.pathname === '/health' && url.searchParams.get('token') === token) {
     response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify({ ok: true, controlCapabilities: ['terminal', 'editor'] }));
+    response.end(JSON.stringify({ ok: true, controlCapabilities: ${JSON.stringify(requiredControlCapabilities)} }));
     setTimeout(() => server.close(() => process.exit(0)), 10);
     return;
   }

@@ -41,7 +41,15 @@ describe('workspace live Git state collection', () => {
   it('returns live branch state from Portal worktree list output', async () => {
     const requestPortal = vi.fn(async () => ({
       ok: true,
-      worktrees: [{ path: '/repo.review', branch: 'feature/live', commit: 'abc1234', head: 'abc1234' }],
+      worktrees: [{
+        path: '/repo.review',
+        branch: 'feature/live',
+        commit: 'abc1234',
+        head: 'abc1234',
+        upstream: 'origin/feature/live',
+        ahead: 1,
+        behind: 2,
+      }],
     }));
 
     await expect(collectWorkspaceGitStatesForProject(project, 'user-1', checkedAt, requestPortal, onlinePortal)).resolves.toEqual([{
@@ -51,6 +59,9 @@ describe('workspace live Git state collection', () => {
       status: 'ready',
       branch: 'feature/live',
       head: 'abc1234',
+      upstream: 'origin/feature/live',
+      ahead: 1,
+      behind: 2,
       detached: false,
       checkedAt,
     }]);

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configureMastraConnection } from '../../packages/client/src/lib/mastra-client';
-import { cancelThreadRun, createWorkspace, discoverWorkspaces, getThreadRunState, listProjectBranches, listProjects, listWorkspaceGitStates, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
+import { cancelThreadRun, createWorkspace, discoverWorkspaces, fetchWorkspaceGitUpstream, getThreadRunState, listProjectBranches, listProjects, listWorkspaceGitStates, pullWorkspaceGitUpstream, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
 import { createWorkspaceDraftDefaults } from '../../packages/client/src/lib/workspace-create-defaults';
 import { overlayWorkspaceGitState } from '../../packages/client/src/lib/workspace-git-state';
 import { listProfiles } from '../../packages/client/src/lib/profiles-api';
@@ -199,6 +199,9 @@ describe('chat-state Project/Workspace API client', () => {
       status: 'ready',
       branch: 'feature/review',
       head: 'abc1234',
+      upstream: 'origin/feature/review',
+      ahead: 1,
+      behind: 2,
       detached: false,
       checkedAt: '2026-06-03T08:01:00.000Z',
     }];
@@ -209,6 +212,36 @@ describe('chat-state Project/Workspace API client', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects/workspaces/git-state', {
       headers: { Authorization: 'Bearer token-1' },
     });
+  });
+
+  it('runs workspace upstream fetch and pull operations', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const state = {
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      path: '/repo.review',
+      status: 'ready',
+      branch: 'feature/review',
+      upstream: 'origin/feature/review',
+      ahead: 0,
+      behind: 0,
+      checkedAt: '2026-06-03T08:01:00.000Z',
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ state }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchWorkspaceGitUpstream('project-1', 'workspace-1')).resolves.toEqual(state);
+    await expect(pullWorkspaceGitUpstream('project-1', 'workspace-1')).resolves.toEqual(state);
+    expect(fetchMock.mock.calls).toEqual([
+      ['http://weave.test/projects/project-1/workspaces/workspace-1/git/fetch', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-1' },
+      }],
+      ['http://weave.test/projects/project-1/workspaces/workspace-1/git/pull', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-1' },
+      }],
+    ]);
   });
 
   it('reads project branch options', async () => {
@@ -263,6 +296,9 @@ describe('chat-state Project/Workspace API client', () => {
         ...workspace,
         branch: 'stale/branch',
         head: 'old',
+        upstream: 'origin/stale',
+        ahead: 3,
+        behind: 4,
         detached: false,
         lastError: 'old error',
       }],
@@ -281,22 +317,49 @@ describe('chat-state Project/Workspace API client', () => {
     });
     expect('branch' in offlineWorkspace).toBe(false);
     expect('head' in offlineWorkspace).toBe(false);
+    expect('upstream' in offlineWorkspace).toBe(false);
+    expect('ahead' in offlineWorkspace).toBe(false);
+    expect('behind' in offlineWorkspace).toBe(false);
     expect('detached' in offlineWorkspace).toBe(false);
     expect('lastError' in offlineWorkspace).toBe(false);
+
+    const syncedWorkspace = overlayWorkspaceGitState([project], [{
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      path: '/repo.review',
+      status: 'ready',
+      branch: 'feature/live',
+      head: 'def5678',
+      upstream: 'origin/feature/live',
+      ahead: 1,
+      behind: 2,
+      detached: false,
+      checkedAt: '2026-06-03T08:02:00.000Z',
+    }])[0].workspaces[0];
+    expect(syncedWorkspace).toMatchObject({
+      id: 'workspace-1',
+      status: 'ready',
+      branch: 'feature/live',
+      head: 'def5678',
+      upstream: 'origin/feature/live',
+      ahead: 1,
+      behind: 2,
+      detached: false,
+    });
 
     const detachedWorkspace = overlayWorkspaceGitState([project], [{
       projectId: 'project-1',
       workspaceId: 'workspace-1',
       path: '/repo.review',
       status: 'ready',
-      head: 'def5678',
+      head: 'fed9876',
       detached: true,
-      checkedAt: '2026-06-03T08:02:00.000Z',
+      checkedAt: '2026-06-03T08:03:00.000Z',
     }])[0].workspaces[0];
     expect(detachedWorkspace).toMatchObject({
       id: 'workspace-1',
       status: 'ready',
-      head: 'def5678',
+      head: 'fed9876',
       detached: true,
     });
     expect('branch' in detachedWorkspace).toBe(false);
@@ -398,6 +461,29 @@ describe('chat-state Project/Workspace API client', () => {
       expect.objectContaining({ id: 'draft-thread', profileId: 'coding' }),
       expect.objectContaining({ id: 'server-thread', profileId: 'research' }),
     ]);
+  });
+
+  it('preserves workspace terminal pane visibility when creating workspace threads', async () => {
+    const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
+
+    useWorkspaceSurfaceStore.getState().selectThread('current-thread', { id: 'current-thread', workspaceId: 'workspace-1' });
+    useWorkspaceSurfaceStore.getState().openPane('terminal');
+    await useChatStore.getState().newThread('project-1', 'workspace-1');
+
+    expect(useWorkspaceSurfaceStore.getState().paneVisibility).toMatchObject({
+      chatOpen: true,
+      editorOpen: true,
+      terminalOpen: true,
+    });
+
+    useWorkspaceSurfaceStore.getState().closePane('terminal');
+    await useChatStore.getState().newThread('project-1', 'workspace-1');
+
+    expect(useWorkspaceSurfaceStore.getState().paneVisibility).toMatchObject({
+      chatOpen: true,
+      editorOpen: true,
+      terminalOpen: false,
+    });
   });
 
   it('sends draft profileId when first persisting a plain thread', async () => {

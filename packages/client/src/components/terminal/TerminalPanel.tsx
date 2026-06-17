@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, LoaderCircle, Plus, TerminalSquare, X } from 'lucide-react';
 import { Button } from '../ui/button';
-import { createTerminalTransport } from '../../lib/terminal-transport';
 import type { TerminalSessionKind, TerminalTransport } from '../../lib/terminal-types';
 import { GhosttyTerminalView, type GhosttyTerminalHandle } from './GhosttyTerminalView';
+import {
+  getActiveTerminalPanelTab,
+  getTerminalPanelTabLabel,
+  getTerminalSessionRenderItems,
+} from './terminal-panel-tabs';
 
 export type TerminalPanelTarget = {
   kind: TerminalSessionKind;
@@ -24,7 +28,14 @@ export type TerminalPanelTab = {
   id: string;
   terminalId: string;
   label: string;
+  slot?: number | undefined;
+  scopeId?: string | undefined;
+  portalId?: string | undefined;
+  rootId?: string | undefined;
+  projectId?: string | undefined;
+  workspaceId?: string | undefined;
   cwd?: string | undefined;
+  processName?: string | undefined;
   title?: string | undefined;
   status?: TerminalStatus | undefined;
   error?: string | undefined;
@@ -36,15 +47,20 @@ type TerminalPanelProps = {
   activeTabId?: string;
   focusRequest?: number;
   isExpanded?: boolean;
+  isSyncing?: boolean;
+  error?: string;
   onActiveTabIdChange: (tabId: string) => void;
-  onCreateTab: (ordinal: number) => TerminalPanelTab;
+  onAddTab: () => void;
+  onCloseTab: (tab: TerminalPanelTab) => void;
   onExpandedChange?: (isExpanded: boolean) => void;
+  onExit: (tab: TerminalPanelTab) => void;
   onSessionActiveChange: (isActive: boolean) => void;
   onTabsChange: (tabs: TerminalPanelTabsChange) => void;
   tabs: TerminalPanelTab[];
   target: TerminalPanelTarget;
   onHide: () => void;
   variant?: 'pane' | 'main' | 'overlay';
+  transport?: TerminalTransport;
 };
 
 type TerminalSize = {
@@ -74,16 +90,6 @@ type TerminalSessionViewProps = {
 const terminalRevealDelayMs = 180;
 const terminalRevealFallbackMs = 1_500;
 
-const getTitlePath = (terminalTitle: string | undefined) => {
-  const trimmedTitle = terminalTitle?.trim();
-  if (!trimmedTitle) return undefined;
-
-  const shellTitleMatch = /^.+@[^:]+:(.+)$/.exec(trimmedTitle);
-  return shellTitleMatch?.[1]?.trim() || trimmedTitle;
-};
-
-const getTabLabel = (tab: TerminalPanelTab) => getTitlePath(tab.title) ?? tab.cwd ?? tab.label;
-
 const TerminalSessionView = ({
   focusRequest,
   isActive,
@@ -97,6 +103,7 @@ const TerminalSessionView = ({
   const terminalRef = useRef<GhosttyTerminalHandle | null>(null);
   const onExitRef = useRef(onExit);
   const onSessionActiveChangeRef = useRef(onSessionActiveChange);
+  const isActiveRef = useRef(isActive);
   const startedTerminalRef = useRef<string | undefined>(undefined);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latestSizeRef = useRef<TerminalSize | undefined>(undefined);
@@ -107,6 +114,7 @@ const TerminalSessionView = ({
   const [error, setError] = useState<string>();
   const [isTerminalReady, setIsTerminalReady] = useState(false);
   const [hasMeasuredSize, setHasMeasuredSize] = useState(false);
+  const [shouldConnect, setShouldConnect] = useState(isActive);
 
   const clearRevealTimer = useCallback(() => {
     if (revealTimerRef.current === undefined) return;
@@ -133,10 +141,12 @@ const TerminalSessionView = ({
   useEffect(() => () => clearRevealTimer(), [clearRevealTimer]);
 
   useEffect(() => {
-    if (!isActive || focusRequest === 0) return undefined;
-    const animationFrame = window.requestAnimationFrame(() => terminalRef.current?.focus());
-    return () => window.cancelAnimationFrame(animationFrame);
-  }, [focusRequest, isActive]);
+    if (isActive) setShouldConnect(true);
+  }, [isActive]);
+
+  useLayoutEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   useEffect(() => {
     const meta: TerminalTabMeta = { cwd, error, status, title };
@@ -151,6 +161,8 @@ const TerminalSessionView = ({
   }, [tab.terminalId, transport]);
 
   const handleResize = useCallback((cols: number, rows: number) => {
+    if (!isActiveRef.current || cols <= 0 || rows <= 0) return;
+
     latestSizeRef.current = { terminalId: tab.terminalId, cols, rows };
     setHasMeasuredSize(true);
     if (startedTerminalRef.current === tab.terminalId) {
@@ -165,6 +177,7 @@ const TerminalSessionView = ({
       ? { terminalId: tab.terminalId, cols: terminalSize.cols, rows: terminalSize.rows }
       : latestSizeRef.current;
     if (!nextSize || nextSize.terminalId !== tab.terminalId) return;
+    if (nextSize.cols <= 0 || nextSize.rows <= 0) return;
 
     latestSizeRef.current = nextSize;
     setHasMeasuredSize(true);
@@ -172,6 +185,15 @@ const TerminalSessionView = ({
       void transport?.resize(tab.terminalId, nextSize.cols, nextSize.rows).catch(() => undefined);
     }
   }, [tab.terminalId, transport]);
+
+  useEffect(() => {
+    if (!isActive || !isTerminalReady) return undefined;
+    const animationFrame = window.requestAnimationFrame(() => {
+      syncTerminalSize();
+      terminalRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [focusRequest, isActive, isTerminalReady, syncTerminalSize]);
 
   const handleTitleChange = useCallback((nextTitle: string) => {
     setTitle(nextTitle);
@@ -183,6 +205,8 @@ const TerminalSessionView = ({
   }, []);
 
   useEffect(() => {
+    if (!shouldConnect) return undefined;
+
     if (!transport) {
       setStatus('error');
       setError('Terminal transport is unavailable in this client.');
@@ -200,7 +224,7 @@ const TerminalSessionView = ({
     setIsTerminalReady(false);
     clearRevealTimer();
 
-    if (!measuredSize) return undefined;
+    if (!measuredSize || measuredSize.cols <= 0 || measuredSize.rows <= 0) return undefined;
 
     const resizeSyncTimers: number[] = [];
     let resizeSyncFrame: number | undefined;
@@ -209,7 +233,7 @@ const TerminalSessionView = ({
     };
 
     const unsubscribe = transport.subscribe(event => {
-      if (event.terminalId !== tab.terminalId) return;
+      if (!('terminalId' in event) || event.terminalId !== tab.terminalId) return;
 
       if (event.type === 'started') {
         setStatus('running');
@@ -284,6 +308,7 @@ const TerminalSessionView = ({
     clearRevealTimer,
     hasMeasuredSize,
     scheduleTerminalReveal,
+    shouldConnect,
     syncTerminalSize,
     tab.id,
     tab.terminalId,
@@ -299,17 +324,26 @@ const TerminalSessionView = ({
   ]);
 
   return (
-    <div className={isActive ? 'relative h-full min-h-0 overflow-hidden' : 'hidden'} data-terminal-tab-id={tab.id}>
+    <div
+      className={[
+        'absolute inset-0 h-full min-h-0 overflow-hidden',
+        isActive ? 'z-10 opacity-100' : 'pointer-events-none z-0 opacity-0',
+      ].join(' ')}
+      aria-hidden={isActive ? undefined : true}
+      data-terminal-tab-id={tab.id}
+    >
       <div className={isTerminalReady ? 'h-full min-h-0 opacity-100' : 'pointer-events-none h-full min-h-0 opacity-0'}>
-        <GhosttyTerminalView
-          key={tab.terminalId}
-          ref={terminalRef}
-          autoFocus={isActive}
-          onInput={handleInput}
-          onResize={handleResize}
-          onError={handleTerminalError}
-          onTitleChange={handleTitleChange}
-        />
+        {shouldConnect ? (
+          <GhosttyTerminalView
+            key={tab.terminalId}
+            ref={terminalRef}
+            autoFocus={false}
+            onInput={handleInput}
+            onResize={handleResize}
+            onError={handleTerminalError}
+            onTitleChange={handleTitleChange}
+          />
+        ) : null}
       </div>
       {!isTerminalReady && status !== 'error' ? (
         <div className="pointer-events-none absolute inset-0 grid place-items-center text-primary">
@@ -327,33 +361,31 @@ const TerminalSessionView = ({
 
 export const TerminalPanel = ({
   activeTabId,
+  error,
   focusRequest = 0,
   isExpanded = false,
+  isSyncing = false,
   onActiveTabIdChange,
-  onCreateTab,
+  onAddTab,
+  onCloseTab,
   onExpandedChange,
+  onExit,
   onSessionActiveChange,
   onTabsChange,
   tabs,
   target,
   onHide,
+  transport,
   variant = 'pane',
 }: TerminalPanelProps) => {
-  const transport = useMemo<TerminalTransport | undefined>(() => createTerminalTransport(), []);
   const [activeSessionTabIds, setActiveSessionTabIds] = useState<Set<string>>(() => new Set());
-  const activeTab = tabs.find(tab => tab.id === activeTabId) ?? tabs[0];
+  const activeTab = getActiveTerminalPanelTab(tabs, activeTabId);
+  const sessionRenderItems = useMemo(() => getTerminalSessionRenderItems(tabs, activeTab?.id), [activeTab?.id, tabs]);
   const activeSessionCount = activeSessionTabIds.size;
 
   useEffect(() => {
     onSessionActiveChange(activeSessionCount > 0);
   }, [activeSessionCount, onSessionActiveChange]);
-
-  useEffect(() => {
-    if (tabs.length > 0) return;
-    const firstTab = onCreateTab(1);
-    onTabsChange([firstTab]);
-    onActiveTabIdChange(firstTab.id);
-  }, [onActiveTabIdChange, onCreateTab, onTabsChange, tabs.length]);
 
   useEffect(() => {
     if (!activeTab && tabs.length > 0) {
@@ -414,54 +446,17 @@ export const TerminalPanel = ({
     });
   }, [onTabsChange]);
 
-  const createNextTab = useCallback(() => onCreateTab(tabs.length + 1), [onCreateTab, tabs.length]);
-
-  const handleAddTab = useCallback(() => {
-    const nextTab = createNextTab();
-    onTabsChange(currentTabs => [...currentTabs, nextTab]);
-    onActiveTabIdChange(nextTab.id);
-  }, [createNextTab, onActiveTabIdChange, onTabsChange]);
-
-  const closeTab = useCallback(async (tabToClose: TerminalPanelTab) => {
-    try {
-      await transport?.close(tabToClose.terminalId);
-    } catch {
-      // A tab can still be removed if its backing session is already gone.
-    }
-
+  const closeTab = useCallback((tabToClose: TerminalPanelTab) => {
     updateTabActiveState(tabToClose.id, false);
-
-    const tabIndex = tabs.findIndex(tab => tab.id === tabToClose.id);
-    const remainingTabs = tabs.filter(tab => tab.id !== tabToClose.id);
-
-    if (remainingTabs.length === 0) {
-      onTabsChange([]);
-      onSessionActiveChange(false);
-      onHide();
-      return;
-    }
-
-    onTabsChange(remainingTabs);
-    if (activeTabId === tabToClose.id) {
-      const nextActiveTab = remainingTabs[Math.min(Math.max(tabIndex, 0), remainingTabs.length - 1)];
-      onActiveTabIdChange(nextActiveTab.id);
-    }
-  }, [
-    activeTabId,
-    onActiveTabIdChange,
-    onSessionActiveChange,
-    onTabsChange,
-    onHide,
-    tabs,
-    transport,
-    updateTabActiveState,
-  ]);
+    onCloseTab(tabToClose);
+  }, [onCloseTab, updateTabActiveState]);
 
   const handleTabExit = useCallback((tabId: string) => {
     const exitedTab = tabs.find(tab => tab.id === tabId);
     if (!exitedTab) return;
-    void closeTab(exitedTab);
-  }, [closeTab, tabs]);
+    updateTabActiveState(tabId, false);
+    onExit(exitedTab);
+  }, [onExit, tabs, updateTabActiveState]);
 
   return (
     <section
@@ -488,7 +483,7 @@ export const TerminalPanel = ({
         >
           {tabs.map(tab => {
             const isSelected = tab.id === activeTab?.id;
-            const tabLabel = getTabLabel(tab);
+            const tabLabel = getTerminalPanelTabLabel(tab);
             const statusLabel = tab.status === 'connecting'
               ? 'connecting'
               : tab.status === 'error'
@@ -539,7 +534,7 @@ export const TerminalPanel = ({
             variant="ghost"
             aria-label="New terminal tab"
             title="New terminal tab"
-            onClick={handleAddTab}
+            onClick={onAddTab}
           >
             <Plus size={14} />
           </Button>
@@ -561,18 +556,28 @@ export const TerminalPanel = ({
         </Button>
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden bg-[var(--vscode-panel-background,var(--background))]">
-        {activeTab ? (
-          <TerminalSessionView
-            key={activeTab.id}
-            focusRequest={focusRequest}
-            isActive
-            onExit={handleTabExit}
-            onMetaChange={handleTabMetaChange}
-            onSessionActiveChange={updateTabActiveState}
-            tab={activeTab}
-            target={target}
-            transport={transport}
-          />
+        {error ? (
+          <div className="absolute inset-x-3 top-3 rounded-md border border-destructive/30 bg-background/90 px-3 py-2 text-xs text-destructive shadow-sm">
+            {error}
+          </div>
+        ) : isSyncing ? (
+          <div className="pointer-events-none absolute inset-0 grid place-items-center text-primary">
+            <LoaderCircle size={20} className="animate-spin" aria-hidden="true" />
+          </div>
+        ) : sessionRenderItems.length > 0 ? (
+          sessionRenderItems.map(({ tab, isActive: isActiveTab }) => (
+            <TerminalSessionView
+              key={tab.id}
+              focusRequest={focusRequest}
+              isActive={isActiveTab}
+              onExit={handleTabExit}
+              onMetaChange={handleTabMetaChange}
+              onSessionActiveChange={updateTabActiveState}
+              tab={tab}
+              target={target}
+              transport={transport}
+            />
+          ))
         ) : null}
       </div>
     </section>

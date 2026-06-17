@@ -4,6 +4,7 @@ import { SkillSearchProcessor } from '@mastra/core/processors';
 import { LibSQLVector } from '@mastra/libsql';
 import { Memory } from '@mastra/memory';
 import { CompactToolHistoryProcessor, getToolHistoryFullCalls } from '../compact-tool-history-processor';
+import { CurrentTurnImageProcessor } from '../current-turn-image-processor';
 import { getContextTokenLimit, getMemoryCapabilities } from '../memory-policy';
 import { RuntimeContextProcessor } from '../runtime-context-processor';
 import { storageAuthToken, storageUrl } from '../storage-config';
@@ -69,6 +70,7 @@ export const mageHandAgent = new Agent({
   workspace: baseWorkspace,
   tools: resolveTools,
   inputProcessors: [
+    new CurrentTurnImageProcessor(),
     new CompactToolHistoryProcessor({ preserveToolCalls: getToolHistoryFullCalls(), tokenLimit: getContextTokenLimit() }),
     new SkillSearchProcessor({
       workspace: baseWorkspace,

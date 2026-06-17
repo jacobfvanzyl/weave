@@ -33,6 +33,7 @@ export const gitProjectCodingInstructions = [
   '',
   'Search and file operations:',
   '- Use bash for discovery/search commands such as ls, fd, and rg before reading unknown files.',
+  '- Use typed git tools for Git status, diffs, logs, branch switching, and worktree operations before falling back to bash git commands.',
   '- Use read for file inspection.',
   '- Use edit for targeted changes.',
   '- Use write only for new files or full-file replacement.',

@@ -1,4 +1,10 @@
-import type { TerminalHostEvent, TerminalStartInput, TerminalStartResult } from './terminal';
+import type {
+  TerminalHostEvent,
+  TerminalStartInput,
+  TerminalStartResult,
+  TerminalTargetInput,
+  TerminalWindowRecord,
+} from './terminal';
 import type { EditorFile, EditorListResult, EditorOperationResult, EditorTarget, EditorWriteResult } from './editor';
 
 export type DesktopConnectionSettings = {
@@ -21,6 +27,9 @@ export type WeaveDesktopBridge = {
   testConnection: (input?: DesktopConnectionInput) => Promise<DesktopConnectionTestResult>;
   openExternal: (url: string) => Promise<void>;
   getPlatform: () => NodeJS.Platform;
+  terminalSnapshot: () => Promise<TerminalWindowRecord[]>;
+  terminalList: (input: TerminalTargetInput) => Promise<TerminalWindowRecord[]>;
+  terminalCreate: (input: TerminalTargetInput) => Promise<TerminalWindowRecord>;
   terminalStart: (input: TerminalStartInput) => Promise<TerminalStartResult>;
   terminalInput: (terminalId: string, data: string) => Promise<void>;
   terminalResize: (terminalId: string, cols: number, rows: number) => Promise<void>;

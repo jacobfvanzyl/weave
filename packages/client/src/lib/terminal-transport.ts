@@ -3,11 +3,16 @@ import type {
   TerminalHostEvent,
   TerminalStartInput,
   TerminalStartResult,
+  TerminalTargetInput,
   TerminalTransport,
+  TerminalWindowRecord,
 } from './terminal-types';
 import { getAuthHeaders, getMastraUrl } from './mastra-client';
 
 type DesktopTerminalBridge = {
+  terminalSnapshot: () => Promise<TerminalWindowRecord[]>;
+  terminalList: (input: TerminalTargetInput) => Promise<TerminalWindowRecord[]>;
+  terminalCreate: (input: TerminalTargetInput) => Promise<TerminalWindowRecord>;
   terminalStart: (input: TerminalStartInput) => Promise<TerminalStartResult>;
   terminalInput: (terminalId: string, data: string) => Promise<void>;
   terminalResize: (terminalId: string, cols: number, rows: number) => Promise<void>;
@@ -25,6 +30,9 @@ const getDesktopBridge = () => {
   const bridge = (window as WindowWithDesktopTerminal).weaveDesktop;
   if (
     typeof bridge?.terminalStart !== 'function'
+    || typeof bridge.terminalSnapshot !== 'function'
+    || typeof bridge.terminalList !== 'function'
+    || typeof bridge.terminalCreate !== 'function'
     || typeof bridge.terminalInput !== 'function'
     || typeof bridge.terminalResize !== 'function'
     || typeof bridge.terminalClose !== 'function'
@@ -50,6 +58,9 @@ export const createDesktopTerminalTransport = (): TerminalTransport | undefined 
   if (!bridge) return undefined;
 
   return {
+    snapshot: () => bridge.terminalSnapshot(),
+    list: input => bridge.terminalList(input),
+    create: input => bridge.terminalCreate(input),
     start: input => bridge.terminalStart(input),
     input: (terminalId, data) => bridge.terminalInput(terminalId, data),
     resize: (terminalId, cols, rows) => bridge.terminalResize(terminalId, cols, rows),
@@ -69,10 +80,24 @@ type PendingStart = {
   reject: (error: Error) => void;
 };
 
+type PendingTerminalRequest = {
+  resolve: (value: TerminalWindowRecord[] | TerminalWindowRecord) => void;
+  reject: (error: Error) => void;
+};
+
 type WebTerminalConnection = {
   send: (message: TerminalClientMessage) => void;
+  list: (input: TerminalTargetInput) => Promise<TerminalWindowRecord[]>;
+  create: (input: TerminalTargetInput) => Promise<TerminalWindowRecord>;
   start: (input: TerminalStartInput) => Promise<TerminalStartResult>;
   closeSocket: () => void;
+};
+
+let terminalRequestCounter = 0;
+
+const nextTerminalRequestId = () => {
+  terminalRequestCounter += 1;
+  return `terminal-${terminalRequestCounter.toString(36)}`;
 };
 
 const parseJson = async <T>(response: Response): Promise<T> => {
@@ -80,7 +105,7 @@ const parseJson = async <T>(response: Response): Promise<T> => {
   return response.json() as Promise<T>;
 };
 
-const requestTerminalToken = async (input: TerminalStartInput) =>
+const requestTerminalToken = async (input: TerminalTargetInput) =>
   parseJson<TerminalTokenResponse>(
     await fetch(`${getMastraUrl()}/terminals/token`, {
       method: 'POST',
@@ -90,7 +115,7 @@ const requestTerminalToken = async (input: TerminalStartInput) =>
   );
 
 const createWebTerminalConnection = async (
-  input: TerminalStartInput,
+  input: TerminalTargetInput,
   emit: (event: TerminalHostEvent) => void,
   onClosed: () => void,
 ): Promise<WebTerminalConnection> => {
@@ -100,6 +125,7 @@ const createWebTerminalConnection = async (
 
   const socket = new WebSocket(url);
   let pendingStart: PendingStart | undefined;
+  const pendingRequests = new Map<string, PendingTerminalRequest>();
   let accepted = false;
 
   const opened = new Promise<void>((resolve, reject) => {
@@ -116,10 +142,28 @@ const createWebTerminalConnection = async (
       }
 
       const terminalEvent = message as TerminalHostEvent;
+      if (terminalEvent.type === 'windows' && terminalEvent.requestId) {
+        pendingRequests.get(terminalEvent.requestId)?.resolve(terminalEvent.windows);
+        pendingRequests.delete(terminalEvent.requestId);
+        return;
+      }
+
+      if (terminalEvent.type === 'created' && terminalEvent.requestId) {
+        pendingRequests.get(terminalEvent.requestId)?.resolve(terminalEvent.window);
+        pendingRequests.delete(terminalEvent.requestId);
+        return;
+      }
+
+      if (terminalEvent.type === 'error' && terminalEvent.requestId) {
+        pendingRequests.get(terminalEvent.requestId)?.reject(new Error(terminalEvent.error));
+        pendingRequests.delete(terminalEvent.requestId);
+        return;
+      }
+
       if (terminalEvent.type === 'started') {
         pendingStart?.resolve({ sessionId: terminalEvent.sessionId, cwd: terminalEvent.cwd });
         pendingStart = undefined;
-      } else if (terminalEvent.type === 'error' && pendingStart && terminalEvent.terminalId === input.terminalId) {
+    } else if (terminalEvent.type === 'error' && pendingStart && terminalEvent.terminalId === input.terminalId) {
         pendingStart.reject(new Error(terminalEvent.error));
         pendingStart = undefined;
       }
@@ -129,6 +173,8 @@ const createWebTerminalConnection = async (
       if (!accepted) reject(new Error('Terminal WebSocket closed before it was accepted.'));
       pendingStart?.reject(new Error('Terminal WebSocket closed.'));
       pendingStart = undefined;
+      for (const pending of pendingRequests.values()) pending.reject(new Error('Terminal WebSocket closed.'));
+      pendingRequests.clear();
       onClosed();
     };
   });
@@ -142,6 +188,22 @@ const createWebTerminalConnection = async (
 
   return {
     send,
+    list: nextInput => new Promise<TerminalWindowRecord[]>((resolve, reject) => {
+      const requestId = nextTerminalRequestId();
+      pendingRequests.set(requestId, {
+        resolve: value => resolve(value as TerminalWindowRecord[]),
+        reject,
+      });
+      send({ type: 'list', requestId, ...nextInput });
+    }),
+    create: nextInput => new Promise<TerminalWindowRecord>((resolve, reject) => {
+      const requestId = nextTerminalRequestId();
+      pendingRequests.set(requestId, {
+        resolve: value => resolve(value as TerminalWindowRecord),
+        reject,
+      });
+      send({ type: 'create', requestId, ...nextInput });
+    }),
     start: nextInput => new Promise<TerminalStartResult>((resolve, reject) => {
       pendingStart = { resolve, reject };
       send({ type: 'start', ...nextInput });
@@ -159,14 +221,24 @@ export const createWebTerminalTransport = (): TerminalTransport | undefined => {
     for (const listener of listeners) listener(event);
   };
 
-  const getConnection = async (input: TerminalStartInput) => {
-    const existing = connections.get(input.terminalId);
+  const getTargetConnectionKey = (input: TerminalTargetInput) => [
+    input.kind,
+    input.portalId ?? '',
+    input.rootId ?? '',
+    input.projectId ?? '',
+    input.workspaceId ?? '',
+    input.workspacePath ?? '',
+    input.cwd ?? '',
+  ].join(':');
+
+  const getConnection = async (input: TerminalTargetInput, connectionKey: string) => {
+    const existing = connections.get(connectionKey);
     if (existing) return existing;
 
     const connection = await createWebTerminalConnection(input, emit, () => {
-      connections.delete(input.terminalId);
+      connections.delete(connectionKey);
     });
-    connections.set(input.terminalId, connection);
+    connections.set(connectionKey, connection);
     return connection;
   };
 
@@ -177,8 +249,21 @@ export const createWebTerminalTransport = (): TerminalTransport | undefined => {
   };
 
   return {
+    snapshot: async input => {
+      if (!input) return [];
+      const connection = await getConnection(input, getTargetConnectionKey(input));
+      return connection.list(input);
+    },
+    list: async input => {
+      const connection = await getConnection(input, getTargetConnectionKey(input));
+      return connection.list(input);
+    },
+    create: async input => {
+      const connection = await getConnection(input, getTargetConnectionKey(input));
+      return connection.create(input);
+    },
     start: async input => {
-      const connection = await getConnection(input);
+      const connection = await getConnection(input, input.terminalId);
       return connection.start(input);
     },
     input: (terminalId, data) => sendToTerminal(terminalId, { type: 'input', terminalId, data }),

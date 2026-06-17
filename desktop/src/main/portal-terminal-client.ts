@@ -5,7 +5,13 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { TerminalHostEvent, TerminalStartInput, TerminalStartResult } from '../shared/terminal';
+import type {
+  TerminalHostEvent,
+  TerminalStartInput,
+  TerminalStartResult,
+  TerminalTargetInput,
+  TerminalWindowRecord,
+} from '../shared/terminal';
 import type { ConnectionSettingsStore } from './settings-store';
 
 export type TerminalWebContents = {
@@ -61,6 +67,10 @@ type LocalTerminalConnection = {
     resolve: (value: TerminalStartResult) => void;
     reject: (error: Error) => void;
   };
+  pendingRequests: Map<string, {
+    resolve: (value: TerminalWindowRecord[] | TerminalWindowRecord) => void;
+    reject: (error: Error) => void;
+  }>;
 };
 
 type PortalSupervisorOptions = {
@@ -70,7 +80,7 @@ type PortalSupervisorOptions = {
 
 const terminalEventChannel = 'terminal:event';
 const defaultPortalWsPort = '4112';
-const requiredControlCapabilities = ['terminal', 'editor'];
+const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth'];
 
 const getAvailablePort = () => new Promise<number>((resolve, reject) => {
   const server = net.createServer();
@@ -394,9 +404,46 @@ export class PortalSupervisor {
 export class PortalTerminalClient {
   private readonly supervisor: PortalSupervisor;
   private readonly connections = new Map<string, LocalTerminalConnection>();
+  private requestCounter = 0;
 
   constructor(supervisor: PortalSupervisor) {
     this.supervisor = supervisor;
+  }
+
+  async snapshot(): Promise<TerminalWindowRecord[]> {
+    const connection = await this.getConnection('snapshot');
+    const requestId = this.nextRequestId();
+    return new Promise<TerminalWindowRecord[]>((resolve, reject) => {
+      connection.pendingRequests.set(requestId, {
+        resolve: value => resolve(value as TerminalWindowRecord[]),
+        reject,
+      });
+      this.send(connection, { type: 'snapshot', requestId });
+    });
+  }
+
+  async list(input: TerminalTargetInput): Promise<TerminalWindowRecord[]> {
+    const connection = await this.getConnection(this.getTargetConnectionId(input));
+    const requestId = this.nextRequestId();
+    return new Promise<TerminalWindowRecord[]>((resolve, reject) => {
+      connection.pendingRequests.set(requestId, {
+        resolve: value => resolve(value as TerminalWindowRecord[]),
+        reject,
+      });
+      this.send(connection, { type: 'list', requestId, ...input });
+    });
+  }
+
+  async create(input: TerminalTargetInput): Promise<TerminalWindowRecord> {
+    const connection = await this.getConnection(this.getTargetConnectionId(input));
+    const requestId = this.nextRequestId();
+    return new Promise<TerminalWindowRecord>((resolve, reject) => {
+      connection.pendingRequests.set(requestId, {
+        resolve: value => resolve(value as TerminalWindowRecord),
+        reject,
+      });
+      this.send(connection, { type: 'create', requestId, ...input });
+    });
   }
 
   async start(input: TerminalStartInput, webContents: TerminalWebContents): Promise<TerminalStartResult> {
@@ -467,6 +514,7 @@ export class PortalTerminalClient {
       terminalId,
       socket,
       subscribers: new Map(),
+      pendingRequests: new Map(),
     };
 
     await new Promise<void>((resolve, reject) => {
@@ -475,6 +523,10 @@ export class PortalTerminalClient {
       socket.onclose = () => {
         connection.pendingStart?.reject(new Error('Portal local terminal WebSocket closed.'));
         connection.pendingStart = undefined;
+        for (const pending of connection.pendingRequests.values()) {
+          pending.reject(new Error('Portal local terminal WebSocket closed.'));
+        }
+        connection.pendingRequests.clear();
         this.connections.delete(terminalId);
       };
       socket.onmessage = event => {
@@ -494,6 +546,24 @@ export class PortalTerminalClient {
   }
 
   private handleEvent(connection: LocalTerminalConnection, event: TerminalHostEvent) {
+    if (event.type === 'windows' && event.requestId) {
+      connection.pendingRequests.get(event.requestId)?.resolve(event.windows);
+      connection.pendingRequests.delete(event.requestId);
+      return;
+    }
+
+    if (event.type === 'created' && event.requestId) {
+      connection.pendingRequests.get(event.requestId)?.resolve(event.window);
+      connection.pendingRequests.delete(event.requestId);
+      return;
+    }
+
+    if (event.type === 'error' && event.requestId) {
+      connection.pendingRequests.get(event.requestId)?.reject(new Error(event.error));
+      connection.pendingRequests.delete(event.requestId);
+      return;
+    }
+
     if (event.type === 'started') {
       connection.pendingStart?.resolve({ sessionId: event.sessionId, cwd: event.cwd });
       connection.pendingStart = undefined;
@@ -509,5 +579,22 @@ export class PortalTerminalClient {
       }
       webContents.send(terminalEventChannel, event);
     }
+  }
+
+  private getTargetConnectionId(input: TerminalTargetInput) {
+    return [
+      input.kind,
+      input.portalId ?? '',
+      input.rootId ?? '',
+      input.projectId ?? '',
+      input.workspaceId ?? '',
+      input.workspacePath ?? '',
+      input.cwd ?? '',
+    ].join(':');
+  }
+
+  private nextRequestId() {
+    this.requestCounter += 1;
+    return `desktop-terminal-${this.requestCounter.toString(36)}`;
   }
 }

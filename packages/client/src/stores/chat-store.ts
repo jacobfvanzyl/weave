@@ -113,6 +113,7 @@ const getSurfaceSnapshot = (): WorkspaceSurfaceSnapshot => {
     threadId: surface.threadId,
     activeSurface: surface.activeSurface,
     paneVisibility: surface.paneVisibility,
+    surfaceLayouts: surface.surfaceLayouts,
     maximizedPane: surface.maximizedPane,
     preMaximizePaneVisibility: surface.preMaximizePaneVisibility,
   };
@@ -196,11 +197,14 @@ export const useChatStore = create<ChatState>()(
         }),
       newThread: async (projectId, workspaceId) => {
         const localThread = { ...createLocalThread(), projectId, workspaceId };
-        const surfaceThreadId = useWorkspaceSurfaceStore.getState().threadId;
+        const surface = useWorkspaceSurfaceStore.getState();
+        const surfaceThreadId = surface.threadId;
         set(state => ({
           threads: [localThread, ...state.threads.filter(thread => thread.id !== surfaceThreadId || !isDraftThread(thread))],
         }));
-        useWorkspaceSurfaceStore.getState().selectThread(localThread.id, toSurfaceThread(localThread));
+        useWorkspaceSurfaceStore.getState().selectThread(localThread.id, toSurfaceThread(localThread), {
+          preserveTerminalVisibility: Boolean(workspaceId),
+        });
       },
       ensureThreadPersisted: async (threadId, title) => {
         const existing = get().threads.find(thread => thread.id === threadId);

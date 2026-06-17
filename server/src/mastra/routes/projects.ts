@@ -1,7 +1,18 @@
 import { registerApiRoute } from '@mastra/core/server';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
-import { collectWorkspaceGitStatesForProject, gitFieldsFromWorktree, stripProjectGitState } from '../projects/git-state';
+import { collectWorkspaceGitStatesForProject, gitFieldsFromWorktree, stripProjectGitState, workspaceStateFromGitFields } from '../projects/git-state';
 import { getPortalConnection, listPortalConnections, requestPortalTool } from '../portal/registry';
+import {
+  createProjectWorktree,
+  fetchWorkspaceUpstream,
+  inspectProjectGit,
+  listProjectBranches,
+  listProjectWorktrees,
+  pullWorkspaceUpstream,
+  removeWorkspaceWorktree,
+  switchWorkspaceBranch,
+  validateProjectWorktree,
+} from '../git/service';
 
 const agentId = 'mageHandAgent';
 const projectThreadPrefix = '__project__';
@@ -21,6 +32,9 @@ export type Workspace = {
   path?: string;
   branch?: string;
   head?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
   detached?: boolean;
   baseBranch?: string;
   locked?: boolean;
@@ -62,13 +76,6 @@ export type Project = {
   updatedAt: string;
 };
 
-type BranchOption = {
-  name: string;
-  ref: string;
-  kind: 'local' | 'remote';
-  current?: boolean;
-};
-
 const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 const nowIso = () => new Date().toISOString();
 const projectThreadId = (projectId: string) => `${projectThreadPrefix}${projectId}`;
@@ -93,19 +100,6 @@ const optionalString = (value: unknown) => (typeof value === 'string' && value.t
 const normalizeBranch = (value: unknown) => optionalString(value)?.replace(/^refs\/heads\//, '');
 const normalizePath = (value: unknown) => optionalString(value)?.replace(/\/+$/, '') || undefined;
 const timestampString = (value: unknown) => typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
-const normalizeBranchOption = (value: unknown): BranchOption | undefined => {
-  const record = value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
-  const name = optionalString(record?.name);
-  const ref = optionalString(record?.ref);
-  if (!name || !ref) return undefined;
-  return {
-    name,
-    ref,
-    kind: record?.kind === 'remote' ? 'remote' : 'local',
-    current: record?.current === true ? true : undefined,
-  };
-};
-
 const getTopThreadSortOrder = async (memory: any, resourceId: string, projectId: string, workspaceId?: string) => {
   const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   const orders = result.threads
@@ -309,14 +303,7 @@ const createGitProject = async (c: any, resourceId: string, baseProject: Project
   if (!rootId) throw new Error('rootId is required for git projects');
   if (!repoPath) throw new Error('repoPath is required for git projects');
 
-  const result = await requestPortalTool({
-    portalId: portalId!,
-    tool: 'portal.git.inspect',
-    args: { rootId, path: repoPath },
-  }) as { ok?: boolean; error?: string; git?: Record<string, unknown> };
-  if (result.ok === false) throw new Error(result.error ?? 'git inspect failed');
-
-  const git = result.git ?? {};
+  const git = await inspectProjectGit(portalId!, rootId, repoPath, requestPortalTool);
   const defaultBranch = normalizeBranch(git.defaultBranch) ?? normalizeBranch(git.currentBranch) ?? 'main';
   const repoRoot = normalizePath(git.root);
   const at = baseProject.createdAt;
@@ -590,19 +577,10 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
-        const result = await requestPortalTool({
-          portalId: project.portalId!,
-          projectId,
-          rootId: project.portalRootId,
-          repoPath: project.repoPath,
-          tool: 'portal.git.branches.list',
-          args: {},
-          timeoutMs: 10_000,
-        }) as { ok?: boolean; error?: string; branches?: unknown[] };
-        portalToolError(result);
-        const branches = Array.isArray(result.branches)
-          ? result.branches.flatMap(branch => normalizeBranchOption(branch) ?? [])
-          : [];
+        const branches = await listProjectBranches(project, resourceId, {
+          getPortal: getPortalConnection,
+          requestPortal: requestPortalTool,
+        });
         return c.json({ branches });
       } catch (error) {
         return errorResponse(c, error);
@@ -638,17 +616,10 @@ export const projectRoutes = [
             if (remote && normalizeRemote(project.gitRemote) !== remote) continue;
             if (!project.portalId) continue;
             try {
-              const result = await requestPortalTool({
-                portalId: project.portalId,
-                projectId: project.id,
-                rootId: project.portalRootId,
-                repoPath: project.repoPath,
-                tool: 'portal.git.worktree.validate',
-                args: { path: workspacePath },
-                timeoutMs: 10_000,
-              }) as { ok?: boolean; error?: string; worktree?: Record<string, unknown> };
-              portalToolError(result);
-              validation = result.worktree ?? {};
+              validation = await validateProjectWorktree(project, resourceId, workspacePath, {
+                getPortal: getPortalConnection,
+                requestPortal: requestPortalTool,
+              });
               const validatedPath = normalizePath(validation.path) ?? workspacePath;
               resolvedProject = project;
               resolvedWorkspace = project.workspaces.find(item => normalizeWorkspacePath(item) === validatedPath.toLowerCase());
@@ -677,7 +648,7 @@ export const projectRoutes = [
               }
               break;
             } catch (error) {
-              if (error instanceof Error && error.message === 'Portal is offline') offline = true;
+              if (error instanceof Error && /portal is offline|portal is offline or unavailable/i.test(error.message)) offline = true;
             }
           }
         }
@@ -725,17 +696,11 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
-        const result = await requestPortalTool({
-          portalId: project.portalId!,
-          projectId,
-          rootId: project.portalRootId,
-          repoPath: project.repoPath,
-          tool: 'portal.git.worktree.list',
-          args: {},
-          timeoutMs: 10_000,
-        }) as { ok?: boolean; error?: string; worktrees?: Array<Record<string, unknown>> };
-        portalToolError(result);
-        const worktrees = (result.worktrees ?? []).map(worktree => {
+        const discovered = await listProjectWorktrees(project, resourceId, {
+          getPortal: getPortalConnection,
+          requestPortal: requestPortalTool,
+        });
+        const worktrees = discovered.map(worktree => {
           const path = normalizePath(worktree.path);
           const branch = normalizeBranch(worktree.branch);
           const workspace = project.workspaces.find(item => normalizePath(item.path) === path);
@@ -766,18 +731,16 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
-        const result = await requestPortalTool({
-          portalId: project.portalId!,
-          projectId,
-          rootId: project.portalRootId,
-          repoPath: project.repoPath,
-          tool: 'portal.git.worktree.create',
-          args: { mode, name, branch, base, path: optionalString(body?.path) },
-          timeoutMs: 60_000,
-        }) as { ok?: boolean; error?: string; worktree?: Record<string, unknown> };
-        portalToolError(result);
-
-        const worktree = result.worktree ?? {};
+        const worktree = await createProjectWorktree(project, resourceId, {
+          mode,
+          name,
+          branch,
+          base,
+          path: optionalString(body?.path),
+        }, {
+          getPortal: getPortalConnection,
+          requestPortal: requestPortalTool,
+        });
         const path = normalizePath(worktree.path);
         if (!path) throw new Error('Portal did not return a workspace path');
         assertUniqueWorkspace(project, { path });
@@ -821,18 +784,10 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
-        const result = await requestPortalTool({
-          portalId: project.portalId!,
-          projectId,
-          rootId: project.portalRootId,
-          repoPath: project.repoPath,
-          tool: 'portal.git.worktree.validate',
-          args: { path },
-          timeoutMs: 10_000,
-        }) as { ok?: boolean; error?: string; worktree?: Record<string, unknown> };
-        portalToolError(result);
-
-        const worktree = result.worktree ?? {};
+        const worktree = await validateProjectWorktree(project, resourceId, path, {
+          getPortal: getPortalConnection,
+          requestPortal: requestPortalTool,
+        });
         const normalizedPath = normalizePath(worktree.path);
         if (!normalizedPath) throw new Error('validated worktree did not return a path');
         assertUniqueWorkspace(project, { path: normalizedPath });
@@ -883,22 +838,14 @@ export const projectRoutes = [
         let nextWorkspace: Workspace = { ...workspace, ...(name ? { name } : {}), updatedAt: at };
 
         if (branch) {
-          const result = await requestPortalTool({
-            portalId: workspace.portalId ?? project.portalId!,
-            projectId,
-            workspaceId,
-            rootId: project.portalRootId,
-            repoPath: project.repoPath,
-            workspacePath: workspace.path,
-            tool: 'portal.git.worktree.switch',
-            args: {
-              branch,
-              create: body?.createBranch === true,
-              base: normalizeBranch(body?.base),
-            },
-            timeoutMs: 60_000,
-          }) as { ok?: boolean; error?: string; worktree?: Record<string, unknown> };
-          portalToolError(result);
+          await switchWorkspaceBranch(project, workspace, resourceId, {
+            branch,
+            create: body?.createBranch === true,
+            base: normalizeBranch(body?.base),
+          }, {
+            getPortal: getPortalConnection,
+            requestPortal: requestPortalTool,
+          });
         }
 
         const nextProject = {
@@ -908,6 +855,54 @@ export const projectRoutes = [
         };
         const thread = await saveProject(memory, resourceId, nextProject);
         return c.json({ project: toProject(thread), workspace: nextWorkspace });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/projects/:projectId/workspaces/:workspaceId/git/fetch', {
+    method: 'POST',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const projectId = c.req.param('projectId');
+        const workspaceId = c.req.param('workspaceId');
+        const memory = await getMemory(c);
+        const project = await getProject(memory, resourceId, projectId);
+        if (!project) return c.json({ error: 'project not found' }, 404);
+        assertGitProjectReady(project, resourceId);
+
+        const workspace = project.workspaces.find(item => item.id === workspaceId);
+        if (!workspace) return c.json({ error: 'workspace not found' }, 404);
+        const status = await fetchWorkspaceUpstream(project, workspace, resourceId, {
+          getPortal: getPortalConnection,
+          requestPortal: requestPortalTool,
+        });
+        return c.json({ state: workspaceStateFromGitFields(project.id, workspace, status, nowIso()) });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/projects/:projectId/workspaces/:workspaceId/git/pull', {
+    method: 'POST',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const projectId = c.req.param('projectId');
+        const workspaceId = c.req.param('workspaceId');
+        const memory = await getMemory(c);
+        const project = await getProject(memory, resourceId, projectId);
+        if (!project) return c.json({ error: 'project not found' }, 404);
+        assertGitProjectReady(project, resourceId);
+
+        const workspace = project.workspaces.find(item => item.id === workspaceId);
+        if (!workspace) return c.json({ error: 'workspace not found' }, 404);
+        const status = await pullWorkspaceUpstream(project, workspace, resourceId, {
+          getPortal: getPortalConnection,
+          requestPortal: requestPortalTool,
+        });
+        return c.json({ state: workspaceStateFromGitFields(project.id, workspace, status, nowIso()) });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -933,16 +928,10 @@ export const projectRoutes = [
         if (activeThreads.length > 0) return c.json({ error: 'workspace has active threads; archive or delete them before removing the workspace' }, 409);
 
         if (mode === 'remove') {
-          const result = await requestPortalTool({
-            portalId: workspace.portalId ?? project.portalId!,
-            projectId,
-            rootId: project.portalRootId,
-            repoPath: project.repoPath,
-            tool: 'portal.git.worktree.remove',
-            args: { path: workspace.path, deleteBranch: false },
-            timeoutMs: 60_000,
-          }) as { ok?: boolean; error?: string };
-          portalToolError(result);
+          await removeWorkspaceWorktree(project, workspace, resourceId, { path: workspace.path, deleteBranch: false }, {
+            getPortal: getPortalConnection,
+            requestPortal: requestPortalTool,
+          });
         }
 
         const nextProject = { ...project, workspaces: project.workspaces.filter(item => item.id !== workspaceId), updatedAt: nowIso() };

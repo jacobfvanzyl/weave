@@ -359,6 +359,14 @@ const withLastUserText = (messages: UIMessage[], text: string, metadata: Record<
   return nextMessages;
 };
 
+const latestUserMessageOnly = (messages: UIMessage[]) => {
+  if (messages.length <= 1) return messages;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') return [messages[index]];
+  }
+  return [messages[messages.length - 1]];
+};
+
 const MarkdownImage = ({ alt, src }: { alt?: string; src?: string }) => {
   const [failed, setFailed] = useState(false);
 
@@ -1707,7 +1715,7 @@ const AssistantChatRuntime = ({
           return {
             headers: getAuthHeaders(),
             body: {
-              messages: requestMessages,
+              messages: latestUserMessageOnly(requestMessages),
               ...(selectedModel ? { model: selectedModel } : {}),
               reasoningEffort,
               memory: {

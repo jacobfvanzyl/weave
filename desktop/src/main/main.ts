@@ -3,7 +3,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { DesktopConnectionInput, DesktopConnectionTestResult } from '../shared/desktop-api';
 import type { EditorTarget } from '../shared/editor';
-import type { TerminalStartInput } from '../shared/terminal';
+import type { TerminalStartInput, TerminalTargetInput } from '../shared/terminal';
 import { getServerOrigin, isHttpUrl, normalizeMastraUrl, parseDesktopConnectionInput } from '../shared/connection';
 import { ConnectionSettingsStore } from './settings-store';
 import {
@@ -20,6 +20,7 @@ import {
   parseTerminalId,
   parseTerminalResize,
   parseTerminalStartInput,
+  parseTerminalTargetInput,
 } from './terminal-input';
 import { PortalSupervisor, PortalTerminalClient } from './portal-terminal-client';
 
@@ -148,7 +149,7 @@ const resolveGitWorkspace = async (input: EditorTarget, featureName: string) => 
   };
 };
 
-const resolveTerminalWorkspace = async (input: TerminalStartInput) => {
+const resolveTerminalWorkspace = async (input: TerminalTargetInput) => {
   if (!input.projectId || !input.workspaceId) throw new Error('Project and Workspace are required for this terminal.');
   const target = await resolveGitWorkspace({ projectId: input.projectId, workspaceId: input.workspaceId }, 'terminal');
   return {
@@ -160,7 +161,7 @@ const resolveTerminalWorkspace = async (input: TerminalStartInput) => {
   };
 };
 
-const resolveGeneralTerminal = async (input: TerminalStartInput) => ({
+const resolveGeneralTerminal = async (input: TerminalTargetInput) => ({
   ...input,
   cwd: await realpath(input.cwd?.trim() || app.getPath('home')),
 });
@@ -207,12 +208,27 @@ const registerIpcHandlers = () => {
     testConnection(input === undefined ? undefined : parseDesktopConnectionInput(input)),
   );
   ipcMain.handle('shell:open-external', (_event, url: string) => openExternal(url));
+  ipcMain.handle('terminal:snapshot', () => getPortalTerminalClient().snapshot());
+  ipcMain.handle('terminal:list', async (_event, input: unknown) => {
+    const parsed = parseTerminalTargetInput(input);
+    const resolved = parsed.kind === 'general'
+      ? await resolveGeneralTerminal(parsed)
+      : await resolveTerminalWorkspace(parsed);
+    return getPortalTerminalClient().list(resolved);
+  });
+  ipcMain.handle('terminal:create', async (_event, input: unknown) => {
+    const parsed = parseTerminalTargetInput(input);
+    const resolved = parsed.kind === 'general'
+      ? await resolveGeneralTerminal(parsed)
+      : await resolveTerminalWorkspace(parsed);
+    return getPortalTerminalClient().create(resolved);
+  });
   ipcMain.handle('terminal:start', async (event, input: unknown) => {
     const parsed = parseTerminalStartInput(input);
     const resolved = parsed.kind === 'general'
       ? await resolveGeneralTerminal(parsed)
       : await resolveTerminalWorkspace(parsed);
-    return getPortalTerminalClient().start(resolved, event.sender);
+    return getPortalTerminalClient().start({ ...resolved, terminalId: parsed.terminalId }, event.sender);
   });
   ipcMain.handle('terminal:input', (_event, terminalId: unknown, data: unknown) =>
     getPortalTerminalClient().input(parseTerminalId(terminalId), parseTerminalInputData(data)),

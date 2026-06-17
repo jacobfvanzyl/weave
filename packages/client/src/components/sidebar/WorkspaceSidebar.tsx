@@ -4,13 +4,14 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ChevronDown, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, Trash2, X } from 'lucide-react';
-import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, discoverWorkspaces, listPortals, listProjectBranches, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type DiscoveredWorktree, type WorkspaceBranchMode } from '../../lib/chat-state-api';
+import { Archive, ChevronDown, Download, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, TerminalSquare, Trash2, X } from 'lucide-react';
+import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, discoverWorkspaces, fetchWorkspaceGitUpstream, listPortals, listProjectBranches, pullWorkspaceGitUpstream, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type DiscoveredWorktree, type WorkspaceBranchMode, type WorkspaceBranchOption } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { createWorkspaceDraftDefaults, getDefaultWorkspaceBase } from '../../lib/workspace-create-defaults';
 import { projectsQueryKey, useProjectsWithLiveGitState, workspaceGitStateQueryKey } from '../../lib/workspace-git-state';
 import { GitProjectDirectoryPicker } from './GitProjectDirectoryPicker';
 import { useChatStore } from '../../stores/chat-store';
+import { useTerminalStore } from '../../stores/terminal-store';
 import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Alert, AlertDescription } from '../ui/alert';
 import {
@@ -42,6 +43,7 @@ import { ScrollArea } from '../ui/scroll-area';
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
 
 const collapsedProjectsStorageKey = 'weave.collapsedProjectIds';
+const branchMenuRefreshThrottleMs = 15_000;
 
 const loadCollapsedProjectIds = () => {
   try {
@@ -78,6 +80,21 @@ const getDiscoveredWorktreeName = (worktree: DiscoveredWorktree) =>
 const getDiscoveredWorktreeState = (worktree: DiscoveredWorktree) => {
   if (worktree.detached) return `Detached ${(worktree.head ?? worktree.commit)?.slice(0, 7) ?? 'HEAD'}`;
   return worktree.branch || 'No branch';
+};
+
+const resolveWorkspaceBaseRef = (
+  base: string | undefined,
+  options: WorkspaceBranchOption[],
+  fallback: string,
+) => {
+  const fallbackTarget = fallback.trim() || 'main';
+  const target = base?.trim() || fallbackTarget;
+  if (!options.length) return target;
+  const resolve = (candidate: string) =>
+    options.find(option => option.ref === candidate)
+      ?? options.find(option => option.kind === 'local' && option.name === candidate)
+      ?? options.find(option => option.name === candidate);
+  return resolve(target)?.ref ?? resolve(fallbackTarget)?.ref ?? options[0]?.ref ?? fallbackTarget;
 };
 
 const SortableSection = ({
@@ -226,9 +243,11 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
   const selectWorkspace = useWorkspaceSurfaceStore(state => state.selectWorkspace);
   const selectThreadSurface = useChatStore(state => state.selectThread);
+  const workspaceTerminalWindowCounts = useTerminalStore(state => state.workspaceTerminalWindowCounts);
   const queryClient = useQueryClient();
   const openProjectIdsBeforeDragRef = useRef<string[] | null>(null);
   const suppressSelectionUntilRef = useRef(0);
+  const branchRefreshTimesRef = useRef(new Map<string, number>());
   const [archivedDialogScopeId, setArchivedDialogScopeId] = useState<string | null>(null);
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
   const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
@@ -247,6 +266,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   const [isAttachingWorkspace, setIsAttachingWorkspace] = useState(false);
   const [attachWorkspaceError, setAttachWorkspaceError] = useState<string | null>(null);
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>(loadCollapsedProjectIds);
+  const [pendingBranchActionKey, setPendingBranchActionKey] = useState<string | null>(null);
   const { projects } = useProjectsWithLiveGitState(resourceId);
   const createWorkspaceProject = createWorkspaceProjectId ? projects.find(project => project.id === createWorkspaceProjectId) : undefined;
   const attachWorkspaceProject = attachWorkspaceProjectId ? projects.find(project => project.id === attachWorkspaceProjectId) : undefined;
@@ -279,6 +299,37 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     queryClient.invalidateQueries({ queryKey: projectsQueryKey(resourceId) }),
     queryClient.invalidateQueries({ queryKey: workspaceGitStateQueryKey(resourceId) }),
   ]);
+  const workspaceActionKey = (projectId: string, workspaceId: string) => `${projectId}:${workspaceId}`;
+  const invalidateWorkspaceGitState = () => queryClient.invalidateQueries({ queryKey: workspaceGitStateQueryKey(resourceId) });
+  const refreshWorkspaceBranchState = async (projectId: string, workspaceId: string, hasUpstream: boolean) => {
+    if (!hasUpstream) return;
+    const key = workspaceActionKey(projectId, workspaceId);
+    const lastRefresh = branchRefreshTimesRef.current.get(key) ?? 0;
+    if (Date.now() - lastRefresh < branchMenuRefreshThrottleMs || pendingBranchActionKey === key) return;
+    branchRefreshTimesRef.current.set(key, Date.now());
+    setPendingBranchActionKey(key);
+    try {
+      await fetchWorkspaceGitUpstream(projectId, workspaceId);
+      await invalidateWorkspaceGitState();
+    } catch {
+      branchRefreshTimesRef.current.delete(key);
+    } finally {
+      setPendingBranchActionKey(current => current === key ? null : current);
+    }
+  };
+  const pullWorkspaceBranch = async (projectId: string, workspaceId: string) => {
+    const key = workspaceActionKey(projectId, workspaceId);
+    setPendingBranchActionKey(key);
+    try {
+      await pullWorkspaceGitUpstream(projectId, workspaceId);
+      branchRefreshTimesRef.current.set(key, Date.now());
+      await invalidateWorkspaceGitState();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingBranchActionKey(current => current === key ? null : current);
+    }
+  };
   const onlinePortalCount = portals.filter(portal => portal.status === 'online').length;
   const plainThreads = sortManual(threads.filter(thread => (!thread.projectId || thread.adHoc) && thread.archived !== true));
   const threadsByProject = new Map(projects.map(project => [project.id, sortManual(threads.filter(thread => thread.projectId === project.id && !thread.adHoc))]));
@@ -366,6 +417,13 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     setAttachWorkspaceName('');
     setAttachWorkspaceError(null);
   };
+
+  useEffect(() => {
+    if (!createWorkspaceProject || workspaceMode !== 'newBranch') return;
+    const fallback = getDefaultWorkspaceBase(createWorkspaceProject.defaultBranch);
+    const nextBase = resolveWorkspaceBaseRef(workspaceBase, workspaceBranchOptions, fallback);
+    if (nextBase !== workspaceBase) setWorkspaceBase(nextBase);
+  }, [createWorkspaceProject, workspaceBase, workspaceBranchOptions, workspaceMode]);
 
   useEffect(() => {
     window.localStorage.setItem(collapsedProjectsStorageKey, JSON.stringify(collapsedProjectIds));
@@ -467,26 +525,28 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
         <div className="space-y-2">
           <SidebarSectionHeader label="Threads" labelClassName="text-primary">
-            <Button
-              className="h-6 w-8 text-primary"
-              size="icon-xs"
-              variant="ghost"
-              aria-label="Create Thread"
-              onClick={createPlainThread}
-            >
-              <SquarePen size={14} />
-            </Button>
-            <Menu>
-              <MenuTrigger render={<Button className="h-6 w-8 text-foreground" size="icon-xs" variant="ghost" aria-label="Threads menu" />}>
-                <MoreHorizontal size={14} />
-              </MenuTrigger>
-              <MenuPopup align="end" sideOffset={4} className="w-40">
-                <MenuItem onClick={() => setArchivedDialogScopeId('plain')}>
-                  <Archive size={13} />
-                  Archived Threads
-                </MenuItem>
-              </MenuPopup>
-            </Menu>
+            <div className="flex items-center">
+              <Button
+                className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Create Thread"
+                onClick={createPlainThread}
+              >
+                <SquarePen size={14} />
+              </Button>
+              <Menu>
+                <MenuTrigger render={<Button className="h-5 w-6 text-foreground sm:h-5 sm:w-6" size="icon-xs" variant="ghost" aria-label="Threads menu" />}>
+                  <MoreHorizontal size={14} />
+                </MenuTrigger>
+                <MenuPopup align="end" sideOffset={4} className="w-40">
+                  <MenuItem onClick={() => setArchivedDialogScopeId('plain')}>
+                    <Archive size={13} />
+                    Archived Threads
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
+            </div>
             <Button
               className="h-6 w-8 md:hidden"
               size="icon-xs"
@@ -635,10 +695,10 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                           <span className="min-w-0 truncate text-foreground">{project.name}</span>
                         </SidebarItemButton>
                         {!isCollapsed ? (
-                          <>
+                          <div className="flex shrink-0 items-center">
                             {project.projectKind === 'general' || project.projectKind === 'notes' ? (
                               <Button
-                                className="h-6 w-8 shrink-0 text-primary"
+                                className="h-5 w-6 shrink-0 text-foreground sm:h-5 sm:w-6"
                                 size="icon-xs"
                                 variant="ghost"
                                 aria-label={`Create thread in ${project.name}`}
@@ -655,7 +715,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                               </Button>
                             ) : null}
                             <Menu>
-                              <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-foreground" aria-label={`${project.name} menu`} />}>
+                              <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 text-foreground sm:h-5 sm:w-6" aria-label={`${project.name} menu`} />}>
                                 <MoreHorizontal size={14} />
                               </MenuTrigger>
                               <MenuPopup align="end" sideOffset={4} className="w-44">
@@ -683,7 +743,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                 </MenuItem>
                               </MenuPopup>
                             </Menu>
-                          </>
+                          </div>
                         ) : null}
                       </div>
                       {!isCollapsed ? (
@@ -767,6 +827,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                 >
                                   {sortedWorkspaces.map(workspace => {
                                     const workspaceThreads = projectThreads.filter(thread => thread.workspaceId === workspace.id && thread.archived !== true);
+                                    const workspaceTerminalCount = workspaceTerminalWindowCounts[workspace.id] ?? 0;
 
                                     return (
                                       <SortableItem
@@ -784,106 +845,162 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                               : 'border-transparent text-foreground hover:bg-background',
                                           )}
                                         >
-                                          <SidebarItemButton
-                                            className="min-w-0 flex-1 items-center rounded-md px-2 py-2 text-left"
-                                            onClick={() => selectWorkspaceSurface(project.id, workspace.id)}
-                                          >
-                                          <div className="min-w-0 flex-1">
-                                            <div className="flex min-w-0 items-center gap-1.5">
+                                          <div className="min-w-0 flex-1 rounded-md px-2 py-2 text-left">
+                                            <button
+                                              type="button"
+                                              className="flex h-5 w-full min-w-0 items-center gap-1.5 text-left text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                                              onClick={() => selectWorkspaceSurface(project.id, workspace.id)}
+                                            >
                                               <span className="truncate text-foreground">{workspace.name}</span>
                                               {workspace.locked || workspace.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
-                                            </div>
-                                            {workspace.branch || workspace.detached ? (
-                                              <div className="truncate text-[10px] font-normal text-mauve">
-                                                {workspace.detached ? `Detached ${workspace.head?.slice(0, 7) ?? 'HEAD'}` : workspace.branch}
+                                            </button>
+                                            {workspace.detached ? (
+                                              <div className="flex h-4 items-center truncate text-[10px] font-normal leading-none text-mauve">
+                                                {`Detached ${workspace.head?.slice(0, 7) ?? 'HEAD'}`}
                                               </div>
+                                            ) : workspace.branch ? (
+                                              <Menu
+                                                onOpenChange={(open) => {
+                                                  if (open) void refreshWorkspaceBranchState(project.id, workspace.id, Boolean(workspace.upstream));
+                                                }}
+                                              >
+                                                <MenuTrigger
+                                                  render={
+                                                    <button
+                                                      type="button"
+                                                      className="flex h-4 max-w-full items-center gap-1 truncate text-[10px] font-normal leading-none text-mauve outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                                                      aria-label={`${workspace.branch} branch menu`}
+                                                    />
+                                                  }
+                                                >
+                                                  <span className="truncate">{workspace.branch}</span>
+                                                  {typeof workspace.behind === 'number' && workspace.behind > 0 ? (
+                                                    <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.behind} behind upstream`}>
+                                                      {`\u2193${workspace.behind}`}
+                                                    </span>
+                                                  ) : null}
+                                                  {typeof workspace.ahead === 'number' && workspace.ahead > 0 ? (
+                                                    <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.ahead} ahead of upstream`}>
+                                                      {`\u2191${workspace.ahead}`}
+                                                    </span>
+                                                  ) : null}
+                                                </MenuTrigger>
+                                                <MenuPopup align="start" sideOffset={4} className="w-44">
+                                                  {workspace.upstream ? (
+                                                    <MenuItem
+                                                      disabled={pendingBranchActionKey === workspaceActionKey(project.id, workspace.id)}
+                                                      onClick={() => void pullWorkspaceBranch(project.id, workspace.id)}
+                                                    >
+                                                      <Download size={13} />
+                                                      Pull from remote
+                                                    </MenuItem>
+                                                  ) : (
+                                                    <MenuItem disabled>
+                                                      <GitBranch size={13} />
+                                                      No upstream
+                                                    </MenuItem>
+                                                  )}
+                                                </MenuPopup>
+                                              </Menu>
                                             ) : null}
                                             {workspace.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{workspace.lastError}</div> : null}
                                           </div>
-                                          </SidebarItemButton>
-                                          <Button
-                                            className="h-6 w-8 shrink-0 text-primary"
-                                            size="icon-xs"
-                                            variant="ghost"
-                                            aria-label={`Create thread in ${workspace.name}`}
-                                            onClick={async () => {
-                                              await newThread(project.id, workspace.id);
-                                              await Promise.all([
-                                                queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-                                                invalidateProjects(),
-                                              ]);
-                                              if (closeOnSelect) onClose?.();
-                                            }}
-                                          >
-                                            <SquarePen size={14} />
-                                          </Button>
-                                          <Menu>
-                                            <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="text-foreground" aria-label={`${workspace.name} menu`} />}>
-                                              <MoreHorizontal size={14} />
-                                            </MenuTrigger>
-                                            <MenuPopup align="end" sideOffset={4} className="w-44">
-                                              <MenuItem onClick={() => setArchivedDialogScopeId(workspace.id)}>
-                                                <Archive size={13} />
-                                                Archived Threads
-                                              </MenuItem>
-                                              {project.projectKind === 'git' ? (
-                                                <MenuItem
-                                                  onClick={async () => {
-                                                    const branch = window.prompt('Branch name', workspace.branch ?? '');
-                                                    if (!branch?.trim()) return;
-                                                    const createBranch = window.confirm('Create as a new branch? Cancel switches to an existing branch.');
-                                                    const base = createBranch ? window.prompt('Base ref (optional)', project.defaultBranch ?? workspace.branch ?? '') : undefined;
-                                                    try {
-                                                      await updateWorkspace(project.id, workspace.id, {
-                                                        branch: branch.trim(),
-                                                        createBranch,
-                                                        base: base?.trim() || undefined,
-                                                      });
-                                                      await invalidateProjects();
-                                                    } catch (error) {
-                                                      window.alert(error instanceof Error ? error.message : String(error));
-                                                    }
-                                                  }}
-                                                >
-                                                  <GitBranch size={13} />
-                                                  Switch Branch
+                                          <div className="-mr-2 flex w-6 shrink-0 flex-col items-center self-stretch py-2">
+                                            <Button
+                                              className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
+                                              size="icon-xs"
+                                              variant="ghost"
+                                              aria-label={`Create thread in ${workspace.name}`}
+                                              onClick={async () => {
+                                                await newThread(project.id, workspace.id);
+                                                await Promise.all([
+                                                  queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+                                                  invalidateProjects(),
+                                                ]);
+                                                if (closeOnSelect) onClose?.();
+                                              }}
+                                            >
+                                              <SquarePen size={14} />
+                                            </Button>
+                                          </div>
+                                          <div className="flex w-6 shrink-0 flex-col items-center self-stretch py-2">
+                                            <Menu>
+                                              <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 text-foreground sm:h-5 sm:w-6" aria-label={`${workspace.name} menu`} />}>
+                                                <MoreHorizontal size={14} />
+                                              </MenuTrigger>
+                                              <MenuPopup align="end" sideOffset={4} className="w-44">
+                                                <MenuItem onClick={() => setArchivedDialogScopeId(workspace.id)}>
+                                                  <Archive size={13} />
+                                                  Archived Threads
                                                 </MenuItem>
-                                              ) : null}
-                                              {project.projectKind === 'git' && !workspace.locked && workspace.workspaceKind !== 'primary' ? (
-                                                <>
+                                                {project.projectKind === 'git' ? (
                                                   <MenuItem
                                                     onClick={async () => {
-                                                      if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk.`)) return;
+                                                      const branch = window.prompt('Branch name', workspace.branch ?? '');
+                                                      if (!branch?.trim()) return;
+                                                      const createBranch = window.confirm('Create as a new branch? Cancel switches to an existing branch.');
+                                                      const base = createBranch ? window.prompt('Base ref (optional)', project.defaultBranch ?? workspace.branch ?? '') : undefined;
                                                       try {
-                                                        await deleteWorkspace(project.id, workspace.id, 'detach');
+                                                        await updateWorkspace(project.id, workspace.id, {
+                                                          branch: branch.trim(),
+                                                          createBranch,
+                                                          base: base?.trim() || undefined,
+                                                        });
                                                         await invalidateProjects();
                                                       } catch (error) {
                                                         window.alert(error instanceof Error ? error.message : String(error));
                                                       }
                                                     }}
                                                   >
-                                                    <Link size={13} />
-                                                    Detach
+                                                    <GitBranch size={13} />
+                                                    Switch Branch
                                                   </MenuItem>
-                                                  <MenuItem
-                                                    variant="destructive"
-                                                    onClick={async () => {
-                                                      if (!window.confirm(`Remove workspace ${workspace.name}? This removes the worktree and leaves the branch alone.`)) return;
-                                                      try {
-                                                        await deleteWorkspace(project.id, workspace.id, 'remove');
-                                                        await invalidateProjects();
-                                                      } catch (error) {
-                                                        window.alert(error instanceof Error ? error.message : String(error));
-                                                      }
-                                                    }}
-                                                  >
-                                                    <Trash2 size={13} />
-                                                    Remove Workspace
-                                                  </MenuItem>
-                                                </>
-                                              ) : null}
-                                            </MenuPopup>
-                                          </Menu>
+                                                ) : null}
+                                                {project.projectKind === 'git' && !workspace.locked && workspace.workspaceKind !== 'primary' ? (
+                                                  <>
+                                                    <MenuItem
+                                                      onClick={async () => {
+                                                        if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk.`)) return;
+                                                        try {
+                                                          await deleteWorkspace(project.id, workspace.id, 'detach');
+                                                          await invalidateProjects();
+                                                        } catch (error) {
+                                                          window.alert(error instanceof Error ? error.message : String(error));
+                                                        }
+                                                      }}
+                                                    >
+                                                      <Link size={13} />
+                                                      Detach
+                                                    </MenuItem>
+                                                    <MenuItem
+                                                      variant="destructive"
+                                                      onClick={async () => {
+                                                        if (!window.confirm(`Remove workspace ${workspace.name}? This removes the worktree and leaves the branch alone.`)) return;
+                                                        try {
+                                                          await deleteWorkspace(project.id, workspace.id, 'remove');
+                                                          await invalidateProjects();
+                                                        } catch (error) {
+                                                          window.alert(error instanceof Error ? error.message : String(error));
+                                                        }
+                                                      }}
+                                                    >
+                                                      <Trash2 size={13} />
+                                                      Remove Workspace
+                                                    </MenuItem>
+                                                  </>
+                                                ) : null}
+                                              </MenuPopup>
+                                            </Menu>
+                                            {workspaceTerminalCount > 0 ? (
+                                              <span
+                                                className="flex h-4 w-6 items-center justify-center text-peach"
+                                                title={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
+                                                aria-label={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
+                                              >
+                                                <TerminalSquare size={14} />
+                                              </span>
+                                            ) : null}
+                                          </div>
                                         </div>
                                         <div
                                           className={cn(
@@ -1000,7 +1117,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                   onValueChange={value => {
                     const nextMode = value === 'existingBranch' || value === 'detached' ? value : 'newBranch';
                     setWorkspaceMode(nextMode);
-                    if (nextMode === 'detached' && !workspaceBase.trim()) {
+                    if ((nextMode === 'detached' || nextMode === 'newBranch') && !workspaceBase.trim()) {
                       setWorkspaceBase(getDefaultWorkspaceBase(createWorkspaceProject.defaultBranch));
                     }
                   }}
@@ -1028,21 +1145,24 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                   />
                 </Field>
               ) : null}
-              <div className="grid gap-3">
-                <Field>
-                  <FieldLabel>{workspaceMode === 'detached' ? 'Commit / Ref' : 'Base'}</FieldLabel>
-                  {workspaceMode === 'detached' ? (
+              {workspaceMode !== 'existingBranch' ? (
+                <div className="grid gap-3">
+                  <Field>
+                    <FieldLabel>{workspaceMode === 'detached' ? 'Commit / Ref' : 'Base'}</FieldLabel>
                     <Combobox
                       items={workspaceBranchOptionRefs}
                       value={workspaceBranchOptionRefs.includes(workspaceBase) ? workspaceBase : null}
                       inputValue={workspaceBase}
-                      onInputValueChange={value => setWorkspaceBase(value)}
+                      onInputValueChange={workspaceMode === 'detached' ? value => setWorkspaceBase(value) : undefined}
                       onValueChange={value => {
                         if (typeof value === 'string') setWorkspaceBase(value);
                       }}
                       disabled={isCreatingWorkspace}
                     >
-                      <ComboboxInput placeholder={getDefaultWorkspaceBase(createWorkspaceProject.defaultBranch)} />
+                      <ComboboxInput
+                        placeholder={getDefaultWorkspaceBase(createWorkspaceProject.defaultBranch)}
+                        readOnly={workspaceMode === 'newBranch'}
+                      />
                       <ComboboxPopup>
                         <ComboboxEmpty>
                           {workspaceBranchOptionsError ? 'Unable to load branches' : 'No branches found'}
@@ -1069,17 +1189,9 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                         </ComboboxList>
                       </ComboboxPopup>
                     </Combobox>
-                  ) : (
-                    <Input
-                      nativeInput
-                      value={workspaceBase}
-                      onChange={event => setWorkspaceBase(event.target.value)}
-                      disabled={isCreatingWorkspace}
-                      placeholder={getDefaultWorkspaceBase(createWorkspaceProject.defaultBranch)}
-                    />
-                  )}
-                </Field>
-              </div>
+                  </Field>
+                </div>
+              ) : null}
               {createWorkspaceError ? <Alert variant="error"><AlertDescription>{createWorkspaceError}</AlertDescription></Alert> : null}
             </DialogPanel>
             <DialogFooter>

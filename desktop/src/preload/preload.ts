@@ -6,7 +6,13 @@ import type {
   WeaveDesktopBridge,
 } from '../shared/desktop-api';
 import type { EditorFile, EditorListResult, EditorOperationResult, EditorTarget, EditorWriteResult } from '../shared/editor';
-import type { TerminalHostEvent, TerminalStartInput, TerminalStartResult } from '../shared/terminal';
+import type {
+  TerminalHostEvent,
+  TerminalStartInput,
+  TerminalStartResult,
+  TerminalTargetInput,
+  TerminalWindowRecord,
+} from '../shared/terminal';
 
 const bridge: WeaveDesktopBridge = {
   getConnectionSettings: () => ipcRenderer.invoke('connection:get-settings') as Promise<DesktopConnectionSettings>,
@@ -16,6 +22,12 @@ const bridge: WeaveDesktopBridge = {
     ipcRenderer.invoke('connection:test', input) as Promise<DesktopConnectionTestResult>,
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<void>,
   getPlatform: () => process.platform,
+  terminalSnapshot: () =>
+    ipcRenderer.invoke('terminal:snapshot') as Promise<TerminalWindowRecord[]>,
+  terminalList: (input: TerminalTargetInput) =>
+    ipcRenderer.invoke('terminal:list', input) as Promise<TerminalWindowRecord[]>,
+  terminalCreate: (input: TerminalTargetInput) =>
+    ipcRenderer.invoke('terminal:create', input) as Promise<TerminalWindowRecord>,
   terminalStart: (input: TerminalStartInput) =>
     ipcRenderer.invoke('terminal:start', input) as Promise<TerminalStartResult>,
   terminalInput: (terminalId: string, data: string) =>

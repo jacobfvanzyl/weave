@@ -5,6 +5,10 @@ type NormalizedTerminalStartInput = TerminalStartInput & {
   rows: number;
 };
 
+type NormalizedTerminalTargetInput = Omit<NormalizedTerminalStartInput, 'terminalId'> & {
+  terminalId?: string;
+};
+
 const parseIdentifier = (value: unknown, name: string) => {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required.`);
   return value.trim();
@@ -17,7 +21,7 @@ const parseDimension = (value: unknown, fallback: number, min: number, max: numb
   return Math.max(min, Math.min(max, Math.floor(value)));
 };
 
-export const parseTerminalStartInput = (input: unknown): NormalizedTerminalStartInput => {
+export const parseTerminalTargetInput = (input: unknown): NormalizedTerminalTargetInput => {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
   const isGeneralTerminalRequest = record.kind === 'general'
     || (
@@ -43,7 +47,7 @@ export const parseTerminalStartInput = (input: unknown): NormalizedTerminalStart
   if (kind === 'general') {
     return {
       kind,
-      terminalId: parseIdentifier(record.terminalId ?? 'weave-general-terminal', 'terminalId'),
+      terminalId: optionalString(record.terminalId),
       ...common,
     };
   }
@@ -51,10 +55,20 @@ export const parseTerminalStartInput = (input: unknown): NormalizedTerminalStart
   const workspaceId = parseIdentifier(record.workspaceId, 'workspaceId');
   return {
     kind,
-    terminalId: parseIdentifier(record.terminalId ?? workspaceId, 'terminalId'),
+    terminalId: optionalString(record.terminalId),
     projectId: parseIdentifier(record.projectId, 'projectId'),
     workspaceId,
     ...common,
+  };
+};
+
+export const parseTerminalStartInput = (input: unknown): NormalizedTerminalStartInput => {
+  const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const target = parseTerminalTargetInput(input);
+  const fallbackTerminalId = target.kind === 'general' ? 'weave-general-terminal' : target.workspaceId;
+  return {
+    ...target,
+    terminalId: parseIdentifier(record.terminalId ?? fallbackTerminalId, 'terminalId'),
   };
 };
 

@@ -16,7 +16,28 @@ export type TerminalStartInput = {
   rows?: number;
 };
 
+export type TerminalTargetInput = Omit<TerminalStartInput, 'terminalId'> & {
+  terminalId?: string;
+};
+
+export type TerminalWindowRecord = {
+  terminalId: string;
+  scopeId: string;
+  slot: number;
+  kind: TerminalSessionKind;
+  cwd: string;
+  title: string;
+  processName?: string;
+  portalId?: string;
+  rootId?: string;
+  projectId?: string;
+  workspaceId?: string;
+};
+
 export type TerminalClientMessage =
+  | { type: 'snapshot'; requestId?: string }
+  | ({ type: 'list'; requestId?: string } & TerminalTargetInput)
+  | ({ type: 'create'; requestId?: string } & TerminalTargetInput)
   | ({ type: 'start' } & TerminalStartInput)
   | { type: 'input'; terminalId: string; data: string }
   | { type: 'resize'; terminalId: string; cols: number; rows: number }
@@ -25,11 +46,13 @@ export type TerminalClientMessage =
 
 export type TerminalHostEvent =
   | { type: 'started'; terminalId: string; workspaceId?: string; sessionId: string; cwd: string; pid?: number; cols: number; rows: number }
+  | { type: 'windows'; requestId?: string; windows: TerminalWindowRecord[] }
+  | { type: 'created'; requestId?: string; terminalId: string; workspaceId?: string; window: TerminalWindowRecord }
   | { type: 'output'; terminalId: string; workspaceId?: string; data: string }
   | { type: 'replay'; terminalId: string; workspaceId?: string; data: string }
   | { type: 'title'; terminalId: string; workspaceId?: string; title: string }
   | { type: 'exit'; terminalId: string; workspaceId?: string; exitCode?: number; signal?: number | string }
-  | { type: 'error'; terminalId: string; workspaceId?: string; error: string };
+  | { type: 'error'; requestId?: string; terminalId: string; workspaceId?: string; error: string };
 
 export type TerminalTokenRecord = {
   resourceId: string;
@@ -85,12 +108,30 @@ const parseTerminalId = (value: unknown) => {
   return terminalId;
 };
 
+const requestIdValue = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
 const parseDimension = (value: unknown, fallback: number, min: number, max: number) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(value)));
 };
 
 const sanitizeTerminalClientMessage = (message: Record<string, unknown>, token: TerminalTokenRecord): TerminalClientMessage => {
+  if (message.type === 'list' || message.type === 'create') {
+    return {
+      type: message.type,
+      requestId: requestIdValue(message.requestId),
+      kind: token.kind,
+      portalId: token.portalId,
+      projectId: token.projectId,
+      workspaceId: token.workspaceId,
+      rootId: token.rootId,
+      repoPath: token.repoPath,
+      workspacePath: token.workspacePath,
+      cols: parseDimension(message.cols, 80, 10, 400),
+      rows: parseDimension(message.rows, 24, 3, 200),
+    };
+  }
+
   if (message.type === 'start') {
     const terminalId = parseTerminalId(message.terminalId);
     return {

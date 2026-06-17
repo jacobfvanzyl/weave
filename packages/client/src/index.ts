@@ -23,7 +23,9 @@ export type {
   TerminalSessionKind,
   TerminalStartInput,
   TerminalStartResult,
+  TerminalTargetInput,
   TerminalTransport,
+  TerminalWindowRecord,
 } from './lib/terminal-types';
 export type {
   ShortcutBinding,

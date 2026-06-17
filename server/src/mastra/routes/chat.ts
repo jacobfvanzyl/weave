@@ -2,7 +2,7 @@ import { handleChatStream } from '@mastra/ai-sdk';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { registerApiRoute } from '@mastra/core/server';
 import { buildChatSystemMessages } from '../agents/instructions';
-import { attachmentIdFromReference, attachmentModelUrl, attachmentStorage, parseBase64DataUrl, type StoredAttachmentMetadata } from '../attachments';
+import { attachmentIdFromReference, attachmentModelUrl, attachmentStorage, parseBase64DataUrl, type AttachmentStorage, type StoredAttachmentMetadata } from '../attachments';
 import { subscribeThreadContextUsage, type ThreadContextUsageSnapshot } from '../context-usage';
 import { resolveMemoryPolicy } from '../memory-policy';
 import { putProfileContext, resolveProfileContext } from '../profiles/resolver';
@@ -566,10 +566,11 @@ const cancelThreadRun = (run: ActiveThreadRun) => {
 
 const normalizeMessageImageAttachments = async (
   messages: unknown,
-  options: { threadId?: string },
+  options: { threadId?: string; storage?: Pick<AttachmentStorage, 'findByThread' | 'put'> },
 ) => {
   if (!Array.isArray(messages)) return messages;
-  const threadAttachments = options.threadId ? await attachmentStorage.findByThread(options.threadId) : [];
+  const storage = options.storage ?? attachmentStorage;
+  const threadAttachments = options.threadId ? await storage.findByThread(options.threadId) : [];
 
   const newestMatchingAttachment = (part: Record<string, unknown>): StoredAttachmentMetadata | undefined => {
     const metadata = part.metadata && typeof part.metadata === 'object' ? part.metadata as Record<string, unknown> : {};
@@ -642,7 +643,7 @@ const normalizeMessageImageAttachments = async (
         throw new Error(`Image attachment exceeds the ${maxImageAttachmentBytes} byte limit`);
       }
 
-      const stored = await attachmentStorage.put({
+      const stored = await storage.put({
         bytes: parsed.bytes,
         mimeType: parsed.mimeType,
         originalName: typeof partRecord.filename === 'string' ? partRecord.filename : 'image',
@@ -703,10 +704,15 @@ const latestUserMessageOnly = (messages: unknown) => {
   return [messages[messages.length - 1]];
 };
 
+const submittedMessagesForMemory = (messages: unknown, threadId: unknown) =>
+  typeof threadId === 'string' && threadId.trim() ? latestUserMessageOnly(messages) : messages;
+
 export const __chatRouteMemoryTest = {
   latestUserMessageOnly,
   getSubmittedUserMessages,
+  normalizeMessageImageAttachments,
   sanitizeSubmittedMessagesForMastra,
+  submittedMessagesForMemory,
 };
 
 export const __chatRunRegistryTest = {
@@ -770,7 +776,7 @@ export const chatRoutes = [
       const resourceId = getResourceId(c);
       putChatRuntimeContext(requestContext, { now: new Date() });
       const threadId = params?.memory?.thread;
-      params.messages = sanitizeSubmittedMessagesForMastra(await normalizeMessageImageAttachments(params.messages, {
+      params.messages = sanitizeSubmittedMessagesForMastra(await normalizeMessageImageAttachments(submittedMessagesForMemory(params.messages, threadId), {
         threadId: typeof threadId === 'string' ? threadId : undefined,
       }));
       const resolvedProfile = resourceId
@@ -783,9 +789,6 @@ export const chatRoutes = [
             threadMetadata: resolvedProfile.threadMetadata,
           })
         : undefined;
-      if (memoryPolicy?.status.observationalMemory.enabled) {
-        params.messages = latestUserMessageOnly(params.messages);
-      }
       const isProjectWorkspace = Boolean(resolvedProfile?.threadMetadata?.mode === 'project' && resolvedProfile.threadMetadata.workspaceId);
       const isGitProject = resolvedProfile?.projectKind === 'git';
       const isNotesProject = resolvedProfile?.projectKind === 'notes';

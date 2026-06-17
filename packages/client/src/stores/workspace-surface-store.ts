@@ -40,14 +40,21 @@ type PersistedLegacyChatEnvelope = {
   state?: PersistedLegacyChatState;
 };
 
+type SurfaceLayout = {
+  paneVisibility: PaneVisibility;
+  maximizedPane: MainPane | null;
+  preMaximizePaneVisibility?: PaneVisibility;
+};
+
 type WorkspaceSurfaceState = {
   threadId: string;
   activeSurface: ActiveSurface;
   paneVisibility: PaneVisibility;
+  surfaceLayouts: Record<string, SurfaceLayout | undefined>;
   editorFollowRequest?: EditorFollowRequest;
   maximizedPane: MainPane | null;
   preMaximizePaneVisibility?: PaneVisibility;
-  selectThread: (threadId: string, thread?: ThreadSurfaceContext) => void;
+  selectThread: (threadId: string, thread?: ThreadSurfaceContext, options?: { preserveTerminalVisibility?: boolean }) => void;
   selectWorkspace: (projectId: string, workspaceId: string) => void;
   syncThreads: (threads: ThreadSurfaceContext[], options?: { selectThreadId?: string }) => void;
   openPane: (pane: MainPane) => void;
@@ -61,7 +68,7 @@ type WorkspaceSurfaceState = {
 
 export type WorkspaceSurfaceSnapshot = Pick<
   WorkspaceSurfaceState,
-  'threadId' | 'activeSurface' | 'paneVisibility' | 'maximizedPane' | 'preMaximizePaneVisibility'
+  'threadId' | 'activeSurface' | 'paneVisibility' | 'surfaceLayouts' | 'maximizedPane' | 'preMaximizePaneVisibility'
 >;
 
 export const initialSurfaceThreadId = createClientId('thread');
@@ -93,6 +100,42 @@ const isPaneOpen = (paneVisibility: PaneVisibility, pane: MainPane) => (
       ? paneVisibility.editorOpen
       : paneVisibility.terminalOpen
 );
+
+const surfaceLayoutKey = (surface: ActiveSurface) =>
+  surface.kind === 'thread'
+    ? `thread:${surface.threadId}`
+    : `workspace:${surface.projectId}:${surface.workspaceId}`;
+
+const captureSurfaceLayout = (state: Pick<WorkspaceSurfaceState, 'paneVisibility' | 'maximizedPane' | 'preMaximizePaneVisibility'>): SurfaceLayout => ({
+  paneVisibility: state.paneVisibility,
+  maximizedPane: state.maximizedPane,
+  preMaximizePaneVisibility: state.preMaximizePaneVisibility,
+});
+
+const saveCurrentSurfaceLayout = (
+  state: Pick<WorkspaceSurfaceState, 'activeSurface' | 'paneVisibility' | 'surfaceLayouts' | 'maximizedPane' | 'preMaximizePaneVisibility'>,
+) => ({
+  ...state.surfaceLayouts,
+  [surfaceLayoutKey(state.activeSurface)]: captureSurfaceLayout(state),
+});
+
+const defaultThreadSurfaceLayout = (thread: ThreadSurfaceContext | undefined): SurfaceLayout => ({
+  paneVisibility: getPaneVisibilityForThread(thread),
+  maximizedPane: null,
+  preMaximizePaneVisibility: undefined,
+});
+
+const defaultWorkspaceSurfaceLayout = (): SurfaceLayout => ({
+  paneVisibility: getEditorOnlyPaneVisibility(),
+  maximizedPane: null,
+  preMaximizePaneVisibility: undefined,
+});
+
+const restoreSurfaceLayout = (
+  surfaceLayouts: Record<string, SurfaceLayout | undefined>,
+  surface: ActiveSurface,
+  fallback: SurfaceLayout,
+) => surfaceLayouts[surfaceLayoutKey(surface)] ?? fallback;
 
 const isPersistedActiveSurface = (value: unknown): value is ActiveSurface => {
   if (!value || typeof value !== 'object') return false;
@@ -157,6 +200,7 @@ const getInitialPersistedSurfaceState = () => {
       ? legacyState.activeSurface
       : { kind: 'thread' as const, threadId },
     paneVisibility: normalizePersistedPaneVisibility(legacyState?.paneVisibility) ?? defaultPaneVisibility,
+    surfaceLayouts: {},
     maximizedPane: isPersistedMainPane(legacyState?.maximizedPane) ? legacyState.maximizedPane : null,
     preMaximizePaneVisibility: normalizePersistedPaneVisibility(legacyState?.preMaximizePaneVisibility),
   };
@@ -176,31 +220,54 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
     (set, get) => ({
       ...getInitialPersistedSurfaceState(),
       editorFollowRequest: undefined,
-      selectThread: (threadId, thread) =>
-        set({
-          threadId,
-          activeSurface: { kind: 'thread', threadId },
-          paneVisibility: getPaneVisibilityForThread(thread),
-          maximizedPane: null,
-          preMaximizePaneVisibility: undefined,
+      selectThread: (threadId, thread, options) =>
+        set(state => {
+          const nextActiveSurface: ActiveSurface = { kind: 'thread', threadId };
+          const surfaceLayouts = saveCurrentSurfaceLayout(state);
+          const fallbackLayout = defaultThreadSurfaceLayout(thread);
+          if (options?.preserveTerminalVisibility) {
+            fallbackLayout.paneVisibility = {
+              ...fallbackLayout.paneVisibility,
+              terminalOpen: state.paneVisibility.terminalOpen,
+            };
+          }
+          const layout = restoreSurfaceLayout(surfaceLayouts, nextActiveSurface, fallbackLayout);
+          return {
+            threadId,
+            activeSurface: nextActiveSurface,
+            surfaceLayouts,
+            paneVisibility: layout.paneVisibility,
+            maximizedPane: layout.maximizedPane,
+            preMaximizePaneVisibility: layout.preMaximizePaneVisibility,
+          };
         }),
       selectWorkspace: (projectId, workspaceId) =>
-        set({
-          activeSurface: { kind: 'workspace', projectId, workspaceId },
-          paneVisibility: getEditorOnlyPaneVisibility(),
-          maximizedPane: null,
-          preMaximizePaneVisibility: undefined,
+        set(state => {
+          const nextActiveSurface: ActiveSurface = { kind: 'workspace', projectId, workspaceId };
+          const surfaceLayouts = saveCurrentSurfaceLayout(state);
+          const layout = restoreSurfaceLayout(surfaceLayouts, nextActiveSurface, defaultWorkspaceSurfaceLayout());
+          return {
+            activeSurface: nextActiveSurface,
+            surfaceLayouts,
+            paneVisibility: layout.paneVisibility,
+            maximizedPane: layout.maximizedPane,
+            preMaximizePaneVisibility: layout.preMaximizePaneVisibility,
+          };
         }),
       syncThreads: (threads, options) =>
         set(state => {
           if (options?.selectThreadId) {
             const selectedThread = getThreadById(threads, options.selectThreadId);
+            const nextActiveSurface: ActiveSurface = { kind: 'thread' as const, threadId: options.selectThreadId };
+            const surfaceLayouts = saveCurrentSurfaceLayout(state);
+            const layout = restoreSurfaceLayout(surfaceLayouts, nextActiveSurface, defaultThreadSurfaceLayout(selectedThread));
             return {
               threadId: options.selectThreadId,
-              activeSurface: { kind: 'thread' as const, threadId: options.selectThreadId },
-              paneVisibility: getPaneVisibilityForThread(selectedThread),
-              maximizedPane: null,
-              preMaximizePaneVisibility: undefined,
+              activeSurface: nextActiveSurface,
+              surfaceLayouts,
+              paneVisibility: layout.paneVisibility,
+              maximizedPane: layout.maximizedPane,
+              preMaximizePaneVisibility: layout.preMaximizePaneVisibility,
             };
           }
 
@@ -213,15 +280,19 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
             ? getThreadById(threads, nextActiveSurface.threadId)
             : undefined;
 
+          const surfaceLayouts = didRepairThreadSurface ? saveCurrentSurfaceLayout(state) : state.surfaceLayouts;
+          const repairedLayout = didRepairThreadSurface && nextActiveSurface.kind === 'thread'
+            ? restoreSurfaceLayout(surfaceLayouts, nextActiveSurface, defaultThreadSurfaceLayout(nextSelectedThread))
+            : undefined;
+
           return {
             threadId: nextThreadId,
             activeSurface: nextActiveSurface,
-            paneVisibility: didRepairThreadSurface && nextActiveSurface.kind === 'thread'
-              ? getPaneVisibilityForThread(nextSelectedThread)
-              : state.paneVisibility,
-            maximizedPane: didRepairThreadSurface && nextActiveSurface.kind === 'thread' ? null : state.maximizedPane,
-            preMaximizePaneVisibility: didRepairThreadSurface && nextActiveSurface.kind === 'thread'
-              ? undefined
+            surfaceLayouts,
+            paneVisibility: repairedLayout?.paneVisibility ?? state.paneVisibility,
+            maximizedPane: repairedLayout ? repairedLayout.maximizedPane : state.maximizedPane,
+            preMaximizePaneVisibility: repairedLayout
+              ? repairedLayout.preMaximizePaneVisibility
               : state.preMaximizePaneVisibility,
           };
         }),
@@ -315,6 +386,7 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
           threadId,
           activeSurface: isPersistedActiveSurface(state.activeSurface) ? state.activeSurface : legacyState.activeSurface,
           paneVisibility: normalizePersistedPaneVisibility(state.paneVisibility) ?? legacyState.paneVisibility,
+          surfaceLayouts: state.surfaceLayouts && typeof state.surfaceLayouts === 'object' ? state.surfaceLayouts : {},
           maximizedPane: isPersistedMainPane(state.maximizedPane) ? state.maximizedPane : legacyState.maximizedPane,
           preMaximizePaneVisibility: normalizePersistedPaneVisibility(state.preMaximizePaneVisibility) ?? legacyState.preMaximizePaneVisibility,
         };
@@ -323,6 +395,7 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
         threadId: state.threadId,
         activeSurface: state.activeSurface,
         paneVisibility: state.paneVisibility,
+        surfaceLayouts: state.surfaceLayouts,
         maximizedPane: state.maximizedPane,
         preMaximizePaneVisibility: state.preMaximizePaneVisibility,
       }),

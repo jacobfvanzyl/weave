@@ -22,6 +22,25 @@ import {
   runtimeMatchesServer,
   writePortalRuntime,
 } from './lifecycle.ts';
+import {
+  createGitWorktree,
+  fetchGitUpstream,
+  getGitDiff,
+  getGitLog,
+  getGitShow,
+  getGitStatus,
+  inspectGit,
+  listGitBranches,
+  listGitWorktrees,
+  readAgentsMd,
+  removeGitWorktree,
+  pullGitUpstream,
+  runGit,
+  switchGitWorktree,
+  validateGitWorktree,
+} from './git.ts';
+
+export type { GitBranchOption } from './git.ts';
 
 type PortalMount = {
   projectId: string;
@@ -71,7 +90,7 @@ const defaultHttpServerUrl = 'http://localhost:4111';
 const defaultWsServerUrl = 'ws://localhost:4112';
 const defaultName = 'Mage Portal';
 const version = '0.1.0';
-const requiredControlCapabilities = ['terminal', 'editor'];
+const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth'];
 const macWindowCapabilities = ['portal.window.list', 'portal.window.session'];
 
 const getWindowCapabilities = async (windowStream: ResolvedWindowStreamConfig) =>
@@ -284,80 +303,6 @@ const resolveRootPath = async (config: ResolvedPortalConfig, rootId: string, pat
   return { rootPath, target };
 };
 
-const decodeOutput = (bytes: Uint8Array) => new TextDecoder().decode(bytes).trim();
-
-const runGit = async (cwd: string, args: string[]) => {
-  const command = new Deno.Command('git', { cwd, args, stdout: 'piped', stderr: 'piped' });
-  const output = await command.output();
-  if (!output.success) throw new Error(decodeOutput(output.stderr) || `git ${args.join(' ')} failed`);
-  return decodeOutput(output.stdout);
-};
-
-const runShell = async (cwd: string, commandText: string) => {
-  const command = new Deno.Command('bash', { cwd, args: ['-lc', commandText], stdout: 'piped', stderr: 'piped' });
-  const output = await command.output();
-  return {
-    ok: output.success,
-    stdout: decodeOutput(output.stdout),
-    stderr: decodeOutput(output.stderr),
-    exitCode: output.code,
-  };
-};
-
-const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-
-const parseJsonOutput = (stdout: string, commandName: string) => {
-  try {
-    return JSON.parse(stdout) as unknown;
-  } catch {
-    throw new Error(`${commandName} returned invalid JSON`);
-  }
-};
-
-const getWorktrunkStatus = async (cwd = Deno.cwd()) => {
-  const result = await runShell(cwd, 'command -v wt && wt --version');
-  if (!result.ok) return { ok: true, installed: false, error: 'wt is not installed or not on Portal PATH' };
-  const [path = '', versionText = ''] = result.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
-  return { ok: true, installed: true, path, version: versionText.replace(/^wt\s+/, '') };
-};
-
-const assertWorktrunkInstalled = async (cwd: string) => {
-  const status = await getWorktrunkStatus(cwd);
-  if (!status.installed) {
-    const error = new Error(
-      'WT_MISSING: wt is not installed or not on Portal PATH. Install Worktrunk or add wt to PATH, then restart Portal.',
-    );
-    error.name = 'WT_MISSING';
-    throw error;
-  }
-  return status;
-};
-
-const runWtJson = async (cwd: string, args: string[]) => {
-  await assertWorktrunkInstalled(cwd);
-  const commandText = ['wt', ...args.map(shellQuote)].join(' ');
-  const result = await runShell(cwd, commandText);
-  if (!result.ok) {
-    const error = new Error(`WT_COMMAND_FAILED: ${result.stderr || result.stdout || commandText}`);
-    error.name = 'WT_COMMAND_FAILED';
-    throw error;
-  }
-  return parseJsonOutput(result.stdout, `wt ${args.join(' ')}`);
-};
-
-const readAgentsMd = async (root: string) => {
-  const path = `${root}/AGENTS.md`;
-  const info = await Deno.stat(path).catch(() => undefined);
-  if (!info?.isFile || info.size > 128_000) return undefined;
-  const content = await Deno.readTextFile(path);
-  return {
-    path: 'AGENTS.md',
-    content: content.slice(0, 32_000),
-    size: info.size,
-    updatedAt: info.mtime?.toISOString(),
-  };
-};
-
 const maxWeaveContextFileSize = 256_000;
 const maxWeaveContextContentLength = 128_000;
 
@@ -491,16 +436,6 @@ const collectAgentInstructionChain = async (gitRoot: string, workspaceRoot: stri
     if (file) files.push(file);
   }
   return files;
-};
-
-const inspectGit = async (path: string) => {
-  const root = await runGit(path, ['rev-parse', '--show-toplevel']);
-  const currentBranch = await runGit(root, ['branch', '--show-current']).catch(() => '');
-  const defaultRef = await runGit(root, ['symbolic-ref', 'refs/remotes/origin/HEAD']).catch(() => '');
-  const defaultBranch = defaultRef ? defaultRef.split('/').pop() : currentBranch || 'main';
-  const remote = await runGit(root, ['config', '--get', 'remote.origin.url']).catch(() => undefined);
-  const agentsMd = await readAgentsMd(root).catch(() => undefined);
-  return { root, currentBranch, defaultBranch, remote, agentsMd };
 };
 
 const resolveWorkspaceRoot = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
@@ -660,198 +595,33 @@ export const discoverWeaveContextTool = async (config: ResolvedPortalConfig, req
   };
 };
 
-const normalizeWtWorktree = (item: unknown) => {
-  const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
-  const commit = record.commit && typeof record.commit === 'object'
-    ? record.commit as Record<string, unknown>
-    : undefined;
-  const worktree = record.worktree && typeof record.worktree === 'object'
-    ? record.worktree as Record<string, unknown>
-    : undefined;
-  return {
-    branch: typeof record.branch === 'string' ? record.branch : undefined,
-    path: typeof record.path === 'string' ? normalizePath(record.path) : undefined,
-    commit: typeof commit?.sha === 'string' ? commit.sha : undefined,
-    head: typeof commit?.sha === 'string' ? commit.sha : undefined,
-    shortCommit: typeof commit?.short_sha === 'string' ? commit.short_sha : undefined,
-    message: typeof commit?.message === 'string' ? commit.message : undefined,
-    isMain: record.is_main === true,
-    isCurrent: record.is_current === true,
-    detached: worktree?.detached === true,
-    statusline: typeof record.statusline === 'string' ? record.statusline.replace(/\u001b\[[0-9;]*m/g, '') : undefined,
-  };
-};
-
-const normalizeGitWorktree = async (path: string) => {
-  const realPath = await Deno.realPath(path);
-  const branch = await runGit(realPath, ['branch', '--show-current']).catch(() => '');
-  const commit = await runGit(realPath, ['rev-parse', 'HEAD']).catch(() => undefined);
-  return { path: realPath, branch: branch || undefined, commit, head: commit, detached: !branch };
-};
-
-const resolveNewWorkspacePath = async (root: string, args: Record<string, unknown>, label: string) => {
-  const requestedPath = typeof args.path === 'string' && args.path.trim() ? args.path.trim() : undefined;
-  const target = requestedPath
-    ? normalizePath(requestedPath.startsWith('/') ? requestedPath : `${getParentPath(root)}/${requestedPath}`)
-    : normalizePath(`${getParentPath(root)}/${pathBasename(root)}.${workspaceSlug(label)}`);
-  const parent = getParentPath(target);
-  await Deno.stat(target).then(() => {
-    throw new Error(`Workspace path already exists: ${target}`);
-  }).catch((error) => {
-    if (error instanceof Deno.errors.NotFound) return;
-    throw error;
-  });
-  await Deno.mkdir(parent, { recursive: true });
-  return target;
-};
-
-const worktrunkStatusTool = async () => getWorktrunkStatus();
-
-const worktrunkListTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
-  const root = await resolveWorkspaceRoot(config, request);
-  const result = await runWtJson(root, ['-C', root, 'list', '--format', 'json']);
-  const worktrees = Array.isArray(result) ? result.map(normalizeWtWorktree) : [];
-  return { ok: true, worktrees };
-};
-
-const worktrunkCreateTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
-  const args = request.args as Record<string, unknown> | undefined;
-  const branch = typeof args?.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
-  if (!branch) throw new Error('Missing branch');
-  const base = typeof args?.base === 'string' && args.base.trim() ? args.base.trim() : undefined;
-  const root = await resolveWorkspaceRoot(config, request);
-  const wtArgs = ['-C', root, 'switch', '--create', branch, '--format', 'json', '--no-cd', '--yes'];
-  if (base) wtArgs.splice(5, 0, '--base', base);
-  const result = await runWtJson(root, wtArgs);
-  return { ok: true, worktree: normalizeWtWorktree(result), raw: result };
-};
-
 const gitWorktreeCreateTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined ?? {};
-  const mode = args.mode === 'existingBranch' || args.mode === 'detached' ? args.mode : 'newBranch';
-  const name = typeof args.name === 'string' && args.name.trim() ? args.name.trim() : undefined;
-  const branch = typeof args.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
-  const base = typeof args.base === 'string' && args.base.trim() ? args.base.trim() : undefined;
-  if (mode !== 'detached' && !branch) throw new Error('Missing branch');
   const root = await resolveWorkspaceRoot(config, request);
-  const target = await resolveNewWorkspacePath(root, args, name ?? branch ?? base ?? 'detached');
-  const gitArgs = mode === 'newBranch'
-    ? ['worktree', 'add', '-b', branch!, target, base ?? 'HEAD']
-    : mode === 'existingBranch'
-    ? ['worktree', 'add', target, branch!]
-    : ['worktree', 'add', '--detach', target, base ?? 'HEAD'];
-  await runGit(root, gitArgs);
-  return { ok: true, worktree: await normalizeGitWorktree(target) };
+  return { ok: true, worktree: await createGitWorktree(root, args) };
 };
 
 const gitWorktreeListTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const root = await resolveWorkspaceRoot(config, request);
-  const stdout = await runGit(root, ['worktree', 'list', '--porcelain']);
-  const records = stdout.split(/\n{2,}/).map((record) => record.trim()).filter(Boolean);
-  const worktrees = records.map((record) => {
-    const fields: Record<string, string | boolean> = {};
-    for (const line of record.split('\n')) {
-      const [key = '', ...rest] = line.split(' ');
-      fields[key] = rest.length ? rest.join(' ') : true;
-    }
-    const branch = typeof fields.branch === 'string' ? fields.branch.replace(/^refs\/heads\//, '') : undefined;
-    const path = typeof fields.worktree === 'string' ? normalizePath(fields.worktree) : undefined;
-    const head = typeof fields.HEAD === 'string' ? fields.HEAD : undefined;
-    return {
-      path,
-      branch,
-      commit: head,
-      head,
-      detached: fields.detached === true || !branch,
-      isCurrent: path === root,
-    };
-  });
-  return { ok: true, worktrees };
-};
-
-export type GitBranchOption = {
-  name: string;
-  ref: string;
-  kind: 'local' | 'remote';
-  current?: boolean;
-};
-
-const normalizeBranchOption = (
-  branch: string,
-  kind: GitBranchOption['kind'],
-  currentBranch: string,
-  localNames: Set<string>,
-): GitBranchOption | undefined => {
-  if (!branch || branch.endsWith('/HEAD')) return undefined;
-  if (kind === 'local') return { name: branch, ref: branch, kind, current: branch === currentBranch };
-  if (!branch.includes('/')) return undefined;
-
-  const name = branch.startsWith('origin/') ? branch.slice('origin/'.length) : branch;
-  if (branch.startsWith('origin/') && localNames.has(name)) return undefined;
-  return { name, ref: branch, kind };
+  return { ok: true, worktrees: await listGitWorktrees(root) };
 };
 
 export const listGitBranchesTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const root = await resolveWorkspaceRoot(config, request);
-  const currentBranch = await runGit(root, ['branch', '--show-current']).catch(() => '');
-  const localOutput = await runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']).catch(() => '');
-  const remoteOutput = await runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes']).catch(() =>
-    ''
-  );
-  const localNames = new Set(localOutput.split('\n').map((line) => line.trim()).filter(Boolean));
-  const localBranches = [...localNames].flatMap((branch) =>
-    normalizeBranchOption(branch, 'local', currentBranch, localNames) ?? []
-  );
-  const remoteBranches = remoteOutput.split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((branch) => normalizeBranchOption(branch, 'remote', currentBranch, localNames) ?? []);
-  const branches = [...localBranches, ...remoteBranches]
-    .sort((a, b) => Number(b.current === true) - Number(a.current === true) || a.name.localeCompare(b.name));
-  return { ok: true, branches };
+  return { ok: true, branches: await listGitBranches(root) };
 };
 
 const gitWorktreeSwitchTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined ?? {};
-  const branch = typeof args.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
-  if (!branch) throw new Error('Missing branch');
   const root = await resolveWorkspaceRoot(config, request);
-  const base = typeof args.base === 'string' && args.base.trim() ? args.base.trim() : undefined;
-  const gitArgs = args.create === true ? ['switch', '-c', branch, ...(base ? [base] : [])] : ['switch', branch];
-  await runGit(root, gitArgs);
-  return { ok: true, worktree: await normalizeGitWorktree(root) };
+  return { ok: true, worktree: await switchGitWorktree(root, args) };
 };
 
 const gitWorktreeRemoveTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined ?? {};
-  const target = typeof args.path === 'string' && args.path.trim()
-    ? args.path.trim()
-    : typeof request.workspacePath === 'string' && request.workspacePath.trim()
-    ? request.workspacePath.trim()
-    : undefined;
-  if (!target) throw new Error('Missing path');
   const root = await resolveWorkspaceRoot(config, { ...request, workspacePath: undefined });
-  const gitArgs = ['worktree', 'remove', target];
-  if (args.force === true) gitArgs.push('--force');
-  await runGit(root, gitArgs);
+  await removeGitWorktree(root, args, typeof request.workspacePath === 'string' ? request.workspacePath : undefined);
   return { ok: true };
-};
-
-const worktrunkRemoveTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
-  const args = request.args as Record<string, unknown> | undefined;
-  const target = typeof args?.branch === 'string' && args.branch.trim()
-    ? args.branch.trim()
-    : typeof args?.path === 'string' && args.path.trim()
-    ? args.path.trim()
-    : undefined;
-  if (!target) throw new Error('Missing branch or path');
-  const root = await resolveWorkspaceRoot(config, request);
-  const wtArgs = ['-C', root, 'remove', target, '--foreground', '--format', 'json', '--yes'];
-  if (args?.force === true) wtArgs.push('--force');
-  if (args?.forceDelete === true) wtArgs.push('--force-delete');
-  if (args?.deleteBranch === false) wtArgs.push('--no-delete-branch');
-  const result = await runWtJson(root, wtArgs);
-  return { ok: true, result };
 };
 
 const gitWorktreeValidateTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
@@ -863,24 +633,37 @@ const gitWorktreeValidateTool = async (config: ResolvedPortalConfig, request: Re
   const candidate = path.startsWith('/')
     ? await Deno.realPath(path)
     : (await resolveRootPath(config, typeof args?.rootId === 'string' ? args.rootId : 'default', path)).target;
-  const primaryCommonDir = await runGit(primaryRoot, ['rev-parse', '--git-common-dir']);
-  const candidateCommonDir = await runGit(candidate, ['rev-parse', '--git-common-dir']);
-  const normalizedPrimaryCommonDir = primaryCommonDir.startsWith('/')
-    ? await Deno.realPath(primaryCommonDir)
-    : await Deno.realPath(`${primaryRoot}/${primaryCommonDir}`);
-  const normalizedCandidateCommonDir = candidateCommonDir.startsWith('/')
-    ? await Deno.realPath(candidateCommonDir)
-    : await Deno.realPath(`${candidate}/${candidateCommonDir}`);
-  if (normalizedPrimaryCommonDir !== normalizedCandidateCommonDir) {
-    throw new Error('Selected path is not a worktree for this Project repo');
-  }
+  return { ok: true, worktree: await validateGitWorktree(primaryRoot, candidate) };
+};
 
-  const branch = await runGit(candidate, ['branch', '--show-current']).catch(() => '');
-  const commit = await runGit(candidate, ['rev-parse', 'HEAD']).catch(() => undefined);
-  return {
-    ok: true,
-    worktree: { path: candidate, branch: branch || undefined, commit, head: commit, detached: !branch },
-  };
+const gitStatusTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const root = await resolveWorkspaceRoot(config, request);
+  return { ok: true, ...await getGitStatus(root) };
+};
+
+const gitFetchTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const root = await resolveWorkspaceRoot(config, request);
+  return { ok: true, ...await fetchGitUpstream(root) };
+};
+
+const gitPullTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const root = await resolveWorkspaceRoot(config, request);
+  return { ok: true, ...await pullGitUpstream(root) };
+};
+
+const gitDiffTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const root = await resolveWorkspaceRoot(config, request);
+  return { ok: true, ...await getGitDiff(root, request.args as Record<string, unknown> | undefined ?? {}) };
+};
+
+const gitLogTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const root = await resolveWorkspaceRoot(config, request);
+  return { ok: true, ...await getGitLog(root, request.args as Record<string, unknown> | undefined ?? {}) };
+};
+
+const gitShowTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const root = await resolveWorkspaceRoot(config, request);
+  return { ok: true, ...await getGitShow(root, request.args as Record<string, unknown> | undefined ?? {}) };
 };
 
 const maxReadLines = 2000;
@@ -1171,14 +954,6 @@ const handleToolCall = async (
       ? await readAgentInstructionsTool(config, request)
       : request.tool === 'portal.context.discover'
       ? await discoverWeaveContextTool(config, request)
-      : request.tool === 'portal.worktrunk.status'
-      ? await worktrunkStatusTool()
-      : request.tool === 'portal.worktrunk.list'
-      ? await worktrunkListTool(config, request)
-      : request.tool === 'portal.worktrunk.create'
-      ? await worktrunkCreateTool(config, request)
-      : request.tool === 'portal.worktrunk.remove'
-      ? await worktrunkRemoveTool(config, request)
       : request.tool === 'portal.git.worktree.create'
       ? await gitWorktreeCreateTool(config, request)
       : request.tool === 'portal.git.worktree.list'
@@ -1191,6 +966,18 @@ const handleToolCall = async (
       ? await gitWorktreeRemoveTool(config, request)
       : request.tool === 'portal.git.worktree.validate'
       ? await gitWorktreeValidateTool(config, request)
+      : request.tool === 'portal.git.status'
+      ? await gitStatusTool(config, request)
+      : request.tool === 'portal.git.fetch'
+      ? await gitFetchTool(config, request)
+      : request.tool === 'portal.git.pull'
+      ? await gitPullTool(config, request)
+      : request.tool === 'portal.git.diff'
+      ? await gitDiffTool(config, request)
+      : request.tool === 'portal.git.log'
+      ? await gitLogTool(config, request)
+      : request.tool === 'portal.git.show'
+      ? await gitShowTool(config, request)
       : undefined;
     if (!result) throw new Error(`Unsupported tool: ${String(request.tool)}`);
     ws.send(JSON.stringify({ id, type: 'tool.result', ...result }));
@@ -1235,13 +1022,14 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'portal.git.branches.list',
     'portal.git.worktree.switch',
     'portal.git.worktree.remove',
-    'portal.worktrunk.status',
+    'portal.git.status',
+    'portal.git.fetch',
+    'portal.git.pull',
+    'portal.git.diff',
+    'portal.git.log',
+    'portal.git.show',
   ];
-  const status = await getWorktrunkStatus().catch(() => ({ installed: false }));
-  const capabilities = status.installed
-    ? [...baseCapabilities, 'portal.worktrunk.list', 'portal.worktrunk.create', 'portal.worktrunk.remove']
-    : baseCapabilities;
-  return [...capabilities, ...await getWindowCapabilities(config.windowStream)];
+  return [...baseCapabilities, ...await getWindowCapabilities(config.windowStream)];
 };
 
 const hasRequiredControlCapabilities = (body: unknown) => {

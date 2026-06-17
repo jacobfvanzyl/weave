@@ -3,11 +3,11 @@ import { z } from 'zod';
 import { findPortalForProject, requestPortalTool } from '../portal/registry';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars } from './model-output';
 
-const offlineMessage = 'This thread is not bound to an active Workspace. Connect a Portal or choose a Project with an online Portal to use local tools.';
+export const offlineMessage = 'This thread is not bound to an active Workspace. Connect a Portal or choose a Project with an online Portal to use local tools.';
 
 const projectThreadId = (projectId: string) => `__project__${projectId}`;
 
-const getThreadBinding = async (context: any) => {
+export const getThreadBinding = async (context: any) => {
   const threadId = context.agent?.threadId;
   const contextResourceId = context.agent?.resourceId;
   if (!threadId) throw new Error(offlineMessage);

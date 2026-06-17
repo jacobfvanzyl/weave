@@ -13,6 +13,9 @@ const stripWorkspaceLiveGitState = (workspace: Workspace): Workspace => {
   const {
     branch: _branch,
     head: _head,
+    upstream: _upstream,
+    ahead: _ahead,
+    behind: _behind,
     detached: _detached,
     ...stableWorkspace
   } = workspace;
@@ -44,6 +47,9 @@ export const overlayWorkspaceGitState = (
         ...(state.lastError ? { lastError: state.lastError } : {}),
         ...(state.branch ? { branch: state.branch } : {}),
         ...(state.head ? { head: state.head } : {}),
+        ...(state.upstream ? { upstream: state.upstream } : {}),
+        ...(typeof state.ahead === 'number' ? { ahead: state.ahead } : {}),
+        ...(typeof state.behind === 'number' ? { behind: state.behind } : {}),
         ...(typeof state.detached === 'boolean' ? { detached: state.detached } : {}),
       };
     }),

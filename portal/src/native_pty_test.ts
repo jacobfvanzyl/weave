@@ -21,10 +21,25 @@ const commandExists = async (command: string) => {
   return output.success;
 };
 
+const portalCommandExists = async (command: string, args: string[] = []) => {
+  try {
+    const output = await new Deno.Command(command, {
+      args,
+      env: Deno.env.toObject(),
+      stdout: 'null',
+      stderr: 'null',
+    }).output();
+    return output.success;
+  } catch {
+    return false;
+  }
+};
+
 Deno.test({
-  name: 'Portal native PTY starts a shell, writes output, resizes, and closes',
+  name: 'Portal tmux terminal starts a shell, writes output, resizes, and closes',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
+    if (!await portalCommandExists('tmux', ['-V'])) return;
     const cwd = await Deno.makeTempDir({ prefix: 'weave-native-pty-' });
     const events: TerminalHostEvent[] = [];
     const host = new PortalTerminalHost({
@@ -35,18 +50,29 @@ Deno.test({
 
     try {
       await host.handleClientMessage('client-1', {
+        type: 'create',
+        kind: 'general',
+        cwd,
+        cols: 80,
+        rows: 24,
+      }, (event) => events.push(event));
+      const created = events.find((event) => event.type === 'created')?.window;
+      if (!created) throw new Error('terminal was not created');
+
+      await host.handleClientMessage('client-1', {
         type: 'start',
         kind: 'general',
-        terminalId: 'native-smoke',
+        terminalId: created.terminalId,
         cwd,
         cols: 80,
         rows: 24,
       }, (event) => events.push(event));
 
-      assertEquals(events[0]?.type, 'started');
+      await waitFor(() => events.some((event) => event.type === 'started'));
+      assertEquals(events.some((event) => event.type === 'started'), true);
       await host.handleClientMessage('client-1', {
         type: 'input',
-        terminalId: 'native-smoke',
+        terminalId: created.terminalId,
         data: 'printf "__WEAVE_NATIVE_PTY_OK__\\n"\r',
       }, (event) => events.push(event));
       await waitFor(() =>
@@ -55,14 +81,13 @@ Deno.test({
 
       await host.handleClientMessage('client-1', {
         type: 'resize',
-        terminalId: 'native-smoke',
+        terminalId: created.terminalId,
         cols: 120,
         rows: 32,
       }, (event) => events.push(event));
       await host.handleClientMessage('client-1', {
-        type: 'input',
-        terminalId: 'native-smoke',
-        data: 'exit\r',
+        type: 'close',
+        terminalId: created.terminalId,
       }, (event) => events.push(event));
       await waitFor(() => events.some((event) => event.type === 'exit'));
     } finally {
@@ -76,10 +101,12 @@ Deno.test({
   name: 'Portal native PTY can run btop and accept q when available',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
+    if (!await portalCommandExists('tmux', ['-V'])) return;
     if (!await commandExists('btop')) return;
 
     const cwd = await Deno.makeTempDir({ prefix: 'weave-native-btop-' });
     const events: TerminalHostEvent[] = [];
+    let terminalId: string | undefined;
     const host = new PortalTerminalHost({
       config: {},
       outputBatchMs: 1,
@@ -88,23 +115,35 @@ Deno.test({
 
     try {
       await host.handleClientMessage('client-1', {
-        type: 'start',
+        type: 'create',
         kind: 'general',
-        terminalId: 'native-btop',
         cwd,
         cols: 120,
         rows: 40,
       }, (event) => events.push(event));
+      const created = events.find((event) => event.type === 'created')?.window;
+      if (!created) throw new Error('terminal was not created');
+      terminalId = created.terminalId;
+
+      await host.handleClientMessage('client-1', {
+        type: 'start',
+        kind: 'general',
+        terminalId: created.terminalId,
+        cwd,
+        cols: 120,
+        rows: 40,
+      }, (event) => events.push(event));
+      await waitFor(() => events.some((event) => event.type === 'started'));
 
       await host.handleClientMessage('client-1', {
         type: 'input',
-        terminalId: 'native-btop',
+        terminalId: created.terminalId,
         data: 'btop; printf "__WEAVE_BTOP_EXITED__\\n"\r',
       }, (event) => events.push(event));
       await waitFor(() => events.some((event) => event.type === 'output' && event.data.length > 200), 8_000);
       await host.handleClientMessage('client-1', {
         type: 'input',
-        terminalId: 'native-btop',
+        terminalId: created.terminalId,
         data: 'q',
       }, (event) => events.push(event));
       await waitFor(
@@ -113,6 +152,9 @@ Deno.test({
       );
       assert(events.some((event) => event.type === 'output' && event.data.includes('__WEAVE_BTOP_EXITED__')));
     } finally {
+      if (terminalId) {
+        await host.handleClientMessage('client-1', { type: 'close', terminalId }, () => undefined);
+      }
       host.dispose();
       await Deno.remove(cwd, { recursive: true });
     }

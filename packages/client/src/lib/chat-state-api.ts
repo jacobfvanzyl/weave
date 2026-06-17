@@ -24,6 +24,9 @@ export type Workspace = {
   locked?: boolean;
   branch?: string;
   head?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
   detached?: boolean;
   baseBranch?: string;
   sortOrder?: number;
@@ -39,6 +42,9 @@ export type WorkspaceGitState = {
   status: Workspace['status'];
   branch?: string;
   head?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
   detached?: boolean;
   checkedAt: string;
   lastError?: string;
@@ -380,6 +386,28 @@ export const updateWorkspace = async (projectId: string, workspaceId: string, in
   );
 
   return result.workspace;
+};
+
+export const fetchWorkspaceGitUpstream = async (projectId: string, workspaceId: string) => {
+  const result = await parseJson<{ state: WorkspaceGitState }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}/git/fetch`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    }),
+  );
+
+  return result.state;
+};
+
+export const pullWorkspaceGitUpstream = async (projectId: string, workspaceId: string) => {
+  const result = await parseJson<{ state: WorkspaceGitState }>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}/git/pull`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    }),
+  );
+
+  return result.state;
 };
 
 export const adoptWorkspace = async (projectId: string, path: string, name?: string) => {

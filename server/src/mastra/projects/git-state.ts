@@ -1,3 +1,5 @@
+import { listProjectWorktrees } from '../git/service';
+
 export type WorkspaceGitStatus = 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual' | 'error';
 
 export type GitStateWorkspace = {
@@ -5,6 +7,9 @@ export type GitStateWorkspace = {
   path?: string;
   branch?: string;
   head?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
   detached?: boolean;
 };
 
@@ -23,6 +28,9 @@ export type WorkspaceGitState = {
   status: WorkspaceGitStatus;
   branch?: string;
   head?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
   detached?: boolean;
   checkedAt: string;
   lastError?: string;
@@ -52,6 +60,9 @@ export const stripWorkspaceGitState = <T extends GitStateWorkspace>(workspace: T
   const {
     branch: _branch,
     head: _head,
+    upstream: _upstream,
+    ahead: _ahead,
+    behind: _behind,
     detached: _detached,
     ...durableWorkspace
   } = workspace;
@@ -66,10 +77,13 @@ export const stripProjectGitState = <T extends { workspaces: GitStateWorkspace[]
 export const gitFieldsFromWorktree = (worktree: Record<string, unknown>) => ({
   branch: normalizeBranch(worktree.branch),
   head: optionalString(worktree.commit) ?? optionalString(worktree.head),
+  upstream: optionalString(worktree.upstream),
+  ahead: typeof worktree.ahead === 'number' ? worktree.ahead : undefined,
+  behind: typeof worktree.behind === 'number' ? worktree.behind : undefined,
   detached: worktree.detached === true,
 });
 
-const workspaceStateFromGitFields = (
+export const workspaceStateFromGitFields = (
   projectId: string,
   workspace: GitStateWorkspace,
   worktree: Record<string, unknown>,
@@ -83,6 +97,9 @@ const workspaceStateFromGitFields = (
     status: 'ready',
     ...(fields.branch ? { branch: fields.branch } : {}),
     ...(fields.head ? { head: fields.head } : {}),
+    ...(fields.upstream ? { upstream: fields.upstream } : {}),
+    ...(typeof fields.ahead === 'number' ? { ahead: fields.ahead } : {}),
+    ...(typeof fields.behind === 'number' ? { behind: fields.behind } : {}),
     detached: fields.detached,
     checkedAt,
   };
@@ -103,10 +120,6 @@ const workspaceState = (
   ...(lastError ? { lastError } : {}),
 });
 
-const portalToolError = (result: { ok?: boolean; error?: unknown }) => {
-  if (result.ok === false) throw new Error(typeof result.error === 'string' ? result.error : 'Portal tool failed');
-};
-
 export const collectWorkspaceGitStatesForProject = async (
   project: GitStateProject,
   resourceId: string,
@@ -122,23 +135,17 @@ export const collectWorkspaceGitStatesForProject = async (
     return workspaces.map(workspace => workspaceState(project.id, workspace, 'offline', checkedAt));
   }
 
-  let result: { ok?: boolean; error?: string; worktrees?: Array<Record<string, unknown>> };
+  let worktrees: Array<Record<string, unknown>>;
   try {
-    result = await requestPortal({
-      portalId: project.portalId,
-      projectId: project.id,
-      rootId: project.portalRootId,
-      repoPath: project.repoPath,
-      tool: 'portal.git.worktree.list',
-      args: {},
-      timeoutMs: 10_000,
-    }) as { ok?: boolean; error?: string; worktrees?: Array<Record<string, unknown>> };
-    portalToolError(result);
+    worktrees = await listProjectWorktrees({ ...project, projectKind: 'git' }, resourceId, {
+      getPortal,
+      requestPortal,
+    });
   } catch (error) {
     return workspaces.map(workspace => workspaceState(project.id, workspace, 'error', checkedAt, errorMessage(error)));
   }
 
-  const worktreesByPath = new Map((result.worktrees ?? []).flatMap(worktree => {
+  const worktreesByPath = new Map(worktrees.flatMap(worktree => {
     const path = normalizePath(worktree.path)?.toLowerCase();
     return path ? [[path, worktree] as const] : [];
   }));
