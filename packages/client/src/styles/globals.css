@@ -148,11 +148,12 @@
   --weave-safe-area-bottom-raw: env(safe-area-inset-bottom, 0px);
   --weave-safe-area-bottom: min(var(--weave-safe-area-bottom-raw), 1rem);
   --weave-appbar-height: 3.5rem;
+  --weave-chat-top-rail-height: 2.5rem;
   --weave-appbar-control-size: 2rem;
   --weave-appbar-control-top: calc((var(--weave-appbar-height) - var(--weave-appbar-control-size)) / 2);
   --weave-sidebar-action-height: 1.5rem;
   --weave-sidebar-padding-top: calc(
-    var(--weave-appbar-height) - (var(--weave-sidebar-action-height) / 2)
+    var(--weave-appbar-height) + ((var(--weave-chat-top-rail-height) - var(--weave-sidebar-action-height)) / 2)
   );
 }
 
@@ -305,7 +306,7 @@ input {
 .weave-appbar-left-actions-floating {
   position: fixed;
   top: calc(var(--weave-safe-area-top) + var(--weave-appbar-control-top));
-  left: 1rem;
+  left: 0.5rem;
   z-index: 47;
   gap: 0.5rem;
 }

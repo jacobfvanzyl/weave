@@ -156,9 +156,9 @@ const SidebarSectionHeader = ({
   label: string;
   labelClassName?: string;
 }) => (
-  <div className="weave-sidebar-section-heading flex h-6 items-center justify-between bg-muted text-sm font-semibold tracking-wide text-muted-foreground dark:bg-card">
-    <span className={labelClassName}>{label}</span>
-    <div className="flex items-center gap-2">
+  <div className="weave-sidebar-section-heading relative flex h-6 items-center justify-end bg-muted text-sm font-semibold tracking-wide text-muted-foreground dark:bg-card">
+    <span className={cn('pointer-events-none absolute left-0 right-0.5 text-center', labelClassName)}>{label}</span>
+    <div className="relative flex items-center gap-2">
       {children}
     </div>
   </div>
@@ -477,9 +477,9 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       </span>
     );
   };
-  const renderThreadMenu = (thread: typeof threads[number]) => (
+  const renderThreadMenu = (thread: typeof threads[number], triggerClassName = 'translate-x-[9px]') => (
     <Menu>
-      <MenuTrigger render={<Button className="shrink-0 text-foreground" size="icon-xs" variant="ghost" aria-label={`Open menu for ${thread.title}`} />}>
+      <MenuTrigger render={<Button className={cn('shrink-0 text-foreground', triggerClassName)} size="icon-xs" variant="ghost" aria-label={`Open menu for ${thread.title}`} />}>
         <MoreHorizontal size={14} />
       </MenuTrigger>
       <MenuPopup align="end" sideOffset={4} className="w-32">
@@ -516,7 +516,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       data-weave-surface="sidebar"
       tabIndex={-1}
       className={cn(
-        'fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-muted p-4 dark:bg-card',
+        'fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-muted py-4 pl-2 pr-4 dark:bg-card',
         presentation === 'overlay'
           ? 'w-96 max-w-[min(24rem,calc(100vw-1rem))]'
           : 'w-full md:static md:z-auto md:w-96',
@@ -536,7 +536,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                 <SquarePen size={14} />
               </Button>
               <Menu>
-                <MenuTrigger render={<Button className="h-5 w-6 text-foreground sm:h-5 sm:w-6" size="icon-xs" variant="ghost" aria-label="Threads menu" />}>
+                <MenuTrigger render={<Button className="h-5 w-6 translate-x-2.5 text-foreground sm:h-5 sm:w-6" size="icon-xs" variant="ghost" aria-label="Threads menu" />}>
                   <MoreHorizontal size={14} />
                 </MenuTrigger>
                 <MenuPopup align="end" sideOffset={4} className="w-40">
@@ -570,12 +570,20 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
             canDrag={plainThreads.length > 1}
             showHandle={false}
             className={cn(
-              'group flex min-h-9 min-w-0 w-[calc(100%+6px)] items-center gap-2 rounded-md border border-transparent py-1 pl-2 pr-1 text-left transition-colors',
-              isThreadActive(thread.id) ? 'border-transparent bg-selected-thread' : 'hover:bg-background',
+              'group relative flex min-h-9 min-w-0 w-[calc(100%+6px)] items-center gap-2 rounded-md border border-transparent py-1 pl-2 pr-1 text-left transition-colors',
+              !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
             )}
           >
+            <span
+              aria-hidden="true"
+              data-sidebar-highlight
+              className={cn(
+                'pointer-events-none absolute inset-y-0 left-[-1px] -right-2 rounded-md transition-colors',
+                isThreadActive(thread.id) && 'bg-selected-thread',
+              )}
+            />
             <SidebarItemButton
-              className="min-w-0 flex-1 items-center text-left"
+              className="relative min-w-0 flex-1 items-center text-left"
               onClick={() => selectThread(thread.id)}
             >
               <div className="flex min-w-0 items-center text-sm font-normal text-foreground">
@@ -592,7 +600,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
         <div className="space-y-2">
           <SidebarSectionHeader label="Projects" labelClassName="text-success">
             <Menu>
-              <MenuTrigger render={<Button className="h-6 w-8 text-foreground" size="icon-xs" variant="ghost" aria-label="Projects menu" />}>
+              <MenuTrigger render={<Button className="h-6 w-8 translate-x-2.5 text-foreground" size="icon-xs" variant="ghost" aria-label="Projects menu" />}>
                 <MoreHorizontal size={14} />
               </MenuTrigger>
               <MenuPopup align="end" sideOffset={4} className="w-36">
@@ -643,15 +651,20 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                     <>
                       <div
                         ref={dragActivator.ref}
-                        className="flex w-full cursor-grab touch-none select-none items-center gap-2 text-sm font-normal text-foreground active:cursor-grabbing"
+                        className="relative flex w-full cursor-grab touch-none select-none items-center gap-2 text-sm font-normal text-foreground active:cursor-grabbing"
                         style={{ touchAction: 'none' }}
                         {...dragActivator.attributes}
                         {...dragActivator.listeners}
                       >
+                        {isNotesProjectActive ? (
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute inset-y-0 left-4 -right-[13px] rounded-md bg-selected-thread"
+                          />
+                        ) : null}
                         <SidebarItemButton
                           className={cn(
-                            'ml-[23px] flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left',
-                            isNotesProjectActive && 'bg-selected-thread',
+                            'relative ml-[14px] flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left',
                           )}
                           onClick={() => {
                             if (shouldSuppressSelection()) return;
@@ -670,7 +683,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                           <span className="min-w-0 truncate font-semibold text-success">{project.name}</span>
                         </SidebarItemButton>
                         {!isCollapsed ? (
-                          <div className="flex shrink-0 items-center">
+                          <div className="relative flex shrink-0 items-center">
                             {project.projectKind === 'general' || project.projectKind === 'notes' ? (
                               <Button
                                 className="h-5 w-6 shrink-0 text-foreground sm:h-5 sm:w-6"
@@ -690,7 +703,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                               </Button>
                             ) : null}
                             <Menu>
-                              <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 text-foreground sm:h-5 sm:w-6" aria-label={`${project.name} menu`} />}>
+                              <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 translate-x-2.5 text-foreground sm:h-5 sm:w-6" aria-label={`${project.name} menu`} />}>
                                 <MoreHorizontal size={14} />
                               </MenuTrigger>
                               <MenuPopup align="end" sideOffset={4} className="w-44">
@@ -722,7 +735,12 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                         ) : null}
                       </div>
                       {!isCollapsed ? (
-                        <div className="relative space-y-2 pb-3 pl-6 before:absolute before:bottom-1.5 before:left-[25px] before:-right-[21px] before:top-[-4px] before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-success/70">
+                        <div
+                          className={cn(
+                            'relative space-y-2 pl-[15px] before:pointer-events-none before:absolute before:left-4 before:-right-[21px] before:top-[-4px] before:z-10 before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-success/70',
+                            project.projectKind === 'git' ? 'pb-3 before:bottom-1.5' : 'pb-1 before:bottom-2',
+                          )}
+                        >
                           {project.projectKind === 'general' ? (
                             <SortableSection
                               items={generalProjectThreads.map(thread => thread.id)}
@@ -738,11 +756,20 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                   showHandle={false}
                                   className={cn(
                                     'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
-                                    isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                                    'border-transparent text-foreground',
+                                    !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
                                   )}
                                 >
+                                  <span
+                                    aria-hidden="true"
+                                    data-sidebar-highlight
+                                    className={cn(
+                                      'pointer-events-none absolute inset-y-0 left-2 -right-[14px] rounded-md transition-colors',
+                                      isThreadActive(thread.id) && 'bg-selected-thread',
+                                    )}
+                                  />
                                   <SidebarItemButton
-                                    className="min-w-0 flex-1 items-center text-left"
+                                    className="relative min-w-0 flex-1 items-center text-left"
                                     onClick={() => selectThread(thread.id)}
                                   >
                                     <div className="flex min-w-0 items-center pl-4">
@@ -750,7 +777,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                     </div>
                                   </SidebarItemButton>
                                   {renderThreadRunningSpinner(thread)}
-                                  {renderThreadMenu(thread)}
+                                  {renderThreadMenu(thread, 'translate-x-[15px]')}
                                 </SortableItem>
                               ))}
                             </SortableSection>
@@ -770,11 +797,20 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                   showHandle={false}
                                   className={cn(
                                     'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
-                                    isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                                    'border-transparent text-foreground',
+                                    !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
                                   )}
                                 >
+                                  <span
+                                    aria-hidden="true"
+                                    data-sidebar-highlight
+                                    className={cn(
+                                      'pointer-events-none absolute inset-y-0 left-2 -right-[14px] rounded-md transition-colors',
+                                      isThreadActive(thread.id) && 'bg-selected-thread',
+                                    )}
+                                  />
                                   <SidebarItemButton
-                                    className="min-w-0 flex-1 items-center text-left"
+                                    className="relative min-w-0 flex-1 items-center text-left"
                                     onClick={() => selectThread(thread.id)}
                                   >
                                     <div className="flex min-w-0 items-center pl-4">
@@ -782,7 +818,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                     </div>
                                   </SidebarItemButton>
                                   {renderThreadRunningSpinner(thread)}
-                                  {renderThreadMenu(thread)}
+                                  {renderThreadMenu(thread, 'translate-x-[15px]')}
                                 </SortableItem>
                               ))}
                             </SortableSection>
@@ -811,208 +847,237 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                       showHandle={false}
                                       className="mb-1 space-y-0 pt-0 pb-0 last:mb-0"
                                     >
-                                      <div
-                                        className={cn(
-                                          'flex min-h-0 min-w-0 w-[calc(100%+0.5rem)] -ml-2 items-center gap-2 rounded-md border py-0 pl-2 pr-1 text-left text-sm font-normal transition-colors',
-                                          isWorkspaceActive(project.id, workspace.id)
-                                            ? 'border-transparent bg-selected-thread text-foreground'
-                                            : 'border-transparent text-foreground hover:bg-background',
-                                        )}
-                                      >
-                                        <div className="min-w-0 flex-1 rounded-md px-2 py-0 text-left">
-                                          <button
-                                            type="button"
-                                            className="flex h-5 w-full min-w-0 items-center gap-1.5 text-left text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                                            onClick={() => selectWorkspaceSurface(project.id, workspace.id)}
+                                      {dragActivator => (
+                                        <>
+                                          <div
+                                            className={cn(
+                                              'group relative -ml-2 flex min-h-0 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border border-transparent py-0 pl-2 pr-1 text-left text-sm font-normal text-foreground transition-colors',
+                                              !isWorkspaceActive(project.id, workspace.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
+                                            )}
                                           >
-                                            <span className="truncate text-peach">{workspace.name}</span>
-                                            {workspace.locked || workspace.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
-                                          </button>
-                                          {workspace.detached ? (
-                                            <div className="flex h-4 items-center truncate pl-2 text-[10px] font-normal leading-none text-mauve">
-                                              {`Detached ${workspace.head?.slice(0, 7) ?? 'HEAD'}`}
-                                            </div>
-                                          ) : workspace.branch ? (
-                                            <Menu
-                                              onOpenChange={(open) => {
-                                                if (open) void refreshWorkspaceBranchState(project.id, workspace.id, Boolean(workspace.upstream));
-                                              }}
-                                            >
-                                              <MenuTrigger
-                                                render={
+                                            <span
+                                              aria-hidden="true"
+                                              data-sidebar-highlight
+                                              className={cn(
+                                                'pointer-events-none absolute inset-y-0 left-2 -right-[14px] rounded-md transition-colors',
+                                                isWorkspaceActive(project.id, workspace.id) && 'bg-selected-thread',
+                                              )}
+                                            />
+                                            <div className="relative min-w-0 flex-1 rounded-md px-2 py-0 text-left">
+                                              <button
+                                                ref={dragActivator.ref}
+                                                type="button"
+                                                className="flex h-5 w-full min-w-0 cursor-pointer touch-none select-none items-center gap-1.5 rounded-md text-left text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                                                style={{ touchAction: 'none' }}
+                                                onClick={() => selectWorkspaceSurface(project.id, workspace.id)}
+                                                {...dragActivator.attributes}
+                                                {...dragActivator.listeners}
+                                              >
+                                                <span className="truncate text-peach">{workspace.name}</span>
+                                                {workspace.locked || workspace.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
+                                              </button>
+                                              {workspace.detached ? (
+                                                <div className="flex h-4 items-center truncate pl-2 text-[10px] font-normal leading-none text-mauve">
+                                                  {`Detached ${workspace.head?.slice(0, 7) ?? 'HEAD'}`}
+                                                </div>
+                                              ) : workspace.branch ? (
+                                                <div className="flex h-4 max-w-full items-center pl-2 text-[10px] font-normal leading-none text-mauve">
+                                                  <Menu
+                                                    onOpenChange={(open) => {
+                                                      if (open) void refreshWorkspaceBranchState(project.id, workspace.id, Boolean(workspace.upstream));
+                                                    }}
+                                                  >
+                                                    <MenuTrigger
+                                                      render={
+                                                        <button
+                                                          type="button"
+                                                          className="flex h-4 min-w-0 max-w-full items-center gap-1 truncate text-[10px] font-normal leading-none text-mauve outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                                                          aria-label={`${workspace.branch} branch menu`}
+                                                        />
+                                                      }
+                                                    >
+                                                      <span className="truncate">{workspace.branch}</span>
+                                                      {typeof workspace.behind === 'number' && workspace.behind > 0 ? (
+                                                        <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.behind} behind upstream`}>
+                                                          {`\u2193${workspace.behind}`}
+                                                        </span>
+                                                      ) : null}
+                                                      {typeof workspace.ahead === 'number' && workspace.ahead > 0 ? (
+                                                        <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.ahead} ahead of upstream`}>
+                                                          {`\u2191${workspace.ahead}`}
+                                                        </span>
+                                                      ) : null}
+                                                    </MenuTrigger>
+                                                    <MenuPopup align="start" sideOffset={4} className="w-44">
+                                                      {workspace.upstream ? (
+                                                        <MenuItem
+                                                          disabled={pendingBranchActionKey === workspaceActionKey(project.id, workspace.id)}
+                                                          onClick={() => void pullWorkspaceBranch(project.id, workspace.id)}
+                                                        >
+                                                          <Download size={13} />
+                                                          Pull from remote
+                                                        </MenuItem>
+                                                      ) : (
+                                                        <MenuItem disabled>
+                                                          <GitBranch size={13} />
+                                                          No upstream
+                                                        </MenuItem>
+                                                      )}
+                                                    </MenuPopup>
+                                                  </Menu>
                                                   <button
                                                     type="button"
-                                                    className="flex h-4 max-w-full items-center gap-1 truncate pl-2 text-[10px] font-normal leading-none text-mauve outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                                                    aria-label={`${workspace.branch} branch menu`}
+                                                    className="h-4 min-w-4 flex-1 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                                                    aria-label={`Select ${workspace.name}`}
+                                                    onClick={() => selectWorkspaceSurface(project.id, workspace.id)}
                                                   />
-                                                }
-                                              >
-                                                <span className="truncate">{workspace.branch}</span>
-                                                {typeof workspace.behind === 'number' && workspace.behind > 0 ? (
-                                                  <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.behind} behind upstream`}>
-                                                    {`\u2193${workspace.behind}`}
-                                                  </span>
-                                                ) : null}
-                                                {typeof workspace.ahead === 'number' && workspace.ahead > 0 ? (
-                                                  <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.ahead} ahead of upstream`}>
-                                                    {`\u2191${workspace.ahead}`}
-                                                  </span>
-                                                ) : null}
-                                              </MenuTrigger>
-                                              <MenuPopup align="start" sideOffset={4} className="w-44">
-                                                {workspace.upstream ? (
-                                                  <MenuItem
-                                                    disabled={pendingBranchActionKey === workspaceActionKey(project.id, workspace.id)}
-                                                    onClick={() => void pullWorkspaceBranch(project.id, workspace.id)}
-                                                  >
-                                                    <Download size={13} />
-                                                    Pull from remote
-                                                  </MenuItem>
-                                                ) : (
-                                                  <MenuItem disabled>
-                                                    <GitBranch size={13} />
-                                                    No upstream
-                                                  </MenuItem>
-                                                )}
-                                              </MenuPopup>
-                                            </Menu>
-                                          ) : null}
-                                          {workspace.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{workspace.lastError}</div> : null}
-                                        </div>
-                                        <div className="-mr-2 flex w-6 shrink-0 flex-col items-center self-stretch py-2">
-                                          <Button
-                                            className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
-                                            size="icon-xs"
-                                            variant="ghost"
-                                            aria-label={`Create thread in ${workspace.name}`}
-                                            onClick={async () => {
-                                              await newThread(project.id, workspace.id);
-                                              await Promise.all([
-                                                queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-                                                invalidateProjects(),
-                                              ]);
-                                              if (closeOnSelect) onClose?.();
-                                            }}
-                                          >
-                                            <SquarePen size={14} />
-                                          </Button>
-                                        </div>
-                                        <div className="flex w-6 shrink-0 flex-col items-center self-stretch py-2">
-                                          <Menu>
-                                            <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 text-foreground sm:h-5 sm:w-6" aria-label={`${workspace.name} menu`} />}>
-                                              <MoreHorizontal size={14} />
-                                            </MenuTrigger>
-                                            <MenuPopup align="end" sideOffset={4} className="w-44">
-                                              <MenuItem onClick={() => setArchivedDialogScopeId(workspace.id)}>
-                                                <Archive size={13} />
-                                                Archived Threads
-                                              </MenuItem>
-                                              {project.projectKind === 'git' ? (
-                                                <MenuItem
-                                                  onClick={async () => {
-                                                    const branch = window.prompt('Branch name', workspace.branch ?? '');
-                                                    if (!branch?.trim()) return;
-                                                    const createBranch = window.confirm('Create as a new branch? Cancel switches to an existing branch.');
-                                                    const base = createBranch ? window.prompt('Base ref (optional)', project.defaultBranch ?? workspace.branch ?? '') : undefined;
-                                                    try {
-                                                      await updateWorkspace(project.id, workspace.id, {
-                                                        branch: branch.trim(),
-                                                        createBranch,
-                                                        base: base?.trim() || undefined,
-                                                      });
-                                                      await invalidateProjects();
-                                                    } catch (error) {
-                                                      window.alert(error instanceof Error ? error.message : String(error));
-                                                    }
-                                                  }}
-                                                >
-                                                  <GitBranch size={13} />
-                                                  Switch Branch
-                                                </MenuItem>
-                                              ) : null}
-                                              {project.projectKind === 'git' && !workspace.locked && workspace.workspaceKind !== 'primary' ? (
-                                                <>
-                                                  <MenuItem
-                                                    onClick={async () => {
-                                                      if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk.`)) return;
-                                                      try {
-                                                        await deleteWorkspace(project.id, workspace.id, 'detach');
-                                                        await invalidateProjects();
-                                                      } catch (error) {
-                                                        window.alert(error instanceof Error ? error.message : String(error));
-                                                      }
-                                                    }}
-                                                  >
-                                                    <Link size={13} />
-                                                    Detach
-                                                  </MenuItem>
-                                                  <MenuItem
-                                                    variant="destructive"
-                                                    onClick={async () => {
-                                                      if (!window.confirm(`Remove workspace ${workspace.name}? This removes the worktree and leaves the branch alone.`)) return;
-                                                      try {
-                                                        await deleteWorkspace(project.id, workspace.id, 'remove');
-                                                        await invalidateProjects();
-                                                      } catch (error) {
-                                                        window.alert(error instanceof Error ? error.message : String(error));
-                                                      }
-                                                    }}
-                                                  >
-                                                    <Trash2 size={13} />
-                                                    Remove Workspace
-                                                  </MenuItem>
-                                                </>
-                                              ) : null}
-                                            </MenuPopup>
-                                          </Menu>
-                                          {workspaceTerminalCount > 0 ? (
-                                            <span
-                                              className="flex h-4 w-6 items-center justify-center text-peach"
-                                              title={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
-                                              aria-label={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
-                                            >
-                                              <TerminalSquare size={14} />
-                                            </span>
-                                          ) : null}
-                                        </div>
-                                      </div>
-                                      <div
-                                        className={cn(
-                                          'relative before:absolute before:bottom-0 before:left-[9px] before:-right-[21px] before:top-[-13px] before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-peach/70',
-                                          workspaceThreads.length === 0 && 'h-2',
-                                        )}
-                                      >
-                                        <SortableSection
-                                          items={workspaceThreads.map(thread => thread.id)}
-                                          onDragStart={suppressSelectionAfterDrag}
-                                          onDragEnd={suppressSelectionAfterDrag}
-                                          onReorder={(activeId, overId) => reorderWorkspaceThreads(project.id, workspace.id, activeId, overId)}
-                                        >
-                                          {workspaceThreads.map(thread => (
-                                            <SortableItem
-                                              key={thread.id}
-                                              id={thread.id}
-                                              canDrag={workspaceThreads.length > 1}
-                                              showHandle={false}
-                                              className={cn(
-                                                'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors first:items-start first:py-0',
-                                                isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
-                                              )}
-                                            >
-                                              <SidebarItemButton
-                                                className="min-w-0 flex-1 items-center text-left"
-                                                onClick={() => selectThread(thread.id)}
-                                              >
-                                                <div className="flex min-w-0 items-center pl-4">
-                                                  <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
                                                 </div>
-                                              </SidebarItemButton>
-                                              {renderThreadRunningSpinner(thread)}
-                                              {renderThreadMenu(thread)}
-                                            </SortableItem>
-                                          ))}
-                                        </SortableSection>
-                                      </div>
+                                              ) : null}
+                                              {workspace.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{workspace.lastError}</div> : null}
+                                            </div>
+                                            <div className="relative -mr-2 grid h-9 w-12 shrink-0 grid-cols-[1.5rem_1.5rem] grid-rows-[1.25rem_1rem] items-center justify-items-center">
+                                              <Button
+                                                className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
+                                                size="icon-xs"
+                                                variant="ghost"
+                                                aria-label={`Create thread in ${workspace.name}`}
+                                                onClick={async () => {
+                                                  await newThread(project.id, workspace.id);
+                                                  await Promise.all([
+                                                    queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+                                                    invalidateProjects(),
+                                                  ]);
+                                                  if (closeOnSelect) onClose?.();
+                                                }}
+                                              >
+                                                <SquarePen size={14} />
+                                              </Button>
+                                              <Menu>
+                                                <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 translate-x-[7px] text-foreground sm:h-5 sm:w-6" aria-label={`${workspace.name} menu`} />}>
+                                                  <MoreHorizontal size={14} />
+                                                </MenuTrigger>
+                                                <MenuPopup align="end" sideOffset={4} className="w-44">
+                                                  <MenuItem onClick={() => setArchivedDialogScopeId(workspace.id)}>
+                                                    <Archive size={13} />
+                                                    Archived Threads
+                                                  </MenuItem>
+                                                  {project.projectKind === 'git' ? (
+                                                    <MenuItem
+                                                      onClick={async () => {
+                                                        const branch = window.prompt('Branch name', workspace.branch ?? '');
+                                                        if (!branch?.trim()) return;
+                                                        const createBranch = window.confirm('Create as a new branch? Cancel switches to an existing branch.');
+                                                        const base = createBranch ? window.prompt('Base ref (optional)', project.defaultBranch ?? workspace.branch ?? '') : undefined;
+                                                        try {
+                                                          await updateWorkspace(project.id, workspace.id, {
+                                                            branch: branch.trim(),
+                                                            createBranch,
+                                                            base: base?.trim() || undefined,
+                                                          });
+                                                          await invalidateProjects();
+                                                        } catch (error) {
+                                                          window.alert(error instanceof Error ? error.message : String(error));
+                                                        }
+                                                      }}
+                                                    >
+                                                      <GitBranch size={13} />
+                                                      Switch Branch
+                                                    </MenuItem>
+                                                  ) : null}
+                                                  {project.projectKind === 'git' && !workspace.locked && workspace.workspaceKind !== 'primary' ? (
+                                                    <>
+                                                      <MenuItem
+                                                        onClick={async () => {
+                                                          if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk.`)) return;
+                                                          try {
+                                                            await deleteWorkspace(project.id, workspace.id, 'detach');
+                                                            await invalidateProjects();
+                                                          } catch (error) {
+                                                            window.alert(error instanceof Error ? error.message : String(error));
+                                                          }
+                                                        }}
+                                                      >
+                                                        <Link size={13} />
+                                                        Detach
+                                                      </MenuItem>
+                                                      <MenuItem
+                                                        variant="destructive"
+                                                        onClick={async () => {
+                                                          if (!window.confirm(`Remove workspace ${workspace.name}? This removes the worktree and leaves the branch alone.`)) return;
+                                                          try {
+                                                            await deleteWorkspace(project.id, workspace.id, 'remove');
+                                                            await invalidateProjects();
+                                                          } catch (error) {
+                                                            window.alert(error instanceof Error ? error.message : String(error));
+                                                          }
+                                                        }}
+                                                      >
+                                                        <Trash2 size={13} />
+                                                        Remove Workspace
+                                                      </MenuItem>
+                                                    </>
+                                                  ) : null}
+                                                </MenuPopup>
+                                              </Menu>
+                                              {workspaceTerminalCount > 0 ? (
+                                                <span
+                                                  className="col-start-2 flex h-4 w-6 items-center justify-center text-peach"
+                                                  title={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
+                                                  aria-label={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
+                                                >
+                                                  <TerminalSquare size={14} />
+                                                </span>
+                                              ) : null}
+                                            </div>
+                                          </div>
+                                          <div
+                                            className={cn(
+                                              'relative before:pointer-events-none before:absolute before:bottom-0 before:left-[9px] before:-right-[21px] before:top-[-13px] before:z-10 before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-peach/70',
+                                              workspaceThreads.length === 0 && 'h-2',
+                                            )}
+                                          >
+                                            <SortableSection
+                                              items={workspaceThreads.map(thread => thread.id)}
+                                              onDragStart={suppressSelectionAfterDrag}
+                                              onDragEnd={suppressSelectionAfterDrag}
+                                              onReorder={(activeId, overId) => reorderWorkspaceThreads(project.id, workspace.id, activeId, overId)}
+                                            >
+                                              {workspaceThreads.map(thread => (
+                                                <SortableItem
+                                                  key={thread.id}
+                                                  id={thread.id}
+                                                  canDrag={workspaceThreads.length > 1}
+                                                  showHandle={false}
+                                                  className={cn(
+                                                    'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
+                                                    'border-transparent text-foreground',
+                                                    !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
+                                                  )}
+                                                >
+                                                  <span
+                                                    aria-hidden="true"
+                                                    data-sidebar-highlight
+                                                    className={cn(
+                                                      'pointer-events-none absolute inset-y-0 left-4 -right-[14px] rounded-md transition-colors',
+                                                      isThreadActive(thread.id) && 'bg-selected-thread',
+                                                    )}
+                                                  />
+                                                  <SidebarItemButton
+                                                    className="relative min-w-0 flex-1 items-center text-left"
+                                                    onClick={() => selectThread(thread.id)}
+                                                  >
+                                                    <div className="flex min-w-0 items-center pl-4">
+                                                      <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
+                                                    </div>
+                                                  </SidebarItemButton>
+                                                  {renderThreadRunningSpinner(thread)}
+                                                  {renderThreadMenu(thread, 'translate-x-[15px]')}
+                                                </SortableItem>
+                                              ))}
+                                            </SortableSection>
+                                          </div>
+                                        </>
+                                      )}
                                     </SortableItem>
                                   );
                                 })}
