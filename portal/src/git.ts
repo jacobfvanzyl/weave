@@ -19,6 +19,33 @@ export type GitWorktreeInfo = {
   isCurrent?: boolean;
 };
 
+export type GitBranchCleanupStatus =
+  | 'not_requested'
+  | 'not_applicable'
+  | 'not_pushed'
+  | 'not_merged'
+  | 'deleted'
+  | 'failed';
+
+export type GitBranchCleanupTargetKind =
+  | 'upstream'
+  | 'same_name_remote'
+  | 'default_branch';
+
+export type GitBranchCleanup = {
+  requested: boolean;
+  status: GitBranchCleanupStatus;
+  eligible?: boolean;
+  branch?: string;
+  targetRef?: string;
+  targetKind?: GitBranchCleanupTargetKind;
+  error?: string;
+};
+
+export class GitWorktreeRemoveDirtyError extends Error {
+  code = 'dirty-worktree';
+}
+
 const textDecoder = new TextDecoder();
 
 const decodeOutput = (bytes: Uint8Array) => textDecoder.decode(bytes).trim();
@@ -231,20 +258,181 @@ export const switchGitWorktree = async (root: string, args: Record<string, unkno
   return normalizeGitWorktree(root);
 };
 
-export const removeGitWorktree = async (
-  root: string,
-  args: Record<string, unknown>,
-  fallbackPath?: string,
-) => {
+const removeDirtyPatterns = [
+  'contains modified or untracked files',
+  'contains modified files',
+  'contains untracked files',
+  'is dirty',
+];
+
+const isDirtyRemoveMessage = (message: string) => {
+  const normalized = message.toLowerCase();
+  return removeDirtyPatterns.some(pattern => normalized.includes(pattern));
+};
+
+const normalizedDefaultBranchName = (value: unknown) => {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return value.trim().replace(/^refs\/heads\//, '').replace(/^origin\//, '');
+};
+
+const getBranchTargetPath = (args: Record<string, unknown>, fallbackPath?: string) => {
   const target = typeof args.path === 'string' && args.path.trim()
     ? args.path.trim()
     : typeof fallbackPath === 'string' && fallbackPath.trim()
     ? fallbackPath.trim()
     : undefined;
   if (!target) throw new Error('Missing path');
+  return target;
+};
+
+const refExists = async (root: string, ref: string) =>
+  (await runGitResult(root, ['rev-parse', '--verify', '--quiet', ref])).ok;
+
+type BranchCleanupTarget =
+  | { ref: string; kind: GitBranchCleanupTargetKind }
+  | { error: string };
+
+const isBranchCleanupTargetError = (target: BranchCleanupTarget | undefined): target is { error: string } =>
+  Boolean(target && 'error' in target);
+
+const remoteBranchName = (remoteRef: string) => {
+  const separator = remoteRef.indexOf('/');
+  if (separator < 0 || remoteRef.endsWith('/HEAD')) return undefined;
+  return remoteRef.slice(separator + 1);
+};
+
+const resolveSameNameRemoteTarget = async (root: string, branch: string): Promise<BranchCleanupTarget | undefined> => {
+  const remoteOutput = await runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes']).catch(() => '');
+  const matches = remoteOutput.split('\n')
+    .map(line => line.trim())
+    .filter(ref => ref && remoteBranchName(ref) === branch);
+  const originMatch = matches.find(ref => ref === `origin/${branch}`);
+  if (originMatch) return { ref: originMatch, kind: 'same_name_remote' };
+  if (matches.length === 1) return { ref: matches[0]!, kind: 'same_name_remote' };
+  if (matches.length > 1) {
+    return { error: `multiple remote branches match ${branch}: ${matches.join(', ')}` };
+  }
+  return undefined;
+};
+
+const resolveDefaultBranchTarget = async (root: string, defaultBranch?: string) => {
+  const branch = normalizedDefaultBranchName(defaultBranch) ?? (await inspectGit(root).catch(() => undefined))?.defaultBranch;
+  if (!branch) return undefined;
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  if (await refExists(root, remoteRef)) return { ref: `origin/${branch}`, kind: 'default_branch' as const };
+  const localRef = `refs/heads/${branch}`;
+  if (await refExists(root, localRef)) return { ref: branch, kind: 'default_branch' as const };
+  return undefined;
+};
+
+const resolveBranchCleanupTarget = async (
+  root: string,
+  worktreePath: string,
+  branch: string,
+  defaultBranch?: string,
+): Promise<BranchCleanupTarget | undefined> => {
+  const upstream = await runGit(worktreePath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() =>
+    undefined
+  );
+  if (upstream) return { ref: upstream, kind: 'upstream' };
+
+  const sameNameRemote = await resolveSameNameRemoteTarget(root, branch);
+  if (sameNameRemote) return sameNameRemote;
+
+  return resolveDefaultBranchTarget(root, defaultBranch);
+};
+
+export const inspectGitBranchCleanup = async (
+  root: string,
+  args: Record<string, unknown>,
+  fallbackPath?: string,
+): Promise<GitBranchCleanup> => {
+  const requested = args.deleteLocalBranch === true;
+  const target = getBranchTargetPath(args, fallbackPath);
+  const branch = await runGit(target, ['branch', '--show-current']).catch(() => '');
+  if (!branch) return { requested, status: 'not_applicable', error: 'workspace is detached' };
+
+  const defaultBranch = normalizedDefaultBranchName(args.defaultBranch);
+  if (defaultBranch && branch === defaultBranch) {
+    return { requested, branch, status: 'not_applicable', error: 'default branch is not offered for deletion' };
+  }
+
+  const branchTarget = await resolveBranchCleanupTarget(root, target, branch, defaultBranch);
+  if (isBranchCleanupTargetError(branchTarget)) {
+    return { requested, branch, status: 'not_applicable', error: branchTarget.error };
+  }
+  if (!branchTarget) {
+    return { requested, branch, status: 'not_applicable', error: 'no upstream, same-name remote, or default branch ref found' };
+  }
+
+  const sourceRef = `refs/heads/${branch}`;
+  const merged = (await runGitResult(root, ['merge-base', '--is-ancestor', sourceRef, branchTarget.ref])).ok;
+  if (!merged) {
+    const isDefaultTarget = branchTarget.kind === 'default_branch';
+    return {
+      requested,
+      branch,
+      targetRef: branchTarget.ref,
+      targetKind: branchTarget.kind,
+      status: isDefaultTarget ? 'not_merged' : 'not_pushed',
+      error: isDefaultTarget ? 'branch is not fully merged' : 'branch has commits not pushed to target',
+    };
+  }
+
+  return { requested, branch, targetRef: branchTarget.ref, targetKind: branchTarget.kind, status: 'not_requested', eligible: true };
+};
+
+export const removeGitWorktree = async (
+  root: string,
+  args: Record<string, unknown>,
+  fallbackPath?: string,
+) => {
+  const target = getBranchTargetPath(args, fallbackPath);
+  const branchCleanupPreview = await inspectGitBranchCleanup(root, args, target);
   const gitArgs = ['worktree', 'remove', target];
   if (args.force === true) gitArgs.push('--force');
-  await runGit(root, gitArgs);
+  const removeResult = await runGitResult(root, gitArgs);
+  if (!removeResult.ok) {
+    const message = removeResult.stderr.trim() || removeResult.stdout.trim() || `git ${gitArgs.join(' ')} failed`;
+    if (args.force !== true && isDirtyRemoveMessage(message)) throw new GitWorktreeRemoveDirtyError(message);
+    throw new Error(message);
+  }
+
+  if (args.deleteLocalBranch !== true) return { branchCleanup: { ...branchCleanupPreview, requested: false } };
+  if (!branchCleanupPreview.eligible || !branchCleanupPreview.branch) {
+    return { branchCleanup: { ...branchCleanupPreview, requested: true } };
+  }
+
+  let configuredSameNameUpstream = false;
+  if (branchCleanupPreview.targetKind === 'same_name_remote' && branchCleanupPreview.targetRef) {
+    const upstreamResult = await runGitResult(root, ['branch', '--set-upstream-to', branchCleanupPreview.targetRef, branchCleanupPreview.branch]);
+    if (!upstreamResult.ok) {
+      const error = upstreamResult.stderr.trim() || upstreamResult.stdout.trim() || undefined;
+      return {
+        branchCleanup: {
+          ...branchCleanupPreview,
+          requested: true,
+          status: 'failed',
+          ...(error ? { error } : {}),
+        } satisfies GitBranchCleanup,
+      };
+    }
+    configuredSameNameUpstream = true;
+  }
+
+  const deleteResult = await runGitResult(root, ['branch', '-d', branchCleanupPreview.branch]);
+  const error = deleteResult.stderr.trim() || deleteResult.stdout.trim() || undefined;
+  if (!deleteResult.ok && configuredSameNameUpstream) {
+    await runGitResult(root, ['branch', '--unset-upstream', branchCleanupPreview.branch]).catch(() => undefined);
+  }
+  return {
+    branchCleanup: {
+      ...branchCleanupPreview,
+      requested: true,
+      status: deleteResult.ok ? 'deleted' : 'failed',
+      ...(deleteResult.ok || !error ? {} : { error }),
+    } satisfies GitBranchCleanup,
+  };
 };
 
 export const validateGitWorktree = async (primaryRoot: string, candidate: string) => {

@@ -30,10 +30,12 @@ import {
   getGitShow,
   getGitStatus,
   inspectGit,
+  inspectGitBranchCleanup,
   listGitBranches,
   listGitWorktrees,
   readAgentsMd,
   removeGitWorktree,
+  GitWorktreeRemoveDirtyError,
   pullGitUpstream,
   runGit,
   switchGitWorktree,
@@ -620,8 +622,26 @@ const gitWorktreeSwitchTool = async (config: ResolvedPortalConfig, request: Reco
 const gitWorktreeRemoveTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const args = request.args as Record<string, unknown> | undefined ?? {};
   const root = await resolveWorkspaceRoot(config, { ...request, workspacePath: undefined });
-  await removeGitWorktree(root, args, typeof request.workspacePath === 'string' ? request.workspacePath : undefined);
-  return { ok: true };
+  try {
+    const result = await removeGitWorktree(root, args, typeof request.workspacePath === 'string' ? request.workspacePath : undefined);
+    return { ok: true, ...result };
+  } catch (error) {
+    if (error instanceof GitWorktreeRemoveDirtyError) {
+      return { ok: false, code: error.code, error: error.message };
+    }
+    throw error;
+  }
+};
+
+const gitWorktreeBranchCleanupTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+  const args = request.args as Record<string, unknown> | undefined ?? {};
+  const root = await resolveWorkspaceRoot(config, { ...request, workspacePath: undefined });
+  const branchCleanup = await inspectGitBranchCleanup(
+    root,
+    args,
+    typeof request.workspacePath === 'string' ? request.workspacePath : undefined,
+  );
+  return { ok: true, branchCleanup };
 };
 
 const gitWorktreeValidateTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
@@ -964,6 +984,8 @@ const handleToolCall = async (
       ? await gitWorktreeSwitchTool(config, request)
       : request.tool === 'portal.git.worktree.remove'
       ? await gitWorktreeRemoveTool(config, request)
+      : request.tool === 'portal.git.worktree.branch-cleanup'
+      ? await gitWorktreeBranchCleanupTool(config, request)
       : request.tool === 'portal.git.worktree.validate'
       ? await gitWorktreeValidateTool(config, request)
       : request.tool === 'portal.git.status'
@@ -1022,6 +1044,7 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'portal.git.branches.list',
     'portal.git.worktree.switch',
     'portal.git.worktree.remove',
+    'portal.git.worktree.branch-cleanup',
     'portal.git.status',
     'portal.git.fetch',
     'portal.git.pull',

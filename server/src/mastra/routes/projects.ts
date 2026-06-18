@@ -6,13 +6,17 @@ import {
   createProjectWorktree,
   fetchWorkspaceUpstream,
   inspectProjectGit,
+  inspectWorkspaceBranchCleanup,
   listProjectBranches,
   listProjectWorktrees,
   pullWorkspaceUpstream,
   removeWorkspaceWorktree,
   switchWorkspaceBranch,
   validateProjectWorktree,
+  PortalToolFailure,
+  type BranchCleanup,
 } from '../git/service';
+import { hasActiveThreadRun } from './chat';
 
 const agentId = 'mageHandAgent';
 const projectThreadPrefix = '__project__';
@@ -74,6 +78,15 @@ export type Project = {
   workspaces: Workspace[];
   createdAt: string;
   updatedAt: string;
+};
+
+type RemovedWorkspaceSnapshot = {
+  id: string;
+  projectId: string;
+  name: string;
+  path?: string;
+  branch?: string;
+  removedAt: string;
 };
 
 const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
@@ -284,15 +297,62 @@ const getAllProjects = async (memory: any, resourceId: string) => {
   return result.threads.filter(isProjectThread).map(toProject);
 };
 
-const getActiveThreadsForWorkspace = async (memory: any, resourceId: string, projectId: string, workspaceId: string) => {
+const getThreadsForWorkspace = async (memory: any, resourceId: string, projectId: string, workspaceId: string) => {
   const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   return result.threads.filter((thread: any) => {
     const metadata = thread.metadata as Record<string, unknown> | undefined;
     return metadata?.mode === 'project'
       && metadata.projectId === projectId
-      && metadata.workspaceId === workspaceId
-      && metadata.archived !== true;
+      && metadata.workspaceId === workspaceId;
   });
+};
+
+const threadIsArchived = (thread: any) => {
+  const metadata = thread.metadata as Record<string, unknown> | undefined;
+  return metadata?.archived === true;
+};
+
+const workspaceRemovalThreadCounts = (threads: any[]) => ({
+  activeThreadCount: threads.filter(thread => !threadIsArchived(thread)).length,
+  archivedThreadCount: threads.filter(threadIsArchived).length,
+});
+
+const removedWorkspaceSnapshot = (
+  workspace: Workspace,
+  removedAt: string,
+  branchCleanup?: BranchCleanup,
+): RemovedWorkspaceSnapshot => ({
+  id: workspace.id,
+  projectId: workspace.projectId,
+  name: workspace.name,
+  ...(workspace.path ? { path: workspace.path } : {}),
+  ...(branchCleanup?.branch ? { branch: branchCleanup.branch } : {}),
+  removedAt,
+});
+
+const archiveRemovedWorkspaceThreads = async (
+  memory: any,
+  threads: any[],
+  removedWorkspace: RemovedWorkspaceSnapshot,
+) => {
+  await Promise.all(threads.map(thread => {
+    const metadata = { ...((thread.metadata ?? {}) as Record<string, unknown>) };
+    delete metadata.workspaceId;
+    metadata.archived = true;
+    metadata.removedWorkspace = removedWorkspace;
+    return memory.updateThread({
+      id: thread.id,
+      title: thread.title,
+      metadata,
+    });
+  }));
+};
+
+const dirtyWorktreeResponse = (c: any, error: unknown) => {
+  if (error instanceof PortalToolFailure && error.code === 'dirty-worktree') {
+    return c.json({ code: 'dirty-worktree', error: error.message }, 409);
+  }
+  return undefined;
 };
 
 const createGitProject = async (c: any, resourceId: string, baseProject: Project, body: Record<string, unknown>): Promise<Project> => {
@@ -908,14 +968,13 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces/:workspaceId', {
-    method: 'DELETE',
+  registerApiRoute('/projects/:projectId/workspaces/:workspaceId/removal-preview', {
+    method: 'GET',
     handler: async c => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
         const workspaceId = c.req.param('workspaceId');
-        const mode = c.req.query('mode') === 'detach' ? 'detach' : 'remove';
         const memory = await getMemory(c);
         const project = await getProject(memory, resourceId, projectId);
         if (!project) return c.json({ error: 'project not found' }, 404);
@@ -924,19 +983,80 @@ export const projectRoutes = [
         const workspace = project.workspaces.find(item => item.id === workspaceId);
         if (!workspace) return c.json({ error: 'workspace not found' }, 404);
         if (isPrimaryWorkspace(workspace)) return c.json({ error: 'primary workspace cannot be removed' }, 400);
-        const activeThreads = await getActiveThreadsForWorkspace(memory, resourceId, projectId, workspaceId);
-        if (activeThreads.length > 0) return c.json({ error: 'workspace has active threads; archive or delete them before removing the workspace' }, 409);
 
-        if (mode === 'remove') {
-          await removeWorkspaceWorktree(project, workspace, resourceId, { path: workspace.path, deleteBranch: false }, {
-            getPortal: getPortalConnection,
-            requestPortal: requestPortalTool,
-          });
+        const workspaceThreads = await getThreadsForWorkspace(memory, resourceId, projectId, workspaceId);
+        const branchCleanup = await inspectWorkspaceBranchCleanup(project, workspace, resourceId, {
+          path: workspace.path,
+          defaultBranch: project.defaultBranch,
+        }, {
+          getPortal: getPortalConnection,
+          requestPortal: requestPortalTool,
+        });
+        return c.json({ workspace, ...workspaceRemovalThreadCounts(workspaceThreads), branchCleanup });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/projects/:projectId/workspaces/:workspaceId', {
+    method: 'DELETE',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const projectId = c.req.param('projectId');
+        const workspaceId = c.req.param('workspaceId');
+        const mode = c.req.query('mode') === 'detach' ? 'detach' : 'remove';
+        const force = c.req.query('force') === 'true';
+        const deleteLocalBranch = c.req.query('deleteLocalBranch') === 'true';
+        const memory = await getMemory(c);
+        const project = await getProject(memory, resourceId, projectId);
+        if (!project) return c.json({ error: 'project not found' }, 404);
+        assertGitProjectReady(project, resourceId);
+
+        const workspace = project.workspaces.find(item => item.id === workspaceId);
+        if (!workspace) return c.json({ error: 'workspace not found' }, 404);
+        if (isPrimaryWorkspace(workspace)) return c.json({ error: 'primary workspace cannot be removed' }, 400);
+        const workspaceThreads = await getThreadsForWorkspace(memory, resourceId, projectId, workspaceId);
+        const runningThreads = workspaceThreads.filter((thread: any) => hasActiveThreadRun(resourceId, thread.id));
+        if (runningThreads.length > 0) {
+          return c.json({ code: 'workspace-thread-running', error: 'workspace has running threads; stop them before removing the workspace' }, 409);
         }
 
-        const nextProject = { ...project, workspaces: project.workspaces.filter(item => item.id !== workspaceId), updatedAt: nowIso() };
+        let branchCleanup: BranchCleanup = { requested: deleteLocalBranch, status: deleteLocalBranch ? 'not_applicable' : 'not_requested' };
+        if (mode === 'remove') {
+          try {
+            const result = await removeWorkspaceWorktree(project, workspace, resourceId, {
+              path: workspace.path,
+              force,
+              deleteLocalBranch,
+              defaultBranch: project.defaultBranch,
+            }, {
+              getPortal: getPortalConnection,
+              requestPortal: requestPortalTool,
+            });
+            branchCleanup = result.branchCleanup;
+          } catch (error) {
+            const dirtyResponse = dirtyWorktreeResponse(c, error);
+            if (dirtyResponse) return dirtyResponse;
+            throw error;
+          }
+        }
+
+        const removedAt = nowIso();
+        const removedWorkspace = removedWorkspaceSnapshot(workspace, removedAt, branchCleanup);
+        await archiveRemovedWorkspaceThreads(memory, workspaceThreads, removedWorkspace);
+
+        const nextProject = { ...project, workspaces: project.workspaces.filter(item => item.id !== workspaceId), updatedAt: removedAt };
         const thread = await saveProject(memory, resourceId, nextProject);
-        return c.json({ project: toProject(thread), workspace, mode });
+        return c.json({
+          project: toProject(thread),
+          workspace,
+          mode,
+          force,
+          removedWorkspace,
+          ...workspaceRemovalThreadCounts(workspaceThreads),
+          branchCleanup,
+        });
       } catch (error) {
         return errorResponse(c, error);
       }

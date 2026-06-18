@@ -179,6 +179,7 @@ export const gitWorktreeTool = createTool({
     base: z.string().optional(),
     path: z.string().optional(),
     force: z.boolean().optional(),
+    deleteLocalBranch: z.boolean().optional().describe('After removing a worktree, delete its local branch only if Git proves it is fully pushed to its upstream/same-name remote branch or fully merged into the default branch. Never force deletes.'),
   }),
   outputSchema: gitOutputSchema,
   execute: async (input, context) => {
@@ -197,8 +198,8 @@ export const gitWorktreeTool = createTool({
     }
 
     const workspace = input.path ? { ...target.workspace, path: input.path } : target.workspace;
-    await removeWorkspaceWorktree(target.project, workspace, target.resourceId, input, adapters);
-    return { ok: true };
+    const result = await removeWorkspaceWorktree(target.project, workspace, target.resourceId, input, adapters);
+    return { ok: true, branchCleanup: result.branchCleanup };
   },
   toModelOutput: output => gitModelOutput('git_worktree', output),
 });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configureMastraConnection } from '../../packages/client/src/lib/mastra-client';
-import { cancelThreadRun, createWorkspace, discoverWorkspaces, fetchWorkspaceGitUpstream, getThreadRunState, listProjectBranches, listProjects, listWorkspaceGitStates, pullWorkspaceGitUpstream, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
+import { cancelThreadRun, createWorkspace, deleteWorkspace, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, getThreadRunState, listProjectBranches, listProjects, listServerThreads, listWorkspaceGitStates, pullWorkspaceGitUpstream, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
 import { createWorkspaceDraftDefaults } from '../../packages/client/src/lib/workspace-create-defaults';
 import { overlayWorkspaceGitState } from '../../packages/client/src/lib/workspace-git-state';
 import { listProfiles } from '../../packages/client/src/lib/profiles-api';
@@ -287,6 +287,103 @@ describe('chat-state Project/Workspace API client', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects/project-1/workspaces/discover', {
       headers: { Authorization: 'Bearer token-1' },
     });
+  });
+
+  it('previews and removes workspaces with branch cleanup options', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const branchCleanup = {
+      requested: false,
+      status: 'not_requested',
+      eligible: true,
+      branch: 'feature/review',
+      targetRef: 'origin/feature/review',
+      targetKind: 'same_name_remote',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      if (String(input).endsWith('/removal-preview')) {
+        return jsonResponse({
+          workspace,
+          activeThreadCount: 1,
+          archivedThreadCount: 2,
+          branchCleanup,
+        });
+      }
+
+      return jsonResponse({
+        project,
+        workspace,
+        mode: 'remove',
+        force: true,
+        activeThreadCount: 1,
+        archivedThreadCount: 2,
+        branchCleanup: { ...branchCleanup, requested: true, status: 'deleted' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchWorkspaceRemovalPreview('project-1', 'workspace-1')).resolves.toEqual({
+      workspace,
+      activeThreadCount: 1,
+      archivedThreadCount: 2,
+      branchCleanup,
+    });
+    await expect(deleteWorkspace('project-1', 'workspace-1', {
+      mode: 'remove',
+      force: true,
+      deleteLocalBranch: true,
+    })).resolves.toMatchObject({
+      branchCleanup: { requested: true, status: 'deleted', branch: 'feature/review' },
+    });
+    expect(fetchMock.mock.calls).toEqual([
+      ['http://weave.test/projects/project-1/workspaces/workspace-1/removal-preview', {
+        headers: { Authorization: 'Bearer token-1' },
+      }],
+      ['http://weave.test/projects/project-1/workspaces/workspace-1?mode=remove&force=true&deleteLocalBranch=true', {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer token-1' },
+      }],
+    ]);
+  });
+
+  it('maps removed workspace metadata onto chat threads', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      threads: [{
+        id: 'thread-1',
+        title: 'Old review',
+        resourceId: 'user-1',
+        createdAt: '2026-06-03T08:00:00.000Z',
+        updatedAt: '2026-06-03T09:00:00.000Z',
+        metadata: {
+          mode: 'project',
+          projectId: 'project-1',
+          archived: true,
+          removedWorkspace: {
+            id: 'workspace-1',
+            projectId: 'project-1',
+            name: 'Review checkout',
+            path: '/repo.review',
+            branch: 'feature/review',
+            removedAt: '2026-06-18T10:00:00.000Z',
+          },
+        },
+      }],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listServerThreads()).resolves.toEqual([expect.objectContaining({
+      id: 'thread-1',
+      projectId: 'project-1',
+      archived: true,
+      removedWorkspace: {
+        id: 'workspace-1',
+        projectId: 'project-1',
+        name: 'Review checkout',
+        path: '/repo.review',
+        branch: 'feature/review',
+        removedAt: '2026-06-18T10:00:00.000Z',
+      },
+    })]);
   });
 
   it('overlays live git-state and strips stale branch metadata', () => {

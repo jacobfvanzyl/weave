@@ -10,6 +10,7 @@ export type GitProject = {
   portalId?: string;
   portalRootId?: string;
   repoPath?: string;
+  defaultBranch?: string;
   workspaces: GitWorkspace[];
 };
 
@@ -34,12 +35,50 @@ export type BranchOption = {
   current?: boolean;
 };
 
+export type BranchCleanupStatus =
+  | 'not_requested'
+  | 'not_applicable'
+  | 'not_pushed'
+  | 'not_merged'
+  | 'deleted'
+  | 'failed';
+
+export type BranchCleanupTargetKind =
+  | 'upstream'
+  | 'same_name_remote'
+  | 'default_branch';
+
+export type BranchCleanup = {
+  requested: boolean;
+  status: BranchCleanupStatus;
+  eligible?: boolean;
+  branch?: string;
+  targetRef?: string;
+  targetKind?: BranchCleanupTargetKind;
+  error?: string;
+};
+
+export class PortalToolFailure extends Error {
+  code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = 'PortalToolFailure';
+    this.code = code;
+  }
+}
+
 const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 const normalizeBranch = (value: unknown) => optionalString(value)?.replace(/^refs\/heads\//, '');
 const normalizePath = (value: unknown) => optionalString(value)?.replace(/\/+$/, '') || undefined;
 
-export const portalToolError = (result: { ok?: boolean; error?: unknown }) => {
-  if (result.ok === false) throw new Error(typeof result.error === 'string' ? result.error : 'Portal tool failed');
+export const portalToolError = (result: { ok?: boolean; error?: unknown; code?: unknown }) => {
+  if (result.ok === false) {
+    throw new PortalToolFailure(
+      typeof result.error === 'string' ? result.error : 'Portal tool failed',
+      typeof result.code === 'string' ? result.code : undefined,
+    );
+  }
 };
 
 export const assertGitProjectReady = (
@@ -65,6 +104,29 @@ const normalizeBranchOption = (value: unknown): BranchOption | undefined => {
     ref,
     kind: record?.kind === 'remote' ? 'remote' : 'local',
     current: record?.current === true ? true : undefined,
+  };
+};
+
+const normalizeBranchCleanup = (value: unknown, requested = false): BranchCleanup => {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const status = record.status === 'not_applicable' ||
+    record.status === 'not_pushed' ||
+    record.status === 'not_merged' ||
+    record.status === 'deleted' ||
+    record.status === 'failed' ||
+    record.status === 'not_requested'
+    ? record.status
+    : 'not_requested';
+  return {
+    requested: typeof record.requested === 'boolean' ? record.requested : requested,
+    status,
+    eligible: record.eligible === true ? true : undefined,
+    branch: optionalString(record.branch),
+    targetRef: optionalString(record.targetRef),
+    targetKind: record.targetKind === 'upstream' || record.targetKind === 'same_name_remote' || record.targetKind === 'default_branch'
+      ? record.targetKind
+      : undefined,
+    error: optionalString(record.error),
   };
 };
 
@@ -192,6 +254,25 @@ export const switchWorkspaceBranch = async (
   return result.worktree ?? {};
 };
 
+export const inspectWorkspaceBranchCleanup = async (
+  project: GitProject,
+  workspace: GitWorkspace,
+  resourceId: string,
+  args: Record<string, unknown>,
+  adapters: { getPortal: PortalConnectionLookup; requestPortal: PortalToolRequester },
+) => {
+  assertGitProjectReady(project, resourceId, adapters.getPortal);
+  const result = await requestProjectGitTool(project, {
+    workspace,
+    tool: 'portal.git.worktree.branch-cleanup',
+    args: { ...args, path: args.path ?? workspace.path, defaultBranch: args.defaultBranch ?? project.defaultBranch },
+    timeoutMs: 10_000,
+    requestPortal: adapters.requestPortal,
+  }) as { ok?: boolean; error?: string; code?: string; branchCleanup?: unknown };
+  portalToolError(result);
+  return normalizeBranchCleanup(result.branchCleanup, args.deleteLocalBranch === true);
+};
+
 export const removeWorkspaceWorktree = async (
   project: GitProject,
   workspace: GitWorkspace,
@@ -203,12 +284,12 @@ export const removeWorkspaceWorktree = async (
   const result = await requestProjectGitTool(project, {
     workspace,
     tool: 'portal.git.worktree.remove',
-    args,
+    args: { ...args, path: args.path ?? workspace.path, defaultBranch: args.defaultBranch ?? project.defaultBranch },
     timeoutMs: 60_000,
     requestPortal: adapters.requestPortal,
-  }) as { ok?: boolean; error?: string };
+  }) as { ok?: boolean; error?: string; code?: string; branchCleanup?: unknown };
   portalToolError(result);
-  return result;
+  return { ...result, branchCleanup: normalizeBranchCleanup(result.branchCleanup, args.deleteLocalBranch === true) };
 };
 
 export const requestWorkspaceGitOperation = async (

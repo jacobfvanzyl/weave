@@ -1306,6 +1306,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   const composerText = useAuiState(state => state.composer.text);
   const isComposerEmpty = useAuiState(state => state.composer.isEmpty);
   const thread = useChatStore(state => state.threads.find(item => item.id === threadId));
+  const isRemovedWorkspaceThread = Boolean(thread?.removedWorkspace);
   const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
   const [activeIndex, setActiveIndex] = useState(0);
   const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
@@ -1324,7 +1325,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
     staleTime: 10_000,
   });
   const isChatGPTConnected = chatgptAuth?.connected === true;
-  const isSendActive = isChatGPTConnected && !isComposerEmpty;
+  const isSendActive = isChatGPTConnected && !isComposerEmpty && !isRemovedWorkspaceThread;
   const knownPromptNames = useMemo(() => new Set(prompts.map(prompt => prompt.name)), [prompts]);
   const promptMatches = prompts
     .map(prompt => ({
@@ -1397,18 +1398,24 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
       <SlashHighlightedInput
         inputRef={inputRef}
         value={composerText}
-        placeholder={isChatGPTConnected ? (isEmpty ? emptyPlaceholder : 'Ask for follow-up changes or attach images') : 'Connect ChatGPT to start chatting'}
+        placeholder={isRemovedWorkspaceThread
+          ? 'Workspace removed; transcript is read-only'
+          : isChatGPTConnected
+          ? (isEmpty ? emptyPlaceholder : 'Ask for follow-up changes or attach images')
+          : 'Connect ChatGPT to start chatting'}
         knownPromptNames={knownPromptNames}
         onKeyDown={handleKeyDown}
-        disabled={!isChatGPTConnected}
+        disabled={!isChatGPTConnected || isRemovedWorkspaceThread}
       />
       <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <ComposerPrimitive.AddAttachment
-            render={<Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Attach image" />}
-          >
-            <Plus size={18} strokeWidth={2.5} />
-          </ComposerPrimitive.AddAttachment>
+          {isRemovedWorkspaceThread ? null : (
+            <ComposerPrimitive.AddAttachment
+              render={<Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Attach image" />}
+            >
+              <Plus size={18} strokeWidth={2.5} />
+            </ComposerPrimitive.AddAttachment>
+          )}
           <ModelPicker />
           <ProfilePicker />
           <ReasoningPicker />
@@ -1418,7 +1425,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {isEmpty ? null : <ContextUsageRing threadId={threadId} />}
           <AuiIf condition={state => !state.thread.isRunning}>
-            {isChatGPTConnected ? (
+            {isRemovedWorkspaceThread ? null : isChatGPTConnected ? (
               <ComposerPrimitive.Send
                 render={(
                   <Button

@@ -11,6 +11,38 @@ type ServerThread = {
   metadata?: Record<string, unknown>;
 };
 
+export type BranchCleanupStatus =
+  | 'not_requested'
+  | 'not_applicable'
+  | 'not_pushed'
+  | 'not_merged'
+  | 'deleted'
+  | 'failed';
+
+export type BranchCleanupTargetKind =
+  | 'upstream'
+  | 'same_name_remote'
+  | 'default_branch';
+
+export type BranchCleanup = {
+  requested: boolean;
+  status: BranchCleanupStatus;
+  eligible?: boolean;
+  branch?: string;
+  targetRef?: string;
+  targetKind?: BranchCleanupTargetKind;
+  error?: string;
+};
+
+export type RemovedWorkspaceSnapshot = {
+  id: string;
+  projectId: string;
+  name: string;
+  path?: string;
+  branch?: string;
+  removedAt: string;
+};
+
 export type Workspace = {
   id: string;
   projectId: string;
@@ -33,6 +65,26 @@ export type Workspace = {
   lastError?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type WorkspaceRemovalPreview = {
+  workspace: Workspace;
+  activeThreadCount: number;
+  archivedThreadCount: number;
+  branchCleanup: BranchCleanup;
+};
+
+export type DeleteWorkspaceOptions = {
+  mode: 'detach' | 'remove';
+  force?: boolean;
+  deleteLocalBranch?: boolean;
+};
+
+export type DeleteWorkspaceResult = WorkspaceRemovalPreview & {
+  project: Project;
+  mode: 'detach' | 'remove';
+  force?: boolean;
+  removedWorkspace?: RemovedWorkspaceSnapshot;
 };
 
 export type WorkspaceGitState = {
@@ -87,6 +139,23 @@ export type Project = {
   updatedAt: string;
 };
 
+const toRemovedWorkspace = (value: unknown): RemovedWorkspaceSnapshot | undefined => {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+  const id = typeof record?.id === 'string' ? record.id : undefined;
+  const projectId = typeof record?.projectId === 'string' ? record.projectId : undefined;
+  const name = typeof record?.name === 'string' ? record.name : undefined;
+  const removedAt = typeof record?.removedAt === 'string' ? record.removedAt : undefined;
+  if (!id || !projectId || !name || !removedAt) return undefined;
+  return {
+    id,
+    projectId,
+    name,
+    path: typeof record?.path === 'string' ? record.path : undefined,
+    branch: typeof record?.branch === 'string' ? record.branch : undefined,
+    removedAt,
+  };
+};
+
 const toChatThread = (thread: ServerThread): ChatThread => ({
   id: thread.id,
   title: thread.title || '...',
@@ -99,11 +168,37 @@ const toChatThread = (thread: ServerThread): ChatThread => ({
   profileId: typeof thread.metadata?.profileId === 'string' ? thread.metadata.profileId : undefined,
   adHoc: thread.metadata?.adHoc === true,
   workspacePath: typeof thread.metadata?.workspacePath === 'string' ? thread.metadata.workspacePath : undefined,
+  removedWorkspace: toRemovedWorkspace(thread.metadata?.removedWorkspace),
 });
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  body?: unknown;
+
+  constructor(message: string, status: number, options: { code?: string; body?: unknown } = {}) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = options.code;
+    this.body = options.body;
+  }
+}
 
 const parseJson = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
-    throw new Error(await response.text());
+    const text = await response.text();
+    try {
+      const body = JSON.parse(text) as Record<string, unknown>;
+      throw new ApiError(
+        typeof body.error === 'string' ? body.error : text,
+        response.status,
+        { code: typeof body.code === 'string' ? body.code : undefined, body },
+      );
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(text, response.status);
+    }
   }
 
   return response.json() as Promise<T>;
@@ -422,9 +517,26 @@ export const adoptWorkspace = async (projectId: string, path: string, name?: str
   return result.workspace;
 };
 
-export const deleteWorkspace = async (projectId: string, workspaceId: string, mode: 'detach' | 'remove') => {
-  const result = await parseJson<{ project: Project; workspace: Workspace; mode: 'detach' | 'remove' }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}?mode=${mode}`, {
+export const fetchWorkspaceRemovalPreview = async (projectId: string, workspaceId: string) => {
+  return parseJson<WorkspaceRemovalPreview>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}/removal-preview`, {
+      headers: getAuthHeaders(),
+    }),
+  );
+};
+
+export const deleteWorkspace = async (
+  projectId: string,
+  workspaceId: string,
+  input: 'detach' | 'remove' | DeleteWorkspaceOptions,
+) => {
+  const options = typeof input === 'string' ? { mode: input } : input;
+  const params = new URLSearchParams({ mode: options.mode });
+  if (options.force) params.set('force', 'true');
+  if (options.deleteLocalBranch) params.set('deleteLocalBranch', 'true');
+
+  const result = await parseJson<DeleteWorkspaceResult>(
+    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}?${params}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }),

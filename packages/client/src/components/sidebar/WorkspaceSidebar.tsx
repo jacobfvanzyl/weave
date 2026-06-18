@@ -4,8 +4,8 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Download, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, TerminalSquare, Trash2, X } from 'lucide-react';
-import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, discoverWorkspaces, fetchWorkspaceGitUpstream, listPortals, listProjectBranches, pullWorkspaceGitUpstream, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type DiscoveredWorktree, type WorkspaceBranchMode, type WorkspaceBranchOption } from '../../lib/chat-state-api';
+import { Archive, Download, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, History, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, TerminalSquare, Trash2, X } from 'lucide-react';
+import { adoptWorkspace, ApiError, createWorkspace, createProject, deleteWorkspace, deleteProject, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, listPortals, listProjectBranches, pullWorkspaceGitUpstream, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type DiscoveredWorktree, type RemovedWorkspaceSnapshot, type WorkspaceBranchMode, type WorkspaceBranchOption } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { createWorkspaceDraftDefaults, getDefaultWorkspaceBase } from '../../lib/workspace-create-defaults';
 import { projectsQueryKey, useProjectsWithLiveGitState, workspaceGitStateQueryKey } from '../../lib/workspace-git-state';
@@ -24,6 +24,7 @@ import {
   AlertDialogTitle,
 } from '../ui/alert-dialog';
 import { Button } from '../ui/button';
+import { Checkbox } from '../ui/checkbox';
 import {
   Dialog,
   DialogClose,
@@ -250,6 +251,13 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   const branchRefreshTimesRef = useRef(new Map<string, number>());
   const [archivedDialogScopeId, setArchivedDialogScopeId] = useState<string | null>(null);
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
+  const [removeWorkspaceTarget, setRemoveWorkspaceTarget] = useState<{ projectId: string; workspaceId: string } | null>(null);
+  const [removeWorkspaceDeleteBranch, setRemoveWorkspaceDeleteBranch] = useState(false);
+  const [removeWorkspaceDeleteBranchTouched, setRemoveWorkspaceDeleteBranchTouched] = useState(false);
+  const [removeWorkspaceForce, setRemoveWorkspaceForce] = useState(false);
+  const [removeWorkspaceError, setRemoveWorkspaceError] = useState<string | null>(null);
+  const [isRemovingWorkspace, setIsRemovingWorkspace] = useState(false);
+  const [removedWorkspaceProjectId, setRemovedWorkspaceProjectId] = useState<string | null>(null);
   const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [createProjectError, setCreateProjectError] = useState<string | null>(null);
@@ -270,6 +278,11 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   const { projects } = useProjectsWithLiveGitState(resourceId);
   const createWorkspaceProject = createWorkspaceProjectId ? projects.find(project => project.id === createWorkspaceProjectId) : undefined;
   const attachWorkspaceProject = attachWorkspaceProjectId ? projects.find(project => project.id === attachWorkspaceProjectId) : undefined;
+  const removeWorkspaceProject = removeWorkspaceTarget ? projects.find(project => project.id === removeWorkspaceTarget.projectId) : undefined;
+  const removeWorkspace = removeWorkspaceTarget
+    ? removeWorkspaceProject?.workspaces.find(workspace => workspace.id === removeWorkspaceTarget.workspaceId)
+    : undefined;
+  const removedWorkspaceProject = removedWorkspaceProjectId ? projects.find(project => project.id === removedWorkspaceProjectId) : undefined;
   const {
     data: workspaceBranchOptions = [],
     error: workspaceBranchOptionsError,
@@ -288,6 +301,16 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     queryFn: () => discoverWorkspaces(attachWorkspaceProject!.id),
     enabled: Boolean(attachWorkspaceProject && attachWorkspaceProject.projectKind === 'git'),
     staleTime: 1000 * 10,
+  });
+  const {
+    data: removeWorkspacePreview,
+    error: removeWorkspacePreviewError,
+    isFetching: isFetchingRemoveWorkspacePreview,
+  } = useQuery({
+    queryKey: ['workspace-removal-preview', resourceId, removeWorkspaceTarget?.projectId, removeWorkspaceTarget?.workspaceId],
+    queryFn: () => fetchWorkspaceRemovalPreview(removeWorkspaceTarget!.projectId, removeWorkspaceTarget!.workspaceId),
+    enabled: Boolean(removeWorkspaceTarget && removeWorkspaceProject?.projectKind === 'git'),
+    retry: false,
   });
   const { data: portals = [] } = useQuery({
     queryKey: ['portals', resourceId],
@@ -333,6 +356,10 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   const onlinePortalCount = portals.filter(portal => portal.status === 'online').length;
   const plainThreads = sortManual(threads.filter(thread => (!thread.projectId || thread.adHoc) && thread.archived !== true));
   const threadsByProject = new Map(projects.map(project => [project.id, sortManual(threads.filter(thread => thread.projectId === project.id && !thread.adHoc))]));
+  const removedWorkspaceThreadsByProject = new Map(projects.map(project => [
+    project.id,
+    sortManual(threads.filter(thread => thread.projectId === project.id && thread.archived === true && thread.removedWorkspace)),
+  ]));
   const sortedProjects = sortManual(projects);
   const toggleProjectCollapsed = (projectId: string) =>
     setCollapsedProjectIds(ids => (ids.includes(projectId) ? ids.filter(id => id !== projectId) : [...ids, projectId]));
@@ -417,6 +444,66 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     setAttachWorkspaceName('');
     setAttachWorkspaceError(null);
   };
+  const openRemoveWorkspaceDialog = (projectId: string, workspaceId: string) => {
+    setRemoveWorkspaceTarget({ projectId, workspaceId });
+    setRemoveWorkspaceDeleteBranch(false);
+    setRemoveWorkspaceDeleteBranchTouched(false);
+    setRemoveWorkspaceForce(false);
+    setRemoveWorkspaceError(null);
+  };
+  const closeRemoveWorkspaceDialog = () => {
+    if (isRemovingWorkspace) return;
+    setRemoveWorkspaceTarget(null);
+    setRemoveWorkspaceDeleteBranch(false);
+    setRemoveWorkspaceDeleteBranchTouched(false);
+    setRemoveWorkspaceForce(false);
+    setRemoveWorkspaceError(null);
+  };
+  const selectFallbackAfterWorkspaceRemoval = (
+    projectId: string,
+    workspaceId: string,
+    nextWorkspaces: typeof projects[number]['workspaces'],
+  ) => {
+    if (activeSurface.kind !== 'workspace' || activeSurface.projectId !== projectId || activeSurface.workspaceId !== workspaceId) return;
+    const fallbackWorkspace = sortManual(nextWorkspaces).find(workspace => workspace.id !== workspaceId);
+    if (fallbackWorkspace) {
+      selectWorkspace(projectId, fallbackWorkspace.id);
+      return;
+    }
+    const fallbackThread = sortManual(threads.filter(thread => thread.archived !== true && thread.workspaceId !== workspaceId))[0];
+    if (fallbackThread) selectThreadSurface(fallbackThread.id);
+  };
+  const removeWorkspaceFromProject = async () => {
+    if (!removeWorkspaceTarget) return;
+    setIsRemovingWorkspace(true);
+    setRemoveWorkspaceError(null);
+    try {
+      const result = await deleteWorkspace(removeWorkspaceTarget.projectId, removeWorkspaceTarget.workspaceId, {
+        mode: 'remove',
+        force: removeWorkspaceForce,
+        deleteLocalBranch: removeWorkspaceDeleteBranch,
+      });
+      selectFallbackAfterWorkspaceRemoval(removeWorkspaceTarget.projectId, removeWorkspaceTarget.workspaceId, result.project.workspaces);
+      setRemoveWorkspaceTarget(null);
+      setRemoveWorkspaceDeleteBranch(false);
+      setRemoveWorkspaceDeleteBranchTouched(false);
+      setRemoveWorkspaceForce(false);
+      setRemoveWorkspaceError(null);
+      await Promise.all([
+        invalidateProjects(),
+        queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+      ]);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409 && error.code === 'dirty-worktree' && !removeWorkspaceForce) {
+        setRemoveWorkspaceForce(true);
+        setRemoveWorkspaceError('The worktree has local changes or untracked files. Confirm again to force remove it.');
+        return;
+      }
+      setRemoveWorkspaceError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRemovingWorkspace(false);
+    }
+  };
 
   useEffect(() => {
     if (!createWorkspaceProject || workspaceMode !== 'newBranch') return;
@@ -424,6 +511,23 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     const nextBase = resolveWorkspaceBaseRef(workspaceBase, workspaceBranchOptions, fallback);
     if (nextBase !== workspaceBase) setWorkspaceBase(nextBase);
   }, [createWorkspaceProject, workspaceBase, workspaceBranchOptions, workspaceMode]);
+
+  useEffect(() => {
+    if (!removeWorkspaceTarget) return;
+    if (removeWorkspacePreview?.branchCleanup.eligible === true) {
+      if (!removeWorkspaceDeleteBranchTouched) setRemoveWorkspaceDeleteBranch(true);
+      return;
+    }
+    setRemoveWorkspaceDeleteBranch(false);
+    setRemoveWorkspaceDeleteBranchTouched(false);
+  }, [
+    removeWorkspaceDeleteBranchTouched,
+    removeWorkspacePreview?.branchCleanup.branch,
+    removeWorkspacePreview?.branchCleanup.eligible,
+    removeWorkspacePreview?.branchCleanup.targetKind,
+    removeWorkspacePreview?.branchCleanup.targetRef,
+    removeWorkspaceTarget,
+  ]);
 
   useEffect(() => {
     window.localStorage.setItem(collapsedProjectsStorageKey, JSON.stringify(collapsedProjectIds));
@@ -440,6 +544,17 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     : projects.find(project => project.id === archivedDialogScopeId)?.name
       ?? projects.flatMap(project => project.workspaces).find(workspace => workspace.id === archivedDialogScopeId)?.name
       ?? 'Archived Threads';
+  const removedWorkspaceDialogThreads = removedWorkspaceProjectId
+    ? removedWorkspaceThreadsByProject.get(removedWorkspaceProjectId) ?? []
+    : [];
+  const removedWorkspaceGroups = Array.from(removedWorkspaceDialogThreads.reduce((groups, thread) => {
+    const removedWorkspace = thread.removedWorkspace;
+    if (!removedWorkspace) return groups;
+    const group = groups.get(removedWorkspace.id) ?? { workspace: removedWorkspace, threads: [] as typeof removedWorkspaceDialogThreads };
+    group.threads.push(thread);
+    groups.set(removedWorkspace.id, group);
+    return groups;
+  }, new Map<string, { workspace: RemovedWorkspaceSnapshot; threads: typeof removedWorkspaceDialogThreads }>()).values());
   const deleteProjectTarget = deleteProjectId ? projects.find(project => project.id === deleteProjectId) : undefined;
   const attachedWorkspacePaths = new Set(
     projects.flatMap(project => project.workspaces)
@@ -464,6 +579,26 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       && (workspaceMode === 'detached' ? trimmedWorkspaceBase : trimmedWorkspaceBranch),
   );
   const canAttachWorkspace = Boolean(attachWorkspaceProject && selectedAttachWorktree?.path && !isAttachingWorkspace);
+  const removeBranchCleanup = removeWorkspacePreview?.branchCleanup;
+  const removeWorkspaceThreadCount = (removeWorkspacePreview?.activeThreadCount ?? 0) + (removeWorkspacePreview?.archivedThreadCount ?? 0);
+  const removeWorkspaceBranchLabel = removeBranchCleanup?.branch ?? removeWorkspace?.branch ?? (removeWorkspace?.detached ? 'Detached HEAD' : undefined);
+  const removeBranchCleanupTargetDetail = removeBranchCleanup?.targetRef
+    ? removeBranchCleanup.targetKind === 'default_branch'
+      ? `fully merged into ${removeBranchCleanup.targetRef}`
+      : `fully pushed to ${removeBranchCleanup.targetRef}`
+    : null;
+  const removeBranchCleanupBlockMessage = removeBranchCleanup?.branch && removeBranchCleanup.status === 'not_pushed'
+    ? `Local branch ${removeBranchCleanup.branch} has commits not pushed to ${removeBranchCleanup.targetRef ?? 'its remote'}; Weave will leave it alone.`
+    : removeBranchCleanup?.branch && removeBranchCleanup.status === 'not_merged'
+      ? `Local branch ${removeBranchCleanup.branch} is not fully merged; Weave will leave it alone.`
+      : null;
+  const removeWorkspacePreviewErrorMessage = removeWorkspacePreviewError instanceof Error
+    ? removeWorkspacePreviewError.message
+    : removeWorkspacePreviewError
+      ? String(removeWorkspacePreviewError)
+      : null;
+  const canDeleteRemoveWorkspaceBranch = removeBranchCleanup?.eligible === true;
+  const canSubmitRemoveWorkspace = Boolean(removeWorkspace && !isRemovingWorkspace && !isFetchingRemoveWorkspacePreview);
   const renderThreadRunningSpinner = (thread: typeof threads[number]) => {
     if (!runningThreadIds.includes(thread.id)) return null;
 
@@ -717,6 +852,12 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                       <Link size={13} />
                                       Attach Workspace
                                     </MenuItem>
+                                    {(removedWorkspaceThreadsByProject.get(project.id)?.length ?? 0) > 0 ? (
+                                      <MenuItem onClick={() => setRemovedWorkspaceProjectId(project.id)}>
+                                        <History size={13} />
+                                        Removed Workspaces
+                                      </MenuItem>
+                                    ) : null}
                                   </>
                                 ) : null}
                                 {project.projectKind !== 'git' ? (
@@ -988,10 +1129,14 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                                     <>
                                                       <MenuItem
                                                         onClick={async () => {
-                                                          if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk.`)) return;
+                                                          if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk and workspace threads move to removed workspace history.`)) return;
                                                           try {
-                                                            await deleteWorkspace(project.id, workspace.id, 'detach');
-                                                            await invalidateProjects();
+                                                            const result = await deleteWorkspace(project.id, workspace.id, 'detach');
+                                                            selectFallbackAfterWorkspaceRemoval(project.id, workspace.id, result.project.workspaces);
+                                                            await Promise.all([
+                                                              invalidateProjects(),
+                                                              queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+                                                            ]);
                                                           } catch (error) {
                                                             window.alert(error instanceof Error ? error.message : String(error));
                                                           }
@@ -1002,15 +1147,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                                       </MenuItem>
                                                       <MenuItem
                                                         variant="destructive"
-                                                        onClick={async () => {
-                                                          if (!window.confirm(`Remove workspace ${workspace.name}? This removes the worktree and leaves the branch alone.`)) return;
-                                                          try {
-                                                            await deleteWorkspace(project.id, workspace.id, 'remove');
-                                                            await invalidateProjects();
-                                                          } catch (error) {
-                                                            window.alert(error instanceof Error ? error.message : String(error));
-                                                          }
-                                                        }}
+                                                        onClick={() => openRemoveWorkspaceDialog(project.id, workspace.id)}
                                                       >
                                                         <Trash2 size={13} />
                                                         Remove Workspace
@@ -1372,6 +1509,88 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
         ) : null}
       </Dialog>
 
+      <AlertDialog open={Boolean(removeWorkspaceTarget)} onOpenChange={open => {
+        if (!open) closeRemoveWorkspaceDialog();
+      }}>
+        {removeWorkspace ? (
+          <AlertDialogPopup className="max-w-md">
+            <AlertDialogHeader>
+              <div className="flex items-start gap-3 text-left">
+                <Trash2 className="mt-0.5 shrink-0 text-destructive" size={18} />
+                <div className="min-w-0">
+                  <AlertDialogTitle>{removeWorkspaceForce ? 'Force Remove Workspace?' : 'Remove Workspace?'}</AlertDialogTitle>
+                  <AlertDialogDescription className="mt-1">
+                    This removes <span className="font-medium text-foreground">{removeWorkspace.name}</span> from Weave and deletes its linked worktree folder.
+                  </AlertDialogDescription>
+                </div>
+              </div>
+            </AlertDialogHeader>
+            <div className="grid gap-3 px-6 pb-5 text-sm">
+              <div className="grid gap-2 rounded-md border border-border/70 bg-background p-3">
+                {removeWorkspace.path ? (
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium uppercase text-muted-foreground">Path</div>
+                    <div className="truncate text-foreground">{removeWorkspace.path}</div>
+                  </div>
+                ) : null}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-xs font-medium uppercase text-muted-foreground">Branch</div>
+                    <div className="truncate text-foreground">{removeWorkspaceBranchLabel ?? 'Unknown'}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium uppercase text-muted-foreground">Threads</div>
+                    <div className="text-foreground">
+                      {isFetchingRemoveWorkspacePreview ? 'Loading' : removeWorkspaceThreadCount}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {canDeleteRemoveWorkspaceBranch && removeBranchCleanup?.branch ? (
+                <label className="flex items-start gap-3 rounded-md border border-border/70 p-3 text-left">
+                  <Checkbox
+                    checked={removeWorkspaceDeleteBranch}
+                    onCheckedChange={checked => {
+                      setRemoveWorkspaceDeleteBranchTouched(true);
+                      setRemoveWorkspaceDeleteBranch(checked === true);
+                    }}
+                    disabled={isRemovingWorkspace}
+                  />
+                  <span className="min-w-0 text-sm text-foreground">
+                    Also delete local branch <span className="font-medium">{removeBranchCleanup.branch}</span>
+                    {removeBranchCleanupTargetDetail ? <span className="text-muted-foreground">, {removeBranchCleanupTargetDetail}</span> : null}
+                  </span>
+                </label>
+              ) : removeBranchCleanupBlockMessage ? (
+                <div className="rounded-md border border-border/70 p-3 text-sm text-muted-foreground">
+                  {removeBranchCleanupBlockMessage}
+                </div>
+              ) : null}
+              {removeWorkspaceThreadCount > 0 ? (
+                <div className="rounded-md border border-border/70 p-3 text-sm text-muted-foreground">
+                  Workspace threads will move to removed workspace history.
+                </div>
+              ) : null}
+              {removeWorkspacePreviewErrorMessage && !removeWorkspacePreview ? (
+                <Alert variant="error"><AlertDescription>{removeWorkspacePreviewErrorMessage}</AlertDescription></Alert>
+              ) : null}
+              {removeWorkspaceError ? <Alert variant="error"><AlertDescription>{removeWorkspaceError}</AlertDescription></Alert> : null}
+            </div>
+            <AlertDialogFooter>
+              <Button variant="outline" onClick={closeRemoveWorkspaceDialog} disabled={isRemovingWorkspace}>Cancel</Button>
+              <Button
+                variant="destructive"
+                disabled={!canSubmitRemoveWorkspace}
+                onClick={() => void removeWorkspaceFromProject()}
+              >
+                {isRemovingWorkspace ? <Loader2 size={13} className="animate-spin" /> : null}
+                {removeWorkspaceForce ? 'Force Remove' : 'Remove'}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogPopup>
+        ) : null}
+      </AlertDialog>
+
       <AlertDialog open={Boolean(deleteProjectTarget)} onOpenChange={open => {
         if (!open) setDeleteProjectId(null);
       }}>
@@ -1407,6 +1626,72 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
           </AlertDialogPopup>
         ) : null}
       </AlertDialog>
+
+      <Dialog open={Boolean(removedWorkspaceProjectId)} onOpenChange={open => {
+        if (!open) setRemovedWorkspaceProjectId(null);
+      }}>
+        {removedWorkspaceProject ? (
+          <DialogPopup className="max-w-md" showCloseButton={false}>
+            <DialogHeader className="flex-row items-start justify-between gap-3">
+              <div className="min-w-0">
+                <DialogTitle>Removed Workspaces</DialogTitle>
+                <DialogDescription className="truncate">{removedWorkspaceProject.name}</DialogDescription>
+              </div>
+              <DialogClose render={<Button size="icon-sm" variant="ghost" aria-label="Close removed workspaces" />}>
+                <X size={16} />
+              </DialogClose>
+            </DialogHeader>
+            <DialogPanel className="pt-1">
+              <ScrollArea className="max-h-80">
+                <div className="space-y-3">
+                  {removedWorkspaceGroups.length === 0 ? (
+                    <Empty className="rounded-md border border-border/70 p-3">
+                      <EmptyDescription>No removed workspace history</EmptyDescription>
+                    </Empty>
+                  ) : removedWorkspaceGroups.map(group => (
+                    <div key={group.workspace.id} className="rounded-md border border-border/70 p-3">
+                      <div className="mb-2 min-w-0">
+                        <div className="truncate text-sm font-medium text-foreground">{group.workspace.name}</div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {group.workspace.branch ? `${group.workspace.branch} - ` : null}{group.workspace.path ?? group.workspace.removedAt}
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        {group.threads.map(thread => (
+                          <div key={thread.id} className="flex items-center gap-2 rounded-md bg-muted/60 p-2">
+                            <div className="min-w-0 flex-1 truncate text-sm text-foreground">{thread.title}</div>
+                            <Button
+                              size="xs"
+                              onClick={() => {
+                                selectThread(thread.id);
+                                setRemovedWorkspaceProjectId(null);
+                              }}
+                            >
+                              Open
+                            </Button>
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              className="text-destructive"
+                              aria-label={`Delete ${thread.title}`}
+                              onClick={async () => {
+                                await deleteThread(thread.id);
+                                await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
+                              }}
+                            >
+                              <Trash2 size={13} />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </DialogPanel>
+          </DialogPopup>
+        ) : null}
+      </Dialog>
 
       <Dialog open={Boolean(archivedDialogScopeId)} onOpenChange={open => {
         if (!open) setArchivedDialogScopeId(null);

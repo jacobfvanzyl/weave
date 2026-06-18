@@ -400,6 +400,9 @@ const getActiveThreadRun = (resourceId: string | undefined, threadId: string | u
   return isActiveThreadRun(run) ? run : undefined;
 };
 
+export const hasActiveThreadRun = (resourceId: string | undefined, threadId: string | undefined) =>
+  Boolean(getActiveThreadRun(resourceId, threadId));
+
 const toThreadRunSnapshot = (run: ActiveThreadRun | undefined) => ({
   active: isActiveThreadRun(run),
   status: run?.status ?? 'idle',

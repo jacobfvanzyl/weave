@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { archiveServerThread, createProjectThread, createServerThread, deleteServerThread, renameServerThread } from '../lib/chat-state-api';
+import { archiveServerThread, createProjectThread, createServerThread, deleteServerThread, renameServerThread, type RemovedWorkspaceSnapshot } from '../lib/chat-state-api';
 import { createClientId } from '../lib/client-id';
 import {
   initialSurfaceThreadId,
@@ -23,6 +23,7 @@ export type ChatThread = {
   archived?: boolean;
   adHoc?: boolean;
   workspacePath?: string;
+  removedWorkspace?: RemovedWorkspaceSnapshot;
   draft?: boolean;
 };
 
