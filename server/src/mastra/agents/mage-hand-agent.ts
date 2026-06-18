@@ -74,7 +74,7 @@ export const mageHandAgent = new Agent({
     new CompactToolHistoryProcessor({ preserveToolCalls: getToolHistoryFullCalls(), tokenLimit: getContextTokenLimit() }),
     new SkillSearchProcessor({
       workspace: baseWorkspace,
-      search: { topK: 5, minScore: 0.1 },
+      search: { topK: 8, minScore: 0.1 },
     }),
     new RuntimeContextProcessor(),
   ],

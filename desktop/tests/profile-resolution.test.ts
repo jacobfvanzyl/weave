@@ -14,18 +14,33 @@ type DynamicProfile = {
   memory?: Record<string, unknown>;
 };
 
+type SkillSummary = {
+  name: string;
+  source: 'source' | 'global' | 'project';
+  path: string;
+  description?: string;
+};
+
 let expandPromptTemplate: (name: string, argsText: string, context?: unknown) => Promise<string | undefined>;
 let listPromptSummaries: (context?: unknown) => Promise<unknown[]>;
+let listResolvedProfileSkillSummaries: (resolved: any) => SkillSummary[];
+let registerResolvedProfileSkills: (resolved: any) => string[];
+let __profileSkillSourceTest: any;
 let __profileResolverTest: any;
 let builtinDefaultProfile: DynamicProfile;
 
 beforeAll(async () => {
   const promptRegistryPath = new URL('../../server/src/mastra/prompt-templates/registry.ts', import.meta.url).href;
   const resolverPath = new URL('../../server/src/mastra/profiles/resolver.ts', import.meta.url).href;
+  const skillSourcePath = new URL('../../server/src/mastra/profiles/skill-source.ts', import.meta.url).href;
   const promptRegistry = await import(promptRegistryPath);
   const resolver = await import(resolverPath);
+  const skillSource = await import(skillSourcePath);
   expandPromptTemplate = promptRegistry.expandPromptTemplate;
   listPromptSummaries = promptRegistry.listPromptSummaries;
+  listResolvedProfileSkillSummaries = skillSource.listResolvedProfileSkillSummaries;
+  registerResolvedProfileSkills = skillSource.registerResolvedProfileSkills;
+  __profileSkillSourceTest = skillSource.__profileSkillSourceTest;
   __profileResolverTest = resolver.__profileResolverTest;
   builtinDefaultProfile = resolver.builtinDefaultProfile;
 });
@@ -151,16 +166,93 @@ describe('dynamic prompt resolution', () => {
     },
   };
 
-  it('merges app, global, and project prompts with project precedence and profile filtering', async () => {
-    await expect(listPromptSummaries({ resolvedProfile })).resolves.toEqual([
-      expect.objectContaining({
-        name: 'ship',
-        description: 'Project ship',
-        source: 'project',
-      }),
-    ]);
+  it('merges app, global, and project prompts with project precedence without profile filtering', async () => {
+    const summaries = await listPromptSummaries({ resolvedProfile }) as Array<{ name: string; source: string; description: string }>;
+    expect(summaries.map(prompt => prompt.name)).toEqual(['plan', 'review', 'ship', 'summarize']);
+    expect(summaries.find(prompt => prompt.name === 'ship')).toEqual(expect.objectContaining({
+      description: 'Project ship',
+      source: 'project',
+    }));
+    expect(summaries.find(prompt => prompt.name === 'review')).toEqual(expect.objectContaining({
+      description: 'Project review $ARGUMENTS',
+      source: 'project',
+    }));
 
     await expect(expandPromptTemplate('ship', 'now', { resolvedProfile })).resolves.toBe('Project ship now');
-    await expect(expandPromptTemplate('review', 'now', { resolvedProfile })).resolves.toBeUndefined();
+    await expect(expandPromptTemplate('review', 'now', { resolvedProfile })).resolves.toBe('Project review now');
+  });
+});
+
+describe('dynamic skill resolution', () => {
+  const resolvedProfile = {
+    profile: profile('default', { skills: ['global-only'] }),
+    profiles: [],
+    selectedProfileId: 'default',
+    agentFiles: [],
+    globalSnapshot: {
+      scope: 'global',
+      checkedAt: '2026-06-03T00:00:00.000Z',
+      files: [
+        {
+          kind: 'skill',
+          path: '.config/weave/skills/global-only/SKILL.md',
+          content: '---\nname: global-only\ndescription: Global only\n---\nGlobal only body\n',
+        },
+        {
+          kind: 'skill',
+          path: '.config/weave/skills/shared/SKILL.md',
+          content: '---\nname: shared\ndescription: Global shared\n---\nGlobal shared body\n',
+        },
+      ],
+    },
+    projectSnapshot: {
+      scope: 'project',
+      checkedAt: '2026-06-03T00:00:00.000Z',
+      files: [
+        {
+          kind: 'skill',
+          path: '.weave/skills/shared/SKILL.md',
+          content: '---\nname: shared\ndescription: Project shared\n---\nProject shared body\n',
+        },
+        {
+          kind: 'skill',
+          path: '.weave/skills/project-only/SKILL.md',
+          content: '---\nname: project-only\ndescription: Project only\n---\nProject only body\n',
+        },
+      ],
+    },
+  };
+
+  it('activates all discovered skills regardless of profile.skills', () => {
+    const summaries = listResolvedProfileSkillSummaries(resolvedProfile);
+    expect(summaries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'global-only', source: 'global', path: '.config/weave/skills/global-only/SKILL.md', description: 'Global only' }),
+      expect.objectContaining({ name: 'shared', source: 'project', path: '.weave/skills/shared/SKILL.md', description: 'Project shared' }),
+      expect.objectContaining({ name: 'project-only', source: 'project', path: '.weave/skills/project-only/SKILL.md', description: 'Project only' }),
+    ]));
+    expect(summaries.some(skill => skill.name === 'shared' && skill.source === 'global')).toBe(false);
+
+    const paths = registerResolvedProfileSkills(resolvedProfile);
+    expect(paths).toEqual(expect.arrayContaining([
+      expect.stringMatching(/\/global\/global-only$/),
+      expect.stringMatching(/\/project\/shared$/),
+      expect.stringMatching(/\/project\/project-only$/),
+    ]));
+    expect(paths.filter(path => path.endsWith('/shared'))).toHaveLength(1);
+  });
+
+  it('merges duplicate skill names with project over global over source precedence', () => {
+    const byName = __profileSkillSourceTest.mergeSkillRecords(
+      [{ name: 'shared', source: 'source', path: 'skills/shared/SKILL.md', workspacePath: 'skills/shared', description: 'Source shared' }],
+      [{ name: 'shared', source: 'global', path: '.config/weave/skills/shared/SKILL.md', workspacePath: '__global/shared', description: 'Global shared' }],
+      [{ name: 'shared', source: 'project', path: '.weave/skills/shared/SKILL.md', workspacePath: '__project/shared', description: 'Project shared' }],
+    );
+
+    expect(byName.get('shared')).toEqual(expect.objectContaining({
+      source: 'project',
+      path: '.weave/skills/shared/SKILL.md',
+      workspacePath: '__project/shared',
+      description: 'Project shared',
+    }));
   });
 });

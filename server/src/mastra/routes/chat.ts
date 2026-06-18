@@ -6,6 +6,7 @@ import { attachmentIdFromReference, attachmentModelUrl, attachmentStorage, parse
 import { subscribeThreadContextUsage, type ThreadContextUsageSnapshot } from '../context-usage';
 import { resolveMemoryPolicy } from '../memory-policy';
 import { putProfileContext, resolveProfileContext } from '../profiles/resolver';
+import { listResolvedProfileSkillSummaries } from '../profiles/skill-source';
 import { putChatRuntimeContext } from '../runtime-context-processor';
 
 const agentId = 'mage-hand';
@@ -801,6 +802,7 @@ export const chatRoutes = [
         includeGitInstructions: isGitProject,
         includeNotesInstructions: isNotesProject,
         agentFiles: resolvedProfile?.agentFiles,
+        skillSummaries: resolvedProfile ? listResolvedProfileSkillSummaries(resolvedProfile) : undefined,
         callerSystem: params.system as Parameters<typeof buildChatSystemMessages>[0]['callerSystem'],
       });
 

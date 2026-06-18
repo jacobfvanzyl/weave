@@ -126,9 +126,6 @@ const getResolvedProfile = async (context?: PromptResolutionContext) => {
   });
 };
 
-const profileAllowsPrompt = (profilePrompts: string[], promptName: string) =>
-  profilePrompts.includes('*') || profilePrompts.includes('all') || profilePrompts.includes(promptName);
-
 const listAppPromptTemplates = async (): Promise<PromptTemplate[]> => {
   if (promptCache) return promptCache;
 
@@ -163,12 +160,7 @@ export const listPromptTemplates = async (context?: PromptResolutionContext): Pr
     if (prompt) promptsByName.set(prompt.name, prompt);
   }
 
-  const requestedPrompts = resolved.profile.prompts;
-  if (requestedPrompts.length === 0) return [];
-
-  return [...promptsByName.values()]
-    .filter(prompt => profileAllowsPrompt(requestedPrompts, prompt.name))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  return [...promptsByName.values()].sort((a, b) => a.name.localeCompare(b.name));
 };
 
 export const listPromptSummaries = async (context?: PromptResolutionContext): Promise<PromptSummary[]> => {

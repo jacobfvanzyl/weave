@@ -1,4 +1,5 @@
 import type { SystemMessage } from '@mastra/core/llm';
+import type { ResolvedSkillSummary } from '../profiles/skill-source';
 
 export type ProjectAgentInstructions = {
   path: string;
@@ -81,6 +82,43 @@ export const formatProjectContextFile = (path: string, content: string) => [
   content,
 ].join('\n');
 
+const maxAvailableSkills = 30;
+const maxSkillDescriptionLength = 220;
+
+const compactText = (value: string) => value.replace(/\s+/g, ' ').trim();
+
+const truncateText = (value: string, maxLength: number) => {
+  const compact = compactText(value);
+  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 1).trimEnd()}...`;
+};
+
+export const formatAvailableSkills = (skills: ResolvedSkillSummary[] = []) => {
+  if (skills.length === 0) return undefined;
+
+  const visible = skills.slice(0, maxAvailableSkills);
+  const omitted = skills.length - visible.length;
+  const rows = visible.map(skill => {
+    const detail = [
+      skill.source,
+      skill.path,
+    ].filter(Boolean).join(', ');
+    const description = skill.description ? `: ${truncateText(skill.description, maxSkillDescriptionLength)}` : '';
+    return `- ${skill.name} (${detail})${description}`;
+  });
+
+  return [
+    '# Available Skills',
+    '',
+    'Use these skills through progressive disclosure. Do not assume their full instructions are loaded.',
+    '- If a listed skill clearly matches the task, call load_skill with its exact name before acting.',
+    '- If relevance is uncertain, call search_skills with focused keywords, then load_skill for the best match.',
+    '- If the user explicitly mentions $skill-name or says "use skill-name", load that exact skill first.',
+    '',
+    ...rows,
+    ...(omitted > 0 ? [`- ${omitted} more skill(s) are available. Use search_skills to find them.`] : []),
+  ].join('\n');
+};
+
 const systemMessageText = (system: SystemMessage): string => {
   if (typeof system === 'string') return system;
   if (Array.isArray(system)) return system.map(item => systemMessageText(item as SystemMessage)).filter(Boolean).join('\n\n');
@@ -138,12 +176,14 @@ export const buildChatSystemMessages = ({
   includeGitInstructions,
   includeNotesInstructions,
   agentFiles,
+  skillSummaries,
   projectInstructions,
   callerSystem,
 }: {
   includeGitInstructions: boolean;
   includeNotesInstructions?: boolean;
   agentFiles?: ProjectAgentInstructions[];
+  skillSummaries?: ResolvedSkillSummary[];
   projectInstructions?: ProjectAgentInstructions;
   callerSystem?: SystemMessage;
 }): SystemMessage | undefined => {
@@ -161,6 +201,9 @@ export const buildChatSystemMessages = ({
   if (projectInstructions?.content.trim()) {
     blocks.push(formatProjectContextFile(projectInstructions.path || 'AGENTS.md', projectInstructions.content.slice(0, 32_000)));
   }
+
+  const availableSkills = formatAvailableSkills(skillSummaries);
+  if (availableSkills) blocks.push(availableSkills);
 
   if (callerSystem) blocks.push(systemMessageText(callerSystem));
 

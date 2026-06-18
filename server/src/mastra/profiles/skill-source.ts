@@ -13,9 +13,21 @@ type VirtualSkillFile = {
   modifiedAt: Date;
 };
 
+export type ResolvedSkillSummary = {
+  name: string;
+  source: 'source' | 'global' | 'project';
+  path: string;
+  description?: string;
+};
+
+type RegisteredSkill = ResolvedSkillSummary & {
+  workspacePath: string;
+};
+
 type RegisteredProfileSkills = {
+  id: string;
   roots: string[];
-  skillsByName: Map<string, string>;
+  skillsByName: Map<string, RegisteredSkill>;
   files: Map<string, VirtualSkillFile>;
 };
 
@@ -45,7 +57,7 @@ const findProjectRoot = (startPath: string) => {
 const projectRoot = findProjectRoot(process.cwd());
 const sourceSkillsRoot = join(projectRoot, 'skills');
 
-let sourceSkillIndex: Map<string, string> | undefined;
+let sourceSkillIndex: Map<string, RegisteredSkill> | undefined;
 
 const skillNameFromPath = (path: string) => {
   const parts = trimSlashes(path).split('/');
@@ -59,10 +71,15 @@ const skillNameFromContent = (content: string, path: string) => {
   return typeof data.name === 'string' && data.name.trim() ? data.name.trim() : skillNameFromPath(path);
 };
 
+const skillDescriptionFromContent = (content: string) => {
+  const { data } = parseFrontmatter(content);
+  return typeof data.description === 'string' && data.description.trim() ? data.description.trim() : undefined;
+};
+
 const scanSourceSkills = () => {
   if (sourceSkillIndex) return sourceSkillIndex;
 
-  const byName = new Map<string, string>();
+  const byName = new Map<string, RegisteredSkill>();
   const visit = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
@@ -75,7 +92,15 @@ const scanSourceSkills = () => {
       const content = readFileSync(path, 'utf8');
       const name = skillNameFromContent(content, path);
       const skillPath = trimSlashes(relative(projectRoot, pathDirname(path)));
-      if (name && skillPath) byName.set(name, skillPath);
+      if (name && skillPath) {
+        byName.set(name, {
+          name,
+          source: 'source',
+          path: `${skillPath}/SKILL.md`,
+          workspacePath: skillPath,
+          description: skillDescriptionFromContent(content),
+        });
+      }
     }
   };
 
@@ -92,6 +117,7 @@ const addVirtualSkill = (
   registry: RegisteredProfileSkills,
   root: string,
   file: WeaveContextFile,
+  source: 'global' | 'project',
 ) => {
   const skillName = skillNameFromContent(file.content, file.path);
   if (!skillName) return;
@@ -106,67 +132,70 @@ const addVirtualSkill = (
     size: typeof file.size === 'number' ? file.size : new TextEncoder().encode(file.content).byteLength,
     modifiedAt,
   });
-  registry.skillsByName.set(skillName, skillDir);
+  registry.skillsByName.set(skillName, {
+    name: skillName,
+    source,
+    path: file.path,
+    workspacePath: skillDir,
+    description: skillDescriptionFromContent(file.content),
+  });
 };
 
 const addSnapshotSkills = (
   registry: RegisteredProfileSkills,
   root: string,
   files: WeaveContextFile[] | undefined,
+  source: 'global' | 'project',
 ) => {
   const skillFiles = files?.filter(file => file.kind === 'skill') ?? [];
   if (skillFiles.length === 0) return;
   registry.roots.push(root);
-  for (const file of skillFiles) addVirtualSkill(registry, root, file);
+  for (const file of skillFiles) addVirtualSkill(registry, root, file, source);
 };
 
-const isSkillPath = (name: string) => name.includes('/');
-
-const combinedSkillsByName = (registry: RegisteredProfileSkills) => {
-  const byName = new Map(scanSourceSkills());
-  for (const [name, path] of registry.skillsByName) byName.set(name, path);
+const mergeSkillRecords = (...layers: RegisteredSkill[][]) => {
+  const byName = new Map<string, RegisteredSkill>();
+  for (const layer of layers) {
+    for (const skill of layer) byName.set(skill.name, skill);
+  }
   return byName;
 };
 
-const resolveRequestedSkillPaths = (registry: RegisteredProfileSkills, requestedSkills: string[]) => {
-  const byName = combinedSkillsByName(registry);
-  if (requestedSkills.includes('*') || requestedSkills.includes('all')) {
-    return [...byName.values()];
-  }
-
-  const paths: string[] = [];
-  const addPath = (path: string) => {
-    if (!paths.includes(path)) paths.push(path);
-  };
-
-  for (const name of requestedSkills) {
-    if (isSkillPath(name)) addPath(name);
-
-    const resolvedPath = byName.get(name);
-    if (resolvedPath) addPath(resolvedPath);
-  }
-
-  return paths;
-};
+const combinedSkillsByName = (registry: RegisteredProfileSkills) =>
+  mergeSkillRecords([...scanSourceSkills().values()], [...registry.skillsByName.values()]);
 
 export const __profileSkillSourceTest = {
+  combinedSkillsByName,
+  mergeSkillRecords,
   skillNameFromContent,
 };
 
-export const registerResolvedProfileSkills = (resolved: ResolvedProfileContext) => {
+const createResolvedProfileSkillRegistry = (resolved: ResolvedProfileContext) => {
   const registryId = createRegistryId();
   const root = `${virtualSkillRoot}/${registryId}`;
   const registry: RegisteredProfileSkills = {
+    id: registryId,
     roots: [],
     skillsByName: new Map(),
     files: new Map(),
   };
 
-  addSnapshotSkills(registry, `${root}/global`, resolved.globalSnapshot?.files);
-  addSnapshotSkills(registry, `${root}/project`, resolved.projectSnapshot?.files);
+  addSnapshotSkills(registry, `${root}/global`, resolved.globalSnapshot?.files, 'global');
+  addSnapshotSkills(registry, `${root}/project`, resolved.projectSnapshot?.files, 'project');
 
-  registries.set(registryId, registry);
-  return resolveRequestedSkillPaths(registry, resolved.profile.skills);
+  return registry;
+};
+
+export const registerResolvedProfileSkills = (resolved: ResolvedProfileContext) => {
+  const registry = createResolvedProfileSkillRegistry(resolved);
+
+  registries.set(registry.id, registry);
+  return [...combinedSkillsByName(registry).values()].map(skill => skill.workspacePath);
+};
+
+export const listResolvedProfileSkillSummaries = (resolved: ResolvedProfileContext): ResolvedSkillSummary[] => {
+  const registry = createResolvedProfileSkillRegistry(resolved);
+  return [...combinedSkillsByName(registry).values()].map(({ workspacePath: _workspacePath, ...summary }) => summary);
 };
 
 export class ProfileSkillSource implements SkillSource {
