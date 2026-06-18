@@ -17,7 +17,7 @@
   --weave-desktop-sidebar-width: 24rem;
   --weave-desktop-sidebar-action-height: 1.5rem;
   --weave-desktop-sidebar-padding-top: calc(
-    var(--weave-desktop-appbar-height) - (var(--weave-desktop-sidebar-action-height) / 2)
+    var(--weave-desktop-appbar-height) + ((var(--weave-chat-top-rail-height) - var(--weave-desktop-sidebar-action-height)) / 2)
   );
   --color-token-foreground: #cdd6f4;
   --color-token-background: #1e1e2e;
