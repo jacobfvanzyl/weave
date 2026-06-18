@@ -4,7 +4,7 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ChevronDown, Download, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, TerminalSquare, Trash2, X } from 'lucide-react';
+import { Archive, Download, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, TerminalSquare, Trash2, X } from 'lucide-react';
 import { adoptWorkspace, createWorkspace, createProject, deleteWorkspace, deleteProject, discoverWorkspaces, fetchWorkspaceGitUpstream, listPortals, listProjectBranches, pullWorkspaceGitUpstream, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type DiscoveredWorktree, type WorkspaceBranchMode, type WorkspaceBranchOption } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { createWorkspaceDraftDefaults, getDefaultWorkspaceBase } from '../../lib/workspace-create-defaults';
@@ -522,7 +522,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
           : 'w-full md:static md:z-auto md:w-96',
       )}
     >
-      <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
+      <div className="min-h-0 flex-1 -mr-4 space-y-4 overflow-x-hidden overflow-y-auto pr-5">
         <div className="space-y-2">
           <SidebarSectionHeader label="Threads" labelClassName="text-primary">
             <div className="flex items-center">
@@ -637,62 +637,37 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                   id={project.id}
                   canDrag={sortedProjects.length > 1}
                   showHandle={false}
-                  className="-ml-2 py-2"
+                  className="-ml-4 py-0.5"
                 >
                   {dragActivator => (
                     <>
                       <div
                         ref={dragActivator.ref}
-                        className={cn(
-                          'flex w-full cursor-grab touch-none select-none items-center gap-2 text-sm font-normal text-foreground active:cursor-grabbing',
-                          !isCollapsed && 'mb-2',
-                        )}
+                        className="flex w-full cursor-grab touch-none select-none items-center gap-2 text-sm font-normal text-foreground active:cursor-grabbing"
                         style={{ touchAction: 'none' }}
                         {...dragActivator.attributes}
                         {...dragActivator.listeners}
                       >
-                        <Button
-                          className="h-6 w-6 shrink-0 text-muted-foreground/80"
-                          size="icon-xs"
-                          variant="ghost"
-                          aria-expanded={!isCollapsed}
-                          aria-label={isCollapsed ? `Expand ${project.name}` : `Collapse ${project.name}`}
-                          onClick={event => {
-                            event.stopPropagation();
-                            if (shouldSuppressSelection()) return;
-                            toggleProjectCollapsed(project.id);
-                          }}
-                        >
-                          <ChevronDown
-                            size={15}
-                            className={cn('transition-transform', isCollapsed && '-rotate-90')}
-                            aria-hidden="true"
-                          />
-                        </Button>
                         <SidebarItemButton
                           className={cn(
-                            'flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left',
+                            'ml-[23px] flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left',
                             isNotesProjectActive && 'bg-selected-thread',
                           )}
                           onClick={() => {
-                            if (project.projectKind === 'notes') {
-                              selectWorkspaceSurface(project.id, notesWorkspace?.id);
-                              return;
-                            }
                             if (shouldSuppressSelection()) return;
                             toggleProjectCollapsed(project.id);
                           }}
                         >
                           {!isCollapsed ? (
-                            <FolderOpen size={16} className="shrink-0 text-foreground" aria-label="Expanded Project" />
+                            <FolderOpen size={16} className="shrink-0 text-success" aria-label="Expanded Project" />
                           ) : project.projectKind === 'git' ? (
-                            <FolderCode size={16} className="shrink-0 text-foreground" aria-label="Git Project" />
+                            <FolderCode size={16} className="shrink-0 text-success" aria-label="Git Project" />
                           ) : project.projectKind === 'notes' ? (
-                            <StickyNote size={16} className="shrink-0 text-foreground" aria-label="Notes Project" />
+                            <StickyNote size={16} className="shrink-0 text-success" aria-label="Notes Project" />
                           ) : (
-                            <Folder size={16} className="shrink-0 text-foreground" aria-label="General Project" />
+                            <Folder size={16} className="shrink-0 text-success" aria-label="General Project" />
                           )}
-                          <span className="min-w-0 truncate text-foreground">{project.name}</span>
+                          <span className="min-w-0 truncate font-semibold text-success">{project.name}</span>
                         </SidebarItemButton>
                         {!isCollapsed ? (
                           <div className="flex shrink-0 items-center">
@@ -747,308 +722,305 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                         ) : null}
                       </div>
                       {!isCollapsed ? (
-                        <>
-                    <div className="relative space-y-2 pl-6 before:absolute before:bottom-1 before:left-3 before:top-0 before:w-px before:bg-success/70">
-                            {project.projectKind === 'general' ? (
-                              <SortableSection
-                                items={generalProjectThreads.map(thread => thread.id)}
-                                onDragStart={suppressSelectionAfterDrag}
-                                onDragEnd={suppressSelectionAfterDrag}
-                                onReorder={(activeId, overId) => reorderProjectThreads(project.id, activeId, overId)}
-                              >
-                                {generalProjectThreads.map(thread => (
-                                  <SortableItem
-                                    key={thread.id}
-                                    id={thread.id}
-                                    canDrag={generalProjectThreads.length > 1}
-                                    showHandle={false}
-                                    className={cn(
-                                      'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
-                                      isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
-                                    )}
-                                  >
-                                    <SidebarItemButton
-                                      className="min-w-0 flex-1 items-center text-left"
-                                      onClick={() => selectThread(thread.id)}
-                                    >
-                                      <div className="flex min-w-0 items-center pl-4">
-                                        <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
-                                      </div>
-                                    </SidebarItemButton>
-                                    {renderThreadRunningSpinner(thread)}
-                                    {renderThreadMenu(thread)}
-                                  </SortableItem>
-                                ))}
-                              </SortableSection>
-                            ) : null}
-                            {project.projectKind === 'notes' && notesWorkspace ? (
-                              <SortableSection
-                                items={notesThreads.map(thread => thread.id)}
-                                onDragStart={suppressSelectionAfterDrag}
-                                onDragEnd={suppressSelectionAfterDrag}
-                                onReorder={(activeId, overId) => reorderWorkspaceThreads(project.id, notesWorkspace.id, activeId, overId)}
-                              >
-                                {notesThreads.map(thread => (
-                                  <SortableItem
-                                    key={thread.id}
-                                    id={thread.id}
-                                    canDrag={notesThreads.length > 1}
-                                    showHandle={false}
-                                    className={cn(
-                                      'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
-                                      isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
-                                    )}
-                                  >
-                                    <SidebarItemButton
-                                      className="min-w-0 flex-1 items-center text-left"
-                                      onClick={() => selectThread(thread.id)}
-                                    >
-                                      <div className="flex min-w-0 items-center pl-4">
-                                        <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
-                                      </div>
-                                    </SidebarItemButton>
-                                    {renderThreadRunningSpinner(thread)}
-                                    {renderThreadMenu(thread)}
-                                  </SortableItem>
-                                ))}
-                              </SortableSection>
-                            ) : null}
-                            {project.projectKind === 'git' ? (
-                              <div>
-                                <SortableSection
-                                  items={sortedWorkspaces.map(workspace => workspace.id)}
-                                  onDragStart={suppressSelectionAfterDrag}
-                                  onDragEnd={suppressSelectionAfterDrag}
-                                  onReorder={async (activeId, overId) => {
-                                    const ordered = moveItem(sortedWorkspaces, activeId, overId);
-                                    await reorderWorkspaces(project.id, ordered.map(item => item.id));
-                                    await invalidateProjects();
-                                  }}
+                        <div className="relative space-y-2 pb-3 pl-6 before:absolute before:bottom-1.5 before:left-[25px] before:-right-[21px] before:top-[-4px] before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-success/70">
+                          {project.projectKind === 'general' ? (
+                            <SortableSection
+                              items={generalProjectThreads.map(thread => thread.id)}
+                              onDragStart={suppressSelectionAfterDrag}
+                              onDragEnd={suppressSelectionAfterDrag}
+                              onReorder={(activeId, overId) => reorderProjectThreads(project.id, activeId, overId)}
+                            >
+                              {generalProjectThreads.map(thread => (
+                                <SortableItem
+                                  key={thread.id}
+                                  id={thread.id}
+                                  canDrag={generalProjectThreads.length > 1}
+                                  showHandle={false}
+                                  className={cn(
+                                    'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
+                                    isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                                  )}
                                 >
-                                  {sortedWorkspaces.map(workspace => {
-                                    const workspaceThreads = projectThreads.filter(thread => thread.workspaceId === workspace.id && thread.archived !== true);
-                                    const workspaceTerminalCount = workspaceTerminalWindowCounts[workspace.id] ?? 0;
+                                  <SidebarItemButton
+                                    className="min-w-0 flex-1 items-center text-left"
+                                    onClick={() => selectThread(thread.id)}
+                                  >
+                                    <div className="flex min-w-0 items-center pl-4">
+                                      <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
+                                    </div>
+                                  </SidebarItemButton>
+                                  {renderThreadRunningSpinner(thread)}
+                                  {renderThreadMenu(thread)}
+                                </SortableItem>
+                              ))}
+                            </SortableSection>
+                          ) : null}
+                          {project.projectKind === 'notes' && notesWorkspace ? (
+                            <SortableSection
+                              items={notesThreads.map(thread => thread.id)}
+                              onDragStart={suppressSelectionAfterDrag}
+                              onDragEnd={suppressSelectionAfterDrag}
+                              onReorder={(activeId, overId) => reorderWorkspaceThreads(project.id, notesWorkspace.id, activeId, overId)}
+                            >
+                              {notesThreads.map(thread => (
+                                <SortableItem
+                                  key={thread.id}
+                                  id={thread.id}
+                                  canDrag={notesThreads.length > 1}
+                                  showHandle={false}
+                                  className={cn(
+                                    'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
+                                    isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                                  )}
+                                >
+                                  <SidebarItemButton
+                                    className="min-w-0 flex-1 items-center text-left"
+                                    onClick={() => selectThread(thread.id)}
+                                  >
+                                    <div className="flex min-w-0 items-center pl-4">
+                                      <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
+                                    </div>
+                                  </SidebarItemButton>
+                                  {renderThreadRunningSpinner(thread)}
+                                  {renderThreadMenu(thread)}
+                                </SortableItem>
+                              ))}
+                            </SortableSection>
+                          ) : null}
+                          {project.projectKind === 'git' ? (
+                            <div>
+                              <SortableSection
+                                items={sortedWorkspaces.map(workspace => workspace.id)}
+                                onDragStart={suppressSelectionAfterDrag}
+                                onDragEnd={suppressSelectionAfterDrag}
+                                onReorder={async (activeId, overId) => {
+                                  const ordered = moveItem(sortedWorkspaces, activeId, overId);
+                                  await reorderWorkspaces(project.id, ordered.map(item => item.id));
+                                  await invalidateProjects();
+                                }}
+                              >
+                                {sortedWorkspaces.map(workspace => {
+                                  const workspaceThreads = projectThreads.filter(thread => thread.workspaceId === workspace.id && thread.archived !== true);
+                                  const workspaceTerminalCount = workspaceTerminalWindowCounts[workspace.id] ?? 0;
 
-                                    return (
-                                      <SortableItem
-                                        key={workspace.id}
-                                        id={workspace.id}
-                                        canDrag={sortedWorkspaces.length > 1}
-                                        showHandle={false}
-                                        className="space-y-1 pt-2 pb-0"
+                                  return (
+                                    <SortableItem
+                                      key={workspace.id}
+                                      id={workspace.id}
+                                      canDrag={sortedWorkspaces.length > 1}
+                                      showHandle={false}
+                                      className="mb-1 space-y-0 pt-0 pb-0 last:mb-0"
+                                    >
+                                      <div
+                                        className={cn(
+                                          'flex min-h-0 min-w-0 w-[calc(100%+0.5rem)] -ml-2 items-center gap-2 rounded-md border py-0 pl-2 pr-1 text-left text-sm font-normal transition-colors',
+                                          isWorkspaceActive(project.id, workspace.id)
+                                            ? 'border-transparent bg-selected-thread text-foreground'
+                                            : 'border-transparent text-foreground hover:bg-background',
+                                        )}
                                       >
-                                        <div
-                                          className={cn(
-                                            'flex min-h-14 min-w-0 w-[calc(100%+0.5rem)] -ml-2 items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left text-sm font-normal transition-colors',
-                                            isWorkspaceActive(project.id, workspace.id)
-                                              ? 'border-transparent bg-selected-thread text-foreground'
-                                              : 'border-transparent text-foreground hover:bg-background',
-                                          )}
-                                        >
-                                          <div className="min-w-0 flex-1 rounded-md px-2 py-2 text-left">
-                                            <button
-                                              type="button"
-                                              className="flex h-5 w-full min-w-0 items-center gap-1.5 text-left text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                                              onClick={() => selectWorkspaceSurface(project.id, workspace.id)}
-                                            >
-                                              <span className="truncate text-foreground">{workspace.name}</span>
-                                              {workspace.locked || workspace.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
-                                            </button>
-                                            {workspace.detached ? (
-                                              <div className="flex h-4 items-center truncate text-[10px] font-normal leading-none text-mauve">
-                                                {`Detached ${workspace.head?.slice(0, 7) ?? 'HEAD'}`}
-                                              </div>
-                                            ) : workspace.branch ? (
-                                              <Menu
-                                                onOpenChange={(open) => {
-                                                  if (open) void refreshWorkspaceBranchState(project.id, workspace.id, Boolean(workspace.upstream));
-                                                }}
-                                              >
-                                                <MenuTrigger
-                                                  render={
-                                                    <button
-                                                      type="button"
-                                                      className="flex h-4 max-w-full items-center gap-1 truncate text-[10px] font-normal leading-none text-mauve outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                                                      aria-label={`${workspace.branch} branch menu`}
-                                                    />
-                                                  }
-                                                >
-                                                  <span className="truncate">{workspace.branch}</span>
-                                                  {typeof workspace.behind === 'number' && workspace.behind > 0 ? (
-                                                    <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.behind} behind upstream`}>
-                                                      {`\u2193${workspace.behind}`}
-                                                    </span>
-                                                  ) : null}
-                                                  {typeof workspace.ahead === 'number' && workspace.ahead > 0 ? (
-                                                    <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.ahead} ahead of upstream`}>
-                                                      {`\u2191${workspace.ahead}`}
-                                                    </span>
-                                                  ) : null}
-                                                </MenuTrigger>
-                                                <MenuPopup align="start" sideOffset={4} className="w-44">
-                                                  {workspace.upstream ? (
-                                                    <MenuItem
-                                                      disabled={pendingBranchActionKey === workspaceActionKey(project.id, workspace.id)}
-                                                      onClick={() => void pullWorkspaceBranch(project.id, workspace.id)}
-                                                    >
-                                                      <Download size={13} />
-                                                      Pull from remote
-                                                    </MenuItem>
-                                                  ) : (
-                                                    <MenuItem disabled>
-                                                      <GitBranch size={13} />
-                                                      No upstream
-                                                    </MenuItem>
-                                                  )}
-                                                </MenuPopup>
-                                              </Menu>
-                                            ) : null}
-                                            {workspace.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{workspace.lastError}</div> : null}
-                                          </div>
-                                          <div className="-mr-2 flex w-6 shrink-0 flex-col items-center self-stretch py-2">
-                                            <Button
-                                              className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
-                                              size="icon-xs"
-                                              variant="ghost"
-                                              aria-label={`Create thread in ${workspace.name}`}
-                                              onClick={async () => {
-                                                await newThread(project.id, workspace.id);
-                                                await Promise.all([
-                                                  queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-                                                  invalidateProjects(),
-                                                ]);
-                                                if (closeOnSelect) onClose?.();
+                                        <div className="min-w-0 flex-1 rounded-md px-2 py-0 text-left">
+                                          <button
+                                            type="button"
+                                            className="flex h-5 w-full min-w-0 items-center gap-1.5 text-left text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                                            onClick={() => selectWorkspaceSurface(project.id, workspace.id)}
+                                          >
+                                            <span className="truncate text-peach">{workspace.name}</span>
+                                            {workspace.locked || workspace.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
+                                          </button>
+                                          {workspace.detached ? (
+                                            <div className="flex h-4 items-center truncate pl-2 text-[10px] font-normal leading-none text-mauve">
+                                              {`Detached ${workspace.head?.slice(0, 7) ?? 'HEAD'}`}
+                                            </div>
+                                          ) : workspace.branch ? (
+                                            <Menu
+                                              onOpenChange={(open) => {
+                                                if (open) void refreshWorkspaceBranchState(project.id, workspace.id, Boolean(workspace.upstream));
                                               }}
                                             >
-                                              <SquarePen size={14} />
-                                            </Button>
-                                          </div>
-                                          <div className="flex w-6 shrink-0 flex-col items-center self-stretch py-2">
-                                            <Menu>
-                                              <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 text-foreground sm:h-5 sm:w-6" aria-label={`${workspace.name} menu`} />}>
-                                                <MoreHorizontal size={14} />
+                                              <MenuTrigger
+                                                render={
+                                                  <button
+                                                    type="button"
+                                                    className="flex h-4 max-w-full items-center gap-1 truncate pl-2 text-[10px] font-normal leading-none text-mauve outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                                                    aria-label={`${workspace.branch} branch menu`}
+                                                  />
+                                                }
+                                              >
+                                                <span className="truncate">{workspace.branch}</span>
+                                                {typeof workspace.behind === 'number' && workspace.behind > 0 ? (
+                                                  <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.behind} behind upstream`}>
+                                                    {`\u2193${workspace.behind}`}
+                                                  </span>
+                                                ) : null}
+                                                {typeof workspace.ahead === 'number' && workspace.ahead > 0 ? (
+                                                  <span className="shrink-0 text-muted-foreground" aria-label={`${workspace.ahead} ahead of upstream`}>
+                                                    {`\u2191${workspace.ahead}`}
+                                                  </span>
+                                                ) : null}
                                               </MenuTrigger>
-                                              <MenuPopup align="end" sideOffset={4} className="w-44">
-                                                <MenuItem onClick={() => setArchivedDialogScopeId(workspace.id)}>
-                                                  <Archive size={13} />
-                                                  Archived Threads
+                                              <MenuPopup align="start" sideOffset={4} className="w-44">
+                                                {workspace.upstream ? (
+                                                  <MenuItem
+                                                    disabled={pendingBranchActionKey === workspaceActionKey(project.id, workspace.id)}
+                                                    onClick={() => void pullWorkspaceBranch(project.id, workspace.id)}
+                                                  >
+                                                    <Download size={13} />
+                                                    Pull from remote
+                                                  </MenuItem>
+                                                ) : (
+                                                  <MenuItem disabled>
+                                                    <GitBranch size={13} />
+                                                    No upstream
+                                                  </MenuItem>
+                                                )}
+                                              </MenuPopup>
+                                            </Menu>
+                                          ) : null}
+                                          {workspace.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{workspace.lastError}</div> : null}
+                                        </div>
+                                        <div className="-mr-2 flex w-6 shrink-0 flex-col items-center self-stretch py-2">
+                                          <Button
+                                            className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
+                                            size="icon-xs"
+                                            variant="ghost"
+                                            aria-label={`Create thread in ${workspace.name}`}
+                                            onClick={async () => {
+                                              await newThread(project.id, workspace.id);
+                                              await Promise.all([
+                                                queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+                                                invalidateProjects(),
+                                              ]);
+                                              if (closeOnSelect) onClose?.();
+                                            }}
+                                          >
+                                            <SquarePen size={14} />
+                                          </Button>
+                                        </div>
+                                        <div className="flex w-6 shrink-0 flex-col items-center self-stretch py-2">
+                                          <Menu>
+                                            <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 text-foreground sm:h-5 sm:w-6" aria-label={`${workspace.name} menu`} />}>
+                                              <MoreHorizontal size={14} />
+                                            </MenuTrigger>
+                                            <MenuPopup align="end" sideOffset={4} className="w-44">
+                                              <MenuItem onClick={() => setArchivedDialogScopeId(workspace.id)}>
+                                                <Archive size={13} />
+                                                Archived Threads
+                                              </MenuItem>
+                                              {project.projectKind === 'git' ? (
+                                                <MenuItem
+                                                  onClick={async () => {
+                                                    const branch = window.prompt('Branch name', workspace.branch ?? '');
+                                                    if (!branch?.trim()) return;
+                                                    const createBranch = window.confirm('Create as a new branch? Cancel switches to an existing branch.');
+                                                    const base = createBranch ? window.prompt('Base ref (optional)', project.defaultBranch ?? workspace.branch ?? '') : undefined;
+                                                    try {
+                                                      await updateWorkspace(project.id, workspace.id, {
+                                                        branch: branch.trim(),
+                                                        createBranch,
+                                                        base: base?.trim() || undefined,
+                                                      });
+                                                      await invalidateProjects();
+                                                    } catch (error) {
+                                                      window.alert(error instanceof Error ? error.message : String(error));
+                                                    }
+                                                  }}
+                                                >
+                                                  <GitBranch size={13} />
+                                                  Switch Branch
                                                 </MenuItem>
-                                                {project.projectKind === 'git' ? (
+                                              ) : null}
+                                              {project.projectKind === 'git' && !workspace.locked && workspace.workspaceKind !== 'primary' ? (
+                                                <>
                                                   <MenuItem
                                                     onClick={async () => {
-                                                      const branch = window.prompt('Branch name', workspace.branch ?? '');
-                                                      if (!branch?.trim()) return;
-                                                      const createBranch = window.confirm('Create as a new branch? Cancel switches to an existing branch.');
-                                                      const base = createBranch ? window.prompt('Base ref (optional)', project.defaultBranch ?? workspace.branch ?? '') : undefined;
+                                                      if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk.`)) return;
                                                       try {
-                                                        await updateWorkspace(project.id, workspace.id, {
-                                                          branch: branch.trim(),
-                                                          createBranch,
-                                                          base: base?.trim() || undefined,
-                                                        });
+                                                        await deleteWorkspace(project.id, workspace.id, 'detach');
                                                         await invalidateProjects();
                                                       } catch (error) {
                                                         window.alert(error instanceof Error ? error.message : String(error));
                                                       }
                                                     }}
                                                   >
-                                                    <GitBranch size={13} />
-                                                    Switch Branch
+                                                    <Link size={13} />
+                                                    Detach
                                                   </MenuItem>
-                                                ) : null}
-                                                {project.projectKind === 'git' && !workspace.locked && workspace.workspaceKind !== 'primary' ? (
-                                                  <>
-                                                    <MenuItem
-                                                      onClick={async () => {
-                                                        if (!window.confirm(`Detach ${workspace.name} from this Project? Worktree files stay on disk.`)) return;
-                                                        try {
-                                                          await deleteWorkspace(project.id, workspace.id, 'detach');
-                                                          await invalidateProjects();
-                                                        } catch (error) {
-                                                          window.alert(error instanceof Error ? error.message : String(error));
-                                                        }
-                                                      }}
-                                                    >
-                                                      <Link size={13} />
-                                                      Detach
-                                                    </MenuItem>
-                                                    <MenuItem
-                                                      variant="destructive"
-                                                      onClick={async () => {
-                                                        if (!window.confirm(`Remove workspace ${workspace.name}? This removes the worktree and leaves the branch alone.`)) return;
-                                                        try {
-                                                          await deleteWorkspace(project.id, workspace.id, 'remove');
-                                                          await invalidateProjects();
-                                                        } catch (error) {
-                                                          window.alert(error instanceof Error ? error.message : String(error));
-                                                        }
-                                                      }}
-                                                    >
-                                                      <Trash2 size={13} />
-                                                      Remove Workspace
-                                                    </MenuItem>
-                                                  </>
-                                                ) : null}
-                                              </MenuPopup>
-                                            </Menu>
-                                            {workspaceTerminalCount > 0 ? (
-                                              <span
-                                                className="flex h-4 w-6 items-center justify-center text-peach"
-                                                title={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
-                                                aria-label={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
-                                              >
-                                                <TerminalSquare size={14} />
-                                              </span>
-                                            ) : null}
-                                          </div>
+                                                  <MenuItem
+                                                    variant="destructive"
+                                                    onClick={async () => {
+                                                      if (!window.confirm(`Remove workspace ${workspace.name}? This removes the worktree and leaves the branch alone.`)) return;
+                                                      try {
+                                                        await deleteWorkspace(project.id, workspace.id, 'remove');
+                                                        await invalidateProjects();
+                                                      } catch (error) {
+                                                        window.alert(error instanceof Error ? error.message : String(error));
+                                                      }
+                                                    }}
+                                                  >
+                                                    <Trash2 size={13} />
+                                                    Remove Workspace
+                                                  </MenuItem>
+                                                </>
+                                              ) : null}
+                                            </MenuPopup>
+                                          </Menu>
+                                          {workspaceTerminalCount > 0 ? (
+                                            <span
+                                              className="flex h-4 w-6 items-center justify-center text-peach"
+                                              title={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
+                                              aria-label={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
+                                            >
+                                              <TerminalSquare size={14} />
+                                            </span>
+                                          ) : null}
                                         </div>
-                                        <div
-                                          className={cn(
-                                            'relative',
-                                            workspaceThreads.length > 0
-                                  && 'before:absolute before:bottom-1 before:left-2 before:top-1 before:w-px before:bg-peach/70',
-                                          )}
+                                      </div>
+                                      <div
+                                        className={cn(
+                                          'relative before:absolute before:bottom-0 before:left-[9px] before:-right-[21px] before:top-[-13px] before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-peach/70',
+                                          workspaceThreads.length === 0 && 'h-2',
+                                        )}
+                                      >
+                                        <SortableSection
+                                          items={workspaceThreads.map(thread => thread.id)}
+                                          onDragStart={suppressSelectionAfterDrag}
+                                          onDragEnd={suppressSelectionAfterDrag}
+                                          onReorder={(activeId, overId) => reorderWorkspaceThreads(project.id, workspace.id, activeId, overId)}
                                         >
-                                          <SortableSection
-                                            items={workspaceThreads.map(thread => thread.id)}
-                                            onDragStart={suppressSelectionAfterDrag}
-                                            onDragEnd={suppressSelectionAfterDrag}
-                                            onReorder={(activeId, overId) => reorderWorkspaceThreads(project.id, workspace.id, activeId, overId)}
-                                          >
-                                            {workspaceThreads.map(thread => (
-                                              <SortableItem
-                                                key={thread.id}
-                                                id={thread.id}
-                                                canDrag={workspaceThreads.length > 1}
-                                                showHandle={false}
-                                                className={cn(
-                                                  'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
-                                                  isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
-                                                )}
+                                          {workspaceThreads.map(thread => (
+                                            <SortableItem
+                                              key={thread.id}
+                                              id={thread.id}
+                                              canDrag={workspaceThreads.length > 1}
+                                              showHandle={false}
+                                              className={cn(
+                                                'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors first:items-start first:py-0',
+                                                isThreadActive(thread.id) ? 'border-transparent bg-selected-thread text-foreground' : 'border-transparent text-foreground hover:bg-background',
+                                              )}
+                                            >
+                                              <SidebarItemButton
+                                                className="min-w-0 flex-1 items-center text-left"
+                                                onClick={() => selectThread(thread.id)}
                                               >
-                                                <SidebarItemButton
-                                                  className="min-w-0 flex-1 items-center text-left"
-                                                  onClick={() => selectThread(thread.id)}
-                                                >
-                                                  <div className="flex min-w-0 items-center pl-4">
-                                                    <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
-                                                  </div>
-                                                </SidebarItemButton>
-                                                {renderThreadRunningSpinner(thread)}
-                                                {renderThreadMenu(thread)}
-                                              </SortableItem>
-                                            ))}
-                                          </SortableSection>
-                                        </div>
-                                      </SortableItem>
-                                    );
-                                  })}
-                                </SortableSection>
-                              </div>
-                            ) : null}
-                            {projectThreads.length === 0 && project.projectKind === 'general' ? <div className="px-2 py-1 text-xs text-muted-foreground">No threads</div> : null}
-                          </div>
-                        </>
+                                                <div className="flex min-w-0 items-center pl-4">
+                                                  <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
+                                                </div>
+                                              </SidebarItemButton>
+                                              {renderThreadRunningSpinner(thread)}
+                                              {renderThreadMenu(thread)}
+                                            </SortableItem>
+                                          ))}
+                                        </SortableSection>
+                                      </div>
+                                    </SortableItem>
+                                  );
+                                })}
+                              </SortableSection>
+                            </div>
+                          ) : null}
+                          {projectThreads.length === 0 && project.projectKind === 'general' ? <div className="px-2 py-1 text-xs text-muted-foreground">No threads</div> : null}
+                        </div>
                       ) : null}
                     </>
                   )}
