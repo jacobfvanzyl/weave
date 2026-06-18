@@ -979,6 +979,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                 {sortedWorkspaces.map(workspace => {
                                   const workspaceThreads = projectThreads.filter(thread => thread.workspaceId === workspace.id && thread.archived !== true);
                                   const workspaceTerminalCount = workspaceTerminalWindowCounts[workspace.id] ?? 0;
+                                  const isLastWorkspace = workspace.id === sortedWorkspaces[sortedWorkspaces.length - 1]?.id;
 
                                   return (
                                     <SortableItem
@@ -986,7 +987,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                       id={workspace.id}
                                       canDrag={sortedWorkspaces.length > 1}
                                       showHandle={false}
-                                      className="mb-1 space-y-0 pt-0 pb-0 last:mb-0"
+                                      className={cn(isLastWorkspace ? 'mb-1' : 'mb-4', 'space-y-0 pt-0 pb-0')}
                                     >
                                       {dragActivator => (
                                         <>
@@ -1170,7 +1171,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                           <div
                                             className={cn(
                                               'relative before:pointer-events-none before:absolute before:bottom-0 before:left-[9px] before:-right-[21px] before:top-[-13px] before:z-10 before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-peach/70',
-                                              workspaceThreads.length === 0 && 'h-2',
+                                              workspaceThreads.length === 0 && !isLastWorkspace && 'h-2',
                                             )}
                                           >
                                             <SortableSection
