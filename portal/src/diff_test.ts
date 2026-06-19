@@ -62,3 +62,34 @@ Deno.test('generateUnifiedDiff renders replacements and deletions as unified hun
     ].join('\n'),
   );
 });
+
+Deno.test('generateUnifiedDiff splits distant changes into separate hunks', () => {
+  const oldLines = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`);
+  const newLines = [...oldLines];
+  newLines[3] = 'line 4 changed';
+  newLines[25] = 'line 26 changed';
+
+  assertEquals(
+    generateUnifiedDiff(oldLines.join('\n'), newLines.join('\n')),
+    [
+      '@@ -1,7 +1,7 @@',
+      ' line 1',
+      ' line 2',
+      ' line 3',
+      '-line 4',
+      '+line 4 changed',
+      ' line 5',
+      ' line 6',
+      ' line 7',
+      '@@ -23,7 +23,7 @@',
+      ' line 23',
+      ' line 24',
+      ' line 25',
+      '-line 26',
+      '+line 26 changed',
+      ' line 27',
+      ' line 28',
+      ' line 29',
+    ].join('\n'),
+  );
+});

@@ -769,41 +769,124 @@ const formatUnifiedRange = (startIndex: number, length: number) => {
   return length === 1 ? String(startLine) : `${startLine},${length}`;
 };
 
+type DiffOp = {
+  type: 'equal' | 'delete' | 'insert';
+  line: string;
+  oldStart: number;
+  newStart: number;
+};
+
+const unifiedDiffContextLines = 3;
+const unifiedDiffSyncLookahead = 500;
+
+const findSyncLine = (oldLines: string[], newLines: string[], oldIndex: number, newIndex: number) => {
+  const maxOldOffset = Math.min(unifiedDiffSyncLookahead, oldLines.length - oldIndex - 1);
+  const maxNewOffset = Math.min(unifiedDiffSyncLookahead, newLines.length - newIndex - 1);
+
+  for (let distance = 1; distance <= maxOldOffset + maxNewOffset; distance += 1) {
+    const minOldOffset = Math.max(0, distance - maxNewOffset);
+    const maxOldOffsetForDistance = Math.min(maxOldOffset, distance);
+    for (let oldOffset = minOldOffset; oldOffset <= maxOldOffsetForDistance; oldOffset += 1) {
+      const newOffset = distance - oldOffset;
+      if (newOffset < 0 || newOffset > maxNewOffset) continue;
+      if (oldLines[oldIndex + oldOffset] === newLines[newIndex + newOffset]) {
+        return { oldIndex: oldIndex + oldOffset, newIndex: newIndex + newOffset };
+      }
+    }
+  }
+
+  return null;
+};
+
+const buildLineDiff = (oldLines: string[], newLines: string[]) => {
+  const ops: DiffOp[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+
+  const pushEqual = () => {
+    ops.push({ type: 'equal', line: oldLines[oldIndex], oldStart: oldIndex, newStart: newIndex });
+    oldIndex += 1;
+    newIndex += 1;
+  };
+
+  const pushDelete = () => {
+    ops.push({ type: 'delete', line: oldLines[oldIndex], oldStart: oldIndex, newStart: newIndex });
+    oldIndex += 1;
+  };
+
+  const pushInsert = () => {
+    ops.push({ type: 'insert', line: newLines[newIndex], oldStart: oldIndex, newStart: newIndex });
+    newIndex += 1;
+  };
+
+  while (oldIndex < oldLines.length || newIndex < newLines.length) {
+    if (oldIndex >= oldLines.length) {
+      pushInsert();
+      continue;
+    }
+    if (newIndex >= newLines.length) {
+      pushDelete();
+      continue;
+    }
+    if (oldLines[oldIndex] === newLines[newIndex]) {
+      pushEqual();
+      continue;
+    }
+
+    const sync = findSyncLine(oldLines, newLines, oldIndex, newIndex);
+    if (!sync) {
+      while (oldIndex < oldLines.length) pushDelete();
+      while (newIndex < newLines.length) pushInsert();
+      break;
+    }
+
+    while (oldIndex < sync.oldIndex) pushDelete();
+    while (newIndex < sync.newIndex) pushInsert();
+  }
+
+  return ops;
+};
+
+const formatUnifiedHunk = (ops: DiffOp[]) => {
+  const oldRangeLength = ops.filter(op => op.type !== 'insert').length;
+  const newRangeLength = ops.filter(op => op.type !== 'delete').length;
+  const output = [
+    `@@ -${formatUnifiedRange(ops[0].oldStart, oldRangeLength)} +${formatUnifiedRange(ops[0].newStart, newRangeLength)} @@`,
+  ];
+
+  ops.forEach(op => {
+    const prefix = op.type === 'insert' ? '+' : op.type === 'delete' ? '-' : ' ';
+    output.push(`${prefix}${op.line}`);
+  });
+
+  return output.join('\n');
+};
+
 export const generateUnifiedDiff = (oldContent: string, newContent: string) => {
   const oldLines = oldContent.split('\n');
   const newLines = newContent.split('\n');
-  let prefix = 0;
-  while (oldLines[prefix] === newLines[prefix] && prefix < oldLines.length && prefix < newLines.length) prefix += 1;
+  const ops = buildLineDiff(oldLines, newLines);
+  const changeIndexes = ops.flatMap((op, index) => op.type === 'equal' ? [] : [index]);
+  const hunks: string[] = [];
+  let changeCursor = 0;
 
-  let oldSuffix = oldLines.length - 1;
-  let newSuffix = newLines.length - 1;
-  while (oldSuffix >= prefix && newSuffix >= prefix && oldLines[oldSuffix] === newLines[newSuffix]) {
-    oldSuffix -= 1;
-    newSuffix -= 1;
-  }
+  while (changeCursor < changeIndexes.length) {
+    let start = Math.max(0, changeIndexes[changeCursor] - unifiedDiffContextLines);
+    let end = Math.min(ops.length - 1, changeIndexes[changeCursor] + unifiedDiffContextLines);
+    changeCursor += 1;
 
-  const start = Math.max(0, prefix - 3);
-  const endOld = Math.min(oldLines.length - 1, oldSuffix + 3);
-  const endNew = Math.min(newLines.length - 1, newSuffix + 3);
-  const oldRangeLength = endOld >= start ? endOld - start + 1 : 0;
-  const newRangeLength = endNew >= start ? endNew - start + 1 : 0;
-  const output: string[] = [];
+    while (
+      changeCursor < changeIndexes.length &&
+      changeIndexes[changeCursor] <= end + unifiedDiffContextLines
+    ) {
+      end = Math.min(ops.length - 1, changeIndexes[changeCursor] + unifiedDiffContextLines);
+      changeCursor += 1;
+    }
 
-  output.push(`@@ -${formatUnifiedRange(start, oldRangeLength)} +${formatUnifiedRange(start, newRangeLength)} @@`);
-  for (let i = start; i < prefix; i += 1) {
-    output.push(` ${oldLines[i]}`);
-  }
-  for (let i = prefix; i <= oldSuffix; i += 1) {
-    output.push(`-${oldLines[i]}`);
-  }
-  for (let i = prefix; i <= newSuffix; i += 1) {
-    output.push(`+${newLines[i]}`);
-  }
-  for (let i = Math.max(prefix, newSuffix + 1); i <= endNew; i += 1) {
-    output.push(` ${newLines[i]}`);
+    hunks.push(formatUnifiedHunk(ops.slice(start, end + 1)));
   }
 
-  return output.join('\n');
+  return hunks.join('\n');
 };
 
 const editFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {

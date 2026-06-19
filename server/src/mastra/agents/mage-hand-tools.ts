@@ -1,5 +1,5 @@
 import { renameThreadTool } from '../tools/rename-thread-tool';
-import { updatePlanTool } from '../tools/update-plan-tool';
+import { updatePlanTool, writePlanTool } from '../tools/update-plan-tool';
 import { webExtractTool, webSearchTool } from '../tools/web-search-tools';
 import {
   gitBranchTool,
@@ -26,6 +26,7 @@ import {
 
 export const mageHandTools = {
   renameThreadTool,
+  writePlanTool,
   updatePlanTool,
   webSearch: webSearchTool,
   webExtract: webExtractTool,

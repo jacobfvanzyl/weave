@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { recordThreadContextUsage } from '../../server/src/mastra/context-usage';
 import { __chatRunRegistryTest } from '../../server/src/mastra/routes/chat';
 import { __chatStateContextUsageTest } from '../../server/src/mastra/routes/chat-state';
@@ -160,5 +160,39 @@ describe('chat active run registry', () => {
     await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
     expect(__chatRunRegistryTest.cancel(run)).toBe(false);
     expect(__chatRunRegistryTest.snapshot(run)).toMatchObject({ active: false, status: 'cancelled' });
+  });
+
+  it('marks an active run as errored when the stream emits an error chunk', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const run = __chatRunRegistryTest.create('resource-1', 'thread-1');
+    const reader = __chatRunRegistryTest.observe(run).getReader();
+    const textChunk = { type: 'text-delta', id: 'msg-1', delta: 'before failure' };
+    const errorChunk = { type: 'error', errorText: 'Provider stream ended before completion.' };
+
+    try {
+      __chatRunRegistryTest.pump(run, new ReadableStream({
+        start(controller) {
+          controller.enqueue(textChunk);
+          controller.enqueue(errorChunk);
+          controller.enqueue({ type: 'text-delta', id: 'msg-1', delta: 'after failure' });
+          controller.close();
+        },
+      }));
+
+      await expect(reader.read()).resolves.toEqual({ done: false, value: textChunk });
+      await expect(reader.read()).rejects.toThrow('Provider stream ended before completion.');
+      expect(__chatRunRegistryTest.snapshot(run)).toMatchObject({
+        active: false,
+        status: 'error',
+        error: 'Provider stream ended before completion.',
+      });
+
+      const replayReader = __chatRunRegistryTest.observe(run).getReader();
+      await expect(replayReader.read()).resolves.toEqual({ done: false, value: textChunk });
+      await expect(replayReader.read()).resolves.toEqual({ done: false, value: errorChunk });
+      await expect(replayReader.read()).resolves.toEqual({ done: true, value: undefined });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

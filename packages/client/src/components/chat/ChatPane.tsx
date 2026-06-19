@@ -1,6 +1,7 @@
 import type { RefObject, ReactNode } from 'react';
 import { Maximize2, MessageSquare, Minimize2, Settings, X } from 'lucide-react';
 import { useChatStore, type ChatThread, type ThreadPlan } from '../../stores/chat-store';
+import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Button } from '../ui/button';
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { AssistantChat } from './AssistantChat';
@@ -37,6 +38,17 @@ export const ChatPane = ({
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
   const showReasoning = useChatStore(state => state.showReasoning);
   const setShowReasoning = useChatStore(state => state.setShowReasoning);
+  const requestEditorFollow = useWorkspaceSurfaceStore(state => state.requestEditorFollow);
+  const activeThreadWorkspaceId = threads.find(thread => thread.id === activeThreadId)?.workspaceId;
+  const handleOpenPlan = activeThreadWorkspaceId
+    ? (path: string) => requestEditorFollow({
+        threadId: activeThreadId,
+        workspaceId: activeThreadWorkspaceId,
+        path,
+        line: 1,
+        toolCallId: 'plan-artifact',
+      })
+    : undefined;
 
   return (
     <div
@@ -107,7 +119,7 @@ export const ChatPane = ({
               <AssistantChat canFollowWrites={thread.id === activeThreadId && canFollowWrites} threadId={thread.id} />
             </div>
           ))}
-        {showPlanPanel ? <PlanSidebar plan={activePlan} /> : null}
+        {showPlanPanel ? <PlanSidebar plan={activePlan} onOpenPlan={handleOpenPlan} /> : null}
       </div>
       {terminalSlot}
     </div>

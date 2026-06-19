@@ -12,6 +12,7 @@ import { putChatRuntimeContext } from '../runtime-context-processor';
 const agentId = 'mage-hand';
 const maxImageAttachmentBytes = 10 * 1024 * 1024;
 const activeThreadRunCleanupDelayMs = 5 * 60 * 1000;
+const sseKeepAliveIntervalMs = 15_000;
 
 const markGitWorkspaceContext = (requestContext: any, value: boolean) => {
   requestContext?.set?.('gitWorkspace', value);
@@ -92,6 +93,21 @@ const getStreamChunkType = (chunk: unknown) =>
   chunk && typeof chunk === 'object' && typeof (chunk as Record<string, unknown>).type === 'string'
     ? (chunk as Record<string, unknown>).type as string
     : undefined;
+
+const getStreamChunkError = (chunk: unknown) => {
+  if (getStreamChunkType(chunk) !== 'error') return undefined;
+  const record = chunk && typeof chunk === 'object' ? chunk as Record<string, unknown> : {};
+  const direct = record.error;
+  if (direct instanceof Error) return direct;
+  if (typeof direct === 'string' && direct.trim()) return new Error(direct);
+
+  for (const key of ['errorText', 'message', 'reason']) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return new Error(value);
+  }
+
+  return new Error('Thread run stream emitted an error.');
+};
 
 const getStreamChunkId = (chunk: unknown) =>
   chunk && typeof chunk === 'object' && typeof (chunk as Record<string, unknown>).id === 'string'
@@ -333,11 +349,41 @@ const bufferAssistantTextStream = (stream: ReadableStream<unknown>) => new Reada
 });
 
 const toSseResponse = (stream: ReadableStream<unknown>) => {
-  const sseStream = stream.pipeThrough(new TransformStream<unknown, string>({
-    transform(chunk, controller) {
-      controller.enqueue(`data: ${JSON.stringify(chunk)}\n\n`);
+  const reader = stream.getReader();
+  let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+
+  const clearKeepAliveTimer = () => {
+    if (!keepAliveTimer) return;
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = undefined;
+  };
+
+  const sseStream = new ReadableStream<string>({
+    async start(controller) {
+      keepAliveTimer = setInterval(() => {
+        controller.enqueue(': keep-alive\n\n');
+      }, sseKeepAliveIntervalMs);
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(`data: ${JSON.stringify(value)}\n\n`);
+        }
+
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        clearKeepAliveTimer();
+        reader.releaseLock();
+      }
     },
-  }));
+    cancel(reason) {
+      clearKeepAliveTimer();
+      return reader.cancel(reason).catch(() => undefined);
+    },
+  });
 
   return new Response(sseStream.pipeThrough(new TextEncoderStream()), {
     headers: {
@@ -499,6 +545,21 @@ const settleThreadRun = (run: ActiveThreadRun, status: Exclude<ActiveThreadRunSt
   run.updatedAt = new Date().toISOString();
   if (error) run.error = error instanceof Error ? error.message : String(error);
 
+  if (status === 'error') {
+    const startedAtMs = Date.parse(run.startedAt);
+    const durationMs = Number.isFinite(startedAtMs) ? Date.now() - startedAtMs : undefined;
+    const lastChunk = run.chunks[run.chunks.length - 1];
+    console.error('[chat] active thread run failed', {
+      threadId: run.threadId,
+      resourceId: run.resourceId,
+      runId: run.runId,
+      durationMs,
+      chunkCount: run.chunks.length,
+      lastChunkType: getStreamChunkType(lastChunk) ?? 'unknown',
+      error: run.error,
+    });
+  }
+
   const event: ActiveThreadRunEvent = status === 'error'
     ? { type: 'error', error: error ?? new Error('Thread run failed') }
     : { type: 'close' };
@@ -546,6 +607,11 @@ const startThreadRunPump = (run: ActiveThreadRun, stream: ReadableStream<unknown
         const { done, value } = await reader.read();
         if (done) break;
         appendThreadRunChunk(run, value);
+        const streamError = getStreamChunkError(value);
+        if (streamError) {
+          settleThreadRun(run, 'error', streamError);
+          return;
+        }
       }
 
       settleThreadRun(run, run.terminalChunkType === 'abort' ? 'cancelled' : 'completed');
@@ -726,6 +792,7 @@ export const __chatRunRegistryTest = {
   observe: observeThreadRun,
   cancel: cancelThreadRun,
   complete: (run: ActiveThreadRun) => settleThreadRun(run, 'completed'),
+  pump: startThreadRunPump,
   snapshot: toThreadRunSnapshot,
   get: getThreadRun,
   clear: () => {

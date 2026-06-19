@@ -47,11 +47,17 @@ const sharedMemory = createSharedMemory();
 
 const resolveProfile = (requestContext: any) => getProfileContext(requestContext)?.profile ?? builtinDefaultProfile;
 
+const gitOnlyToolKeys = new Set(['writePlanTool', 'updatePlanTool']);
+
+const isToolAvailableForContext = (key: string, requestContext: any) =>
+  !gitOnlyToolKeys.has(key) || getProfileContext(requestContext)?.projectKind === 'git';
+
 const resolveTools = ({ requestContext }: { requestContext: any }) => {
   const profile = resolveProfile(requestContext);
   const allowed = new Set(profile.tools);
-  if (allowed.has('*') || allowed.has('all')) return mageHandTools;
-  return Object.fromEntries(Object.entries(mageHandTools).filter(([key]) => allowed.has(key)));
+  const entries = Object.entries(mageHandTools).filter(([key]) => isToolAvailableForContext(key, requestContext));
+  if (allowed.has('*') || allowed.has('all')) return Object.fromEntries(entries);
+  return Object.fromEntries(entries.filter(([key]) => allowed.has(key)));
 };
 
 export const mageHandAgent = new Agent({

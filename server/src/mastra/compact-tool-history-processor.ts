@@ -135,7 +135,7 @@ export const createCompactToolHistoryPart = (
 export const isLegacyCompactToolHistoryText = (text: string) => {
   if (text.startsWith(`${compactToolHistoryPrefix}\n`)) return true;
 
-  const legacyHeading = /^(read|write|edit|bash|webSearch|webExtract|rename-thread|renameThreadTool|update_plan|updatePlanTool) result:\s*\n/;
+  const legacyHeading = /^(read|write|edit|bash|webSearch|webExtract|rename-thread|renameThreadTool|write_plan|writePlanTool|update_plan|updatePlanTool) result:\s*\n/;
   if (!legacyHeading.test(text)) return false;
 
   return /(?:^|\n)(ok|path|command|query|results|renamed|updated|completed|total|contentChars|contentHash|exitCode):\s/.test(text);

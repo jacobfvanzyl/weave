@@ -6,6 +6,8 @@ import {
 import {
   getToolActivityFollowTarget,
   getToolActivitySideEffect,
+  getToolResultText,
+  isHiddenToolCall,
   shouldRenderToolActivityChildren,
   summarizeToolActivity,
   toToolActivityCall,
@@ -77,14 +79,32 @@ describe('chat tool activity helpers', () => {
     expect(shouldRenderToolActivityChildren(false, 1, false)).toBe(false);
   });
 
-  it('detects hidden rename and plan side effects without rendering tool cards', () => {
+  it('summarizes edit results instead of rendering raw diffs', () => {
+    expect(getToolResultText('edit', {
+      ok: true,
+      replacements: 2,
+      diff: [
+        '@@ -1,100 +1,100 @@',
+        '-old value',
+        '+new value',
+      ].join('\n'),
+    })).toBe('Applied 2 replacements.');
+  });
+
+  it('keeps rename hidden while rendering artifact plan tool cards', () => {
+    expect(isHiddenToolCall({ toolCallId: 'rename-1', toolName: 'renameThreadTool' })).toBe(true);
+    expect(isHiddenToolCall({ toolCallId: 'write-plan-1', toolName: 'write_plan' })).toBe(false);
+    expect(isHiddenToolCall({ toolCallId: 'update-plan-1', toolName: 'update_plan' })).toBe(false);
+
     expect(getToolActivitySideEffect({
       toolCallId: 'rename-1',
       toolName: 'renameThreadTool',
       args: { title: 'A sharper thread title' },
       rawStatus: 'complete',
     })).toEqual({ type: 'renameThread', title: 'A sharper thread title' });
+  });
 
+  it('extracts legacy and artifact plan side effects', () => {
     const effect = getToolActivitySideEffect({
       toolCallId: 'plan-1',
       toolName: 'update_plan',
@@ -103,6 +123,44 @@ describe('chat tool activity helpers', () => {
         completed: 1,
         total: 2,
         isBusy: true,
+      },
+    });
+
+    const artifactEffect = getToolActivitySideEffect({
+      toolCallId: 'plan-2',
+      toolName: 'write_plan',
+      result: {
+        ok: true,
+        title: 'Plan Artifact Overhaul',
+        path: '.agents/plans/bright-river.md',
+        status: 'blocked',
+        checklist: [
+          { id: 'research', text: 'Research current plan tooling', status: 'completed' },
+          { id: 'implement', text: 'Implement artifact-aware plan tools', status: 'blocked' },
+        ],
+        completed: 1,
+        total: 2,
+        updatedAt: '2026-06-18T12:00:00.000Z',
+        contentHash: 'abc123',
+      },
+      rawStatus: 'complete',
+    });
+
+    expect(artifactEffect).toMatchObject({
+      type: 'updatePlan',
+      plan: {
+        title: 'Plan Artifact Overhaul',
+        path: '.agents/plans/bright-river.md',
+        status: 'blocked',
+        completed: 1,
+        total: 2,
+        updatedAt: '2026-06-18T12:00:00.000Z',
+        contentHash: 'abc123',
+        isBusy: false,
+        plan: [
+          { id: 'research', step: 'Research current plan tooling', status: 'completed' },
+          { id: 'implement', step: 'Implement artifact-aware plan tools', status: 'blocked' },
+        ],
       },
     });
   });

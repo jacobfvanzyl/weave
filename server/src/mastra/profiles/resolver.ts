@@ -79,7 +79,7 @@ export const builtinDefaultProfile: DynamicProfile = {
     'You are Mage Hand, a helpful, concise assistant. Be direct, practical, and use available tools when they help.',
   model: process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.5',
   reasoningEffort: 'medium',
-  tools: ['renameThreadTool', 'updatePlanTool', 'webSearch', 'webExtract'],
+  tools: ['renameThreadTool', 'writePlanTool', 'updatePlanTool', 'webSearch', 'webExtract'],
   skills: [],
   prompts: [],
   mcp: [],
@@ -200,6 +200,26 @@ const selectProfile = (
     profile: byId.get(selectedProfileId) ?? byId.get('default') ?? builtinDefaultProfile,
     selectedProfileId,
   };
+};
+
+const expandProfileToolsForProjectKind = (
+  tools: string[],
+  projectKind?: 'general' | 'git' | 'notes',
+) => {
+  const expanded = new Set(tools);
+  if (projectKind === 'git' && expanded.has('updatePlanTool')) {
+    expanded.add('writePlanTool');
+  }
+  return [...expanded];
+};
+
+const profileWithProjectToolCompatibility = (
+  profile: DynamicProfile,
+  projectKind?: 'general' | 'git' | 'notes',
+) => {
+  const tools = expandProfileToolsForProjectKind(profile.tools, projectKind);
+  if (tools.length === profile.tools.length && tools.every((tool, index) => tool === profile.tools[index])) return profile;
+  return { ...profile, tools };
 };
 
 const requestedProfileIdForContext = (projectContext: Pick<RuntimeProjectContext, 'threadMetadata' | 'project'>) =>
@@ -357,10 +377,11 @@ export const resolveProfileContext = async (input: ProfileResolutionInput): Prom
     projectKind: projectContext.projectKind,
     config,
   });
+  const resolvedProfile = profileWithProjectToolCompatibility(profile, projectContext.projectKind);
 
   return {
     ...projectContext,
-    profile,
+    profile: resolvedProfile,
     profiles,
     globalSnapshot,
     requestedProfileId,
@@ -389,6 +410,7 @@ export const __profileResolverTest = {
   configuredDefaultProfileId,
   parseConfig,
   parseProfiles,
+  expandProfileToolsForProjectKind,
   requestedProfileIdForContext,
   selectProfile,
 };

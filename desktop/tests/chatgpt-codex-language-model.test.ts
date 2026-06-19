@@ -11,6 +11,7 @@ const describeStreamPart = (part: Awaited<ReturnType<typeof __chatgptCodexLangua
   if (part.type === 'tool-input-end') return `${part.type}:${part.id}`;
   if (part.type === 'tool-call') return `${part.type}:${part.toolCallId}:${part.toolName}:${part.input}`;
   if (part.type === 'finish') return `${part.type}:${part.finishReason}:${part.usage.totalTokens}`;
+  if (part.type === 'error') return `${part.type}:${part.error instanceof Error ? part.error.message : String(part.error)}`;
   return part.type;
 };
 
@@ -194,6 +195,31 @@ describe('ChatGPT Codex stream mapping', () => {
       'text-delta:text-msg_1-0:Here is the fix.',
       'text-end:text-msg_1-0',
       'finish:stop:3',
+    ]);
+  });
+
+  it('emits an error instead of an unknown finish when the upstream stream ends without a terminal event', async () => {
+    const parts = await __chatgptCodexLanguageModelTest.collectCodexResponseStreamParts([
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'msg_1', type: 'message' },
+      },
+      {
+        type: 'response.output_text.delta',
+        item_id: 'msg_1',
+        output_index: 0,
+        content_index: 0,
+        delta: 'Partial response',
+      },
+    ]);
+
+    expect(parts.map(describeStreamPart)).toEqual([
+      'stream-start',
+      'text-start:text-msg_1-0',
+      'text-delta:text-msg_1-0:Partial response',
+      'text-end:text-msg_1-0',
+      'error:ChatGPT Codex response stream ended before a terminal response event.',
     ]);
   });
 });

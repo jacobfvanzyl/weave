@@ -129,6 +129,35 @@ describe('dynamic profile resolver', () => {
       config: {},
     }).profile).toBe(builtinDefaultProfile);
   });
+
+  it('expands legacy plan tool allow-lists for git projects', () => {
+    expect(__profileResolverTest.expandProfileToolsForProjectKind([
+      'renameThreadTool',
+      'updatePlanTool',
+      'read',
+    ], 'git')).toEqual([
+      'renameThreadTool',
+      'updatePlanTool',
+      'read',
+      'writePlanTool',
+    ]);
+
+    expect(__profileResolverTest.expandProfileToolsForProjectKind([
+      'renameThreadTool',
+      'updatePlanTool',
+    ], 'general')).toEqual([
+      'renameThreadTool',
+      'updatePlanTool',
+    ]);
+
+    expect(__profileResolverTest.expandProfileToolsForProjectKind([
+      'renameThreadTool',
+      'read',
+    ], 'git')).toEqual([
+      'renameThreadTool',
+      'read',
+    ]);
+  });
 });
 
 describe('dynamic prompt resolution', () => {

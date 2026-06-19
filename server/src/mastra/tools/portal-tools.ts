@@ -1,7 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { findPortalForProject, requestPortalTool } from '../portal/registry';
-import { formatToolModelOutput, getCodeToolModelOutputMaxChars } from './model-output';
+import { formatToolModelOutput, getCodeToolModelOutputMaxChars, hashText } from './model-output';
 
 export const offlineMessage = 'This thread is not bound to an active Workspace. Connect a Portal or choose a Project with an online Portal to use local tools.';
 
@@ -49,7 +49,7 @@ export const getThreadBinding = async (context: any) => {
   return { resourceId, projectId: metadata.projectId, workspaceId: metadata.workspaceId, projectKind, portalId, rootId, repoPath, workspacePath };
 };
 
-const routePortalTool = async (tool: string, args: unknown, context: any, timeoutMs?: number) => {
+export const routePortalTool = async (tool: string, args: unknown, context: any, timeoutMs?: number) => {
   const binding = await getThreadBinding(context);
   const mountedPortal = findPortalForProject(binding.resourceId, binding.projectId);
   const portalId = binding.portalId ?? mountedPortal?.portalId;
@@ -157,6 +157,59 @@ const portalBaseOutputSchema = {
   command: z.string().optional(),
 };
 
+const editToolModelOutputMaxChars = 1_600;
+const editDiffSummaryMaxLines = 80;
+
+const isDiffChangeLine = (line: string) =>
+  (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---'));
+
+type EditDiffSummary = {
+  body?: string;
+  diffChars?: number;
+  diffHash?: string;
+  diffLines?: number;
+  diffSummaryLines?: number;
+  diffOmittedLines?: number;
+};
+
+const summarizeEditDiff = (diff: unknown): EditDiffSummary => {
+  if (typeof diff !== 'string' || !diff.trim()) return {};
+
+  const diffLines = diff.split('\n');
+  const summaryLines: string[] = [];
+  let omittedLines = 0;
+
+  diffLines.forEach(line => {
+    if (line.startsWith('@@ ') || isDiffChangeLine(line)) {
+      if (summaryLines.length < editDiffSummaryMaxLines) {
+        summaryLines.push(line);
+      } else {
+        omittedLines += 1;
+      }
+      return;
+    }
+
+    omittedLines += 1;
+  });
+
+  const body = summaryLines.length
+    ? [
+      'diff summary (hunk headers and changed lines only):',
+      ...summaryLines,
+      ...(omittedLines ? [`... ${omittedLines} diff lines omitted. Use read or git_diff for surrounding context.`] : []),
+    ].join('\n')
+    : undefined;
+
+  return {
+    body,
+    diffChars: diff.length,
+    diffHash: hashText(diff),
+    diffLines: diffLines.length,
+    diffSummaryLines: summaryLines.length,
+    diffOmittedLines: omittedLines || undefined,
+  };
+};
+
 export const portalReadModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
   const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
   return formatToolModelOutput(
@@ -183,17 +236,23 @@ export const portalWriteModelOutput = (output: unknown) => {
   ]);
 };
 
-export const portalEditModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
+export const portalEditModelOutput = (output: unknown, maxChars = editToolModelOutputMaxChars) => {
   const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+  const diffSummary = summarizeEditDiff(result.diff);
   return formatToolModelOutput(
     'edit',
     [
       ['ok', result.ok],
       ['path', result.path],
       ['replacements', result.replacements],
+      ['diffChars', diffSummary.diffChars],
+      ['diffHash', diffSummary.diffHash],
+      ['diffLines', diffSummary.diffLines],
+      ['diffSummaryLines', diffSummary.diffSummaryLines],
+      ['diffOmittedLines', diffSummary.diffOmittedLines],
       ['error', result.error],
     ],
-    result.diff,
+    diffSummary.body,
     maxChars,
   );
 };

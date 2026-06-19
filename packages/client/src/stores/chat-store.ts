@@ -24,21 +24,28 @@ export type ChatThread = {
   adHoc?: boolean;
   workspacePath?: string;
   removedWorkspace?: RemovedWorkspaceSnapshot;
+  latestPlan?: ThreadPlan;
   draft?: boolean;
 };
 
-export type PlanStepStatus = 'pending' | 'in_progress' | 'completed';
+export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
 
 export type ThreadPlanStep = {
+  id?: string;
   step: string;
   status: PlanStepStatus;
 };
 
 export type ThreadPlan = {
+  id?: string;
+  title?: string;
+  path?: string;
+  status?: PlanStepStatus;
   plan: ThreadPlanStep[];
   completed: number;
   total: number;
   updatedAt: string;
+  contentHash?: string;
   isBusy?: boolean;
 };
 
@@ -188,11 +195,18 @@ export const useChatStore = create<ChatState>()(
           const nextThreads = activeThreads.length > 0 ? [...mappedServerThreads, ...optimisticThreads] : state.threads;
           const shouldSelectLastMessaged = !state.hasInitializedThreads && mappedServerThreads.length > 0;
           const nextThreadId = shouldSelectLastMessaged ? mappedServerThreads[0].id : undefined;
+          const threadPlans = { ...state.threadPlans };
+          for (const thread of nextThreads) {
+            if (!thread.latestPlan) continue;
+            const currentPlan = threadPlans[thread.id];
+            threadPlans[thread.id] = currentPlan?.isBusy ? currentPlan : thread.latestPlan;
+          }
 
           surface.syncThreads(nextThreads.map(toSurfaceThread), { selectThreadId: nextThreadId });
 
           return {
             threads: nextThreads,
+            threadPlans,
             hasInitializedThreads: true,
           };
         }),

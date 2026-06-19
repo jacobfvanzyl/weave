@@ -241,6 +241,12 @@ const finishReason = (status?: unknown): LanguageModelV2FinishReason => {
   return 'stop';
 };
 
+const streamErrorToError = (error: unknown, fallbackMessage: string) => {
+  if (error instanceof Error) return error;
+  if (typeof error === 'string' && error.trim()) return new Error(error);
+  return new Error(fallbackMessage);
+};
+
 const usageFrom = (response: Record<string, unknown> | undefined): LanguageModelV2Usage => {
   const usage = response?.usage as Record<string, unknown> | undefined;
   const inputTokens = typeof usage?.input_tokens === 'number' ? usage.input_tokens : undefined;
@@ -464,7 +470,9 @@ const createCodexResponseStream = (
 
       endAllText();
       endAllReasoningSummaries();
-      controller.enqueue({ type: 'finish', finishReason: 'unknown', usage: usageFrom(undefined) });
+      const error = new Error('ChatGPT Codex response stream ended before a terminal response event.');
+      console.error('[chatgpt-codex] response stream ended without terminal event', { model: options.modelId });
+      controller.enqueue({ type: 'error', error });
       controller.close();
     } catch (error) {
       controller.enqueue({ type: 'error', error });
@@ -509,6 +517,9 @@ export class ChatGPTCodexLanguageModel implements LanguageModelV2 {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (value.type === 'error') {
+        throw streamErrorToError(value.error, 'ChatGPT Codex stream failed.');
+      }
       if (value.type === 'text-delta') text += value.delta;
       if (value.type === 'finish') {
         finish = value.finishReason;

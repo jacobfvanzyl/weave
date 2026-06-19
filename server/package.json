@@ -26,6 +26,7 @@
     "@mastra/memory": "^1.17.5",
     "@mastra/observability": "^1.11.1",
     "exa-js": "^2.12.1",
+    "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

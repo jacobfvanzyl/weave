@@ -11,7 +11,7 @@ import { resolveMemoryPolicy } from '../../server/src/mastra/memory-policy';
 import { __chatRouteMemoryTest } from '../../server/src/mastra/routes/chat';
 import { __chatStateContextUsageTest } from '../../server/src/mastra/routes/chat-state';
 import { getCodeToolModelOutputMaxChars } from '../../server/src/mastra/tools/model-output';
-import { portalBashModelOutput, portalReadModelOutput } from '../../server/src/mastra/tools/portal-tools';
+import { portalBashModelOutput, portalEditModelOutput, portalReadModelOutput } from '../../server/src/mastra/tools/portal-tools';
 
 const noMemoryCapabilities = {
   semanticRecall: false,
@@ -159,6 +159,35 @@ describe('tool model output compaction', () => {
     expect(output).toContain('truncated: true');
     expect(output).toContain('contentHash:');
     expect(modelOutputBody(output)).toBe(rawBody.slice(0, 12_000));
+  });
+
+  it('summarizes edit diffs for model output without dumping unchanged context', () => {
+    const diff = [
+      '@@ -1,205 +1,205 @@',
+      ' context before',
+      '-old value',
+      ...Array.from({ length: 200 }, (_, index) => ` context line ${index + 1}`),
+      '+new value',
+    ].join('\n');
+    const output = portalEditModelOutput({
+      ok: true,
+      path: 'src/large.ts',
+      replacements: 2,
+      diff,
+    });
+    const body = modelOutputBody(output);
+
+    expect(output).toContain('path: src/large.ts');
+    expect(output).toContain('replacements: 2');
+    expect(output).toContain(`diffChars: ${diff.length}`);
+    expect(output).toContain('diffHash:');
+    expect(output).toContain('diffOmittedLines:');
+    expect(body).toContain('diff summary');
+    expect(body).toContain('@@ -1,205 +1,205 @@');
+    expect(body).toContain('-old value');
+    expect(body).toContain('+new value');
+    expect(body.includes('context line 200')).toBe(false);
+    expect(output.length).toBeLessThan(2_400);
   });
 
   it('compacts old provider prompt tool results while preserving recent tool steps', () => {

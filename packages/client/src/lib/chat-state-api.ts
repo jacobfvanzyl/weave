@@ -1,6 +1,6 @@
 import type { UIMessage } from 'ai';
 import { getAuthHeaders, getMastraUrl } from './mastra-client';
-import type { ChatThread } from '../stores/chat-store';
+import type { ChatThread, PlanStepStatus, ThreadPlan, ThreadPlanStep } from '../stores/chat-store';
 
 type ServerThread = {
   id: string;
@@ -156,6 +156,53 @@ const toRemovedWorkspace = (value: unknown): RemovedWorkspaceSnapshot | undefine
   };
 };
 
+const isPlanStepStatus = (value: unknown): value is PlanStepStatus =>
+  value === 'pending' || value === 'in_progress' || value === 'completed' || value === 'blocked';
+
+const toPlanStep = (value: unknown): ThreadPlanStep | undefined => {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+  const step = typeof record?.step === 'string'
+    ? record.step
+    : typeof record?.text === 'string'
+      ? record.text
+      : undefined;
+  if (!step || !isPlanStepStatus(record?.status)) return undefined;
+  return {
+    step,
+    status: record.status,
+    ...(typeof record.id === 'string' ? { id: record.id } : {}),
+  };
+};
+
+const toThreadPlan = (value: unknown): ThreadPlan | undefined => {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+  const sourcePlan = Array.isArray(record?.checklist)
+    ? record.checklist
+    : Array.isArray(record?.plan)
+      ? record.plan
+      : undefined;
+  if (!sourcePlan) return undefined;
+
+  const plan = sourcePlan.map(toPlanStep).filter((item): item is ThreadPlanStep => Boolean(item));
+  if (plan.length === 0) return undefined;
+
+  return {
+    plan,
+    completed: typeof record?.completed === 'number' ? record.completed : plan.filter(item => item.status === 'completed').length,
+    total: typeof record?.total === 'number' ? record.total : plan.length,
+    updatedAt: typeof record?.updatedAt === 'string' ? record.updatedAt : new Date().toISOString(),
+    ...(typeof record?.id === 'string' ? { id: record.id } : {}),
+    ...(typeof record?.title === 'string' ? { title: record.title } : {}),
+    ...(typeof record?.path === 'string' ? { path: record.path } : {}),
+    ...(isPlanStepStatus(record?.status) ? { status: record.status } : {}),
+    ...(typeof record?.contentHash === 'string' ? { contentHash: record.contentHash } : {}),
+  };
+};
+
 const toChatThread = (thread: ServerThread): ChatThread => ({
   id: thread.id,
   title: thread.title || '...',
@@ -169,6 +216,7 @@ const toChatThread = (thread: ServerThread): ChatThread => ({
   adHoc: thread.metadata?.adHoc === true,
   workspacePath: typeof thread.metadata?.workspacePath === 'string' ? thread.metadata.workspacePath : undefined,
   removedWorkspace: toRemovedWorkspace(thread.metadata?.removedWorkspace),
+  latestPlan: toThreadPlan(thread.metadata?.latestPlan),
 });
 
 export class ApiError extends Error {

@@ -1,22 +1,34 @@
-export type ToolActivityPlanStepStatus = 'pending' | 'in_progress' | 'completed';
+export type ToolActivityPlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
 
 export type ToolActivityPlanStep = {
+  id?: string;
   step: string;
   status: ToolActivityPlanStepStatus;
 };
 
 export type ToolActivityPlan = {
+  id?: string;
+  title?: string;
+  path?: string;
+  status?: ToolActivityPlanStepStatus;
   plan: ToolActivityPlanStep[];
   completed: number;
   total: number;
   updatedAt: string;
+  contentHash?: string;
   isBusy: boolean;
 };
 
 type PlanPayload = {
+  id?: string;
+  title?: string;
+  path?: string;
+  status?: ToolActivityPlanStepStatus;
   plan: ToolActivityPlanStep[];
   completed?: number;
   total?: number;
+  updatedAt?: string;
+  contentHash?: string;
 };
 
 export type ToolActivityCall = {
@@ -45,25 +57,43 @@ export const isDegradedToolCall = ({ toolName, args, result }: Pick<ToolActivity
   (toolName === 'call' || toolName === 'tool') && isEmptyObject(args) && result === undefined;
 
 export const isRenameThreadTool = (toolName: string) => ['renameThreadTool', 'rename-thread'].includes(toolName);
-export const isUpdatePlanTool = (toolName: string) => ['updatePlanTool', 'update_plan', 'update-plan'].includes(toolName);
+export const isUpdatePlanTool = (toolName: string) =>
+  ['writePlanTool', 'write_plan', 'write-plan', 'updatePlanTool', 'update_plan', 'update-plan'].includes(toolName);
 
 const isPlanStepStatus = (value: unknown): value is ToolActivityPlanStepStatus =>
-  value === 'pending' || value === 'in_progress' || value === 'completed';
+  value === 'pending' || value === 'in_progress' || value === 'completed' || value === 'blocked';
 
 const getPlanPayload = (result: unknown, args: unknown): PlanPayload | null => {
   const source = result && typeof result === 'object' ? result : args;
   if (!source || typeof source !== 'object') return null;
 
   const record = source as Record<string, unknown>;
-  if (!Array.isArray(record.plan)) return null;
+  const checklistPlan = Array.isArray(record.checklist) ? record.checklist as unknown[] : undefined;
+  const legacyPlan = Array.isArray(record.plan) ? record.plan as unknown[] : undefined;
+  const isChecklistPayload = Boolean(checklistPlan);
+  const sourcePlan = checklistPlan ?? legacyPlan;
+  if (!sourcePlan) return null;
 
-  const plan = record.plan
+  const plan = sourcePlan
     .map(item => {
       if (!item || typeof item !== 'object') return null;
-      const step = (item as Record<string, unknown>).step;
-      const status = (item as Record<string, unknown>).status;
-      if (typeof step !== 'string' || !isPlanStepStatus(status)) return null;
-      return { step, status };
+      const itemRecord = item as Record<string, unknown>;
+      const step = typeof itemRecord.step === 'string'
+        ? itemRecord.step
+        : typeof itemRecord.text === 'string'
+          ? itemRecord.text
+          : undefined;
+      const status = isPlanStepStatus(itemRecord.status)
+        ? itemRecord.status
+        : isChecklistPayload
+          ? 'pending'
+          : undefined;
+      if (typeof step !== 'string' || !status) return null;
+      return {
+        step,
+        status,
+        ...(typeof itemRecord.id === 'string' ? { id: itemRecord.id } : {}),
+      };
     })
     .filter((item): item is ToolActivityPlanStep => item !== null);
 
@@ -73,14 +103,25 @@ const getPlanPayload = (result: unknown, args: unknown): PlanPayload | null => {
     plan,
     completed: typeof record.completed === 'number' ? record.completed : undefined,
     total: typeof record.total === 'number' ? record.total : undefined,
+    updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : undefined,
+    ...(typeof record.id === 'string' ? { id: record.id } : {}),
+    ...(typeof record.title === 'string' ? { title: record.title } : {}),
+    ...(typeof record.path === 'string' ? { path: record.path } : {}),
+    ...(isPlanStepStatus(record.status) ? { status: record.status } : {}),
+    ...(typeof record.contentHash === 'string' ? { contentHash: record.contentHash } : {}),
   };
 };
 
 const toThreadPlan = (payload: PlanPayload, isBusy: boolean): ToolActivityPlan => ({
+  id: payload.id,
+  title: payload.title,
+  path: payload.path,
+  status: payload.status,
   plan: payload.plan,
   completed: payload.completed ?? payload.plan.filter(item => item.status === 'completed').length,
   total: payload.total ?? payload.plan.length,
-  updatedAt: new Date().toISOString(),
+  updatedAt: payload.updatedAt ?? new Date().toISOString(),
+  contentHash: payload.contentHash,
   isBusy,
 });
 
@@ -88,6 +129,10 @@ export const getToolChipDetail = (toolName: string, args: unknown) => {
   const record = args && typeof args === 'object' ? args as Record<string, unknown> : undefined;
   if (toolName === 'bash' && typeof record?.command === 'string') return record.command;
   if (['read', 'write', 'edit'].includes(toolName) && typeof record?.path === 'string') return record.path;
+  if (isUpdatePlanTool(toolName)) {
+    if (typeof record?.planPath === 'string') return record.planPath;
+    if (typeof record?.title === 'string') return record.title;
+  }
   return '';
 };
 
@@ -101,10 +146,11 @@ export const getToolResultText = (toolName: string, result: unknown) => {
     if (typeof record.stdout === 'string' || typeof record.stderr === 'string') {
       return [record.stdout, record.stderr].filter(item => typeof item === 'string' && item.trim()).join('\n');
     }
-    if (typeof record.diff === 'string' && record.diff.trim()) return record.diff;
     if (toolName === 'write' && typeof record.bytes === 'number') return `Wrote ${record.bytes} bytes.`;
     if (toolName === 'edit' && typeof record.replacements === 'number') return `Applied ${record.replacements} replacement${record.replacements === 1 ? '' : 's'}.`;
+    if (typeof record.diff === 'string' && record.diff.trim()) return record.diff;
     if (typeof record.error === 'string') return record.error;
+    if (isUpdatePlanTool(toolName) && typeof record.path === 'string') return `Plan artifact updated: ${record.path}`;
   }
   return JSON.stringify(result, null, 2);
 };
@@ -137,7 +183,7 @@ export const getToolActivityStatus = (call: ToolActivityCall) => {
   return call.rawStatus ?? 'running';
 };
 
-export const isHiddenToolCall = (call: ToolActivityCall) => isRenameThreadTool(call.toolName) || isUpdatePlanTool(call.toolName);
+export const isHiddenToolCall = (call: ToolActivityCall) => isRenameThreadTool(call.toolName);
 
 export const getArgsRecord = (args: unknown) => args && typeof args === 'object' ? args as Record<string, unknown> : {};
 

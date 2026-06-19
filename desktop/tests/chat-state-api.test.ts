@@ -386,6 +386,54 @@ describe('chat-state Project/Workspace API client', () => {
     })]);
   });
 
+  it('maps latest plan artifact metadata onto chat threads', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      threads: [{
+        id: 'thread-1',
+        title: 'Plan work',
+        resourceId: 'user-1',
+        createdAt: '2026-06-03T08:00:00.000Z',
+        updatedAt: '2026-06-03T09:00:00.000Z',
+        metadata: {
+          latestPlan: {
+            version: 1,
+            id: 'bright-river',
+            title: 'Plan Artifact Overhaul',
+            path: '.agents/plans/bright-river.md',
+            status: 'blocked',
+            checklist: [
+              { id: 'research', text: 'Research current plan tooling', status: 'completed' },
+              { id: 'implement', text: 'Implement artifact-aware plan tools', status: 'blocked' },
+            ],
+            completed: 1,
+            total: 2,
+            updatedAt: '2026-06-18T12:00:00.000Z',
+            contentHash: 'abc123',
+          },
+        },
+      }],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listServerThreads()).resolves.toEqual([expect.objectContaining({
+      latestPlan: {
+        id: 'bright-river',
+        title: 'Plan Artifact Overhaul',
+        path: '.agents/plans/bright-river.md',
+        status: 'blocked',
+        completed: 1,
+        total: 2,
+        updatedAt: '2026-06-18T12:00:00.000Z',
+        contentHash: 'abc123',
+        plan: [
+          { id: 'research', step: 'Research current plan tooling', status: 'completed' },
+          { id: 'implement', step: 'Implement artifact-aware plan tools', status: 'blocked' },
+        ],
+      },
+    })]);
+  });
+
   it('overlays live git-state and strips stale branch metadata', () => {
     const legacyProject: Project = {
       ...project,
@@ -558,6 +606,40 @@ describe('chat-state Project/Workspace API client', () => {
       expect.objectContaining({ id: 'draft-thread', profileId: 'coding' }),
       expect.objectContaining({ id: 'server-thread', profileId: 'research' }),
     ]);
+  });
+
+  it('hydrates plan panel state from server thread metadata', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const now = '2026-06-03T08:00:00.000Z';
+
+    useChatStore.getState().setServerThreads([{
+      id: 'thread-1',
+      title: 'Plan work',
+      createdAt: now,
+      updatedAt: now,
+      latestPlan: {
+        id: 'bright-river',
+        title: 'Plan Artifact Overhaul',
+        path: '.agents/plans/bright-river.md',
+        status: 'blocked',
+        plan: [
+          { id: 'research', step: 'Research current plan tooling', status: 'completed' },
+          { id: 'implement', step: 'Implement artifact-aware plan tools', status: 'blocked' },
+        ],
+        completed: 1,
+        total: 2,
+        updatedAt: '2026-06-18T12:00:00.000Z',
+        contentHash: 'abc123',
+      },
+    }]);
+
+    expect(useChatStore.getState().threadPlans['thread-1']).toMatchObject({
+      title: 'Plan Artifact Overhaul',
+      path: '.agents/plans/bright-river.md',
+      status: 'blocked',
+      completed: 1,
+      total: 2,
+    });
   });
 
   it('preserves workspace terminal pane visibility when creating workspace threads', async () => {
