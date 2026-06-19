@@ -22,7 +22,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Brain, Check, ChevronRight, Clipboard, Crosshair, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, UserRoundCog, X } from 'lucide-react';
-import { createContext, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
@@ -38,6 +38,7 @@ import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
 import { CommandPanel } from '../ui/command';
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
+import { Tooltip, TooltipPopup, TooltipTrigger } from '../ui/tooltip';
 import { CodeBlock } from './CodeBlock';
 import {
   getAutoCollapsedAssistantTextPartIndices,
@@ -399,6 +400,84 @@ const MarkdownImage = ({ alt, src }: { alt?: string; src?: string }) => {
   );
 };
 
+const getMarkdownNodeText = (node: ReactNode): string => {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(getMarkdownNodeText).join('');
+  if (isValidElement<{ children?: ReactNode }>(node)) return getMarkdownNodeText(node.props.children);
+  return '';
+};
+
+const writeClipboardText = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '0';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+
+    try {
+      return document.execCommand('copy');
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+};
+
+const MarkdownPre = ({ children }: { children: ReactNode }) => {
+  const [isCopied, setIsCopied] = useState(false);
+  const resetCopiedRef = useRef<number | null>(null);
+  const copyText = useMemo(() => getMarkdownNodeText(children).replace(/\n$/, ''), [children]);
+
+  useEffect(() => () => {
+    if (resetCopiedRef.current !== null) window.clearTimeout(resetCopiedRef.current);
+  }, []);
+
+  const copyCode = useCallback(async () => {
+    if (!copyText) return;
+
+    const didCopy = await writeClipboardText(copyText);
+    if (!didCopy) return;
+
+    setIsCopied(true);
+    if (resetCopiedRef.current !== null) window.clearTimeout(resetCopiedRef.current);
+    resetCopiedRef.current = window.setTimeout(() => {
+      setIsCopied(false);
+      resetCopiedRef.current = null;
+    }, 1200);
+  }, [copyText]);
+
+  const label = isCopied ? 'Copied' : 'Copy code';
+
+  return (
+    <div className="group relative my-3 max-w-full rounded-md bg-muted font-mono text-xs leading-5">
+      <div className="max-w-full overflow-x-auto p-3 pr-10">{children}</div>
+      <Tooltip>
+        <TooltipTrigger
+          aria-label={label}
+          className={cn(
+            'absolute right-1.5 top-1.5 z-10 inline-flex size-6 items-center justify-center rounded-md border border-border/70 bg-background/90 text-muted-foreground opacity-0 shadow-sm backdrop-blur transition-[background-color,border-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-40 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100',
+            isCopied && 'text-foreground',
+          )}
+          disabled={!copyText}
+          onClick={copyCode}
+          title={label}
+          type="button"
+        >
+          {isCopied ? <Check size={14} /> : <Clipboard size={14} />}
+        </TooltipTrigger>
+        <TooltipPopup side="left">{label}</TooltipPopup>
+      </Tooltip>
+    </div>
+  );
+};
+
 const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string; deferCodeHighlight?: boolean }) => (
   <div className="min-w-0 max-w-full space-y-3 overflow-hidden break-words text-inherit [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
     <ReactMarkdown
@@ -423,7 +502,7 @@ const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string;
           ) : (
             <code className={cn('break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]', className)}>{children}</code>
           ),
-        pre: ({ children }) => <div className="my-3 max-w-full overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs leading-5">{children}</div>,
+        pre: ({ children }) => <MarkdownPre>{children}</MarkdownPre>,
         blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
         table: ({ children }) => <div className="my-3 max-w-full overflow-x-auto"><table className="w-full border-collapse text-left text-xs">{children}</table></div>,
         thead: ({ children }) => <thead className="border-b border-border bg-muted">{children}</thead>,

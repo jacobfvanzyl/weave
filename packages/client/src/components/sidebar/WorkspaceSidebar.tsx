@@ -773,6 +773,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                 ? projectThreads.filter(thread => thread.workspaceId === notesWorkspace.id && thread.archived !== true)
                 : [];
               const isNotesProjectActive = Boolean(notesWorkspace && isWorkspaceActive(project.id, notesWorkspace.id));
+              const hasProjectThreadAction = project.projectKind === 'general' || project.projectKind === 'notes';
 
               return (
                 <SortableItem
@@ -818,8 +819,8 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                           <span className="min-w-0 truncate font-semibold text-success">{project.name}</span>
                         </SidebarItemButton>
                         {!isCollapsed ? (
-                          <div className="relative flex shrink-0 items-center">
-                            {project.projectKind === 'general' || project.projectKind === 'notes' ? (
+                          <div className={cn('relative flex shrink-0 items-center', hasProjectThreadAction && 'translate-x-2.5')}>
+                            {hasProjectThreadAction ? (
                               <Button
                                 className="h-5 w-6 shrink-0 text-foreground sm:h-5 sm:w-6"
                                 size="icon-xs"
@@ -838,7 +839,16 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                               </Button>
                             ) : null}
                             <Menu>
-                              <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 translate-x-2.5 text-foreground sm:h-5 sm:w-6" aria-label={`${project.name} menu`} />}>
+                              <MenuTrigger
+                                render={
+                                  <Button
+                                    size="icon-xs"
+                                    variant="ghost"
+                                    className={cn('h-5 w-6 text-foreground sm:h-5 sm:w-6', !hasProjectThreadAction && 'translate-x-2.5')}
+                                    aria-label={`${project.name} menu`}
+                                  />
+                                }
+                              >
                                 <MoreHorizontal size={14} />
                               </MenuTrigger>
                               <MenuPopup align="end" sideOffset={4} className="w-44">
@@ -979,6 +989,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                 {sortedWorkspaces.map(workspace => {
                                   const workspaceThreads = projectThreads.filter(thread => thread.workspaceId === workspace.id && thread.archived !== true);
                                   const workspaceTerminalCount = workspaceTerminalWindowCounts[workspace.id] ?? 0;
+                                  const hasWorkspaceTerminals = workspaceTerminalCount > 0;
                                   const isLastWorkspace = workspace.id === sortedWorkspaces[sortedWorkspaces.length - 1]?.id;
 
                                   return (
@@ -1077,9 +1088,23 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                               ) : null}
                                               {workspace.lastError ? <div className="truncate text-[10px] font-normal text-destructive">{workspace.lastError}</div> : null}
                                             </div>
-                                            <div className="relative -mr-2 grid h-9 w-12 shrink-0 grid-cols-[1.5rem_1.5rem] grid-rows-[1.25rem_1rem] items-center justify-items-center">
+                                            <div
+                                              className={cn(
+                                                'relative -mr-2 grid h-9 shrink-0 translate-x-[7px] grid-rows-[1.25rem_1rem] items-center justify-items-center',
+                                                hasWorkspaceTerminals ? 'w-[4.5rem] grid-cols-[1.5rem_1.5rem_1.5rem]' : 'w-12 grid-cols-[1.5rem_1.5rem]',
+                                              )}
+                                            >
+                                              {hasWorkspaceTerminals ? (
+                                                <span
+                                                  className="col-start-1 row-start-1 flex h-5 w-6 items-center justify-center text-peach"
+                                                  title={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
+                                                  aria-label={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
+                                                >
+                                                  <TerminalSquare size={14} />
+                                                </span>
+                                              ) : null}
                                               <Button
-                                                className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
+                                                className={cn('row-start-1 h-5 w-6 text-foreground sm:h-5 sm:w-6', hasWorkspaceTerminals ? 'col-start-2' : 'col-start-1')}
                                                 size="icon-xs"
                                                 variant="ghost"
                                                 aria-label={`Create thread in ${workspace.name}`}
@@ -1095,7 +1120,16 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                                 <SquarePen size={14} />
                                               </Button>
                                               <Menu>
-                                                <MenuTrigger render={<Button size="icon-xs" variant="ghost" className="h-5 w-6 translate-x-[7px] text-foreground sm:h-5 sm:w-6" aria-label={`${workspace.name} menu`} />}>
+                                                <MenuTrigger
+                                                  render={
+                                                    <Button
+                                                      size="icon-xs"
+                                                      variant="ghost"
+                                                      className={cn('row-start-1 h-5 w-6 text-foreground sm:h-5 sm:w-6', hasWorkspaceTerminals ? 'col-start-3' : 'col-start-2')}
+                                                      aria-label={`${workspace.name} menu`}
+                                                    />
+                                                  }
+                                                >
                                                   <MoreHorizontal size={14} />
                                                 </MenuTrigger>
                                                 <MenuPopup align="end" sideOffset={4} className="w-44">
@@ -1157,15 +1191,6 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                                   ) : null}
                                                 </MenuPopup>
                                               </Menu>
-                                              {workspaceTerminalCount > 0 ? (
-                                                <span
-                                                  className="col-start-2 flex h-4 w-6 items-center justify-center text-peach"
-                                                  title={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
-                                                  aria-label={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
-                                                >
-                                                  <TerminalSquare size={14} />
-                                                </span>
-                                              ) : null}
                                             </div>
                                           </div>
                                           <div
