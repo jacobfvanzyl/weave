@@ -43,6 +43,7 @@ import { Button } from '../ui/button';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../ui/dialog';
 import { Input } from '../ui/input';
 import { CodeMirrorEditor, editorCanvasBackgroundColor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
+import { ExcalidrawCanvasControls, type ExcalidrawCanvasAppState } from './ExcalidrawCanvasControls';
 import { useApplePencilExcalidrawControls } from './useApplePencilExcalidrawControls';
 
 export type UnifiedEditorTarget = EditorTarget & {
@@ -93,6 +94,7 @@ type TreeNode = {
 type ExcalidrawComponentProps = ComponentProps<typeof Excalidraw>;
 type ExcalidrawImperativeAPI = Parameters<NonNullable<ExcalidrawComponentProps['excalidrawAPI']>>[0];
 type ExcalidrawChangeHandler = NonNullable<ExcalidrawComponentProps['onChange']>;
+type ExcalidrawTopRightRenderer = NonNullable<ExcalidrawComponentProps['renderTopRightUI']>;
 type RestoredExcalidrawData = ReturnType<typeof restoreExcalidrawData>;
 
 const toErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -744,6 +746,28 @@ export const UnifiedEditorPanel = ({
     }
     setActiveBufferValue(serializedScene);
   }, [excalidrawBufferKey, excalidrawInitialSerialized, setActiveBufferValue]);
+
+  const handleExcalidrawAppStateChange = useCallback((appState: ExcalidrawCanvasAppState) => {
+    if (!excalidrawBufferKey) return;
+    const api = excalidrawApiRef.current;
+    if (!api) return;
+
+    const serializedScene = serializeExcalidrawAsJSON(
+      api.getSceneElementsIncludingDeleted(),
+      getExcalidrawStoredAppState(appState as Parameters<typeof serializeExcalidrawAsJSON>[1]),
+      api.getFiles(),
+      'local',
+    );
+    setActiveBufferValue(serializedScene);
+  }, [excalidrawBufferKey, setActiveBufferValue]);
+
+  const renderExcalidrawTopRightUI = useCallback<ExcalidrawTopRightRenderer>((_isMobile, appState) => (
+    <ExcalidrawCanvasControls
+      apiRef={excalidrawApiRef}
+      appState={appState}
+      onAppStateChange={handleExcalidrawAppStateChange}
+    />
+  ), [handleExcalidrawAppStateChange]);
 
   const focusEditorSurface = useCallback(() => {
     if (mode === 'notes' && isExcalidrawPath(openBuffer?.path)) {
@@ -1633,6 +1657,7 @@ export const UnifiedEditorPanel = ({
             initialData={excalidrawInitialData}
             name={openBuffer.path}
             onChange={handleExcalidrawChange}
+            renderTopRightUI={renderExcalidrawTopRightUI}
             theme={resolvedTheme}
           />
         </div>

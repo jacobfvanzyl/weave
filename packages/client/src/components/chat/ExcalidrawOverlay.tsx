@@ -4,6 +4,7 @@ import '@excalidraw/excalidraw/index.css';
 import { X } from 'lucide-react';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
+import { ExcalidrawCanvasControls } from '../editor/ExcalidrawCanvasControls';
 import { useApplePencilExcalidrawControls } from '../editor/useApplePencilExcalidrawControls';
 import { Button } from '../ui/button';
 
@@ -15,6 +16,7 @@ type ExcalidrawComponentProps = ComponentProps<typeof Excalidraw>;
 type ExcalidrawImperativeAPI = Parameters<NonNullable<ExcalidrawComponentProps['excalidrawAPI']>>[0];
 type ExcalidrawChangeHandler = NonNullable<ExcalidrawComponentProps['onChange']>;
 type ExcalidrawSceneSnapshot = Parameters<ExcalidrawChangeHandler>;
+type ExcalidrawTopRightRenderer = NonNullable<ExcalidrawComponentProps['renderTopRightUI']>;
 
 const excalidrawUIOptions: ExcalidrawComponentProps['UIOptions'] = {};
 
@@ -37,6 +39,10 @@ export const ExcalidrawOverlay = ({ onHide }: ExcalidrawOverlayProps) => {
   const handleChange = useCallback<ExcalidrawChangeHandler>((elements, appState, files) => {
     sceneSnapshotRef.current = [elements, appState, files];
   }, []);
+
+  const renderExcalidrawTopRightUI = useCallback<ExcalidrawTopRightRenderer>((_isMobile, appState) => (
+    <ExcalidrawCanvasControls apiRef={excalidrawApiRef} appState={appState} />
+  ), []);
 
   return (
     <section
@@ -64,6 +70,7 @@ export const ExcalidrawOverlay = ({ onHide }: ExcalidrawOverlayProps) => {
           excalidrawAPI={handleExcalidrawApi}
           name="Weave Sketch"
           onChange={handleChange}
+          renderTopRightUI={renderExcalidrawTopRightUI}
           theme={theme}
           UIOptions={excalidrawUIOptions}
         />

@@ -312,7 +312,8 @@ input {
   .mobile-misc-tools-container,
   .main-menu-trigger,
   .help-icon,
-  .footer-center
+  .footer-center,
+  [data-weave-excalidraw-controls]
 ) {
   opacity: 0;
   pointer-events: none;
