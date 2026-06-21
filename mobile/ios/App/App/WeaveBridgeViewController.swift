@@ -6,9 +6,16 @@ import WebKit
 @objc(WeaveBridgeViewController)
 class WeaveBridgeViewController: CAPBridgeViewController, UIPencilInteractionDelegate, PKToolPickerObserver {
     private let doubleSqueezeMaximumInterval: TimeInterval = 0.55
+    private let doubleSqueezePaletteDelay: TimeInterval = 0.35
+    private let doubleSqueezeTapCancellationInterval: TimeInterval = 0.45
+    private let minimumCompletedSqueezeDuration: TimeInterval = 0.45
     private var applePencilInteraction: UIPencilInteraction?
     private var applePencilToolPicker: PKToolPicker?
     private var lastCompletedSqueezeTimestamp: TimeInterval?
+    private var lastTapTimestamp: TimeInterval?
+    private var currentSqueezeStartedTimestamp: TimeInterval?
+    private var pendingDoubleSqueezeTimestamp: TimeInterval?
+    private var pendingDoubleSqueezeWorkItem: DispatchWorkItem?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -16,6 +23,7 @@ class WeaveBridgeViewController: CAPBridgeViewController, UIPencilInteractionDel
     }
 
     deinit {
+        pendingDoubleSqueezeWorkItem?.cancel()
         applePencilToolPicker?.removeObserver(self)
     }
 
@@ -30,6 +38,13 @@ class WeaveBridgeViewController: CAPBridgeViewController, UIPencilInteractionDel
 
     @available(iOS 17.5, *)
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
+        lastTapTimestamp = tap.timestamp
+        cancelPendingDoubleSqueezePaletteIfNeeded(near: tap.timestamp)
+        if let completedTimestamp = lastCompletedSqueezeTimestamp,
+           abs(completedTimestamp - tap.timestamp) <= doubleSqueezeTapCancellationInterval {
+            lastCompletedSqueezeTimestamp = nil
+        }
+
         var detail: [String: Any] = [
             "preferredAction": preferredActionName(UIPencilInteraction.preferredTapAction),
             "timestamp": tap.timestamp
@@ -43,8 +58,13 @@ class WeaveBridgeViewController: CAPBridgeViewController, UIPencilInteractionDel
     @available(iOS 17.5, *)
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
         let preferredAction = UIPencilInteraction.preferredSqueezeAction
+        if squeeze.phase == .began {
+            currentSqueezeStartedTimestamp = squeeze.timestamp
+        }
+
         let isDoubleSqueeze = preferredAction != .ignore
             && squeeze.phase == .began
+            && !isNearRecentTap(squeeze.timestamp)
             && consumeDoubleSqueezeIfNeeded(at: squeeze.timestamp)
 
         var detail: [String: Any] = [
@@ -54,13 +74,18 @@ class WeaveBridgeViewController: CAPBridgeViewController, UIPencilInteractionDel
         ]
         if isDoubleSqueeze {
             detail["isDoubleSqueeze"] = true
-            showApplePencilToolPicker()
+            scheduleApplePencilToolPicker(for: squeeze.timestamp)
         }
         if let hoverPose = hoverPosePayload(squeeze.hoverPose) {
             detail["hoverPose"] = hoverPose
         }
         if squeeze.phase == .ended || squeeze.phase == .cancelled {
-            lastCompletedSqueezeTimestamp = squeeze.timestamp
+            if shouldRecordCompletedSqueeze(at: squeeze.timestamp) {
+                lastCompletedSqueezeTimestamp = squeeze.timestamp
+            } else {
+                lastCompletedSqueezeTimestamp = nil
+            }
+            currentSqueezeStartedTimestamp = nil
         }
         dispatchApplePencilEvent("weave:apple-pencil:squeeze", detail: detail)
     }
@@ -141,6 +166,32 @@ class WeaveBridgeViewController: CAPBridgeViewController, UIPencilInteractionDel
         }
     }
 
+    private func scheduleApplePencilToolPicker(for timestamp: TimeInterval) {
+        pendingDoubleSqueezeWorkItem?.cancel()
+        pendingDoubleSqueezeTimestamp = timestamp
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.pendingDoubleSqueezeTimestamp == timestamp else { return }
+            self.pendingDoubleSqueezeTimestamp = nil
+            self.pendingDoubleSqueezeWorkItem = nil
+            guard !self.isNearRecentTap(timestamp) else { return }
+            self.showApplePencilToolPicker()
+        }
+
+        pendingDoubleSqueezeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + doubleSqueezePaletteDelay, execute: workItem)
+    }
+
+    private func cancelPendingDoubleSqueezePaletteIfNeeded(near timestamp: TimeInterval) {
+        guard let pendingTimestamp = pendingDoubleSqueezeTimestamp else { return }
+        guard abs(pendingTimestamp - timestamp) <= doubleSqueezeTapCancellationInterval else { return }
+
+        pendingDoubleSqueezeWorkItem?.cancel()
+        pendingDoubleSqueezeWorkItem = nil
+        pendingDoubleSqueezeTimestamp = nil
+    }
+
     private func makeApplePencilToolPicker() -> PKToolPicker {
         let toolPicker = PKToolPicker()
         toolPicker.stateAutosaveName = "WeaveApplePencilToolPicker"
@@ -155,6 +206,17 @@ class WeaveBridgeViewController: CAPBridgeViewController, UIPencilInteractionDel
         guard timestamp - previousTimestamp <= doubleSqueezeMaximumInterval else { return false }
         lastCompletedSqueezeTimestamp = nil
         return true
+    }
+
+    private func isNearRecentTap(_ timestamp: TimeInterval) -> Bool {
+        guard let lastTapTimestamp else { return false }
+        return abs(timestamp - lastTapTimestamp) <= doubleSqueezeTapCancellationInterval
+    }
+
+    private func shouldRecordCompletedSqueeze(at timestamp: TimeInterval) -> Bool {
+        guard !isNearRecentTap(timestamp) else { return false }
+        guard let currentSqueezeStartedTimestamp else { return false }
+        return timestamp - currentSqueezeStartedTimestamp >= minimumCompletedSqueezeDuration
     }
 
     private func dispatchApplePencilEvent(_ eventName: String, detail: [String: Any]) {

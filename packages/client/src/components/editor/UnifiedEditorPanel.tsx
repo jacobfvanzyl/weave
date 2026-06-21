@@ -44,6 +44,7 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, Dia
 import { Input } from '../ui/input';
 import { CodeMirrorEditor, editorCanvasBackgroundColor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
 import { ExcalidrawCanvasControls, type ExcalidrawCanvasAppState } from './ExcalidrawCanvasControls';
+import { ExcalidrawPencilToolOverlay } from './ExcalidrawPencilToolOverlay';
 import { useApplePencilExcalidrawControls } from './useApplePencilExcalidrawControls';
 
 export type UnifiedEditorTarget = EditorTarget & {
@@ -661,7 +662,7 @@ export const UnifiedEditorPanel = ({
     excalidrawInitialData ? serializeRestoredExcalidrawData(excalidrawInitialData) : undefined
   ), [excalidrawInitialData]);
   const excalidrawViewBackgroundColor = excalidrawInitialData?.appState.viewBackgroundColor ?? editorCanvasBackgroundColor;
-  const isApplePencilHandModeActive = useApplePencilExcalidrawControls(
+  const applePencilExcalidrawControls = useApplePencilExcalidrawControls(
     excalidrawApiRef,
     excalidrawSurfaceRef,
     Boolean(excalidrawBufferKey),
@@ -1645,9 +1646,10 @@ export const UnifiedEditorPanel = ({
       return (
         <div
           ref={excalidrawSurfaceRef}
-          className="h-full w-full"
+          className="relative h-full w-full"
           data-weave-editor-excalidraw
-          data-weave-pencil-active={isApplePencilHandModeActive ? 'true' : undefined}
+          data-weave-pencil-input-active={applePencilExcalidrawControls.isPencilInputActive ? 'true' : undefined}
+          data-weave-pencil-active={applePencilExcalidrawControls.isPencilChromeHidden ? 'true' : undefined}
           style={{ '--weave-excalidraw-background': editorCanvasBackgroundColor } as CSSProperties}
         >
           <Excalidraw
@@ -1659,6 +1661,10 @@ export const UnifiedEditorPanel = ({
             onChange={handleExcalidrawChange}
             renderTopRightUI={renderExcalidrawTopRightUI}
             theme={resolvedTheme}
+          />
+          <ExcalidrawPencilToolOverlay
+            overlay={applePencilExcalidrawControls.toolOverlay}
+            onSelectTool={applePencilExcalidrawControls.selectTool}
           />
         </div>
       );

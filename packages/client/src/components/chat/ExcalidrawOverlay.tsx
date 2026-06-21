@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
 import { ExcalidrawCanvasControls } from '../editor/ExcalidrawCanvasControls';
+import { ExcalidrawPencilToolOverlay } from '../editor/ExcalidrawPencilToolOverlay';
 import { useApplePencilExcalidrawControls } from '../editor/useApplePencilExcalidrawControls';
 import { Button } from '../ui/button';
 
@@ -26,7 +27,7 @@ export const ExcalidrawOverlay = ({ onHide }: ExcalidrawOverlayProps) => {
   const excalidrawApiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const excalidrawSurfaceRef = useRef<HTMLElement | null>(null);
   const sceneSnapshotRef = useRef<ExcalidrawSceneSnapshot | null>(null);
-  const isApplePencilHandModeActive = useApplePencilExcalidrawControls(excalidrawApiRef, excalidrawSurfaceRef, true);
+  const applePencilExcalidrawControls = useApplePencilExcalidrawControls(excalidrawApiRef, excalidrawSurfaceRef, true);
 
   useEffect(() => {
     configureExcalidrawAssetPath();
@@ -49,7 +50,8 @@ export const ExcalidrawOverlay = ({ onHide }: ExcalidrawOverlayProps) => {
       ref={excalidrawSurfaceRef}
       className="relative z-10 flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background p-0.5"
       data-weave-excalidraw-surface
-      data-weave-pencil-active={isApplePencilHandModeActive ? 'true' : undefined}
+      data-weave-pencil-input-active={applePencilExcalidrawControls.isPencilInputActive ? 'true' : undefined}
+      data-weave-pencil-active={applePencilExcalidrawControls.isPencilChromeHidden ? 'true' : undefined}
       data-weave-surface="editor"
     >
       <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3" data-weave-overlay-titlebar>
@@ -75,6 +77,10 @@ export const ExcalidrawOverlay = ({ onHide }: ExcalidrawOverlayProps) => {
           UIOptions={excalidrawUIOptions}
         />
       </div>
+      <ExcalidrawPencilToolOverlay
+        overlay={applePencilExcalidrawControls.toolOverlay}
+        onSelectTool={applePencilExcalidrawControls.selectTool}
+      />
     </section>
   );
 };

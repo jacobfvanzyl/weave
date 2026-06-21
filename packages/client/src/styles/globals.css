@@ -306,14 +306,32 @@ input {
 :where(
   [data-weave-editor-excalidraw],
   [data-weave-excalidraw-surface]
+)[data-weave-pencil-input-active="true"] .excalidraw :is(
+  .App-top-bar .App-toolbar-container,
+  .App-top-bar .App-toolbar,
+  .App-menu_top .shapes-section,
+  .App-menu_top .App-toolbar-container,
+  .App-menu_top .App-toolbar
+) {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+:where(
+  [data-weave-editor-excalidraw],
+  [data-weave-excalidraw-surface]
 )[data-weave-pencil-active="true"] .excalidraw :is(
-  .App-top-bar,
+  .App-top-bar .App-toolbar-container,
+  .App-top-bar .App-toolbar,
+  .App-menu_top .shapes-section,
+  .App-menu_top .App-toolbar-container,
+  .App-menu_top .App-toolbar,
   .App-bottom-bar,
   .mobile-misc-tools-container,
   .main-menu-trigger,
   .help-icon,
-  .footer-center,
-  [data-weave-excalidraw-controls]
+  .footer-center
 ) {
   opacity: 0;
   pointer-events: none;
