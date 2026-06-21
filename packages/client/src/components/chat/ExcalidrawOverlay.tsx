@@ -4,6 +4,7 @@ import '@excalidraw/excalidraw/index.css';
 import { X } from 'lucide-react';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
+import { useApplePencilExcalidrawControls } from '../editor/useApplePencilExcalidrawControls';
 import { Button } from '../ui/button';
 
 type ExcalidrawOverlayProps = {
@@ -21,7 +22,9 @@ export const ExcalidrawOverlay = ({ onHide }: ExcalidrawOverlayProps) => {
   const mode = useThemeStore(state => state.mode);
   const theme = getResolvedTheme(mode);
   const excalidrawApiRef = useRef<ExcalidrawImperativeAPI | null>(null);
+  const excalidrawSurfaceRef = useRef<HTMLElement | null>(null);
   const sceneSnapshotRef = useRef<ExcalidrawSceneSnapshot | null>(null);
+  const isApplePencilHandModeActive = useApplePencilExcalidrawControls(excalidrawApiRef, excalidrawSurfaceRef, true);
 
   useEffect(() => {
     configureExcalidrawAssetPath();
@@ -37,8 +40,10 @@ export const ExcalidrawOverlay = ({ onHide }: ExcalidrawOverlayProps) => {
 
   return (
     <section
+      ref={excalidrawSurfaceRef}
       className="relative z-10 flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background p-0.5"
       data-weave-excalidraw-surface
+      data-weave-pencil-active={isApplePencilHandModeActive ? 'true' : undefined}
       data-weave-surface="editor"
     >
       <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3" data-weave-overlay-titlebar>

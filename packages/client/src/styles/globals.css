@@ -303,6 +303,22 @@ input {
   color: #a6adc8;
 }
 
+:where(
+  [data-weave-editor-excalidraw],
+  [data-weave-excalidraw-surface]
+)[data-weave-pencil-active="true"] .excalidraw :is(
+  .App-top-bar,
+  .App-bottom-bar,
+  .mobile-misc-tools-container,
+  .main-menu-trigger,
+  .help-icon,
+  .footer-center
+) {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
 .weave-appbar-left-actions-floating {
   position: fixed;
   top: calc(var(--weave-safe-area-top) + var(--weave-appbar-control-top));

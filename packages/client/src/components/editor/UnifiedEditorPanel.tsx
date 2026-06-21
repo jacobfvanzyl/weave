@@ -43,6 +43,7 @@ import { Button } from '../ui/button';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../ui/dialog';
 import { Input } from '../ui/input';
 import { CodeMirrorEditor, editorCanvasBackgroundColor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
+import { useApplePencilExcalidrawControls } from './useApplePencilExcalidrawControls';
 
 export type UnifiedEditorTarget = EditorTarget & {
   projectName: string;
@@ -593,6 +594,7 @@ export const UnifiedEditorPanel = ({
   const resolvedTheme = getResolvedTheme(useThemeStore(state => state.mode));
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const excalidrawApiRef = useRef<ExcalidrawImperativeAPI | null>(null);
+  const excalidrawSurfaceRef = useRef<HTMLDivElement | null>(null);
   const skippedInitialExcalidrawChangeKeyRef = useRef<string | undefined>(undefined);
   const excalidrawResizeFrameRef = useRef<number | undefined>(undefined);
   const excalidrawResizeTimeoutRef = useRef<number | undefined>(undefined);
@@ -657,6 +659,11 @@ export const UnifiedEditorPanel = ({
     excalidrawInitialData ? serializeRestoredExcalidrawData(excalidrawInitialData) : undefined
   ), [excalidrawInitialData]);
   const excalidrawViewBackgroundColor = excalidrawInitialData?.appState.viewBackgroundColor ?? editorCanvasBackgroundColor;
+  const isApplePencilHandModeActive = useApplePencilExcalidrawControls(
+    excalidrawApiRef,
+    excalidrawSurfaceRef,
+    Boolean(excalidrawBufferKey),
+  );
 
   const tree = useMemo(() => (
     mode === 'code'
@@ -1613,8 +1620,10 @@ export const UnifiedEditorPanel = ({
     if (mode === 'notes' && isExcalidrawPath(openBuffer.path)) {
       return (
         <div
+          ref={excalidrawSurfaceRef}
           className="h-full w-full"
           data-weave-editor-excalidraw
+          data-weave-pencil-active={isApplePencilHandModeActive ? 'true' : undefined}
           style={{ '--weave-excalidraw-background': editorCanvasBackgroundColor } as CSSProperties}
         >
           <Excalidraw
