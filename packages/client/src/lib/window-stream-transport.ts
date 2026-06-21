@@ -1,8 +1,23 @@
 import { getAuthHeaders, getMastraUrl } from './mastra-client';
-import type { WindowStreamControlMessage, WindowStreamInfo, WindowStreamSession } from './window-stream-types';
+import type {
+  WindowStreamApplicationInfo,
+  WindowStreamControlMessage,
+  WindowStreamInfo,
+  WindowStreamSession,
+} from './window-stream-types';
 
 type WindowListResponse = {
   windows?: unknown[];
+  error?: string;
+};
+
+type ApplicationListResponse = {
+  applications?: unknown[];
+  error?: string;
+};
+
+type ApplicationOpenResponse = {
+  application?: unknown;
   error?: string;
 };
 
@@ -86,11 +101,31 @@ const normalizeWindow = (value: unknown): WindowStreamInfo[] => {
     id,
     title: optionalString(value.title),
     appName: optionalString(value.appName),
+    bundleIdentifier: optionalString(value.bundleIdentifier),
     pid: typeof value.pid === 'number' ? value.pid : undefined,
     x: typeof value.x === 'number' ? value.x : undefined,
     y: typeof value.y === 'number' ? value.y : undefined,
     width: typeof value.width === 'number' ? value.width : undefined,
     height: typeof value.height === 'number' ? value.height : undefined,
+  }];
+};
+
+const normalizeApplication = (value: unknown): WindowStreamApplicationInfo[] => {
+  if (!isRecord(value)) return [];
+  const id = optionalString(value.id);
+  const name = optionalString(value.name);
+  if (!id || !name) return [];
+  return [{
+    id,
+    name,
+    path: optionalString(value.path),
+    bundleIdentifier: optionalString(value.bundleIdentifier),
+    isRunning: typeof value.isRunning === 'boolean' ? value.isRunning : undefined,
+    pids: Array.isArray(value.pids)
+      ? value.pids.filter((pid): pid is number => typeof pid === 'number' && Number.isFinite(pid))
+      : undefined,
+    isActive: typeof value.isActive === 'boolean' ? value.isActive : undefined,
+    iconDataUrl: optionalString(value.iconDataUrl),
   }];
 };
 
@@ -100,6 +135,25 @@ export const listWindowStreamWindows = async (portalId: string) => {
     await fetch(`${getMastraUrl()}/window-sessions/windows?${params}`, { headers: getAuthHeaders() }),
   );
   return (result.windows ?? []).flatMap(normalizeWindow);
+};
+
+export const listWindowStreamApplications = async (portalId: string) => {
+  const params = new URLSearchParams({ portalId });
+  const result = await parseJson<ApplicationListResponse>(
+    await fetch(`${getMastraUrl()}/window-sessions/applications?${params}`, { headers: getAuthHeaders() }),
+  );
+  return (result.applications ?? []).flatMap(normalizeApplication);
+};
+
+export const openWindowStreamApplication = async (input: { portalId: string; applicationId: string }) => {
+  const result = await parseJson<ApplicationOpenResponse>(
+    await fetch(`${getMastraUrl()}/window-sessions/applications/open`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify(input),
+    }),
+  );
+  return normalizeApplication(result.application)[0];
 };
 
 const requestWindowSessionToken = async (input: { portalId: string; windowId?: string }) =>

@@ -5,7 +5,12 @@ import {
   viewerSupportsCodec,
 } from './window_config.ts';
 import { ProcessWindowHostClient } from './window_host_client.ts';
-import type { PortalWindowInfo, WindowClientMessage, WindowHostEvent } from './window_protocol.ts';
+import type {
+  PortalApplicationInfo,
+  PortalWindowInfo,
+  WindowClientMessage,
+  WindowHostEvent,
+} from './window_protocol.ts';
 import {
   isRecord,
   isWindowClientEnvelope,
@@ -20,6 +25,7 @@ export { isWindowHostAvailable, resolveWindowHostRuntime } from './window_host_r
 export type { WindowHostRuntime } from './window_host_runtime.ts';
 export { ProcessWindowHostClient } from './window_host_client.ts';
 export type {
+  PortalApplicationInfo,
   PortalWindowInfo,
   WindowClientEnvelope,
   WindowClientMessage,
@@ -57,6 +63,22 @@ export class PortalWindowHost {
       ? result.windows.flatMap((item) => this.normalizeWindowInfo(item))
       : [];
     return { ok: true, windows };
+  }
+
+  async listApplications(): Promise<{ ok: true; applications: PortalApplicationInfo[] }> {
+    const result = await this.helper.request({ type: 'applications.list' });
+    const applications = Array.isArray(result.applications)
+      ? result.applications.flatMap((item) => this.normalizeApplicationInfo(item))
+      : [];
+    return { ok: true, applications };
+  }
+
+  async openApplication(input: { applicationId?: string }): Promise<{ ok: true; application?: PortalApplicationInfo }> {
+    const applicationId = optionalString(input.applicationId);
+    if (!applicationId) throw new Error('applicationId is required.');
+    const result = await this.helper.request({ type: 'applications.open', applicationId });
+    const application = this.normalizeApplicationInfo(result.application)[0];
+    return { ok: true, ...(application ? { application } : {}) };
   }
 
   async handleClientMessage(
@@ -159,11 +181,31 @@ export class PortalWindowHost {
       id,
       title: optionalString(value.title),
       appName: optionalString(value.appName),
+      bundleIdentifier: optionalString(value.bundleIdentifier),
       pid: typeof value.pid === 'number' ? value.pid : undefined,
       x: typeof value.x === 'number' ? value.x : undefined,
       y: typeof value.y === 'number' ? value.y : undefined,
       width: typeof value.width === 'number' ? value.width : undefined,
       height: typeof value.height === 'number' ? value.height : undefined,
+    }];
+  }
+
+  private normalizeApplicationInfo(value: unknown): PortalApplicationInfo[] {
+    if (!isRecord(value)) return [];
+    const id = optionalString(value.id);
+    const name = optionalString(value.name);
+    if (!id || !name) return [];
+    return [{
+      id,
+      name,
+      path: optionalString(value.path),
+      bundleIdentifier: optionalString(value.bundleIdentifier),
+      isRunning: typeof value.isRunning === 'boolean' ? value.isRunning : undefined,
+      pids: Array.isArray(value.pids)
+        ? value.pids.filter((pid): pid is number => typeof pid === 'number' && Number.isFinite(pid))
+        : undefined,
+      isActive: typeof value.isActive === 'boolean' ? value.isActive : undefined,
+      iconDataUrl: optionalString(value.iconDataUrl),
     }];
   }
 }

@@ -14,8 +14,10 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
   let server: ReturnType<typeof createServer> | undefined;
   let serverUrl = '';
   let userDataPath = '';
+  let applicationOpenRequests = 0;
 
   beforeEach(async () => {
+    applicationOpenRequests = 0;
     server = createServer((request, response) => {
       response.setHeader('access-control-allow-origin', '*');
       response.setHeader('access-control-allow-headers', 'authorization, content-type');
@@ -64,11 +66,68 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
               userId: 'smoke-user',
               name: 'Smoke Portal',
               status: 'online',
-              capabilities: ['portal.terminal.session', 'portal.window.session'],
+              capabilities: [
+                'portal.terminal.session',
+                'portal.window.session',
+                'portal.window.list',
+                'portal.applications.list',
+                'portal.applications.open',
+              ],
               roots: [{ id: 'default', name: 'Default' }],
               primary: true,
             },
           ],
+        }));
+        return;
+      }
+
+      if (request.url?.startsWith('/window-sessions/windows')) {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          portalId: 'smoke-portal',
+          ok: true,
+          windows: [{
+            id: 'sck:1',
+            title: 'Smoke Window',
+            appName: 'Smoke App',
+            bundleIdentifier: 'com.example.smoke',
+            pid: 100,
+          }],
+        }));
+        return;
+      }
+
+      if (request.url === '/window-sessions/applications/open') {
+        applicationOpenRequests += 1;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          portalId: 'smoke-portal',
+          ok: true,
+          application: {
+            id: 'bundle:com.example.smoke',
+            name: 'Smoke App',
+            path: '/Applications/Smoke.app',
+            bundleIdentifier: 'com.example.smoke',
+            isRunning: true,
+            pids: [100],
+          },
+        }));
+        return;
+      }
+
+      if (request.url?.startsWith('/window-sessions/applications')) {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          portalId: 'smoke-portal',
+          ok: true,
+          applications: [{
+            id: 'bundle:com.example.smoke',
+            name: 'Smoke App',
+            path: '/Applications/Smoke.app',
+            bundleIdentifier: 'com.example.smoke',
+            isRunning: true,
+            pids: [100],
+          }],
         }));
         return;
       }
@@ -128,6 +187,16 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await page.getByRole('button', { name: 'Show window stream' }).click();
     const windowStreamOverlay = page.locator('[data-weave-window-stream-overlay]');
     await playwrightExpect(windowStreamOverlay).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(windowStreamOverlay.getByText(/^Window$/)).toHaveCount(0);
+    await windowStreamOverlay.getByRole('button', { name: 'Launcher' }).click();
+    const streamLauncher = windowStreamOverlay.locator('[data-weave-window-stream-launcher]');
+    await playwrightExpect(streamLauncher).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(streamLauncher.getByRole('button', { name: /Running/ })).toBeVisible();
+    await playwrightExpect(streamLauncher.getByRole('button', { name: /Applications/ })).toBeVisible();
+    await playwrightExpect(streamLauncher.getByText('Smoke App')).toBeVisible();
+    await streamLauncher.getByRole('button', { name: /Smoke App/ }).first().click();
+    await expect.poll(() => applicationOpenRequests).toBe(1);
+    await playwrightExpect(streamLauncher).toBeHidden({ timeout: 5_000 });
     await windowStreamOverlay.getByRole('button', { name: 'Hide window stream' }).click();
     await playwrightExpect(windowStreamOverlay).toBeHidden({ timeout: 5_000 });
 

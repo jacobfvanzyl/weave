@@ -5,6 +5,8 @@ import { issueWindowSessionToken } from '../portal/window-relay';
 
 const windowSessionCapability = 'portal.window.session';
 const windowListCapability = 'portal.window.list';
+const applicationListCapability = 'portal.applications.list';
+const applicationOpenCapability = 'portal.applications.open';
 
 const getResourceId = (c: any) => {
   const resourceId = c.get('requestContext')?.get(MASTRA_RESOURCE_ID_KEY);
@@ -39,13 +41,13 @@ const assertWindowPortal = (
     );
 
   if (!portal || portal.userId !== resourceId) throw new Error('Portal is offline or unavailable.');
-  if (!portal.capabilities.includes(capability)) throw new Error('Portal does not support window streaming.');
+  if (!portal.capabilities.includes(capability)) throw new Error('Portal does not support the requested window capability.');
   return portal;
 };
 
 const errorResponse = (c: any, error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  const status = /not found/i.test(message) ? 404 : /Portal|window|streaming/i.test(message) ? 400 : 500;
+  const status = /not found/i.test(message) ? 404 : /Portal|window|streaming|application/i.test(message) ? 400 : 500;
   return c.json({ error: message }, status);
 };
 
@@ -62,6 +64,46 @@ export const windowSessionRoutes = [
           tool: windowListCapability,
           args: {},
           timeoutMs: 10_000,
+        });
+        return c.json({ portalId: portal.portalId, ...(result as Record<string, unknown>) });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/window-sessions/applications', {
+    method: 'GET',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const portalId = optionalString(c.req.query('portalId'));
+        const portal = assertWindowPortal(resourceId, portalId, applicationListCapability);
+        const result = await requestPortalTool({
+          portalId: portal.portalId,
+          tool: applicationListCapability,
+          args: {},
+          timeoutMs: 10_000,
+        });
+        return c.json({ portalId: portal.portalId, ...(result as Record<string, unknown>) });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  registerApiRoute('/window-sessions/applications/open', {
+    method: 'POST',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+        const portal = assertWindowPortal(resourceId, optionalString(body.portalId), applicationOpenCapability);
+        const applicationId = optionalString(body.applicationId);
+        if (!applicationId) throw new Error('applicationId is required.');
+        const result = await requestPortalTool({
+          portalId: portal.portalId,
+          tool: applicationOpenCapability,
+          args: { applicationId },
+          timeoutMs: 15_000,
         });
         return c.json({ portalId: portal.portalId, ...(result as Record<string, unknown>) });
       } catch (error) {

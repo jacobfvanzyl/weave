@@ -1408,15 +1408,19 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                   };
                   setIsCreatingWorkspace(true);
                   setCreateWorkspaceError(null);
+                  let shouldCloseSidebar = false;
                   try {
-                    await createWorkspace(createWorkspaceProject.id, input);
+                    const createdWorkspace = await createWorkspace(createWorkspaceProject.id, input);
+                    selectWorkspace(createWorkspaceProject.id, createdWorkspace.id);
                     setCreateWorkspaceProjectId(null);
                     await invalidateProjects();
+                    shouldCloseSidebar = true;
                   } catch (error) {
                     setCreateWorkspaceError(error instanceof Error ? error.message : String(error));
                   } finally {
                     setIsCreatingWorkspace(false);
                   }
+                  if (shouldCloseSidebar && closeOnSelect) onClose?.();
                 }}
               >
                 {isCreatingWorkspace ? <Loader2 size={13} className="animate-spin" /> : null}

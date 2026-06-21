@@ -155,6 +155,15 @@ try {
   const source = Array.isArray(list.windows) ? list.windows[0] : undefined;
   if (!source?.id) throw new Error('No capturable ScreenCaptureKit window source was found.');
 
+  const applicationsList = await host.request('applications.list');
+  const applications = Array.isArray(applicationsList.applications) ? applicationsList.applications : [];
+  const application = applications.find((item) => item?.id && item?.name);
+  if (!application) throw new Error('Native application launcher did not return any applications.');
+
+  if (process.env.WEAVE_WINDOW_STREAM_SMOKE_OPEN_APPLICATION === '1') {
+    await host.request('applications.open', { applicationId: application.id }, 15_000);
+  }
+
   const sessionId = `native_smoke_${Date.now()}`;
   await host.request('session.start', {
     sessionId,

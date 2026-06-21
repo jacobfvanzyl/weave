@@ -93,7 +93,12 @@ const defaultWsServerUrl = 'ws://localhost:4112';
 const defaultName = 'Mage Portal';
 const version = '0.1.0';
 const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth'];
-const macWindowCapabilities = ['portal.window.list', 'portal.window.session'];
+const macWindowCapabilities = [
+  'portal.window.list',
+  'portal.window.session',
+  'portal.applications.list',
+  'portal.applications.open',
+];
 
 const getWindowCapabilities = async (windowStream: ResolvedWindowStreamConfig) =>
   await isWindowHostAvailable(undefined, windowStream) ? macWindowCapabilities : [];
@@ -135,6 +140,8 @@ const stringFlag = (flags: Record<string, string | boolean>, key: string) => {
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
+
+const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
 const numberFlag = (flags: Record<string, string | boolean>, key: string) => {
   const value = stringFlag(flags, key);
@@ -1047,6 +1054,12 @@ const handleToolCall = async (
       ? await vaultHost.upload(editorInputFromToolCall(request) as Parameters<PortalVaultHost['upload']>[0])
       : request.tool === 'portal.window.list'
       ? await windowHost.list()
+      : request.tool === 'portal.applications.list'
+      ? await windowHost.listApplications()
+      : request.tool === 'portal.applications.open'
+      ? await windowHost.openApplication({
+        applicationId: isRecord(request.args) ? optionalString(request.args.applicationId) : undefined,
+      })
       : request.tool === 'portal.fs.list'
       ? await listRootTool(config, request)
       : request.tool === 'portal.fs.stat'

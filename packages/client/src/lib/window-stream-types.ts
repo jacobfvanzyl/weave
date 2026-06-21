@@ -2,11 +2,23 @@ export type WindowStreamInfo = {
   id: string;
   title?: string;
   appName?: string;
+  bundleIdentifier?: string;
   pid?: number;
   x?: number;
   y?: number;
   width?: number;
   height?: number;
+};
+
+export type WindowStreamApplicationInfo = {
+  id: string;
+  name: string;
+  path?: string;
+  bundleIdentifier?: string;
+  isRunning?: boolean;
+  pids?: number[];
+  isActive?: boolean;
+  iconDataUrl?: string;
 };
 
 export type WindowStreamControlMessage =

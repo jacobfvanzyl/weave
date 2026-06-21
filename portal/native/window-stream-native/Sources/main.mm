@@ -168,6 +168,275 @@ static NSDictionary *JsonWindow(SCWindow *window) {
     return output;
 }
 
+static NSArray<NSString *> *ApplicationSearchRoots() {
+    NSMutableArray<NSString *> *roots = [NSMutableArray arrayWithObjects:
+        @"/Applications",
+        @"/Applications/Utilities",
+        @"/System/Applications",
+        @"/System/Applications/Utilities",
+        @"/System/Library/CoreServices/Applications",
+        nil];
+    NSString *home = NSHomeDirectory();
+    if (home.length > 0) [roots addObject:[home stringByAppendingPathComponent:@"Applications"]];
+    return roots;
+}
+
+static BOOL IsApplicationBundlePath(NSString *path) {
+    NSString *trimmed = OptionalString(path);
+    if (!trimmed || ![trimmed.pathExtension.lowercaseString isEqualToString:@"app"]) return NO;
+    BOOL isDirectory = NO;
+    return [[NSFileManager defaultManager] fileExistsAtPath:trimmed isDirectory:&isDirectory] && isDirectory;
+}
+
+static BOOL IsNestedApplicationPath(NSString *path) {
+    NSArray<NSString *> *components = path.pathComponents;
+    if (components.count <= 1) return NO;
+    for (NSUInteger index = 0; index + 1 < components.count; index += 1) {
+        if ([components[index].pathExtension.lowercaseString isEqualToString:@"app"]) return YES;
+    }
+    return NO;
+}
+
+static BOOL IsAllowedApplicationPath(NSString *path) {
+    NSString *standardized = OptionalString(path).stringByStandardizingPath;
+    if (!IsApplicationBundlePath(standardized) || IsNestedApplicationPath(standardized)) return NO;
+    for (NSString *root in ApplicationSearchRoots()) {
+        NSString *standardRoot = root.stringByStandardizingPath;
+        if ([standardized isEqualToString:standardRoot] || [standardized hasPrefix:[standardRoot stringByAppendingString:@"/"]]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static NSString *ApplicationDisplayName(NSString *path, NSRunningApplication *runningApplication) {
+    NSString *runningName = OptionalString(runningApplication.localizedName);
+    if (runningName) return runningName;
+
+    NSBundle *bundle = path ? [NSBundle bundleWithPath:path] : nil;
+    NSString *displayName = OptionalString(bundle.localizedInfoDictionary[@"CFBundleDisplayName"]) ?:
+        OptionalString(bundle.localizedInfoDictionary[@"CFBundleName"]) ?:
+        OptionalString(bundle.infoDictionary[@"CFBundleDisplayName"]) ?:
+        OptionalString(bundle.infoDictionary[@"CFBundleName"]);
+    if (displayName) return displayName;
+
+    NSString *fileName = OptionalString([[NSFileManager defaultManager] displayNameAtPath:path]);
+    if (fileName) return fileName.stringByDeletingPathExtension;
+    return path.lastPathComponent.stringByDeletingPathExtension ?: @"Application";
+}
+
+static NSString *ApplicationBundleIdentifier(NSString *path, NSRunningApplication *runningApplication) {
+    NSString *runningIdentifier = OptionalString(runningApplication.bundleIdentifier);
+    if (runningIdentifier) return runningIdentifier;
+    NSBundle *bundle = path ? [NSBundle bundleWithPath:path] : nil;
+    return OptionalString(bundle.bundleIdentifier);
+}
+
+static NSString *ApplicationId(NSString *bundleIdentifier, NSString *path, NSNumber *pid) {
+    NSString *identifier = OptionalString(bundleIdentifier);
+    if (identifier) return [@"bundle:" stringByAppendingString:identifier];
+    NSString *standardPath = OptionalString(path).stringByStandardizingPath;
+    if (standardPath) return [@"path:" stringByAppendingString:standardPath];
+    if (pid) return [NSString stringWithFormat:@"pid:%@", pid];
+    return nil;
+}
+
+static NSString *IconDataUrlForApplicationPath(NSString *path) {
+    if (!path) return nil;
+    NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:path];
+    if (!icon) return nil;
+    icon.size = NSMakeSize(32, 32);
+    NSData *tiffData = icon.TIFFRepresentation;
+    if (!tiffData) return nil;
+    NSBitmapImageRep *imageRep = [NSBitmapImageRep imageRepWithData:tiffData];
+    NSData *pngData = [imageRep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    NSString *base64 = [pngData base64EncodedStringWithOptions:0];
+    return base64 ? [@"data:image/png;base64," stringByAppendingString:base64] : nil;
+}
+
+static NSMutableDictionary *JsonApplication(NSString *path, NSRunningApplication *runningApplication, BOOL includeIcon) {
+    NSString *standardPath = OptionalString(path).stringByStandardizingPath;
+    NSString *bundleIdentifier = ApplicationBundleIdentifier(standardPath, runningApplication);
+    NSNumber *pid = runningApplication ? @(runningApplication.processIdentifier) : nil;
+    NSString *identifier = ApplicationId(bundleIdentifier, standardPath, pid);
+    NSString *name = ApplicationDisplayName(standardPath, runningApplication);
+    if (!identifier || !name) return nil;
+
+    NSMutableDictionary *output = [NSMutableDictionary dictionary];
+    output[@"id"] = identifier;
+    output[@"name"] = name;
+    if (standardPath) output[@"path"] = standardPath;
+    if (bundleIdentifier) output[@"bundleIdentifier"] = bundleIdentifier;
+    if (pid) output[@"pids"] = @[pid];
+    output[@"isRunning"] = @(runningApplication != nil);
+    output[@"isActive"] = @(runningApplication.active);
+    if (includeIcon) {
+        NSString *iconDataUrl = IconDataUrlForApplicationPath(standardPath);
+        if (iconDataUrl) output[@"iconDataUrl"] = iconDataUrl;
+    }
+    return output;
+}
+
+static void MergeApplication(NSMutableDictionary<NSString *, NSMutableDictionary *> *applicationsById, NSDictionary *application) {
+    NSString *identifier = OptionalString(application[@"id"]);
+    NSString *name = OptionalString(application[@"name"]);
+    if (!identifier || !name) return;
+
+    NSMutableDictionary *existing = applicationsById[identifier];
+    if (!existing) {
+        applicationsById[identifier] = [application mutableCopy];
+        return;
+    }
+
+    if (!OptionalString(existing[@"path"])) {
+        NSString *path = OptionalString(application[@"path"]);
+        if (path) existing[@"path"] = path;
+    }
+    if (!OptionalString(existing[@"bundleIdentifier"])) {
+        NSString *bundleIdentifier = OptionalString(application[@"bundleIdentifier"]);
+        if (bundleIdentifier) existing[@"bundleIdentifier"] = bundleIdentifier;
+    }
+    if (!OptionalString(existing[@"iconDataUrl"])) {
+        NSString *iconDataUrl = OptionalString(application[@"iconDataUrl"]);
+        if (iconDataUrl) existing[@"iconDataUrl"] = iconDataUrl;
+    }
+
+    BOOL isRunning = [existing[@"isRunning"] boolValue] || [application[@"isRunning"] boolValue];
+    BOOL isActive = [existing[@"isActive"] boolValue] || [application[@"isActive"] boolValue];
+    existing[@"isRunning"] = @(isRunning);
+    existing[@"isActive"] = @(isActive);
+
+    NSMutableOrderedSet<NSNumber *> *pids = [NSMutableOrderedSet orderedSetWithArray:existing[@"pids"] ?: @[]];
+    for (NSNumber *pid in application[@"pids"] ?: @[]) {
+        if ([pid isKindOfClass:NSNumber.class]) [pids addObject:pid];
+    }
+    if (pids.count > 0) existing[@"pids"] = pids.array;
+}
+
+static NSArray<NSDictionary *> *ListApplicationsSync() {
+    NSMutableDictionary<NSString *, NSMutableDictionary *> *applicationsById = [NSMutableDictionary dictionary];
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    NSArray<NSURLResourceKey> *resourceKeys = @[NSURLIsDirectoryKey];
+
+    for (NSString *root in ApplicationSearchRoots()) {
+        NSURL *rootURL = [NSURL fileURLWithPath:root isDirectory:YES];
+        NSDirectoryEnumerator<NSURL *> *enumerator = [fileManager enumeratorAtURL:rootURL
+                                                       includingPropertiesForKeys:resourceKeys
+                                                                          options:NSDirectoryEnumerationSkipsHiddenFiles | NSDirectoryEnumerationSkipsPackageDescendants
+                                                                     errorHandler:nil];
+        for (NSURL *url in enumerator) {
+            NSString *path = url.path.stringByStandardizingPath;
+            NSNumber *isDirectory = nil;
+            [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+            if (![isDirectory boolValue]) continue;
+            if (![path.pathExtension.lowercaseString isEqualToString:@"app"]) continue;
+            [enumerator skipDescendants];
+            if (!IsAllowedApplicationPath(path)) continue;
+            NSMutableDictionary *application = JsonApplication(path, nil, NO);
+            if (application) MergeApplication(applicationsById, application);
+        }
+    }
+
+    for (NSRunningApplication *application in [NSWorkspace sharedWorkspace].runningApplications) {
+        if (application.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+        NSString *path = application.bundleURL.path.stringByStandardizingPath;
+        NSMutableDictionary *applicationJson = JsonApplication(path, application, YES);
+        if (applicationJson) MergeApplication(applicationsById, applicationJson);
+    }
+
+    NSArray<NSDictionary *> *applications = applicationsById.allValues;
+    return [applications sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *first, NSDictionary *second) {
+        BOOL firstActive = [first[@"isActive"] boolValue];
+        BOOL secondActive = [second[@"isActive"] boolValue];
+        if (firstActive != secondActive) return firstActive ? NSOrderedAscending : NSOrderedDescending;
+        BOOL firstRunning = [first[@"isRunning"] boolValue];
+        BOOL secondRunning = [second[@"isRunning"] boolValue];
+        if (firstRunning != secondRunning) return firstRunning ? NSOrderedAscending : NSOrderedDescending;
+        NSString *firstName = OptionalString(first[@"name"]) ?: @"";
+        NSString *secondName = OptionalString(second[@"name"]) ?: @"";
+        return [firstName localizedCaseInsensitiveCompare:secondName];
+    }];
+}
+
+static NSRunningApplication *FindRunningApplication(NSString *applicationId) {
+    NSString *identifier = OptionalString(applicationId);
+    if (!identifier) return nil;
+    NSString *bundleIdentifier = [identifier hasPrefix:@"bundle:"] ? [identifier substringFromIndex:7] : nil;
+    NSString *path = [identifier hasPrefix:@"path:"] ? [identifier substringFromIndex:5].stringByStandardizingPath : nil;
+    NSString *pidString = [identifier hasPrefix:@"pid:"] ? [identifier substringFromIndex:4] : nil;
+
+    for (NSRunningApplication *application in [NSWorkspace sharedWorkspace].runningApplications) {
+        if (bundleIdentifier && [application.bundleIdentifier isEqualToString:bundleIdentifier]) return application;
+        if (path && [application.bundleURL.path.stringByStandardizingPath isEqualToString:path]) return application;
+        if (pidString && application.processIdentifier == pidString.intValue) return application;
+    }
+    return nil;
+}
+
+static NSURL *ApplicationURLForId(NSString *applicationId, NSError **outError) {
+    NSString *identifier = OptionalString(applicationId);
+    if ([identifier hasPrefix:@"bundle:"]) {
+        NSString *bundleIdentifier = [identifier substringFromIndex:7];
+        NSURL *url = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:bundleIdentifier];
+        if (url) return url;
+    }
+
+    if ([identifier hasPrefix:@"path:"]) {
+        NSString *path = [identifier substringFromIndex:5].stringByStandardizingPath;
+        if (IsAllowedApplicationPath(path)) return [NSURL fileURLWithPath:path isDirectory:YES];
+    }
+
+    if (outError) {
+        *outError = [NSError errorWithDomain:@"weave.window-stream-native"
+                                        code:3
+                                    userInfo:@{NSLocalizedDescriptionKey: @"Application is not installed or is not launchable."}];
+    }
+    return nil;
+}
+
+static NSDictionary *OpenApplicationSync(NSString *applicationId, NSError **outError) {
+    NSRunningApplication *runningApplication = FindRunningApplication(applicationId);
+    if (runningApplication) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [runningApplication activateWithOptions:NSApplicationActivateIgnoringOtherApps | NSApplicationActivateAllWindows];
+#pragma clang diagnostic pop
+        return JsonApplication(runningApplication.bundleURL.path, runningApplication, YES);
+    }
+
+    NSURL *url = ApplicationURLForId(applicationId, outError);
+    if (!url) return nil;
+
+    __block NSRunningApplication *openedApplication = nil;
+    __block NSError *openError = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+    configuration.activates = YES;
+    [[NSWorkspace sharedWorkspace] openApplicationAtURL:url
+                                          configuration:configuration
+                                      completionHandler:^(NSRunningApplication *application, NSError *error) {
+        openedApplication = application;
+        openError = error;
+        dispatch_semaphore_signal(semaphore);
+    }];
+
+    if (dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0) {
+        if (outError) {
+            *outError = [NSError errorWithDomain:@"weave.window-stream-native"
+                                            code:4
+                                        userInfo:@{NSLocalizedDescriptionKey: @"Timed out while opening application."}];
+        }
+        return nil;
+    }
+
+    if (openError) {
+        if (outError) *outError = openError;
+        return nil;
+    }
+
+    return JsonApplication(url.path, openedApplication, YES);
+}
+
 static SCShareableContent *ShareableContentSync(NSError **outError) {
     __block SCShareableContent *result = nil;
     __block NSError *blockError = nil;
@@ -1642,6 +1911,28 @@ static void CompressionOutputCallback(
             return YES;
         }
         [self reply:requestId ok:YES fields:@{@"backend": @"native-webrtc", @"windows": windows}];
+        return YES;
+    }
+
+    if ([type isEqualToString:@"applications.list"]) {
+        NSArray<NSDictionary *> *applications = ListApplicationsSync();
+        [self reply:requestId ok:YES fields:@{@"backend": @"native-webrtc", @"applications": applications}];
+        return YES;
+    }
+
+    if ([type isEqualToString:@"applications.open"]) {
+        NSString *applicationId = OptionalString(message[@"applicationId"]);
+        if (!applicationId) {
+            [self fail:requestId error:@"applicationId is required."];
+            return YES;
+        }
+        NSError *error = nil;
+        NSDictionary *application = OpenApplicationSync(applicationId, &error);
+        if (!application) {
+            [self fail:requestId error:NSErrorMessage(error)];
+            return YES;
+        }
+        [self reply:requestId ok:YES fields:@{@"backend": @"native-webrtc", @"application": application}];
         return YES;
     }
 

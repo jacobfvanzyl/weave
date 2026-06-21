@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.19';
-import { resolveWindowStreamConfig } from './window.ts';
+import { PortalWindowHost, resolveWindowStreamConfig } from './window.ts';
 
 Deno.test('window stream config resolves presets and defaults', () => {
   const config = resolveWindowStreamConfig(undefined, {}, {});
@@ -115,4 +115,123 @@ Deno.test('window stream config rejects invalid codec and ranges', async () => {
     Error,
     'windowStream.encoder.codec',
   );
+});
+
+Deno.test('PortalWindowHost normalizes application and window metadata', async () => {
+  const calls: Record<string, unknown>[] = [];
+  const helper = {
+    request: async (payload: Record<string, unknown>) => {
+      calls.push(payload);
+      if (payload.type === 'windows.list') {
+        return {
+          windows: [
+            {
+              id: 'sck:1',
+              title: 'Example',
+              appName: 'Example App',
+              bundleIdentifier: 'com.example.app',
+              pid: 42,
+              width: 800,
+              malformed: true,
+            },
+            { title: 'missing id' },
+          ],
+        };
+      }
+      if (payload.type === 'applications.list') {
+        return {
+          applications: [
+            {
+              id: 'bundle:com.example.app',
+              name: 'Example App',
+              path: '/Applications/Example.app',
+              bundleIdentifier: 'com.example.app',
+              isRunning: true,
+              pids: [42, 'bad', 43],
+              isActive: true,
+              iconDataUrl: 'data:image/png;base64,abc',
+            },
+            { id: 'missing-name' },
+          ],
+        };
+      }
+      throw new Error(`Unexpected payload: ${String(payload.type)}`);
+    },
+    dispose: () => undefined,
+  };
+  const host = new PortalWindowHost({
+    config: { windowStream: resolveWindowStreamConfig({}, {}, {}) },
+    helper: helper as any,
+  });
+
+  assertEquals(await host.list(), {
+    ok: true,
+    windows: [{
+      id: 'sck:1',
+      title: 'Example',
+      appName: 'Example App',
+      bundleIdentifier: 'com.example.app',
+      pid: 42,
+      x: undefined,
+      y: undefined,
+      width: 800,
+      height: undefined,
+    }],
+  });
+  assertEquals(await host.listApplications(), {
+    ok: true,
+    applications: [{
+      id: 'bundle:com.example.app',
+      name: 'Example App',
+      path: '/Applications/Example.app',
+      bundleIdentifier: 'com.example.app',
+      isRunning: true,
+      pids: [42, 43],
+      isActive: true,
+      iconDataUrl: 'data:image/png;base64,abc',
+    }],
+  });
+  assertEquals(calls.map(call => call.type), ['windows.list', 'applications.list']);
+});
+
+Deno.test('PortalWindowHost validates and forwards application open requests', async () => {
+  const calls: Record<string, unknown>[] = [];
+  const helper = {
+    request: async (payload: Record<string, unknown>) => {
+      calls.push(payload);
+      return {
+        application: {
+          id: payload.applicationId,
+          name: 'Example App',
+          isRunning: true,
+          pids: [42],
+        },
+      };
+    },
+    dispose: () => undefined,
+  };
+  const host = new PortalWindowHost({
+    config: { windowStream: resolveWindowStreamConfig({}, {}, {}) },
+    helper: helper as any,
+  });
+
+  await assertRejects(
+    () => host.openApplication({ applicationId: ' ' }),
+    Error,
+    'applicationId is required',
+  );
+  assertEquals(await host.openApplication({ applicationId: 'bundle:com.example.app' }), {
+    ok: true,
+    application: {
+      id: 'bundle:com.example.app',
+      name: 'Example App',
+      path: undefined,
+      bundleIdentifier: undefined,
+      isRunning: true,
+      pids: [42],
+      isActive: undefined,
+      iconDataUrl: undefined,
+    },
+  });
+  assertEquals(calls, [{ type: 'applications.open', applicationId: 'bundle:com.example.app' }]);
 });
