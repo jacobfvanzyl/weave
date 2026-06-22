@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, Download, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, History, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, TerminalSquare, Trash2, X } from 'lucide-react';
 import { adoptWorkspace, ApiError, createWorkspace, createProject, deleteWorkspace, deleteProject, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, listPortals, listProjectBranches, pullWorkspaceGitUpstream, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type DiscoveredWorktree, type RemovedWorkspaceSnapshot, type WorkspaceBranchMode, type WorkspaceBranchOption } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
+import { createThreadOpenabilityContext, isOpenableThread, sortThreadsForDisplay } from '../../lib/thread-eligibility';
 import { createWorkspaceDraftDefaults, getDefaultWorkspaceBase } from '../../lib/workspace-create-defaults';
 import { projectsQueryKey, useProjectsWithLiveGitState, workspaceGitStateQueryKey } from '../../lib/workspace-git-state';
 import { GitProjectDirectoryPicker } from './GitProjectDirectoryPicker';
@@ -354,11 +355,11 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     }
   };
   const onlinePortalCount = portals.filter(portal => portal.status === 'online').length;
-  const plainThreads = sortManual(threads.filter(thread => (!thread.projectId || thread.adHoc) && thread.archived !== true));
-  const threadsByProject = new Map(projects.map(project => [project.id, sortManual(threads.filter(thread => thread.projectId === project.id && !thread.adHoc))]));
+  const plainThreads = sortThreadsForDisplay(threads.filter(thread => (!thread.projectId || thread.adHoc) && thread.archived !== true));
+  const threadsByProject = new Map(projects.map(project => [project.id, sortThreadsForDisplay(threads.filter(thread => thread.projectId === project.id && !thread.adHoc))]));
   const removedWorkspaceThreadsByProject = new Map(projects.map(project => [
     project.id,
-    sortManual(threads.filter(thread => thread.projectId === project.id && thread.archived === true && thread.removedWorkspace)),
+    sortThreadsForDisplay(threads.filter(thread => thread.projectId === project.id && thread.archived === true && thread.removedWorkspace)),
   ]));
   const sortedProjects = sortManual(projects);
   const toggleProjectCollapsed = (projectId: string) =>
@@ -470,7 +471,11 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       selectWorkspace(projectId, fallbackWorkspace.id);
       return;
     }
-    const fallbackThread = sortManual(threads.filter(thread => thread.archived !== true && thread.workspaceId !== workspaceId))[0];
+    const nextProjects = projects.map(project =>
+      project.id === projectId ? { ...project, workspaces: nextWorkspaces } : project,
+    );
+    const openabilityContext = createThreadOpenabilityContext(nextProjects);
+    const fallbackThread = sortThreadsForDisplay(threads.filter(thread => isOpenableThread(thread, openabilityContext)))[0];
     if (fallbackThread) selectThreadSurface(fallbackThread.id);
   };
   const removeWorkspaceFromProject = async () => {

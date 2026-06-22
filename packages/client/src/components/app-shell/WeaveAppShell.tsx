@@ -114,6 +114,8 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     hasWindowStreamPortal,
     notesTarget,
     onlinePortals,
+    projects,
+    projectsQuery,
     terminalTarget,
   } = useWorkspaceTargets({
     activeSurface,
@@ -506,13 +508,9 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   });
 
   useEffect(() => {
-    if (serverThreads.length > 0) {
-      setServerThreads(serverThreads);
-      return;
-    }
-
-    if (isFetched && serverThreads.length === 0 && threads.length === 0) void newThread();
-  }, [isFetched, newThread, serverThreads, setServerThreads, threads.length]);
+    if (!isFetched || !projectsQuery.isFetched) return;
+    setServerThreads(serverThreads, projects);
+  }, [isFetched, projects, projectsQuery.isFetched, serverThreads, setServerThreads]);
 
   const focusSidebar = useCallback(() => {
     window.requestAnimationFrame(() => {

@@ -26,7 +26,7 @@ export const useWorkspaceTargets = ({
   const activeThread = activeSurface.kind === 'thread' ? threads.find(thread => thread.id === activeThreadId) : undefined;
   const hasChatPaneTarget = activeSurface.kind === 'thread';
   const hasThreadTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
-  const { projects } = useProjectsWithLiveGitState(resourceId);
+  const { projects, projectsQuery } = useProjectsWithLiveGitState(resourceId);
   const { data: portals = [] } = useQuery({
     queryKey: ['portals', resourceId],
     queryFn: listPortals,
@@ -112,6 +112,7 @@ export const useWorkspaceTargets = ({
     onlinePortals,
     portals,
     projects,
+    projectsQuery,
     terminalTarget,
   };
 };

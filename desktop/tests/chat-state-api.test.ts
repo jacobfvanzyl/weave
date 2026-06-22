@@ -3,6 +3,7 @@ import { configureMastraConnection } from '../../packages/client/src/lib/mastra-
 import { cancelThreadRun, createWorkspace, deleteWorkspace, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, getThreadRunState, listProjectBranches, listProjects, listServerThreads, listWorkspaceGitStates, pullWorkspaceGitUpstream, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
 import { createWorkspaceDraftDefaults } from '../../packages/client/src/lib/workspace-create-defaults';
 import { overlayWorkspaceGitState } from '../../packages/client/src/lib/workspace-git-state';
+import { sortThreadsForDisplay } from '../../packages/client/src/lib/thread-eligibility';
 import { listProfiles } from '../../packages/client/src/lib/profiles-api';
 import { expandPrompt, listPrompts } from '../../packages/client/src/lib/prompts-api';
 
@@ -58,9 +59,11 @@ const createStorage = (): Storage => {
   };
 };
 
-const loadFreshChatStore = async () => {
+const loadFreshChatStore = async (seed?: (storage: Storage) => void) => {
   vi.resetModules();
-  vi.stubGlobal('localStorage', createStorage());
+  const storage = createStorage();
+  seed?.(storage);
+  vi.stubGlobal('localStorage', storage);
   const [storeModule, surfaceModule, mastraClient] = await Promise.all([
     import('../../packages/client/src/stores/chat-store'),
     import('../../packages/client/src/stores/workspace-surface-store'),
@@ -640,6 +643,148 @@ describe('chat-state Project/Workspace API client', () => {
       completed: 1,
       total: 2,
     });
+  });
+
+  it('starts on a root draft while retaining archived, removed, and orphaned threads', async () => {
+    const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
+    const now = '2026-06-03T08:00:00.000Z';
+    const projectWithMissingWorkspace: Project = {
+      ...project,
+      workspaces: [{ ...workspace, status: 'missing' }],
+    };
+
+    useChatStore.getState().setServerThreads([
+      {
+        id: 'archived-thread',
+        title: 'Archived',
+        createdAt: now,
+        updatedAt: '2026-06-03T12:00:00.000Z',
+        projectId: 'project-1',
+        workspaceId: 'workspace-1',
+        archived: true,
+      },
+      {
+        id: 'removed-thread',
+        title: 'Removed workspace',
+        createdAt: now,
+        updatedAt: '2026-06-03T11:00:00.000Z',
+        projectId: 'project-1',
+        removedWorkspace: {
+          id: 'workspace-removed',
+          projectId: 'project-1',
+          name: 'Removed',
+          removedAt: '2026-06-03T10:30:00.000Z',
+        },
+      },
+      {
+        id: 'orphan-thread',
+        title: 'Orphan',
+        createdAt: now,
+        updatedAt: '2026-06-03T10:00:00.000Z',
+        projectId: 'project-2',
+        workspaceId: 'workspace-2',
+      },
+      {
+        id: 'valid-thread',
+        title: 'Valid',
+        createdAt: now,
+        updatedAt: '2026-06-03T09:00:00.000Z',
+        projectId: 'project-1',
+        workspaceId: 'workspace-1',
+      },
+    ], [projectWithMissingWorkspace]);
+
+    expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual([
+      'archived-thread',
+      'removed-thread',
+      'orphan-thread',
+      'valid-thread',
+      useWorkspaceSurfaceStore.getState().threadId,
+    ]);
+    const startupThread = useChatStore.getState().threads.find(thread => thread.id === useWorkspaceSurfaceStore.getState().threadId);
+    expect(startupThread).toMatchObject({ draft: true });
+    expect(startupThread?.projectId).toBeUndefined();
+    expect(startupThread?.workspaceId).toBeUndefined();
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      activeSurface: { kind: 'thread', threadId: startupThread?.id },
+      paneVisibility: { chatOpen: true, editorOpen: false, terminalOpen: false },
+    });
+
+    await useChatStore.getState().archiveThread(startupThread!.id);
+
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      threadId: 'valid-thread',
+      activeSurface: { kind: 'thread', threadId: 'valid-thread' },
+      paneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: false },
+    });
+  });
+
+  it('starts on a local draft when no server threads are openable', async () => {
+    const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
+    const now = '2026-06-03T08:00:00.000Z';
+
+    useChatStore.getState().setServerThreads([
+      {
+        id: 'archived-thread',
+        title: 'Archived',
+        createdAt: now,
+        updatedAt: '2026-06-03T10:00:00.000Z',
+        projectId: 'project-1',
+        workspaceId: 'workspace-1',
+        archived: true,
+      },
+      {
+        id: 'orphan-thread',
+        title: 'Orphan',
+        createdAt: now,
+        updatedAt: '2026-06-03T09:00:00.000Z',
+        projectId: 'project-2',
+        workspaceId: 'workspace-2',
+      },
+    ], [project]);
+
+    const selectedThread = useChatStore.getState().threads.find(thread => thread.id === useWorkspaceSurfaceStore.getState().threadId);
+    expect(selectedThread).toMatchObject({ draft: true });
+    expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual(expect.arrayContaining([
+      'archived-thread',
+      'orphan-thread',
+    ]));
+    expect(useWorkspaceSurfaceStore.getState().activeSurface).toEqual({
+      kind: 'thread',
+      threadId: selectedThread?.id,
+    });
+  });
+
+  it('sorts draft threads above persisted threads within any thread list', () => {
+    const now = '2026-06-03T08:00:00.000Z';
+    const newestPersisted = {
+      id: 'persisted-new',
+      title: 'Newest persisted',
+      createdAt: now,
+      updatedAt: '2026-06-03T12:00:00.000Z',
+      sortOrder: 0,
+    };
+    const olderDraft = {
+      id: 'draft-old',
+      title: 'Draft',
+      createdAt: now,
+      updatedAt: '2026-06-03T09:00:00.000Z',
+      sortOrder: 100,
+      draft: true,
+    };
+    const olderPersisted = {
+      id: 'persisted-old',
+      title: 'Older persisted',
+      createdAt: now,
+      updatedAt: '2026-06-03T10:00:00.000Z',
+      sortOrder: 1,
+    };
+
+    expect(sortThreadsForDisplay([newestPersisted, olderPersisted, olderDraft]).map(thread => thread.id)).toEqual([
+      'draft-old',
+      'persisted-new',
+      'persisted-old',
+    ]);
   });
 
   it('preserves workspace terminal pane visibility when creating workspace threads', async () => {

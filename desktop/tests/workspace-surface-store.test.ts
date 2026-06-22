@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { workspaceRefKey } from '../../packages/client/src/lib/thread-eligibility';
 
 const createStorage = (): Storage => {
   const values = new Map<string, string>();
@@ -142,6 +143,33 @@ describe('workspace surface store', () => {
       paneVisibility: { chatOpen: false, editorOpen: false, terminalOpen: true },
       maximizedPane: 'terminal',
       preMaximizePaneVisibility: { chatOpen: false, editorOpen: true, terminalOpen: true },
+    });
+  });
+
+  it('repairs a persisted workspace surface when that workspace is no longer visible', async () => {
+    const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore(storage => {
+      storage.setItem('weave-surface', JSON.stringify({
+        state: {
+          threadId: 'stale-thread',
+          activeSurface: { kind: 'workspace', projectId: 'deleted-project', workspaceId: 'deleted-workspace' },
+          paneVisibility: { chatOpen: false, editorOpen: true, terminalOpen: true },
+          surfaceLayouts: {},
+          maximizedPane: null,
+        },
+        version: 1,
+      }));
+    });
+
+    useWorkspaceSurfaceStore.getState().syncThreads(
+      [{ id: 'thread-1', workspaceId: 'workspace-1' }],
+      { workspaceRefs: new Set([workspaceRefKey('project-1', 'workspace-1')]) },
+    );
+
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      threadId: 'thread-1',
+      activeSurface: { kind: 'thread', threadId: 'thread-1' },
+      paneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: false },
+      maximizedPane: null,
     });
   });
 

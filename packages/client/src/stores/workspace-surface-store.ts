@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createClientId } from '../lib/client-id';
+import { workspaceRefKey } from '../lib/thread-eligibility';
 
 export type ActiveSurface =
   | { kind: 'thread'; threadId: string }
@@ -56,7 +57,7 @@ type WorkspaceSurfaceState = {
   preMaximizePaneVisibility?: PaneVisibility;
   selectThread: (threadId: string, thread?: ThreadSurfaceContext, options?: { preserveTerminalVisibility?: boolean }) => void;
   selectWorkspace: (projectId: string, workspaceId: string) => void;
-  syncThreads: (threads: ThreadSurfaceContext[], options?: { selectThreadId?: string }) => void;
+  syncThreads: (threads: ThreadSurfaceContext[], options?: { selectThreadId?: string; workspaceRefs?: ReadonlySet<string> }) => void;
   openPane: (pane: MainPane) => void;
   closePane: (pane: MainPane) => void;
   togglePane: (pane: MainPane) => void;
@@ -206,8 +207,17 @@ const getInitialPersistedSurfaceState = () => {
   };
 };
 
-const repairThreadSurface = (activeSurface: ActiveSurface, threads: ThreadSurfaceContext[], fallbackThreadId: string): ActiveSurface => {
-  if (activeSurface.kind === 'workspace') return activeSurface;
+const repairActiveSurface = (
+  activeSurface: ActiveSurface,
+  threads: ThreadSurfaceContext[],
+  fallbackThreadId: string,
+  workspaceRefs: ReadonlySet<string> | undefined,
+): ActiveSurface => {
+  if (activeSurface.kind === 'workspace') {
+    return !workspaceRefs || workspaceRefs.has(workspaceRefKey(activeSurface.projectId, activeSurface.workspaceId))
+      ? activeSurface
+      : { kind: 'thread', threadId: fallbackThreadId };
+  }
   return threads.some(thread => thread.id === activeSurface.threadId)
     ? activeSurface
     : { kind: 'thread', threadId: fallbackThreadId };
@@ -256,7 +266,7 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
         }),
       syncThreads: (threads, options) =>
         set(state => {
-          if (options?.selectThreadId) {
+          if (options?.selectThreadId && getThreadById(threads, options.selectThreadId)) {
             const selectedThread = getThreadById(threads, options.selectThreadId);
             const nextActiveSurface: ActiveSurface = { kind: 'thread' as const, threadId: options.selectThreadId };
             const surfaceLayouts = saveCurrentSurfaceLayout(state);
@@ -274,7 +284,7 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
           const nextThreadId = threads.some(thread => thread.id === state.threadId)
             ? state.threadId
             : threads[0]?.id || state.threadId;
-          const nextActiveSurface = repairThreadSurface(state.activeSurface, threads, nextThreadId);
+          const nextActiveSurface = repairActiveSurface(state.activeSurface, threads, nextThreadId, options?.workspaceRefs);
           const didRepairThreadSurface = nextActiveSurface !== state.activeSurface;
           const nextSelectedThread = nextActiveSurface.kind === 'thread'
             ? getThreadById(threads, nextActiveSurface.threadId)

@@ -3,6 +3,14 @@ import { persist } from 'zustand/middleware';
 import { archiveServerThread, createProjectThread, createServerThread, deleteServerThread, renameServerThread, type RemovedWorkspaceSnapshot } from '../lib/chat-state-api';
 import { createClientId } from '../lib/client-id';
 import {
+  createThreadOpenabilityContext,
+  emptyThreadOpenabilityContext,
+  getOpenableThreads,
+  isOpenableThread,
+  type ThreadOpenabilityContext,
+  type ThreadOpenabilityProject,
+} from '../lib/thread-eligibility';
+import {
   initialSurfaceThreadId,
   useWorkspaceSurfaceStore,
   type ThreadSurfaceContext,
@@ -76,6 +84,7 @@ type ChatState = {
   threadPlans: Record<string, ThreadPlan | undefined>;
   toolActivityCollapsed: Record<string, boolean>;
   hasInitializedThreads: boolean;
+  threadOpenabilityContext: ThreadOpenabilityContext;
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (reasoningEffort: ReasoningEffort) => void;
   setFollowWrites: (followWrites: boolean) => void;
@@ -86,7 +95,7 @@ type ChatState = {
   clearThreadPlan: (threadId: string) => void;
   setToolActivityCollapsed: (groupId: string, collapsed: boolean) => void;
   setDraftThreadProfile: (threadId: string, profileId: string | null) => void;
-  setServerThreads: (threads: ChatThread[]) => void;
+  setServerThreads: (threads: ChatThread[], projects?: ThreadOpenabilityProject[]) => void;
   newThread: (projectId?: string, workspaceId?: string) => Promise<void>;
   ensureThreadPersisted: (threadId: string, title?: string) => Promise<void>;
   selectThread: (threadId: string) => void;
@@ -115,6 +124,23 @@ const isDraftThread = (thread: ChatThread | undefined) => thread?.draft === true
 
 const initialThread = createLocalThread(initialSurfaceThreadId);
 const toSurfaceThread = (thread: ChatThread): ThreadSurfaceContext => ({ id: thread.id, workspaceId: thread.workspaceId });
+const withOpenableThreadFallback = (
+  threads: ChatThread[],
+  context: ThreadOpenabilityContext,
+  fallbackCandidates: ChatThread[] = [],
+) => {
+  const openableThreads = getOpenableThreads(threads, context);
+  if (openableThreads.length > 0) return { threads, openableThreads };
+
+  const fallbackThread =
+    fallbackCandidates.find(thread => isDraftThread(thread) && isOpenableThread(thread, context))
+    ?? threads.find(thread => isDraftThread(thread) && isOpenableThread(thread, context))
+    ?? createLocalThread();
+  const nextThreads = threads.some(thread => thread.id === fallbackThread.id)
+    ? threads
+    : [fallbackThread, ...threads];
+  return { threads: nextThreads, openableThreads: [fallbackThread] };
+};
 const getSurfaceSnapshot = (): WorkspaceSurfaceSnapshot => {
   const surface = useWorkspaceSurfaceStore.getState();
   return {
@@ -144,6 +170,7 @@ export const useChatStore = create<ChatState>()(
       threadPlans: {},
       toolActivityCollapsed: {},
       hasInitializedThreads: false,
+      threadOpenabilityContext: emptyThreadOpenabilityContext,
       setSelectedModel: selectedModel => set({ selectedModel }),
       setReasoningEffort: reasoningEffort => set({ reasoningEffort }),
       setFollowWrites: followWrites => set({ followWrites }),
@@ -175,9 +202,13 @@ export const useChatStore = create<ChatState>()(
               : thread,
           ),
         })),
-      setServerThreads: threads =>
+      setServerThreads: (threads, projects = []) =>
         set(state => {
           const surface = useWorkspaceSurfaceStore.getState();
+          const threadOpenabilityContext = createThreadOpenabilityContext(projects);
+          const startupDraftThread = !state.hasInitializedThreads
+            ? state.threads.find(thread => isDraftThread(thread) && !thread.projectId && !thread.workspaceId) ?? createLocalThread()
+            : undefined;
           const deletedThreadIds = new Set(state.deletedThreadIds);
           const activeThreads = threads.filter(thread => !deletedThreadIds.has(thread.id));
           const mappedServerThreads = activeThreads.map(serverThread => {
@@ -187,14 +218,20 @@ export const useChatStore = create<ChatState>()(
             return hasLocalTitle && hasPlaceholderServerTitle ? { ...serverThread, title: localThread.title } : serverThread;
           });
           const optimisticThreads = state.threads.filter(
-            localThread =>
-              !deletedThreadIds.has(localThread.id) &&
-              !activeThreads.some(serverThread => serverThread.id === localThread.id) &&
-              (activeThreads.length === 0 || state.hasInitializedThreads || !['New chat', '...'].includes(localThread.title)),
+            localThread => {
+              const isStartupDraftThread = startupDraftThread?.id === localThread.id;
+              return !deletedThreadIds.has(localThread.id) &&
+                !activeThreads.some(serverThread => serverThread.id === localThread.id) &&
+                (isStartupDraftThread || activeThreads.length === 0 || state.hasInitializedThreads || !['New chat', '...'].includes(localThread.title));
+            },
           );
-          const nextThreads = activeThreads.length > 0 ? [...mappedServerThreads, ...optimisticThreads] : state.threads;
-          const shouldSelectLastMessaged = !state.hasInitializedThreads && mappedServerThreads.length > 0;
-          const nextThreadId = shouldSelectLastMessaged ? mappedServerThreads[0].id : undefined;
+          let nextThreads = activeThreads.length > 0 ? [...mappedServerThreads, ...optimisticThreads] : state.threads;
+          if (startupDraftThread && !nextThreads.some(thread => thread.id === startupDraftThread.id)) {
+            nextThreads = [startupDraftThread, ...nextThreads];
+          }
+          const nextThreadId = startupDraftThread?.id;
+          const fallback = withOpenableThreadFallback(nextThreads, threadOpenabilityContext, state.threads);
+          nextThreads = fallback.threads;
           const threadPlans = { ...state.threadPlans };
           for (const thread of nextThreads) {
             if (!thread.latestPlan) continue;
@@ -202,12 +239,16 @@ export const useChatStore = create<ChatState>()(
             threadPlans[thread.id] = currentPlan?.isBusy ? currentPlan : thread.latestPlan;
           }
 
-          surface.syncThreads(nextThreads.map(toSurfaceThread), { selectThreadId: nextThreadId });
+          surface.syncThreads(fallback.openableThreads.map(toSurfaceThread), {
+            selectThreadId: nextThreadId,
+            workspaceRefs: threadOpenabilityContext.workspaceRefs,
+          });
 
           return {
             threads: nextThreads,
             threadPlans,
             hasInitializedThreads: true,
+            threadOpenabilityContext,
           };
         }),
       newThread: async (projectId, workspaceId) => {
@@ -276,9 +317,12 @@ export const useChatStore = create<ChatState>()(
           set(state => {
             const threads = state.threads.filter(thread => thread.id !== threadId);
             const nextThreads = threads.length > 0 ? threads : [createLocalThread()];
-            useWorkspaceSurfaceStore.getState().syncThreads(nextThreads.map(toSurfaceThread));
+            const fallback = withOpenableThreadFallback(nextThreads, state.threadOpenabilityContext, state.threads);
+            useWorkspaceSurfaceStore.getState().syncThreads(fallback.openableThreads.map(toSurfaceThread), {
+              workspaceRefs: state.threadOpenabilityContext.workspaceRefs,
+            });
             return {
-              threads: nextThreads,
+              threads: fallback.threads,
               runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
               completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
             };
@@ -288,10 +332,12 @@ export const useChatStore = create<ChatState>()(
 
         set(state => {
           const nextThreads = state.threads.map(thread => thread.id === threadId ? { ...thread, archived: true } : thread);
-          const visibleThreads = nextThreads.filter(thread => !thread.archived);
-          useWorkspaceSurfaceStore.getState().syncThreads(visibleThreads.map(toSurfaceThread));
+          const fallback = withOpenableThreadFallback(nextThreads, state.threadOpenabilityContext, state.threads);
+          useWorkspaceSurfaceStore.getState().syncThreads(fallback.openableThreads.map(toSurfaceThread), {
+            workspaceRefs: state.threadOpenabilityContext.workspaceRefs,
+          });
           return {
-            threads: nextThreads,
+            threads: fallback.threads,
             runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
             completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
           };
@@ -311,11 +357,17 @@ export const useChatStore = create<ChatState>()(
 
         set(state => {
           const threads = state.threads.filter(thread => thread.id !== threadId);
-          const nextThreads = threads.length > 0 ? threads : [createLocalThread()];
-          useWorkspaceSurfaceStore.getState().syncThreads(nextThreads.map(toSurfaceThread));
+          const fallback = withOpenableThreadFallback(
+            threads.length > 0 ? threads : [createLocalThread()],
+            state.threadOpenabilityContext,
+            state.threads,
+          );
+          useWorkspaceSurfaceStore.getState().syncThreads(fallback.openableThreads.map(toSurfaceThread), {
+            workspaceRefs: state.threadOpenabilityContext.workspaceRefs,
+          });
 
           return {
-            threads: nextThreads,
+            threads: fallback.threads,
             runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
             completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
             deletedThreadIds: isDraft || state.deletedThreadIds.includes(threadId) ? state.deletedThreadIds : [...state.deletedThreadIds, threadId],
