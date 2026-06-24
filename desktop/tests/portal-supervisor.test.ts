@@ -302,7 +302,7 @@ describe('PortalSupervisor', () => {
   it('provisions config and spawns Portal when no compatible runtime exists', async () =>
     withTempPortal(async ({ directory, portalHome }) => {
       const { server, url: mastraUrl } = await listen((request, response) => {
-        if (request.url === '/portals/token') {
+        if (request.url === '/portal/token' || request.url === '/portals/token') {
           response.setHeader('content-type', 'application/json');
           response.end(JSON.stringify({ portalId: 'portal_spawned', token: 'portal-token' }));
           return;

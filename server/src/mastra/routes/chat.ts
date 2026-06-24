@@ -1,6 +1,6 @@
 import { handleChatStream } from '@mastra/ai-sdk';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import { buildChatSystemMessages } from '../agents/instructions';
 import { attachmentIdFromReference, attachmentModelUrl, attachmentStorage, parseBase64DataUrl, type AttachmentStorage, type StoredAttachmentMetadata } from '../attachments';
 import { subscribeThreadContextUsage, type ThreadContextUsageSnapshot } from '../context-usage';
@@ -807,7 +807,7 @@ export const __chatRunRegistryTest = {
 };
 
 export const chatRoutes = [
-  registerApiRoute('/chat/:threadId/stream', {
+  defineRoute('/chat/:threadId/stream', {
     method: 'GET',
     handler: async c => {
       const resourceId = getResourceId(c);
@@ -818,7 +818,7 @@ export const chatRoutes = [
       return toSseResponse(observeThreadRun(run));
     },
   }),
-  registerApiRoute('/chat/:threadId/run', {
+  defineRoute('/chat/:threadId/run', {
     method: 'GET',
     handler: async c => {
       const resourceId = getResourceId(c);
@@ -826,7 +826,7 @@ export const chatRoutes = [
       return c.json({ run: toThreadRunSnapshot(getThreadRun(resourceId, threadId)) });
     },
   }),
-  registerApiRoute('/chat/:threadId/cancel', {
+  defineRoute('/chat/:threadId/cancel', {
     method: 'POST',
     handler: async c => {
       const resourceId = getResourceId(c);
@@ -838,7 +838,7 @@ export const chatRoutes = [
       return c.json({ ok: true, run: toThreadRunSnapshot(run) });
     },
   }),
-  registerApiRoute('/chat', {
+  defineRoute('/chat', {
     method: 'POST',
     handler: async c => {
       const params = await c.req.json();

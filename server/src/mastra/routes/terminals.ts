@@ -1,4 +1,4 @@
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { findPortalForProject, getPortalConnection, listPortalConnections } from '../portal/registry';
 import { issueTerminalToken, type TerminalSessionKind } from '../portal/terminal-relay';
@@ -134,7 +134,7 @@ const errorResponse = (c: any, error: unknown) => {
 };
 
 export const terminalRoutes = [
-  registerApiRoute('/terminals/token', {
+  defineRoute('/terminals/token', {
     method: 'POST',
     handler: async c => {
       try {

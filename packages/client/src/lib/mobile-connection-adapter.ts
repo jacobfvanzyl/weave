@@ -1,5 +1,6 @@
 import { Preferences } from '@capacitor/preferences';
 import type { ConnectionAdapter, ConnectionInput, ConnectionSettings, ConnectionTestResult } from './connection-types';
+import { weaveRoutePaths } from './weave-routes';
 
 type PersistedMobileConnectionSettings = {
   mastraUrl?: string;
@@ -139,7 +140,7 @@ const testConnection = async (input?: ConnectionInput): Promise<ConnectionTestRe
     let response: Response;
 
     try {
-      response = await fetch(`${mastraUrl}/chat-state/me`, { headers, signal: timeout.signal });
+      response = await fetch(`${mastraUrl}${weaveRoutePaths.owner.me()}`, { headers, signal: timeout.signal });
     } finally {
       timeout.clear();
     }
@@ -149,12 +150,13 @@ const testConnection = async (input?: ConnectionInput): Promise<ConnectionTestRe
       return { ok: false, status: response.status, error: error || `HTTP ${response.status}` };
     }
 
-    const data = await response.json() as { user?: { id?: unknown; name?: unknown } };
-    if (typeof data.user?.id !== 'string' || typeof data.user.name !== 'string') {
-      return { ok: false, error: 'Connection response did not include a valid user.' };
+    const data = await response.json() as { owner?: { id?: unknown; name?: unknown }; user?: { id?: unknown; name?: unknown } };
+    const user = data.owner ?? data.user;
+    if (typeof user?.id !== 'string' || typeof user.name !== 'string') {
+      return { ok: false, error: 'Connection response did not include a valid owner.' };
     }
 
-    return { ok: true, user: { id: data.user.id, name: data.user.name } };
+    return { ok: true, user: { id: user.id, name: user.name } };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       return { ok: false, error: 'Connection timed out.' };

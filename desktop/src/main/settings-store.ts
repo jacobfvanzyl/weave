@@ -20,16 +20,73 @@ export type ConnectionSettingsStoreOptions = {
   env?: Record<string, string | undefined>;
 };
 
+const optionalString = (value: unknown) =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+const parseEnvText = (text: string) => {
+  const env: Record<string, string | undefined> = {};
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const separator = line.indexOf('=');
+    if (separator <= 0) continue;
+    const key = line.slice(0, separator).trim();
+    const rawValue = line.slice(separator + 1).trim();
+    const value = rawValue.replace(/^(['"])(.*)\1$/, '$2');
+    env[key] = value;
+  }
+  return env;
+};
+
+const loadServerEnv = () => {
+  const candidates = [
+    process.env.WEAVE_SERVER_ENV_FILE,
+    path.join(process.cwd(), '../server/.env'),
+    path.join(process.cwd(), 'server/.env'),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate)) return parseEnvText(readFileSync(candidate, 'utf8'));
+    } catch {
+      // Ignore malformed or unreadable local env files; explicit process env still works.
+    }
+  }
+
+  return {};
+};
+
+const hasExplicitAuthEnv = (env: Record<string, string | undefined>) =>
+  Object.hasOwn(env, 'WEAVE_OWNER_TOKEN') ||
+  Object.hasOwn(env, 'WEAVE_AUTH_TOKEN') ||
+  Object.hasOwn(env, 'WEAVE_AUTH_TOKENS') ||
+  Object.hasOwn(env, 'VITE_WEAVE_AUTH_TOKEN');
+
+const authTokenFromLegacyMap = (rawTokens: string | undefined) => {
+  const raw = optionalString(rawTokens);
+  if (!raw) return undefined;
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const tokens = Object.keys(parsed).filter(token => token.trim());
+    return tokens.length === 1 ? tokens[0] : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export class ConnectionSettingsStore {
   private readonly filePath: string;
   private readonly encryption: EncryptionProvider;
   private readonly env: Record<string, string | undefined>;
   private sessionAuthToken: string | undefined;
 
-  constructor({ userDataPath, encryption, env = process.env }: ConnectionSettingsStoreOptions) {
+  constructor({ userDataPath, encryption, env }: ConnectionSettingsStoreOptions) {
+    const baseEnv = env ?? process.env;
     this.filePath = path.join(userDataPath, 'connection.json');
     this.encryption = encryption;
-    this.env = env;
+    this.env = env === undefined && !hasExplicitAuthEnv(baseEnv) ? { ...loadServerEnv(), ...baseEnv } : baseEnv;
     this.sessionAuthToken = this.getEnvAuthToken();
   }
 
@@ -82,7 +139,10 @@ export class ConnectionSettingsStore {
   }
 
   private getEnvAuthToken() {
-    return this.env.WEAVE_AUTH_TOKEN?.trim() || this.env.VITE_WEAVE_AUTH_TOKEN?.trim() || undefined;
+    return optionalString(this.env.WEAVE_OWNER_TOKEN)
+      ?? optionalString(this.env.WEAVE_AUTH_TOKEN)
+      ?? optionalString(this.env.VITE_WEAVE_AUTH_TOKEN)
+      ?? authTokenFromLegacyMap(this.env.WEAVE_AUTH_TOKENS);
   }
 
   private readPersisted(): PersistedConnectionSettings {

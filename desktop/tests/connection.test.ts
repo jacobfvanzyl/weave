@@ -134,4 +134,49 @@ describe('ConnectionSettingsStore', () => {
     });
     expect(store.getAuthToken()).toBe('env-secret');
   }));
+
+  it('uses owner token environment defaults', () => withTempStore(directory => {
+    const store = new ConnectionSettingsStore({
+      userDataPath: directory,
+      encryption: createEncryption(),
+      env: {
+        WEAVE_OWNER_TOKEN: 'owner-secret',
+      },
+    });
+
+    expect(store.getSettings()).toEqual({
+      mastraUrl: 'http://localhost:4111',
+      hasAuthToken: true,
+    });
+    expect(store.getAuthToken()).toBe('owner-secret');
+  }));
+
+  it('uses a single legacy auth token map entry as a compatibility default', () => withTempStore(directory => {
+    const store = new ConnectionSettingsStore({
+      userDataPath: directory,
+      encryption: createEncryption(),
+      env: {
+        WEAVE_AUTH_TOKENS: JSON.stringify({
+          'legacy-secret': { id: 'legacy-user', name: 'Legacy User' },
+        }),
+      },
+    });
+
+    expect(store.getAuthToken()).toBe('legacy-secret');
+  }));
+
+  it('ignores multi-entry legacy auth token maps', () => withTempStore(directory => {
+    const store = new ConnectionSettingsStore({
+      userDataPath: directory,
+      encryption: createEncryption(),
+      env: {
+        WEAVE_AUTH_TOKENS: JSON.stringify({
+          'legacy-secret-1': { id: 'legacy-user-1', name: 'Legacy User 1' },
+          'legacy-secret-2': { id: 'legacy-user-2', name: 'Legacy User 2' },
+        }),
+      },
+    });
+
+    expect(store.getAuthToken()).toBeUndefined();
+  }));
 });

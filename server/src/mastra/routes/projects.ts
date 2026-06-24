@@ -1,7 +1,9 @@
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { collectWorkspaceGitStatesForProject, gitFieldsFromWorktree, stripProjectGitState, workspaceStateFromGitFields } from '../projects/git-state';
 import { getPortalConnection, listPortalConnections, requestPortalTool } from '../portal/registry';
+import { sanitizeNotesStorageMetadata } from '../notes-storage/resolver';
+import type { NotesStorageMetadata } from '../notes-storage/types';
 import {
   createProjectWorktree,
   fetchWorkspaceUpstream,
@@ -61,6 +63,7 @@ export type Project = {
   portalRootId?: string;
   repoPath?: string;
   vaultPath?: string;
+  notesStorage?: NotesStorageMetadata;
   gitRemote?: string;
   defaultBranch?: string;
   rootPathHint?: string;
@@ -146,6 +149,7 @@ const toProject = (thread: any): Project => {
     portalRootId: metadata.portalRootId,
     repoPath: metadata.repoPath,
     vaultPath: metadata.vaultPath,
+    notesStorage: sanitizeNotesStorageMetadata(metadata.notesStorage),
     gitRemote: metadata.gitRemote,
     defaultBranch: metadata.defaultBranch,
     rootPathHint: metadata.rootPathHint,
@@ -297,6 +301,36 @@ const getAllProjects = async (memory: any, resourceId: string) => {
   return result.threads.filter(isProjectThread).map(toProject);
 };
 
+const getProjectPortalIds = async (memory: any, resourceId: string) => {
+  const portalIds = new Set<string>();
+  for (const project of await getAllProjects(memory, resourceId)) {
+    const projectPortalId = optionalString(project.portalId);
+    if (projectPortalId) portalIds.add(projectPortalId);
+    const notesPortalId = optionalString(project.notesStorage?.portalId);
+    if (notesPortalId) portalIds.add(notesPortalId);
+    for (const workspace of project.workspaces) {
+      const workspacePortalId = optionalString(workspace.portalId);
+      if (workspacePortalId) portalIds.add(workspacePortalId);
+    }
+  }
+  return [...portalIds];
+};
+
+const resolvePortalTokenId = async (memory: any, resourceId: string) => {
+  const projectPortalIds = await getProjectPortalIds(memory, resourceId);
+  if (projectPortalIds.length > 0) return projectPortalIds[0];
+  return await getPrimaryPortalId(memory, resourceId) ?? createId('portal');
+};
+
+const savePortalToken = async (memory: any, resourceId: string, portalId: string, token: string) => {
+  const threadId = portalThreadId(portalId);
+  const title = `Portal ${portalId.slice(-6)}`;
+  const metadata = { kind: 'portal-token', portalId, token, status: 'issued', createdAt: nowIso() };
+  const existing = await memory.getThreadById({ threadId }).catch(() => undefined);
+  if (existing) return memory.updateThread({ id: threadId, title, metadata });
+  return memory.createThread({ resourceId, threadId, title, metadata, saveThread: true });
+};
+
 const getThreadsForWorkspace = async (memory: any, resourceId: string, projectId: string, workspaceId: string) => {
   const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   return result.threads.filter((thread: any) => {
@@ -401,14 +435,39 @@ const createGitProject = async (c: any, resourceId: string, baseProject: Project
   };
 };
 
+const createVirtualNotesWorkspace = (baseProject: Project, name: string): Workspace => ({
+  id: createId('workspace'),
+  projectId: baseProject.id,
+  workspaceKind: 'primary',
+  source: 'notes',
+  name: name || baseProject.name,
+  locked: true,
+  sortOrder: 0,
+  status: 'ready',
+  createdAt: baseProject.createdAt,
+  updatedAt: baseProject.createdAt,
+});
+
 const createNotesProject = async (_c: any, resourceId: string, baseProject: Project, body: Record<string, unknown>): Promise<Project> => {
-  const portalId = optionalString(body?.portalId);
-  const rootId = optionalString(body?.rootId);
-  const vaultPath = optionalString(body?.vaultPath ?? body?.repoPath) ?? '';
+  const requestedStorage = sanitizeNotesStorageMetadata(body?.notesStorage);
+  if (requestedStorage && requestedStorage.kind !== 'portal') {
+    return {
+      ...baseProject,
+      notesStorage: requestedStorage,
+      workspaces: [createVirtualNotesWorkspace(baseProject, optionalString(body?.workspaceName) ?? baseProject.name)],
+    };
+  }
+
+  const portalId = optionalString(body?.portalId) ?? requestedStorage?.portalId;
+  const rootId = optionalString(body?.rootId) ?? requestedStorage?.rootId;
+  const vaultPath = optionalString(body?.vaultPath ?? body?.repoPath)
+    ?? requestedStorage?.vaultPath
+    ?? requestedStorage?.workspacePath
+    ?? '';
   assertPortalForUser(portalId, resourceId);
   if (!rootId) throw new Error('rootId is required for notes projects');
 
-  const result = isRootedPath(vaultPath)
+  const result = (isRootedPath(vaultPath)
     ? await requestPortalTool({
         portalId: portalId!,
         tool: 'portal.fs.stat',
@@ -420,7 +479,7 @@ const createNotesProject = async (_c: any, resourceId: string, baseProject: Proj
         tool: 'portal.fs.list',
         args: { rootId, path: vaultPath },
         timeoutMs: 10_000,
-      }) as { ok?: boolean; error?: string; path?: string; realPath?: string; isDirectory?: boolean };
+      })) as { ok?: boolean; error?: string; path?: string; realPath?: string; isDirectory?: boolean };
   portalToolError(result);
   const realPath = normalizePath(isRootedPath(vaultPath) ? result.path : result.realPath);
   if (!realPath || result.isDirectory === false) throw new Error('Selected vault folder could not be resolved. Restart Portal and select the folder again.');
@@ -445,12 +504,19 @@ const createNotesProject = async (_c: any, resourceId: string, baseProject: Proj
     portalId,
     portalRootId: rootId,
     vaultPath: realPath,
+    notesStorage: {
+      kind: 'portal',
+      portalId,
+      rootId,
+      vaultPath: realPath,
+      workspacePath: realPath,
+    },
     workspaces: [primaryWorkspace],
   };
 };
 
 export const projectRoutes = [
-  registerApiRoute('/projects', {
+  defineRoute('/projects', {
     method: 'GET',
     handler: async c => {
       try {
@@ -471,16 +537,16 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/workspaces/git-state', {
+  defineRoute('/projects/workspaces/git-state', {
     method: 'GET',
     handler: async c => {
       try {
         const resourceId = getResourceId(c);
         const memory = await getMemory(c);
         const checkedAt = nowIso();
-        const projects = (await getAllProjects(memory, resourceId))
-          .filter(project => project.projectKind === 'git' && isVisibleUserProject(project));
-        const states = (await Promise.all(projects.map(project =>
+        const projects: Project[] = (await getAllProjects(memory, resourceId))
+          .filter((project: Project) => project.projectKind === 'git' && isVisibleUserProject(project));
+        const states = (await Promise.all(projects.map((project: Project) =>
           collectWorkspaceGitStatesForProject(project, resourceId, checkedAt, requestPortalTool, getPortalConnection),
         ))).flat();
         return c.json({ states });
@@ -489,7 +555,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects', {
+  defineRoute('/projects', {
     method: 'POST',
     handler: async c => {
       try {
@@ -525,7 +591,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/reorder', {
+  defineRoute('/projects/reorder', {
     method: 'PATCH',
     handler: async c => {
       try {
@@ -558,7 +624,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId', {
+  defineRoute('/projects/:projectId', {
     method: 'DELETE',
     handler: async c => {
       try {
@@ -569,7 +635,7 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
 
         const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
-        const projectThreads = result.threads.filter(thread => {
+        const projectThreads = (result.threads as any[]).filter((thread: any) => {
           const metadata = thread.metadata as Record<string, unknown> | undefined;
           return metadata?.mode === 'project' && metadata.projectId === projectId;
         });
@@ -585,7 +651,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId', {
+  defineRoute('/projects/:projectId', {
     method: 'GET',
     handler: async c => {
       try {
@@ -599,7 +665,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/profile', {
+  defineRoute('/projects/:projectId/profile', {
     method: 'PATCH',
     handler: async c => {
       try {
@@ -626,7 +692,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/branches', {
+  defineRoute('/projects/:projectId/branches', {
     method: 'GET',
     handler: async c => {
       try {
@@ -647,7 +713,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/resolve-workspace', {
+  defineRoute('/projects/resolve-workspace', {
     method: 'POST',
     handler: async c => {
       try {
@@ -661,9 +727,10 @@ export const projectRoutes = [
         const memory = await getMemory(c);
         const allowAdHoc = body?.allowAdHoc === true;
         const portalId = optionalString(body?.portalId);
-        const projects = (await getAllProjects(memory, resourceId)).filter(project => project.projectKind === 'git' && !project.hidden && project.systemKind !== 'adHoc');
-        const exact = projects.flatMap(project => project.workspaces.map(workspace => ({ project, workspace })))
-          .find(item => normalizeWorkspacePath(item.workspace) === workspacePath.toLowerCase());
+        const projects: Project[] = (await getAllProjects(memory, resourceId))
+          .filter((project: Project) => project.projectKind === 'git' && !project.hidden && project.systemKind !== 'adHoc');
+        const exact = projects.flatMap((project: Project) => project.workspaces.map((workspace: Workspace) => ({ project, workspace })))
+          .find((item: { project: Project; workspace: Workspace }) => normalizeWorkspacePath(item.workspace) === workspacePath.toLowerCase());
 
         let resolvedProject = exact?.project;
         let resolvedWorkspace = exact?.workspace;
@@ -682,7 +749,7 @@ export const projectRoutes = [
               });
               const validatedPath = normalizePath(validation.path) ?? workspacePath;
               resolvedProject = project;
-              resolvedWorkspace = project.workspaces.find(item => normalizeWorkspacePath(item) === validatedPath.toLowerCase());
+              resolvedWorkspace = project.workspaces.find((item: Workspace) => normalizeWorkspacePath(item) === validatedPath.toLowerCase());
 
               if (!resolvedWorkspace) {
                 assertUniqueWorkspace(project, { path: validatedPath });
@@ -718,12 +785,12 @@ export const projectRoutes = [
             const adHoc = await ensureAdHocWorkspace(memory, resourceId, portalId, workspacePath);
             return c.json({ resolved: true, adHoc: true, offline: false, project: adHoc.project, workspace: adHoc.workspace });
           }
-          const remoteMatches = remote ? projects.filter(project => normalizeRemote(project.gitRemote) === remote) : [];
+          const remoteMatches = remote ? projects.filter((project: Project) => normalizeRemote(project.gitRemote) === remote) : [];
           return c.json({
             resolved: false,
             offline,
             needsConfirmation: remoteMatches.length > 0,
-            candidates: remoteMatches.map(project => ({ projectId: project.id, name: project.name, gitRemote: project.gitRemote })),
+            candidates: remoteMatches.map((project: Project) => ({ projectId: project.id, name: project.name, gitRemote: project.gitRemote })),
           });
         }
 
@@ -745,7 +812,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces/discover', {
+  defineRoute('/projects/:projectId/workspaces/discover', {
     method: 'GET',
     handler: async c => {
       try {
@@ -772,7 +839,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces', {
+  defineRoute('/projects/:projectId/workspaces', {
     method: 'POST',
     handler: async c => {
       try {
@@ -829,7 +896,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces/adopt', {
+  defineRoute('/projects/:projectId/workspaces/adopt', {
     method: 'POST',
     handler: async c => {
       try {
@@ -877,7 +944,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces/:workspaceId', {
+  defineRoute('/projects/:projectId/workspaces/:workspaceId', {
     method: 'PATCH',
     handler: async c => {
       try {
@@ -920,7 +987,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces/:workspaceId/git/fetch', {
+  defineRoute('/projects/:projectId/workspaces/:workspaceId/git/fetch', {
     method: 'POST',
     handler: async c => {
       try {
@@ -944,7 +1011,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces/:workspaceId/git/pull', {
+  defineRoute('/projects/:projectId/workspaces/:workspaceId/git/pull', {
     method: 'POST',
     handler: async c => {
       try {
@@ -968,7 +1035,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces/:workspaceId/removal-preview', {
+  defineRoute('/projects/:projectId/workspaces/:workspaceId/removal-preview', {
     method: 'GET',
     handler: async c => {
       try {
@@ -998,7 +1065,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces/:workspaceId', {
+  defineRoute('/projects/:projectId/workspaces/:workspaceId', {
     method: 'DELETE',
     handler: async c => {
       try {
@@ -1062,24 +1129,24 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/workspaces/reorder', {
+  defineRoute('/projects/:projectId/workspaces/reorder', {
     method: 'PATCH',
     handler: async c => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
         const body = await c.req.json();
-        const workspaceIds = Array.isArray(body?.workspaceIds) ? body.workspaceIds.filter((id: unknown) => typeof id === 'string') : [];
+        const workspaceIds: string[] = Array.isArray(body?.workspaceIds) ? body.workspaceIds.filter((id: unknown): id is string => typeof id === 'string') : [];
         const memory = await getMemory(c);
         const project = await getProject(memory, resourceId, projectId);
         if (!project) return c.json({ error: 'project not found' }, 404);
         const existingIds = new Set(project.workspaces.map(workspace => workspace.id));
-        if (workspaceIds.length !== existingIds.size || workspaceIds.some(id => !existingIds.has(id))) {
+        if (workspaceIds.length !== existingIds.size || workspaceIds.some((id: string) => !existingIds.has(id))) {
           return c.json({ error: 'workspaceIds must include all workspaces for this project' }, 400);
         }
 
-        const order = new Map(workspaceIds.map((id, index) => [id, index]));
-        const nextProject = {
+        const order = new Map<string, number>(workspaceIds.map((id: string, index: number) => [id, index]));
+        const nextProject: Project = {
           ...project,
           workspaces: project.workspaces.map(workspace => ({ ...workspace, sortOrder: order.get(workspace.id) ?? workspace.sortOrder })),
           updatedAt: nowIso(),
@@ -1091,7 +1158,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/projects/:projectId/threads', {
+  defineRoute('/projects/:projectId/threads', {
     method: 'POST',
     handler: async c => {
       try {
@@ -1146,7 +1213,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/portals/:portalId/browse', {
+  defineRoute('/portals/:portalId/browse', {
     method: 'GET',
     handler: async c => {
       try {
@@ -1167,7 +1234,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/portals', {
+  defineRoute('/portals', {
     method: 'GET',
     handler: async c => {
       try {
@@ -1182,7 +1249,7 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/portals/:portalId/primary', {
+  defineRoute('/portals/:portalId/primary', {
     method: 'PATCH',
     handler: async c => {
       try {
@@ -1198,23 +1265,16 @@ export const projectRoutes = [
       }
     },
   }),
-  registerApiRoute('/portals/token', {
+  defineRoute('/portals/token', {
     method: 'POST',
     handler: async c => {
       try {
         const resourceId = getResourceId(c);
-        const portalId = createId('portal');
-        const token = `mhb_${crypto.randomUUID().replace(/-/g, '')}`;
         const memory = await getMemory(c);
-        await memory.createThread({
-          resourceId,
-          threadId: portalThreadId(portalId),
-          title: `Portal ${portalId.slice(-6)}`,
-          metadata: { kind: 'portal-token', portalId, token, status: 'issued', createdAt: nowIso() },
-          saveThread: true,
-        });
-        const primaryPortalId = await getPrimaryPortalId(memory, resourceId);
-        if (!primaryPortalId) await setPrimaryPortalId(memory, resourceId, portalId);
+        const portalId = await resolvePortalTokenId(memory, resourceId);
+        const token = `mhb_${crypto.randomUUID().replace(/-/g, '')}`;
+        await savePortalToken(memory, resourceId, portalId, token);
+        await setPrimaryPortalId(memory, resourceId, portalId);
         return c.json({ portalId, token });
       } catch (error) {
         return errorResponse(c, error);

@@ -77,19 +77,23 @@ const testConnection = async (input?: DesktopConnectionInput): Promise<DesktopCo
     const mastraUrl = normalizeMastraUrl(input?.mastraUrl ?? savedSettings.mastraUrl);
     const authToken = Object.hasOwn(input ?? {}, 'authToken') ? input?.authToken?.trim() : store.getAuthToken();
     const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-    const response = await fetch(`${mastraUrl}/chat-state/me`, { headers });
+    const response = await fetch(`${mastraUrl}/owner/me`, { headers });
 
     if (!response.ok) {
       const error = (await response.text()).trim();
       return { ok: false, status: response.status, error: error || `HTTP ${response.status}` };
     }
 
-    const data = await response.json() as { user?: { id?: unknown; name?: unknown } };
-    if (typeof data.user?.id !== 'string' || typeof data.user.name !== 'string') {
-      return { ok: false, error: 'Connection response did not include a valid user.' };
+    const data = await response.json() as {
+      owner?: { id?: unknown; name?: unknown };
+      user?: { id?: unknown; name?: unknown };
+    };
+    const user = data.owner ?? data.user;
+    if (typeof user?.id !== 'string' || typeof user.name !== 'string') {
+      return { ok: false, error: 'Connection response did not include a valid owner.' };
     }
 
-    return { ok: true, user: { id: data.user.id, name: data.user.name } };
+    return { ok: true, user: { id: user.id, name: user.name } };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'Connection failed.' };
   }
@@ -121,7 +125,7 @@ const resolveGitWorkspace = async (input: EditorTarget, featureName: string) => 
   const settings = store.getSettings();
   const authToken = store.getAuthToken();
   const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-  const response = await fetch(`${normalizeMastraUrl(settings.mastraUrl)}/projects`, { headers });
+  const response = await fetch(`${normalizeMastraUrl(settings.mastraUrl)}/code/projects`, { headers });
 
   if (!response.ok) {
     const error = (await response.text()).trim();

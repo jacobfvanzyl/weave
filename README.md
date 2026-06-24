@@ -1,12 +1,12 @@
 # Weave
 
-Weave is split into a Mastra server plus clients and local runtime pieces.
+Weave is split into an owned Deno server plus clients and local runtime pieces.
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `server/` | Mastra server, agents, API routes, tools, prompts, Docker files, and server env templates. |
+| `server/` | Deno server, backend modules, Agent implementation, Docker files, and server env templates. |
 | `packages/client/` | Shared React client package used by web, desktop, and mobile shells. |
 | `desktop/` | Electron desktop app. |
 | `web/` | Browser web app. |
@@ -34,4 +34,4 @@ npm run portal:check
 npm run portal:test
 ```
 
-The server `.env`, `.env.example`, Mastra source, and deploy files now live under `server/`.
+The server `.env`, `.env.example`, Deno runtime, Agent/Mastra implementation, and deploy files live under `server/`.

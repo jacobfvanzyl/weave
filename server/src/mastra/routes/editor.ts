@@ -1,4 +1,4 @@
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { findPortalForProject, getPortalConnection, requestPortalTool } from '../portal/registry';
 
@@ -146,19 +146,19 @@ const handleEditorRoute = async (c: any, tool: string, args: (body: Record<strin
 };
 
 export const editorRoutes = [
-  registerApiRoute('/editor/list', {
+  defineRoute('/editor/list', {
     method: 'POST',
     handler: async c => handleEditorRoute(c, 'portal.editor.list', body => ({
       path: optionalString(body.path) ?? '',
     })),
   }),
-  registerApiRoute('/editor/read', {
+  defineRoute('/editor/read', {
     method: 'POST',
     handler: async c => handleEditorRoute(c, 'portal.editor.read', body => ({
       path: optionalString(body.path) ?? '',
     })),
   }),
-  registerApiRoute('/editor/write', {
+  defineRoute('/editor/write', {
     method: 'POST',
     handler: async c => handleEditorRoute(c, 'portal.editor.write', body => ({
       path: optionalString(body.path) ?? '',
@@ -166,13 +166,13 @@ export const editorRoutes = [
       version: optionalString(body.version),
     })),
   }),
-  registerApiRoute('/editor/mkdir', {
+  defineRoute('/editor/mkdir', {
     method: 'POST',
     handler: async c => handleEditorRoute(c, 'portal.editor.mkdir', body => ({
       path: optionalString(body.path) ?? '',
     })),
   }),
-  registerApiRoute('/editor/move', {
+  defineRoute('/editor/move', {
     method: 'POST',
     handler: async c => handleEditorRoute(c, 'portal.editor.move', body => ({
       fromPath: optionalString(body.fromPath) ?? '',
@@ -180,7 +180,7 @@ export const editorRoutes = [
       overwrite: body.overwrite === true,
     })),
   }),
-  registerApiRoute('/editor/delete', {
+  defineRoute('/editor/delete', {
     method: 'POST',
     handler: async c => handleEditorRoute(c, 'portal.editor.delete', body => ({
       path: optionalString(body.path) ?? '',

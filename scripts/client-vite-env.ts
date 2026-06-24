@@ -15,14 +15,15 @@ const firstTokenFromAuthTokens = (rawTokens: string | undefined) => {
   try {
     const parsed = JSON.parse(rawTokens) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-    return Object.keys(parsed).find(token => Boolean(token.trim()));
+    const tokens = Object.keys(parsed).filter(token => Boolean(token.trim()));
+    return tokens.length === 1 ? tokens[0] : undefined;
   } catch {
     return undefined;
   }
 };
 
 const getServerAuthToken = (env: EnvMap) =>
-  firstNonEmpty(env.WEAVE_AUTH_TOKEN, firstTokenFromAuthTokens(env.WEAVE_AUTH_TOKENS));
+  firstNonEmpty(env.WEAVE_OWNER_TOKEN, env.WEAVE_AUTH_TOKEN, firstTokenFromAuthTokens(env.WEAVE_AUTH_TOKENS));
 
 export const resolveWeaveClientAuthToken = ({ appEnv, shellEnv, workspaceEnv }: WeaveClientDefineOptions) =>
   firstNonEmpty(

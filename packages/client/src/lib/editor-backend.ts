@@ -1,5 +1,6 @@
 import type { EditorBackend, EditorFile, EditorListResult, EditorTarget, EditorWriteResult, FileOperationResult } from './editor-types';
-import { getAuthHeaders, getMastraUrl } from './mastra-client';
+import { getAuthHeaders } from './mastra-client';
+import { weaveRoutes } from './weave-routes';
 
 type DesktopEditorBridge = {
   editorList: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
@@ -67,7 +68,7 @@ export const createEditorBackend = (): EditorBackend => {
 
   if (!bridge) {
     const request = async <T>(action: 'list' | 'read' | 'write' | 'mkdir' | 'move' | 'delete', body: unknown): Promise<T> => {
-      const response = await fetch(`${getMastraUrl()}/editor/${action}`, {
+      const response = await fetch(weaveRoutes.code.editor(action), {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(body),

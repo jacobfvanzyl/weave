@@ -1,8 +1,14 @@
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const localDataDir = join(process.cwd(), '.data');
+const currentDataDir = join(process.cwd(), '.data');
+const legacyDataDir = join(dirname(fileURLToPath(import.meta.url)), 'public', '.data');
+const legacyStoragePath = join(legacyDataDir, 'mastra.db');
+
+export const localDataDir = process.env.WEAVE_DATA_DIR
+  ?? process.env.MASTRA_LOCAL_DATA_DIR
+  ?? (existsSync(legacyStoragePath) ? legacyDataDir : currentDataDir);
 mkdirSync(localDataDir, { recursive: true });
 
 export const localStorageUrl = pathToFileURL(join(localDataDir, 'mastra.db')).href;

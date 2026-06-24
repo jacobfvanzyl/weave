@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
-import { getAuthHeaders, getMastraUrl } from './mastra-client';
+import { getAuthHeaders } from './mastra-client';
+import { weaveRoutes } from './weave-routes';
 import type { ChatThread, PlanStepStatus, ThreadPlan, ThreadPlanStep } from '../stores/chat-store';
 
 type ServerThread = {
@@ -119,6 +120,15 @@ export type DiscoveredWorktree = {
   workspaceId?: string;
 };
 
+export type NotesStorageMetadata = {
+  kind: string;
+  portalId?: string;
+  rootId?: string;
+  vaultPath?: string;
+  workspacePath?: string;
+  [key: string]: unknown;
+};
+
 export type Project = {
   id: string;
   userId: string;
@@ -129,6 +139,7 @@ export type Project = {
   portalRootId?: string;
   repoPath?: string;
   vaultPath?: string;
+  notesStorage?: NotesStorageMetadata;
   gitRemote?: string;
   defaultBranch?: string;
   rootPathHint?: string;
@@ -258,16 +269,16 @@ export type AuthUser = {
 };
 
 export const getAuthUser = async () => {
-  const result = await parseJson<{ user: AuthUser }>(
-    await fetch(`${getMastraUrl()}/chat-state/me`, { headers: getAuthHeaders() }),
+  const result = await parseJson<{ owner?: AuthUser; user?: AuthUser }>(
+    await fetch(weaveRoutes.owner.me(), { headers: getAuthHeaders() }),
   );
 
-  return result.user;
+  return result.owner ?? result.user!;
 };
 
 export const listServerThreads = async () => {
   const result = await parseJson<{ threads: ServerThread[] }>(
-    await fetch(`${getMastraUrl()}/chat-state/threads`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.chat.threads(), { headers: getAuthHeaders() }),
   );
 
   return result.threads.map(toChatThread);
@@ -275,7 +286,7 @@ export const listServerThreads = async () => {
 
 export const createServerThread = async (threadId: string, projectId?: string, workspaceId?: string, title = '...', profileId?: string) => {
   const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(`${getMastraUrl()}/chat-state/threads`, {
+    await fetch(weaveRoutes.chat.threads(), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ threadId, title, projectId, workspaceId, profileId }),
@@ -287,7 +298,7 @@ export const createServerThread = async (threadId: string, projectId?: string, w
 
 export const setServerThreadProfile = async (threadId: string, profileId: string | null) => {
   const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}`, {
+    await fetch(weaveRoutes.chat.thread(threadId), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ profileId }),
@@ -299,7 +310,7 @@ export const setServerThreadProfile = async (threadId: string, profileId: string
 
 export const archiveServerThread = async (threadId: string, archived = true) => {
   const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}`, {
+    await fetch(weaveRoutes.chat.thread(threadId), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ archived }),
@@ -311,7 +322,7 @@ export const archiveServerThread = async (threadId: string, archived = true) => 
 
 export const renameServerThread = async (threadId: string, title: string) => {
   const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}`, {
+    await fetch(weaveRoutes.chat.thread(threadId), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ title }),
@@ -323,13 +334,13 @@ export const renameServerThread = async (threadId: string, title: string) => {
 
 export const deleteServerThread = async (threadId: string) => {
   await parseJson<{ ok: true }>(
-    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}`, { method: 'DELETE', headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.chat.thread(threadId), { method: 'DELETE', headers: getAuthHeaders() }),
   );
 };
 
 export const listProjects = async () => {
   const result = await parseJson<{ projects: Project[] }>(
-    await fetch(`${getMastraUrl()}/projects`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.code.projects(), { headers: getAuthHeaders() }),
   );
 
   return result.projects;
@@ -337,7 +348,7 @@ export const listProjects = async () => {
 
 export const listWorkspaceGitStates = async () => {
   const result = await parseJson<{ states: WorkspaceGitState[] }>(
-    await fetch(`${getMastraUrl()}/projects/workspaces/git-state`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.code.workspaceGitStates(), { headers: getAuthHeaders() }),
   );
 
   return result.states;
@@ -345,7 +356,7 @@ export const listWorkspaceGitStates = async () => {
 
 export const listProjectBranches = async (projectId: string) => {
   const result = await parseJson<{ branches: WorkspaceBranchOption[] }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/branches`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.code.projectBranches(projectId), { headers: getAuthHeaders() }),
   );
 
   return result.branches;
@@ -390,6 +401,7 @@ export type CreateProjectInput = {
   rootId?: string;
   repoPath?: string;
   vaultPath?: string;
+  notesStorage?: NotesStorageMetadata;
 };
 
 export type WorkspaceBranchMode = 'newBranch' | 'existingBranch' | 'detached';
@@ -434,7 +446,7 @@ const normalizePortalConnection = (portal: unknown): PortalConnection | undefine
 
 export const listPortals = async () => {
   const result = await parseJson<{ portals: unknown[] }>(
-    await fetch(`${getMastraUrl()}/portals`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.portal.portals(), { headers: getAuthHeaders() }),
   );
 
   return result.portals.flatMap(portal => normalizePortalConnection(portal) ?? []);
@@ -443,13 +455,13 @@ export const listPortals = async () => {
 export const browsePortal = async (portalId: string, rootId = 'default', path = '') => {
   const params = new URLSearchParams({ rootId, path });
   return parseJson<PortalBrowseResult>(
-    await fetch(`${getMastraUrl()}/portals/${portalId}/browse?${params}`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.portal.portalBrowse(portalId, params), { headers: getAuthHeaders() }),
   );
 };
 
 export const setPrimaryPortal = async (portalId: string) => {
   const result = await parseJson<{ ok: true; primaryPortalId: string; portals: unknown[] }>(
-    await fetch(`${getMastraUrl()}/portals/${portalId}/primary`, {
+    await fetch(weaveRoutes.portal.portalPrimary(portalId), {
       method: 'PATCH',
       headers: getAuthHeaders(),
     }),
@@ -464,7 +476,7 @@ export const setPrimaryPortal = async (portalId: string) => {
 export const createProject = async (input: string | CreateProjectInput) => {
   const body = typeof input === 'string' ? { name: input, projectKind: 'general' } : input;
   const result = await parseJson<{ project: Project }>(
-    await fetch(`${getMastraUrl()}/projects`, {
+    await fetch(weaveRoutes.code.projects(), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(body),
@@ -476,13 +488,13 @@ export const createProject = async (input: string | CreateProjectInput) => {
 
 export const deleteProject = async (projectId: string) => {
   await parseJson<{ ok: true }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}`, { method: 'DELETE', headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.code.project(projectId), { method: 'DELETE', headers: getAuthHeaders() }),
   );
 };
 
 export const setProjectProfile = async (projectId: string, profileId: string | null) => {
   const result = await parseJson<{ project: Project }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/profile`, {
+    await fetch(weaveRoutes.code.projectProfile(projectId), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ profileId }),
@@ -494,7 +506,7 @@ export const setProjectProfile = async (projectId: string, profileId: string | n
 
 export const reorderProjects = async (projectIds: string[]) => {
   const result = await parseJson<{ projects: Project[] }>(
-    await fetch(`${getMastraUrl()}/projects/reorder`, {
+    await fetch(weaveRoutes.code.reorderProjects(), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ projectIds }),
@@ -509,7 +521,7 @@ export const createWorkspace = async (projectId: string, input: string | CreateW
     ? { name: input, mode: 'newBranch' satisfies WorkspaceBranchMode, branch: input }
     : input;
   const result = await parseJson<{ project: Project; workspace: Workspace }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces`, {
+    await fetch(weaveRoutes.code.workspaces(projectId), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(body),
@@ -521,7 +533,7 @@ export const createWorkspace = async (projectId: string, input: string | CreateW
 
 export const updateWorkspace = async (projectId: string, workspaceId: string, input: UpdateWorkspaceInput) => {
   const result = await parseJson<{ project: Project; workspace: Workspace }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}`, {
+    await fetch(weaveRoutes.code.workspace(projectId, workspaceId), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(input),
@@ -533,7 +545,7 @@ export const updateWorkspace = async (projectId: string, workspaceId: string, in
 
 export const fetchWorkspaceGitUpstream = async (projectId: string, workspaceId: string) => {
   const result = await parseJson<{ state: WorkspaceGitState }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}/git/fetch`, {
+    await fetch(weaveRoutes.code.workspaceGitFetch(projectId, workspaceId), {
       method: 'POST',
       headers: getAuthHeaders(),
     }),
@@ -544,7 +556,7 @@ export const fetchWorkspaceGitUpstream = async (projectId: string, workspaceId: 
 
 export const pullWorkspaceGitUpstream = async (projectId: string, workspaceId: string) => {
   const result = await parseJson<{ state: WorkspaceGitState }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}/git/pull`, {
+    await fetch(weaveRoutes.code.workspaceGitPull(projectId, workspaceId), {
       method: 'POST',
       headers: getAuthHeaders(),
     }),
@@ -555,7 +567,7 @@ export const pullWorkspaceGitUpstream = async (projectId: string, workspaceId: s
 
 export const adoptWorkspace = async (projectId: string, path: string, name?: string) => {
   const result = await parseJson<{ project: Project; workspace: Workspace }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/adopt`, {
+    await fetch(weaveRoutes.code.adoptWorkspace(projectId), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ path, name }),
@@ -567,7 +579,7 @@ export const adoptWorkspace = async (projectId: string, path: string, name?: str
 
 export const fetchWorkspaceRemovalPreview = async (projectId: string, workspaceId: string) => {
   return parseJson<WorkspaceRemovalPreview>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}/removal-preview`, {
+    await fetch(weaveRoutes.code.workspaceRemovalPreview(projectId, workspaceId), {
       headers: getAuthHeaders(),
     }),
   );
@@ -584,7 +596,7 @@ export const deleteWorkspace = async (
   if (options.deleteLocalBranch) params.set('deleteLocalBranch', 'true');
 
   const result = await parseJson<DeleteWorkspaceResult>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/${workspaceId}?${params}`, {
+    await fetch(weaveRoutes.code.workspace(projectId, workspaceId, params), {
       method: 'DELETE',
       headers: getAuthHeaders(),
     }),
@@ -595,7 +607,7 @@ export const deleteWorkspace = async (
 
 export const discoverWorkspaces = async (projectId: string) => {
   const result = await parseJson<{ worktrees: DiscoveredWorktree[] }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/discover`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.code.discoverWorkspaces(projectId), { headers: getAuthHeaders() }),
   );
 
   return result.worktrees;
@@ -603,7 +615,7 @@ export const discoverWorkspaces = async (projectId: string) => {
 
 export const reorderWorkspaces = async (projectId: string, workspaceIds: string[]) => {
   const result = await parseJson<{ project: Project }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/workspaces/reorder`, {
+    await fetch(weaveRoutes.code.reorderWorkspaces(projectId), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ workspaceIds }),
@@ -615,7 +627,7 @@ export const reorderWorkspaces = async (projectId: string, workspaceIds: string[
 
 export const createProjectThread = async (projectId: string, threadId: string, workspaceId?: string, title = '...', profileId?: string) => {
   const result = await parseJson<{ thread: ServerThread; workspace: Workspace }>(
-    await fetch(`${getMastraUrl()}/projects/${projectId}/threads`, {
+    await fetch(weaveRoutes.code.projectThreads(projectId), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ threadId, title, workspaceId, profileId }),
@@ -627,7 +639,7 @@ export const createProjectThread = async (projectId: string, threadId: string, w
 
 export const reorderThreads = async (scope: { plain?: true; projectId?: string; workspaceId?: string }, threadIds: string[]) => {
   await parseJson<{ ok: true }>(
-    await fetch(`${getMastraUrl()}/chat-state/threads/reorder`, {
+    await fetch(weaveRoutes.chat.reorderThreads(), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ scope, threadIds }),
@@ -637,7 +649,7 @@ export const reorderThreads = async (scope: { plain?: true; projectId?: string; 
 
 export const listServerMessages = async (threadId: string) => {
   const result = await parseJson<{ messages: UIMessage[] }>(
-    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}/messages`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.chat.threadMessages(threadId), { headers: getAuthHeaders() }),
   );
 
   return result.messages;
@@ -654,7 +666,7 @@ export type ThreadRunState = {
 
 export const getThreadRunState = async (threadId: string) => {
   const result = await parseJson<{ run: ThreadRunState }>(
-    await fetch(`${getMastraUrl()}/chat/${threadId}/run`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.chat.run(threadId), { headers: getAuthHeaders() }),
   );
 
   return result.run;
@@ -662,7 +674,7 @@ export const getThreadRunState = async (threadId: string) => {
 
 export const cancelThreadRun = async (threadId: string) => {
   const result = await parseJson<{ ok: true; run: ThreadRunState }>(
-    await fetch(`${getMastraUrl()}/chat/${threadId}/cancel`, { method: 'POST', headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.chat.cancelRun(threadId), { method: 'POST', headers: getAuthHeaders() }),
   );
 
   return result.run;
@@ -681,8 +693,8 @@ export type ContextUsage = {
 };
 
 export const getThreadContextUsage = async (threadId: string, contextWindow?: number) => {
-  const params = contextWindow ? `?${new URLSearchParams({ contextWindow: String(contextWindow) })}` : '';
+  const params = contextWindow ? new URLSearchParams({ contextWindow: String(contextWindow) }) : undefined;
   return parseJson<ContextUsage>(
-    await fetch(`${getMastraUrl()}/chat-state/threads/${threadId}/context-usage${params}`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.chat.threadContextUsage(threadId, params), { headers: getAuthHeaders() }),
   );
 };

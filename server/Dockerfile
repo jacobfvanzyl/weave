@@ -1,25 +1,19 @@
 # syntax=docker/dockerfile:1
 
-FROM node:22-bookworm-slim AS builder
-WORKDIR /app
+FROM denoland/deno:2.8.3 AS runner
+WORKDIR /app/server
 
-COPY package.json package-lock.json ./
-RUN npm ci
-
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
-
-FROM node:22-bookworm-slim AS runner
-WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=4111
 ENV WEAVE_PORTAL_WS_PORT=4112
 
-COPY --from=builder /app/.mastra/output ./
-RUN mkdir -p /app/.data
+COPY deno.json deno.lock ./
+COPY src ./src
+RUN deno cache --config deno.json --node-modules-dir=auto --sloppy-imports src/server.ts
+
+RUN mkdir -p /app/server/.data
 
 EXPOSE 4111 4112
-VOLUME ["/app/.data"]
+VOLUME ["/app/server/.data"]
 
-CMD ["node", "index.mjs"]
+CMD ["deno", "task", "--config", "deno.json", "start"]

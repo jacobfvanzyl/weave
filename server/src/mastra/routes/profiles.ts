@@ -1,5 +1,5 @@
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import { builtinDefaultProfile, listResolvedProfiles, type DynamicProfile, type ProfileResolutionInput, type WeaveContextSnapshot } from '../profiles/resolver';
 
 const getResourceId = (c: any) => {
@@ -87,7 +87,7 @@ const errorResponse = (c: any, error: unknown) => {
 };
 
 export const profileRoutes = [
-  registerApiRoute('/profiles', {
+  defineRoute('/profiles', {
     method: 'GET',
     handler: async c => {
       try {
@@ -97,7 +97,7 @@ export const profileRoutes = [
       }
     },
   }),
-  registerApiRoute('/profiles/resolved', {
+  defineRoute('/profiles/resolved', {
     method: 'GET',
     handler: async c => {
       try {

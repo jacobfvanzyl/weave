@@ -1,9 +1,9 @@
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import { attachmentStorage } from '../attachments';
 import { getAuthUserFromHeader } from '../auth';
 
 export const attachmentRoutes = [
-  registerApiRoute('/attachments/:attachmentId', {
+  defineRoute('/attachments/:attachmentId', {
     method: 'GET',
     handler: async c => {
       const user = getAuthUserFromHeader(c.req.header('Authorization'));

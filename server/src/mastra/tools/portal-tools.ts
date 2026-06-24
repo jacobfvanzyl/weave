@@ -1,6 +1,10 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { findPortalForProject, requestPortalTool } from '../portal/registry';
+import {
+  resolveNotesVaultForThreadContext,
+  type NotesVaultResolverDependencies,
+} from '../notes-storage/resolver';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars, hashText } from './model-output';
 
 export const offlineMessage = 'This thread is not bound to an active Workspace. Connect a Portal or choose a Project with an online Portal to use local tools.';
@@ -68,24 +72,21 @@ export const routePortalTool = async (tool: string, args: unknown, context: any,
   });
 };
 
-const routeNotesVaultTool = async (tool: string, args: unknown, context: any, timeoutMs?: number) => {
-  const binding = await getThreadBinding(context);
-  if (binding.projectKind !== 'notes') return { ok: false, error: 'Vault tools are only available in Notes Project threads.' };
-  const mountedPortal = findPortalForProject(binding.resourceId, binding.projectId);
-  const portalId = binding.portalId ?? mountedPortal?.portalId;
-  if (!portalId) return { ok: false, error: offlineMessage };
+type VaultToolAction = 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload';
 
-  return requestPortalTool({
-    portalId,
-    projectId: binding.projectId,
-    workspaceId: binding.workspaceId,
-    rootId: binding.rootId,
-    repoPath: binding.repoPath,
-    workspacePath: binding.workspacePath,
-    tool,
-    args,
-    timeoutMs,
-  });
+const routeNotesVaultTool = async (
+  action: VaultToolAction,
+  args: unknown,
+  context: any,
+  timeoutMs?: number,
+  deps: NotesVaultResolverDependencies = {},
+) => {
+  try {
+    const { backend, binding } = await resolveNotesVaultForThreadContext(context, deps);
+    return await backend[action](binding, args as never, timeoutMs ? { timeoutMs } : undefined);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 };
 
 type PortalBaseOutput = {
@@ -415,7 +416,7 @@ export const vaultIndexTool = createTool({
     attachments: z.array(z.any()).optional(),
     backlinks: z.record(z.string(), z.array(z.string())).optional(),
   }),
-  execute: async (input, context): Promise<PortalBaseOutput> => withVaultMetadata(await routeNotesVaultTool('portal.vault.index', input, context, 30_000), {}),
+  execute: async (input, context): Promise<PortalBaseOutput> => withVaultMetadata(await routeNotesVaultTool('index', input, context, 30_000), {}),
   toModelOutput: vaultIndexModelOutput,
 });
 
@@ -431,7 +432,7 @@ export const vaultReadTool = createTool({
     version: z.string().optional(),
   }),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('portal.vault.read', input, context), { path: input.path }),
+    withVaultMetadata(await routeNotesVaultTool('read', input, context), { path: input.path }),
   toModelOutput: vaultReadModelOutput,
 });
 
@@ -445,7 +446,7 @@ export const vaultWriteTool = createTool({
   }),
   outputSchema: z.object({ ...portalBaseOutputSchema, version: z.string().optional() }),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('portal.vault.write', input, context), { path: input.path }),
+    withVaultMetadata(await routeNotesVaultTool('write', input, context), { path: input.path }),
   toModelOutput: output => vaultOperationModelOutput('vault_write', output),
 });
 
@@ -457,7 +458,7 @@ export const vaultMkdirTool = createTool({
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('portal.vault.mkdir', input, context), { path: input.path }),
+    withVaultMetadata(await routeNotesVaultTool('mkdir', input, context), { path: input.path }),
   toModelOutput: output => vaultOperationModelOutput('vault_mkdir', output),
 });
 
@@ -471,7 +472,7 @@ export const vaultMoveTool = createTool({
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('portal.vault.move', input, context), { path: input.toPath }),
+    withVaultMetadata(await routeNotesVaultTool('move', input, context), { path: input.toPath }),
   toModelOutput: output => vaultOperationModelOutput('vault_move', output),
 });
 
@@ -484,7 +485,7 @@ export const vaultDeleteTool = createTool({
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('portal.vault.delete', input, context), { path: input.path }),
+    withVaultMetadata(await routeNotesVaultTool('delete', input, context), { path: input.path }),
   toModelOutput: output => vaultOperationModelOutput('vault_delete', output),
 });
 
@@ -498,6 +499,10 @@ export const vaultUploadTool = createTool({
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('portal.vault.upload', input, context), { path: input.path }),
+    withVaultMetadata(await routeNotesVaultTool('upload', input, context), { path: input.path }),
   toModelOutput: output => vaultOperationModelOutput('vault_upload', output),
 });
+
+export const __portalToolsTest = {
+  routeNotesVaultTool,
+};

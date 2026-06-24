@@ -1,5 +1,5 @@
 import { parseFrontmatter } from '../prompt-templates/frontmatter';
-import { listPortalConnections, requestPortalTool } from '../portal/registry';
+import { getPortalConnection, listPortalConnections, requestPortalTool } from '../portal/registry';
 import { registerResolvedProfileSkills } from './skill-source';
 
 export type WeaveContextFileKind = 'config' | 'mcp' | 'profile' | 'prompt' | 'skill' | 'agents';
@@ -279,8 +279,24 @@ const loadGlobalSnapshot = async (memory: any, resourceId: string) => {
   }
 };
 
-const loadProjectSnapshot = async (project: Record<string, any>, workspace: Record<string, any> | undefined) => {
+const resolveProjectPortalId = (
+  resourceId: string,
+  project: Record<string, any>,
+  workspace: Record<string, any> | undefined,
+) => {
   const portalId = optionalString(workspace?.portalId) ?? optionalString(project.portalId);
+  if (!portalId) return undefined;
+  const portal = getPortalConnection(portalId);
+  if (portal?.userId === resourceId) return portalId;
+  return listPortalConnections(resourceId)[0]?.portalId ?? portalId;
+};
+
+const loadProjectSnapshot = async (
+  resourceId: string,
+  project: Record<string, any>,
+  workspace: Record<string, any> | undefined,
+) => {
+  const portalId = resolveProjectPortalId(resourceId, project, workspace);
   if (!portalId) return undefined;
   const workspacePath = optionalString(workspace?.path);
   const key = `${portalId}:${workspacePath ?? project.id ?? ''}`;
@@ -322,7 +338,7 @@ const getProjectContext = async (
   const workspace = Array.isArray(project.workspaces) && typeof threadMetadata.workspaceId === 'string'
     ? project.workspaces.find((item: any) => item?.id === threadMetadata.workspaceId)
     : undefined;
-  const projectSnapshot = await loadProjectSnapshot(project, workspace);
+  const projectSnapshot = await loadProjectSnapshot(resourceId, project, workspace);
   return {
     thread,
     threadMetadata,

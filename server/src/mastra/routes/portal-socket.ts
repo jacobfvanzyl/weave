@@ -1,3 +1,2 @@
-// WebSocket Portal transport currently runs as a Node sidecar server.
-// See server/src/mastra/portal/websocket-sidecar.ts.
+// WebSocket Portal transport is owned by server/src/modules/portal/realtime.ts.
 export const portalSocketRoutes = [];

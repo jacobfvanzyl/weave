@@ -8,16 +8,15 @@ services:
       - "4111:4111"
       - "4112:4112"
     volumes:
-      - weave-data:/app/.data
+      - weave-data:/app/server/.data
     environment:
       NODE_ENV: production
       PORT: 4111
-      MASTRA_HOST: 0.0.0.0
       WEAVE_PORTAL_WS_PORT: 4112
-      # Required auth. Prefer Dokploy environment variables/secrets over committing values.
-      # WEAVE_AUTH_TOKEN: change-me
-      # or:
-      # WEAVE_AUTH_TOKENS: '{"wv_xxx":{"id":"user-1","name":"Jaco"}}'
+      # Required single-owner auth. Prefer Dokploy environment variables/secrets over committing values.
+      # WEAVE_OWNER_TOKEN: change-me
+      # WEAVE_OWNER_ID: local-user
+      # WEAVE_OWNER_NAME: Local User
       # Model config lives on server only.
       # WEAVE_DEFAULT_MODEL: openai/gpt-5.5
       # WEAVE_MODEL_OPTIONS: '[{"id":"openai/gpt-5.5","label":"GPT 5.5"}]'

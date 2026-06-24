@@ -1,0 +1,204 @@
+import { connectPortal, disconnectPortal, handlePortalMessage, updatePortal } from '../../mastra/portal/registry';
+import {
+  connectTerminalRelayClient,
+  disconnectTerminalRelayClient,
+  forwardTerminalClientMessage,
+  handleTerminalPortalMessage,
+} from '../../mastra/portal/terminal-relay';
+import {
+  connectWindowRelayClient,
+  disconnectWindowRelayClient,
+  forwardWindowClientMessage,
+  handleWindowPortalMessage,
+} from '../../mastra/portal/window-relay';
+
+const agentId = 'mageHandAgent';
+const portalThreadPrefix = '__portal__';
+const portalThreadId = (portalId: string) => `${portalThreadPrefix}${portalId}`;
+const defaultPort = 4112;
+
+type MastraLike = {
+  getAgent: (agentId: string) => Promise<{ getMemory: () => Promise<any> | any }> | { getMemory: () => Promise<any> | any };
+  getLogger?: () => { info?: (message: string, details?: unknown) => void; warn?: (message: string, details?: unknown) => void };
+};
+
+type RealtimeSocket = {
+  send: (data: string) => void;
+  close: (code?: number, reason?: string) => void;
+  addEventListener: WebSocket['addEventListener'];
+};
+
+let server: Deno.HttpServer<Deno.NetAddr> | undefined;
+
+const validatePortalToken = async (mastra: MastraLike, portalId: string, token: string) => {
+  if (!portalId || !token) return undefined;
+
+  const agent = await mastra.getAgent(agentId);
+  const memory = await agent?.getMemory();
+  const thread = await memory?.getThreadById({ threadId: portalThreadId(portalId) }).catch(() => undefined);
+  const metadata = thread?.metadata as Record<string, unknown> | undefined;
+  if (metadata?.kind !== 'portal-token') return undefined;
+  if (metadata?.portalId !== portalId) return undefined;
+  if (metadata?.token !== token) return undefined;
+  return typeof thread.resourceId === 'string' && thread.resourceId ? thread.resourceId : undefined;
+};
+
+const safeParse = (data: unknown) => {
+  try {
+    if (typeof data === 'string') return JSON.parse(data) as Record<string, unknown>;
+    if (data instanceof ArrayBuffer) return JSON.parse(new TextDecoder().decode(data)) as Record<string, unknown>;
+    if (ArrayBuffer.isView(data)) return JSON.parse(new TextDecoder().decode(data)) as Record<string, unknown>;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const stringArray = (value: unknown) => (Array.isArray(value) ? value.filter(item => typeof item === 'string') : []);
+
+const closeUnauthorized = (ws: RealtimeSocket, message: string) => {
+  ws.send(JSON.stringify({ type: 'portal.rejected', error: message }));
+  ws.close(4001, message);
+};
+
+const onMessage = (ws: RealtimeSocket, handler: (message: Record<string, unknown>) => void) => {
+  ws.addEventListener('message', event => {
+    const message = safeParse(event.data);
+    if (message) handler(message);
+  });
+};
+
+const connectTerminalClient = (ws: RealtimeSocket, url: URL) => {
+  const connected = connectTerminalRelayClient({
+    token: url.searchParams.get('token') ?? '',
+    ws,
+  });
+
+  if (!connected) {
+    closeUnauthorized(ws, 'invalid terminal token');
+    return;
+  }
+
+  ws.send(JSON.stringify({ type: 'terminal.accepted', clientId: connected.clientId }));
+  onMessage(ws, message => {
+    try {
+      forwardTerminalClientMessage(connected.clientId, message, connected.token);
+    } catch (error) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        terminalId: typeof message.terminalId === 'string' ? message.terminalId : 'unknown',
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  });
+  ws.addEventListener('close', () => disconnectTerminalRelayClient(connected.clientId));
+  ws.addEventListener('error', () => disconnectTerminalRelayClient(connected.clientId));
+};
+
+const connectWindowClient = (ws: RealtimeSocket, url: URL) => {
+  const connected = connectWindowRelayClient({
+    token: url.searchParams.get('token') ?? '',
+    ws,
+  });
+
+  if (!connected) {
+    closeUnauthorized(ws, 'invalid window session token');
+    return;
+  }
+
+  ws.send(JSON.stringify({
+    type: 'window.accepted',
+    clientId: connected.clientId,
+    sessionId: connected.token.sessionId,
+    portalId: connected.token.portalId,
+  }));
+  onMessage(ws, message => {
+    try {
+      forwardWindowClientMessage(connected.clientId, message);
+    } catch (error) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        sessionId: connected.token.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  });
+  ws.addEventListener('close', () => disconnectWindowRelayClient(connected.clientId));
+  ws.addEventListener('error', () => disconnectWindowRelayClient(connected.clientId));
+};
+
+const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraLike) => {
+  const portalId = url.searchParams.get('portalId') ?? '';
+  const token = url.searchParams.get('token') ?? '';
+  const userId = await validatePortalToken(mastra, portalId, token).catch(() => undefined);
+
+  if (!userId) {
+    closeUnauthorized(ws, 'invalid portal token');
+    return;
+  }
+
+  const connection = connectPortal({ portalId, userId, ws });
+  ws.send(JSON.stringify({ type: 'portal.accepted', portalId, connectedAt: connection.connectedAt }));
+
+  onMessage(ws, message => {
+    if (handleTerminalPortalMessage(message)) return;
+    if (handleWindowPortalMessage(message)) return;
+    if (handlePortalMessage(message)) return;
+
+    if (message.type === 'portal.hello') {
+      updatePortal(portalId, {
+        name: typeof message.name === 'string' ? message.name : undefined,
+        version: typeof message.version === 'string' ? message.version : undefined,
+        capabilities: stringArray(message.capabilities),
+        mounts: Array.isArray(message.mounts) ? message.mounts : [],
+        roots: Array.isArray(message.roots) ? message.roots : [],
+      });
+      ws.send(JSON.stringify({ type: 'portal.hello.ack', portalId }));
+      return;
+    }
+
+    if (message.type === 'portal.pong') updatePortal(portalId);
+  });
+
+  ws.addEventListener('close', () => disconnectPortal(portalId, ws));
+  ws.addEventListener('error', () => disconnectPortal(portalId, ws));
+};
+
+export const startPortalRealtimeServer = (mastra: MastraLike) => {
+  if (server || process.env.WEAVE_PORTAL_WS_DISABLED === 'true') return server;
+
+  const port = Number(process.env.WEAVE_PORTAL_WS_PORT ?? defaultPort);
+  server = Deno.serve({ port, onListen: () => undefined }, request => {
+    const url = new URL(request.url);
+    if (url.pathname !== '/portals/connect' && url.pathname !== '/terminals/connect' && url.pathname !== '/windows/connect') {
+      return new Response(JSON.stringify({ error: 'not found' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+
+    if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response(JSON.stringify({ error: 'websocket upgrade required' }), {
+        status: 426,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+
+    const { socket, response } = Deno.upgradeWebSocket(request);
+    const ws = socket as RealtimeSocket;
+    socket.addEventListener('open', () => {
+      if (url.pathname === '/terminals/connect') return connectTerminalClient(ws, url);
+      if (url.pathname === '/windows/connect') return connectWindowClient(ws, url);
+      void connectPortalDaemon(ws, url, mastra);
+    });
+    return response;
+  });
+
+  mastra.getLogger?.().info?.('Portal realtime server running', { url: `ws://localhost:${port}/portals/connect` });
+  return server;
+};
+
+export const stopPortalRealtimeServer = async () => {
+  await server?.shutdown();
+  server = undefined;
+};

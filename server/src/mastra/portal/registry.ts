@@ -1,5 +1,3 @@
-import type { WSContext } from 'hono/helper/websocket';
-
 export type PortalStatus = 'online' | 'offline';
 
 export type PortalConnection = {
@@ -16,7 +14,10 @@ export type PortalConnection = {
   lastSeenAt: string;
 };
 
-type PortalSocket = WSContext<unknown>;
+type PortalSocket = {
+  send: (data: string) => void;
+  close: (code?: number, reason?: string) => void;
+};
 
 const connections = new Map<string, PortalConnection & { ws: PortalSocket }>();
 const pendingRequests = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> }>();

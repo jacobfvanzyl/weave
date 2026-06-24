@@ -31,9 +31,11 @@ export const configureMastraConnection = (config: MastraConnectionConfig) => {
   };
 };
 
-export const getMastraUrl = () => connectionConfig.mastraUrl;
+export const getWeaveServerUrl = () => connectionConfig.mastraUrl;
 
-export const getChatUrl = () => `${getMastraUrl()}/chat`;
+export const getMastraUrl = getWeaveServerUrl;
+
+export const getChatUrl = () => `${getWeaveServerUrl()}/chat/runs`;
 
 export const getAuthHeaders = (): Record<string, string> => {
   if (!connectionConfig.authToken) return {};

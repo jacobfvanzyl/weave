@@ -1,6 +1,6 @@
 # Weave Server
 
-This is the Mastra server for Weave. It owns agents, tools, API routes, prompt templates, server persistence, and Portal websocket routing.
+This is the owned Deno server for Weave. It owns HTTP routes, owner auth, backend modules, server persistence, the singular Weave Agent interface, and Portal realtime routing. Mastra is used privately under `src/agent/mastra` as the current Agent implementation.
 
 ## Commands
 
@@ -8,6 +8,7 @@ This is the Mastra server for Weave. It owns agents, tools, API routes, prompt t
 npm run dev
 npm run build
 npm run start
+npm run check
 ```
 
 From the repo root, these are available as:
@@ -18,17 +19,21 @@ npm run server:build
 npm run server:start
 ```
 
-Open [http://localhost:4111](http://localhost:4111) during development to access Mastra Studio and the local REST API.
+The HTTP server listens on [http://localhost:4111](http://localhost:4111). Portal realtime remains on port `4112` during the compatibility phase.
+The `dev` and `start` tasks load `server/.env` automatically when it exists, while still allowing shell environment variables to override local defaults.
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `src/mastra/index.ts` | Mastra entry point and route registration. |
-| `src/mastra/agents/` | Agent definitions, instructions, and tools. |
-| `src/mastra/routes/` | HTTP API routes registered with Mastra. |
+| `src/server.ts` | Deno/Hono entry point. |
+| `src/modules/` | Module-owned route registration for Code, Notes, Chat, Agent, Portal, and cross-product surfaces. |
+| `src/owner/` | Single-owner auth and request context. |
+| `src/agent/` | Public Agent service/contribution boundary and private Mastra implementation. |
+| `src/mastra/agents/` | Current Mastra agent definitions, instructions, and tools. |
+| `src/mastra/routes/` | Legacy route handlers mounted by modules as canonical routes plus compatibility aliases. |
 | `src/mastra/tools/` | Reusable Mastra tools. |
-| `src/mastra/portal/` | Portal registry, relay, and websocket sidecar. |
+| `src/mastra/portal/` | Portal registry and relay primitives consumed by the Portal module. |
 | `src/mastra/prompts/` | Prompt templates loaded by the server. |
 
 Server env files and deployment files also live here: `.env.example`, `.env`, `Dockerfile`, `compose.dokploy.yml`, and `.dockerignore`.

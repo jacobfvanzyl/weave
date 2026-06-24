@@ -1,4 +1,4 @@
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import {
   completeCodexBrowserLogin,
   getCodexAuthStatus,
@@ -18,14 +18,14 @@ const htmlResponse = (title: string, message: string, status = 200) =>
   });
 
 export const chatgptAuthRoutes = [
-  registerApiRoute('/chatgpt/login/start', {
+  defineRoute('/chatgpt/login/start', {
     method: 'POST',
     handler: async c => {
       const login = await startCodexBrowserLogin();
       return jsonResponse(login);
     },
   }),
-  registerApiRoute('/chatgpt/login/callback', {
+  defineRoute('/chatgpt/login/callback', {
     method: 'GET',
     requiresAuth: false,
     handler: async c => {
@@ -46,7 +46,7 @@ export const chatgptAuthRoutes = [
       }
     },
   }),
-  registerApiRoute('/chatgpt/auth-status', {
+  defineRoute('/chatgpt/auth-status', {
     method: 'GET',
     handler: async () => jsonResponse(await getCodexAuthStatus()),
   }),

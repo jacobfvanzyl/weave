@@ -83,13 +83,13 @@ describe('chat-state Project/Workspace API client', () => {
     configureMastraConnection({ mastraUrl: 'http://localhost:4111', authToken: null });
   });
 
-  it('reads /projects response shapes', async () => {
+  it('reads /code/projects response shapes', async () => {
     configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ projects: [project] }));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(listProjects()).resolves.toEqual([project]);
-    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects', {
+    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/code/projects', {
       headers: { Authorization: 'Bearer token-1' },
     });
   });
@@ -113,8 +113,8 @@ describe('chat-state Project/Workspace API client', () => {
     await expect(cancelThreadRun('thread-1')).resolves.toMatchObject({ active: false, status: 'cancelled' });
 
     expect(fetchMock.mock.calls).toEqual([
-      ['http://weave.test/chat/thread-1/run', { headers: { Authorization: 'Bearer token-1' } }],
-      ['http://weave.test/chat/thread-1/cancel', { method: 'POST', headers: { Authorization: 'Bearer token-1' } }],
+      ['http://weave.test/chat/runs/thread-1', { headers: { Authorization: 'Bearer token-1' } }],
+      ['http://weave.test/chat/runs/thread-1/cancel', { method: 'POST', headers: { Authorization: 'Bearer token-1' } }],
     ]);
   });
 
@@ -132,7 +132,7 @@ describe('chat-state Project/Workspace API client', () => {
     })).resolves.toEqual(workspace);
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://weave.test/projects/project-1/workspaces');
+    expect(url).toBe('http://weave.test/code/projects/project-1/workspaces');
     expect(init).toMatchObject({ method: 'POST' });
     expect(JSON.parse(String(init?.body))).toEqual({
       name: 'Review checkout',
@@ -155,7 +155,7 @@ describe('chat-state Project/Workspace API client', () => {
     })).resolves.toEqual(workspace);
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://weave.test/projects/project-1/workspaces');
+    expect(url).toBe('http://weave.test/code/projects/project-1/workspaces');
     expect(init).toMatchObject({ method: 'POST' });
     expect(JSON.parse(String(init?.body))).toEqual({
       name: 'clever-lovelace',
@@ -188,7 +188,7 @@ describe('chat-state Project/Workspace API client', () => {
     expect('branch' in updated).toBe(false);
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://weave.test/projects/project-1/workspaces/workspace-1');
+    expect(url).toBe('http://weave.test/code/projects/project-1/workspaces/workspace-1');
     expect(init).toMatchObject({ method: 'PATCH' });
     expect(JSON.parse(String(init?.body))).toEqual({ branch: 'main', createBranch: false });
   });
@@ -212,7 +212,7 @@ describe('chat-state Project/Workspace API client', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(listWorkspaceGitStates()).resolves.toEqual(states);
-    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects/workspaces/git-state', {
+    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/code/projects/workspaces/git-state', {
       headers: { Authorization: 'Bearer token-1' },
     });
   });
@@ -236,11 +236,11 @@ describe('chat-state Project/Workspace API client', () => {
     await expect(fetchWorkspaceGitUpstream('project-1', 'workspace-1')).resolves.toEqual(state);
     await expect(pullWorkspaceGitUpstream('project-1', 'workspace-1')).resolves.toEqual(state);
     expect(fetchMock.mock.calls).toEqual([
-      ['http://weave.test/projects/project-1/workspaces/workspace-1/git/fetch', {
+      ['http://weave.test/code/projects/project-1/workspaces/workspace-1/git/fetch', {
         method: 'POST',
         headers: { Authorization: 'Bearer token-1' },
       }],
-      ['http://weave.test/projects/project-1/workspaces/workspace-1/git/pull', {
+      ['http://weave.test/code/projects/project-1/workspaces/workspace-1/git/pull', {
         method: 'POST',
         headers: { Authorization: 'Bearer token-1' },
       }],
@@ -257,7 +257,7 @@ describe('chat-state Project/Workspace API client', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(listProjectBranches('project-1')).resolves.toEqual(branches);
-    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects/project-1/branches', {
+    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/code/projects/project-1/branches', {
       headers: { Authorization: 'Bearer token-1' },
     });
   });
@@ -287,7 +287,7 @@ describe('chat-state Project/Workspace API client', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(discoverWorkspaces('project-1')).resolves.toEqual(worktrees);
-    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects/project-1/workspaces/discover', {
+    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/code/projects/project-1/workspaces/discover', {
       headers: { Authorization: 'Bearer token-1' },
     });
   });
@@ -338,10 +338,10 @@ describe('chat-state Project/Workspace API client', () => {
       branchCleanup: { requested: true, status: 'deleted', branch: 'feature/review' },
     });
     expect(fetchMock.mock.calls).toEqual([
-      ['http://weave.test/projects/project-1/workspaces/workspace-1/removal-preview', {
+      ['http://weave.test/code/projects/project-1/workspaces/workspace-1/removal-preview', {
         headers: { Authorization: 'Bearer token-1' },
       }],
-      ['http://weave.test/projects/project-1/workspaces/workspace-1?mode=remove&force=true&deleteLocalBranch=true', {
+      ['http://weave.test/code/projects/project-1/workspaces/workspace-1?mode=remove&force=true&deleteLocalBranch=true', {
         method: 'DELETE',
         headers: { Authorization: 'Bearer token-1' },
       }],
@@ -524,7 +524,7 @@ describe('chat-state Project/Workspace API client', () => {
       metadata: { profileId: 'coding' },
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      if (String(input).includes('/chat-state/threads/')) return jsonResponse({ thread });
+      if (String(input).includes('/chat/threads/')) return jsonResponse({ thread });
       return jsonResponse({ project: { ...project, defaultProfileId: 'coding' } });
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -533,8 +533,8 @@ describe('chat-state Project/Workspace API client', () => {
     await expect(setProjectProfile('project-1', 'coding')).resolves.toMatchObject({ id: 'project-1', defaultProfileId: 'coding' });
 
     expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method, JSON.parse(String(init?.body))])).toEqual([
-      ['http://weave.test/chat-state/threads/thread-1', 'PATCH', { profileId: 'coding' }],
-      ['http://weave.test/projects/project-1/profile', 'PATCH', { profileId: 'coding' }],
+      ['http://weave.test/chat/threads/thread-1', 'PATCH', { profileId: 'coding' }],
+      ['http://weave.test/code/projects/project-1/profile', 'PATCH', { profileId: 'coding' }],
     ]);
   });
 
@@ -562,8 +562,8 @@ describe('chat-state Project/Workspace API client', () => {
     await listPrompts(context);
 
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
-      'http://weave.test/profiles?threadId=draft-thread&projectId=project-1&workspaceId=workspace-1&profileId=coding',
-      'http://weave.test/prompts?threadId=draft-thread&projectId=project-1&workspaceId=workspace-1&profileId=coding',
+      'http://weave.test/agent/profiles?threadId=draft-thread&projectId=project-1&workspaceId=workspace-1&profileId=coding',
+      'http://weave.test/agent/prompts?threadId=draft-thread&projectId=project-1&workspaceId=workspace-1&profileId=coding',
     ]);
   });
 
@@ -580,7 +580,7 @@ describe('chat-state Project/Workspace API client', () => {
     })).resolves.toBe('Ship now');
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe('http://weave.test/prompts/ship/expand?threadId=draft-thread&projectId=project-1&workspaceId=workspace-1&profileId=coding');
+    expect(String(url)).toBe('http://weave.test/agent/prompts/ship/expand?threadId=draft-thread&projectId=project-1&workspaceId=workspace-1&profileId=coding');
     expect(init).toMatchObject({ method: 'POST' });
     expect(JSON.parse(String(init?.body))).toEqual({
       arguments: 'now',
@@ -834,7 +834,7 @@ describe('chat-state Project/Workspace API client', () => {
     await useChatStore.getState().ensureThreadPersisted('draft-thread', 'Hello');
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe('http://weave.test/chat-state/threads');
+    expect(String(url)).toBe('http://weave.test/chat/threads');
     expect(init).toMatchObject({ method: 'POST' });
     expect(JSON.parse(String(init?.body))).toEqual({
       threadId: 'draft-thread',
@@ -879,7 +879,7 @@ describe('chat-state Project/Workspace API client', () => {
     await useChatStore.getState().ensureThreadPersisted('draft-thread', 'Hello');
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe('http://weave.test/projects/project-1/threads');
+    expect(String(url)).toBe('http://weave.test/code/projects/project-1/threads');
     expect(init).toMatchObject({ method: 'POST' });
     expect(JSON.parse(String(init?.body))).toEqual({
       threadId: 'draft-thread',

@@ -1,4 +1,4 @@
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 
 export type ModelOption = {
   id: string;
@@ -145,7 +145,7 @@ const getModelConfig = async () => {
 };
 
 export const modelRoutes = [
-  registerApiRoute('/models', {
+  defineRoute('/models', {
     method: 'GET',
     handler: async c => c.json(await getModelConfig()),
   }),

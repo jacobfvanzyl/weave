@@ -1,5 +1,5 @@
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import type { MastraDBMessage } from '@mastra/core/agent';
 import { getAuthUserFromHeader } from '../auth';
 import { attachmentIdFromReference, attachmentUrlPath } from '../attachments';
@@ -350,7 +350,7 @@ const errorResponse = (c: any, error: unknown) => {
 };
 
 export const chatStateRoutes = [
-  registerApiRoute('/chat-state/me', {
+  defineRoute('/chat-state/me', {
     method: 'GET',
     handler: async c => {
       try {
@@ -363,7 +363,7 @@ export const chatStateRoutes = [
       }
     },
   }),
-  registerApiRoute('/chat-state/threads', {
+  defineRoute('/chat-state/threads', {
     method: 'GET',
     handler: async c => {
       try {
@@ -404,7 +404,7 @@ export const chatStateRoutes = [
       }
     },
   }),
-  registerApiRoute('/chat-state/threads', {
+  defineRoute('/chat-state/threads', {
     method: 'POST',
     handler: async c => {
       try {
@@ -435,7 +435,7 @@ export const chatStateRoutes = [
       }
     },
   }),
-  registerApiRoute('/chat-state/threads/reorder', {
+  defineRoute('/chat-state/threads/reorder', {
     method: 'PATCH',
     handler: async c => {
       try {
@@ -475,7 +475,7 @@ export const chatStateRoutes = [
       }
     },
   }),
-  registerApiRoute('/chat-state/threads/:threadId/raw-messages', {
+  defineRoute('/chat-state/threads/:threadId/raw-messages', {
     method: 'GET',
     handler: async c => {
       try {
@@ -498,7 +498,7 @@ export const chatStateRoutes = [
       }
     },
   }),
-  registerApiRoute('/chat-state/threads/:threadId/context-usage', {
+  defineRoute('/chat-state/threads/:threadId/context-usage', {
     method: 'GET',
     handler: async c => {
       try {
@@ -544,7 +544,7 @@ export const chatStateRoutes = [
       }
     },
   }),
-  registerApiRoute('/chat-state/threads/:threadId/messages', {
+  defineRoute('/chat-state/threads/:threadId/messages', {
     method: 'GET',
     handler: async c => {
       try {
@@ -573,7 +573,7 @@ export const chatStateRoutes = [
       }
     },
   }),
-  registerApiRoute('/chat-state/threads/:threadId', {
+  defineRoute('/chat-state/threads/:threadId', {
     method: 'PATCH',
     handler: async c => {
       try {
@@ -608,7 +608,7 @@ export const chatStateRoutes = [
       }
     },
   }),
-  registerApiRoute('/chat-state/threads/:threadId', {
+  defineRoute('/chat-state/threads/:threadId', {
     method: 'DELETE',
     handler: async c => {
       try {

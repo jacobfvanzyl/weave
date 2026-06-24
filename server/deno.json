@@ -1,0 +1,36 @@
+{
+  "tasks": {
+    "dev": "deno run --env-file=.env --watch --sloppy-imports --allow-net --allow-read --allow-write=.data,src/mastra/public/.data --allow-env --allow-sys --allow-ffi --node-modules-dir=auto src/server.ts",
+    "start": "deno run --env-file=.env --sloppy-imports --allow-net --allow-read --allow-write=.data,src/mastra/public/.data --allow-env --allow-sys --allow-ffi --node-modules-dir=auto src/server.ts",
+    "check": "deno check --sloppy-imports --node-modules-dir=auto src/server.ts",
+    "build": "deno check --sloppy-imports --node-modules-dir=auto src/server.ts"
+  },
+  "nodeModulesDir": "auto",
+  "imports": {
+    "@mastra/ai-sdk": "npm:@mastra/ai-sdk@1.4.5",
+    "@mastra/core/": "npm:@mastra/core@1.42.0/",
+    "@mastra/libsql": "npm:@mastra/libsql@1.13.0",
+    "@mastra/loggers": "npm:@mastra/loggers@1.1.2",
+    "@mastra/memory": "npm:@mastra/memory@1.20.3",
+    "@mastra/observability": "npm:@mastra/observability@1.14.1",
+    "@ai-sdk/provider-v5": "npm:@ai-sdk/provider@2.0.1",
+    "@ai-sdk/provider-utils-v5": "npm:@ai-sdk/provider-utils@3.0.23",
+    "exa-js": "npm:exa-js@2.13.0",
+    "hono": "npm:hono@4.12.18",
+    "yaml": "npm:yaml@2.9.0",
+    "zod": "npm:zod@4.4.3"
+  },
+  "compilerOptions": {
+    "lib": ["deno.ns", "deno.window"],
+    "strict": true
+  },
+  "fmt": {
+    "singleQuote": true,
+    "lineWidth": 120
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  }
+}

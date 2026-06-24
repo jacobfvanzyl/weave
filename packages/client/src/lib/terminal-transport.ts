@@ -7,7 +7,8 @@ import type {
   TerminalTransport,
   TerminalWindowRecord,
 } from './terminal-types';
-import { getAuthHeaders, getMastraUrl } from './mastra-client';
+import { getAuthHeaders } from './mastra-client';
+import { weaveRoutes } from './weave-routes';
 
 type DesktopTerminalBridge = {
   terminalSnapshot: () => Promise<TerminalWindowRecord[]>;
@@ -107,7 +108,7 @@ const parseJson = async <T>(response: Response): Promise<T> => {
 
 const requestTerminalToken = async (input: TerminalTargetInput) =>
   parseJson<TerminalTokenResponse>(
-    await fetch(`${getMastraUrl()}/terminals/token`, {
+    await fetch(weaveRoutes.code.terminalToken(), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(input),

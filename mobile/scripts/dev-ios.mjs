@@ -54,8 +54,8 @@ Environment:
   WEAVE_MOBILE_DEV_PORT   Same as --port.
   WEAVE_MOBILE_DEV_SERVER_URL
                            Same as --server-url.
-  WEAVE_AUTH_TOKEN        Injected into the dev app when set.
-  WEAVE_AUTH_TOKENS       First token is injected when WEAVE_AUTH_TOKEN is unset.
+  WEAVE_OWNER_TOKEN       Injected into the dev app when set.
+  WEAVE_AUTH_TOKEN        Compatibility alias for WEAVE_OWNER_TOKEN.
 `);
 };
 
@@ -204,25 +204,13 @@ const parseEnvText = text => {
   return env;
 };
 
-const firstTokenFromAuthTokens = rawTokens => {
-  if (!rawTokens?.trim()) return undefined;
-
-  try {
-    const parsed = JSON.parse(rawTokens);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-    return Object.keys(parsed).find(token => Boolean(token.trim()));
-  } catch {
-    return undefined;
-  }
-};
-
 const trimToken = value => {
   const trimmed = value?.trim();
   return trimmed || undefined;
 };
 
 const getAuthTokenFromEnv = env =>
-  trimToken(env.WEAVE_AUTH_TOKEN) ?? firstTokenFromAuthTokens(env.WEAVE_AUTH_TOKENS);
+  trimToken(env.WEAVE_OWNER_TOKEN) ?? trimToken(env.WEAVE_AUTH_TOKEN);
 
 const readServerEnv = async () => {
   try {

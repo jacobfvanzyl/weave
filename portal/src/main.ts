@@ -250,16 +250,45 @@ const toWsUrl = (server: string) => {
 const normalizeHttpUrl = (server: string) => server.replace(/\/$/, '');
 const normalizeWsUrl = (server: string) => toWsUrl(server).replace(/\/$/, '');
 
+const authTokenFromLegacyMap = (rawTokens: string | undefined) => {
+  const raw = rawTokens?.trim();
+  if (!raw) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('WEAVE_AUTH_TOKENS must be valid JSON or replaced with WEAVE_OWNER_TOKEN.');
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('WEAVE_AUTH_TOKENS must be an object token map or replaced with WEAVE_OWNER_TOKEN.');
+  }
+
+  const tokens = Object.keys(parsed).filter(token => token.trim());
+  if (tokens.length !== 1) {
+    throw new Error('WEAVE_AUTH_TOKENS is unsupported for multiple tokens. Set one WEAVE_OWNER_TOKEN instead.');
+  }
+
+  return tokens[0];
+};
+
+const getLoginAuthToken = (flags: Record<string, string | boolean>) =>
+  stringFlag(flags, 'token')
+    ?? Deno.env.get('WEAVE_OWNER_TOKEN')?.trim()
+    ?? Deno.env.get('WEAVE_AUTH_TOKEN')?.trim()
+    ?? authTokenFromLegacyMap(Deno.env.get('WEAVE_AUTH_TOKENS'));
+
 const login = async (flags: Record<string, string | boolean>) => {
   const httpServerUrl = normalizeHttpUrl(stringFlag(flags, 'server') ?? defaultHttpServerUrl);
   const wsServerUrl = normalizeWsUrl(stringFlag(flags, 'ws-server') ?? defaultWsServerUrl);
-  const authToken = stringFlag(flags, 'token') ?? Deno.env.get('WEAVE_AUTH_TOKEN');
+  const authToken = getLoginAuthToken(flags);
   const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
   const name = stringFlag(flags, 'name') ?? defaultName;
 
-  if (!authToken) throw new Error('Missing auth token. Pass --token or set WEAVE_AUTH_TOKEN.');
+  if (!authToken) throw new Error('Missing auth token. Pass --token or set WEAVE_OWNER_TOKEN.');
 
-  const response = await fetch(`${httpServerUrl}/portals/token`, {
+  const response = await fetch(`${httpServerUrl}/portal/token`, {
     method: 'POST',
     headers: { authorization: `Bearer ${authToken}` },
   });
@@ -1467,7 +1496,7 @@ const usage = () => {
   console.log(`mage-portal ${version}
 
 Commands:
-  login --server http://localhost:4111 --token <auth-token> [--ws-server ws://localhost:4112] [--name <name>]
+  login --server http://localhost:4111 --token <owner-token> [--ws-server ws://localhost:4112] [--name <name>]
   root --path /path/to/code [--id default] [--name Code] [--config ~/.config/weave/portal/config.json]
   mount --project project_x --path /path/to/repo [--config ~/.config/weave/portal/config.json]
   daemon [--config ~/.config/weave/portal/config.json] [--ws-server ws://localhost:4112] [--control-port 0] [--control-token token] [--no-control]

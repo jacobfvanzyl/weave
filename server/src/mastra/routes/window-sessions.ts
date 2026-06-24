@@ -1,4 +1,4 @@
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { getPortalConnection, listPortalConnections, requestPortalTool } from '../portal/registry';
 import { issueWindowSessionToken } from '../portal/window-relay';
@@ -52,7 +52,7 @@ const errorResponse = (c: any, error: unknown) => {
 };
 
 export const windowSessionRoutes = [
-  registerApiRoute('/window-sessions/windows', {
+  defineRoute('/window-sessions/windows', {
     method: 'GET',
     handler: async c => {
       try {
@@ -71,7 +71,7 @@ export const windowSessionRoutes = [
       }
     },
   }),
-  registerApiRoute('/window-sessions/applications', {
+  defineRoute('/window-sessions/applications', {
     method: 'GET',
     handler: async c => {
       try {
@@ -90,7 +90,7 @@ export const windowSessionRoutes = [
       }
     },
   }),
-  registerApiRoute('/window-sessions/applications/open', {
+  defineRoute('/window-sessions/applications/open', {
     method: 'POST',
     handler: async c => {
       try {
@@ -111,7 +111,7 @@ export const windowSessionRoutes = [
       }
     },
   }),
-  registerApiRoute('/window-sessions/token', {
+  defineRoute('/window-sessions/token', {
     method: 'POST',
     handler: async c => {
       try {

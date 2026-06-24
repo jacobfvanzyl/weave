@@ -207,7 +207,7 @@ export const forwardTerminalClientMessage = (
   const client = terminalClients.get(clientId);
   if (!client) throw new Error('Terminal relay client is not connected.');
   const message = sanitizeTerminalClientMessage(rawMessage, token);
-  if ('terminalId' in message) client.terminalIds.add(message.terminalId);
+  if ('terminalId' in message && typeof message.terminalId === 'string') client.terminalIds.add(message.terminalId);
   sendPortalMessage(client.portalId, { type: 'terminal.client', clientId, message });
 };
 

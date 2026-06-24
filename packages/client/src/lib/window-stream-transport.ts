@@ -1,4 +1,5 @@
-import { getAuthHeaders, getMastraUrl } from './mastra-client';
+import { getAuthHeaders } from './mastra-client';
+import { weaveRoutes } from './weave-routes';
 import type {
   WindowStreamApplicationInfo,
   WindowStreamControlMessage,
@@ -132,7 +133,7 @@ const normalizeApplication = (value: unknown): WindowStreamApplicationInfo[] => 
 export const listWindowStreamWindows = async (portalId: string) => {
   const params = new URLSearchParams({ portalId });
   const result = await parseJson<WindowListResponse>(
-    await fetch(`${getMastraUrl()}/window-sessions/windows?${params}`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.portal.windowStreamWindows(params), { headers: getAuthHeaders() }),
   );
   return (result.windows ?? []).flatMap(normalizeWindow);
 };
@@ -140,14 +141,14 @@ export const listWindowStreamWindows = async (portalId: string) => {
 export const listWindowStreamApplications = async (portalId: string) => {
   const params = new URLSearchParams({ portalId });
   const result = await parseJson<ApplicationListResponse>(
-    await fetch(`${getMastraUrl()}/window-sessions/applications?${params}`, { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.portal.windowStreamApplications(params), { headers: getAuthHeaders() }),
   );
   return (result.applications ?? []).flatMap(normalizeApplication);
 };
 
 export const openWindowStreamApplication = async (input: { portalId: string; applicationId: string }) => {
   const result = await parseJson<ApplicationOpenResponse>(
-    await fetch(`${getMastraUrl()}/window-sessions/applications/open`, {
+    await fetch(weaveRoutes.portal.windowStreamApplicationOpen(), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(input),
@@ -158,7 +159,7 @@ export const openWindowStreamApplication = async (input: { portalId: string; app
 
 const requestWindowSessionToken = async (input: { portalId: string; windowId?: string }) =>
   parseJson<WindowSessionTokenResponse>(
-    await fetch(`${getMastraUrl()}/window-sessions/token`, {
+    await fetch(weaveRoutes.portal.windowStreamToken(), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(input),

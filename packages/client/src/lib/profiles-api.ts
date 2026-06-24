@@ -1,4 +1,5 @@
-import { getAuthHeaders, getMastraUrl } from './mastra-client';
+import { getAuthHeaders } from './mastra-client';
+import { weaveRoutes } from './weave-routes';
 
 export type DynamicProfileSummary = {
   id: string;
@@ -71,13 +72,13 @@ export const profileParams = (context?: string | ProfileResolutionContext) => {
 };
 
 export const listProfiles = async (context?: string | ProfileResolutionContext) => {
-  const response = await fetch(`${getMastraUrl()}/profiles${profileParams(context)}`, { headers: getAuthHeaders() });
+  const response = await fetch(weaveRoutes.agent.profiles(profileParams(context)), { headers: getAuthHeaders() });
   if (!response.ok) throw new Error(`Failed to list profiles: ${response.status}`);
   return response.json() as Promise<ProfilesResponse>;
 };
 
 export const getResolvedProfile = async (context?: string | ProfileResolutionContext) => {
-  const response = await fetch(`${getMastraUrl()}/profiles/resolved${profileParams(context)}`, { headers: getAuthHeaders() });
+  const response = await fetch(weaveRoutes.agent.resolvedProfile(profileParams(context)), { headers: getAuthHeaders() });
   if (!response.ok) throw new Error(`Failed to resolve profile: ${response.status}`);
   return response.json() as Promise<ProfilesResponse>;
 };

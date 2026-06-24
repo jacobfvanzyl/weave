@@ -257,7 +257,7 @@ export class PortalSupervisor {
     const authToken = this.settingsStore.getAuthToken();
     if (!authToken) throw new Error('Portal requires a saved auth token before terminals can start.');
 
-    const response = await fetch(`${httpServerUrl}/portals/token`, {
+    const response = await fetch(`${httpServerUrl}/portal/token`, {
       method: 'POST',
       headers: { authorization: `Bearer ${authToken}` },
     });

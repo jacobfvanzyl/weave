@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import type {
   LanguageModelV2,
   LanguageModelV2CallOptions,
@@ -133,11 +134,14 @@ const toResponsesInput = async (prompt: LanguageModelV2CallOptions['prompt']) =>
 };
 
 const getInstructions = (prompt: LanguageModelV2CallOptions['prompt']): string | undefined => {
-  return prompt.filter(message => message.role === 'system').map(message => message.content).join('\n\n') || undefined;
+  return prompt
+    .filter((message: LanguageModelV2CallOptions['prompt'][number]) => message.role === 'system')
+    .map((message: Extract<LanguageModelV2CallOptions['prompt'][number], { role: 'system' }>) => message.content)
+    .join('\n\n') || undefined;
 };
 
 const toResponsesTools = (tools: LanguageModelV2CallOptions['tools']) => {
-  return tools?.filter(isFunctionTool).map(tool => ({
+  return tools?.filter(isFunctionTool).map((tool: LanguageModelV2FunctionTool) => ({
     type: 'function',
     name: tool.name,
     description: tool.description,

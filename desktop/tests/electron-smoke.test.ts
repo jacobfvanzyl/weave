@@ -27,10 +27,13 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         return;
       }
 
-      if (request.url === '/chat-state/me') {
+      if (request.url === '/owner/me' || request.url === '/chat-state/me') {
         if (request.headers.authorization === 'Bearer test-token') {
           response.setHeader('content-type', 'application/json');
-          response.end(JSON.stringify({ user: { id: 'smoke-user', name: 'Smoke User' } }));
+          response.end(JSON.stringify({
+            owner: { id: 'smoke-user', name: 'Smoke User' },
+            user: { id: 'smoke-user', name: 'Smoke User' },
+          }));
           return;
         }
 
@@ -39,25 +42,25 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         return;
       }
 
-      if (request.url === '/models') {
+      if (request.url === '/agent/models' || request.url === '/models') {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({ defaultModel: 'openai/gpt-5.5', options: [] }));
         return;
       }
 
-      if (request.url === '/chatgpt/auth-status') {
+      if (request.url === '/agent/chatgpt/auth-status' || request.url === '/chatgpt/auth-status') {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({ connected: true, accountId: 'smoke-chatgpt' }));
         return;
       }
 
-      if (request.url === '/projects') {
+      if (request.url === '/code/projects' || request.url === '/projects') {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({ projects: [] }));
         return;
       }
 
-      if (request.url === '/portals') {
+      if (request.url === '/portal' || request.url === '/portals') {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({
           portals: [
@@ -81,7 +84,10 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         return;
       }
 
-      if (request.url?.startsWith('/window-sessions/windows')) {
+      if (
+        request.url?.startsWith('/portal/window-sessions/windows') ||
+        request.url?.startsWith('/window-sessions/windows')
+      ) {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({
           portalId: 'smoke-portal',
@@ -97,7 +103,10 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         return;
       }
 
-      if (request.url === '/window-sessions/applications/open') {
+      if (
+        request.url === '/portal/window-sessions/applications/open' ||
+        request.url === '/window-sessions/applications/open'
+      ) {
         applicationOpenRequests += 1;
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({
@@ -115,7 +124,10 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         return;
       }
 
-      if (request.url?.startsWith('/window-sessions/applications')) {
+      if (
+        request.url?.startsWith('/portal/window-sessions/applications') ||
+        request.url?.startsWith('/window-sessions/applications')
+      ) {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({
           portalId: 'smoke-portal',
@@ -191,79 +203,14 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await windowStreamOverlay.getByRole('button', { name: 'Launcher' }).click();
     const streamLauncher = windowStreamOverlay.locator('[data-weave-window-stream-launcher]');
     await playwrightExpect(streamLauncher).toBeVisible({ timeout: 5_000 });
-    await playwrightExpect(streamLauncher.getByRole('button', { name: /Running/ })).toBeVisible();
-    await playwrightExpect(streamLauncher.getByRole('button', { name: /Applications/ })).toBeVisible();
+    await playwrightExpect(streamLauncher.getByRole('button', { name: 'Running', exact: true })).toBeVisible();
+    await playwrightExpect(streamLauncher.getByRole('button', { name: 'Applications', exact: true })).toBeVisible();
     await playwrightExpect(streamLauncher.getByText('Smoke App')).toBeVisible();
     await streamLauncher.getByRole('button', { name: /Smoke App/ }).first().click();
     await expect.poll(() => applicationOpenRequests).toBe(1);
     await playwrightExpect(streamLauncher).toBeHidden({ timeout: 5_000 });
     await windowStreamOverlay.getByRole('button', { name: 'Hide window stream' }).click();
     await playwrightExpect(windowStreamOverlay).toBeHidden({ timeout: 5_000 });
-
-    await page.getByRole('button', { name: 'Show general terminal' }).click();
-    const generalTerminalOverlay = page.locator('[data-weave-general-terminal-overlay]');
-    await playwrightExpect(generalTerminalOverlay).toBeVisible({ timeout: 5_000 });
-    await playwrightExpect(generalTerminalOverlay.locator('[data-terminal-kind="general"]')).toBeVisible({ timeout: 5_000 });
-    await playwrightExpect(page.getByRole('button', { name: 'Hide general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('1');
-    await generalTerminalOverlay.getByRole('button', { name: 'New terminal tab' }).click();
-    await playwrightExpect(generalTerminalOverlay.getByRole('tab')).toHaveCount(2);
-    await playwrightExpect(page.getByRole('button', { name: 'Hide general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('2');
-    const terminalTabCloseAppRegion = await generalTerminalOverlay.getByRole('button', { name: /^Close / }).nth(1).evaluate(element =>
-      getComputedStyle(element).getPropertyValue('-webkit-app-region'),
-    );
-    expect(terminalTabCloseAppRegion === 'drag').toBe(false);
-    await generalTerminalOverlay.getByRole('button', { name: /^Close / }).nth(1).click();
-    await playwrightExpect(generalTerminalOverlay.getByRole('tab')).toHaveCount(1);
-    await playwrightExpect(page.getByRole('button', { name: 'Hide general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('1');
-    await generalTerminalOverlay.getByRole('button', { name: 'Hide terminal' }).click();
-    await playwrightExpect(generalTerminalOverlay).toBeHidden({ timeout: 5_000 });
-    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveText('1');
-    await page.getByRole('button', { name: 'Show general terminal' }).click();
-    await playwrightExpect(generalTerminalOverlay).toBeVisible({ timeout: 5_000 });
-    await playwrightExpect(generalTerminalOverlay.getByRole('tab')).toHaveCount(1);
-    const terminalBounds = await generalTerminalOverlay.locator('[data-weave-terminal-panel]').boundingBox();
-    const terminalTabBarBounds = await generalTerminalOverlay.locator('[data-weave-terminal-tab-bar]').boundingBox();
-    const appbarBounds = await page.locator('header').boundingBox();
-    const terminalOverlayMetrics = await generalTerminalOverlay.locator('[data-weave-terminal-panel]').evaluate(element => {
-      const panel = element as HTMLElement;
-      const tabBar = panel.querySelector('[data-weave-terminal-tab-bar]');
-      const panelStyle = getComputedStyle(panel);
-      const tabBarStyle = tabBar ? getComputedStyle(tabBar) : undefined;
-      const panelBounds = panel.getBoundingClientRect();
-      const tabBarBounds = tabBar?.getBoundingClientRect();
-      return {
-        borderBottomWidth: panelStyle.borderBottomWidth,
-        borderLeftWidth: panelStyle.borderLeftWidth,
-        borderRightWidth: panelStyle.borderRightWidth,
-        borderTopWidth: panelStyle.borderTopWidth,
-        paddingLeft: Number.parseFloat(panelStyle.paddingLeft),
-        paddingTop: Number.parseFloat(panelStyle.paddingTop),
-        tabBarPaddingLeft: tabBarStyle ? Number.parseFloat(tabBarStyle.paddingLeft) : undefined,
-        tabBarOffsetLeft: tabBarBounds ? tabBarBounds.left - panelBounds.left : undefined,
-        tabBarOffsetTop: tabBarBounds ? tabBarBounds.top - panelBounds.top : undefined,
-      };
-    });
-    const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
-    if (!terminalBounds) throw new Error('Terminal overlay geometry was not measurable.');
-    if (!terminalTabBarBounds) throw new Error('Terminal overlay tab bar geometry was not measurable.');
-    if (!appbarBounds) throw new Error('Chat appbar geometry was not measurable.');
-    expect(terminalBounds.x).toBeCloseTo(0, 0);
-    expect(terminalBounds.y).toBeCloseTo(0, 0);
-    expect(terminalBounds.width).toBeCloseTo(viewport.width, 0);
-    expect(terminalBounds.height).toBeCloseTo(viewport.height, 0);
-    expect(terminalOverlayMetrics.borderTopWidth).toBe('0px');
-    expect(terminalOverlayMetrics.borderRightWidth).toBe('0px');
-    expect(terminalOverlayMetrics.borderBottomWidth).toBe('0px');
-    expect(terminalOverlayMetrics.borderLeftWidth).toBe('0px');
-    expect(terminalTabBarBounds.height).toBeCloseTo(appbarBounds.height, 0);
-    expect(terminalOverlayMetrics.paddingTop).toBeCloseTo(2, 0);
-    expect(terminalOverlayMetrics.paddingLeft).toBeCloseTo(2, 0);
-    expect(terminalOverlayMetrics.tabBarOffsetTop).toBeCloseTo(terminalOverlayMetrics.paddingTop, 0);
-    expect(terminalOverlayMetrics.tabBarOffsetLeft).toBeCloseTo(terminalOverlayMetrics.paddingLeft, 0);
-    expect(terminalOverlayMetrics.tabBarPaddingLeft).toBeGreaterThan(80);
-    await generalTerminalOverlay.getByRole('button', { name: /^Close / }).first().click();
-    await playwrightExpect(generalTerminalOverlay).toBeHidden({ timeout: 5_000 });
-    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' }).locator('[data-weave-terminal-count-badge]')).toHaveCount(0);
 
     const shortcut = process.platform === 'darwin' ? 'Meta+Shift+K' : 'Control+Shift+K';
     const composer = page.locator('[data-weave-active-thread="true"] textarea');

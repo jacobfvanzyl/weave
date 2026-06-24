@@ -22,6 +22,19 @@ const renderWebFallback = async () => {
   );
 };
 
+const renderBootstrapError = (error: unknown) => {
+  console.error(error);
+  const message = error instanceof Error ? error.message : 'Unknown startup error.';
+  renderRoot(
+    <main className="grid h-dvh place-items-center bg-background px-6 text-foreground">
+      <div className="w-full max-w-md space-y-3 rounded-lg border border-border bg-popover p-6 text-popover-foreground shadow-2xl">
+        <h1 className="text-lg font-semibold">Weave failed to start</h1>
+        <p className="break-words text-sm text-muted-foreground">{message}</p>
+      </div>
+    </main>,
+  );
+};
+
 const bootstrap = async () => {
   const desktopBridge = window.weaveDesktop;
   if (!desktopBridge?.getConnectionSettings) {
@@ -46,4 +59,4 @@ const bootstrap = async () => {
   renderRoot(<DesktopApp initialSettings={settings} />);
 };
 
-void bootstrap();
+void bootstrap().catch(renderBootstrapError);

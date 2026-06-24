@@ -1,5 +1,5 @@
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
-import { registerApiRoute } from '@mastra/core/server';
+import { defineRoute } from '../../server/route-adapter';
 import { expandPromptTemplate, listPromptSummaries } from '../prompt-templates/registry';
 
 const maxArgumentsLength = 20_000;
@@ -33,11 +33,11 @@ const promptContext = (c: any, values: Record<string, unknown> = {}) => {
 };
 
 export const promptRoutes = [
-  registerApiRoute('/prompts', {
+  defineRoute('/prompts', {
     method: 'GET',
     handler: async c => jsonResponse({ prompts: await listPromptSummaries(promptContext(c)) }),
   }),
-  registerApiRoute('/prompts/:name/expand', {
+  defineRoute('/prompts/:name/expand', {
     method: 'POST',
     handler: async c => {
       const name = c.req.param('name');

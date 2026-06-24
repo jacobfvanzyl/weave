@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, MessageSquare, MonitorUp, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
 import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
-import { useChatStore } from '../../stores/chat-store';
+import { useChatStore, type ChatThread } from '../../stores/chat-store';
 import { useAppShellStore } from '../../stores/app-shell-store';
 import { generalTerminalId, useTerminalStore } from '../../stores/terminal-store';
 import { useWorkspaceSurfaceStore, type MainPane } from '../../stores/workspace-surface-store';
@@ -40,6 +40,7 @@ const TerminalTabCountBadge = ({ count }: { count: number }) => count > 0 ? (
 ) : null;
 const terminalProcessRefreshMs = 2_000;
 const terminalSnapshotRefreshMs = 5_000;
+const emptyServerThreads: ChatThread[] = [];
 
 const terminalTargetInput = (target: TerminalPanelTarget): TerminalTargetInput => ({
   kind: target.kind,
@@ -502,10 +503,11 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     }, terminalProcessRefreshMs);
     return () => window.clearInterval(interval);
   }, [refreshTerminalProcessNames, showTerminalPane, workspaceSyncKey, workspaceTerminalSyncTarget]);
-  const { data: serverThreads = [], isFetched } = useQuery({
+  const { data: queriedServerThreads, isFetched } = useQuery({
     queryKey: ['threads', resourceId],
     queryFn: () => listServerThreads(),
   });
+  const serverThreads = queriedServerThreads ?? emptyServerThreads;
 
   useEffect(() => {
     if (!isFetched || !projectsQuery.isFetched) return;

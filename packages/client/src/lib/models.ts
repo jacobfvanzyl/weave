@@ -1,4 +1,5 @@
-import { getAuthHeaders, getMastraUrl } from './mastra-client';
+import { getAuthHeaders } from './mastra-client';
+import { weaveRoutes } from './weave-routes';
 
 export type ModelOption = {
   id: string;
@@ -15,7 +16,7 @@ export type ModelConfig = {
 };
 
 export const fetchModelConfig = async (): Promise<ModelConfig> => {
-  const response = await fetch(`${getMastraUrl()}/models`, { headers: getAuthHeaders() });
+  const response = await fetch(weaveRoutes.agent.models(), { headers: getAuthHeaders() });
   if (!response.ok) throw new Error(`models failed: ${response.status}`);
   return await response.json() as ModelConfig;
 };

@@ -1,5 +1,6 @@
-import { getAuthHeaders, getMastraUrl } from './mastra-client';
+import { getAuthHeaders } from './mastra-client';
 import type { EditorTarget } from './editor-types';
+import { weaveRoutes } from './weave-routes';
 
 export type VaultTarget = EditorTarget;
 
@@ -68,7 +69,7 @@ export type VaultBackend = {
 };
 
 const request = async <T>(action: 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload', body: unknown): Promise<T> => {
-  const response = await fetch(`${getMastraUrl()}/vault/${action}`, {
+  const response = await fetch(weaveRoutes.notes.vault(action), {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(body),

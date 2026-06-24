@@ -62,6 +62,11 @@ const gitModelOutput = (name: string, output: unknown, maxChars = getCodeToolMod
   ], body, maxChars);
 };
 
+const withOk = async (value: Promise<Record<string, unknown> & { ok?: boolean; error?: string }>) => {
+  const result = await value;
+  return { ...result, ok: result.ok !== false };
+};
+
 export const gitStatusTool = createTool({
   id: 'git_status',
   description: 'Inspect structured Git status for the current Workspace. Prefer this over running `git status` through bash.',
@@ -69,10 +74,10 @@ export const gitStatusTool = createTool({
   outputSchema: gitOutputSchema,
   execute: async (_input, context) => {
     const target = await getGitTarget(context);
-    return requestWorkspaceGitOperation(target.project, target.workspace, target.resourceId, {
+    return withOk(requestWorkspaceGitOperation(target.project, target.workspace, target.resourceId, {
       operation: 'status',
       adapters,
-    });
+    }));
   },
   toModelOutput: output => gitModelOutput('git_status', output),
 });
@@ -88,11 +93,11 @@ export const gitDiffTool = createTool({
   outputSchema: gitOutputSchema,
   execute: async (input, context) => {
     const target = await getGitTarget(context);
-    return requestWorkspaceGitOperation(target.project, target.workspace, target.resourceId, {
+    return withOk(requestWorkspaceGitOperation(target.project, target.workspace, target.resourceId, {
       operation: 'diff',
       args: input,
       adapters,
-    });
+    }));
   },
   toModelOutput: output => gitModelOutput('git_diff', output),
 });
@@ -107,11 +112,11 @@ export const gitLogTool = createTool({
   outputSchema: gitOutputSchema,
   execute: async (input, context) => {
     const target = await getGitTarget(context);
-    return requestWorkspaceGitOperation(target.project, target.workspace, target.resourceId, {
+    return withOk(requestWorkspaceGitOperation(target.project, target.workspace, target.resourceId, {
       operation: 'log',
       args: input,
       adapters,
-    });
+    }));
   },
   toModelOutput: output => gitModelOutput('git_log', output),
 });
@@ -125,11 +130,11 @@ export const gitShowTool = createTool({
   outputSchema: gitOutputSchema,
   execute: async (input, context) => {
     const target = await getGitTarget(context);
-    return requestWorkspaceGitOperation(target.project, target.workspace, target.resourceId, {
+    return withOk(requestWorkspaceGitOperation(target.project, target.workspace, target.resourceId, {
       operation: 'show',
       args: input,
       adapters,
-    });
+    }));
   },
   toModelOutput: output => gitModelOutput('git_show', output),
 });
