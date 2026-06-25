@@ -242,13 +242,18 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
             };
           }
           const layout = restoreSurfaceLayout(surfaceLayouts, nextActiveSurface, fallbackLayout);
+          const maximizedPane = layout.maximizedPane === 'chat' ? layout.maximizedPane : null;
           return {
             threadId,
             activeSurface: nextActiveSurface,
             surfaceLayouts,
-            paneVisibility: layout.paneVisibility,
-            maximizedPane: layout.maximizedPane,
-            preMaximizePaneVisibility: layout.preMaximizePaneVisibility,
+            paneVisibility: {
+              ...layout.paneVisibility,
+              chatOpen: true,
+              ...(options?.preserveTerminalVisibility ? { terminalOpen: state.paneVisibility.terminalOpen } : {}),
+            },
+            maximizedPane,
+            preMaximizePaneVisibility: maximizedPane ? layout.preMaximizePaneVisibility : undefined,
           };
         }),
       selectWorkspace: (projectId, workspaceId) =>

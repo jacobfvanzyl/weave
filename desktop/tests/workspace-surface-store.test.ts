@@ -173,7 +173,7 @@ describe('workspace surface store', () => {
     });
   });
 
-  it('restores each thread pane layout when switching away and back', async () => {
+  it('restores each thread pane layout while reopening chat when switching away and back', async () => {
     const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
 
     useWorkspaceSurfaceStore.getState().selectThread('thread-1', { id: 'thread-1', workspaceId: 'workspace-1' });
@@ -198,7 +198,7 @@ describe('workspace surface store', () => {
     useWorkspaceSurfaceStore.getState().selectThread('thread-2', { id: 'thread-2', workspaceId: 'workspace-1' });
     expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
       activeSurface: { kind: 'thread', threadId: 'thread-2' },
-      paneVisibility: { chatOpen: false, editorOpen: true, terminalOpen: false },
+      paneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: false },
       maximizedPane: null,
     });
   });
