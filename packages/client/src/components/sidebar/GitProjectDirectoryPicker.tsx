@@ -217,7 +217,7 @@ export const GitProjectDirectoryPicker = ({
               </Button>
             ) : null}
           </div>
-          <div className={cn('mt-2 rounded px-2 py-1', projectKind === 'notes' || browseResult?.isGitRepo ? 'bg-success/15 text-success' : 'bg-background/60 text-muted-foreground')}>
+          <div className={cn('mt-2 rounded px-2 py-1', projectKind === 'notes' || browseResult?.isGitRepo ? 'bg-selected-thread text-foreground' : 'bg-background/60 text-muted-foreground')}>
             {projectKind === 'notes' ? 'Vault folder selected' : browseResult?.isGitRepo ? 'Valid git repository root' : 'Select a git repository root'}
           </div>
         </div> : null}
@@ -239,7 +239,7 @@ export const GitProjectDirectoryPicker = ({
               onClick={() => setPath(joinPath(path, entry.name))}
               disabled={isCreating}
             >
-              <Folder size={14} className={cn('shrink-0', entry.hidden ? 'text-muted-foreground' : 'text-success')} />
+              <Folder size={14} className={cn('shrink-0', entry.hidden ? 'text-muted-foreground' : 'text-foreground')} />
               <span className="min-w-0 truncate">{entry.name}</span>
             </Button>
           ))}
@@ -254,7 +254,7 @@ export const GitProjectDirectoryPicker = ({
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={isCreating}>Cancel</Button>
           <Button
-            className="bg-success text-background hover:bg-success/90"
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
             disabled={!canCreate}
             onClick={() => {
               if (projectKind === 'general') return onCreate({ name: trimmedName, projectKind: 'general' });

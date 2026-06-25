@@ -773,7 +773,7 @@ export const WindowStreamOverlay = ({ portals, onHide, onSessionActiveChange }: 
     <section className="flex h-full min-h-0 flex-col bg-background text-foreground" data-weave-window-stream-overlay>
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-3" data-weave-overlay-titlebar>
         <div className="flex min-w-0 items-center gap-2">
-          <MonitorUp size={18} className="shrink-0 text-primary" />
+          <MonitorUp size={18} className="shrink-0 text-muted-foreground" />
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">Window Stream</h2>
             <p className="truncate text-xs text-muted-foreground">

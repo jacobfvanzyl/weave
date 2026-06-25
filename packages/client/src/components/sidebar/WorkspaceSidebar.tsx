@@ -159,7 +159,7 @@ const SidebarSectionHeader = ({
   label: string;
   labelClassName?: string;
 }) => (
-  <div className="weave-sidebar-section-heading relative flex h-6 items-center justify-end bg-muted text-sm font-semibold tracking-wide text-muted-foreground dark:bg-card">
+  <div className="weave-sidebar-section-heading relative flex h-6 items-center justify-end bg-transparent text-xs font-medium text-muted-foreground">
     <span className={cn('pointer-events-none absolute left-0 right-0.5 text-center', labelClassName)}>{label}</span>
     <div className="relative flex items-center gap-2">
       {children}
@@ -666,7 +666,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       data-weave-surface="sidebar"
       tabIndex={-1}
       className={cn(
-        'fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-muted py-4 pl-2 pr-4 dark:bg-card',
+        'fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-card py-4 pl-2 pr-4',
         presentation === 'overlay'
           ? 'w-96 max-w-[min(24rem,calc(100vw-1rem))]'
           : 'w-full md:static md:z-auto md:w-96',
@@ -674,7 +674,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     >
       <div className="min-h-0 flex-1 -mr-4 space-y-4 overflow-x-hidden overflow-y-auto pr-5">
         {product === 'chat' ? <div className="space-y-2">
-          <SidebarSectionHeader label="Threads" labelClassName="text-primary">
+          <SidebarSectionHeader label="Threads">
             <div className="flex items-center">
               <Button
                 className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
@@ -721,7 +721,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
             showHandle={false}
             className={cn(
               'group relative flex min-h-9 min-w-0 w-[calc(100%+6px)] items-center gap-2 rounded-md border border-transparent py-1 pl-2 pr-1 text-left transition-colors',
-              !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
+              !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-accent',
             )}
           >
             <span
@@ -748,7 +748,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
         </div> : null}
 
         <div className="space-y-2">
-          <SidebarSectionHeader label="Projects" labelClassName="text-success">
+          <SidebarSectionHeader label="Projects">
             <Menu>
               <MenuTrigger render={<Button className="h-6 w-8 translate-x-2.5 text-foreground" size="icon-xs" variant="ghost" aria-label="Projects menu" />}>
                 <MoreHorizontal size={14} />
@@ -823,15 +823,15 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                           }}
                         >
                           {!isCollapsed ? (
-                            <FolderOpen size={16} className="shrink-0 text-success" aria-label="Expanded Project" />
+                            <FolderOpen size={16} className="shrink-0 text-muted-foreground" aria-label="Expanded Project" />
                           ) : project.projectKind === 'git' ? (
-                            <FolderCode size={16} className="shrink-0 text-success" aria-label="Git Project" />
+                            <FolderCode size={16} className="shrink-0 text-muted-foreground" aria-label="Git Project" />
                           ) : project.projectKind === 'notes' ? (
-                            <StickyNote size={16} className="shrink-0 text-success" aria-label="Notes Project" />
+                            <StickyNote size={16} className="shrink-0 text-muted-foreground" aria-label="Notes Project" />
                           ) : (
-                            <Folder size={16} className="shrink-0 text-success" aria-label="General Project" />
+                            <Folder size={16} className="shrink-0 text-muted-foreground" aria-label="General Project" />
                           )}
-                          <span className="min-w-0 truncate font-semibold text-success">{project.name}</span>
+                          <span className="min-w-0 truncate font-medium text-foreground">{project.name}</span>
                         </SidebarItemButton>
                         {!isCollapsed ? (
                           <div className={cn('relative flex shrink-0 items-center', hasProjectThreadAction && 'translate-x-2.5')}>
@@ -903,7 +903,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                       {!isCollapsed ? (
                         <div
                           className={cn(
-                            'relative space-y-2 pl-[15px] before:pointer-events-none before:absolute before:left-4 before:-right-[21px] before:top-[-4px] before:z-10 before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-success/70',
+                            'relative space-y-2 pl-[15px] before:pointer-events-none before:absolute before:left-4 before:-right-[21px] before:top-[-4px] before:z-10 before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-border',
                             project.projectKind === 'git' ? 'pb-3 before:bottom-1.5' : 'pb-1 before:bottom-2',
                           )}
                         >
@@ -923,7 +923,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                   className={cn(
                                     'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
                                     'border-transparent text-foreground',
-                                    !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
+                                    !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-accent',
                                   )}
                                 >
                                   <span
@@ -964,7 +964,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                   className={cn(
                                     'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
                                     'border-transparent text-foreground',
-                                    !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
+                                    !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-accent',
                                   )}
                                 >
                                   <span
@@ -1020,7 +1020,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                           <div
                                             className={cn(
                                               'group relative -ml-2 flex min-h-0 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border border-transparent py-0 pl-2 pr-1 text-left text-sm font-normal text-foreground transition-colors',
-                                              !isWorkspaceActive(project.id, workspace.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
+                                              !isWorkspaceActive(project.id, workspace.id) && 'hover:[&>[data-sidebar-highlight]]:bg-accent',
                                             )}
                                           >
                                             <span
@@ -1041,15 +1041,15 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                                 {...dragActivator.attributes}
                                                 {...dragActivator.listeners}
                                               >
-                                                <span className="truncate text-peach">{workspace.name}</span>
+                                                <span className="truncate text-foreground">{workspace.name}</span>
                                                 {workspace.locked || workspace.workspaceKind === 'primary' ? <Lock size={11} className="shrink-0 text-muted-foreground" aria-label="Primary workspace" /> : null}
                                               </button>
                                               {workspace.detached ? (
-                                                <div className="flex h-4 items-center truncate pl-2 text-[10px] font-normal leading-none text-mauve">
+                                                <div className="flex h-4 items-center truncate pl-2 text-[10px] font-normal leading-none text-muted-foreground">
                                                   {`Detached ${workspace.head?.slice(0, 7) ?? 'HEAD'}`}
                                                 </div>
                                               ) : workspace.branch ? (
-                                                <div className="flex h-4 max-w-full items-center pl-2 text-[10px] font-normal leading-none text-mauve">
+                                                <div className="flex h-4 max-w-full items-center pl-2 text-[10px] font-normal leading-none text-muted-foreground">
                                                   <Menu
                                                     onOpenChange={(open) => {
                                                       if (open) void refreshWorkspaceBranchState(project.id, workspace.id, Boolean(workspace.upstream));
@@ -1059,7 +1059,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                                       render={
                                                         <button
                                                           type="button"
-                                                          className="flex h-4 min-w-0 max-w-full items-center gap-1 truncate text-[10px] font-normal leading-none text-mauve outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                                                          className="flex h-4 min-w-0 max-w-full items-center gap-1 truncate text-[10px] font-normal leading-none text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                                                           aria-label={`${workspace.branch} branch menu`}
                                                         />
                                                       }
@@ -1111,7 +1111,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                             >
                                               {hasWorkspaceTerminals ? (
                                                 <span
-                                                  className="col-start-1 row-start-1 flex h-5 w-6 items-center justify-center text-peach"
+                                                  className="col-start-1 row-start-1 flex h-5 w-6 items-center justify-center text-muted-foreground"
                                                   title={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
                                                   aria-label={`${workspaceTerminalCount} running terminal${workspaceTerminalCount === 1 ? '' : 's'}`}
                                                 >
@@ -1210,7 +1210,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                           </div>
                                           <div
                                             className={cn(
-                                              'relative before:pointer-events-none before:absolute before:bottom-0 before:left-[9px] before:-right-[21px] before:top-[-13px] before:z-10 before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-peach/70',
+                                              'relative before:pointer-events-none before:absolute before:bottom-0 before:left-[9px] before:-right-[21px] before:top-[-13px] before:z-10 before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-border',
                                               workspaceThreads.length === 0 && !isLastWorkspace && 'h-2',
                                             )}
                                           >
@@ -1229,7 +1229,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                                   className={cn(
                                                     'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
                                                     'border-transparent text-foreground',
-                                                    !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-background',
+                                                    !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-accent',
                                                   )}
                                                 >
                                                   <span
@@ -1390,7 +1390,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                               return (
                                 <ComboboxItem key={ref} value={ref}>
                                   <span className="flex min-w-0 items-center gap-2">
-                                    <span className="truncate text-mauve">{option?.name ?? ref}</span>
+                                    <span className="truncate text-foreground">{option?.name ?? ref}</span>
                                     {option?.kind === 'remote' ? (
                                       <span className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">origin</span>
                                     ) : null}
@@ -1413,7 +1413,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
             <DialogFooter>
               <Button variant="outline" onClick={closeCreateWorkspaceDialog} disabled={isCreatingWorkspace}>Cancel</Button>
               <Button
-                className="bg-success text-background hover:bg-success/90"
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
                 disabled={!canCreateWorkspace}
                 onClick={async () => {
                   const input: CreateWorkspaceInput = {
@@ -1488,7 +1488,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                         className={cn(
                           'h-auto w-full justify-start rounded-md border p-3 text-left shadow-none',
                           isSelected
-                            ? 'border-success/70 bg-selected-thread text-foreground'
+                            ? 'border-primary/40 bg-selected-thread text-foreground'
                             : 'border-border/70 bg-background text-foreground hover:bg-muted',
                         )}
                         variant="ghost"
@@ -1500,7 +1500,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                       >
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex min-w-0 items-center gap-2">
-                            <GitBranch size={13} className="shrink-0 text-mauve" />
+                            <GitBranch size={13} className="shrink-0 text-muted-foreground" />
                             <span className="min-w-0 truncate text-sm font-medium">{getDiscoveredWorktreeState(worktree)}</span>
                           </div>
                           <div className="truncate text-xs font-normal text-muted-foreground">{path}</div>
@@ -1525,7 +1525,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
             <DialogFooter>
               <Button variant="outline" onClick={closeAttachWorkspaceDialog} disabled={isAttachingWorkspace}>Cancel</Button>
               <Button
-                className="bg-success text-background hover:bg-success/90"
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
                 disabled={!canAttachWorkspace}
                 onClick={async () => {
                   if (!attachWorkspaceProject || !selectedAttachWorktree?.path) return;

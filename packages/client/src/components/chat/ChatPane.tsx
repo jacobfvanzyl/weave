@@ -60,7 +60,7 @@ export const ChatPane = ({
       data-maximized={isMaximized ? 'true' : 'false'}
     >
       <div className="relative flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-        <MessageSquare size={15} className="relative z-10 shrink-0 text-primary" />
+        <MessageSquare size={15} className="relative z-10 shrink-0 text-muted-foreground" />
         {breadcrumb ? (
           <div
             className="pointer-events-none absolute inset-y-0 left-1/2 flex min-w-0 -translate-x-1/2 items-center justify-center"

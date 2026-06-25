@@ -257,8 +257,8 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
     return (
       <aside
         className={isSlideOver
-          ? 'absolute bottom-2 right-2 top-2 z-20 flex w-64 max-w-[calc(100%-1rem)] flex-col overflow-hidden rounded-md border border-border bg-card/95 shadow-xl backdrop-blur'
-          : 'flex w-64 shrink-0 flex-col border-l border-border bg-card/70'}
+          ? 'absolute bottom-2 right-2 top-2 z-20 flex w-64 max-w-[calc(100%-1rem)] flex-col overflow-hidden rounded-md border border-border bg-card shadow-md'
+          : 'flex w-64 shrink-0 flex-col border-l border-border bg-card'}
         data-weave-editor-file-tree
         data-presentation={presentation}
         onPointerEnter={isSlideOver ? openFileTreeSlideOver : undefined}
@@ -298,7 +298,7 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
                 onClick={() => handleOpenEntry(entry, { closeSlideOverOnFileOpen: isSlideOver })}
               >
                 {entry.type === 'directory' ? (
-                  <Folder size={14} className="shrink-0 text-mauve" />
+                  <Folder size={14} className="shrink-0 text-muted-foreground" />
                 ) : entry.type === 'file' ? (
                   <File size={14} className="shrink-0 text-muted-foreground" />
                 ) : (
@@ -332,7 +332,7 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
         {columnMeasureText}
       </span>
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
-        <Code2 size={15} className="shrink-0 text-primary" />
+        <Code2 size={15} className="shrink-0 text-muted-foreground" />
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <span className="min-w-0 truncate text-xs font-semibold text-foreground">
             {titlePath}

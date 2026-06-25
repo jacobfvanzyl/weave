@@ -19,55 +19,36 @@
   --weave-desktop-sidebar-padding-top: calc(
     var(--weave-desktop-appbar-height) + ((var(--weave-chat-top-rail-height) - var(--weave-desktop-sidebar-action-height)) / 2)
   );
-  --color-token-foreground: #cdd6f4;
-  --color-token-background: #1e1e2e;
-  --color-token-background-surface: #181825;
-  --color-token-background-under: #11111b;
-  --color-token-border: #45475a;
-  --color-token-border-subtle: color-mix(in srgb, #45475a 58%, transparent);
-  --color-token-accent: #cba6f7;
-  --color-token-accent-blue: #89b4fa;
+  --color-token-foreground: var(--foreground);
+  --color-token-background: var(--background);
+  --color-token-background-surface: var(--card);
+  --color-token-background-under: var(--ctp-crust);
+  --color-token-border: var(--border);
+  --color-token-border-subtle: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --color-token-accent: var(--primary);
+  --color-token-accent-blue: var(--ctp-blue);
   --vscode-foreground: var(--color-token-foreground);
-  --vscode-editor-background: #1e1e2e;
-  --vscode-editor-foreground: #cdd6f4;
-  --vscode-sideBar-background: #181825;
-  --vscode-activityBar-background: #11111b;
-  --vscode-panel-background: #1e1e2e;
-  --vscode-button-background: #cba6f7;
-  --vscode-button-foreground: #11111b;
-  --vscode-terminal-ansiBlack: #45475a;
-  --vscode-terminal-ansiRed: #f38ba8;
-  --vscode-terminal-ansiGreen: #a6e3a1;
-  --vscode-terminal-ansiYellow: #f9e2af;
-  --vscode-terminal-ansiBlue: #89b4fa;
-  --vscode-terminal-ansiMagenta: #f5c2e7;
-  --vscode-terminal-ansiCyan: #94e2d5;
-  --vscode-terminal-ansiWhite: #a6adc8;
-  --vscode-terminal-ansiBrightBlack: #585b70;
-  --vscode-terminal-ansiBrightWhite: #bac2de;
+  --vscode-editor-background: var(--background);
+  --vscode-editor-foreground: var(--foreground);
+  --vscode-sideBar-background: var(--card);
+  --vscode-activityBar-background: var(--ctp-crust);
+  --vscode-panel-background: var(--background);
+  --vscode-button-background: var(--primary);
+  --vscode-button-foreground: var(--primary-foreground);
+  --vscode-terminal-ansiBlack: var(--ctp-surface1);
+  --vscode-terminal-ansiRed: var(--ctp-red);
+  --vscode-terminal-ansiGreen: var(--ctp-green);
+  --vscode-terminal-ansiYellow: var(--ctp-yellow);
+  --vscode-terminal-ansiBlue: var(--ctp-blue);
+  --vscode-terminal-ansiMagenta: var(--ctp-mauve);
+  --vscode-terminal-ansiCyan: var(--ctp-teal);
+  --vscode-terminal-ansiWhite: var(--ctp-subtext1);
+  --vscode-terminal-ansiBrightBlack: var(--ctp-surface2);
+  --vscode-terminal-ansiBrightWhite: var(--ctp-text);
   --color-background-surface-under: var(--color-token-background-under);
-  --color-background-surface: rgb(30 30 46 / 55%);
-  --color-background-elevated-primary: color-mix(in srgb, #313244 74%, transparent);
-  --color-background-editor-opaque: #181825;
-  --background: #1e1e2e;
-  --foreground: #cdd6f4;
-  --card: #181825;
-  --card-foreground: #cdd6f4;
-  --popover: color-mix(in srgb, #181825 94%, #11111b);
-  --popover-foreground: #cdd6f4;
-  --muted: #313244;
-  --muted-foreground: #a6adc8;
-  --secondary: #313244;
-  --secondary-foreground: #cdd6f4;
-  --accent: #45475a;
-  --accent-foreground: #cdd6f4;
-  --border: color-mix(in srgb, #45475a 72%, transparent);
-  --input: #45475a;
-  --ring: #cba6f7;
-  --primary: var(--blue);
-  --primary-foreground: #11111b;
-  --user: var(--primary);
-  --user-foreground: #11111b;
+  --color-background-surface: color-mix(in oklab, var(--background) 78%, transparent);
+  --color-background-elevated-primary: color-mix(in oklab, var(--card) 94%, transparent);
+  --color-background-editor-opaque: var(--card);
 }
 
 :root[data-weave-window-type="electron"],
@@ -88,7 +69,7 @@
   overflow: hidden;
   isolation: isolate;
   background: transparent;
-  border: var(--weave-desktop-window-border-width) solid color-mix(in srgb, #cdd6f4 10%, transparent);
+  border: var(--weave-desktop-window-border-width) solid color-mix(in oklab, var(--foreground) 8%, transparent);
 }
 
 :root[data-weave-window-type="electron"] main[data-sidebar-open] {
@@ -97,7 +78,7 @@
   overflow: hidden;
   background: var(--background);
   border-left: 0;
-  box-shadow: 0 2px 4px -1px color-mix(in srgb, #000 18%, transparent);
+  box-shadow: 0 2px 4px -1px color-mix(in oklab, #000000 18%, transparent);
 }
 
 :root[data-weave-window-type="electron"] header {
@@ -105,7 +86,7 @@
   height: var(--weave-desktop-appbar-height);
   border-bottom-width: 0 !important;
   border-bottom-color: transparent !important;
-  background: color-mix(in srgb, #1e1e2e 86%, transparent);
+  background: color-mix(in oklab, var(--background) 86%, transparent);
   -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
 }
@@ -238,6 +219,21 @@
   padding-left: calc(5rem + var(--weave-desktop-appbar-control-leading-offset) + 1px);
 }
 
+@media (max-width: 520px) {
+  :root[data-weave-window-type="electron"] header {
+    grid-template-columns: minmax(11rem, 1fr) auto minmax(3rem, 1fr);
+  }
+
+  :root[data-weave-window-type="electron"] .weave-product-rail {
+    gap: 0.125rem;
+    font-size: 11px;
+  }
+
+  :root[data-weave-window-type="electron"] .weave-product-rail button {
+    padding-inline: 0.375rem;
+  }
+}
+
 :root[data-weave-window-type="electron"] aside[data-weave-thread-sidebar][data-weave-thread-sidebar-overlay="true"] {
   position: fixed;
   top: 0;
@@ -248,13 +244,13 @@
   max-width: min(var(--weave-desktop-sidebar-width), calc(100vw - 1rem));
   box-shadow:
     1px 0 0 0 var(--border),
-    0 20px 25px -5px rgb(0 0 0 / 18%),
-    0 8px 10px -6px rgb(0 0 0 / 18%);
+    0 8px 16px -4px rgb(0 0 0 / 18%),
+    0 4px 8px -4px rgb(0 0 0 / 16%);
   animation: weave-desktop-sidebar-preview-in 150ms ease-out;
 }
 
 :root[data-weave-window-type="electron"] ::selection {
-  background: color-mix(in srgb, #cba6f7 34%, transparent);
+  background: color-mix(in oklab, var(--primary) 34%, transparent);
 }
 
 @keyframes weave-desktop-sidebar-preview-in {

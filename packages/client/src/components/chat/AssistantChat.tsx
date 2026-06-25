@@ -197,7 +197,7 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
       <CollapsibleTrigger className="flex min-w-0 cursor-pointer select-none items-center gap-2 font-medium text-muted-foreground">
         {isBusy ? <Loader2 size={12} className="shrink-0 animate-spin text-primary" /> : null}
         <span className="min-w-0 truncate">
-          <span className="font-bold italic text-mauve">{display.toolName}</span>
+          <span className="font-medium italic text-foreground">{display.toolName}</span>
           {chipDetail ? <span className="text-foreground">: {chipDetail}</span> : null}
         </span>
         <Badge className="ml-auto" size="sm" variant={display.isError ? 'error' : isBusy ? 'info' : 'success'}>
@@ -488,10 +488,10 @@ const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string;
         h2: ({ children }) => <h2 className="mb-3 mt-5 text-xl font-bold leading-tight first:mt-0">{children}</h2>,
         h3: ({ children }) => <h3 className="mb-2 mt-4 text-lg font-semibold leading-tight first:mt-0">{children}</h3>,
         h4: ({ children }) => <h4 className="mb-2 mt-4 text-base font-semibold leading-tight first:mt-0">{children}</h4>,
-        p: ({ children }) => <p className="my-3 leading-6 first:mt-0 last:mb-0">{children}</p>,
+        p: ({ children }) => <p className="my-3 leading-[var(--weave-chat-line-height)] first:mt-0 last:mb-0">{children}</p>,
         ul: ({ children, className }) => <ul className={cn('my-3 list-disc space-y-1 pl-6', className?.includes('contains-task-list') && 'list-none pl-0')}>{children}</ul>,
         ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-6">{children}</ol>,
-        li: ({ children, className }) => <li className={cn('pl-1 leading-6 marker:text-muted-foreground', className?.includes('task-list-item') && 'flex items-start gap-2 pl-0')}>{children}</li>,
+        li: ({ children, className }) => <li className={cn('pl-1 leading-[var(--weave-chat-line-height)] marker:text-muted-foreground', className?.includes('task-list-item') && 'flex items-start gap-2 pl-0')}>{children}</li>,
         strong: ({ children }) => <strong className="font-bold text-inherit">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
         del: ({ children }) => <del className="text-muted-foreground line-through">{children}</del>,
@@ -535,7 +535,7 @@ const RunningIndicatorTail = () => {
   return (
     <div className="chat-message-shell mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
       <div className="chat-message-row flex min-w-0 justify-start">
-        <div className="chat-message-bubble min-w-0 max-w-full text-base leading-6">
+        <div className="chat-message-bubble min-w-0 max-w-full text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)]">
           <RunningIndicator />
         </div>
       </div>
@@ -915,7 +915,7 @@ const ThreadMessage = () => (
   <MessagePrimitive.Root className="chat-message-shell mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
     <MessagePrimitive.If assistant>
       <div className="chat-message-row flex min-w-0 justify-start">
-        <div className="chat-message-bubble min-w-0 max-w-full text-base leading-6">
+        <div className="chat-message-bubble min-w-0 max-w-full text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)]">
           <AssistantMessageContent />
           <div className="text-red-300">
             <MessagePrimitive.Error />
@@ -925,7 +925,7 @@ const ThreadMessage = () => (
     </MessagePrimitive.If>
     <MessagePrimitive.If user>
       <div className="chat-message-row flex min-w-0 justify-end">
-        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-primary bg-user px-4 py-2 text-base leading-6 text-user-foreground">
+        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-border bg-user px-3.5 py-2 text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)] text-user-foreground">
           <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
           <div className="mt-3 flex flex-wrap gap-2 empty:hidden">
             <MessageImageAttachments />
@@ -1158,7 +1158,7 @@ const FollowWritesToggle = ({ canFollowWrites }: { canFollowWrites: boolean }) =
       onClick={() => setFollowWrites(!followWrites)}
       className={cn(
         'h-9 w-9 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground',
-        followWrites && 'text-mauve hover:text-mauve',
+        followWrites && 'text-primary hover:text-primary',
       )}
     >
       <Crosshair size={16} />
@@ -1317,10 +1317,10 @@ const PromptSlashMenu = ({
           }}
           className={cn(
             'h-auto w-full justify-start gap-3 rounded-none px-4 py-3 text-left text-sm',
-            index === activeIndex ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
+            index === activeIndex ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
           )}
         >
-          <span className="w-28 shrink-0 font-bold text-primary">/{prompt.name}</span>
+          <span className="w-28 shrink-0 font-medium text-foreground">/{prompt.name}</span>
           {prompt.argumentHint ? <span className="shrink-0 text-xs text-muted-foreground">{prompt.argumentHint}</span> : null}
           <span className="min-w-0 truncate">— {prompt.description}</span>
         </Button>
@@ -1349,11 +1349,11 @@ const SlashHighlightedInput = ({
   const isKnownCommand = Boolean(commandName && knownPromptNames.has(commandName));
 
   return (
-    <div className="relative text-base leading-6">
+    <div className="relative text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)]">
       {match && isKnownCommand ? (
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 min-h-10 overflow-hidden whitespace-pre-wrap break-words p-0 font-[inherit] leading-6 text-foreground"
+          className="pointer-events-none absolute inset-0 min-h-10 overflow-hidden whitespace-pre-wrap break-words p-0 font-[inherit] leading-[var(--weave-chat-line-height)] text-foreground"
         >
           <span className="font-bold text-primary">{match[1]}</span>
           <span>{match[2] || ' '}</span>
@@ -1366,7 +1366,7 @@ const SlashHighlightedInput = ({
         placeholder={placeholder}
         onKeyDown={onKeyDown}
         className={cn(
-          'relative max-h-40 min-h-6 w-full resize-none bg-transparent p-0 text-base leading-6 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-70',
+          'relative max-h-40 min-h-6 w-full resize-none bg-transparent p-0 text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-70',
           match && isKnownCommand && 'text-transparent caret-foreground',
         )}
       />
@@ -1467,7 +1467,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   return (
     <ComposerPrimitive.Root
       ref={composerRef}
-      className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-primary bg-background px-4 py-3 shadow-[0_0_0_1px_rgba(87,119,255,0.08)]"
+      className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-border bg-card px-4 py-3 shadow-sm"
       data-weave-text-surface="true"
     >
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
@@ -1513,7 +1513,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
                     className={cn(
                       'h-11 w-11 shrink-0 rounded-full',
                       isSendActive
-                        ? 'border-mauve bg-mauve text-background hover:bg-mauve/90'
+                        ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
                         : 'text-primary',
                     )}
                   />
@@ -1528,7 +1528,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
                 onClick={() => void connectChatGPT()}
                 size="icon-lg"
                 variant="ghost"
-                className="h-11 w-11 shrink-0 rounded-full text-peach"
+                className="h-11 w-11 shrink-0 rounded-full text-primary"
               >
                 <KeyRound size={20} />
               </Button>

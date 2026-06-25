@@ -63,7 +63,7 @@ export const ExcalidrawPencilToolOverlay = ({
   const overlayContent = (
     <div
       aria-label="Apple Pencil tools"
-      className="fixed z-50 rounded-full border border-border/70 bg-background/88 shadow-2xl backdrop-blur"
+      className="fixed z-50 rounded-full border border-border/70 bg-background/88 shadow-md backdrop-blur"
       data-weave-excalidraw-pencil-tool-overlay
       role="toolbar"
       style={{ height: paletteSize, left: overlay.left, top: overlay.top, width: paletteSize }}

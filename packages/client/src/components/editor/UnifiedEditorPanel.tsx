@@ -503,11 +503,11 @@ const SortableEditorTab = ({
     <div
       ref={setNodeRef}
       className={cn(
-        'relative -ml-px flex h-7 min-w-36 max-w-64 shrink-0 items-center overflow-hidden rounded-t-md rounded-b-none border border-b-0 text-xs first:ml-0',
+        'relative -ml-px flex h-full min-w-36 max-w-64 shrink-0 items-center overflow-hidden rounded-none border-x border-y-0 text-xs first:ml-0',
         isSelected
-          ? 'z-10 border-primary/40 bg-primary/10 text-foreground'
-          : 'z-0 border-border bg-transparent text-muted-foreground hover:z-10 hover:bg-primary/5 hover:text-foreground',
-        isDragging && 'z-20 opacity-90 shadow-lg',
+          ? 'z-10 border-border bg-accent text-foreground'
+          : 'z-0 border-transparent bg-transparent text-muted-foreground hover:z-10 hover:border-border hover:bg-accent/60 hover:text-foreground',
+        isDragging && 'z-20 opacity-90 shadow-md',
       )}
       style={style}
       data-weave-editor-tab={tab.path}
@@ -1523,7 +1523,7 @@ export const UnifiedEditorPanel = ({
     const rowIcon = isDirectory ? (
       isExpandedNode ? <FolderOpen size={14} className="shrink-0 text-muted-foreground" /> : <Folder size={14} className="shrink-0 text-muted-foreground" />
     ) : isExcalidrawPath(node.path) ? (
-      <PencilRuler size={14} className="shrink-0 text-primary" />
+      <PencilRuler size={14} className="shrink-0 text-muted-foreground" />
     ) : (
       <FileIcon size={14} className="shrink-0 text-muted-foreground" />
     );
@@ -1732,7 +1732,7 @@ export const UnifiedEditorPanel = ({
           const isRenaming = renameState?.origin === 'tab' && renameState.path === tab.path;
           const icon = mode === 'notes'
             ? isExcalidrawPath(tab.path)
-              ? <PencilRuler size={12} className="text-primary" />
+              ? <PencilRuler size={12} className="text-muted-foreground" />
               : <StickyNote size={12} className="text-muted-foreground" />
             : <FileIcon size={12} className="text-muted-foreground" />;
           return (
@@ -1772,9 +1772,9 @@ export const UnifiedEditorPanel = ({
     return (
       <aside
         className={cn(
-          'flex w-80 min-w-64 shrink-0 flex-col bg-card/40',
+          'flex w-80 min-w-64 shrink-0 flex-col bg-card',
           isSlideOver
-            ? 'absolute bottom-2 right-2 top-2 z-20 max-w-[calc(100%-1rem)] overflow-hidden rounded-md border border-border bg-card/95 shadow-xl backdrop-blur'
+            ? 'absolute bottom-2 right-2 top-2 z-20 max-w-[calc(100%-1rem)] overflow-hidden rounded-md border border-border bg-card shadow-md'
             : 'border-l border-border',
         )}
         data-weave-editor-explorer
@@ -1844,7 +1844,7 @@ export const UnifiedEditorPanel = ({
               </Button>
             </div>
             <div className="border-b border-border p-2">
-              <div className="flex h-8 items-center gap-2 rounded-md border border-border bg-background px-2">
+              <div className="flex h-8 items-center gap-2 rounded-md border border-border bg-secondary px-2">
                 <Search size={13} className="shrink-0 text-muted-foreground" />
                 <Input
                   nativeInput
@@ -1905,9 +1905,9 @@ export const UnifiedEditorPanel = ({
           {editorColumnMeasureText}
         </span>
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3" data-weave-editor-titlebar data-weave-editor-tab-bar>
-          {mode === 'notes' ? <StickyNote size={15} className="shrink-0 text-primary" /> : <Code2 size={15} className="shrink-0 text-primary" />}
+          {mode === 'notes' ? <StickyNote size={15} className="shrink-0 text-muted-foreground" /> : <Code2 size={15} className="shrink-0 text-muted-foreground" />}
           <div
-            className="flex min-w-0 max-w-[55%] shrink items-end self-stretch overflow-x-auto pt-2"
+            className="flex min-w-0 max-w-[55%] shrink items-stretch self-stretch overflow-x-auto"
             role="tablist"
             aria-label={mode === 'notes' ? 'Open notes' : 'Open code buffers'}
           >

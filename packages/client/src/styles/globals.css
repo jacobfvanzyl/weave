@@ -45,55 +45,124 @@
   --font-sans: var(--font-ui);
   --font-mono: var(--font-code);
   --font-heading: var(--font-ui);
+  --text-xs: 11px;
+  --text-xs--line-height: 1.35;
+  --text-sm: 12px;
+  --text-sm--line-height: 1.45;
+  --text-base: 14px;
+  --text-base--line-height: 1.5;
+  --text-lg: 16px;
+  --text-lg--line-height: 1.5;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 0.08);
+  --shadow-md: 0 2px 4px -1px rgb(0 0 0 / 0.08);
+  --shadow-lg: 0 4px 8px -2px rgb(0 0 0 / 0.10);
+  --shadow-xl: 0 8px 16px -4px rgb(0 0 0 / 0.12);
+  --shadow-2xl: 0 16px 32px -8px rgb(0 0 0 / 0.16);
 }
 
 :root,
 :root[data-theme="latte"] {
   color-scheme: light;
   --weave-chat-content-max-width: 48rem;
-  --weave-chat-text-size: 1rem;
-  --weave-chat-line-height: 1.5rem;
-  --weave-terminal-font-size: 1rem;
-  --background: #eff1f5;
-  --foreground: #4c4f69;
-  --card: #ffffff;
-  --card-foreground: #4c4f69;
-  --popover: #ffffff;
-  --popover-foreground: #4c4f69;
-  --muted: #e6e9ef;
-  --muted-foreground: #6c6f85;
-  --secondary: #e6e9ef;
-  --secondary-foreground: #4c4f69;
-  --accent: #dce0e8;
-  --accent-foreground: #4c4f69;
-  --border: #ccd0da;
-  --input: #bcc0cc;
-  --ring: #8839ef;
-  --primary: #8839ef;
-  --primary-foreground: #eff1f5;
-  --user: var(--primary);
-  --user-foreground: #eff1f5;
-  --selected-thread: #ccd0da;
-  --success: #40a02b;
-  --success-foreground: #40a02b;
-  --success-button: #40a02b;
-  --info: #8839ef;
-  --info-foreground: #8839ef;
-  --warning: #df8e1d;
-  --warning-foreground: #df8e1d;
-  --blue: #1e66f5;
-  --mauve: #8839ef;
-  --mauve-button: #cba6f7;
-  --peach: #fe640b;
-  --yellow: #df8e1d;
-  --rosewater: #dc8a78;
-  --destructive: #d20f39;
-  --destructive-foreground: #eff1f5;
+  --weave-chat-text-size: 14px;
+  --weave-chat-line-height: 22px;
+  --weave-terminal-font-size: 13px;
+  --ctp-rosewater: #dc8a78;
+  --ctp-flamingo: #dd7878;
+  --ctp-pink: #ea76cb;
+  --ctp-mauve: #8839ef;
+  --ctp-red: #d20f39;
+  --ctp-maroon: #e64553;
+  --ctp-peach: #fe640b;
+  --ctp-yellow: #df8e1d;
+  --ctp-green: #40a02b;
+  --ctp-teal: #179299;
+  --ctp-sky: #04a5e5;
+  --ctp-sapphire: #209fb5;
+  --ctp-blue: #1e66f5;
+  --ctp-lavender: #7287fd;
+  --ctp-text: #4c4f69;
+  --ctp-subtext1: #5c5f77;
+  --ctp-subtext0: #6c6f85;
+  --ctp-overlay2: #7c7f93;
+  --ctp-overlay1: #8c8fa1;
+  --ctp-overlay0: #9ca0b0;
+  --ctp-surface2: #acb0be;
+  --ctp-surface1: #bcc0cc;
+  --ctp-surface0: #ccd0da;
+  --ctp-base: #eff1f5;
+  --ctp-mantle: #e6e9ef;
+  --ctp-crust: #dce0e8;
+  --background: var(--ctp-base);
+  --foreground: var(--ctp-text);
+  --card: var(--ctp-surface0);
+  --card-foreground: var(--foreground);
+  --popover: color-mix(in oklab, #ffffff 42%, var(--ctp-surface0));
+  --popover-foreground: var(--foreground);
+  --muted: color-mix(in oklab, var(--ctp-surface1) 58%, transparent);
+  --muted-foreground: var(--ctp-subtext0);
+  --secondary: color-mix(in oklab, var(--ctp-surface1) 50%, transparent);
+  --secondary-foreground: var(--foreground);
+  --accent: color-mix(in oklab, var(--ctp-surface1) 62%, transparent);
+  --accent-foreground: var(--foreground);
+  --border: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --input: color-mix(in oklab, var(--ctp-surface1) 72%, transparent);
+  --ring: var(--ctp-mauve);
+  --primary: var(--ctp-mauve);
+  --primary-foreground: var(--ctp-base);
+  --user: color-mix(in oklab, var(--ctp-surface0) 56%, var(--background));
+  --user-foreground: var(--foreground);
+  --selected-thread: color-mix(in oklab, var(--ctp-surface1) 74%, transparent);
+  --success: var(--ctp-green);
+  --success-foreground: #2a7d22;
+  --success-button: var(--ctp-green);
+  --info: var(--ctp-blue);
+  --info-foreground: var(--ctp-blue);
+  --warning: var(--ctp-peach);
+  --warning-foreground: #9a4a0a;
+  --blue: var(--ctp-blue);
+  --mauve: var(--ctp-mauve);
+  --mauve-button: var(--ctp-mauve);
+  --peach: var(--ctp-peach);
+  --yellow: var(--ctp-yellow);
+  --rosewater: var(--ctp-rosewater);
+  --destructive: var(--ctp-red);
+  --destructive-foreground: var(--ctp-base);
+  --weave-editor-background: var(--background);
+  --weave-editor-foreground: var(--foreground);
+  --weave-editor-gutter-background: var(--card);
+  --weave-editor-gutter-foreground: var(--ctp-overlay1);
+  --weave-editor-gutter-border: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --weave-editor-active-line: color-mix(in oklab, var(--ctp-surface0) 62%, transparent);
+  --weave-editor-active-gutter-foreground: var(--ctp-text);
+  --weave-editor-caret: var(--ctp-mauve);
+  --weave-editor-selection: color-mix(in oklab, var(--ctp-mauve) 22%, transparent);
+  --weave-editor-search-match: color-mix(in oklab, var(--ctp-yellow) 22%, transparent);
+  --weave-editor-search-match-border: color-mix(in oklab, var(--ctp-yellow) 42%, transparent);
+  --weave-editor-search-match-selected: color-mix(in oklab, var(--peach) 24%, transparent);
+  --weave-editor-matching-bracket: color-mix(in oklab, var(--ctp-surface0) 82%, transparent);
+  --weave-editor-matching-bracket-border: color-mix(in oklab, var(--ctp-mauve) 26%, transparent);
+  --weave-syntax-keyword: var(--ctp-mauve);
+  --weave-syntax-name: var(--ctp-red);
+  --weave-syntax-property: var(--ctp-blue);
+  --weave-syntax-variable: var(--foreground);
+  --weave-syntax-function: var(--ctp-blue);
+  --weave-syntax-constant: var(--ctp-peach);
+  --weave-syntax-string: var(--ctp-green);
+  --weave-syntax-link: var(--ctp-sapphire);
+  --weave-syntax-type: var(--ctp-yellow);
+  --weave-syntax-operator: var(--ctp-sky);
+  --weave-syntax-comment: var(--ctp-overlay1);
+  --weave-syntax-meta: var(--ctp-flamingo);
+  --weave-syntax-heading: var(--ctp-mauve);
+  --weave-syntax-emphasis: var(--ctp-pink);
+  --weave-syntax-inserted: var(--ctp-green);
+  --weave-syntax-invalid: var(--destructive);
   --radius: 0.5rem;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-code: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
@@ -106,41 +175,97 @@
 
 :root[data-theme="mocha"] {
   color-scheme: dark;
-  --background: #1e1e2e;
-  --foreground: #cdd6f4;
-  --card: #181825;
-  --card-foreground: #cdd6f4;
-  --popover: #181825;
-  --popover-foreground: #cdd6f4;
-  --muted: #313244;
-  --muted-foreground: #a6adc8;
-  --secondary: #313244;
-  --secondary-foreground: #cdd6f4;
-  --accent: #45475a;
-  --accent-foreground: #cdd6f4;
-  --border: #45475a;
-  --input: #45475a;
-  --ring: #cba6f7;
-  --primary: var(--blue);
-  --primary-foreground: #11111b;
-  --user: var(--primary);
-  --user-foreground: #11111b;
-  --selected-thread: #45475a;
-  --success: #a6e3a1;
-  --success-foreground: #a6e3a1;
-  --success-button: #a6e3a1;
-  --info: #cba6f7;
-  --info-foreground: #cba6f7;
-  --warning: #f9e2af;
-  --warning-foreground: #f9e2af;
-  --blue: #89b4fa;
-  --mauve: #cba6f7;
-  --mauve-button: #cba6f7;
-  --peach: #fab387;
-  --yellow: #f9e2af;
-  --rosewater: #f5e0dc;
-  --destructive: #f38ba8;
-  --destructive-foreground: #11111b;
+  --ctp-rosewater: #f5e0dc;
+  --ctp-flamingo: #f2cdcd;
+  --ctp-pink: #f5c2e7;
+  --ctp-mauve: #cba6f7;
+  --ctp-red: #f38ba8;
+  --ctp-maroon: #eba0ac;
+  --ctp-peach: #fab387;
+  --ctp-yellow: #f9e2af;
+  --ctp-green: #a6e3a1;
+  --ctp-teal: #94e2d5;
+  --ctp-sky: #89dceb;
+  --ctp-sapphire: #74c7ec;
+  --ctp-blue: #89b4fa;
+  --ctp-lavender: #b4befe;
+  --ctp-text: #cdd6f4;
+  --ctp-subtext1: #bac2de;
+  --ctp-subtext0: #a6adc8;
+  --ctp-overlay2: #9399b2;
+  --ctp-overlay1: #7f849c;
+  --ctp-overlay0: #6c7086;
+  --ctp-surface2: #585b70;
+  --ctp-surface1: #45475a;
+  --ctp-surface0: #313244;
+  --ctp-base: #1e1e2e;
+  --ctp-mantle: #181825;
+  --ctp-crust: #11111b;
+  --background: var(--ctp-base);
+  --foreground: var(--ctp-text);
+  --card: var(--ctp-surface0);
+  --card-foreground: var(--foreground);
+  --popover: color-mix(in oklab, var(--ctp-surface0) 96%, transparent);
+  --popover-foreground: var(--foreground);
+  --muted: color-mix(in oklab, var(--ctp-surface1) 56%, transparent);
+  --muted-foreground: var(--ctp-subtext0);
+  --secondary: color-mix(in oklab, var(--ctp-surface1) 46%, transparent);
+  --secondary-foreground: var(--foreground);
+  --accent: color-mix(in oklab, var(--ctp-surface1) 66%, transparent);
+  --accent-foreground: var(--foreground);
+  --border: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --input: color-mix(in oklab, var(--ctp-surface1) 84%, transparent);
+  --ring: var(--ctp-mauve);
+  --primary: var(--ctp-mauve);
+  --primary-foreground: var(--ctp-crust);
+  --user: color-mix(in oklab, var(--ctp-surface0) 76%, transparent);
+  --user-foreground: var(--foreground);
+  --selected-thread: color-mix(in oklab, var(--ctp-surface1) 74%, transparent);
+  --success: var(--ctp-green);
+  --success-foreground: var(--ctp-green);
+  --success-button: var(--ctp-green);
+  --info: var(--ctp-blue);
+  --info-foreground: var(--ctp-blue);
+  --warning: var(--ctp-peach);
+  --warning-foreground: var(--ctp-peach);
+  --blue: var(--ctp-blue);
+  --mauve: var(--ctp-mauve);
+  --mauve-button: var(--ctp-mauve);
+  --peach: var(--ctp-peach);
+  --yellow: var(--ctp-yellow);
+  --rosewater: var(--ctp-rosewater);
+  --destructive: var(--ctp-red);
+  --destructive-foreground: var(--ctp-crust);
+  --weave-editor-background: var(--background);
+  --weave-editor-foreground: var(--foreground);
+  --weave-editor-gutter-background: var(--card);
+  --weave-editor-gutter-foreground: var(--ctp-overlay1);
+  --weave-editor-gutter-border: color-mix(in oklab, var(--foreground) 8%, transparent);
+  --weave-editor-active-line: color-mix(in oklab, var(--ctp-surface0) 58%, transparent);
+  --weave-editor-active-gutter-foreground: var(--ctp-text);
+  --weave-editor-caret: var(--ctp-mauve);
+  --weave-editor-selection: color-mix(in oklab, var(--ctp-mauve) 30%, transparent);
+  --weave-editor-search-match: color-mix(in oklab, var(--ctp-yellow) 20%, transparent);
+  --weave-editor-search-match-border: color-mix(in oklab, var(--ctp-yellow) 42%, transparent);
+  --weave-editor-search-match-selected: color-mix(in oklab, var(--peach) 24%, transparent);
+  --weave-editor-matching-bracket: color-mix(in oklab, var(--ctp-surface0) 82%, transparent);
+  --weave-editor-matching-bracket-border: color-mix(in oklab, var(--ctp-mauve) 28%, transparent);
+  --weave-syntax-keyword: var(--ctp-mauve);
+  --weave-syntax-name: var(--ctp-red);
+  --weave-syntax-property: var(--ctp-blue);
+  --weave-syntax-variable: var(--foreground);
+  --weave-syntax-function: var(--ctp-blue);
+  --weave-syntax-constant: var(--ctp-peach);
+  --weave-syntax-string: var(--ctp-green);
+  --weave-syntax-link: var(--ctp-sapphire);
+  --weave-syntax-type: var(--ctp-yellow);
+  --weave-syntax-operator: var(--ctp-sky);
+  --weave-syntax-comment: var(--ctp-overlay1);
+  --weave-syntax-meta: var(--ctp-flamingo);
+  --weave-syntax-heading: var(--ctp-mauve);
+  --weave-syntax-emphasis: var(--ctp-pink);
+  --weave-syntax-inserted: var(--ctp-green);
+  --weave-syntax-invalid: var(--destructive);
 }
 
 :root {
@@ -170,6 +295,11 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-ui);
+  font-size: var(--text-base);
+  font-weight: 430;
+  line-height: var(--text-base--line-height);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button,
@@ -225,82 +355,82 @@ input {
   [data-weave-editor-excalidraw],
   [data-weave-excalidraw-surface]
 ) .excalidraw {
-  --island-bg-color: #313244;
-  --popup-bg-color: #313244;
-  --default-border-color: #45475a;
-  --button-border: #45475a;
-  --button-hover-border: #585b70;
-  --button-active-border: #cba6f7;
+  --island-bg-color: var(--card);
+  --popup-bg-color: var(--card);
+  --default-border-color: color-mix(in oklab, var(--ctp-text) 8%, transparent);
+  --button-border: color-mix(in oklab, var(--ctp-text) 8%, transparent);
+  --button-hover-border: color-mix(in oklab, var(--ctp-text) 14%, transparent);
+  --button-active-border: var(--ctp-mauve);
   --button-bg: transparent;
-  --button-hover-bg: #45475a;
-  --button-active-bg: #585b70;
-  --button-selected-bg: #45475a;
-  --button-selected-border: #cba6f7;
-  --button-selected-hover-bg: #585b70;
-  --button-color: #cdd6f4;
-  --button-hover-color: #f5e0dc;
-  --icon-fill-color: #cdd6f4;
-  --keybinding-color: #a6adc8;
-  --color-primary: #cba6f7;
-  --color-primary-darker: #b4befe;
-  --color-primary-darkest: #f5c2e7;
-  --color-primary-light: #45475a;
-  --color-primary-light-darker: #313244;
-  --color-primary-hover: #b4befe;
-  --color-on-primary-container: #cba6f7;
-  --color-surface-primary-container: #45475a;
-  --color-surface-high: #45475a;
-  --color-surface-low: #313244;
-  --color-surface-mid: #181825;
-  --color-surface-lowest: #45475a;
-  --color-on-surface: #cdd6f4;
-  --color-border-outline: #585b70;
-  --color-border-outline-variant: #45475a;
-  --color-brand-active: #cba6f7;
-  --color-brand-hover: #b4befe;
-  --color-muted: #bac2de;
-  --color-muted-darker: #a6adc8;
-  --color-muted-darkest: #7f849c;
-  --button-gray-1: #313244;
-  --button-gray-2: #45475a;
-  --button-gray-3: #585b70;
-  --input-bg-color: #181825;
-  --input-border-color: #45475a;
-  --input-hover-bg-color: #313244;
-  --input-label-color: #bac2de;
-  --scrollbar-thumb: #45475a;
-  --scrollbar-thumb-hover: #585b70;
-  --shadow-island: 0 0 0 1px #45475a, 0 16px 36px rgba(17, 17, 27, 0.28);
+  --button-hover-bg: color-mix(in oklab, var(--ctp-surface0) 76%, transparent);
+  --button-active-bg: color-mix(in oklab, var(--ctp-surface0) 92%, transparent);
+  --button-selected-bg: color-mix(in oklab, var(--ctp-mauve) 16%, transparent);
+  --button-selected-border: var(--ctp-mauve);
+  --button-selected-hover-bg: color-mix(in oklab, var(--ctp-mauve) 20%, transparent);
+  --button-color: var(--ctp-text);
+  --button-hover-color: var(--ctp-rosewater);
+  --icon-fill-color: var(--ctp-text);
+  --keybinding-color: var(--ctp-subtext0);
+  --color-primary: var(--ctp-mauve);
+  --color-primary-darker: var(--ctp-lavender);
+  --color-primary-darkest: var(--ctp-blue);
+  --color-primary-light: color-mix(in oklab, var(--ctp-mauve) 18%, transparent);
+  --color-primary-light-darker: color-mix(in oklab, var(--ctp-mauve) 12%, transparent);
+  --color-primary-hover: var(--ctp-lavender);
+  --color-on-primary-container: var(--ctp-mauve);
+  --color-surface-primary-container: color-mix(in oklab, var(--ctp-mauve) 12%, transparent);
+  --color-surface-high: color-mix(in oklab, var(--ctp-surface1) 72%, transparent);
+  --color-surface-low: color-mix(in oklab, var(--ctp-surface0) 62%, transparent);
+  --color-surface-mid: var(--card);
+  --color-surface-lowest: color-mix(in oklab, var(--ctp-surface0) 78%, transparent);
+  --color-on-surface: var(--ctp-text);
+  --color-border-outline: color-mix(in oklab, var(--ctp-text) 14%, transparent);
+  --color-border-outline-variant: color-mix(in oklab, var(--ctp-text) 8%, transparent);
+  --color-brand-active: var(--ctp-mauve);
+  --color-brand-hover: var(--ctp-lavender);
+  --color-muted: var(--ctp-subtext1);
+  --color-muted-darker: var(--ctp-subtext0);
+  --color-muted-darkest: var(--ctp-overlay1);
+  --button-gray-1: color-mix(in oklab, var(--ctp-surface0) 58%, transparent);
+  --button-gray-2: color-mix(in oklab, var(--ctp-surface0) 74%, transparent);
+  --button-gray-3: color-mix(in oklab, var(--ctp-surface1) 76%, transparent);
+  --input-bg-color: var(--card);
+  --input-border-color: color-mix(in oklab, var(--ctp-text) 10%, transparent);
+  --input-hover-bg-color: color-mix(in oklab, var(--ctp-surface0) 66%, transparent);
+  --input-label-color: var(--ctp-subtext0);
+  --scrollbar-thumb: color-mix(in oklab, var(--ctp-surface1) 78%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--ctp-surface2) 84%, transparent);
+  --shadow-island: 0 0 0 1px color-mix(in oklab, var(--ctp-text) 8%, transparent), 0 8px 16px rgba(17, 17, 27, 0.2);
 }
 
 :root[data-theme="mocha"] :where(
   [data-weave-editor-excalidraw],
   [data-weave-excalidraw-surface]
 ) .excalidraw :is(.Island, .main-menu-trigger, .sidebar-trigger, .help-icon) {
-  box-shadow: 0 0 0 1px #45475a, 0 12px 28px rgba(17, 17, 27, 0.22);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--ctp-text) 8%, transparent), 0 8px 16px rgba(17, 17, 27, 0.2);
 }
 
 :root[data-theme="mocha"] :where(
   [data-weave-editor-excalidraw],
   [data-weave-excalidraw-surface]
 ) .excalidraw :is(.main-menu-trigger, .sidebar-trigger, .help-icon) {
-  background-color: #313244;
-  color: #cdd6f4;
+  background-color: var(--card);
+  color: var(--ctp-text);
 }
 
 :root[data-theme="mocha"] :where(
   [data-weave-editor-excalidraw],
   [data-weave-excalidraw-surface]
 ) .excalidraw :is(.main-menu-trigger, .sidebar-trigger, .help-icon):hover {
-  background-color: #45475a;
-  color: #f5e0dc;
+  background-color: color-mix(in oklab, var(--ctp-surface0) 76%, transparent);
+  color: var(--ctp-rosewater);
 }
 
 :root[data-theme="mocha"] :where(
   [data-weave-editor-excalidraw],
   [data-weave-excalidraw-surface]
 ) .excalidraw :is(.ToolIcon__keybinding, .HintViewer) {
-  color: #a6adc8;
+  color: var(--ctp-subtext0);
 }
 
 :where(

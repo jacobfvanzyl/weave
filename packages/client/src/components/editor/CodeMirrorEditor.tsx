@@ -52,56 +52,27 @@ type VimModeChangeEvent = {
   subMode?: string;
 };
 
-const catppuccinMocha = {
-  rosewater: '#f5e0dc',
-  flamingo: '#f2cdcd',
-  pink: '#f5c2e7',
-  mauve: '#cba6f7',
-  red: '#f38ba8',
-  maroon: '#eba0ac',
-  peach: '#fab387',
-  yellow: '#f9e2af',
-  green: '#a6e3a1',
-  teal: '#94e2d5',
-  sky: '#89dceb',
-  sapphire: '#74c7ec',
-  blue: '#89b4fa',
-  lavender: '#b4befe',
-  text: '#cdd6f4',
-  subtext1: '#bac2de',
-  subtext0: '#a6adc8',
-  overlay2: '#9399b2',
-  overlay1: '#7f849c',
-  overlay0: '#6c7086',
-  surface2: '#585b70',
-  surface1: '#45475a',
-  surface0: '#313244',
-  base: '#1e1e2e',
-  mantle: '#181825',
-  crust: '#11111b',
-};
+export const editorCanvasBackgroundColor = '#1e1e2e';
 
-export const editorCanvasBackgroundColor = catppuccinMocha.base;
-
-const catppuccinMochaHighlightStyle = HighlightStyle.define([
-  { tag: [t.keyword, t.modifier, t.operatorKeyword, t.controlKeyword, t.moduleKeyword], color: catppuccinMocha.mauve },
-  { tag: [t.name, t.deleted, t.character, t.macroName], color: catppuccinMocha.red },
-  { tag: [t.propertyName, t.attributeName], color: catppuccinMocha.blue },
-  { tag: [t.variableName, t.definition(t.variableName)], color: catppuccinMocha.text },
-  { tag: [t.function(t.variableName), t.function(t.propertyName), t.labelName], color: catppuccinMocha.blue },
-  { tag: [t.number, t.integer, t.float, t.bool, t.null, t.atom], color: catppuccinMocha.peach },
-  { tag: [t.string, t.special(t.string), t.regexp], color: catppuccinMocha.green },
-  { tag: [t.escape, t.link], color: catppuccinMocha.teal },
-  { tag: [t.typeName, t.className, t.namespace], color: catppuccinMocha.yellow },
-  { tag: [t.constant(t.variableName), t.standard(t.variableName)], color: catppuccinMocha.peach },
-  { tag: [t.definitionKeyword, t.self, t.operator, t.derefOperator], color: catppuccinMocha.sky },
-  { tag: [t.comment, t.lineComment, t.blockComment], color: catppuccinMocha.overlay1, fontStyle: 'italic' },
-  { tag: [t.meta, t.processingInstruction, t.annotation], color: catppuccinMocha.flamingo },
-  { tag: [t.heading, t.strong], color: catppuccinMocha.mauve, fontWeight: '600' },
-  { tag: [t.emphasis], color: catppuccinMocha.pink, fontStyle: 'italic' },
+const weaveHighlightStyle = HighlightStyle.define([
+  { tag: [t.keyword, t.modifier, t.operatorKeyword, t.controlKeyword, t.moduleKeyword], color: 'var(--weave-syntax-keyword)' },
+  { tag: [t.name, t.deleted, t.character, t.macroName], color: 'var(--weave-syntax-name)' },
+  { tag: [t.propertyName, t.attributeName], color: 'var(--weave-syntax-property)' },
+  { tag: [t.variableName, t.definition(t.variableName)], color: 'var(--weave-syntax-variable)' },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.labelName], color: 'var(--weave-syntax-function)' },
+  { tag: [t.number, t.integer, t.float, t.bool, t.null, t.atom], color: 'var(--weave-syntax-constant)' },
+  { tag: [t.string, t.special(t.string), t.regexp], color: 'var(--weave-syntax-string)' },
+  { tag: [t.escape, t.link], color: 'var(--weave-syntax-link)' },
+  { tag: [t.typeName, t.className, t.namespace], color: 'var(--weave-syntax-type)' },
+  { tag: [t.constant(t.variableName), t.standard(t.variableName)], color: 'var(--weave-syntax-constant)' },
+  { tag: [t.definitionKeyword, t.self, t.operator, t.derefOperator], color: 'var(--weave-syntax-operator)' },
+  { tag: [t.comment, t.lineComment, t.blockComment], color: 'var(--weave-syntax-comment)', fontStyle: 'italic' },
+  { tag: [t.meta, t.processingInstruction, t.annotation], color: 'var(--weave-syntax-meta)' },
+  { tag: [t.heading, t.strong], color: 'var(--weave-syntax-heading)', fontWeight: '600' },
+  { tag: [t.emphasis], color: 'var(--weave-syntax-emphasis)', fontStyle: 'italic' },
   { tag: [t.strikethrough], textDecoration: 'line-through' },
-  { tag: [t.inserted], color: catppuccinMocha.green },
-  { tag: [t.invalid], color: catppuccinMocha.red },
+  { tag: [t.inserted], color: 'var(--weave-syntax-inserted)' },
+  { tag: [t.invalid], color: 'var(--weave-syntax-invalid)' },
 ]);
 
 class RelativeLineNumberMarker extends GutterMarker {
@@ -174,8 +145,8 @@ const toVimMode = (event: VimModeChangeEvent = {}): VimMode => {
 const editorTheme = EditorView.theme({
   '&': {
     height: '100%',
-    backgroundColor: editorCanvasBackgroundColor,
-    color: catppuccinMocha.text,
+    backgroundColor: 'var(--weave-editor-background)',
+    color: 'var(--weave-editor-foreground)',
   },
   '.cm-scroller': {
     fontFamily: 'var(--font-code)',
@@ -185,73 +156,74 @@ const editorTheme = EditorView.theme({
   '.cm-content': {
     minHeight: '100%',
     padding: '12px 0',
-    caretColor: catppuccinMocha.rosewater,
+    caretColor: 'var(--weave-editor-caret)',
   },
   '.cm-line': {
     padding: '0 12px',
   },
   '.cm-gutters': {
-    backgroundColor: catppuccinMocha.mantle,
-    borderRight: `1px solid ${catppuccinMocha.surface0}`,
-    color: catppuccinMocha.overlay1,
+    backgroundColor: 'var(--weave-editor-gutter-background)',
+    borderRight: '1px solid var(--weave-editor-gutter-border)',
+    color: 'var(--weave-editor-gutter-foreground)',
   },
   '.cm-lineNumbers .cm-gutterElement': {
     padding: '0 10px 0 8px',
   },
   '.cm-activeLine': {
-    backgroundColor: catppuccinMocha.surface0,
+    backgroundColor: 'var(--weave-editor-active-line)',
   },
   '.cm-activeLineGutter': {
-    backgroundColor: catppuccinMocha.surface0,
-    color: catppuccinMocha.subtext1,
+    backgroundColor: 'var(--weave-editor-active-line)',
+    color: 'var(--weave-editor-active-gutter-foreground)',
   },
   '.cm-cursor, .cm-dropCursor': {
-    borderLeftColor: catppuccinMocha.rosewater,
+    borderLeftColor: 'var(--weave-editor-caret)',
   },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
-    backgroundColor: `${catppuccinMocha.surface2}99`,
+    backgroundColor: 'var(--weave-editor-selection)',
   },
   '.cm-searchMatch': {
-    backgroundColor: `${catppuccinMocha.yellow}33`,
-    outline: `1px solid ${catppuccinMocha.yellow}66`,
+    backgroundColor: 'var(--weave-editor-search-match)',
+    outline: '1px solid var(--weave-editor-search-match-border)',
   },
   '.cm-searchMatch.cm-searchMatch-selected': {
-    backgroundColor: `${catppuccinMocha.peach}4d`,
+    backgroundColor: 'var(--weave-editor-search-match-selected)',
   },
   '.cm-matchingBracket, .cm-nonmatchingBracket': {
-    backgroundColor: catppuccinMocha.surface1,
-    color: catppuccinMocha.text,
-    outline: `1px solid ${catppuccinMocha.surface2}`,
+    backgroundColor: 'var(--weave-editor-matching-bracket)',
+    color: 'var(--weave-editor-foreground)',
+    outline: '1px solid var(--weave-editor-matching-bracket-border)',
   },
   '.cm-placeholder': {
-    color: catppuccinMocha.overlay0,
+    color: 'var(--muted-foreground)',
   },
   '.cm-panels': {
-    backgroundColor: catppuccinMocha.mantle,
-    color: catppuccinMocha.text,
+    backgroundColor: 'var(--popover)',
+    color: 'var(--popover-foreground)',
   },
   '.cm-panels.cm-panels-top': {
-    borderBottom: `1px solid ${catppuccinMocha.surface0}`,
+    borderBottom: '1px solid var(--border)',
   },
   '.cm-panels.cm-panels-bottom': {
-    borderTop: `1px solid ${catppuccinMocha.surface0}`,
+    borderTop: '1px solid var(--border)',
   },
   '.cm-tooltip': {
-    backgroundColor: catppuccinMocha.surface0,
-    border: `1px solid ${catppuccinMocha.surface1}`,
-    color: catppuccinMocha.text,
+    backgroundColor: 'var(--popover)',
+    border: '1px solid var(--border)',
+    color: 'var(--popover-foreground)',
+    boxShadow: 'var(--shadow-sm)',
   },
   '.cm-tooltip-autocomplete ul li[aria-selected]': {
-    backgroundColor: catppuccinMocha.surface1,
-    color: catppuccinMocha.text,
+    backgroundColor: 'var(--accent)',
+    color: 'var(--accent-foreground)',
   },
   '.cm-diagnostic': {
-    borderLeftColor: catppuccinMocha.red,
+    borderLeftColor: 'var(--destructive)',
   },
   '&.cm-focused': {
     outline: 'none',
   },
-}, { dark: true });
+});
 
 const getLanguageExtension = (filePath: string | undefined): Extension[] => {
   const lowerPath = filePath?.toLowerCase() ?? '';
@@ -393,7 +365,7 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
         relativeLineNumbers,
         editorBasicSetup,
         editorTheme,
-        syntaxHighlighting(catppuccinMochaHighlightStyle),
+        syntaxHighlighting(weaveHighlightStyle),
         EditorView.lineWrapping,
         EditorView.editable.of(!readOnly),
         saveKeymap,

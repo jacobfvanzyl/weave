@@ -40,7 +40,7 @@ export const PlanSidebar = ({ plan, onOpenPlan }: { plan?: ThreadPlan; onOpenPla
 
   return (
     <aside
-      className="pointer-events-auto absolute right-4 top-4 z-20 hidden max-h-[min(70dvh,calc(100%_-_2rem))] w-80 min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card/95 shadow-lg backdrop-blur md:flex"
+      className="pointer-events-auto absolute right-4 top-4 z-20 hidden max-h-[min(70dvh,calc(100%_-_2rem))] w-80 min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-md md:flex"
       data-weave-plan-card
       data-weave-surface="plan"
     >

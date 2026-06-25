@@ -708,7 +708,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     <Button
       className={[
         isGeneralTerminalOpen ? 'bg-accent' : '',
-        isGeneralTerminalActive ? 'text-peach' : '',
+        isGeneralTerminalActive ? 'text-foreground' : '',
       ].filter(Boolean).join(' ')}
       size="icon"
       variant="ghost"
@@ -724,7 +724,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     <Button
       className={[
         isWindowStreamOpen ? 'bg-accent' : '',
-        isWindowStreamActive ? 'text-mauve' : '',
+        isWindowStreamActive ? 'text-foreground' : '',
       ].filter(Boolean).join(' ')}
       size="icon"
       variant="ghost"
@@ -736,15 +736,15 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     </Button>
   ) : null;
   const renderProductRail = () => (
-    <nav className="weave-product-rail flex items-center gap-1 rounded-md text-sm font-semibold" aria-label="Products">
+    <nav className="weave-product-rail flex min-w-0 max-w-full items-center gap-1 overflow-hidden rounded-md text-sm font-medium" aria-label="Products">
       {appbarProducts.map(product => (
         <button
           key={product}
           type="button"
           className={[
-            'h-7 rounded-md px-2.5 leading-none outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
+            'h-7 shrink-0 rounded-md px-2 leading-none outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background sm:px-2.5',
             activeProduct === product
-              ? 'bg-accent text-accent-foreground shadow-sm'
+              ? 'bg-accent text-accent-foreground'
               : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
           ].filter(Boolean).join(' ')}
           data-active={activeProduct === product ? 'true' : 'false'}
@@ -854,7 +854,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
         <Button
           className={[
             showTerminalPane ? 'bg-accent' : '',
-            hasActiveTerminal ? 'text-peach' : '',
+            hasActiveTerminal ? 'text-foreground' : '',
           ].filter(Boolean).join(' ')}
           size="icon"
           variant="ghost"

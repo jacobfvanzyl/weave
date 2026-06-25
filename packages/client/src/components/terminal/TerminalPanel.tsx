@@ -477,7 +477,7 @@ export const TerminalPanel = ({
       data-expanded={isExpanded ? 'true' : 'false'}
     >
       <div className="flex h-14 shrink-0 items-stretch gap-2 border-b border-border px-3" data-weave-terminal-tab-bar>
-        <TerminalSquare size={15} className="self-center shrink-0 text-primary" />
+        <TerminalSquare size={15} className="self-center shrink-0 text-muted-foreground" />
         {breadcrumb ? <div className="flex min-w-0 max-w-[42%] shrink items-center truncate">{breadcrumb}</div> : null}
         <div
           className="flex min-w-0 flex-1 items-end overflow-x-auto"
@@ -499,8 +499,8 @@ export const TerminalPanel = ({
                 className={[
                   'relative -ml-px flex h-7 min-w-36 max-w-64 shrink-0 items-center overflow-hidden rounded-t-md rounded-b-none border border-b-0 text-xs first:ml-0',
                   isSelected
-                    ? 'z-10 border-primary/40 bg-primary/10 text-foreground'
-                    : 'z-0 border-border bg-transparent text-muted-foreground hover:z-10 hover:bg-primary/5 hover:text-foreground',
+                    ? 'z-10 border-border bg-accent text-foreground'
+                    : 'z-0 border-border bg-transparent text-muted-foreground hover:z-10 hover:bg-accent/60 hover:text-foreground',
                 ].join(' ')}
               >
                 <button
