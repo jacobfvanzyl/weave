@@ -37,6 +37,7 @@ type CodeMirrorEditorProps = {
   readOnly?: boolean;
   wikiLinkSuggestions?: WikiLinkSuggestion[];
   onChange: (value: string) => void;
+  onGutterWidthChange?: (width: number) => void;
   onOpenWikiLink?: (target: string) => void;
   onSave?: () => void;
   onVimModeChange?: (mode: VimMode) => void;
@@ -247,6 +248,7 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
   readOnly,
   wikiLinkSuggestions = [],
   onChange,
+  onGutterWidthChange,
   onOpenWikiLink,
   onSave,
   onVimModeChange,
@@ -254,6 +256,7 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const onGutterWidthChangeRef = useRef(onGutterWidthChange);
   const onOpenWikiLinkRef = useRef(onOpenWikiLink);
   const onSaveRef = useRef(onSave);
   const onVimModeChangeRef = useRef(onVimModeChange);
@@ -327,6 +330,10 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
   }, [onChange]);
 
   useEffect(() => {
+    onGutterWidthChangeRef.current = onGutterWidthChange;
+  }, [onGutterWidthChange]);
+
+  useEffect(() => {
     onOpenWikiLinkRef.current = onOpenWikiLink;
   }, [onOpenWikiLink]);
 
@@ -378,6 +385,19 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
     viewRef.current = view;
     onVimModeChangeRef.current?.('normal');
 
+    const gutter = view.dom.querySelector<HTMLElement>('.cm-gutters');
+    const reportGutterWidth = () => {
+      const width = gutter?.getBoundingClientRect().width ?? 0;
+      if (width <= 0) return;
+      const nextWidth = Math.ceil(width);
+      document.documentElement.style.setProperty('--weave-editor-gutter-width', `${nextWidth}px`);
+      onGutterWidthChangeRef.current?.(nextWidth);
+    };
+    reportGutterWidth();
+    const animationFrame = window.requestAnimationFrame(reportGutterWidth);
+    const resizeObserver = gutter ? new ResizeObserver(reportGutterWidth) : undefined;
+    if (gutter) resizeObserver?.observe(gutter);
+
     const cm = getCM(view);
     const handleVimModeChange = (event: VimModeChangeEvent) => {
       onVimModeChangeRef.current?.(toVimMode(event));
@@ -385,6 +405,8 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
     cm?.on('vim-mode-change', handleVimModeChange);
 
     return () => {
+      window.cancelAnimationFrame(animationFrame);
+      resizeObserver?.disconnect();
       cm?.off('vim-mode-change', handleVimModeChange);
       view.destroy();
       if (viewRef.current === view) viewRef.current = null;

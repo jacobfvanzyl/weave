@@ -503,7 +503,7 @@ const SortableEditorTab = ({
     <div
       ref={setNodeRef}
       className={cn(
-        'relative -ml-px flex h-full min-w-36 max-w-64 shrink-0 items-center overflow-hidden rounded-none border-x border-y-0 text-xs first:ml-0',
+        'relative -ml-px flex h-full min-w-36 max-w-64 shrink-0 items-center overflow-hidden rounded-none border-x border-y-0 text-xs',
         isSelected
           ? 'z-10 border-border bg-accent text-foreground'
           : 'z-0 border-transparent bg-transparent text-muted-foreground hover:z-10 hover:border-border hover:bg-accent/60 hover:text-foreground',
@@ -632,6 +632,7 @@ export const UnifiedEditorPanel = ({
   const [createPathDialog, setCreatePathDialog] = useState<CreatePathDialogState>();
   const [renameState, setRenameState] = useState<RenameState>();
   const [bufferFocusRequest, setBufferFocusRequest] = useState(0);
+  const [editorGutterWidth, setEditorGutterWidth] = useState(56);
   const activeEditorTab = editorTabs.find(tab => tab.id === activeEditorTabId) ?? editorTabs[0];
   const openBuffer = activeEditorTab ? buffersByTabId[activeEditorTab.id] : undefined;
   const activePath = openBuffer?.path ?? activeEditorTab?.path;
@@ -643,6 +644,9 @@ export const UnifiedEditorPanel = ({
   const isExplorerSlideOverMode = !canDockExplorer;
   const isExplorerDocked = (isExplorerVisible || shouldPersistExplorerOpen) && canDockExplorer;
   const isExplorerSlideOverVisible = isExplorerSlideOverMode && (isExplorerSlideOverOpen || shouldPersistExplorerOpen);
+  const editorPanelStyle = useMemo(() => ({
+    '--weave-editor-gutter-width': `${Math.max(44, editorGutterWidth)}px`,
+  }) as CSSProperties, [editorGutterWidth]);
   const isExplorerActive = isExplorerDocked || isExplorerSlideOverVisible;
   const modeIndicator = editorModeIndicatorStyles[vimMode];
   const statusLabel = isSaving ? 'saving' : isFileLoading ? 'loading' : undefined;
@@ -1681,6 +1685,7 @@ export const UnifiedEditorPanel = ({
         value={content}
         wikiLinkSuggestions={noteSuggestions}
         onChange={setActiveBufferValue}
+        onGutterWidthChange={setEditorGutterWidth}
         onOpenWikiLink={openWikiLink}
         onSave={() => void handleSave()}
         onVimModeChange={setVimMode}
@@ -1896,6 +1901,7 @@ export const UnifiedEditorPanel = ({
         data-weave-editor-mode={mode}
         data-weave-surface="editor"
         data-expanded={isExpanded ? 'true' : 'false'}
+        style={editorPanelStyle}
       >
         <span
           ref={columnMeasureRef}
@@ -1904,8 +1910,10 @@ export const UnifiedEditorPanel = ({
         >
           {editorColumnMeasureText}
         </span>
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3" data-weave-editor-titlebar data-weave-editor-tab-bar>
-          {mode === 'notes' ? <StickyNote size={15} className="shrink-0 text-muted-foreground" /> : <Code2 size={15} className="shrink-0 text-muted-foreground" />}
+        <div className="flex h-10 shrink-0 items-center border-b border-border" data-weave-editor-titlebar data-weave-editor-tab-bar>
+          <div className="flex h-full shrink-0 items-center justify-center border-r border-border" style={{ width: 'var(--weave-editor-gutter-width)' }}>
+            {mode === 'notes' ? <StickyNote size={15} className="shrink-0 text-muted-foreground" /> : <Code2 size={15} className="shrink-0 text-muted-foreground" />}
+          </div>
           <div
             className="flex min-w-0 max-w-[55%] shrink items-stretch self-stretch overflow-x-auto"
             role="tablist"
@@ -1913,22 +1921,24 @@ export const UnifiedEditorPanel = ({
           >
             {editorTabs.length > 0 ? renderEditorTabs() : null}
           </div>
-          <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden">
+          <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden px-3">
             {breadcrumb ? <div className="min-w-0 max-w-full truncate">{breadcrumb}</div> : null}
           </div>
-          {statusLabel ? <span className="self-center shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span> : null}
-          <Button size="icon-xs" variant="ghost" aria-label="Save buffer" title="Save buffer" disabled={!openBuffer || !isDirty || isSaving} onClick={() => void handleSave()}>
-            <Save size={14} />
-          </Button>
-          <Button size="icon-xs" variant="ghost" aria-label="Reload buffer" title="Reload buffer" disabled={!openBuffer || isFileLoading} onClick={handleReload}>
-            <RefreshCw size={14} className={isFileLoading ? 'animate-spin' : undefined} />
-          </Button>
-          <Button size="icon-xs" variant="ghost" aria-label={isExpanded ? 'Restore editor column' : 'Expand editor'} title={isExpanded ? 'Restore editor column' : 'Expand editor'} onClick={() => onExpandedChange(!isExpanded)}>
-            {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          </Button>
-          <Button size="icon-xs" variant="ghost" aria-label={mode === 'notes' ? 'Hide notes' : 'Hide editor'} onClick={handleHidePanel}>
-            <X size={14} />
-          </Button>
+          <div className="flex shrink-0 items-center gap-1 pr-3">
+            {statusLabel ? <span className="self-center shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span> : null}
+            <Button size="icon-xs" variant="ghost" aria-label="Save buffer" title="Save buffer" disabled={!openBuffer || !isDirty || isSaving} onClick={() => void handleSave()}>
+              <Save size={14} />
+            </Button>
+            <Button size="icon-xs" variant="ghost" aria-label="Reload buffer" title="Reload buffer" disabled={!openBuffer || isFileLoading} onClick={handleReload}>
+              <RefreshCw size={14} className={isFileLoading ? 'animate-spin' : undefined} />
+            </Button>
+            <Button size="icon-xs" variant="ghost" aria-label={isExpanded ? 'Restore editor column' : 'Expand editor'} title={isExpanded ? 'Restore editor column' : 'Expand editor'} onClick={() => onExpandedChange(!isExpanded)}>
+              {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </Button>
+            <Button size="icon-xs" variant="ghost" aria-label={mode === 'notes' ? 'Hide notes' : 'Hide editor'} onClick={handleHidePanel}>
+              <X size={14} />
+            </Button>
+          </div>
         </div>
         <div ref={editorBodyRef} className="relative flex min-h-0 flex-1">
           <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
@@ -1947,29 +1957,46 @@ export const UnifiedEditorPanel = ({
           {isExplorerDocked ? renderExplorerRail('docked') : null}
           {isExplorerSlideOverVisible ? renderExplorerRail('slide-over') : null}
         </div>
-        <div className="flex h-9 shrink-0 items-center gap-2 border-t border-border px-3">
-          <span
-            className="inline-flex h-5 min-w-[4.75rem] shrink-0 items-center justify-center rounded-sm px-2 text-[11px] font-bold"
-            style={{
-              backgroundColor: modeIndicator.background,
-              color: modeIndicator.foreground,
-            }}
-          >
-            {modeIndicator.label}
-          </span>
-          <div className="min-w-0 flex-1" aria-hidden="true" />
-          <Button
-            className={isExplorerActive ? 'bg-accent' : undefined}
-            size="icon-xs"
-            variant="ghost"
-            aria-label={explorerToggleLabel}
-            title={explorerToggleLabel}
-            data-active={isExplorerActive ? 'true' : 'false'}
-            onClick={toggleExplorerRail}
-            {...explorerToggleHoverHandlers}
-          >
-            {isExplorerActive ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
-          </Button>
+        <div className="relative flex h-9 shrink-0 items-center">
+          <div
+            className="h-full shrink-0 bg-[var(--weave-editor-gutter-background)]"
+            style={{ width: 'var(--weave-editor-gutter-width)' }}
+            aria-hidden="true"
+          />
+          <div
+            className="pointer-events-none absolute bottom-0 top-0 w-px bg-border"
+            style={{ left: 'calc(var(--weave-editor-gutter-width) - 2px)' }}
+            aria-hidden="true"
+          />
+          <div
+            className="pointer-events-none absolute right-0 top-0 h-px bg-border"
+            style={{ left: 'calc(var(--weave-editor-gutter-width) - 1px)' }}
+            aria-hidden="true"
+          />
+          <div className="flex h-full min-w-0 flex-1 items-center gap-2 px-3">
+            <span
+              className="inline-flex h-5 min-w-[4.75rem] shrink-0 items-center justify-center rounded-sm px-2 text-[11px] font-bold"
+              style={{
+                backgroundColor: modeIndicator.background,
+                color: modeIndicator.foreground,
+              }}
+            >
+              {modeIndicator.label}
+            </span>
+            <div className="min-w-0 flex-1" aria-hidden="true" />
+            <Button
+              className={isExplorerActive ? 'bg-accent' : undefined}
+              size="icon-xs"
+              variant="ghost"
+              aria-label={explorerToggleLabel}
+              title={explorerToggleLabel}
+              data-active={isExplorerActive ? 'true' : 'false'}
+              onClick={toggleExplorerRail}
+              {...explorerToggleHoverHandlers}
+            >
+              {isExplorerActive ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+            </Button>
+          </div>
         </div>
       </section>
       <Dialog open={Boolean(createPathDialog)} onOpenChange={open => {

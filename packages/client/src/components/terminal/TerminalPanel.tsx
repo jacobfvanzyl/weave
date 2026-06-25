@@ -476,11 +476,12 @@ export const TerminalPanel = ({
       data-terminal-kind={target.kind}
       data-expanded={isExpanded ? 'true' : 'false'}
     >
-      <div className="flex h-14 shrink-0 items-stretch gap-2 border-b border-border px-3" data-weave-terminal-tab-bar>
-        <TerminalSquare size={15} className="self-center shrink-0 text-muted-foreground" />
-        {breadcrumb ? <div className="flex min-w-0 max-w-[42%] shrink items-center truncate">{breadcrumb}</div> : null}
+      <div className="flex h-10 shrink-0 items-center border-b border-border" data-weave-terminal-tab-bar>
+        <div className="flex h-full shrink-0 items-center justify-center border-r border-border" style={{ width: 'var(--weave-editor-gutter-width)' }}>
+          <TerminalSquare size={15} className="shrink-0 text-muted-foreground" />
+        </div>
         <div
-          className="flex min-w-0 flex-1 items-end overflow-x-auto"
+          className="flex min-w-0 max-w-[55%] shrink items-stretch self-stretch overflow-x-auto"
           role="tablist"
           aria-label={target.title}
         >
@@ -497,15 +498,15 @@ export const TerminalPanel = ({
               <div
                 key={tab.id}
                 className={[
-                  'relative -ml-px flex h-7 min-w-36 max-w-64 shrink-0 items-center overflow-hidden rounded-t-md rounded-b-none border border-b-0 text-xs first:ml-0',
+                  'relative -ml-px flex h-full min-w-36 max-w-64 shrink-0 items-center overflow-hidden rounded-none border-x border-y-0 text-xs',
                   isSelected
                     ? 'z-10 border-border bg-accent text-foreground'
-                    : 'z-0 border-border bg-transparent text-muted-foreground hover:z-10 hover:bg-accent/60 hover:text-foreground',
+                    : 'z-0 border-transparent bg-transparent text-muted-foreground hover:z-10 hover:border-border hover:bg-accent/60 hover:text-foreground',
                 ].join(' ')}
               >
                 <button
                   type="button"
-                  className="min-w-0 flex-1 overflow-hidden px-2 text-left"
+                  className="flex h-full min-w-0 flex-1 items-center overflow-hidden px-2 text-left"
                   role="tab"
                   aria-selected={isSelected}
                   title={statusLabel ? `${tabLabel} - ${statusLabel}` : tabLabel}
@@ -519,7 +520,7 @@ export const TerminalPanel = ({
                 </button>
                 <button
                   type="button"
-                  className="grid h-7 w-7 shrink-0 place-items-center text-muted-foreground hover:text-foreground"
+                  className="grid h-full w-7 shrink-0 place-items-center text-muted-foreground hover:text-foreground"
                   aria-label={`Close ${tabLabel}`}
                   onClick={event => {
                     event.stopPropagation();
@@ -532,7 +533,7 @@ export const TerminalPanel = ({
             );
           })}
           <Button
-            className="mb-0.5 ml-2 shrink-0"
+            className="ml-1 shrink-0 self-center"
             size="icon-xs"
             variant="ghost"
             aria-label="New terminal tab"
@@ -542,21 +543,25 @@ export const TerminalPanel = ({
             <Plus size={14} />
           </Button>
         </div>
-        {variant !== 'overlay' && onExpandedChange ? (
-          <Button
-            className="self-center"
-            size="icon-xs"
-            variant="ghost"
-            aria-label={isExpanded ? 'Collapse terminal' : 'Expand terminal'}
-            title={isExpanded ? 'Collapse terminal' : 'Expand terminal'}
-            onClick={() => onExpandedChange(!isExpanded)}
-          >
-            {isExpanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+        <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden px-3">
+          {breadcrumb ? <div className="min-w-0 max-w-full truncate">{breadcrumb}</div> : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 pr-3">
+          {variant !== 'overlay' && onExpandedChange ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={isExpanded ? 'Collapse terminal' : 'Expand terminal'}
+              title={isExpanded ? 'Collapse terminal' : 'Expand terminal'}
+              onClick={() => onExpandedChange(!isExpanded)}
+            >
+              {isExpanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+            </Button>
+          ) : null}
+          <Button size="icon-xs" variant="ghost" aria-label="Hide terminal" onClick={onHide}>
+            <X size={14} />
           </Button>
-        ) : null}
-        <Button className="self-center" size="icon-xs" variant="ghost" aria-label="Hide terminal" onClick={onHide}>
-          <X size={14} />
-        </Button>
+        </div>
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden bg-[var(--vscode-panel-background,var(--background))]">
         {error ? (

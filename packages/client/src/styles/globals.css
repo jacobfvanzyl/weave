@@ -72,6 +72,7 @@
   --weave-chat-text-size: 14px;
   --weave-chat-line-height: 22px;
   --weave-terminal-font-size: 13px;
+  --weave-editor-gutter-width: 47px;
   --ctp-rosewater: #dc8a78;
   --ctp-flamingo: #dd7878;
   --ctp-pink: #ea76cb;
@@ -135,7 +136,7 @@
   --destructive-foreground: var(--ctp-base);
   --weave-editor-background: var(--background);
   --weave-editor-foreground: var(--foreground);
-  --weave-editor-gutter-background: var(--card);
+  --weave-editor-gutter-background: color-mix(in oklab, var(--background) 86%, var(--ctp-surface0));
   --weave-editor-gutter-foreground: var(--ctp-overlay1);
   --weave-editor-gutter-border: color-mix(in oklab, var(--foreground) 9%, transparent);
   --weave-editor-active-line: color-mix(in oklab, var(--ctp-surface0) 62%, transparent);
@@ -238,7 +239,7 @@
   --destructive-foreground: var(--ctp-crust);
   --weave-editor-background: var(--background);
   --weave-editor-foreground: var(--foreground);
-  --weave-editor-gutter-background: var(--card);
+  --weave-editor-gutter-background: color-mix(in oklab, var(--background) 86%, var(--ctp-surface0));
   --weave-editor-gutter-foreground: var(--ctp-overlay1);
   --weave-editor-gutter-border: color-mix(in oklab, var(--foreground) 8%, transparent);
   --weave-editor-active-line: color-mix(in oklab, var(--ctp-surface0) 58%, transparent);
