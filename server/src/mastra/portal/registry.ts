@@ -23,10 +23,27 @@ const connections = new Map<string, PortalConnection & { ws: PortalSocket }>();
 const pendingRequests = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
 
 const publicConnection = ({ ws: _ws, ...connection }: PortalConnection & { ws: PortalSocket }): PortalConnection => connection;
+const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+const normalizePath = (value: unknown) => {
+  const path = optionalString(value);
+  if (!path) return undefined;
+  const normalized = path.replace(/\/+/g, '/').replace(/\/+$/, '');
+  return normalized || '/';
+};
+
+const isSameOrChildPath = (path: string | undefined, root: string | undefined) =>
+  Boolean(path && root && (path === root || path.startsWith(`${root}/`)));
+
+const portalConnectionsForUser = (userId: string) =>
+  [...connections.values()]
+    .filter(connection => connection.userId === userId)
+    .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
 
 export const listPortalConnections = (userId?: string) =>
-  [...connections.values()]
-    .filter(connection => !userId || connection.userId === userId)
+  (userId ? portalConnectionsForUser(userId) : [...connections.values()])
     .map(publicConnection)
     .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
 
@@ -42,9 +59,57 @@ export const sendPortalMessage = (portalId: string, message: unknown) => {
 };
 
 export const findPortalForProject = (userId: string, projectId: string) =>
-  [...connections.values()].find(connection =>
+  portalConnectionsForUser(userId).find(connection =>
     connection.userId === userId && connection.mounts.some((mount: any) => mount?.projectId === projectId && typeof mount?.localPath === 'string'),
   );
+
+export const resolvePortalForTarget = (input: {
+  userId: string;
+  portalId?: string;
+  projectId?: string;
+  rootId?: string;
+  repoPath?: string;
+  workspacePath?: string;
+}) => {
+  const candidates = portalConnectionsForUser(input.userId);
+  if (!candidates.length) return undefined;
+
+  const workspacePath = normalizePath(input.workspacePath);
+  const pathMatches = workspacePath
+    ? candidates.filter(connection => {
+      const mounted = connection.mounts.some(mount => {
+        if (!isRecord(mount)) return false;
+        const localPath = normalizePath(mount.localPath);
+        if (!localPath) return false;
+        return isSameOrChildPath(workspacePath, localPath) || isSameOrChildPath(localPath, workspacePath);
+      });
+      if (mounted) return true;
+
+      return connection.roots.some(root => {
+        if (!isRecord(root)) return false;
+        return isSameOrChildPath(workspacePath, normalizePath(root.path));
+      });
+    })
+    : [];
+  if (pathMatches.length) return publicConnection(pathMatches[0]);
+
+  if (input.rootId) {
+    const rootMatch = candidates.find(connection =>
+      connection.roots.some(root => isRecord(root) && root.id === input.rootId),
+    );
+    if (rootMatch) return publicConnection(rootMatch);
+  }
+
+  if (input.projectId) {
+    const projectMatch = candidates.find(connection =>
+      connection.mounts.some(mount => isRecord(mount) && mount.projectId === input.projectId && typeof mount.localPath === 'string'),
+    );
+    if (projectMatch) return publicConnection(projectMatch);
+  }
+
+  const hinted = input.portalId ? candidates.find(connection => connection.portalId === input.portalId) : undefined;
+  return publicConnection(hinted ?? candidates[0]);
+};
 
 export const handlePortalMessage = (message: Record<string, unknown>) => {
   if (message.type !== 'tool.result' || typeof message.id !== 'string') return false;

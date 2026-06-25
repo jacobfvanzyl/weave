@@ -1,6 +1,6 @@
 import { defineRoute } from '../../server/route-adapter';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
-import { findPortalForProject, getPortalConnection, listPortalConnections } from '../portal/registry';
+import { listPortalConnections, resolvePortalForTarget } from '../portal/registry';
 import { issueTerminalToken, type TerminalSessionKind } from '../portal/terminal-relay';
 
 const agentId = 'mageHandAgent';
@@ -81,13 +81,6 @@ const portalRootId = (portal: { roots?: unknown[] }) => {
   return typeof (firstRoot as any)?.id === 'string' ? (firstRoot as any).id : 'default';
 };
 
-const assertPortal = (portalId: string | undefined, resourceId: string) => {
-  if (!portalId) throw new Error('No online Portal is available for this terminal.');
-  const portal = getPortalConnection(portalId);
-  if (!portal || portal.userId !== resourceId) throw new Error('Portal is offline or unavailable.');
-  return portal;
-};
-
 const resolveTerminalTarget = async (c: any, resourceId: string, body: Record<string, unknown>) => {
   const kind: TerminalSessionKind = body.kind === 'workspace' ? 'workspace' : 'general';
 
@@ -112,13 +105,19 @@ const resolveTerminalTarget = async (c: any, resourceId: string, body: Record<st
 
   const workspace = project.workspaces.find(item => item.id === workspaceId);
   if (!workspace) throw new Error('Workspace was not found.');
-  const mountedPortal = findPortalForProject(resourceId, projectId);
-  const portalId = workspace.portalId ?? project.portalId ?? mountedPortal?.portalId;
-  assertPortal(portalId, resourceId);
+  const portal = resolvePortalForTarget({
+    userId: resourceId,
+    portalId: workspace.portalId ?? project.portalId,
+    projectId,
+    rootId: project.portalRootId,
+    repoPath: project.repoPath,
+    workspacePath: workspace.path,
+  });
+  if (!portal) throw new Error('No online Portal is available for this terminal.');
 
   return {
     kind,
-    portalId: portalId!,
+    portalId: portal.portalId,
     projectId,
     workspaceId,
     rootId: project.portalRootId,

@@ -1,6 +1,6 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
-import { findPortalForProject, requestPortalTool } from '../portal/registry';
+import { requestPortalTool, resolvePortalForTarget } from '../portal/registry';
 import {
   resolveNotesVaultForThreadContext,
   type NotesVaultResolverDependencies,
@@ -55,8 +55,7 @@ export const getThreadBinding = async (context: any) => {
 
 export const routePortalTool = async (tool: string, args: unknown, context: any, timeoutMs?: number) => {
   const binding = await getThreadBinding(context);
-  const mountedPortal = findPortalForProject(binding.resourceId, binding.projectId);
-  const portalId = binding.portalId ?? mountedPortal?.portalId;
+  const portalId = resolvePortalForBinding(binding);
   if (!portalId) return { ok: false, error: offlineMessage };
 
   return requestPortalTool({
@@ -71,6 +70,16 @@ export const routePortalTool = async (tool: string, args: unknown, context: any,
     timeoutMs,
   });
 };
+
+export const resolvePortalForBinding = (binding: Awaited<ReturnType<typeof getThreadBinding>>) =>
+  resolvePortalForTarget({
+    userId: binding.resourceId,
+    portalId: binding.portalId,
+    projectId: binding.projectId,
+    rootId: binding.rootId,
+    repoPath: binding.repoPath,
+    workspacePath: binding.workspacePath,
+  })?.portalId;
 
 type VaultToolAction = 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload';
 

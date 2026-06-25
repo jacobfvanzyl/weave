@@ -1,4 +1,4 @@
-import { findPortalForProject, getPortalConnection } from '../portal/registry';
+import { findPortalForProject, getPortalConnection, resolvePortalForTarget } from '../portal/registry';
 import { getNotesVaultBackend } from './registry';
 import type {
   NotesProject,
@@ -21,6 +21,14 @@ export type NotesVaultResolverDependencies = {
   findPortalForProject?: (resourceId: string, projectId: string) => { portalId?: string } | undefined;
   getBackend?: (kind: string) => NotesVaultBackend | undefined;
   getPortalConnection?: (portalId: string) => { userId: string } | undefined;
+  resolvePortalForTarget?: (input: {
+    userId: string;
+    portalId?: string;
+    projectId?: string;
+    rootId?: string;
+    repoPath?: string;
+    workspacePath?: string;
+  }) => { portalId: string; userId: string } | undefined;
 };
 
 export class NotesVaultBackendNotRegisteredError extends Error {
@@ -105,6 +113,7 @@ const defaultDependencies = (): Required<NotesVaultResolverDependencies> => ({
   findPortalForProject,
   getBackend: getNotesVaultBackend,
   getPortalConnection,
+  resolvePortalForTarget,
 });
 
 const normalizeStorageForProject = (
@@ -140,7 +149,15 @@ const resolvePortalStorage = (
   deps: Required<NotesVaultResolverDependencies>,
 ) => {
   const mountedPortal = deps.findPortalForProject(resourceId, project.id);
-  const portalId = storage.portalId ?? mountedPortal?.portalId;
+  const resolvedPortal = deps.resolvePortalForTarget({
+    userId: resourceId,
+    portalId: storage.portalId,
+    projectId: project.id,
+    rootId: storage.rootId,
+    repoPath: storage.vaultPath,
+    workspacePath: storage.workspacePath,
+  });
+  const portalId = resolvedPortal?.portalId ?? storage.portalId ?? mountedPortal?.portalId;
   if (!portalId) throw new Error('No online Portal is available for this vault.');
   const portal = deps.getPortalConnection(portalId);
   if (!portal || portal.userId !== resourceId) throw new Error('Portal is offline or unavailable.');

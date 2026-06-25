@@ -10,9 +10,9 @@ import {
   type GitProject,
   type GitWorkspace,
 } from '../git/service';
-import { findPortalForProject, getPortalConnection, requestPortalTool } from '../portal/registry';
+import { getPortalConnection, requestPortalTool } from '../portal/registry';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars } from './model-output';
-import { getThreadBinding, offlineMessage } from './portal-tools';
+import { getThreadBinding, offlineMessage, resolvePortalForBinding } from './portal-tools';
 
 const adapters = {
   getPortal: getPortalConnection,
@@ -27,8 +27,7 @@ const gitOutputSchema = z.object({
 const getGitTarget = async (context: any) => {
   const binding = await getThreadBinding(context);
   if (binding.projectKind !== 'git') throw new Error('Git tools are only available in Git Project Workspace threads.');
-  const mountedPortal = findPortalForProject(binding.resourceId, binding.projectId);
-  const portalId = binding.portalId ?? mountedPortal?.portalId;
+  const portalId = resolvePortalForBinding(binding);
   if (!portalId) throw new Error(offlineMessage);
   if (!binding.workspacePath) throw new Error('This Workspace has no local path yet. Create it again or attach an existing location.');
 

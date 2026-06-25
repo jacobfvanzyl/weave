@@ -1,6 +1,6 @@
 import { defineRoute } from '../../server/route-adapter';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
-import { findPortalForProject, getPortalConnection, requestPortalTool } from '../portal/registry';
+import { requestPortalTool, resolvePortalForTarget } from '../portal/registry';
 
 const agentId = 'mageHandAgent';
 const projectThreadPrefix = '__project__';
@@ -83,13 +83,6 @@ const parseTarget = (body: Record<string, unknown>): EditorTarget => {
   };
 };
 
-const assertPortal = (portalId: string | undefined, resourceId: string) => {
-  if (!portalId) throw new Error('No online Portal is available for this editor.');
-  const portal = getPortalConnection(portalId);
-  if (!portal || portal.userId !== resourceId) throw new Error('Portal is offline or unavailable.');
-  return portal;
-};
-
 const resolveEditorTarget = async (c: any, resourceId: string, body: Record<string, unknown>) => {
   const target = parseTarget(body);
   if (!target.projectId || !target.workspaceId) throw new Error('Project and Workspace are required for this editor.');
@@ -101,12 +94,18 @@ const resolveEditorTarget = async (c: any, resourceId: string, body: Record<stri
 
   const workspace = project.workspaces.find(item => item.id === target.workspaceId);
   if (!workspace) throw new Error('Workspace was not found.');
-  const mountedPortal = findPortalForProject(resourceId, target.projectId);
-  const portalId = workspace.portalId ?? project.portalId ?? mountedPortal?.portalId ?? target.portalId;
-  assertPortal(portalId, resourceId);
+  const portal = resolvePortalForTarget({
+    userId: resourceId,
+    portalId: target.portalId ?? workspace.portalId ?? project.portalId,
+    projectId: target.projectId,
+    rootId: project.portalRootId ?? target.rootId,
+    repoPath: project.repoPath ?? target.repoPath,
+    workspacePath: workspace.path ?? target.workspacePath,
+  });
+  if (!portal) throw new Error('No online Portal is available for this editor.');
 
   return {
-    portalId: portalId!,
+    portalId: portal.portalId,
     projectId: target.projectId,
     workspaceId: target.workspaceId,
     rootId: project.portalRootId ?? target.rootId,

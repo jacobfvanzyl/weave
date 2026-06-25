@@ -1,5 +1,5 @@
 import { parseFrontmatter } from '../prompt-templates/frontmatter';
-import { getPortalConnection, listPortalConnections, requestPortalTool } from '../portal/registry';
+import { listPortalConnections, requestPortalTool, resolvePortalForTarget } from '../portal/registry';
 import { registerResolvedProfileSkills } from './skill-source';
 
 export type WeaveContextFileKind = 'config' | 'mcp' | 'profile' | 'prompt' | 'skill' | 'agents';
@@ -285,10 +285,14 @@ const resolveProjectPortalId = (
   workspace: Record<string, any> | undefined,
 ) => {
   const portalId = optionalString(workspace?.portalId) ?? optionalString(project.portalId);
-  if (!portalId) return undefined;
-  const portal = getPortalConnection(portalId);
-  if (portal?.userId === resourceId) return portalId;
-  return listPortalConnections(resourceId)[0]?.portalId ?? portalId;
+  return resolvePortalForTarget({
+    userId: resourceId,
+    portalId,
+    projectId: optionalString(project.id),
+    rootId: optionalString(project.portalRootId),
+    repoPath: optionalString(project.repoPath),
+    workspacePath: optionalString(workspace?.path),
+  })?.portalId;
 };
 
 const loadProjectSnapshot = async (
