@@ -1,5 +1,6 @@
 import { defineRoute } from '../../../server/routes';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
+import { productProjectRepository } from '../../../products/project-repository';
 import { requestPortalTool, resolvePortalForTarget } from '../../../portal/registry';
 
 const agentId = 'mageHandAgent';
@@ -60,6 +61,9 @@ const toProject = (thread: any): Project => {
 };
 
 const getProject = async (memory: any, resourceId: string, projectId: string) => {
+  const persisted = await productProjectRepository.get(resourceId, projectId, 'code');
+  if (persisted) return persisted as Project;
+
   const thread = await memory.getThreadById({ threadId: projectThreadId(projectId) }).catch(() => undefined);
   if (!thread || thread.resourceId !== resourceId) return undefined;
   const metadata = thread.metadata as Record<string, unknown> | undefined;

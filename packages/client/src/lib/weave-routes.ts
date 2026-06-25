@@ -16,6 +16,11 @@ export const weaveRoutePaths = {
     me: () => '/owner/me',
   },
   chat: {
+    projects: () => '/chat/projects',
+    project: (projectId: string) => `/chat/projects/${encodePath(projectId)}`,
+    projectProfile: (projectId: string) => `/chat/projects/${encodePath(projectId)}/profile`,
+    reorderProjects: () => '/chat/projects/reorder',
+    projectThreads: (projectId: string) => `/chat/projects/${encodePath(projectId)}/threads`,
     threads: () => '/chat/threads',
     thread: (threadId: string) => `/chat/threads/${encodePath(threadId)}`,
     reorderThreads: () => '/chat/threads/reorder',
@@ -51,7 +56,17 @@ export const weaveRoutePaths = {
     terminalToken: () => '/code/terminals/token',
   },
   notes: {
+    projects: () => '/notes/projects',
+    project: (projectId: string) => `/notes/projects/${encodePath(projectId)}`,
+    projectProfile: (projectId: string) => `/notes/projects/${encodePath(projectId)}/profile`,
+    reorderProjects: () => '/notes/projects/reorder',
+    projectThreads: (projectId: string) => `/notes/projects/${encodePath(projectId)}/threads`,
     vault: (action: string) => `/notes/vault/${encodePath(action)}`,
+  },
+  compat: {
+    projects: () => '/projects',
+    project: (projectId: string) => `/projects/${encodePath(projectId)}`,
+    projectProfile: (projectId: string) => `/projects/${encodePath(projectId)}/profile`,
   },
   agent: {
     models: () => '/agent/models',
@@ -79,6 +94,11 @@ export const weaveRoutes = {
     me: () => url(weaveRoutePaths.owner.me()),
   },
   chat: {
+    projects: () => url(weaveRoutePaths.chat.projects()),
+    project: (projectId: string) => url(weaveRoutePaths.chat.project(projectId)),
+    projectProfile: (projectId: string) => url(weaveRoutePaths.chat.projectProfile(projectId)),
+    reorderProjects: () => url(weaveRoutePaths.chat.reorderProjects()),
+    projectThreads: (projectId: string) => url(weaveRoutePaths.chat.projectThreads(projectId)),
     threads: () => url(weaveRoutePaths.chat.threads()),
     thread: (threadId: string) => url(weaveRoutePaths.chat.thread(threadId)),
     reorderThreads: () => url(weaveRoutePaths.chat.reorderThreads()),
@@ -114,7 +134,17 @@ export const weaveRoutes = {
     terminalToken: () => url(weaveRoutePaths.code.terminalToken()),
   },
   notes: {
+    projects: () => url(weaveRoutePaths.notes.projects()),
+    project: (projectId: string) => url(weaveRoutePaths.notes.project(projectId)),
+    projectProfile: (projectId: string) => url(weaveRoutePaths.notes.projectProfile(projectId)),
+    reorderProjects: () => url(weaveRoutePaths.notes.reorderProjects()),
+    projectThreads: (projectId: string) => url(weaveRoutePaths.notes.projectThreads(projectId)),
     vault: (action: string) => url(weaveRoutePaths.notes.vault(action)),
+  },
+  compat: {
+    projects: () => url(weaveRoutePaths.compat.projects()),
+    project: (projectId: string) => url(weaveRoutePaths.compat.project(projectId)),
+    projectProfile: (projectId: string) => url(weaveRoutePaths.compat.projectProfile(projectId)),
   },
   agent: {
     models: () => url(weaveRoutePaths.agent.models()),

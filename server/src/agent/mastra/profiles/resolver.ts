@@ -1,4 +1,5 @@
 import { parseFrontmatter } from '../prompt-templates/frontmatter';
+import { productProjectRepository } from '../../../products/project-repository';
 import { listPortalConnections, requestPortalTool, resolvePortalForTarget } from '../../../portal/registry';
 import { registerResolvedProfileSkills } from './skill-source';
 
@@ -333,10 +334,15 @@ const getProjectContext = async (
     return { thread, threadMetadata, agentFiles: [] };
   }
 
-  const projectThread = await memory.getThreadById({ threadId: projectThreadId(threadMetadata.projectId) }).catch(() => undefined);
-  const project = projectThread?.metadata as Record<string, any> | undefined;
-  if (!projectThread || projectThread.resourceId !== resourceId || project?.kind !== 'project') {
-    return { thread, threadMetadata, agentFiles: [] };
+  let project = await productProjectRepository.get(resourceId, threadMetadata.projectId) as Record<string, any> | undefined;
+  if (!project) {
+    const projectThread = await memory.getThreadById({ threadId: projectThreadId(threadMetadata.projectId) }).catch(() => undefined);
+    const projectMetadata = projectThread?.metadata as Record<string, any> | undefined;
+    if (!projectThread || projectThread.resourceId !== resourceId || projectMetadata?.kind !== 'project') {
+      return { thread, threadMetadata, agentFiles: [] };
+    }
+    project = projectMetadata;
+    await productProjectRepository.save(projectMetadata as any).catch(() => undefined);
   }
 
   const workspace = Array.isArray(project.workspaces) && typeof threadMetadata.workspaceId === 'string'

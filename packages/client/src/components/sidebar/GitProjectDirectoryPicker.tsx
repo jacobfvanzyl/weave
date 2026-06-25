@@ -14,6 +14,7 @@ import { Spinner } from '../ui/spinner';
 
 type GitProjectDirectoryPickerProps = {
   portals: PortalConnection[];
+  projectKind?: 'general' | 'git' | 'notes';
   isCreating?: boolean;
   createError?: string | null;
   onCancel: () => void;
@@ -42,9 +43,19 @@ const normalizeBrowseResult = (result: PortalBrowseResult | null, requestedPath:
   };
 };
 
-export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createError, onCancel, onCreate }: GitProjectDirectoryPickerProps) => {
+const projectKindLabel = (projectKind: 'general' | 'git' | 'notes') =>
+  projectKind === 'git' ? 'Code' : projectKind === 'notes' ? 'Notes' : 'General';
+
+export const GitProjectDirectoryPicker = ({
+  portals,
+  projectKind: fixedProjectKind,
+  isCreating = false,
+  createError,
+  onCancel,
+  onCreate,
+}: GitProjectDirectoryPickerProps) => {
   const [projectName, setProjectName] = useState('');
-  const [projectKind, setProjectKind] = useState<'general' | 'git' | 'notes'>('general');
+  const [projectKind, setProjectKind] = useState<'general' | 'git' | 'notes'>(fixedProjectKind ?? 'general');
   const onlinePortals = useMemo(() => portals.filter(portal => portal.status === 'online'), [portals]);
   const [selectedPortalId, setSelectedPortalId] = useState(() => onlinePortals[0]?.portalId ?? '');
   const selectedPortal = onlinePortals.find(portal => portal.portalId === selectedPortalId) ?? onlinePortals[0];
@@ -54,6 +65,10 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
   const [browseResult, setBrowseResult] = useState<PortalBrowseResult | null>(null);
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (fixedProjectKind) setProjectKind(fixedProjectKind);
+  }, [fixedProjectKind]);
 
   useEffect(() => {
     if (onlinePortals.length === 0) {
@@ -117,7 +132,7 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
         <DialogHeader className="flex-row items-start justify-between gap-3">
           <div className="min-w-0">
             <DialogTitle>Create Project</DialogTitle>
-            <DialogDescription>General, Code, or Notes</DialogDescription>
+            <DialogDescription>{fixedProjectKind ? projectKindLabel(fixedProjectKind) : 'General, Code, or Notes'}</DialogDescription>
           </div>
           <DialogClose render={<Button size="icon-sm" variant="ghost" aria-label="Close directory picker" />}>
             <X size={16} />
@@ -137,23 +152,25 @@ export const GitProjectDirectoryPicker = ({ portals, isCreating = false, createE
               placeholder="Project name"
             />
           </Field>
-          <Field>
-            <FieldLabel>Type</FieldLabel>
-            <Select
-              value={projectKind}
-              onValueChange={value => setProjectKind(value === 'git' || value === 'notes' ? value : 'general')}
-              disabled={isCreating}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopup>
-                <SelectItem value="general">General</SelectItem>
-                <SelectItem value="git">Code</SelectItem>
-                <SelectItem value="notes">Notes</SelectItem>
-              </SelectPopup>
-            </Select>
-          </Field>
+          {!fixedProjectKind ? (
+            <Field>
+              <FieldLabel>Type</FieldLabel>
+              <Select
+                value={projectKind}
+                onValueChange={value => setProjectKind(value === 'git' || value === 'notes' ? value : 'general')}
+                disabled={isCreating}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="general">General</SelectItem>
+                  <SelectItem value="git">Code</SelectItem>
+                  <SelectItem value="notes">Notes</SelectItem>
+                </SelectPopup>
+              </Select>
+            </Field>
+          ) : null}
         </div>
 
         {projectKind === 'git' || projectKind === 'notes' ? <div className="grid gap-3 sm:grid-cols-2">

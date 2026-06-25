@@ -6,6 +6,7 @@ import type { UnifiedEditorTarget } from './UnifiedEditorPanel';
 const UnifiedEditorPanel = lazy(() => import('./UnifiedEditorPanel').then(module => ({ default: module.UnifiedEditorPanel })));
 
 type EditorPaneProps = {
+  breadcrumb?: ReactNode;
   followRequest?: EditorFollowRequest;
   focusRequest: number;
   isMaximized: boolean;
@@ -17,6 +18,7 @@ type EditorPaneProps = {
 };
 
 export const EditorPane = ({
+  breadcrumb,
   followRequest,
   focusRequest,
   isMaximized,
@@ -37,6 +39,7 @@ export const EditorPane = ({
         <UnifiedEditorPanel
           followRequest={followRequest}
           focusRequest={focusRequest}
+          breadcrumb={breadcrumb}
           isExpanded={isMaximized}
           mode={mode}
           onExpandedChange={onExpandedChange}

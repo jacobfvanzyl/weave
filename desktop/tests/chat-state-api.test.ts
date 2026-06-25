@@ -83,13 +83,13 @@ describe('chat-state Project/Workspace API client', () => {
     configureMastraConnection({ mastraUrl: 'http://localhost:4111', authToken: null });
   });
 
-  it('reads /code/projects response shapes', async () => {
+  it('reads compatibility /projects response shapes', async () => {
     configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ projects: [project] }));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(listProjects()).resolves.toEqual([project]);
-    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/code/projects', {
+    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects', {
       headers: { Authorization: 'Bearer token-1' },
     });
   });
@@ -534,7 +534,7 @@ describe('chat-state Project/Workspace API client', () => {
 
     expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method, JSON.parse(String(init?.body))])).toEqual([
       ['http://weave.test/chat/threads/thread-1', 'PATCH', { profileId: 'coding' }],
-      ['http://weave.test/code/projects/project-1/profile', 'PATCH', { profileId: 'coding' }],
+      ['http://weave.test/projects/project-1/profile', 'PATCH', { profileId: 'coding' }],
     ]);
   });
 

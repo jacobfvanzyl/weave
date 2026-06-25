@@ -1,7 +1,13 @@
 import { mountRoute } from '../../server/routes';
 import { registerAgentContribution } from '../../agent/contributions';
 import type { ServerModule } from '../types';
+import { productProjectRoutes } from '../code/routes/projects';
 import { vaultRoutes } from './routes/vault';
+
+const notesProjectPath = (path: string) =>
+  path === '/code/projects' ? '/notes/projects'
+    : path.startsWith('/code/projects/') ? `/notes/projects${path.slice('/code/projects'.length)}`
+    : undefined;
 
 registerAgentContribution({
   moduleId: 'notes',
@@ -22,6 +28,10 @@ registerAgentContribution({
 export const notesModule: ServerModule = {
   id: 'notes',
   registerRoutes: app => {
+    for (const route of productProjectRoutes) {
+      const canonicalPath = notesProjectPath(route.path);
+      if (canonicalPath) mountRoute(app, route, { canonicalPath });
+    }
     for (const route of vaultRoutes) mountRoute(app, route);
   },
 };

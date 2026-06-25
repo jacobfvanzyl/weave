@@ -10,6 +10,7 @@ import { PlanSidebar } from './PlanSidebar';
 type ChatPaneProps = {
   activePlan?: ThreadPlan;
   activeThreadId: string;
+  breadcrumb?: ReactNode;
   canFollowWrites: boolean;
   isMaximized: boolean;
   runningThreadIds: string[];
@@ -24,6 +25,7 @@ type ChatPaneProps = {
 export const ChatPane = ({
   activePlan,
   activeThreadId,
+  breadcrumb,
   canFollowWrites,
   isMaximized,
   runningThreadIds,
@@ -57,12 +59,20 @@ export const ChatPane = ({
       data-weave-main-pane="chat"
       data-maximized={isMaximized ? 'true' : 'false'}
     >
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-        <MessageSquare size={15} className="shrink-0 text-primary" />
+      <div className="relative flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+        <MessageSquare size={15} className="relative z-10 shrink-0 text-primary" />
+        {breadcrumb ? (
+          <div
+            className="pointer-events-none absolute inset-y-0 left-1/2 flex min-w-0 -translate-x-1/2 items-center justify-center"
+            style={{ maxWidth: 'min(60%, calc(100% - 9rem))' }}
+          >
+            {breadcrumb}
+          </div>
+        ) : null}
         <div className="min-w-0 flex-1" />
         <Menu>
           <MenuTrigger
-            render={<Button size="icon-xs" variant="ghost" aria-label="Chat settings" title="Chat settings" />}
+            render={<Button className="relative z-10" size="icon-xs" variant="ghost" aria-label="Chat settings" title="Chat settings" />}
           >
             <Settings size={14} />
           </MenuTrigger>
@@ -84,6 +94,7 @@ export const ChatPane = ({
           </MenuPopup>
         </Menu>
         <Button
+          className="relative z-10"
           size="icon-xs"
           variant="ghost"
           aria-label={isMaximized ? 'Restore chat pane' : 'Maximize chat pane'}
@@ -93,6 +104,7 @@ export const ChatPane = ({
           {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </Button>
         <Button
+          className="relative z-10"
           size="icon-xs"
           variant="ghost"
           aria-label="Close chat pane"

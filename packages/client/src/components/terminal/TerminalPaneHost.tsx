@@ -1,9 +1,10 @@
-import { Suspense } from 'react';
+import { Suspense, type ReactNode } from 'react';
 import { TerminalPanel, type TerminalPanelTab, type TerminalPanelTabsChange, type TerminalPanelTarget } from './TerminalPanel';
 import type { TerminalTransport } from '../../lib/terminal-types';
 
 type TerminalPaneHostProps = {
   activeTabId?: string;
+  breadcrumb?: ReactNode;
   canToggleMaximized: boolean;
   error?: string;
   focusRequest: number;
@@ -26,6 +27,7 @@ type TerminalPaneHostProps = {
 
 export const TerminalPaneHost = ({
   activeTabId,
+  breadcrumb,
   canToggleMaximized,
   error,
   focusRequest,
@@ -48,6 +50,7 @@ export const TerminalPaneHost = ({
   <Suspense fallback={null}>
     <TerminalPanel
       activeTabId={activeTabId}
+      breadcrumb={breadcrumb}
       error={error}
       focusRequest={focusRequest}
       isExpanded={variant === 'main' ? isEffectivelyMaximized : false}

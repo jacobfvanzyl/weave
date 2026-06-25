@@ -1,5 +1,6 @@
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { defineRoute } from '../../server/routes';
+import { productProjectRepository } from '../../products/project-repository';
 import { getPortalConnection, listPortalConnections, requestPortalTool } from '../registry';
 
 const agentId = 'mageHandAgent';
@@ -55,8 +56,21 @@ const isProjectThread = (thread: { id: string; metadata?: unknown }) => {
 };
 
 const getProjectPortalIds = async (memory: any, resourceId: string) => {
-  const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   const portalIds = new Set<string>();
+  const projects = await productProjectRepository.list(resourceId, { includeHidden: true });
+  for (const project of projects) {
+    const projectPortalId = optionalString(project.portalId);
+    if (projectPortalId) portalIds.add(projectPortalId);
+    const notesPortalId = optionalString(project.notesStorage?.portalId);
+    if (notesPortalId) portalIds.add(notesPortalId);
+    for (const workspace of project.workspaces) {
+      const workspacePortalId = optionalString(workspace?.portalId);
+      if (workspacePortalId) portalIds.add(workspacePortalId);
+    }
+  }
+  if (portalIds.size > 0) return [...portalIds];
+
+  const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   for (const thread of result.threads.filter(isProjectThread)) {
     const metadata = thread.metadata as Record<string, any> | undefined;
     const projectPortalId = optionalString(metadata?.portalId);

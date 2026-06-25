@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp, LoaderCircle, Plus, TerminalSquare, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import type { TerminalSessionKind, TerminalTransport } from '../../lib/terminal-types';
@@ -45,6 +45,7 @@ export type TerminalPanelTabsChange = TerminalPanelTab[] | ((tabs: TerminalPanel
 
 type TerminalPanelProps = {
   activeTabId?: string;
+  breadcrumb?: ReactNode;
   focusRequest?: number;
   isExpanded?: boolean;
   isSyncing?: boolean;
@@ -361,6 +362,7 @@ const TerminalSessionView = ({
 
 export const TerminalPanel = ({
   activeTabId,
+  breadcrumb,
   error,
   focusRequest = 0,
   isExpanded = false,
@@ -476,6 +478,7 @@ export const TerminalPanel = ({
     >
       <div className="flex h-14 shrink-0 items-stretch gap-2 border-b border-border px-3" data-weave-terminal-tab-bar>
         <TerminalSquare size={15} className="self-center shrink-0 text-primary" />
+        {breadcrumb ? <div className="flex min-w-0 max-w-[42%] shrink items-center truncate">{breadcrumb}</div> : null}
         <div
           className="flex min-w-0 flex-1 items-end overflow-x-auto"
           role="tablist"

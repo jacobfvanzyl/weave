@@ -144,6 +144,10 @@
 
 :root[data-weave-window-type="electron"] header button,
 :root[data-weave-window-type="electron"] header button *,
+:root[data-weave-window-type="electron"] .weave-appbar-center-content,
+:root[data-weave-window-type="electron"] .weave-appbar-center-content *,
+:root[data-weave-window-type="electron"] .weave-product-rail,
+:root[data-weave-window-type="electron"] .weave-product-rail *,
 :root[data-weave-window-type="electron"] header [role="button"],
 :root[data-weave-window-type="electron"] header [role="button"] *,
 :root[data-weave-window-type="electron"] input,
@@ -151,6 +155,10 @@
 :root[data-weave-window-type="electron"] [data-slot="button"],
 :root[data-weave-window-type="electron"] [data-slot="menu-trigger"] {
   -webkit-app-region: no-drag;
+}
+
+:root[data-weave-window-type="electron"] .weave-appbar-center-content {
+  z-index: 46;
 }
 
 :root[data-weave-window-type="electron"] header > .absolute {

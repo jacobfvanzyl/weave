@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai';
 import { getAuthHeaders } from './mastra-client';
 import { weaveRoutes } from './weave-routes';
+import { productForProjectKind, type ProductId } from './products';
 import type { ChatThread, PlanStepStatus, ThreadPlan, ThreadPlanStep } from '../stores/chat-store';
 
 type ServerThread = {
@@ -149,6 +150,12 @@ export type Project = {
   createdAt: string;
   updatedAt: string;
 };
+
+const productProjectRoutes = (product: ProductId) =>
+  product === 'notes' ? weaveRoutes.notes : product === 'chat' ? weaveRoutes.chat : weaveRoutes.code;
+
+const productForProjectInput = (projectKind?: Project['projectKind']): ProductId =>
+  projectKind ? productForProjectKind(projectKind) : 'chat';
 
 const toRemovedWorkspace = (value: unknown): RemovedWorkspaceSnapshot | undefined => {
   const record = value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
@@ -340,7 +347,15 @@ export const deleteServerThread = async (threadId: string) => {
 
 export const listProjects = async () => {
   const result = await parseJson<{ projects: Project[] }>(
-    await fetch(weaveRoutes.code.projects(), { headers: getAuthHeaders() }),
+    await fetch(weaveRoutes.compat.projects(), { headers: getAuthHeaders() }),
+  );
+
+  return result.projects;
+};
+
+export const listProductProjects = async (product: ProductId) => {
+  const result = await parseJson<{ projects: Project[] }>(
+    await fetch(productProjectRoutes(product).projects(), { headers: getAuthHeaders() }),
   );
 
   return result.projects;
@@ -474,9 +489,10 @@ export const setPrimaryPortal = async (portalId: string) => {
 };
 
 export const createProject = async (input: string | CreateProjectInput) => {
-  const body = typeof input === 'string' ? { name: input, projectKind: 'general' } : input;
+  const body: CreateProjectInput = typeof input === 'string' ? { name: input, projectKind: 'general' } : input;
+  const routes = productProjectRoutes(productForProjectInput(body.projectKind));
   const result = await parseJson<{ project: Project }>(
-    await fetch(weaveRoutes.code.projects(), {
+    await fetch(routes.projects(), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(body),
@@ -486,15 +502,24 @@ export const createProject = async (input: string | CreateProjectInput) => {
   return result.project;
 };
 
-export const deleteProject = async (projectId: string) => {
+export const deleteProject = async (projectId: string, projectKind?: Project['projectKind']) => {
   await parseJson<{ ok: true }>(
-    await fetch(weaveRoutes.code.project(projectId), { method: 'DELETE', headers: getAuthHeaders() }),
+    await fetch(
+      projectKind ? productProjectRoutes(productForProjectKind(projectKind)).project(projectId) : weaveRoutes.compat.project(projectId),
+      { method: 'DELETE', headers: getAuthHeaders() },
+    ),
   );
 };
 
-export const setProjectProfile = async (projectId: string, profileId: string | null) => {
+export const setProjectProfile = async (
+  projectId: string,
+  profileId: string | null,
+  projectKind?: Project['projectKind'],
+) => {
   const result = await parseJson<{ project: Project }>(
-    await fetch(weaveRoutes.code.projectProfile(projectId), {
+    await fetch(projectKind
+      ? productProjectRoutes(productForProjectKind(projectKind)).projectProfile(projectId)
+      : weaveRoutes.compat.projectProfile(projectId), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ profileId }),
@@ -504,9 +529,10 @@ export const setProjectProfile = async (projectId: string, profileId: string | n
   return result.project;
 };
 
-export const reorderProjects = async (projectIds: string[]) => {
+export const reorderProjects = async (projectIds: string[], product: ProductId = 'code') => {
+  const routes = productProjectRoutes(product);
   const result = await parseJson<{ projects: Project[] }>(
-    await fetch(weaveRoutes.code.reorderProjects(), {
+    await fetch(routes.reorderProjects(), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ projectIds }),
@@ -625,9 +651,17 @@ export const reorderWorkspaces = async (projectId: string, workspaceIds: string[
   return result.project;
 };
 
-export const createProjectThread = async (projectId: string, threadId: string, workspaceId?: string, title = '...', profileId?: string) => {
+export const createProjectThread = async (
+  projectId: string,
+  threadId: string,
+  workspaceId?: string,
+  title = '...',
+  profileId?: string,
+  projectKind?: Project['projectKind'],
+) => {
+  const routes = productProjectRoutes(projectKind ? productForProjectKind(projectKind) : 'code');
   const result = await parseJson<{ thread: ServerThread; workspace: Workspace }>(
-    await fetch(weaveRoutes.code.projectThreads(projectId), {
+    await fetch(routes.projectThreads(projectId), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ threadId, title, workspaceId, profileId }),

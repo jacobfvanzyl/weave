@@ -190,6 +190,14 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     );
     expect(hideSidebarAppRegion === 'drag').toBe(false);
     expect(hideSidebarIconAppRegion === 'drag').toBe(false);
+    const productSwitchAppRegion = await page.getByRole('button', { name: 'Switch to Chat' }).evaluate(element =>
+      getComputedStyle(element).getPropertyValue('-webkit-app-region'),
+    );
+    expect(productSwitchAppRegion === 'drag').toBe(false);
+    await page.getByRole('button', { name: 'Switch to Chat' }).click();
+    await playwrightExpect(page.getByRole('button', { name: 'Switch to Chat' })).toHaveAttribute('data-active', 'true');
+    await page.getByRole('button', { name: 'Switch to Code' }).click();
+    await playwrightExpect(page.getByRole('button', { name: 'Switch to Code' })).toHaveAttribute('data-active', 'true');
     const generalTerminalToggle = page.getByRole('button', { name: 'Show general terminal' });
     await generalTerminalToggle.waitFor({ timeout: 5_000 });
     await playwrightExpect(generalTerminalToggle.locator('[data-weave-terminal-count-badge]')).toHaveCount(0);

@@ -1,5 +1,7 @@
 import { defineRoute } from '../../../server/routes';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
+import { productProjectRepository } from '../../../products/project-repository';
+import type { ProductId, Project, Workspace } from '../../../products/types';
 import { collectWorkspaceGitStatesForProject, gitFieldsFromWorktree, stripProjectGitState, workspaceStateFromGitFields } from '../projects/git-state';
 import { getPortalConnection, listPortalConnections, requestPortalTool } from '../../../portal/registry';
 import { sanitizeNotesStorageMetadata } from '../../notes/storage/resolver';
@@ -26,62 +28,6 @@ const portalThreadPrefix = '__portal__';
 const portalSettingsThreadPrefix = '__portal_settings__';
 const adHocProjectPrefix = 'project_ad_hoc_';
 const adHocWorkspacePrefix = 'workspace_ad_hoc_';
-
-export type Workspace = {
-  id: string;
-  projectId: string;
-  portalId?: string;
-  mountId?: string;
-  workspaceKind: 'primary' | 'worktree';
-  source?: 'primary' | 'git' | 'notes' | 'adopted' | 'legacy';
-  name: string;
-  path?: string;
-  branch?: string;
-  head?: string;
-  upstream?: string;
-  ahead?: number;
-  behind?: number;
-  detached?: boolean;
-  baseBranch?: string;
-  locked?: boolean;
-  sortOrder?: number;
-  status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual' | 'error';
-  lastError?: string;
-  hidden?: boolean;
-  systemKind?: 'adHoc';
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type Project = {
-  id: string;
-  userId: string;
-  name: string;
-  projectKind: 'general' | 'git' | 'notes';
-  description?: string;
-  portalId?: string;
-  portalRootId?: string;
-  repoPath?: string;
-  vaultPath?: string;
-  notesStorage?: NotesStorageMetadata;
-  gitRemote?: string;
-  defaultBranch?: string;
-  rootPathHint?: string;
-  defaultProfileId?: string;
-  sortOrder?: number;
-  agentInstructions?: {
-    path: string;
-    content: string;
-    size?: number;
-    updatedAt?: string;
-    checkedAt?: string;
-  };
-  hidden?: boolean;
-  systemKind?: 'adHoc';
-  workspaces: Workspace[];
-  createdAt: string;
-  updatedAt: string;
-};
 
 type RemovedWorkspaceSnapshot = {
   id: string;
@@ -135,6 +81,32 @@ const isProjectThread = (thread: { id: string; metadata?: unknown }) => {
 };
 
 const isVisibleUserProject = (project: Project) => !project.hidden && project.systemKind !== 'adHoc';
+const productProjectKinds: Record<ProductId, Project['projectKind']> = {
+  code: 'git',
+  notes: 'notes',
+  chat: 'general',
+};
+
+const productForRequestPath = (c: any): ProductId | undefined => {
+  const path = new URL(c.req.url).pathname;
+  if (path.startsWith('/code/')) return 'code';
+  if (path.startsWith('/notes/')) return 'notes';
+  if (path.startsWith('/chat/')) return 'chat';
+  return undefined;
+};
+
+const projectKindForRequest = (c: any, requested: unknown): Project['projectKind'] => {
+  const product = productForRequestPath(c);
+  if (product) return productProjectKinds[product];
+  return requested === 'git' || requested === 'notes' ? requested : 'general';
+};
+
+const assertProjectProduct = (c: any, project: Project | undefined) => {
+  const product = productForRequestPath(c);
+  if (!project || !product) return project;
+  const expectedKind = productProjectKinds[product];
+  return project.projectKind === expectedKind || (project.systemKind === 'adHoc' && product === 'code') ? project : undefined;
+};
 
 const toProject = (thread: any): Project => {
   const metadata = (thread.metadata ?? {}) as Partial<Project> & { workspaces?: Workspace[] };
@@ -164,22 +136,33 @@ const toProject = (thread: any): Project => {
   });
 };
 
+const legacyProjectsFromMemory = async (memory: any, resourceId: string) => {
+  const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
+  return result.threads.filter(isProjectThread).map((thread: any) => toProject(thread));
+};
+
+export const migrateLegacyProjectsForOwner = (memory: any, resourceId: string) =>
+  productProjectRepository.migrateLegacyProjects(resourceId, () => legacyProjectsFromMemory(memory, resourceId));
+
 const saveProject = async (memory: any, resourceId: string, project: Project) => {
+  await migrateLegacyProjectsForOwner(memory, resourceId);
+  const durableProject = await productProjectRepository.save(stripProjectGitState(project));
   const threadId = projectThreadId(project.id);
-  const metadata = { kind: 'project', ...stripProjectGitState(project) };
+  const metadata = { kind: 'project', ...durableProject };
   const existing = await memory.getThreadById({ threadId }).catch(() => undefined);
 
   if (existing) {
-    return memory.updateThread({ id: threadId, title: project.name, metadata });
+    await memory.updateThread({ id: threadId, title: durableProject.name, metadata });
+    return durableProject;
   }
 
-  return memory.createThread({ resourceId, threadId, title: project.name, metadata, saveThread: true });
+  await memory.createThread({ resourceId, threadId, title: durableProject.name, metadata, saveThread: true });
+  return durableProject;
 };
 
 const getProject = async (memory: any, resourceId: string, projectId: string) => {
-  const thread = await memory.getThreadById({ threadId: projectThreadId(projectId) }).catch(() => undefined);
-  if (!thread || thread.resourceId !== resourceId || !isProjectThread(thread)) return undefined;
-  return toProject(thread);
+  await migrateLegacyProjectsForOwner(memory, resourceId);
+  return productProjectRepository.get(resourceId, projectId);
 };
 
 const errorResponse = (c: any, error: unknown) => {
@@ -297,8 +280,8 @@ const ensureAdHocWorkspace = async (memory: any, resourceId: string, portalId: s
 };
 
 const getAllProjects = async (memory: any, resourceId: string) => {
-  const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
-  return result.threads.filter(isProjectThread).map(toProject);
+  await migrateLegacyProjectsForOwner(memory, resourceId);
+  return productProjectRepository.list(resourceId, { includeHidden: true });
 };
 
 const getProjectPortalIds = async (memory: any, resourceId: string) => {
@@ -522,15 +505,8 @@ export const projectRoutes = [
       try {
         const resourceId = getResourceId(c);
         const memory = await getMemory(c);
-        const result = await memory.listThreads({
-          filter: { resourceId },
-          perPage: false,
-          orderBy: { field: 'updatedAt', direction: 'DESC' },
-        });
-        const projects: Project[] = result.threads.filter(isProjectThread).map((thread: any) => toProject(thread)).filter(isVisibleUserProject).sort((a: Project, b: Project) =>
-          (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER)
-          || timestampString(b.updatedAt).localeCompare(timestampString(a.updatedAt)),
-        );
+        await migrateLegacyProjectsForOwner(memory, resourceId);
+        const projects = await productProjectRepository.list(resourceId, { product: productForRequestPath(c) });
         return c.json({ projects });
       } catch (error) {
         return errorResponse(c, error);
@@ -564,7 +540,7 @@ export const projectRoutes = [
         const name = cleanName(body?.name);
         if (!name) return c.json({ error: 'name is required' }, 400);
 
-        const projectKind = body?.projectKind === 'git' || body?.projectKind === 'notes' ? body.projectKind : 'general';
+        const projectKind = projectKindForRequest(c, body?.projectKind);
         const at = nowIso();
         const memory = await getMemory(c);
         const baseProject: Project = {
@@ -584,8 +560,7 @@ export const projectRoutes = [
           ? await createGitProject(c, resourceId, baseProject, body)
           : await createNotesProject(c, resourceId, baseProject, body);
 
-        const thread = await saveProject(memory, resourceId, project);
-        return c.json({ project: toProject(thread) });
+        return c.json({ project: await saveProject(memory, resourceId, project) });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -599,25 +574,19 @@ export const projectRoutes = [
         const body = await c.req.json();
         const projectIds = Array.isArray(body?.projectIds) ? body.projectIds.filter((id: unknown) => typeof id === 'string') : [];
         const memory = await getMemory(c);
-        const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
-        const visibleProjectEntries: Array<{ project: Project; thread: any }> = result.threads
-          .filter(isProjectThread)
-          .map((thread: any) => ({ project: toProject(thread), thread }))
-          .filter((entry: { project: Project; thread: any }) => isVisibleUserProject(entry.project));
-        const byId = new Map<string, any>(visibleProjectEntries.map(entry => [entry.project.id, entry.thread]));
+        await migrateLegacyProjectsForOwner(memory, resourceId);
+        const product = productForRequestPath(c);
+        if (product) {
+          await productProjectRepository.reorder(resourceId, product, projectIds);
+          return c.json({ projects: await productProjectRepository.list(resourceId, { product }) });
+        }
+
+        const projects = await productProjectRepository.list(resourceId);
+        const byId = new Map(projects.map(project => [project.id, project]));
         if (projectIds.length !== byId.size || projectIds.some((id: string) => !byId.has(id))) return c.json({ error: 'projectIds must include all visible projects for this user' }, 400);
-
-        await Promise.all(projectIds.map((projectId: string, index: number) => {
-          const thread = byId.get(projectId)!;
-          const project = { ...toProject(thread), sortOrder: index, updatedAt: nowIso() };
-          return saveProject(memory, resourceId, project);
-        }));
-
-        const updated = await memory.listThreads({ filter: { resourceId }, perPage: false });
-        const projects: Project[] = updated.threads.filter(isProjectThread).map((thread: any) => toProject(thread)).filter(isVisibleUserProject).sort((a: Project, b: Project) =>
-          (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER)
-          || timestampString(b.updatedAt).localeCompare(timestampString(a.updatedAt)),
-        );
+        await Promise.all(projectIds.map((projectId: string, index: number) =>
+          saveProject(memory, resourceId, { ...byId.get(projectId)!, sortOrder: index, updatedAt: nowIso() })
+        ));
         return c.json({ projects });
       } catch (error) {
         return errorResponse(c, error);
@@ -631,7 +600,7 @@ export const projectRoutes = [
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
         const memory = await getMemory(c);
-        const project = await getProject(memory, resourceId, projectId);
+        const project = assertProjectProduct(c, await getProject(memory, resourceId, projectId));
         if (!project) return c.json({ error: 'project not found' }, 404);
 
         const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
@@ -641,6 +610,7 @@ export const projectRoutes = [
         });
 
         await Promise.all([
+          productProjectRepository.delete(resourceId, projectId),
           memory.deleteThread(projectThreadId(projectId)),
           ...projectThreads.map(thread => memory.deleteThread(thread.id)),
         ]);
@@ -657,7 +627,7 @@ export const projectRoutes = [
       try {
         const resourceId = getResourceId(c);
         const memory = await getMemory(c);
-        const project = await getProject(memory, resourceId, c.req.param('projectId'));
+        const project = assertProjectProduct(c, await getProject(memory, resourceId, c.req.param('projectId')));
         if (!project) return c.json({ error: 'project not found' }, 404);
         return c.json({ project });
       } catch (error) {
@@ -676,7 +646,7 @@ export const projectRoutes = [
         if (!hasProfileId) return c.json({ error: 'profileId is required' }, 400);
 
         const memory = await getMemory(c);
-        const project = await getProject(memory, resourceId, projectId);
+        const project = assertProjectProduct(c, await getProject(memory, resourceId, projectId));
         if (!project) return c.json({ error: 'project not found' }, 404);
 
         const profileId = optionalString(body.profileId);
@@ -685,8 +655,7 @@ export const projectRoutes = [
           ...(profileId ? { defaultProfileId: profileId } : { defaultProfileId: undefined }),
           updatedAt: nowIso(),
         };
-        const thread = await saveProject(memory, resourceId, nextProject);
-        return c.json({ project: toProject(thread) });
+        return c.json({ project: await saveProject(memory, resourceId, nextProject) });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -889,8 +858,7 @@ export const projectRoutes = [
           updatedAt: at,
         };
         const nextProject = { ...project, workspaces: [...project.workspaces, workspace], updatedAt: at };
-        const thread = await saveProject(memory, resourceId, nextProject);
-        return c.json({ project: toProject(thread), workspace });
+        return c.json({ project: await saveProject(memory, resourceId, nextProject), workspace });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -937,8 +905,7 @@ export const projectRoutes = [
           updatedAt: at,
         };
         const nextProject = { ...project, workspaces: [...project.workspaces, workspace], updatedAt: at };
-        const thread = await saveProject(memory, resourceId, nextProject);
-        return c.json({ project: toProject(thread), workspace });
+        return c.json({ project: await saveProject(memory, resourceId, nextProject), workspace });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -980,8 +947,7 @@ export const projectRoutes = [
           workspaces: project.workspaces.map(item => item.id === workspaceId ? nextWorkspace : item),
           updatedAt: at,
         };
-        const thread = await saveProject(memory, resourceId, nextProject);
-        return c.json({ project: toProject(thread), workspace: nextWorkspace });
+        return c.json({ project: await saveProject(memory, resourceId, nextProject), workspace: nextWorkspace });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -1114,9 +1080,8 @@ export const projectRoutes = [
         await archiveRemovedWorkspaceThreads(memory, workspaceThreads, removedWorkspace);
 
         const nextProject = { ...project, workspaces: project.workspaces.filter(item => item.id !== workspaceId), updatedAt: removedAt };
-        const thread = await saveProject(memory, resourceId, nextProject);
         return c.json({
-          project: toProject(thread),
+          project: await saveProject(memory, resourceId, nextProject),
           workspace,
           mode,
           force,
@@ -1151,8 +1116,7 @@ export const projectRoutes = [
           workspaces: project.workspaces.map(workspace => ({ ...workspace, sortOrder: order.get(workspace.id) ?? workspace.sortOrder })),
           updatedAt: nowIso(),
         };
-        const thread = await saveProject(memory, resourceId, nextProject);
-        return c.json({ project: toProject(thread) });
+        return c.json({ project: await saveProject(memory, resourceId, nextProject) });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -1214,3 +1178,13 @@ export const projectRoutes = [
     },
   }),
 ];
+
+const productProjectRoutePaths = new Set([
+  '/code/projects',
+  '/code/projects/reorder',
+  '/code/projects/:projectId',
+  '/code/projects/:projectId/profile',
+  '/code/projects/:projectId/threads',
+]);
+
+export const productProjectRoutes = projectRoutes.filter(route => productProjectRoutePaths.has(route.path));

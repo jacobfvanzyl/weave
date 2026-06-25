@@ -350,6 +350,12 @@ input {
   position: relative;
 }
 
+.weave-appbar-center-content,
+.weave-product-rail,
+.weave-product-rail * {
+  pointer-events: auto;
+}
+
 aside[data-weave-thread-sidebar] {
   padding-top: var(--weave-sidebar-padding-top);
 }

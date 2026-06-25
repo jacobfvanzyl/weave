@@ -1,4 +1,5 @@
 import { findPortalForProject, getPortalConnection, resolvePortalForTarget } from '../../../portal/registry';
+import { productProjectRepository } from '../../../products/project-repository';
 import { getNotesVaultBackend } from './registry';
 import type {
   NotesProject,
@@ -90,6 +91,9 @@ export const isProjectThread = (thread: { id: string; metadata?: unknown }) => {
 };
 
 export const getNotesProject = async (memory: any, resourceId: string, projectId: string) => {
+  const persisted = await productProjectRepository.get(resourceId, projectId, 'notes');
+  if (persisted) return persisted as NotesProject;
+
   const thread = await memory.getThreadById({ threadId: projectThreadId(projectId) }).catch(() => undefined);
   if (!thread || thread.resourceId !== resourceId || !isProjectThread(thread)) return undefined;
   return toNotesProject(thread);

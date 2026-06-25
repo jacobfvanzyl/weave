@@ -53,6 +53,7 @@ export type UnifiedEditorTarget = EditorTarget & {
 };
 
 type UnifiedEditorPanelProps = {
+  breadcrumb?: ReactNode;
   followRequest?: EditorFollowRequest;
   focusRequest?: number;
   isExpanded: boolean;
@@ -563,6 +564,7 @@ const SortableEditorTab = ({
 };
 
 export const UnifiedEditorPanel = ({
+  breadcrumb,
   followRequest,
   focusRequest = 0,
   isExpanded,
@@ -1905,11 +1907,14 @@ export const UnifiedEditorPanel = ({
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3" data-weave-editor-titlebar data-weave-editor-tab-bar>
           {mode === 'notes' ? <StickyNote size={15} className="shrink-0 text-primary" /> : <Code2 size={15} className="shrink-0 text-primary" />}
           <div
-            className="flex min-w-0 flex-1 items-end self-stretch overflow-x-auto pt-2"
+            className="flex min-w-0 max-w-[55%] shrink items-end self-stretch overflow-x-auto pt-2"
             role="tablist"
             aria-label={mode === 'notes' ? 'Open notes' : 'Open code buffers'}
           >
             {editorTabs.length > 0 ? renderEditorTabs() : null}
+          </div>
+          <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden">
+            {breadcrumb ? <div className="min-w-0 max-w-full truncate">{breadcrumb}</div> : null}
           </div>
           {statusLabel ? <span className="self-center shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span> : null}
           <Button size="icon-xs" variant="ghost" aria-label="Save buffer" title="Save buffer" disabled={!openBuffer || !isDirty || isSaving} onClick={() => void handleSave()}>

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 type AppTopBarProps = {
+  centerContent?: ReactNode;
   leftActions?: ReactNode;
   projectName?: string;
   workspaceName?: string;
@@ -9,6 +10,7 @@ type AppTopBarProps = {
 };
 
 export const AppTopBar = ({
+  centerContent,
   leftActions,
   projectName,
   workspaceName,
@@ -17,7 +19,11 @@ export const AppTopBar = ({
 }: AppTopBarProps) => (
   <header className="relative z-20 flex h-14 shrink-0 items-center justify-center border-b border-border bg-background px-4">
     {leftActions ? <div className="weave-appbar-left-actions absolute left-4 flex items-center gap-2">{leftActions}</div> : null}
-    {projectName || threadTitle ? (
+    {centerContent ? (
+      <div className="weave-appbar-center-content relative z-30 flex max-w-[60%] items-center justify-center truncate text-center">
+        {centerContent}
+      </div>
+    ) : projectName || threadTitle ? (
       <h2 className="flex max-w-[60%] items-center justify-center gap-1 truncate text-center text-sm font-semibold text-foreground">
         {projectName ? (
           <>

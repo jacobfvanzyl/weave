@@ -3,6 +3,7 @@ import { AppTopBar } from '../app-shell/AppTopBar';
 import { MainPaneLayout } from './MainPaneLayout';
 
 type WorkspaceMainContentProps = {
+  centerContent?: ReactNode;
   emptyState?: ReactNode;
   isEmpty: boolean;
   isSidebarAutoHidden: boolean;
@@ -18,6 +19,7 @@ type WorkspaceMainContentProps = {
 };
 
 export const WorkspaceMainContent = ({
+  centerContent,
   emptyState,
   isEmpty,
   isSidebarAutoHidden,
@@ -39,6 +41,7 @@ export const WorkspaceMainContent = ({
     data-sidebar-preview-open={showSidebarPreview ? 'true' : 'false'}
   >
     <AppTopBar
+      centerContent={centerContent}
       leftActions={leftActions}
       projectName={projectName}
       workspaceName={workspaceName}

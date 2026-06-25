@@ -1,5 +1,6 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import { productProjectRepository } from '../../../products/project-repository';
 import { requestPortalTool, resolvePortalForTarget } from '../../../portal/registry';
 import {
   resolveNotesVaultForThreadContext,
@@ -27,8 +28,15 @@ export const getThreadBinding = async (context: any) => {
     throw new Error(offlineMessage);
   }
 
-  const projectThread = await memory?.getThreadById({ threadId: projectThreadId(metadata.projectId) }).catch(() => undefined);
-  const projectMetadata = projectThread?.metadata as Record<string, any> | undefined;
+  let projectMetadata = await productProjectRepository.get(resourceId, metadata.projectId) as Record<string, any> | undefined;
+  if (!projectMetadata) {
+    const projectThread = await memory?.getThreadById({ threadId: projectThreadId(metadata.projectId) }).catch(() => undefined);
+    const legacyMetadata = projectThread?.metadata as Record<string, any> | undefined;
+    if (legacyMetadata?.kind === 'project') {
+      projectMetadata = legacyMetadata;
+      await productProjectRepository.save(legacyMetadata as any).catch(() => undefined);
+    }
+  }
   const workspace = Array.isArray(projectMetadata?.workspaces)
     ? projectMetadata.workspaces.find((item: any) => item?.id === metadata.workspaceId)
     : undefined;

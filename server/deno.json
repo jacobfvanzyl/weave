@@ -13,6 +13,7 @@
     "@mastra/loggers": "npm:@mastra/loggers@1.1.2",
     "@mastra/memory": "npm:@mastra/memory@1.20.3",
     "@mastra/observability": "npm:@mastra/observability@1.14.1",
+    "@libsql/client": "npm:@libsql/client@0.17.4",
     "@ai-sdk/provider-v5": "npm:@ai-sdk/provider@2.0.1",
     "@ai-sdk/provider-utils-v5": "npm:@ai-sdk/provider-utils@3.0.23",
     "exa-js": "npm:exa-js@2.13.0",

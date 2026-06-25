@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, MessageSquare, MonitorUp, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
+import { projectBelongsToProduct, productForProjectKind, productLabels, type ProductId } from '../../lib/products';
 import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useChatStore, type ChatThread } from '../../stores/chat-store';
 import { useAppShellStore } from '../../stores/app-shell-store';
+import { useProductStore } from '../../stores/product-store';
 import { generalTerminalId, useTerminalStore } from '../../stores/terminal-store';
 import { useWorkspaceSurfaceStore, type MainPane } from '../../stores/workspace-surface-store';
 import { Button } from '../ui/button';
@@ -19,6 +21,7 @@ import { TerminalPaneHost } from '../terminal/TerminalPaneHost';
 import type { TerminalPanelTab, TerminalPanelTabsChange, TerminalPanelTarget } from '../terminal/TerminalPanel';
 import type { TerminalTargetInput, TerminalTransport, TerminalWindowRecord } from '../../lib/terminal-types';
 import { WindowStreamOverlayHost } from '../window-stream/WindowStreamOverlayHost';
+import { ContextBreadcrumb } from '../workspace/ContextBreadcrumb';
 import { WorkspaceMainContent } from '../workspace/WorkspaceMainContent';
 import {
   chatContentMaxWidthPx,
@@ -41,6 +44,7 @@ const TerminalTabCountBadge = ({ count }: { count: number }) => count > 0 ? (
 const terminalProcessRefreshMs = 2_000;
 const terminalSnapshotRefreshMs = 5_000;
 const emptyServerThreads: ChatThread[] = [];
+const appbarProducts: ProductId[] = ['chat', 'code', 'notes'];
 
 const terminalTargetInput = (target: TerminalPanelTarget): TerminalTargetInput => ({
   kind: target.kind,
@@ -82,12 +86,14 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const resourceId = useChatStore(state => state.resourceId);
   const threadId = useWorkspaceSurfaceStore(state => state.threadId);
   const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
+  const selectWorkspaceSurface = useWorkspaceSurfaceStore(state => state.selectWorkspace);
   const threads = useChatStore(state => state.threads);
   const threadPlans = useChatStore(state => state.threadPlans);
   const showPlanPanel = useChatStore(state => state.showPlanPanel);
   const runningThreadIds = useChatStore(state => state.runningThreadIds);
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
+  const selectThreadSurface = useChatStore(state => state.selectThread);
   const setShowPlanPanel = useChatStore(state => state.setShowPlanPanel);
   const paneVisibility = useWorkspaceSurfaceStore(state => state.paneVisibility);
   const maximizedPane = useWorkspaceSurfaceStore(state => state.maximizedPane);
@@ -98,34 +104,52 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const toggleMaximizedPane = useWorkspaceSurfaceStore(state => state.toggleMaximizedPane);
   const restoreMaximizedPane = useWorkspaceSurfaceStore(state => state.restoreMaximizedPane);
   const queryClient = useQueryClient();
+  const activeProduct = useProductStore(state => state.activeProduct);
+  const setActiveProduct = useProductStore(state => state.setActiveProduct);
   const { editorMinimumMeasureRef, editorMinimumWidthPx, pageRef, pageWidth } = useMainPaneMetrics();
   const sidebarSurfaceRef = useRef<HTMLElement | null>(null);
   const chatSurfaceRef = useRef<HTMLDivElement | null>(null);
   const isPortraitViewport = useIsPortraitViewport();
   const isElectronWindow = isElectronWindowNow();
-  const {
-    activeProject,
-    activeThread,
-    activeThreadId,
-    activeWorkspace,
-    editorTarget,
-    generalTerminalTarget,
-    hasChatPaneTarget,
-    hasThreadTitle,
-    hasWindowStreamPortal,
-    notesTarget,
-    onlinePortals,
-    projects,
-    projectsQuery,
-    terminalTarget,
-  } = useWorkspaceTargets({
+  const workspaceTargets = useWorkspaceTargets({
     activeSurface,
     isElectronWindow,
     resourceId,
     threadId,
     threads,
   });
+  const {
+    activeThread,
+    activeThreadId,
+    hasChatPaneTarget,
+    hasThreadTitle,
+    onlinePortals,
+    projects,
+    projectsQuery,
+  } = workspaceTargets;
+  const activeProject = workspaceTargets.activeProject && projectBelongsToProduct(workspaceTargets.activeProject, activeProduct)
+    ? workspaceTargets.activeProject
+    : undefined;
+  const activeWorkspace = activeProject ? workspaceTargets.activeWorkspace : undefined;
+  const editorTarget = activeProduct === 'code' ? workspaceTargets.editorTarget : undefined;
+  const notesTarget = activeProduct === 'notes' ? workspaceTargets.notesTarget : undefined;
+  const generalTerminalTarget = activeProduct === 'code' ? workspaceTargets.generalTerminalTarget : undefined;
+  const terminalTarget = activeProduct === 'code' ? workspaceTargets.terminalTarget : undefined;
+  const hasWindowStreamPortal = activeProduct === 'code' && workspaceTargets.hasWindowStreamPortal;
   const activePlan = threadPlans[activeThreadId];
+  const projectById = useMemo(() => new Map(projects.map(project => [project.id, project])), [projects]);
+  const productForProjectId = useCallback((projectId: string): ProductId | undefined => {
+    const project = projectById.get(projectId);
+    return project ? productForProjectKind(project.projectKind) : undefined;
+  }, [projectById]);
+  const productForThread = useCallback((thread: ChatThread | undefined): ProductId | undefined => {
+    if (!thread) return undefined;
+    if (!thread.projectId || thread.adHoc) return 'chat';
+    return productForProjectId(thread.projectId);
+  }, [productForProjectId]);
+  const activeSurfaceProduct = activeSurface.kind === 'workspace'
+    ? productForProjectId(activeSurface.projectId)
+    : productForThread(activeThread);
   const canFollowWrites = Boolean(editorTarget && activeThread?.workspaceId && activeSurface.kind === 'thread');
   const showChatPane = hasChatPaneTarget && paneVisibility.chatOpen;
   const isChatMaximized = maximizedPane === 'chat';
@@ -153,6 +177,17 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const showTerminalInChatPane = terminalHost === 'chat';
   const showTerminalInEditorPane = terminalHost === 'editor';
   const showStandaloneTerminalPane = terminalHost === 'standalone';
+  const breadcrumbPane = showChatPane ? 'chat' : showEditorPane ? 'editor' : showStandaloneTerminalPane ? 'terminal' : undefined;
+  const contextBreadcrumb = activeProject?.name || (hasThreadTitle && activeThread?.title) ? (
+    <ContextBreadcrumb
+      projectName={activeProject?.name}
+      threadTitle={hasThreadTitle ? activeThread?.title : undefined}
+      workspaceName={activeWorkspace?.name}
+    />
+  ) : undefined;
+  const editorBreadcrumb = activeProject?.name ? (
+    <ContextBreadcrumb projectName={activeProject.name} workspaceName={activeWorkspace?.name} />
+  ) : undefined;
   const sideEditorTargetKey = editorTarget ? `code:${editorTarget.workspaceId}` : notesTarget ? `notes:${notesTarget.workspaceId}` : undefined;
   const terminalWorkspaceId = terminalTarget?.workspaceId;
   const terminalTargetKey = terminalTarget?.terminalId;
@@ -514,6 +549,40 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     setServerThreads(serverThreads, projects);
   }, [isFetched, projects, projectsQuery.isFetched, serverThreads, setServerThreads]);
 
+  useEffect(() => {
+    if (!isFetched || !projectsQuery.isFetched || activeSurfaceProduct === activeProduct) return;
+
+    if (activeProduct === 'code' || activeProduct === 'notes') {
+      const nextProject = projects.find(project =>
+        projectBelongsToProduct(project, activeProduct) && project.workspaces.length > 0
+      );
+      const nextWorkspace = nextProject?.workspaces[0];
+      if (nextProject && nextWorkspace) {
+        selectWorkspaceSurface(nextProject.id, nextWorkspace.id);
+        return;
+      }
+    }
+
+    const nextThread = threads.find(thread => thread.archived !== true && productForThread(thread) === activeProduct);
+    if (nextThread) {
+      selectThreadSurface(nextThread.id);
+      return;
+    }
+
+    if (activeProduct === 'chat') void newThread();
+  }, [
+    activeProduct,
+    activeSurfaceProduct,
+    isFetched,
+    newThread,
+    productForThread,
+    projects,
+    projectsQuery.isFetched,
+    selectThreadSurface,
+    selectWorkspaceSurface,
+    threads,
+  ]);
+
   const focusSidebar = useCallback(() => {
     window.requestAnimationFrame(() => {
       const sidebar = sidebarSurfaceRef.current;
@@ -666,10 +735,33 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
       <MonitorUp size={18} />
     </Button>
   ) : null;
+  const renderProductRail = () => (
+    <nav className="weave-product-rail flex items-center gap-1 rounded-md text-sm font-semibold" aria-label="Products">
+      {appbarProducts.map(product => (
+        <button
+          key={product}
+          type="button"
+          className={[
+            'h-7 rounded-md px-2.5 leading-none outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
+            activeProduct === product
+              ? 'bg-accent text-accent-foreground shadow-sm'
+              : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
+          ].filter(Boolean).join(' ')}
+          data-active={activeProduct === product ? 'true' : 'false'}
+          aria-current={activeProduct === product ? 'page' : undefined}
+          aria-label={`Switch to ${productLabels[product]}`}
+          onClick={() => setActiveProduct(product)}
+        >
+          {productLabels[product]}
+        </button>
+      ))}
+    </nav>
+  );
 
   const renderTerminalPanel = (variant: 'pane' | 'main') => showTerminalPane ? (
     <TerminalPaneHost
       activeTabId={activeTerminalTabId}
+      breadcrumb={breadcrumbPane === 'terminal' && variant === 'main' ? contextBreadcrumb : undefined}
       canToggleMaximized={canToggleTerminalMaximized}
       error={workspaceTerminalError}
       focusRequest={terminalFocusRequest}
@@ -695,6 +787,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     <ChatPane
       activePlan={activePlan}
       activeThreadId={activeThreadId}
+      breadcrumb={breadcrumbPane === 'chat' ? contextBreadcrumb : undefined}
       isMaximized={isChatMaximized}
       runningThreadIds={runningThreadIds}
       showPlanPanel={showPlanPanel}
@@ -720,6 +813,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
 
   const renderEditorPane = () => showEditorPane && (editorTarget || notesTarget) ? (
     <EditorPane
+      breadcrumb={breadcrumbPane === 'editor' && !isSidebarSurfaceVisible ? editorBreadcrumb : undefined}
       followRequest={editorFollowRequest}
       focusRequest={editorFocusRequest}
       isMaximized={isEditorMaximized}
@@ -835,6 +929,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
         connectionSettingsButton={connectionSettingsButton}
         isPortraitViewport={isPortraitViewport}
         isSidebarOpen={isSidebarOpen}
+        product={activeProduct}
         showSidebarPreview={showSidebarPreview}
         sidebarRef={sidebarSurfaceRef}
         onCloseSidebar={closeSidebar}
@@ -854,6 +949,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
         </div>
       ) : null}
       <WorkspaceMainContent
+        centerContent={renderProductRail()}
         emptyState={emptyMainPaneState}
         isEmpty={!showChatPane && !showEditorPane && !showTerminalPane}
         isSidebarAutoHidden={isSidebarAutoHidden}
@@ -861,11 +957,8 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
         isSidebarPinnedOpen={isSidebarPinnedOpen}
         leftActions={headerLeftActions}
         panes={orderedMainPanes}
-        projectName={activeProject?.name}
         rightActions={headerRightActions}
         showSidebarPreview={showSidebarPreview}
-        threadTitle={hasThreadTitle ? activeThread?.title : undefined}
-        workspaceName={activeWorkspace?.name}
       />
       <GlobalTerminalOverlay
         activeTabId={activeGeneralTerminalTabId}
