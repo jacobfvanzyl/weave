@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isHiddenThread } from '../../server/src/mastra/routes/thread-visibility';
+import { isHiddenThread } from '../../server/src/modules/chat/routes/thread-visibility';
 
 describe('thread visibility', () => {
   it('keeps Project internals and legacy Plane internals out of plain thread lists', () => {

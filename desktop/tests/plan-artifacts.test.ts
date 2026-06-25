@@ -3,7 +3,7 @@ import {
   __planArtifactTest,
   planArtifactVersion,
   type PlanFrontmatter,
-} from '../../server/src/mastra/tools/plan-artifacts';
+} from '../../server/src/agent/mastra/tools/plan-artifacts';
 
 const frontmatter = (overrides: Partial<PlanFrontmatter> = {}): PlanFrontmatter => ({
   weave_plan_version: planArtifactVersion,
@@ -26,7 +26,7 @@ describe('plan artifact helpers', () => {
   it('renders and parses canonical YAML frontmatter and body sections', () => {
     const content = __planArtifactTest.renderPlanArtifact(frontmatter(), {
       purpose: 'Replace checklist-only plan state with artifact-backed ExecPlans.',
-      context: 'Server tools live in server/src/mastra/tools.',
+      context: 'Server tools live in server/src/agent/mastra/tools.',
       requirements: '- Git-only\n- UI-readable frontmatter',
       planOfWork: 'Build helper, tools, UI hydration, and tests.',
       concreteSteps: '1. Add helper\n2. Replace tool\n3. Update client',
@@ -42,7 +42,7 @@ describe('plan artifact helpers', () => {
     });
     expect(parsed.sections.progress).toContain('- [x] Research current plan tooling');
     expect(parsed.sections.progress).toContain('- [ ] Implement artifact-aware plan tools (in progress)');
-    expect(parsed.sections.context).toContain('server/src/mastra/tools');
+    expect(parsed.sections.context).toContain('server/src/agent/mastra/tools');
   });
 
   it('rejects paths outside .agents/plans docker-style markdown files', () => {

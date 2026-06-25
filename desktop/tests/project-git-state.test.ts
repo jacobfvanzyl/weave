@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { collectWorkspaceGitStatesForProject } from '../../server/src/mastra/projects/git-state';
+import { collectWorkspaceGitStatesForProject } from '../../server/src/modules/code/projects/git-state';
 
 const checkedAt = '2026-06-03T08:01:00.000Z';
 

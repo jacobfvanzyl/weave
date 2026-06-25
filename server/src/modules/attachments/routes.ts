@@ -1,6 +1,6 @@
-import { attachmentRoutes } from '../../mastra/routes/attachments';
-import { mountRoute } from '../../server/route-adapter';
+import { mountRoute } from '../../server/routes';
 import type { ServerModule } from '../types';
+import { attachmentRoutes } from './routes/attachments';
 
 export const attachmentsModule: ServerModule = {
   id: 'attachments',

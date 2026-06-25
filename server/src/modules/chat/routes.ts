@@ -1,27 +1,23 @@
-import { chatRoutes } from '../../mastra/routes/chat';
-import { chatStateRoutes } from '../../mastra/routes/chat-state';
-import { mountRoute, mountRoutes, replacePrefix } from '../../server/route-adapter';
-import { ownerResponse } from '../../owner/auth';
+import { mountRoute } from '../../server/routes';
+import { registerAgentContribution } from '../../agent/contributions';
 import type { ServerModule } from '../types';
+import { chatRoutes } from './routes/chat';
+import { chatStateRoutes } from './routes/chat-state';
 
-const chatStateCanonicalPath = (path: string) => {
-  if (path === '/chat-state/me') return '/owner/me';
-  return replacePrefix(path, '/chat-state/threads', '/chat/threads');
-};
-
-const chatRunCanonicalPath = (path: string) => {
-  if (path === '/chat') return '/chat/runs';
-  if (path === '/chat/:threadId/run') return '/chat/runs/:threadId';
-  if (path === '/chat/:threadId/cancel') return '/chat/runs/:threadId/cancel';
-  if (path === '/chat/:threadId/stream') return '/chat/runs/:threadId/stream';
-  return undefined;
-};
+registerAgentContribution({
+  moduleId: 'chat',
+  runtimeContextProviders: [
+    { id: 'chat.thread', description: 'Thread metadata, selected profile, model, and run context.' },
+  ],
+  memoryPolicyHints: [
+    { id: 'chat.context-window', description: 'Context-window and compaction policy for chat runs.' },
+  ],
+});
 
 export const chatModule: ServerModule = {
   id: 'chat',
   registerRoutes: app => {
-    app.get('/owner/me', c => c.json(ownerResponse(c.get('owner'))));
-    mountRoutes(app, chatStateRoutes, chatStateCanonicalPath);
-    mountRoutes(app, chatRoutes, chatRunCanonicalPath);
+    for (const route of chatStateRoutes) mountRoute(app, route);
+    for (const route of chatRoutes) mountRoute(app, route);
   },
 };

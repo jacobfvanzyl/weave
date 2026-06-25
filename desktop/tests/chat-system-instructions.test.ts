@@ -3,8 +3,8 @@ import {
   buildChatSystemMessages,
   formatAvailableSkills,
   formatRuntimeContext,
-} from '../../server/src/mastra/agents/instructions';
-import { RuntimeContextProcessor } from '../../server/src/mastra/runtime-context-processor';
+} from '../../server/src/agent/mastra/agents/instructions';
+import { RuntimeContextProcessor } from '../../server/src/agent/mastra/runtime-context-processor';
 
 describe('chat system instructions', () => {
   const now = new Date('2026-06-11T13:42:31.000Z');

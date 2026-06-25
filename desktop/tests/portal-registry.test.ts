@@ -3,7 +3,7 @@ import {
   connectPortal,
   disconnectPortal,
   resolvePortalForTarget,
-} from '../../server/src/mastra/portal/registry';
+} from '../../server/src/portal/registry';
 
 const connectedPortalIds: string[] = [];
 

@@ -4,8 +4,8 @@ import {
   getThreadContextUsageSnapshot,
   recordThreadContextUsage,
   subscribeThreadContextUsage,
-} from '../../server/src/mastra/context-usage';
-import { __chatStateContextUsageTest } from '../../server/src/mastra/routes/chat-state';
+} from '../../server/src/agent/mastra/context-usage';
+import { __chatStateContextUsageTest } from '../../server/src/modules/chat/routes/chat-state';
 
 describe('context usage tracking', () => {
   it('uses provider input tokens as the displayed context pressure', () => {

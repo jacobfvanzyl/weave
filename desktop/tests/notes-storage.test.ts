@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   resolveNotesVault,
   resolveNotesVaultForProject,
-} from '../../server/src/mastra/notes-storage/resolver';
+} from '../../server/src/modules/notes/storage/resolver';
 import type {
   NotesProject,
   NotesVaultBackend,
   ResolvedNotesVaultBinding,
-} from '../../server/src/mastra/notes-storage/types';
-import { __vaultRoutesTest } from '../../server/src/mastra/routes/vault';
-import { __portalToolsTest } from '../../server/src/mastra/tools/portal-tools';
+} from '../../server/src/modules/notes/storage/types';
+import { __vaultRoutesTest } from '../../server/src/modules/notes/routes/vault';
+import { __portalToolsTest } from '../../server/src/agent/mastra/tools/portal-tools';
 import {
   createNotesWorkspaceTarget,
   isNotesTargetAvailable,

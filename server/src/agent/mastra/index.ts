@@ -2,10 +2,10 @@ import { Mastra } from '@mastra/core/mastra';
 import { PinoLogger } from '@mastra/loggers';
 import { LibSQLStore } from '@mastra/libsql';
 import { Observability, CloudExporter, SensitiveDataFilter } from '@mastra/observability';
-import { mageHandAgent } from '../../mastra/agents/mage-hand-agent';
-import { workspace } from '../../mastra/workspace';
-import { ChatGPTCodexGateway } from '../../mastra/providers/chatgpt-codex-gateway';
-import { storageAuthToken, storageUrl } from '../../mastra/storage-config';
+import { mageHandAgent } from './agents/mage-hand-agent';
+import { workspace } from './workspace';
+import { ChatGPTCodexGateway } from './providers/chatgpt-codex-gateway';
+import { storageAuthToken, storageUrl } from './storage-config';
 
 export const mastra = new Mastra({
   workspace,

@@ -5,13 +5,13 @@ import {
   createCompactToolHistoryPart,
   getToolHistoryFullCalls,
   limitCompactToolHistoryPrompt,
-} from '../../server/src/mastra/compact-tool-history-processor';
-import { CurrentTurnImageProcessor } from '../../server/src/mastra/current-turn-image-processor';
-import { resolveMemoryPolicy } from '../../server/src/mastra/memory-policy';
-import { __chatRouteMemoryTest } from '../../server/src/mastra/routes/chat';
-import { __chatStateContextUsageTest } from '../../server/src/mastra/routes/chat-state';
-import { getCodeToolModelOutputMaxChars } from '../../server/src/mastra/tools/model-output';
-import { portalBashModelOutput, portalEditModelOutput, portalReadModelOutput } from '../../server/src/mastra/tools/portal-tools';
+} from '../../server/src/agent/mastra/compact-tool-history-processor';
+import { CurrentTurnImageProcessor } from '../../server/src/agent/mastra/current-turn-image-processor';
+import { resolveMemoryPolicy } from '../../server/src/agent/mastra/memory-policy';
+import { __chatRouteMemoryTest } from '../../server/src/modules/chat/routes/chat';
+import { __chatStateContextUsageTest } from '../../server/src/modules/chat/routes/chat-state';
+import { getCodeToolModelOutputMaxChars } from '../../server/src/agent/mastra/tools/model-output';
+import { portalBashModelOutput, portalEditModelOutput, portalReadModelOutput } from '../../server/src/agent/mastra/tools/portal-tools';
 
 const noMemoryCapabilities = {
   semanticRecall: false,

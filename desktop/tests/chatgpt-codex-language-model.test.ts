@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { __chatgptCodexLanguageModelTest } from '../../server/src/mastra/providers/chatgpt-codex-language-model';
+import { __chatgptCodexLanguageModelTest } from '../../server/src/agent/mastra/providers/chatgpt-codex-language-model';
 
 const describeStreamPart = (part: Awaited<ReturnType<typeof __chatgptCodexLanguageModelTest.collectCodexResponseStreamParts>>[number]) => {
   if (part.type === 'text-start' || part.type === 'text-end') return `${part.type}:${part.id}`;

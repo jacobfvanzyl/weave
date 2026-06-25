@@ -5,7 +5,7 @@ import {
   listProjectBranches,
   pullWorkspaceUpstream,
   requestWorkspaceGitOperation,
-} from '../../server/src/mastra/git/service';
+} from '../../server/src/modules/code/git/service';
 
 const project = {
   id: 'project-1',

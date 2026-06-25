@@ -30,9 +30,9 @@ let __profileResolverTest: any;
 let builtinDefaultProfile: DynamicProfile;
 
 beforeAll(async () => {
-  const promptRegistryPath = new URL('../../server/src/mastra/prompt-templates/registry.ts', import.meta.url).href;
-  const resolverPath = new URL('../../server/src/mastra/profiles/resolver.ts', import.meta.url).href;
-  const skillSourcePath = new URL('../../server/src/mastra/profiles/skill-source.ts', import.meta.url).href;
+  const promptRegistryPath = new URL('../../server/src/agent/mastra/prompt-templates/registry.ts', import.meta.url).href;
+  const resolverPath = new URL('../../server/src/agent/mastra/profiles/resolver.ts', import.meta.url).href;
+  const skillSourcePath = new URL('../../server/src/agent/mastra/profiles/skill-source.ts', import.meta.url).href;
   const promptRegistry = await import(promptRegistryPath);
   const resolver = await import(resolverPath);
   const skillSource = await import(skillSourcePath);

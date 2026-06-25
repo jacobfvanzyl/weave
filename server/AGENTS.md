@@ -25,18 +25,12 @@ npm run check # Deno-check the server entrypoint
 | Folder                 | Description                                                                                                                              |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/server.ts`        | Deno/Hono entry point.                                                                                                                   |
-| `src/modules`          | Module-owned route registration and public backend boundaries.                                                                           |
+| `src/modules`          | Product module route registration and public backend boundaries for Code, Notes, Chat, and shared Attachments.                           |
 | `src/owner`            | Single-owner auth and request context.                                                                                                   |
-| `src/agent`            | Public Agent service/contribution boundary and private Mastra implementation.                                                            |
-| `src/mastra`           | Legacy Mastra implementation code used by `src/agent/mastra` and mounted through modules during migration.                               |
-| `src/mastra/agents`    | Define and configure your agents - their behavior, goals, and tools.                                                                     |
-| `src/mastra/routes`    | Legacy HTTP handlers mounted by modules as canonical routes plus compatibility aliases.                                                   |
-| `src/mastra/workflows` | Define multi-step workflows that orchestrate agents and tools together.                                                                  |
-| `src/mastra/tools`     | Create reusable tools that your agents can call                                                                                          |
-| `src/mastra/portal`    | Portal registry and relay primitives used by the Portal module.                                                                          |
-| `src/mastra/mcp`       | (Optional) Implement custom MCP servers to share your tools with external agents                                                         |
-| `src/mastra/scorers`   | (Optional) Define scorers for evaluating agent performance over time                                                                     |
-| `src/mastra/public`    | (Optional) Contents are copied into the `.build/output` directory during the build process, making them available for serving at runtime |
+| `src/agent`            | Agent core service, contribution boundary, Agent HTTP routes, and private Mastra implementation.                                         |
+| `src/agent/mastra`     | Private Mastra implementation for the singular Weave Agent.                                                                              |
+| `src/portal`           | Portal core service, HTTP routes, registry, realtime server, and relay primitives.                                                       |
+| `src/server`           | Shared server types, route helpers, and compatibility alias registration.                                                                |
 
 ### Top-level files
 
@@ -55,8 +49,9 @@ Top-level files define how your Mastra project is configured, built, and connect
 ### Always do
 
 - Load the `mastra` skill before any Mastra-related work
-- Register public routes from modules under `src/modules`
-- Keep Mastra imports inside `src/agent/mastra` or existing Mastra implementation files
+- Register product routes from modules under `src/modules`
+- Register Agent and Portal core routes from `src/agent` and `src/portal`
+- Keep Mastra imports inside `src/agent/mastra`; product modules must use Agent and Portal core boundaries
 - Use schemas for tool inputs and outputs
 - Run `npm run check` to verify changes compile
 

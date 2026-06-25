@@ -1,9 +1,12 @@
 import type { OwnerAuthConfig } from '../owner/auth';
 import type { WeaveApp } from '../server/types';
+import type { AgentCore } from '../agent';
+import type { PortalCore } from '../portal/types';
 
 export type ModuleServices = {
   auth: OwnerAuthConfig;
-  mastra: import('@mastra/core/mastra').Mastra;
+  agent: AgentCore;
+  portal: PortalCore;
 };
 
 export type ServerModule = {

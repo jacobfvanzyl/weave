@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { recordThreadContextUsage } from '../../server/src/mastra/context-usage';
-import { __chatRunRegistryTest } from '../../server/src/mastra/routes/chat';
-import { __chatStateContextUsageTest } from '../../server/src/mastra/routes/chat-state';
+import { recordThreadContextUsage } from '../../server/src/agent/mastra/context-usage';
+import { __chatRunRegistryTest } from '../../server/src/modules/chat/routes/chat';
+import { __chatStateContextUsageTest } from '../../server/src/modules/chat/routes/chat-state';
 
 describe('chat active run registry', () => {
   afterEach(() => {
