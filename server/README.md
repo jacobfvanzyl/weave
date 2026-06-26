@@ -5,18 +5,18 @@ This is the owned Deno server for Weave. It owns HTTP routes, owner auth, backen
 ## Commands
 
 ```shell
-npm run dev
-npm run build
-npm run start
-npm run check
+deno task dev
+deno task build
+deno task start
+deno task check
 ```
 
 From the repo root, these are available as:
 
 ```shell
-npm run server:dev
-npm run server:build
-npm run server:start
+deno task server:dev
+deno task server:build
+deno task server:start
 ```
 
 The HTTP server listens on [http://localhost:4111](http://localhost:4111). Portal realtime remains on port `4112` during the compatibility phase.

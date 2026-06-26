@@ -1,3 +1,5 @@
+import type { Hotkey, HotkeyCallbackContext, HotkeySequence } from '@tanstack/react-hotkeys';
+
 export type ShortcutSurface = 'app' | 'sidebar' | 'chat' | 'plan' | 'terminal' | 'editor';
 
 export type ShortcutCommandId =
@@ -14,26 +16,23 @@ export type ShortcutCommandId =
   | 'editor.expandToggle';
 
 export type ShortcutPlatform = 'mac' | 'ios' | 'windows' | 'linux' | 'android' | 'unknown';
+export type TanStackShortcutPlatform = 'mac' | 'windows' | 'linux';
 
-export type ShortcutChord = {
-  key: string;
-  mod?: boolean;
-  shift?: boolean;
-  alt?: boolean;
-  control?: boolean;
-  meta?: boolean;
-};
+export type ShortcutHotkey = Hotkey;
+export type ShortcutSequence = readonly Hotkey[];
 
-export type ShortcutSequence = readonly ShortcutChord[];
-
-export type ShortcutBindingKind = 'direct' | 'leader';
+export type ShortcutBindingKind = 'hotkey' | 'sequence';
+export type ShortcutScope = 'app' | 'window-stream';
 
 export type ShortcutBinding = {
   commandId: ShortcutCommandId;
   kind: ShortcutBindingKind;
-  chord?: ShortcutChord;
+  hotkey?: ShortcutHotkey;
   sequence?: ShortcutSequence;
+  allowInInputs?: boolean;
   reservedGlobal?: boolean;
+  scope?: ShortcutScope;
+  order?: number;
 };
 
 export type ShortcutCommand = {
@@ -58,19 +57,12 @@ export type NormalizedShortcutEvent = {
 
 export type ShortcutContext = {
   platform: ShortcutPlatform;
+  tanStackPlatform: TanStackShortcutPlatform;
   target: EventTarget | null;
   activeSurface?: ShortcutSurface;
   isTextInputTarget: boolean;
   now: number;
-};
-
-export type LeaderShortcutMatch =
-  | { type: 'exact'; binding: ShortcutBinding }
-  | { type: 'partial' }
-  | { type: 'none' };
-
-export type ShortcutRuntimeAdapter = {
-  type: 'app-window' | 'desktop-global' | 'mobile-native';
+  hotkeyContext?: HotkeyCallbackContext;
 };
 
 export type ShortcutBindingProfile = {
@@ -78,3 +70,19 @@ export type ShortcutBindingProfile = {
   name: string;
   bindings: readonly ShortcutBinding[];
 };
+
+export type ShortcutRuntimeAdapter = {
+  type: 'app-window' | 'desktop-global' | 'mobile-native';
+};
+
+declare module '@tanstack/hotkeys' {
+  interface HotkeyMeta {
+    allowInInputs?: boolean;
+    commandId?: ShortcutCommandId;
+    order?: number;
+    scope?: ShortcutScope;
+    surface?: ShortcutSurface;
+  }
+}
+
+export const toMutableShortcutSequence = (sequence: ShortcutSequence): HotkeySequence => [...sequence];

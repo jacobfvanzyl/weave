@@ -10,17 +10,17 @@ local/WebSocket protocol.
 
 ```bash
 # server must already be running at localhost:4111/4112 unless overridden
-npm run portal:login -- --token test-token --name "My Laptop"
+deno task portal:login -- --token test-token --name "My Laptop"
 
-npm run portal:dev
-npm run portal:status
-npm run portal:stop
+deno task portal:dev
+deno task portal:status
+deno task portal:stop
 
-npm run portal:build
-npm run portal:start
+deno task portal:build
+deno task portal:start
 ```
 
-Direct Deno tasks are also available:
+Package-local Deno tasks are also available:
 
 ```bash
 deno task --config portal/deno.json login --token test-token
@@ -80,8 +80,8 @@ ScreenCaptureKit frames go into VideoToolbox H.264/HEVC, and libdatachannel owns
 the WebRTC media/data-channel transport.
 
 ```bash
-npm run portal:window-stream-native:smoke
-npm run portal:window-stream-native:benchmark
+deno task portal:window-stream-native:smoke
+deno task portal:window-stream-native:benchmark
 ```
 
 Build native dependencies with:

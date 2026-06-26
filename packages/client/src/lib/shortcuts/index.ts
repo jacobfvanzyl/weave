@@ -1,17 +1,17 @@
-export { defaultShortcutBindings, shortcutLeaderChord } from './bindings';
-export { auditShortcutBindingConflicts, getShortcutChordSignature } from './conflict-policy';
+export { defaultShortcutBindings, defaultShortcutSequenceTimeoutMs, shortcutLeaderHotkey } from './bindings';
+export { auditShortcutBindingConflicts, getShortcutHotkeySignature } from './conflict-policy';
 export type { ShortcutConflict, ShortcutConflictRisk } from './conflict-policy';
 export {
-  inactiveShortcutLeaderState,
-  reduceShortcutLeaderKey,
-  startShortcutLeader,
-} from './leader';
-export type { ShortcutLeaderResult, ShortcutLeaderState } from './leader';
+  formatShortcutForDisplay,
+  formatShortcutForDisplayParts,
+  formatShortcutSequenceForDisplay,
+  formatShortcutSequenceSignature,
+} from './display';
 export {
   createShortcutContext,
-  doesShortcutChordMatch,
-  findDirectShortcutBinding,
-  findLeaderShortcutBinding,
+  doesShortcutHotkeyMatch,
+  findHotkeyShortcutBinding,
+  findSequenceTailShortcutBinding,
   getActiveShortcutSurface,
   isModifierOnlyShortcutKey,
   isShortcutAllowedForTarget,
@@ -19,19 +19,32 @@ export {
   normalizeKeyboardEvent,
   normalizeShortcutKey,
 } from './matcher';
-export { isAppleLikeShortcutPlatform, resolveShortcutPlatform } from './platform';
+export { isAppleLikeShortcutPlatform, resolveShortcutPlatform, toTanStackShortcutPlatform } from './platform';
 export type {
-  LeaderShortcutMatch,
   NormalizedShortcutEvent,
   ShortcutBinding,
   ShortcutBindingKind,
   ShortcutBindingProfile,
-  ShortcutChord,
   ShortcutCommand,
   ShortcutCommandId,
   ShortcutContext,
+  ShortcutHotkey,
   ShortcutPlatform,
   ShortcutRuntimeAdapter,
+  ShortcutScope,
   ShortcutSequence,
   ShortcutSurface,
+  TanStackShortcutPlatform,
 } from './types';
+export { toMutableShortcutSequence } from './types';
+export {
+  useHeldKeyCodes as useShortcutHeldKeyCodes,
+  useHeldKeys as useShortcutHeldKeys,
+  useHotkeyRecorder as useShortcutRecorder,
+  useHotkeySequenceRecorder as useShortcutSequenceRecorder,
+  useKeyHold as useShortcutKeyHold,
+} from '@tanstack/react-hotkeys';
+export type {
+  Hotkey as TanStackHotkey,
+  HotkeySequence as TanStackHotkeySequence,
+} from '@tanstack/react-hotkeys';

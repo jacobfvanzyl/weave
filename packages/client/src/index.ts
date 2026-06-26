@@ -30,12 +30,15 @@ export type {
 export type {
   ShortcutBinding,
   ShortcutBindingProfile,
-  ShortcutChord,
   ShortcutCommand,
   ShortcutCommandId,
   ShortcutContext,
+  ShortcutHotkey,
   ShortcutPlatform,
   ShortcutRuntimeAdapter,
+  ShortcutScope,
   ShortcutSequence,
   ShortcutSurface,
+  TanStackHotkey,
+  TanStackHotkeySequence,
 } from './lib/shortcuts';

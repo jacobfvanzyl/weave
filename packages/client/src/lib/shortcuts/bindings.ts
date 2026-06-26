@@ -1,68 +1,100 @@
-import type { ShortcutBinding, ShortcutChord } from './types';
+import type { ShortcutBinding, ShortcutHotkey } from './types';
 
-export const shortcutLeaderChord: ShortcutChord = { key: 'k', mod: true, shift: true };
+export const shortcutLeaderHotkey = 'Mod+Shift+K' satisfies ShortcutHotkey;
 
-const key = (value: string): ShortcutChord => ({ key: value });
+const leaderSequence = (tail: ShortcutHotkey) => [shortcutLeaderHotkey, tail] as const;
 
 export const defaultShortcutBindings = [
   {
     commandId: 'shortcuts.open',
-    kind: 'direct',
-    chord: shortcutLeaderChord,
+    kind: 'hotkey',
+    hotkey: shortcutLeaderHotkey,
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 0,
   },
   {
     commandId: 'sidebar.toggle',
-    kind: 'leader',
-    sequence: [key('s')],
+    kind: 'sequence',
+    sequence: leaderSequence('S'),
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 10,
   },
   {
     commandId: 'chat.focus',
-    kind: 'leader',
-    sequence: [key('c')],
+    kind: 'sequence',
+    sequence: leaderSequence('C'),
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 20,
   },
   {
     commandId: 'thread.new',
-    kind: 'leader',
-    sequence: [key('n')],
+    kind: 'sequence',
+    sequence: leaderSequence('N'),
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 30,
   },
   {
     commandId: 'plan.toggle',
-    kind: 'leader',
-    sequence: [key('p')],
+    kind: 'sequence',
+    sequence: leaderSequence('P'),
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 40,
   },
   {
     commandId: 'terminal.globalToggle',
-    kind: 'leader',
-    sequence: [key(';')],
+    kind: 'sequence',
+    sequence: leaderSequence(';'),
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 45,
   },
   {
     commandId: 'terminal.toggle',
-    kind: 'leader',
-    sequence: [key('t')],
+    kind: 'sequence',
+    sequence: leaderSequence('T'),
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 50,
   },
   {
     commandId: 'terminal.expandToggle',
-    kind: 'leader',
-    sequence: [{ key: 't', shift: true }],
+    kind: 'sequence',
+    sequence: leaderSequence('Shift+T'),
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 60,
   },
   {
     commandId: 'editor.toggle',
-    kind: 'leader',
-    sequence: [key('e')],
+    kind: 'sequence',
+    sequence: leaderSequence('E'),
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 70,
   },
   {
     commandId: 'editor.expandToggle',
-    kind: 'leader',
-    sequence: [{ key: 'e', shift: true }],
+    kind: 'sequence',
+    sequence: leaderSequence('Shift+E'),
+    allowInInputs: true,
     reservedGlobal: true,
+    scope: 'app',
+    order: 80,
   },
 ] as const satisfies readonly ShortcutBinding[];
+
+export const defaultShortcutSequenceTimeoutMs = 1_000;

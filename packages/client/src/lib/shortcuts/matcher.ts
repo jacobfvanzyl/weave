@@ -1,19 +1,20 @@
-import { isAppleLikeShortcutPlatform, resolveShortcutPlatform } from './platform';
+import { matchesKeyboardEvent, parseHotkey } from '@tanstack/react-hotkeys';
+import { resolveShortcutPlatform, toTanStackShortcutPlatform } from './platform';
 import type {
-  LeaderShortcutMatch,
   NormalizedShortcutEvent,
   ShortcutBinding,
-  ShortcutChord,
   ShortcutContext,
+  ShortcutHotkey,
   ShortcutPlatform,
   ShortcutSurface,
 } from './types';
 
 const shortcutSurfaceAttribute = 'data-weave-surface';
 const textSurfaceSelector = [
-  'input',
+  'input:not([type="button"]):not([type="submit"]):not([type="reset"])',
   'textarea',
-  '[contenteditable="true"]',
+  'select',
+  '[contenteditable]:not([contenteditable="false"])',
   '[role="textbox"]',
   '[data-weave-text-surface="true"]',
   '.cm-editor',
@@ -75,11 +76,12 @@ export const getActiveShortcutSurface = (target: EventTarget | null): ShortcutSu
 };
 
 export const createShortcutContext = (
-  event: NormalizedShortcutEvent,
+  event: Pick<KeyboardEvent, 'target'> | NormalizedShortcutEvent,
   platform: ShortcutPlatform = resolveShortcutPlatform(),
   now = Date.now(),
 ): ShortcutContext => ({
   platform,
+  tanStackPlatform: toTanStackShortcutPlatform(platform),
   target: event.target,
   activeSurface: getActiveShortcutSurface(event.target),
   isTextInputTarget: isTextInputShortcutTarget(event.target),
@@ -87,57 +89,38 @@ export const createShortcutContext = (
 });
 
 export const isShortcutAllowedForTarget = (binding: ShortcutBinding, context: Pick<ShortcutContext, 'isTextInputTarget'>) =>
-  !context.isTextInputTarget || binding.reservedGlobal === true;
+  !context.isTextInputTarget || binding.allowInInputs === true;
 
-export const doesShortcutChordMatch = (
-  chord: ShortcutChord,
-  event: Pick<NormalizedShortcutEvent, 'key' | 'shift' | 'alt' | 'control' | 'meta'>,
-  platform: ShortcutPlatform,
-) => {
-  const isAppleLike = isAppleLikeShortcutPlatform(platform);
-  const expectedControl = Boolean(chord.control) || (!isAppleLike && Boolean(chord.mod));
-  const expectedMeta = Boolean(chord.meta) || (isAppleLike && Boolean(chord.mod));
-
-  return normalizeShortcutKey(chord.key) === event.key
-    && event.shift === Boolean(chord.shift)
-    && event.alt === Boolean(chord.alt)
-    && event.control === expectedControl
-    && event.meta === expectedMeta;
-};
-
-const doesSequenceStartWithEvents = (
-  sequence: readonly ShortcutChord[],
-  events: readonly NormalizedShortcutEvent[],
-  platform: ShortcutPlatform,
-) => {
-  if (events.length > sequence.length) return false;
-  return events.every((event, index) => doesShortcutChordMatch(sequence[index], event, platform));
-};
-
-export const findDirectShortcutBinding = (
-  bindings: readonly ShortcutBinding[],
-  event: NormalizedShortcutEvent,
-  context: ShortcutContext,
-) => bindings.find(binding =>
-  binding.kind === 'direct'
-  && binding.chord
-  && isShortcutAllowedForTarget(binding, context)
-  && doesShortcutChordMatch(binding.chord, event, context.platform),
+export const doesShortcutHotkeyMatch = (
+  hotkey: ShortcutHotkey,
+  event: KeyboardEvent,
+  platform: ShortcutPlatform = resolveShortcutPlatform(),
+) => matchesKeyboardEvent(
+  event,
+  parseHotkey(hotkey, toTanStackShortcutPlatform(platform)),
+  toTanStackShortcutPlatform(platform),
 );
 
-export const findLeaderShortcutBinding = (
+export const findHotkeyShortcutBinding = (
   bindings: readonly ShortcutBinding[],
-  events: readonly NormalizedShortcutEvent[],
+  event: KeyboardEvent,
   context: ShortcutContext,
-): LeaderShortcutMatch => {
-  let hasPartialMatch = false;
+) => bindings.find(binding =>
+  binding.kind === 'hotkey'
+  && binding.hotkey
+  && isShortcutAllowedForTarget(binding, context)
+  && doesShortcutHotkeyMatch(binding.hotkey, event, context.platform),
+);
 
-  for (const binding of bindings) {
-    if (binding.kind !== 'leader' || !binding.sequence || !isShortcutAllowedForTarget(binding, context)) continue;
-    if (!doesSequenceStartWithEvents(binding.sequence, events, context.platform)) continue;
-    if (binding.sequence.length === events.length) return { type: 'exact', binding };
-    hasPartialMatch = true;
-  }
-
-  return hasPartialMatch ? { type: 'partial' } : { type: 'none' };
-};
+export const findSequenceTailShortcutBinding = (
+  bindings: readonly ShortcutBinding[],
+  leaderHotkey: ShortcutHotkey,
+  event: KeyboardEvent,
+  context: ShortcutContext,
+) => bindings.find(binding =>
+  binding.kind === 'sequence'
+  && binding.sequence?.length === 2
+  && binding.sequence[0] === leaderHotkey
+  && isShortcutAllowedForTarget(binding, context)
+  && doesShortcutHotkeyMatch(binding.sequence[1], event, context.platform),
+);

@@ -1,4 +1,4 @@
-import type { ShortcutBinding, ShortcutChord } from './types';
+import type { ShortcutBinding, ShortcutHotkey } from './types';
 
 export type ShortcutConflictRisk = 'medium' | 'high';
 
@@ -8,7 +8,7 @@ export type ShortcutConflict = {
   reason: string;
 };
 
-const highRiskDirectChordSignatures = new Set([
+const highRiskDirectHotkeySignatures = new Set([
   'mod+a',
   'mod+c',
   'mod+d',
@@ -38,14 +38,25 @@ const highRiskDirectChordSignatures = new Set([
   'control+tab',
 ]);
 
-export const getShortcutChordSignature = (chord: ShortcutChord) => [
-  chord.control ? 'control' : undefined,
-  chord.alt ? 'alt' : undefined,
-  chord.shift ? 'shift' : undefined,
-  chord.meta ? 'meta' : undefined,
-  chord.mod ? 'mod' : undefined,
-  chord.key.toLowerCase(),
-].filter(Boolean).join('+');
+const modifierAliases: Record<string, string> = {
+  cmd: 'meta',
+  command: 'meta',
+  commandorcontrol: 'mod',
+  control: 'control',
+  ctrl: 'control',
+  meta: 'meta',
+  mod: 'mod',
+  option: 'alt',
+};
+
+const modifierOrder = ['control', 'alt', 'shift', 'meta', 'mod'];
+
+export const getShortcutHotkeySignature = (hotkey: ShortcutHotkey) => {
+  const parts = hotkey.split('+').map(part => modifierAliases[part.toLowerCase()] ?? part.toLowerCase());
+  const key = parts.at(-1) ?? '';
+  const modifiers = parts.slice(0, -1).sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b));
+  return [...modifiers, key].join('+');
+};
 
 const isFunctionKey = (key: string) => /^f\d{1,2}$/i.test(key);
 const isArrowKey = (key: string) => /^arrow/i.test(key);
@@ -54,25 +65,32 @@ export const auditShortcutBindingConflicts = (bindings: readonly ShortcutBinding
   const conflicts: ShortcutConflict[] = [];
 
   for (const binding of bindings) {
-    if (binding.kind !== 'direct' || !binding.chord) continue;
+    if (binding.kind !== 'hotkey' || !binding.hotkey) continue;
 
-    const signature = getShortcutChordSignature(binding.chord);
-    if (highRiskDirectChordSignatures.has(signature)) {
+    const signature = getShortcutHotkeySignature(binding.hotkey);
+    const parts = signature.split('+');
+    const key = parts.at(-1) ?? '';
+    const hasAlt = parts.includes('alt');
+    const hasControl = parts.includes('control');
+    const hasMeta = parts.includes('meta');
+    const hasMod = parts.includes('mod');
+
+    if (highRiskDirectHotkeySignatures.has(signature)) {
       conflicts.push({ binding, risk: 'high', reason: `${signature} is commonly reserved by browsers, operating systems, or text editing.` });
       continue;
     }
 
-    if (binding.chord.alt && !binding.chord.mod && !binding.chord.meta) {
+    if (hasAlt && !hasMod && !hasMeta) {
       conflicts.push({ binding, risk: 'high', reason: 'Raw Alt/Option shortcuts are likely to conflict with browser or OS menu behavior.' });
       continue;
     }
 
-    if (binding.chord.control && !binding.chord.mod && !binding.chord.meta) {
+    if (hasControl && !hasMod && !hasMeta) {
       conflicts.push({ binding, risk: 'medium', reason: 'Raw Control shortcuts are used heavily by accessibility, focus, terminal, and text systems.' });
       continue;
     }
 
-    if (isFunctionKey(binding.chord.key) || isArrowKey(binding.chord.key)) {
+    if (isFunctionKey(key) || isArrowKey(key)) {
       conflicts.push({ binding, risk: 'medium', reason: 'Function and arrow keys are frequently intercepted by browsers, systems, or focused controls.' });
     }
   }

@@ -23,13 +23,17 @@ Public HTTP behavior should be registered by modules under `server/src/modules`.
 ## Commands
 
 ```bash
-npm run server:install
-npm run dev # starts the Deno server
-npm run build # Deno-checks the server entrypoint
-npm run desktop:typecheck
-npm run desktop:test
-npm run portal:check
-npm run portal:test
+deno task server:install
+deno task dev # starts the Deno server
+deno task server:dev
+deno task portal:dev
+deno task desktop:dev
+deno task web:dev
+deno task build # Deno-checks the server entrypoint
+deno task desktop:typecheck
+deno task desktop:test
+deno task portal:check
+deno task portal:test
 ```
 
 ## Boundaries

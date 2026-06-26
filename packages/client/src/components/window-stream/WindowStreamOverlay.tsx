@@ -11,11 +11,13 @@ import {
   type TouchEvent as ReactTouchEvent,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
+import { useHotkey } from '@tanstack/react-hotkeys';
 import { useQuery } from '@tanstack/react-query';
 import { AppWindow, List, Loader2, MonitorUp, Play, Search, Square, X } from 'lucide-react';
 import type { PortalConnection } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
+import { resolveShortcutPlatform, shortcutLeaderHotkey, toTanStackShortcutPlatform } from '../../lib/shortcuts';
 import { normalizeVideoPoint } from '../../lib/window-stream-control';
 import {
   getWindowStreamErrorMessage,
@@ -182,6 +184,7 @@ const launcherRecentStorageKey = (portalId: string) => `weave.window-stream.laun
 const delay = (durationMs: number) => new Promise(resolve => window.setTimeout(resolve, durationMs));
 
 export const WindowStreamOverlay = ({ portals, onHide, onSessionActiveChange }: WindowStreamOverlayProps) => {
+  const overlayRef = useRef<HTMLElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const textCaptureRef = useRef<HTMLTextAreaElement | null>(null);
@@ -294,16 +297,19 @@ export const WindowStreamOverlay = ({ portals, onHide, onSessionActiveChange }: 
     setIsLauncherOpen(true);
   };
 
-  useEffect(() => {
-    const handleLauncherShortcut = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== 'k') return;
-      event.preventDefault();
-      event.stopPropagation();
-      openLauncher();
-    };
-    window.addEventListener('keydown', handleLauncherShortcut, true);
-    return () => window.removeEventListener('keydown', handleLauncherShortcut, true);
-  }, []);
+  useHotkey(shortcutLeaderHotkey, () => openLauncher(), {
+    conflictBehavior: 'allow',
+    ignoreInputs: false,
+    meta: {
+      name: 'Open window launcher',
+      scope: 'window-stream',
+      surface: 'app',
+    },
+    platform: toTanStackShortcutPlatform(resolveShortcutPlatform()),
+    preventDefault: true,
+    stopPropagation: true,
+    target: overlayRef,
+  });
 
   useEffect(() => {
     sessionRef.current = session;
@@ -770,7 +776,7 @@ export const WindowStreamOverlay = ({ portals, onHide, onSessionActiveChange }: 
   ) : null;
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-background text-foreground" data-weave-window-stream-overlay>
+    <section ref={overlayRef} className="flex h-full min-h-0 flex-col bg-background text-foreground" data-weave-window-stream-overlay>
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-3" data-weave-overlay-titlebar>
         <div className="flex min-w-0 items-center gap-2">
           <MonitorUp size={18} className="shrink-0 text-muted-foreground" />

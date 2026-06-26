@@ -1,20 +1,31 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
+  HotkeysProvider as TanStackHotkeysProvider,
+  useHotkeys,
+  useHotkeySequences,
+  type HotkeysProviderOptions,
+  type UseHotkeyDefinition,
+  type UseHotkeySequenceDefinition,
+} from '@tanstack/react-hotkeys';
+import {
   createShortcutContext,
   defaultShortcutBindings,
-  findDirectShortcutBinding,
-  inactiveShortcutLeaderState,
+  defaultShortcutSequenceTimeoutMs,
+  findHotkeyShortcutBinding,
+  findSequenceTailShortcutBinding,
+  formatShortcutForDisplayParts,
+  isModifierOnlyShortcutKey,
+  isShortcutAllowedForTarget,
   normalizeKeyboardEvent,
-  reduceShortcutLeaderKey,
   resolveShortcutPlatform,
-  shortcutLeaderChord,
-  startShortcutLeader,
+  shortcutLeaderHotkey,
+  toMutableShortcutSequence,
+  toTanStackShortcutPlatform,
   type ShortcutBinding,
-  type ShortcutChord,
   type ShortcutCommand,
   type ShortcutCommandId,
   type ShortcutContext as ShortcutCommandContext,
-  type ShortcutLeaderState,
+  type ShortcutHotkey,
   type ShortcutPlatform,
 } from '../../lib/shortcuts';
 import { cn } from '../../lib/cn';
@@ -27,10 +38,23 @@ type ShortcutProviderProps = {
   leaderOverlayDelayMs?: number;
 };
 
+type ShortcutRuntimeProps = Omit<ShortcutProviderProps, 'bindings' | 'leaderOverlayDelayMs'> & {
+  bindings: readonly ShortcutBinding[];
+  leaderOverlayDelayMs: number;
+  platform: ShortcutPlatform;
+};
+
 type ShortcutController = {
   openLeader: () => void;
 };
 
+type ShortcutLeaderState = {
+  active: boolean;
+  message?: string;
+  sequence: ShortcutHotkey[];
+};
+
+const inactiveShortcutLeaderState: ShortcutLeaderState = { active: false, sequence: [] };
 const ShortcutControllerContext = createContext<ShortcutController | null>(null);
 
 const consumeKeyboardEvent = (event: KeyboardEvent) => {
@@ -39,40 +63,46 @@ const consumeKeyboardEvent = (event: KeyboardEvent) => {
   event.stopImmediatePropagation();
 };
 
-const formatShortcutChord = (chord: ShortcutChord) => [
-  chord.control ? 'Ctrl' : undefined,
-  chord.alt ? 'Alt' : undefined,
-  chord.shift ? 'Shift' : undefined,
-  chord.meta ? 'Meta' : undefined,
-  chord.mod ? 'Mod' : undefined,
-  chord.key.length === 1 ? chord.key.toUpperCase() : chord.key,
-].filter(Boolean).join('+');
-
-const formatShortcutSequence = (sequence: readonly ShortcutChord[] | undefined) =>
-  sequence?.map(formatShortcutChord).join(' ') ?? '';
-
 const isCommandEnabled = (command: ShortcutCommand | undefined, context: ShortcutCommandContext) =>
   Boolean(command && (command.isEnabled?.(context) ?? true));
 
 const getContextForDisplay = (platform: ShortcutPlatform): ShortcutCommandContext => ({
   platform,
+  tanStackPlatform: toTanStackShortcutPlatform(platform),
   target: null,
   isTextInputTarget: false,
   now: Date.now(),
 });
 
-const shortcutBindingSortValue = (binding: ShortcutBinding) => {
-  if (binding.commandId === 'sidebar.toggle') return 10;
-  if (binding.commandId === 'chat.focus') return 20;
-  if (binding.commandId === 'thread.new') return 30;
-  if (binding.commandId === 'plan.toggle') return 40;
-  if (binding.commandId === 'terminal.globalToggle') return 45;
-  if (binding.commandId === 'terminal.toggle') return 50;
-  if (binding.commandId === 'terminal.expandToggle') return 60;
-  if (binding.commandId === 'editor.toggle') return 70;
-  if (binding.commandId === 'editor.expandToggle') return 80;
-  return 100;
+const shortcutBindingSortValue = (binding: ShortcutBinding) => binding.order ?? 100;
+
+const getBindingDisplayHotkeys = (binding: ShortcutBinding) => {
+  if (binding.kind === 'sequence' && binding.sequence) {
+    return binding.sequence[0] === shortcutLeaderHotkey ? binding.sequence.slice(1) : binding.sequence;
+  }
+  return binding.hotkey ? [binding.hotkey] : [];
 };
+
+const ShortcutKbdGroup = ({
+  hotkeys,
+  isDisabled,
+  platform,
+}: {
+  hotkeys: readonly ShortcutHotkey[];
+  isDisabled?: boolean;
+  platform: ShortcutPlatform;
+}) => (
+  <KbdGroup className="shrink-0">
+    {hotkeys.map((hotkey, hotkeyIndex) => (
+      <span key={`${hotkey}-${hotkeyIndex}`} className="inline-flex items-center gap-1">
+        {hotkeyIndex > 0 ? <span className="px-0.5 text-muted-foreground/60">then</span> : null}
+        {formatShortcutForDisplayParts(hotkey, platform).map(part => (
+          <Kbd key={`${hotkey}-${part}`} className={isDisabled ? 'opacity-55' : undefined}>{part}</Kbd>
+        ))}
+      </span>
+    ))}
+  </KbdGroup>
+);
 
 const ShortcutOverlay = ({
   bindings,
@@ -91,18 +121,21 @@ const ShortcutOverlay = ({
 
   const displayContext = getContextForDisplay(platform);
   const rows = bindings
-    .filter(binding => binding.kind === 'leader' && binding.sequence)
+    .filter(binding => binding.kind === 'sequence' && binding.sequence)
     .sort((a, b) => shortcutBindingSortValue(a) - shortcutBindingSortValue(b))
     .map(binding => {
       const command = commandsById.get(binding.commandId);
       return {
         binding,
         command,
+        displayHotkeys: getBindingDisplayHotkeys(binding),
         enabled: isCommandEnabled(command, displayContext),
       };
     })
     .filter(row => row.command);
-  const sequenceText = leaderState.sequence.map(event => event.key.toUpperCase()).join(' ');
+  const sequenceText = leaderState.sequence
+    .map(hotkey => formatShortcutForDisplayParts(hotkey, platform).join('+'))
+    .join(' ');
 
   return (
     <div
@@ -118,14 +151,10 @@ const ShortcutOverlay = ({
             {leaderState.message ?? (sequenceText ? `Sequence ${sequenceText}` : 'Choose a command')}
           </div>
         </div>
-        <KbdGroup>
-          {formatShortcutChord(shortcutLeaderChord).split('+').map(part => (
-            <Kbd key={part}>{part}</Kbd>
-          ))}
-        </KbdGroup>
+        <ShortcutKbdGroup hotkeys={[shortcutLeaderHotkey]} platform={platform} />
       </div>
       <div className="max-h-[min(60dvh,24rem)] overflow-y-auto p-2">
-        {rows.map(({ binding, command, enabled }) => (
+        {rows.map(({ binding, command, displayHotkeys, enabled }) => (
           <div
             key={binding.commandId}
             className={cn(
@@ -135,11 +164,7 @@ const ShortcutOverlay = ({
             aria-disabled={!enabled}
           >
             <span className="min-w-0 flex-1 truncate">{command?.label}</span>
-            <KbdGroup className="shrink-0">
-              {formatShortcutSequence(binding.sequence).split(' ').map(part => (
-                <Kbd key={part} className={enabled ? undefined : 'opacity-55'}>{part}</Kbd>
-              ))}
-            </KbdGroup>
+            <ShortcutKbdGroup hotkeys={displayHotkeys} isDisabled={!enabled} platform={platform} />
           </div>
         ))}
       </div>
@@ -147,13 +172,24 @@ const ShortcutOverlay = ({
   );
 };
 
-export const ShortcutProvider = ({
-  bindings = defaultShortcutBindings,
+const shortcutBindingMeta = (binding: ShortcutBinding, command: ShortcutCommand | undefined) => ({
+  allowInInputs: binding.allowInInputs,
+  commandId: binding.commandId,
+  description: command?.label,
+  name: command?.label,
+  order: binding.order,
+  scope: binding.scope ?? 'app',
+  surface: command?.surface,
+});
+
+const ShortcutRuntime = ({
+  bindings,
   children,
   commands,
-  leaderOverlayDelayMs = 750,
-}: ShortcutProviderProps) => {
-  const platform = useMemo(() => resolveShortcutPlatform(), []);
+  leaderOverlayDelayMs,
+  platform,
+}: ShortcutRuntimeProps) => {
+  const tanStackPlatform = toTanStackShortcutPlatform(platform);
   const commandsById = useMemo(() => new Map(commands.map(command => [command.id, command])), [commands]);
   const [leaderState, setLeaderState] = useState<ShortcutLeaderState>(inactiveShortcutLeaderState);
   const [isLeaderOverlayVisible, setIsLeaderOverlayVisible] = useState(false);
@@ -185,6 +221,11 @@ export const ShortcutProvider = ({
     setIsLeaderOverlayVisible(false);
   }, [clearLeaderOverlayDelay]);
 
+  const showLeaderOverlay = useCallback(() => {
+    clearLeaderOverlayDelay();
+    setIsLeaderOverlayVisible(true);
+  }, [clearLeaderOverlayDelay]);
+
   const scheduleLeaderOverlay = useCallback(() => {
     clearLeaderOverlayDelay();
     setIsLeaderOverlayVisible(false);
@@ -208,7 +249,7 @@ export const ShortcutProvider = ({
   useEffect(() => () => clearLeaderOverlayDelay(), [clearLeaderOverlayDelay]);
 
   const openLeader = useCallback(() => {
-    setLeaderState(startShortcutLeader());
+    setLeaderState({ active: true, sequence: [] });
     scheduleLeaderOverlay();
   }, [scheduleLeaderOverlay]);
 
@@ -216,65 +257,122 @@ export const ShortcutProvider = ({
     const command = commandsByIdRef.current.get(commandId);
     if (!command) return false;
     if (!(command.isEnabled?.(context) ?? true)) {
-      setLeaderState({ ...startShortcutLeader(), message: 'Unavailable' });
+      setLeaderState({ active: true, message: 'Unavailable', sequence: [] });
+      showLeaderOverlay();
       return false;
     }
 
     command.run(context);
     return true;
-  }, []);
+  }, [showLeaderOverlay]);
+
+  const hotkeyDefinitions = useMemo<UseHotkeyDefinition[]>(() => bindings
+    .filter((binding): binding is ShortcutBinding & { hotkey: ShortcutHotkey } => binding.kind === 'hotkey' && Boolean(binding.hotkey))
+    .map(binding => {
+      const command = commandsById.get(binding.commandId);
+      return {
+        hotkey: binding.hotkey,
+        callback: (event, hotkeyContext) => {
+          const context = {
+            ...createShortcutContext(event, platform),
+            hotkeyContext,
+          };
+          if (!isShortcutAllowedForTarget(binding, context)) return;
+          if (binding.commandId === 'shortcuts.open') {
+            openLeader();
+            return;
+          }
+          runShortcutCommand(binding.commandId, context);
+        },
+        options: {
+          conflictBehavior: 'allow',
+          ignoreInputs: binding.allowInInputs !== true,
+          meta: shortcutBindingMeta(binding, command),
+          platform: tanStackPlatform,
+          preventDefault: true,
+          stopPropagation: true,
+        },
+      };
+    }), [bindings, commandsById, openLeader, platform, runShortcutCommand, tanStackPlatform]);
+
+  const sequenceDefinitions = useMemo<UseHotkeySequenceDefinition[]>(() => bindings
+    .filter((binding): binding is ShortcutBinding & { sequence: readonly ShortcutHotkey[] } => binding.kind === 'sequence' && Boolean(binding.sequence?.length))
+    .map(binding => {
+      const command = commandsById.get(binding.commandId);
+      return {
+        sequence: toMutableShortcutSequence(binding.sequence),
+        callback: (event, hotkeyContext) => {
+          const context = {
+            ...createShortcutContext(event, platform),
+            hotkeyContext,
+          };
+          if (!isShortcutAllowedForTarget(binding, context)) return;
+          if (runShortcutCommand(binding.commandId, context)) {
+            closeLeader();
+          }
+        },
+        options: {
+          conflictBehavior: 'allow',
+          ignoreInputs: binding.allowInInputs !== true,
+          meta: shortcutBindingMeta(binding, command),
+          platform: tanStackPlatform,
+          preventDefault: true,
+          stopPropagation: true,
+          timeout: defaultShortcutSequenceTimeoutMs,
+        },
+      };
+    }), [bindings, closeLeader, commandsById, platform, runShortcutCommand, tanStackPlatform]);
+
+  useHotkeys(hotkeyDefinitions);
+  useHotkeySequences(sequenceDefinitions);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const normalizedEvent = normalizeKeyboardEvent(event);
       if (normalizedEvent.repeat || normalizedEvent.isComposing) return;
 
-      const context = createShortcutContext(normalizedEvent, platform);
+      const context = createShortcutContext(event, platform);
       const currentLeader = leaderStateRef.current;
 
-      if (currentLeader.active) {
-        const leaderResult = reduceShortcutLeaderKey({
-          bindings: bindingsRef.current,
-          context,
-          event: normalizedEvent,
-          state: currentLeader,
-        });
-        if (!leaderResult.consumed) {
-          setLeaderState(leaderResult.state);
-          return;
-        }
+      if (!currentLeader.active) {
+        if (!context.isTextInputTarget) return;
+        const directBinding = findHotkeyShortcutBinding(bindingsRef.current, event, context);
+        if (!directBinding) return;
 
         consumeKeyboardEvent(event);
-        if (leaderResult.commandId) {
-          if (runShortcutCommand(leaderResult.commandId, context)) {
-            closeLeader();
-          }
+        if (directBinding.commandId === 'shortcuts.open') {
+          openLeader();
           return;
         }
+        runShortcutCommand(directBinding.commandId, context);
+        return;
+      }
 
-        if (leaderResult.state.active) {
-          setLeaderState(leaderResult.state);
-        } else {
+      if (isModifierOnlyShortcutKey(normalizedEvent)) return;
+      if (normalizedEvent.key === 'escape') {
+        consumeKeyboardEvent(event);
+        closeLeader();
+        return;
+      }
+
+      const sequenceBinding = findSequenceTailShortcutBinding(bindingsRef.current, shortcutLeaderHotkey, event, context);
+      if (sequenceBinding) {
+        if (!context.isTextInputTarget) return;
+        consumeKeyboardEvent(event);
+        if (runShortcutCommand(sequenceBinding.commandId, context)) {
           closeLeader();
         }
         return;
       }
 
-      const directBinding = findDirectShortcutBinding(bindingsRef.current, normalizedEvent, context);
-      if (!directBinding) return;
-
       consumeKeyboardEvent(event);
-      if (directBinding.commandId === 'shortcuts.open') {
-        openLeader();
-        return;
-      }
-
-      runShortcutCommand(directBinding.commandId, context);
+      setLeaderState({ active: true, message: 'No command', sequence: [] });
+      showLeaderOverlay();
     };
 
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-  }, [closeLeader, openLeader, platform, runShortcutCommand]);
+  }, [closeLeader, openLeader, platform, runShortcutCommand, showLeaderOverlay]);
 
   const controller = useMemo<ShortcutController>(() => ({ openLeader }), [openLeader]);
 
@@ -289,6 +387,54 @@ export const ShortcutProvider = ({
         platform={platform}
       />
     </ShortcutControllerContext.Provider>
+  );
+};
+
+export const ShortcutProvider = ({
+  bindings = defaultShortcutBindings,
+  children,
+  commands,
+  leaderOverlayDelayMs = 750,
+}: ShortcutProviderProps) => {
+  const platform = useMemo(() => resolveShortcutPlatform(), []);
+  const tanStackPlatform = toTanStackShortcutPlatform(platform);
+  const defaultOptions = useMemo<HotkeysProviderOptions>(() => ({
+    hotkey: {
+      conflictBehavior: 'allow',
+      ignoreInputs: true,
+      platform: tanStackPlatform,
+      preventDefault: true,
+      stopPropagation: true,
+    },
+    hotkeyRecorder: {
+      ignoreInputs: true,
+      platform: tanStackPlatform,
+    },
+    hotkeySequence: {
+      conflictBehavior: 'allow',
+      ignoreInputs: true,
+      platform: tanStackPlatform,
+      preventDefault: true,
+      stopPropagation: true,
+      timeout: defaultShortcutSequenceTimeoutMs,
+    },
+    hotkeySequenceRecorder: {
+      ignoreInputs: true,
+      platform: tanStackPlatform,
+    },
+  }), [tanStackPlatform]);
+
+  return (
+    <TanStackHotkeysProvider defaultOptions={defaultOptions}>
+      <ShortcutRuntime
+        bindings={bindings}
+        commands={commands}
+        leaderOverlayDelayMs={leaderOverlayDelayMs}
+        platform={platform}
+      >
+        {children}
+      </ShortcutRuntime>
+    </TanStackHotkeysProvider>
   );
 };
 

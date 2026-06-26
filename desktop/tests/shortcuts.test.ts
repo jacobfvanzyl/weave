@@ -3,17 +3,17 @@ import {
   auditShortcutBindingConflicts,
   createShortcutContext,
   defaultShortcutBindings,
-  doesShortcutChordMatch,
-  findDirectShortcutBinding,
-  findLeaderShortcutBinding,
-  inactiveShortcutLeaderState,
+  doesShortcutHotkeyMatch,
+  findHotkeyShortcutBinding,
+  findSequenceTailShortcutBinding,
+  formatShortcutForDisplay,
+  formatShortcutSequenceForDisplay,
+  getShortcutHotkeySignature,
   normalizeKeyboardEvent,
-  reduceShortcutLeaderKey,
   resolveShortcutPlatform,
-  startShortcutLeader,
-  type NormalizedShortcutEvent,
+  shortcutLeaderHotkey,
   type ShortcutBinding,
-  type ShortcutChord,
+  type ShortcutHotkey,
   type ShortcutSurface,
 } from '@weave/client/lib/shortcuts';
 
@@ -27,18 +27,17 @@ const makeKeyEvent = ({
   repeat = false,
   shiftKey = false,
   target = null,
-}: Partial<Pick<KeyboardEvent, 'altKey' | 'code' | 'ctrlKey' | 'isComposing' | 'key' | 'metaKey' | 'repeat' | 'shiftKey' | 'target'>> = {}) =>
-  normalizeKeyboardEvent({
-    altKey,
-    code,
-    ctrlKey,
-    isComposing,
-    key,
-    metaKey,
-    repeat,
-    shiftKey,
-    target,
-  } as KeyboardEvent);
+}: Partial<Pick<KeyboardEvent, 'altKey' | 'code' | 'ctrlKey' | 'isComposing' | 'key' | 'metaKey' | 'repeat' | 'shiftKey' | 'target'>> = {}) => ({
+  altKey,
+  code,
+  ctrlKey,
+  isComposing,
+  key,
+  metaKey,
+  repeat,
+  shiftKey,
+  target,
+}) as KeyboardEvent;
 
 const makeTarget = ({ surface, text }: { surface?: ShortcutSurface; text?: boolean }) => ({
   closest: (selector: string) => {
@@ -52,20 +51,18 @@ const makeTarget = ({ surface, text }: { surface?: ShortcutSurface; text?: boole
   },
 }) as unknown as EventTarget;
 
-const contextFor = (event: NormalizedShortcutEvent, now = 1_000) =>
+const contextFor = (event: KeyboardEvent, now = 1_000) =>
   createShortcutContext(event, 'mac', now);
 
 describe('shortcut matching', () => {
   it('resolves Mod to Command on Apple-like platforms and Control elsewhere', () => {
-    const chord: ShortcutChord = { key: 'k', mod: true, shift: true };
-
-    expect(doesShortcutChordMatch(chord, makeKeyEvent({ key: 'k', metaKey: true, shiftKey: true }), 'mac')).toBe(true);
-    expect(doesShortcutChordMatch(chord, makeKeyEvent({ key: 'k', ctrlKey: true, shiftKey: true }), 'windows')).toBe(true);
-    expect(doesShortcutChordMatch(chord, makeKeyEvent({ key: 'k', ctrlKey: true, shiftKey: true }), 'mac')).toBe(false);
+    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', metaKey: true, shiftKey: true }), 'mac')).toBe(true);
+    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', ctrlKey: true, shiftKey: true }), 'windows')).toBe(true);
+    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', ctrlKey: true, shiftKey: true }), 'mac')).toBe(false);
   });
 
   it('normalizes KeyboardEvent.key without using deprecated keyCode', () => {
-    const event = makeKeyEvent({ key: 'K', code: 'KeyK' });
+    const event = normalizeKeyboardEvent(makeKeyEvent({ key: 'K', code: 'KeyK' }));
 
     expect(event).toMatchObject({
       key: 'k',
@@ -82,85 +79,65 @@ describe('shortcut matching', () => {
     })).toBe('ios');
   });
 
-  it('allows reserved globals inside text-heavy surfaces', () => {
+  it('allows explicitly intended leader shortcuts inside text-heavy surfaces', () => {
     const target = makeTarget({ surface: 'chat', text: true });
     const event = makeKeyEvent({ key: 'k', metaKey: true, shiftKey: true, target });
-    const binding = findDirectShortcutBinding(defaultShortcutBindings, event, contextFor(event));
+    const binding = findHotkeyShortcutBinding(defaultShortcutBindings, event, contextFor(event));
 
     expect(binding?.commandId).toBe('shortcuts.open');
   });
 
-  it('blocks non-reserved shortcuts inside text-heavy surfaces', () => {
+  it('blocks non-allowed hotkeys inside text-heavy surfaces', () => {
     const target = makeTarget({ surface: 'chat', text: true });
     const event = makeKeyEvent({ key: 'b', metaKey: true, target });
     const bindings: ShortcutBinding[] = [{
       commandId: 'sidebar.toggle',
-      kind: 'direct',
-      chord: { key: 'b', mod: true },
+      kind: 'hotkey',
+      hotkey: 'Mod+B' satisfies ShortcutHotkey,
     }];
 
-    expect(findDirectShortcutBinding(bindings, event, contextFor(event))).toBeUndefined();
+    expect(findHotkeyShortcutBinding(bindings, event, contextFor(event))).toBeUndefined();
   });
 
   it('matches leader semicolon for the global terminal inside text-heavy surfaces', () => {
     const textTarget = makeTarget({ surface: 'chat', text: true });
     const textEvent = makeKeyEvent({ key: ';', code: 'Semicolon', target: textTarget });
 
-    expect(findDirectShortcutBinding(defaultShortcutBindings, textEvent, contextFor(textEvent))).toBeUndefined();
-    expect(findLeaderShortcutBinding(defaultShortcutBindings, [textEvent], contextFor(textEvent))).toEqual({
-      type: 'exact',
-      binding: expect.objectContaining({ commandId: 'terminal.globalToggle' }),
-    });
+    expect(findHotkeyShortcutBinding(defaultShortcutBindings, textEvent, contextFor(textEvent))).toBeUndefined();
+    expect(findSequenceTailShortcutBinding(defaultShortcutBindings, shortcutLeaderHotkey, textEvent, contextFor(textEvent))).toEqual(
+      expect.objectContaining({ commandId: 'terminal.globalToggle' }),
+    );
   });
 
-  it('matches leader sequences', () => {
+  it('matches leader sequence tails', () => {
     const terminalToggle = makeKeyEvent({ key: 't' });
     const terminalExpand = makeKeyEvent({ key: 'T', shiftKey: true });
 
-    expect(findLeaderShortcutBinding(defaultShortcutBindings, [terminalToggle], contextFor(terminalToggle))).toEqual({ type: 'exact', binding: expect.objectContaining({ commandId: 'terminal.toggle' }) });
-    expect(findLeaderShortcutBinding(defaultShortcutBindings, [terminalExpand], contextFor(terminalExpand))).toEqual({ type: 'exact', binding: expect.objectContaining({ commandId: 'terminal.expandToggle' }) });
+    expect(findSequenceTailShortcutBinding(defaultShortcutBindings, shortcutLeaderHotkey, terminalToggle, contextFor(terminalToggle))).toEqual(
+      expect.objectContaining({ commandId: 'terminal.toggle' }),
+    );
+    expect(findSequenceTailShortcutBinding(defaultShortcutBindings, shortcutLeaderHotkey, terminalExpand, contextFor(terminalExpand))).toEqual(
+      expect.objectContaining({ commandId: 'terminal.expandToggle' }),
+    );
   });
 
-  it('dismisses leader mode on valid keys and Escape without timing out', () => {
-    const leader = startShortcutLeader();
-    const exact = reduceShortcutLeaderKey({
-      bindings: defaultShortcutBindings,
-      context: contextFor(makeKeyEvent({ key: 'e' }), 1_100),
-      event: makeKeyEvent({ key: 'e' }),
-      state: leader,
-    });
-    expect(exact).toEqual({
-      commandId: 'editor.toggle',
-      consumed: true,
-      state: inactiveShortcutLeaderState,
-    });
+  it('formats shortcuts through TanStack display helpers', () => {
+    const macDisplay = formatShortcutForDisplay(shortcutLeaderHotkey, 'mac');
 
-    const stillOpenLater = reduceShortcutLeaderKey({
-      bindings: defaultShortcutBindings,
-      context: contextFor(makeKeyEvent({ key: 'z' }), 120_000),
-      event: makeKeyEvent({ key: 'z' }),
-      state: startShortcutLeader(),
-    });
-    expect(stillOpenLater.consumed).toBe(true);
-    expect(stillOpenLater.state.active).toBe(true);
-    expect(stillOpenLater.state.message).toBe('No command');
-
-    const cancelled = reduceShortcutLeaderKey({
-      bindings: defaultShortcutBindings,
-      context: contextFor(makeKeyEvent({ key: 'Escape' }), 1_100),
-      event: makeKeyEvent({ key: 'Escape' }),
-      state: leader,
-    });
-    expect(cancelled).toEqual({ consumed: true, state: inactiveShortcutLeaderState });
+    expect(formatShortcutForDisplay(shortcutLeaderHotkey, 'windows')).toBe('Ctrl+Shift+K');
+    expect(macDisplay).toContain('K');
+    expect(macDisplay.includes('Mod')).toBe(false);
+    expect(formatShortcutSequenceForDisplay([shortcutLeaderHotkey, ';'], 'windows')).toBe('Ctrl+Shift+K ;');
   });
 
-  it('flags high-risk direct bindings while leaving the default profile clean', () => {
+  it('flags high-risk direct hotkeys while leaving the default profile clean', () => {
     expect(auditShortcutBindingConflicts(defaultShortcutBindings)).toEqual([]);
+    expect(getShortcutHotkeySignature('Control+S')).toBe('control+s');
     expect(auditShortcutBindingConflicts([{
       commandId: 'thread.new',
-      kind: 'direct',
-      chord: { key: 's', mod: true },
-      reservedGlobal: true,
+      kind: 'hotkey',
+      hotkey: 'Mod+S',
+      allowInInputs: true,
     }])).toEqual([expect.objectContaining({
       risk: 'high',
     })]);

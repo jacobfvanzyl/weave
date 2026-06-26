@@ -20,18 +20,22 @@ Weave is split into an owned Deno server plus clients and local runtime pieces.
 Install Node dependencies per package. For the server:
 
 ```bash
-npm run server:install
+deno task server:install
 ```
 
 Run commands from the repo root or directly inside the target package.
 
 ```bash
-npm run dev
-npm run build
-npm run desktop:typecheck
-npm run desktop:test
-npm run portal:check
-npm run portal:test
+deno task dev
+deno task server:dev
+deno task portal:dev
+deno task desktop:dev
+deno task web:dev
+deno task build
+deno task desktop:typecheck
+deno task desktop:test
+deno task portal:check
+deno task portal:test
 ```
 
 The server `.env`, `.env.example`, Deno runtime, Agent/Mastra implementation, and deploy files live under `server/`.

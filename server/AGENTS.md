@@ -14,10 +14,10 @@ This directory is the Weave **Deno** server written in TypeScript. It owns HTTP 
 ## Commands
 
 ```bash
-npm run dev # Start the Deno server at localhost:4111
-npm run build # Deno-check the server entrypoint
-npm run start # Start the Deno server
-npm run check # Deno-check the server entrypoint
+deno task dev # Start the Deno server at localhost:4111
+deno task build # Deno-check the server entrypoint
+deno task start # Start the Deno server
+deno task check # Deno-check the server entrypoint
 ```
 
 ## Project Structure
@@ -53,7 +53,7 @@ Top-level files define how your Mastra project is configured, built, and connect
 - Register Agent and Portal core routes from `src/agent` and `src/portal`
 - Keep Mastra imports inside `src/agent/mastra`; product modules must use Agent and Portal core boundaries
 - Use schemas for tool inputs and outputs
-- Run `npm run check` to verify changes compile
+- Run `deno task check` to verify changes compile
 
 ### Never do
 

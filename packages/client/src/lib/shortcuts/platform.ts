@@ -1,4 +1,5 @@
 import type { ShortcutPlatform } from './types';
+import type { TanStackShortcutPlatform } from './types';
 
 type NavigatorLike = {
   platform?: string;
@@ -28,3 +29,9 @@ export const resolveShortcutPlatform = (navigatorLike: NavigatorLike | undefined
 };
 
 export const isAppleLikeShortcutPlatform = (platform: ShortcutPlatform) => platform === 'mac' || platform === 'ios';
+
+export const toTanStackShortcutPlatform = (platform: ShortcutPlatform): TanStackShortcutPlatform => {
+  if (platform === 'mac' || platform === 'ios') return 'mac';
+  if (platform === 'windows') return 'windows';
+  return 'linux';
+};

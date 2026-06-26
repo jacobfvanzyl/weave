@@ -38,6 +38,7 @@ const sharedClientPackages = [
   '@lezer/common',
   '@lezer/highlight',
   '@replit/codemirror-vim',
+  '@tanstack/react-hotkeys',
   '@tanstack/react-query',
   'ai',
   'class-variance-authority',
