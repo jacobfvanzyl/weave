@@ -1,6 +1,10 @@
-import { MastraModelGateway, type ProviderConfig, type GatewayLanguageModel } from '@mastra/core/llm';
-import { getCodexCredentials } from './chatgpt-codex-auth';
-import { ChatGPTCodexLanguageModel } from './chatgpt-codex-language-model';
+import {
+  type GatewayAuthResult,
+  type GatewayLanguageModel,
+  MastraModelGateway,
+  type ProviderConfig,
+} from '@mastra/core/llm';
+import { createChatGPTCodexLanguageModel } from './chatgpt-codex-language-model';
 
 const models = [
   'gpt-5.1-codex',
@@ -30,14 +34,29 @@ export class ChatGPTCodexGateway extends MastraModelGateway {
   }
 
   buildUrl(): string {
-    return 'https://chatgpt.com/backend-api/codex/responses';
+    return 'https://chatgpt.com/backend-api/codex';
   }
 
   async getApiKey(): Promise<string> {
-    return (await getCodexCredentials()).access;
+    return 'chatgpt-subscription';
   }
 
-  resolveLanguageModel({ modelId }: { modelId: string; providerId: string; apiKey: string; headers?: Record<string, string> }): GatewayLanguageModel {
-    return new ChatGPTCodexLanguageModel(modelId.split('/').at(-1) ?? modelId);
+  resolveAuth(): GatewayAuthResult {
+    return { apiKey: 'chatgpt-subscription', source: 'gateway' };
+  }
+
+  resolveLanguageModel({
+    modelId,
+    headers,
+  }: {
+    modelId: string;
+    providerId: string;
+    apiKey: string;
+    headers?: Record<string, string>;
+  }): GatewayLanguageModel {
+    return createChatGPTCodexLanguageModel({
+      modelId: modelId.split('/').at(-1) ?? modelId,
+      headers,
+    }) as GatewayLanguageModel;
   }
 }

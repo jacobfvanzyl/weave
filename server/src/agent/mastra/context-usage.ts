@@ -12,8 +12,17 @@ export type ThreadContextUsageSnapshot = {
 };
 
 type ProviderTokenUsage = {
-  inputTokens?: number;
-  outputTokens?: number;
+  inputTokens?: number | {
+    total?: number;
+    noCache?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
+  outputTokens?: number | {
+    total?: number;
+    text?: number;
+    reasoning?: number;
+  };
   totalTokens?: number;
   cachedInputTokens?: number;
 };
@@ -28,23 +37,32 @@ const keyFor = (threadId: string, resourceId?: string) => `${resourceId ?? ''}::
 const positiveFinite = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
 
-const finiteNumber = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isFinite(value);
+const finiteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
 export const contextUsageFromProviderUsage = (usage: ProviderTokenUsage) => {
-  if (!positiveFinite(usage.inputTokens)) return undefined;
+  const inputTokens = typeof usage.inputTokens === 'object' && usage.inputTokens
+    ? usage.inputTokens.total
+    : usage.inputTokens;
+  const outputTokens = typeof usage.outputTokens === 'object' && usage.outputTokens
+    ? usage.outputTokens.total
+    : usage.outputTokens;
+  const cachedInputTokens = typeof usage.inputTokens === 'object' && usage.inputTokens
+    ? usage.inputTokens.cacheRead
+    : usage.cachedInputTokens;
 
-  const outputTokens = finiteNumber(usage.outputTokens) ? usage.outputTokens : undefined;
+  if (!positiveFinite(inputTokens)) return undefined;
+
+  const finiteOutputTokens = finiteNumber(outputTokens) ? outputTokens : undefined;
   const totalProcessedTokens = positiveFinite(usage.totalTokens)
     ? usage.totalTokens
-    : usage.inputTokens + (outputTokens ?? 0);
+    : inputTokens + (finiteOutputTokens ?? 0);
 
   return {
-    usedTokens: usage.inputTokens,
+    usedTokens: inputTokens,
     totalProcessedTokens,
-    inputTokens: usage.inputTokens,
-    ...(finiteNumber(usage.cachedInputTokens) ? { cachedInputTokens: usage.cachedInputTokens } : {}),
-    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    inputTokens,
+    ...(finiteNumber(cachedInputTokens) ? { cachedInputTokens } : {}),
+    ...(finiteOutputTokens !== undefined ? { outputTokens: finiteOutputTokens } : {}),
   };
 };
 
