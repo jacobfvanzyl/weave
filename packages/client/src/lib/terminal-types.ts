@@ -75,7 +75,7 @@ export type TerminalTransport = {
   start: (input: TerminalStartInput) => Promise<TerminalStartResult>;
   input: (terminalId: string, data: string) => Promise<void>;
   resize: (terminalId: string, cols: number, rows: number) => Promise<void>;
-  close: (terminalId: string) => Promise<void>;
+  close: (terminalId: string, input?: TerminalTargetInput) => Promise<void>;
   detach: (terminalId: string) => Promise<void>;
   subscribe: (listener: (event: TerminalHostEvent) => void) => () => void;
 };

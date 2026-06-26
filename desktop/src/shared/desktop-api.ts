@@ -33,7 +33,7 @@ export type WeaveDesktopBridge = {
   terminalStart: (input: TerminalStartInput) => Promise<TerminalStartResult>;
   terminalInput: (terminalId: string, data: string) => Promise<void>;
   terminalResize: (terminalId: string, cols: number, rows: number) => Promise<void>;
-  terminalClose: (terminalId: string) => Promise<void>;
+  terminalClose: (terminalId: string, input?: TerminalTargetInput) => Promise<void>;
   terminalDetach: (terminalId: string) => Promise<void>;
   onTerminalEvent: (listener: (event: TerminalHostEvent) => void) => () => void;
   editorList: (target: EditorTarget, path?: string) => Promise<EditorListResult>;

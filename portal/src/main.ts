@@ -92,7 +92,7 @@ const defaultHttpServerUrl = 'http://localhost:4111';
 const defaultWsServerUrl = 'ws://localhost:4112';
 const defaultName = 'Mage Portal';
 const version = '0.1.0';
-const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth'];
+const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth', 'terminal.tmux-control-mode'];
 const macWindowCapabilities = [
   'portal.window.list',
   'portal.window.session',

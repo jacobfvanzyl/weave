@@ -2,9 +2,9 @@
   "tasks": {
     "check": "deno check src/main.ts",
     "native": "deno run --allow-run --allow-env --allow-read scripts/build-native.ts",
-    "test": "deno task native && deno test --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-run src/*_test.ts",
-    "dev": "deno task native && deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-run src/main.ts daemon",
-    "daemon": "deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-run src/main.ts daemon",
+    "test": "deno task native && deno test --allow-net --allow-read --allow-write --allow-env --allow-run src/*_test.ts",
+    "dev": "deno task native && deno run --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts daemon",
+    "daemon": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts daemon",
     "login": "deno run --env-file=../server/.env --allow-net --allow-read --allow-write --allow-env src/main.ts login",
     "build": "deno run --allow-run --allow-env --allow-read --allow-write scripts/build.ts",
     "window-stream-native:smoke": "node scripts/window-stream-native-smoke.mjs",

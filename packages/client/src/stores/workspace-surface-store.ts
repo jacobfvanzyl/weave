@@ -165,6 +165,34 @@ const normalizePersistedPaneVisibility = (value: unknown): PaneVisibility | unde
   };
 };
 
+const normalizePersistedSurfaceLayout = (value: unknown): SurfaceLayout | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const paneVisibility = normalizePersistedPaneVisibility(record.paneVisibility);
+  if (!paneVisibility) return undefined;
+  const maximizedPane = isPersistedMainPane(record.maximizedPane) ? record.maximizedPane : null;
+  const normalizedPaneVisibility = maximizedPane && !isPaneOpen(paneVisibility, maximizedPane)
+    ? setPaneOpen(paneVisibility, maximizedPane, true)
+    : paneVisibility;
+  return {
+    paneVisibility: normalizedPaneVisibility,
+    maximizedPane,
+    preMaximizePaneVisibility: maximizedPane
+      ? normalizePersistedPaneVisibility(record.preMaximizePaneVisibility)
+      : undefined,
+  };
+};
+
+const normalizePersistedSurfaceLayouts = (value: unknown): Record<string, SurfaceLayout | undefined> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const layouts: Record<string, SurfaceLayout | undefined> = {};
+  for (const [key, layout] of Object.entries(value)) {
+    const normalizedLayout = normalizePersistedSurfaceLayout(layout);
+    if (normalizedLayout) layouts[key] = normalizedLayout;
+  }
+  return layouts;
+};
+
 const isPersistedMainPane = (value: unknown): value is MainPane => value === 'chat' || value === 'editor' || value === 'terminal';
 
 const getClientStorage = () => {
@@ -224,6 +252,31 @@ const repairActiveSurface = (
 };
 
 const getThreadById = (threads: ThreadSurfaceContext[], threadId: string) => threads.find(thread => thread.id === threadId);
+
+const normalizePersistedSurfaceState = (
+  persistedState: unknown,
+  fallback: Pick<WorkspaceSurfaceState, 'threadId' | 'activeSurface' | 'paneVisibility' | 'surfaceLayouts' | 'maximizedPane' | 'preMaximizePaneVisibility'>,
+) => {
+  const state = persistedState && typeof persistedState === 'object'
+    ? persistedState as Partial<WorkspaceSurfaceState>
+    : {};
+  const threadId = typeof state.threadId === 'string' && state.threadId ? state.threadId : fallback.threadId;
+  const paneVisibility = normalizePersistedPaneVisibility(state.paneVisibility) ?? fallback.paneVisibility;
+  const maximizedPane = isPersistedMainPane(state.maximizedPane) ? state.maximizedPane : fallback.maximizedPane;
+  const normalizedPaneVisibility = maximizedPane && !isPaneOpen(paneVisibility, maximizedPane)
+    ? setPaneOpen(paneVisibility, maximizedPane, true)
+    : paneVisibility;
+  return {
+    threadId,
+    activeSurface: isPersistedActiveSurface(state.activeSurface) ? state.activeSurface : fallback.activeSurface,
+    paneVisibility: normalizedPaneVisibility,
+    surfaceLayouts: normalizePersistedSurfaceLayouts(state.surfaceLayouts ?? fallback.surfaceLayouts),
+    maximizedPane,
+    preMaximizePaneVisibility: maximizedPane
+      ? normalizePersistedPaneVisibility(state.preMaximizePaneVisibility) ?? fallback.preMaximizePaneVisibility
+      : undefined,
+  };
+};
 
 export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
   persist(
@@ -394,17 +447,12 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
       name: 'weave-surface',
       version: 1,
       migrate: persistedState => {
-        const state = persistedState as Partial<WorkspaceSurfaceState>;
         const legacyState = getInitialPersistedSurfaceState();
-        const threadId = typeof state.threadId === 'string' && state.threadId ? state.threadId : legacyState.threadId;
-        return {
-          threadId,
-          activeSurface: isPersistedActiveSurface(state.activeSurface) ? state.activeSurface : legacyState.activeSurface,
-          paneVisibility: normalizePersistedPaneVisibility(state.paneVisibility) ?? legacyState.paneVisibility,
-          surfaceLayouts: state.surfaceLayouts && typeof state.surfaceLayouts === 'object' ? state.surfaceLayouts : {},
-          maximizedPane: isPersistedMainPane(state.maximizedPane) ? state.maximizedPane : legacyState.maximizedPane,
-          preMaximizePaneVisibility: normalizePersistedPaneVisibility(state.preMaximizePaneVisibility) ?? legacyState.preMaximizePaneVisibility,
-        };
+        return normalizePersistedSurfaceState(persistedState, legacyState);
+      },
+      merge: (persistedState, currentState) => {
+        const normalizedState = normalizePersistedSurfaceState(persistedState, currentState);
+        return { ...currentState, ...normalizedState };
       },
       partialize: state => ({
         threadId: state.threadId,

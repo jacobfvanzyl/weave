@@ -34,7 +34,8 @@ const bridge: WeaveDesktopBridge = {
     ipcRenderer.invoke('terminal:input', terminalId, data) as Promise<void>,
   terminalResize: (terminalId: string, cols: number, rows: number) =>
     ipcRenderer.invoke('terminal:resize', terminalId, cols, rows) as Promise<void>,
-  terminalClose: (terminalId: string) => ipcRenderer.invoke('terminal:close', terminalId) as Promise<void>,
+  terminalClose: (terminalId: string, input?: TerminalTargetInput) =>
+    ipcRenderer.invoke('terminal:close', terminalId, input) as Promise<void>,
   terminalDetach: (terminalId: string) => ipcRenderer.invoke('terminal:detach', terminalId) as Promise<void>,
   onTerminalEvent: listener => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, terminalEvent: TerminalHostEvent) => {

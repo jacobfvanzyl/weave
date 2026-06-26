@@ -7,7 +7,9 @@ import {
   getActiveTerminalPanelTab,
   getTerminalPanelTabLabel,
   getTerminalSessionRenderItems,
+  mergeTerminalPanelTabMeta,
 } from './terminal-panel-tabs';
+import { cancelScheduledTerminalDetach, scheduleTerminalDetach } from './terminal-detach-scheduler';
 
 export type TerminalPanelTarget = {
   kind: TerminalSessionKind;
@@ -109,10 +111,10 @@ const TerminalSessionView = ({
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latestSizeRef = useRef<TerminalSize | undefined>(undefined);
   const latestMetaRef = useRef<string | undefined>(undefined);
-  const [status, setStatus] = useState<TerminalStatus>('connecting');
-  const [cwd, setCwd] = useState<string>();
-  const [title, setTitle] = useState<string>();
-  const [error, setError] = useState<string>();
+  const [status, setStatus] = useState<TerminalStatus>(() => tab.status ?? 'connecting');
+  const [cwd, setCwd] = useState<string | undefined>(() => tab.cwd);
+  const [title, setTitle] = useState<string | undefined>(() => tab.title);
+  const [error, setError] = useState<string | undefined>(() => tab.error);
   const [isTerminalReady, setIsTerminalReady] = useState(false);
   const [hasMeasuredSize, setHasMeasuredSize] = useState(false);
   const [shouldConnect, setShouldConnect] = useState(isActive);
@@ -150,12 +152,13 @@ const TerminalSessionView = ({
   }, [isActive]);
 
   useEffect(() => {
+    if (!shouldConnect) return;
     const meta: TerminalTabMeta = { cwd, error, status, title };
     const metaKey = JSON.stringify(meta);
     if (latestMetaRef.current === metaKey) return;
     latestMetaRef.current = metaKey;
     onMetaChange(tab.id, meta);
-  }, [cwd, error, onMetaChange, status, tab.id, title]);
+  }, [cwd, error, onMetaChange, shouldConnect, status, tab.id, title]);
 
   const handleInput = useCallback((data: string) => {
     void transport?.input(tab.terminalId, data).catch(() => undefined);
@@ -172,8 +175,8 @@ const TerminalSessionView = ({
   }, [tab.terminalId, transport]);
 
   const syncTerminalSize = useCallback(() => {
-    terminalRef.current?.fit();
-    const terminalSize = terminalRef.current?.getSize();
+    const fittedSize = terminalRef.current?.fit();
+    const terminalSize = fittedSize ?? terminalRef.current?.getSize();
     const nextSize = terminalSize
       ? { terminalId: tab.terminalId, cols: terminalSize.cols, rows: terminalSize.rows }
       : latestSizeRef.current;
@@ -197,7 +200,7 @@ const TerminalSessionView = ({
   }, [focusRequest, isActive, isTerminalReady, syncTerminalSize]);
 
   const handleTitleChange = useCallback((nextTitle: string) => {
-    setTitle(nextTitle);
+    setTitle(nextTitle.trim() || undefined);
   }, []);
 
   const handleTerminalError = useCallback((message: string) => {
@@ -218,14 +221,20 @@ const TerminalSessionView = ({
       ? latestSizeRef.current
       : undefined;
 
+    cancelScheduledTerminalDetach(tab.terminalId);
     setStatus('connecting');
     setError(undefined);
-    setCwd(undefined);
-    setTitle(undefined);
+    setCwd(current => current ?? tab.cwd ?? target.cwd);
+    setTitle(current => current ?? tab.title);
     setIsTerminalReady(false);
     clearRevealTimer();
 
-    if (!measuredSize || measuredSize.cols <= 0 || measuredSize.rows <= 0) return undefined;
+    if (!measuredSize || measuredSize.cols <= 0 || measuredSize.rows <= 0) {
+      return () => {
+        clearRevealTimer();
+        scheduleTerminalDetach(transport, tab.terminalId);
+      };
+    }
 
     const resizeSyncTimers: number[] = [];
     let resizeSyncFrame: number | undefined;
@@ -246,7 +255,13 @@ const TerminalSessionView = ({
         return;
       }
 
-      if (event.type === 'output' || event.type === 'replay') {
+      if (event.type === 'replay') {
+        terminalRef.current?.resetAndWrite(event.data);
+        scheduleTerminalReveal();
+        return;
+      }
+
+      if (event.type === 'output') {
         terminalRef.current?.write(event.data);
         scheduleTerminalReveal();
         return;
@@ -303,7 +318,7 @@ const TerminalSessionView = ({
       resizeSyncTimers.forEach(timer => window.clearTimeout(timer));
       clearRevealTimer();
       unsubscribe();
-      void transport.detach(tab.terminalId).catch(() => undefined);
+      scheduleTerminalDetach(transport, tab.terminalId);
     };
   }, [
     clearRevealTimer,
@@ -312,6 +327,8 @@ const TerminalSessionView = ({
     shouldConnect,
     syncTerminalSize,
     tab.id,
+    tab.cwd,
+    tab.title,
     tab.terminalId,
     target.cwd,
     target.workspaceId,
@@ -333,7 +350,7 @@ const TerminalSessionView = ({
       aria-hidden={isActive ? undefined : true}
       data-terminal-tab-id={tab.id}
     >
-      <div className={isTerminalReady ? 'h-full min-h-0 opacity-100' : 'pointer-events-none h-full min-h-0 opacity-0'}>
+      <div className={isTerminalReady ? 'h-full min-h-0 w-full opacity-100' : 'pointer-events-none h-full min-h-0 w-full opacity-0'}>
         {shouldConnect ? (
           <GhosttyTerminalView
             key={tab.terminalId}
@@ -432,16 +449,10 @@ export const TerminalPanel = ({
       let didChange = false;
       const nextTabs = currentTabs.map(tab => {
         if (tab.id !== tabId) return tab;
-        if (
-          tab.cwd === meta.cwd
-          && tab.error === meta.error
-          && tab.status === meta.status
-          && tab.title === meta.title
-        ) {
-          return tab;
-        }
+        const nextTab = mergeTerminalPanelTabMeta(tab, meta);
+        if (nextTab === tab) return tab;
         didChange = true;
-        return { ...tab, ...meta };
+        return nextTab;
       });
 
       return didChange ? nextTabs : currentTabs;
@@ -501,7 +512,7 @@ export const TerminalPanel = ({
                   'relative -ml-px flex h-full min-w-36 max-w-64 shrink-0 items-center overflow-hidden rounded-none border-x border-y-0 text-xs',
                   isSelected
                     ? 'z-10 border-border bg-accent text-foreground'
-                    : 'z-0 border-transparent bg-transparent text-muted-foreground hover:z-10 hover:border-border hover:bg-accent/60 hover:text-foreground',
+                    : 'z-0 border-transparent bg-transparent text-muted-foreground hover:z-20 focus-within:z-20 hover:border-border hover:bg-accent/60 hover:text-foreground',
                 ].join(' ')}
               >
                 <button
@@ -520,9 +531,15 @@ export const TerminalPanel = ({
                 </button>
                 <button
                   type="button"
-                  className="grid h-full w-7 shrink-0 place-items-center text-muted-foreground hover:text-foreground"
+                  className="relative z-30 grid h-full w-8 shrink-0 place-items-center text-muted-foreground hover:bg-accent hover:text-foreground"
                   aria-label={`Close ${tabLabel}`}
+                  title={`Close ${tabLabel}`}
+                  onPointerDown={event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
                   onClick={event => {
+                    event.preventDefault();
                     event.stopPropagation();
                     void closeTab(tab);
                   }}

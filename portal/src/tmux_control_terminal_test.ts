@@ -1,7 +1,8 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1.0.19';
-import { PortalTerminalHost, type TerminalHostEvent } from './terminal.ts';
+import { PortalTerminalHost, type TerminalHostEvent, TmuxTerminalController } from './terminal.ts';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const makeShortTempDir = (prefix: string) => Deno.makeTempDir({ dir: '/tmp', prefix });
 
 const waitFor = async (predicate: () => boolean, timeoutMs = 5_000) => {
   const startedAt = Date.now();
@@ -9,7 +10,7 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 5_000) => {
     if (predicate()) return;
     await delay(25);
   }
-  throw new Error('Timed out waiting for native PTY smoke condition.');
+  throw new Error('Timed out waiting for tmux control terminal condition.');
 };
 
 const commandExists = async (command: string) => {
@@ -35,18 +36,47 @@ const portalCommandExists = async (command: string, args: string[] = []) => {
   }
 };
 
+const createHost = (portalHome: string, env: Record<string, string | undefined>) =>
+  new PortalTerminalHost({
+    config: {},
+    tmux: new TmuxTerminalController({ portalHome, env }),
+    outputBatchMs: 1,
+    env,
+  });
+
+const runTmux = async (portalHome: string, args: string[]) =>
+  await new Deno.Command('tmux', {
+    args: [
+      '-f',
+      `${portalHome}/tmux/tmux.conf`,
+      '-S',
+      `${portalHome}/tmux/_weave.sock`,
+      ...args,
+    ],
+    stdout: 'piped',
+    stderr: 'piped',
+  }).output();
+
+const listTmuxSessions = async (portalHome: string) => {
+  const output = await runTmux(portalHome, ['list-sessions', '-F', '#{session_name}']);
+  if (!output.success) return [];
+  return new TextDecoder().decode(output.stdout).trim().split('\n').filter(Boolean);
+};
+
+const killTmuxServer = async (portalHome: string) => {
+  await runTmux(portalHome, ['kill-server']).catch(() => undefined);
+};
+
 Deno.test({
   name: 'Portal tmux terminal starts a shell, writes output, resizes, and closes',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     if (!await portalCommandExists('tmux', ['-V'])) return;
-    const cwd = await Deno.makeTempDir({ prefix: 'weave-native-pty-' });
+    const cwd = await makeShortTempDir('wtc-');
+    const portalHome = await makeShortTempDir('wth-');
     const events: TerminalHostEvent[] = [];
-    const host = new PortalTerminalHost({
-      config: {},
-      outputBatchMs: 1,
-      env: { ...Deno.env.toObject(), SHELL: '/bin/sh' },
-    });
+    const env = { ...Deno.env.toObject(), SHELL: '/bin/sh' };
+    const host = createHost(portalHome, env);
 
     try {
       await host.handleClientMessage('client-1', {
@@ -57,7 +87,7 @@ Deno.test({
         rows: 24,
       }, (event) => events.push(event));
       const created = events.find((event) => event.type === 'created')?.window;
-      if (!created) throw new Error('terminal was not created');
+      if (!created) throw new Error(`terminal was not created: ${JSON.stringify(events)}`);
 
       await host.handleClientMessage('client-1', {
         type: 'start',
@@ -73,10 +103,10 @@ Deno.test({
       await host.handleClientMessage('client-1', {
         type: 'input',
         terminalId: created.terminalId,
-        data: 'printf "__WEAVE_NATIVE_PTY_OK__\\n"\r',
+        data: 'printf "__WEAVE_TMUX_CONTROL_OK__\\n"\r',
       }, (event) => events.push(event));
       await waitFor(() =>
-        events.some((event) => event.type === 'output' && event.data.includes('__WEAVE_NATIVE_PTY_OK__'))
+        events.some((event) => event.type === 'output' && event.data.includes('__WEAVE_TMUX_CONTROL_OK__'))
       );
 
       await host.handleClientMessage('client-1', {
@@ -86,32 +116,71 @@ Deno.test({
         rows: 32,
       }, (event) => events.push(event));
       await host.handleClientMessage('client-1', {
+        type: 'detach',
+        terminalId: created.terminalId,
+      }, (event) => events.push(event));
+
+      const listEvents: TerminalHostEvent[] = [];
+      await host.handleClientMessage('client-2', {
+        type: 'list',
+        kind: 'general',
+        cwd,
+      }, (event) => listEvents.push(event));
+      const listed = listEvents.find((event) => event.type === 'windows');
+      assertEquals(listed?.type === 'windows' ? listed.windows.length : 0, 1);
+
+      const reopenEvents: TerminalHostEvent[] = [];
+      await host.handleClientMessage('client-2', {
+        type: 'start',
+        kind: 'general',
+        terminalId: created.terminalId,
+        cwd,
+        cols: 120,
+        rows: 32,
+      }, (event) => reopenEvents.push(event));
+      assertEquals(reopenEvents.some((event) => event.type === 'started'), true);
+      assertEquals(
+        reopenEvents.some((event) => event.type === 'replay' && event.data.includes('__WEAVE_TMUX_CONTROL_OK__')),
+        true,
+      );
+
+      await host.handleClientMessage('client-2', {
+        type: 'input',
+        terminalId: created.terminalId,
+        data: 'printf "__WEAVE_TMUX_CONTROL_REOPEN__\\n"\r',
+      }, (event) => reopenEvents.push(event));
+      await waitFor(() =>
+        reopenEvents.some((event) => event.type === 'output' && event.data.includes('__WEAVE_TMUX_CONTROL_REOPEN__'))
+      );
+      assertEquals(await listTmuxSessions(portalHome), ['_weave']);
+
+      await host.handleClientMessage('client-1', {
         type: 'close',
         terminalId: created.terminalId,
       }, (event) => events.push(event));
-      await waitFor(() => events.some((event) => event.type === 'exit'));
+      await waitFor(() => reopenEvents.some((event) => event.type === 'exit'));
     } finally {
       host.dispose();
+      await killTmuxServer(portalHome);
       await Deno.remove(cwd, { recursive: true });
+      await Deno.remove(portalHome, { recursive: true });
     }
   },
 });
 
 Deno.test({
-  name: 'Portal native PTY can run btop and accept q when available',
+  name: 'Portal tmux control terminal can run btop and accept q when available',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     if (!await portalCommandExists('tmux', ['-V'])) return;
     if (!await commandExists('btop')) return;
 
-    const cwd = await Deno.makeTempDir({ prefix: 'weave-native-btop-' });
+    const cwd = await makeShortTempDir('wtb-');
+    const portalHome = await makeShortTempDir('wbh-');
     const events: TerminalHostEvent[] = [];
     let terminalId: string | undefined;
-    const host = new PortalTerminalHost({
-      config: {},
-      outputBatchMs: 1,
-      env: { ...Deno.env.toObject(), SHELL: '/bin/sh' },
-    });
+    const env = { ...Deno.env.toObject(), SHELL: '/bin/sh' };
+    const host = createHost(portalHome, env);
 
     try {
       await host.handleClientMessage('client-1', {
@@ -122,7 +191,7 @@ Deno.test({
         rows: 40,
       }, (event) => events.push(event));
       const created = events.find((event) => event.type === 'created')?.window;
-      if (!created) throw new Error('terminal was not created');
+      if (!created) throw new Error(`terminal was not created: ${JSON.stringify(events)}`);
       terminalId = created.terminalId;
 
       await host.handleClientMessage('client-1', {
@@ -156,7 +225,9 @@ Deno.test({
         await host.handleClientMessage('client-1', { type: 'close', terminalId }, () => undefined);
       }
       host.dispose();
+      await killTmuxServer(portalHome);
       await Deno.remove(cwd, { recursive: true });
+      await Deno.remove(portalHome, { recursive: true });
     }
   },
 });

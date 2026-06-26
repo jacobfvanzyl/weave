@@ -15,7 +15,7 @@ const originalEnv = {
   WEAVE_PORTAL_WS_PORT: process.env.WEAVE_PORTAL_WS_PORT,
 };
 
-const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth'];
+const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth', 'terminal.tmux-control-mode'];
 
 const restoreEnv = () => {
   for (const [key, value] of Object.entries(originalEnv)) {
@@ -299,7 +299,28 @@ describe('PortalSupervisor', () => {
       await expect(createSupervisor('http://mastra.test').ensureStarted()).rejects.toThrow('saved auth token');
     }));
 
-  it('provisions config and spawns Portal when no compatible runtime exists', async () =>
+  it('does not launch a Desktop-owned Portal by default when no compatible runtime exists', async () =>
+    withTempPortal(async () => {
+      const { server, url: mastraUrl } = await listen((request, response) => {
+        if (request.url === '/portal/token' || request.url === '/portals/token') {
+          response.setHeader('content-type', 'application/json');
+          response.end(JSON.stringify({ portalId: 'portal_external', token: 'portal-token' }));
+          return;
+        }
+        response.statusCode = 404;
+        response.end('not found');
+      });
+
+      try {
+        await expect(createSupervisor(mastraUrl, 'desktop-token').ensureStarted()).rejects.toThrow(
+          'Desktop Portal auto-launch is disabled',
+        );
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    }));
+
+  it('provisions config and spawns Portal when WEAVE_PORTAL_COMMAND is explicitly set', async () =>
     withTempPortal(async ({ directory, portalHome }) => {
       const { server, url: mastraUrl } = await listen((request, response) => {
         if (request.url === '/portal/token' || request.url === '/portals/token') {

@@ -17,7 +17,7 @@ type DesktopTerminalBridge = {
   terminalStart: (input: TerminalStartInput) => Promise<TerminalStartResult>;
   terminalInput: (terminalId: string, data: string) => Promise<void>;
   terminalResize: (terminalId: string, cols: number, rows: number) => Promise<void>;
-  terminalClose: (terminalId: string) => Promise<void>;
+  terminalClose: (terminalId: string, input?: TerminalTargetInput) => Promise<void>;
   terminalDetach: (terminalId: string) => Promise<void>;
   onTerminalEvent: (listener: (event: TerminalHostEvent) => void) => () => void;
 };
@@ -65,7 +65,7 @@ export const createDesktopTerminalTransport = (): TerminalTransport | undefined 
     start: input => bridge.terminalStart(input),
     input: (terminalId, data) => bridge.terminalInput(terminalId, data),
     resize: (terminalId, cols, rows) => bridge.terminalResize(terminalId, cols, rows),
-    close: terminalId => bridge.terminalClose(terminalId),
+    close: (terminalId, input) => bridge.terminalClose(terminalId, input),
     detach: terminalId => bridge.terminalDetach(terminalId),
     subscribe: listener => bridge.onTerminalEvent(listener),
   };
@@ -269,10 +269,15 @@ export const createWebTerminalTransport = (): TerminalTransport | undefined => {
     },
     input: (terminalId, data) => sendToTerminal(terminalId, { type: 'input', terminalId, data }),
     resize: (terminalId, cols, rows) => sendToTerminal(terminalId, { type: 'resize', terminalId, cols, rows }),
-    close: async terminalId => {
-      await sendToTerminal(terminalId, { type: 'close', terminalId });
-      connections.get(terminalId)?.closeSocket();
-      connections.delete(terminalId);
+    close: async (terminalId, input) => {
+      const connection = input
+        ? await getConnection(input, getTargetConnectionKey(input))
+        : connections.get(terminalId);
+      if (!connection) return;
+      connection.send({ type: 'close', terminalId });
+      const terminalConnection = connections.get(terminalId);
+      if (terminalConnection && terminalConnection !== connection) terminalConnection.closeSocket();
+      if (terminalConnection) connections.delete(terminalId);
     },
     detach: async terminalId => {
       await sendToTerminal(terminalId, { type: 'detach', terminalId });

@@ -170,6 +170,11 @@ const resolveGeneralTerminal = async (input: TerminalTargetInput) => ({
   cwd: await realpath(input.cwd?.trim() || app.getPath('home')),
 });
 
+const resolveTerminalTarget = async (input: TerminalTargetInput) =>
+  input.kind === 'general'
+    ? await resolveGeneralTerminal(input)
+    : await resolveTerminalWorkspace(input);
+
 const resolveEditorWorkspace = (target: EditorTarget) => resolveGitWorkspace(target, 'editor');
 
 const getPortalTerminalClient = () => {
@@ -241,9 +246,10 @@ const registerIpcHandlers = () => {
     const size = parseTerminalResize(cols, rows);
     return getPortalTerminalClient().resize(parseTerminalId(terminalId), size.cols, size.rows);
   });
-  ipcMain.handle('terminal:close', (_event, terminalId: unknown) =>
-    getPortalTerminalClient().close(parseTerminalId(terminalId)),
-  );
+  ipcMain.handle('terminal:close', async (_event, terminalId: unknown, input?: unknown) => {
+    const resolved = input === undefined ? undefined : await resolveTerminalTarget(parseTerminalTargetInput(input));
+    return getPortalTerminalClient().close(parseTerminalId(terminalId), resolved);
+  });
   ipcMain.handle('terminal:detach', (event, terminalId: unknown) =>
     getPortalTerminalClient().detach(parseTerminalId(terminalId), event.sender),
   );

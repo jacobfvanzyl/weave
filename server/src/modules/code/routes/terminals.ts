@@ -89,12 +89,21 @@ const resolveTerminalTarget = async (c: any, resourceId: string, body: Record<st
   const kind: TerminalSessionKind = body.kind === 'workspace' ? 'workspace' : 'general';
 
   if (kind === 'general') {
-    const portal = listPortalConnections(resourceId).find(connection => connection.status === 'online');
+    const requestedPortalId = optionalString(body.portalId);
+    const requestedRootId = optionalString(body.rootId);
+    const portal = requestedPortalId
+      ? listPortalConnections(resourceId).find(connection =>
+        connection.status === 'online' && connection.portalId === requestedPortalId)
+      : resolvePortalForTarget({
+        userId: resourceId,
+        rootId: requestedRootId,
+        workspacePath: optionalString(body.workspacePath) ?? optionalString(body.cwd),
+      });
     if (!portal) throw new Error('No online Portal is available for this terminal.');
     return {
       kind,
       portalId: portal.portalId,
-      rootId: optionalString(body.rootId) ?? portalRootId(portal),
+      rootId: requestedRootId ?? portalRootId(portal),
     };
   }
 

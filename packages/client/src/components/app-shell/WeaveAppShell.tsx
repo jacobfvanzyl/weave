@@ -21,6 +21,7 @@ import { TerminalPaneHost } from '../terminal/TerminalPaneHost';
 import type { TerminalPanelTab, TerminalPanelTabsChange, TerminalPanelTarget } from '../terminal/TerminalPanel';
 import type { TerminalTargetInput, TerminalTransport, TerminalWindowRecord } from '../../lib/terminal-types';
 import { WindowStreamOverlayHost } from '../window-stream/WindowStreamOverlayHost';
+import { shouldCloseUnavailableTerminalPane } from './terminal-pane-availability';
 import { ContextBreadcrumb } from '../workspace/ContextBreadcrumb';
 import { WorkspaceMainContent } from '../workspace/WorkspaceMainContent';
 import {
@@ -55,6 +56,16 @@ const terminalTargetInput = (target: TerminalPanelTarget): TerminalTargetInput =
   repoPath: target.repoPath,
   workspacePath: target.workspacePath,
   cwd: target.cwd,
+});
+
+const terminalTargetInputForTab = (target: TerminalPanelTarget, tab: TerminalPanelTab): TerminalTargetInput => ({
+  ...terminalTargetInput(target),
+  terminalId: tab.terminalId,
+  portalId: tab.portalId ?? target.portalId,
+  rootId: tab.rootId ?? target.rootId,
+  projectId: tab.projectId ?? target.projectId,
+  workspaceId: tab.workspaceId ?? target.workspaceId,
+  cwd: tab.cwd ?? target.cwd,
 });
 
 const isTerminalWindowForTarget = (window: TerminalWindowRecord, target: TerminalPanelTarget) => {
@@ -191,6 +202,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const sideEditorTargetKey = editorTarget ? `code:${editorTarget.workspaceId}` : notesTarget ? `notes:${notesTarget.workspaceId}` : undefined;
   const terminalWorkspaceId = terminalTarget?.workspaceId;
   const terminalTargetKey = terminalTarget?.terminalId;
+  const hasWorkspaceTerminalContext = Boolean(workspaceTargets.activeProjectId && workspaceTargets.activeWorkspaceId);
   const terminalTransport = useMemo<TerminalTransport | undefined>(() => createTerminalTransport(), []);
   const [terminalSyncingTargets, setTerminalSyncingTargets] = useState<Set<string>>(() => new Set());
   const [terminalSyncErrors, setTerminalSyncErrors] = useState<Record<string, string | undefined>>({});
@@ -471,7 +483,7 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
       setTerminalTargetError(key, undefined);
     }
     try {
-      await terminalTransport.close(tab.terminalId);
+      await terminalTransport.close(tab.terminalId, terminalTargetInputForTab(target, tab));
     } catch {
       // Reconciliation below decides what still exists.
     }
@@ -670,9 +682,26 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   }, [activeSurface, focusEditor, showEditorPane, sideEditorTargetKey]);
 
   useEffect(() => {
-    if (hasTerminalPaneTarget || !paneVisibility.terminalOpen) return;
+    if (!shouldCloseUnavailableTerminalPane({
+      activeProduct,
+      hasTerminalPaneTarget,
+      hasWorkspaceTerminalContext,
+      isPortalsFetched: workspaceTargets.portalsQuery.isFetched,
+      isProjectsFetched: projectsQuery.isFetched,
+      terminalOpen: paneVisibility.terminalOpen,
+    })) {
+      return;
+    }
     closePane('terminal');
-  }, [closePane, hasTerminalPaneTarget, paneVisibility.terminalOpen]);
+  }, [
+    activeProduct,
+    closePane,
+    hasTerminalPaneTarget,
+    hasWorkspaceTerminalContext,
+    paneVisibility.terminalOpen,
+    projectsQuery.isFetched,
+    workspaceTargets.portalsQuery.isFetched,
+  ]);
   const isSidebarSurfaceVisible = isSidebarOpen || showSidebarPreview;
   const hasFloatingLeftAction = showHeaderSidebarToggle || showPinnedSidebarToggle || Boolean(generalTerminalTarget) || hasWindowStreamPortal;
   const hasHeaderLeftAction = showHeaderSidebarToggle || Boolean(generalTerminalTarget) || hasWindowStreamPortal;

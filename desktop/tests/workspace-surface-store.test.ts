@@ -146,6 +146,34 @@ describe('workspace surface store', () => {
     });
   });
 
+  it('normalizes same-version persisted surface layouts before restoring them', async () => {
+    const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore(storage => {
+      storage.setItem('weave-surface', JSON.stringify({
+        state: {
+          threadId: 'thread-1',
+          activeSurface: { kind: 'thread', threadId: 'thread-1' },
+          paneVisibility: { chatOpen: true, editorOpen: false },
+          surfaceLayouts: {
+            'workspace:project-1:workspace-1': {
+              paneVisibility: { chatOpen: false, editorOpen: true },
+              maximizedPane: 'terminal',
+            },
+          },
+          maximizedPane: null,
+        },
+        version: 1,
+      }));
+    });
+
+    useWorkspaceSurfaceStore.getState().selectWorkspace('project-1', 'workspace-1');
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      activeSurface: { kind: 'workspace', projectId: 'project-1', workspaceId: 'workspace-1' },
+      paneVisibility: { chatOpen: false, editorOpen: true, terminalOpen: true },
+      maximizedPane: 'terminal',
+      preMaximizePaneVisibility: undefined,
+    });
+  });
+
   it('repairs a persisted workspace surface when that workspace is no longer visible', async () => {
     const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore(storage => {
       storage.setItem('weave-surface', JSON.stringify({

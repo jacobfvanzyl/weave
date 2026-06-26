@@ -12,10 +12,16 @@ type GhosttyTerminalViewProps = {
 };
 
 export type GhosttyTerminalHandle = {
-  fit: () => void;
+  fit: () => TerminalGridSize | undefined;
   focus: () => void;
-  getSize: () => { cols: number; rows: number } | undefined;
+  getSize: () => TerminalGridSize | undefined;
+  resetAndWrite: (data: string) => void;
   write: (data: string) => void;
+};
+
+type TerminalGridSize = {
+  cols: number;
+  rows: number;
 };
 
 type TerminalCursorStyle = 'block' | 'underline' | 'bar';
@@ -88,6 +94,19 @@ const applyCursorStyleSequences = (terminal: Terminal, data: string, incompleteS
 const writeTerminalData = (terminal: Terminal, data: string, incompleteCursorSequence: { current: string }) => {
   applyCursorStyleSequences(terminal, data, incompleteCursorSequence);
   terminal.write(data);
+};
+
+const fitTerminal = (
+  terminal: Terminal | null | undefined,
+  fitAddon: FitAddon | null | undefined,
+): TerminalGridSize | undefined => {
+  if (!terminal || !fitAddon) return undefined;
+
+  const proposedSize = fitAddon.proposeDimensions();
+  fitAddon.fit();
+  if (!proposedSize) return undefined;
+
+  return { cols: proposedSize.cols, rows: proposedSize.rows };
 };
 
 const terminalFontFallbackFamily =
@@ -184,11 +203,22 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
     const incompleteCursorSequenceRef = useRef('');
 
     useImperativeHandle(ref, () => ({
-      fit: () => fitAddonRef.current?.fit(),
+      fit: () => fitTerminal(terminalRef.current, fitAddonRef.current),
       focus: () => terminalRef.current?.focus(),
       getSize: () => terminalRef.current
         ? { cols: terminalRef.current.cols, rows: terminalRef.current.rows }
         : undefined,
+      resetAndWrite: data => {
+        const terminal = terminalRef.current;
+        incompleteCursorSequenceRef.current = '';
+        if (terminal) {
+          terminal.reset();
+          writeTerminalData(terminal, data, incompleteCursorSequenceRef);
+          return;
+        }
+
+        pendingWritesRef.current = [data];
+      },
       write: data => {
         const terminal = terminalRef.current;
         if (terminal) {
@@ -204,6 +234,32 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
       let disposed = false;
       let terminal: Terminal | undefined;
       let fitAddon: FitAddon | undefined;
+      let terminalResizeObserver: ResizeObserver | undefined;
+      const initialFitFrames = new Set<number>();
+      const initialFitTimers = new Set<number>();
+
+      const emitFittedSize = () => {
+        if (disposed || terminalRef.current !== terminal || fitAddonRef.current !== fitAddon) return;
+        const nextSize = fitTerminal(terminal, fitAddon);
+        if (nextSize) onResize(nextSize.cols, nextSize.rows);
+      };
+
+      const scheduleInitialFit = (delayMs: number) => {
+        if (delayMs <= 0) {
+          const frame = window.requestAnimationFrame(() => {
+            initialFitFrames.delete(frame);
+            emitFittedSize();
+          });
+          initialFitFrames.add(frame);
+          return;
+        }
+
+        const timer = window.setTimeout(() => {
+          initialFitTimers.delete(timer);
+          emitFittedSize();
+        }, delayMs);
+        initialFitTimers.add(timer);
+      };
 
       const setup = async () => {
         const [ghostty, fontConfig] = await Promise.all([
@@ -233,9 +289,15 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
         const resizeSubscription = terminal.onResize(size => onResize(size.cols, size.rows));
         const titleSubscription = terminal.onTitleChange(title => onTitleChange?.(title));
 
-        fitAddon.fit();
+        const fittedSize = fitTerminal(terminal, fitAddon);
         fitAddon.observeResize();
-        onResize(terminal.cols, terminal.rows);
+        if (fittedSize) onResize(fittedSize.cols, fittedSize.rows);
+        terminalResizeObserver = new ResizeObserver(() => {
+          emitFittedSize();
+          scheduleInitialFit(0);
+        });
+        terminalResizeObserver.observe(containerRef.current);
+        [0, 50, 150, 350, 750].forEach(scheduleInitialFit);
 
         const pendingWrites = pendingWritesRef.current;
         pendingWritesRef.current = [];
@@ -268,6 +330,9 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
 
       return () => {
         disposed = true;
+        terminalResizeObserver?.disconnect();
+        initialFitFrames.forEach(frame => window.cancelAnimationFrame(frame));
+        initialFitTimers.forEach(timer => window.clearTimeout(timer));
         terminalRef.current = null;
         fitAddonRef.current = null;
         incompleteCursorSequenceRef.current = '';

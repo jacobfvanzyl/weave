@@ -95,36 +95,9 @@ export type TerminalPortalConfig = {
   roots?: TerminalPortalRoot[];
 };
 
-export type PortalPtyExitEvent = {
-  exitCode?: number;
-  signal?: number | string;
-};
-
 type Disposable = {
   dispose: () => void;
 };
-
-export type PortalPty = {
-  pid?: number;
-  write: (data: string) => void;
-  resize: (cols: number, rows: number) => void;
-  close: () => void;
-  onData: (listener: (data: string) => void) => Disposable;
-  onExit: (listener: (event: PortalPtyExitEvent) => void) => Disposable;
-};
-
-export type PortalPtySpawnOptions = {
-  cols: number;
-  rows: number;
-  cwd: string;
-  env: Record<string, string>;
-};
-
-export type PortalPtySpawner = (
-  file: string,
-  args: string[],
-  options: PortalPtySpawnOptions,
-) => PortalPty | Promise<PortalPty>;
 
 type NormalizedTerminalStartInput = TerminalStartInput & {
   cols: number;
@@ -146,12 +119,12 @@ type TerminalSession = {
   sessionId: string;
   kind: TerminalSessionKind;
   terminalId: string;
-  attachSessionId?: string;
-  window: TerminalWindowRecord;
+  window: PortalTmuxWindowRecord;
+  windowId: string;
+  paneId: string;
   projectId?: string;
   workspaceId?: string;
   cwd: string;
-  pty: PortalPty;
   cols: number;
   rows: number;
   replay: string;
@@ -164,19 +137,21 @@ type TerminalSession = {
 
 export type PortalTerminalHostOptions = {
   config: TerminalPortalConfig;
-  spawner?: PortalPtySpawner;
   tmux?: PortalTmuxController;
   replayLimitBytes?: number;
   outputBatchMs?: number;
+  replayCaptureSettleMs?: number;
   env?: Record<string, string | undefined>;
 };
 
 const defaultReplayLimitBytes = 200 * 1024;
 const defaultOutputBatchMs = 16;
+const defaultReplayCaptureSettleMs = 100;
 
 const toErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const byteLength = (value: string) => new TextEncoder().encode(value).byteLength;
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const parseIdentifier = (value: unknown, name: string) => {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required.`);
@@ -293,12 +268,25 @@ type ResolvedTerminalTarget = NormalizedTerminalTargetInput & {
   scopeIds: string[];
 };
 
-export type PortalTmuxAttachCommand = {
-  attachSessionId: string;
-  file: string;
-  args: string[];
-  cwd: string;
-  env: Record<string, string>;
+export type PortalTmuxWindowRecord = TerminalWindowRecord & {
+  windowIndex: string;
+  windowId: string;
+  paneId: string;
+  target: string;
+};
+
+export type PortalTmuxControlClientHandlers = {
+  onOutput: (paneId: string, data: string) => void;
+  onWindowClose: (windowId: string) => void;
+  onExit: (reason?: string) => void;
+  onError: (error: Error) => void;
+};
+
+export type PortalTmuxControlClient = {
+  start: () => Promise<void>;
+  input: (paneId: string, data: string) => Promise<void>;
+  resize: (windowId: string, cols: number, rows: number) => Promise<void>;
+  close: () => void;
 };
 
 export type PortalTmuxController = {
@@ -307,13 +295,13 @@ export type PortalTmuxController = {
   createWindow: (
     target: ResolvedTerminalTarget,
     input: { slot?: number; env: Record<string, string>; shell: { file: string; args: string[] } },
-  ) => Promise<TerminalWindowRecord>;
+  ) => Promise<PortalTmuxWindowRecord>;
   ensureWindow: (
     target: ResolvedTerminalTarget,
     input: { terminalId: string; env: Record<string, string>; shell: { file: string; args: string[] } },
-  ) => Promise<TerminalWindowRecord>;
-  getAttachCommand: (terminalId: string, clientId: string) => Promise<PortalTmuxAttachCommand>;
-  killAttachment: (attachSessionId: string) => Promise<void>;
+  ) => Promise<PortalTmuxWindowRecord>;
+  findWindow: (terminalId: string) => Promise<PortalTmuxWindowRecord | undefined>;
+  openControlClient: (handlers: PortalTmuxControlClientHandlers) => Promise<PortalTmuxControlClient>;
   killWindow: (terminalId: string) => Promise<void>;
   captureWindow?: (terminalId: string) => Promise<string>;
 };
@@ -413,8 +401,7 @@ const terminalScopeId = (scope: TerminalScope) => base64UrlEncode(stableJson(sco
 const deterministicTerminalId = (scopeId: string, slot: number) => `${terminalProtocolVersion}:${scopeId}:slot:${slot}`;
 
 const uniqueStrings = (values: string[]) => [...new Set(values)];
-const targetScopeIds = (target: ResolvedTerminalTarget) =>
-  target.scopeIds?.length ? target.scopeIds : [target.scopeId];
+const targetScopeIds = (target: ResolvedTerminalTarget) => target.scopeIds?.length ? target.scopeIds : [target.scopeId];
 
 const parseTerminalScope = (scopeId: string): TerminalScope | undefined => {
   try {
@@ -500,221 +487,6 @@ const terminalProcessDisplayName = (command: string | undefined) => {
   return ignoredTerminalProcessNames.has(normalized) ? undefined : basename;
 };
 
-const nativePtyLibraryName = Deno.build.os === 'darwin'
-  ? 'libweave_portal_pty.dylib'
-  : Deno.build.os === 'linux'
-  ? 'libweave_portal_pty.so'
-  : undefined;
-
-const nativePtyReadNone = 0;
-const nativePtyReadData = 1;
-const nativePtyReadExit = 2;
-const nativePtyReadError = -1;
-
-type PointerValue = NonNullable<ReturnType<typeof Deno.UnsafePointer.create>>;
-
-const nativePtySymbols = {
-  weave_pty_create: { parameters: ['buffer', 'usize', 'buffer'], result: 'pointer' },
-  weave_pty_pid: { parameters: ['pointer'], result: 'u32' },
-  weave_pty_read: { parameters: ['pointer', 'buffer', 'buffer', 'buffer', 'buffer'], result: 'i32' },
-  weave_pty_write: { parameters: ['pointer', 'buffer', 'usize', 'buffer'], result: 'i32' },
-  weave_pty_resize: { parameters: ['pointer', 'u16', 'u16', 'buffer'], result: 'i32' },
-  weave_pty_close: { parameters: ['pointer'], result: 'void' },
-  weave_pty_dispose: { parameters: ['pointer'], result: 'void' },
-  weave_pty_free_data: { parameters: ['pointer', 'usize'], result: 'void' },
-  weave_pty_free_string: { parameters: ['pointer'], result: 'void' },
-} as const;
-
-type NativePtyLibrary = Deno.DynamicLibrary<typeof nativePtySymbols>;
-
-let nativePtyLibraryPromise: Promise<NativePtyLibrary> | undefined;
-
-const pointerOut = (): BigUint64Array<ArrayBuffer> => new BigUint64Array(new ArrayBuffer(8));
-
-const pathFromFileUrl = (url: URL) => {
-  if (url.protocol !== 'file:') throw new Error('Portal native PTY library must be loaded from a file URL.');
-  return decodeURIComponent(url.pathname);
-};
-
-const fileExists = async (path: string) => {
-  try {
-    return (await Deno.stat(path)).isFile;
-  } catch {
-    return false;
-  }
-};
-
-const materializeNativePtyLibrary = async (libraryUrl: URL) => {
-  const bytes = await Deno.readFile(libraryUrl).catch((error) => {
-    throw new Error(
-      `Portal native PTY library was not found. Run "deno task --config portal/deno.json native" first. ${
-        toErrorMessage(error)
-      }`,
-    );
-  });
-  const directory = await Deno.makeTempDir({ prefix: 'weave-portal-pty-' });
-  const path = `${directory}/${nativePtyLibraryName}`;
-  await Deno.writeFile(path, bytes, { mode: 0o700 });
-  return path;
-};
-
-const resolveNativePtyLibraryPath = async () => {
-  if (!nativePtyLibraryName) throw new Error(`Portal native PTY is not supported on ${Deno.build.os}.`);
-  const override = Deno.env.get('WEAVE_PORTAL_PTY_LIB_PATH')?.trim();
-  if (override) return override;
-
-  const libraryUrl = new URL(`../native/pty/target/release/${nativePtyLibraryName}`, import.meta.url);
-  const libraryPath = pathFromFileUrl(libraryUrl);
-  if (await fileExists(libraryPath)) return libraryPath;
-  return await materializeNativePtyLibrary(libraryUrl);
-};
-
-const loadNativePtyLibrary = () => {
-  nativePtyLibraryPromise ??= resolveNativePtyLibraryPath().then((path) => Deno.dlopen(path, nativePtySymbols));
-  return nativePtyLibraryPromise;
-};
-
-const pointerFromOut = (out: BigUint64Array) => out[0] === 0n ? null : Deno.UnsafePointer.create(out[0]);
-
-const readNativeError = (library: NativePtyLibrary, errorOut: BigUint64Array, fallback: string) => {
-  const pointer = pointerFromOut(errorOut);
-  if (!pointer) return fallback;
-  try {
-    return Deno.UnsafePointerView.getCString(pointer);
-  } finally {
-    library.symbols.weave_pty_free_string(pointer);
-    errorOut[0] = 0n;
-  }
-};
-
-const throwNativeError = (library: NativePtyLibrary, errorOut: BigUint64Array, fallback: string): never => {
-  throw new Error(readNativeError(library, errorOut, fallback));
-};
-
-const createNativePty: PortalPtySpawner = async (file, args, options) => {
-  const library = await loadNativePtyLibrary();
-  const config = textEncoder.encode(JSON.stringify({
-    file,
-    args,
-    cwd: options.cwd,
-    env: options.env,
-    cols: options.cols,
-    rows: options.rows,
-  }));
-  const errorOut = pointerOut();
-  const pty = library.symbols.weave_pty_create(config, BigInt(config.byteLength), errorOut) as PointerValue | null;
-  if (!pty) throwNativeError(library, errorOut, 'native PTY create failed');
-
-  const pid = library.symbols.weave_pty_pid(pty);
-  const dataListeners = new Set<(data: string) => void>();
-  const exitListeners = new Set<(event: PortalPtyExitEvent) => void>();
-  const decoder = new TextDecoder();
-  let pollTimer: ReturnType<typeof setTimeout> | undefined;
-  let exited = false;
-  let disposed = false;
-
-  const emitData = (data: string) => {
-    if (!data) return;
-    for (const listener of [...dataListeners]) listener(data);
-  };
-
-  const disposeNative = () => {
-    if (disposed) return;
-    disposed = true;
-    if (pollTimer !== undefined) clearTimeout(pollTimer);
-    library.symbols.weave_pty_dispose(pty);
-  };
-
-  const emitExit = (event: PortalPtyExitEvent) => {
-    if (exited) return;
-    exited = true;
-    const trailing = decoder.decode();
-    if (trailing) emitData(trailing);
-    for (const listener of [...exitListeners]) listener(event);
-    disposeNative();
-  };
-
-  const poll = () => {
-    if (disposed || exited) return;
-    let reads = 0;
-    while (reads < 64) {
-      reads += 1;
-      const dataOut = pointerOut();
-      const lenOut = pointerOut();
-      const exitCodeOut = new Int32Array(1);
-      const readErrorOut = pointerOut();
-      const result = library.symbols.weave_pty_read(pty, dataOut, lenOut, exitCodeOut, readErrorOut);
-
-      if (result === nativePtyReadNone) break;
-      if (result === nativePtyReadError) {
-        emitExit({ signal: readNativeError(library, readErrorOut, 'native PTY read failed') });
-        return;
-      }
-      if (result === nativePtyReadExit) {
-        emitExit({ exitCode: exitCodeOut[0] });
-        return;
-      }
-      if (result !== nativePtyReadData) {
-        emitExit({ signal: `native PTY returned unknown read status: ${result}` });
-        return;
-      }
-
-      const dataPointer = pointerFromOut(dataOut);
-      const byteLength = Number(lenOut[0]);
-      if (!dataPointer || byteLength <= 0) continue;
-      try {
-        const buffer = new Deno.UnsafePointerView(dataPointer).getArrayBuffer(byteLength);
-        emitData(decoder.decode(new Uint8Array(buffer).slice(), { stream: true }));
-      } finally {
-        library.symbols.weave_pty_free_data(dataPointer, BigInt(byteLength));
-      }
-    }
-
-    pollTimer = setTimeout(poll, reads >= 64 ? 0 : 8);
-  };
-
-  pollTimer = setTimeout(poll, 0);
-
-  const callWithError = (callback: (nextErrorOut: BigUint64Array<ArrayBuffer>) => number, fallback: string) => {
-    if (disposed || exited) return;
-    const nextErrorOut = pointerOut();
-    const result = callback(nextErrorOut);
-    if (result !== 0) emitExit({ signal: readNativeError(library, nextErrorOut, fallback) });
-  };
-
-  return {
-    pid,
-    write: (data) => {
-      const bytes = textEncoder.encode(data);
-      callWithError(
-        (nextErrorOut) => library.symbols.weave_pty_write(pty, bytes, BigInt(bytes.byteLength), nextErrorOut),
-        'native PTY write failed',
-      );
-    },
-    resize: (cols, rows) => {
-      callWithError(
-        (nextErrorOut) => library.symbols.weave_pty_resize(pty, cols, rows, nextErrorOut),
-        'native PTY resize failed',
-      );
-    },
-    close: () => {
-      if (disposed || exited) return;
-      library.symbols.weave_pty_close(pty);
-      setTimeout(() => {
-        if (!exited) emitExit({});
-      }, 2_000);
-    },
-    onData: (listener) => {
-      dataListeners.add(listener);
-      return { dispose: () => dataListeners.delete(listener) };
-    },
-    onExit: (listener) => {
-      exitListeners.add(listener);
-      return { dispose: () => exitListeners.delete(listener) };
-    },
-  };
-};
-
 type TmuxCommandResult = {
   ok: boolean;
   stdout: string;
@@ -722,9 +494,11 @@ type TmuxCommandResult = {
   code: number;
 };
 
-type TmuxWindowDetails = TerminalWindowRecord & {
-  windowIndex: string;
-  target: string;
+type TmuxWindowDetails = PortalTmuxWindowRecord;
+
+type TmuxPaneScreenState = {
+  alternateOn: boolean;
+  cursor?: { x: number; y: number };
 };
 
 export type PortalTmuxRunner = (
@@ -732,12 +506,356 @@ export type PortalTmuxRunner = (
   options?: { cwd?: string; env?: Record<string, string> },
 ) => Promise<TmuxCommandResult>;
 
+type TmuxControlClientFactoryOptions = {
+  args: string[];
+  env: Record<string, string>;
+  handlers: PortalTmuxControlClientHandlers;
+  debug: (event: string, details?: Record<string, unknown>) => void;
+};
+
+const terminalDebugEnabled = (env: Record<string, string | undefined>) =>
+  /^(1|true|yes|on)$/i.test(env.WEAVE_PORTAL_TERMINAL_DEBUG?.trim() ?? '');
+
+const terminalWindowDiagnosticRecord = (
+  window: TerminalWindowRecord & { target?: string; windowIndex?: string; windowId?: string; paneId?: string },
+) => ({
+  terminalId: window.terminalId,
+  slot: window.slot,
+  kind: window.kind,
+  cwd: window.cwd,
+  title: window.title,
+  processName: window.processName,
+  scopeId: window.scopeId,
+  portalId: window.portalId,
+  rootId: window.rootId,
+  projectId: window.projectId,
+  workspaceId: window.workspaceId,
+  target: window.target,
+  windowIndex: window.windowIndex,
+  windowId: window.windowId,
+  paneId: window.paneId,
+});
+
+const toTerminalWindowRecord = (window: TerminalWindowRecord): TerminalWindowRecord => ({
+  terminalId: window.terminalId,
+  scopeId: window.scopeId,
+  slot: window.slot,
+  kind: window.kind,
+  cwd: window.cwd,
+  title: window.title,
+  ...(window.processName ? { processName: window.processName } : {}),
+  ...(window.portalId ? { portalId: window.portalId } : {}),
+  ...(window.rootId ? { rootId: window.rootId } : {}),
+  ...(window.projectId ? { projectId: window.projectId } : {}),
+  ...(window.workspaceId ? { workspaceId: window.workspaceId } : {}),
+});
+
+const logTerminalDebug = (
+  env: Record<string, string | undefined>,
+  event: string,
+  details: Record<string, unknown> = {},
+) => {
+  if (!terminalDebugEnabled(env)) return;
+  console.log(`[portal:terminal] ${JSON.stringify({ event, ...details })}`);
+};
+
+const tmuxCommandQuote = (value: string) =>
+  /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+
+const normalizeCapturedTerminalReplay = (data: string) => data.replace(/\r?\n/g, '\r\n');
+
+const terminalCursorPositionSequence = (cursor: { x: number; y: number } | undefined) => {
+  if (!cursor) return '';
+  if (!Number.isInteger(cursor.x) || !Number.isInteger(cursor.y) || cursor.x < 0 || cursor.y < 0) return '';
+  return `\x1b[${cursor.y + 1};${cursor.x + 1}H`;
+};
+
+export const encodeTerminalInputHex = (data: string) =>
+  [...textEncoder.encode(data)].map((byte) => byte.toString(16).padStart(2, '0'));
+
+export const decodeTmuxControlOutputValue = (value: string) => {
+  const bytes: number[] = [];
+  for (let index = 0; index < value.length;) {
+    const char = value[index];
+    if (char !== '\\') {
+      const codePoint = value.codePointAt(index);
+      if (codePoint === undefined) break;
+      bytes.push(...textEncoder.encode(String.fromCodePoint(codePoint)));
+      index += codePoint > 0xffff ? 2 : 1;
+      continue;
+    }
+
+    const octal = value.slice(index + 1, index + 4);
+    if (/^[0-7]{3}$/.test(octal)) {
+      bytes.push(Number.parseInt(octal, 8));
+      index += 4;
+      continue;
+    }
+
+    const escaped = value[index + 1];
+    if (escaped === undefined) {
+      bytes.push(...textEncoder.encode('\\'));
+      index += 1;
+      continue;
+    }
+    bytes.push(...textEncoder.encode(escaped));
+    index += 2;
+  }
+  return textDecoder.decode(new Uint8Array(bytes));
+};
+
+export type TmuxControlNotification =
+  | { type: 'output'; paneId: string; data: string }
+  | { type: 'window-close'; windowId: string }
+  | { type: 'exit'; reason?: string }
+  | { type: 'other' };
+
+export const parseTmuxControlNotification = (line: string): TmuxControlNotification => {
+  if (line.startsWith('%output ')) {
+    const match = /^%output\s+(\S+)\s?(.*)$/.exec(line);
+    return match
+      ? { type: 'output', paneId: match[1], data: decodeTmuxControlOutputValue(match[2] ?? '') }
+      : { type: 'other' };
+  }
+
+  if (line.startsWith('%extended-output ')) {
+    const match = /^%extended-output\s+(\S+)\s+.*?\s:\s?(.*)$/.exec(line);
+    return match
+      ? { type: 'output', paneId: match[1], data: decodeTmuxControlOutputValue(match[2] ?? '') }
+      : { type: 'other' };
+  }
+
+  if (line.startsWith('%window-close ') || line.startsWith('%unlinked-window-close ')) {
+    const [, windowId = ''] = line.split(/\s+/, 2);
+    return windowId ? { type: 'window-close', windowId } : { type: 'other' };
+  }
+
+  if (line.startsWith('%exit')) {
+    const reason = line.slice('%exit'.length).trim() || undefined;
+    return { type: 'exit', reason };
+  }
+
+  return { type: 'other' };
+};
+
+class TmuxControlModeClient implements PortalTmuxControlClient {
+  private process?: Deno.ChildProcess;
+  private writer?: WritableStreamDefaultWriter<Uint8Array>;
+  private commandQueue = Promise.resolve();
+  private pendingCommand?: { resolve: () => void; reject: (error: Error) => void };
+  private attachReady?: { resolve: () => void };
+  private commandBlockDepth = 0;
+  private closing = false;
+
+  constructor(private readonly options: TmuxControlClientFactoryOptions) {}
+
+  async start() {
+    if (this.process) return;
+    try {
+      this.process = new Deno.Command('tmux', {
+        args: this.options.args,
+        env: this.options.env,
+        clearEnv: true,
+        stdin: 'piped',
+        stdout: 'piped',
+        stderr: 'piped',
+      }).spawn();
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) throw new Error(tmuxRequiredMessage);
+      throw error;
+    }
+    this.writer = this.process.stdin.getWriter();
+    const attachReady = new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.attachReady = undefined;
+        resolve();
+      }, 250);
+      this.attachReady = {
+        resolve: () => {
+          clearTimeout(timeout);
+          resolve();
+        },
+      };
+    });
+    void this.readStdout(this.process.stdout);
+    void this.readStderr(this.process.stderr);
+    void this.process.status.then((status) => {
+      const reason = status.success ? undefined : `tmux control client exited with code ${status.code}`;
+      this.finishAttachReady();
+      if (!this.closing) this.options.handlers.onExit(reason);
+    }).catch((error) => {
+      this.finishAttachReady();
+      if (!this.closing) this.options.handlers.onError(error instanceof Error ? error : new Error(String(error)));
+    });
+    await attachReady;
+  }
+
+  async input(paneId: string, data: string) {
+    const hex = encodeTerminalInputHex(data);
+    for (let index = 0; index < hex.length; index += 256) {
+      await this.sendCommand(['send-keys', '-H', '-t', paneId, ...hex.slice(index, index + 256)]);
+    }
+  }
+
+  async resize(windowId: string, cols: number, rows: number) {
+    await this.sendCommand(['refresh-client', '-C', `${windowId}:${cols}x${rows}`]);
+  }
+
+  close() {
+    if (this.closing) return;
+    this.closing = true;
+    this.finishPendingCommand(new Error('tmux control client closed.'));
+    const writer = this.writer;
+    if (writer) {
+      void writer.write(textEncoder.encode('detach-client\n')).catch(() => undefined).finally(() => {
+        void writer.close().catch(() => undefined);
+      });
+    }
+    setTimeout(() => {
+      try {
+        this.process?.kill('SIGTERM');
+      } catch {
+        // Process may have already exited after detach-client.
+      }
+    }, 500);
+  }
+
+  private async sendCommand(args: string[]) {
+    if (!args.length || this.closing) return;
+    const commandPromise = this.commandQueue.catch(() => undefined).then(() => this.writeCommandAndWait(args));
+    this.commandQueue = commandPromise.catch(() => undefined);
+    await commandPromise;
+  }
+
+  private async writeCommandAndWait(args: string[]) {
+    const writer = this.writer;
+    if (!writer) throw new Error('tmux control client is not running.');
+    const command = `${args.map(tmuxCommandQuote).join(' ')}\n`;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (this.pendingCommand === pending) this.pendingCommand = undefined;
+        reject(new Error(`Timed out waiting for tmux command: ${args[0] ?? 'unknown'}`));
+      }, 5_000);
+      const pending = {
+        resolve: () => {
+          clearTimeout(timeout);
+          resolve();
+        },
+        reject: (error: Error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      };
+      this.pendingCommand = pending;
+      writer.write(textEncoder.encode(command)).catch((error) => {
+        if (this.pendingCommand === pending) this.pendingCommand = undefined;
+        clearTimeout(timeout);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
+  private async readStdout(stream: ReadableStream<Uint8Array>) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffered = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+        buffered = this.handleBufferedOutput(buffered);
+      }
+      buffered += decoder.decode();
+      this.handleBufferedOutput(`${buffered}\n`);
+    } catch (error) {
+      if (!this.closing) this.options.handlers.onError(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private async readStderr(stream: ReadableStream<Uint8Array>) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffered = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+      }
+      buffered += decoder.decode();
+      if (buffered.trim()) this.options.debug('tmux.control.stderr', { stderr: buffered.trim() });
+    } catch {
+      // Stderr diagnostics are best-effort only.
+    }
+  }
+
+  private handleBufferedOutput(buffered: string) {
+    const lines = buffered.split(/\r?\n/);
+    const trailing = lines.pop() ?? '';
+    for (const line of lines) this.handleLine(line);
+    return trailing;
+  }
+
+  private handleLine(line: string) {
+    if (!line) return;
+    if (line.startsWith('%begin ')) {
+      this.commandBlockDepth += 1;
+      return;
+    }
+    if (line.startsWith('%end ')) {
+      this.commandBlockDepth = Math.max(0, this.commandBlockDepth - 1);
+      this.finishPendingCommand();
+      return;
+    }
+    if (line.startsWith('%error ')) {
+      this.commandBlockDepth = Math.max(0, this.commandBlockDepth - 1);
+      this.finishPendingCommand(new Error(line.slice('%error'.length).trim() || 'tmux command failed.'));
+      return;
+    }
+    if (this.commandBlockDepth > 0) return;
+
+    this.finishAttachReady();
+    const notification = parseTmuxControlNotification(line);
+    if (notification.type === 'output') {
+      this.options.handlers.onOutput(notification.paneId, notification.data);
+      return;
+    }
+    if (notification.type === 'window-close') {
+      this.options.handlers.onWindowClose(notification.windowId);
+      return;
+    }
+    if (notification.type === 'exit') {
+      this.options.handlers.onExit(notification.reason);
+    }
+  }
+
+  private finishPendingCommand(error?: Error) {
+    const pending = this.pendingCommand;
+    if (!pending) return;
+    this.pendingCommand = undefined;
+    if (error) {
+      pending.reject(error);
+      return;
+    }
+    pending.resolve();
+  }
+
+  private finishAttachReady() {
+    const attachReady = this.attachReady;
+    if (!attachReady) return;
+    this.attachReady = undefined;
+    attachReady.resolve();
+  }
+}
+
 export class TmuxTerminalController implements PortalTmuxController {
   private readonly socketPath: string;
   private readonly configPath: string;
   private readonly sessionName: string;
   private readonly env: Record<string, string | undefined>;
   private readonly runner?: PortalTmuxRunner;
+  private readonly controlClientFactory: (options: TmuxControlClientFactoryOptions) => PortalTmuxControlClient;
   private ensured = false;
   private configWritten = false;
 
@@ -748,6 +866,7 @@ export class TmuxTerminalController implements PortalTmuxController {
     configPath?: string;
     sessionName?: string;
     runner?: PortalTmuxRunner;
+    controlClientFactory?: (options: TmuxControlClientFactoryOptions) => PortalTmuxControlClient;
   } = {}) {
     const portalHome = options.portalHome ?? resolvePortalHome();
     this.socketPath = options.socketPath ?? `${portalHome}/tmux/_weave.sock`;
@@ -755,6 +874,8 @@ export class TmuxTerminalController implements PortalTmuxController {
     this.sessionName = options.sessionName ?? '_weave';
     this.env = options.env ?? Deno.env.toObject();
     this.runner = options.runner;
+    this.controlClientFactory = options.controlClientFactory ??
+      ((controlOptions) => new TmuxControlModeClient(controlOptions));
   }
 
   async listAllWindows() {
@@ -774,9 +895,9 @@ export class TmuxTerminalController implements PortalTmuxController {
     const seenTerminalIds = new Set<string>();
     return [...windows]
       .sort((left, right) =>
-        left.scopeId.localeCompare(right.scopeId)
-        || left.slot - right.slot
-        || left.terminalId.localeCompare(right.terminalId)
+        left.scopeId.localeCompare(right.scopeId) ||
+        left.slot - right.slot ||
+        left.terminalId.localeCompare(right.terminalId)
       )
       .filter((window) => {
         if (seenTerminalIds.has(window.terminalId)) return false;
@@ -797,7 +918,7 @@ export class TmuxTerminalController implements PortalTmuxController {
       const slot = input.slot ?? this.nextSlot(scoped);
       const terminalId = deterministicTerminalId(target.scopeId, slot);
       const duplicate = scoped.find((window) => window.terminalId === terminalId);
-      if (duplicate) return this.toRecord(duplicate);
+      if (duplicate) return duplicate;
 
       const title = tmuxWindowTitle(target.scopeId, slot);
       const windowEnv = { ...input.env, WEAVE_TERMINAL_ID: terminalId };
@@ -827,7 +948,7 @@ export class TmuxTerminalController implements PortalTmuxController {
       const windowTarget = `${this.sessionName}:${windowIndex}`;
       await this.setWindowMetadata(windowTarget, target, terminalId, slot, title);
       const details = await this.findWindowByTerminalId(terminalId);
-      if (details) return this.toRecord(details);
+      if (details) return details;
     }
 
     throw new Error('Could not allocate a deterministic tmux window slot.');
@@ -839,55 +960,34 @@ export class TmuxTerminalController implements PortalTmuxController {
   ) {
     await this.ensureSession(target.cwd);
     const existing = await this.findWindowByTerminalId(input.terminalId);
-    if (existing) return this.toRecord(existing);
+    if (existing) return existing;
     const parsed = parseDeterministicTerminalId(input.terminalId);
     const slot = parsed && targetScopeIds(target).includes(parsed.scopeId) ? parsed.slot : 1;
     return await this.createWindow(target, { slot, env: input.env, shell: input.shell });
   }
 
-  async getAttachCommand(terminalId: string, clientId: string) {
-    const window = await this.findWindowByTerminalId(terminalId);
-    if (!window) throw new Error('Terminal tmux window is not running.');
-    const attachSessionId = this.attachSessionName(clientId, terminalId);
-    const env = getTerminalProcessEnv(this.env);
-    await this.run(['kill-session', '-t', attachSessionId], { env }, [0, 1]);
-    await this.run(['new-session', '-d', '-s', attachSessionId, '-n', '_weave_attach_boot', '-c', window.cwd, 'sleep 2147483647'], {
-      cwd: window.cwd,
-      env,
-    });
-    await this.run(['set-option', '-t', attachSessionId, 'detach-on-destroy', 'on'], {
-      cwd: window.cwd,
-      env,
-    });
-    await this.run(['link-window', '-k', '-s', window.target, '-t', `${attachSessionId}:0`], {
-      cwd: window.cwd,
-      env,
-    });
-    await this.run(['select-window', '-t', `${attachSessionId}:0`], {
-      cwd: window.cwd,
-      env,
-    });
-    return {
-      attachSessionId,
-      file: 'tmux',
-      args: [...this.tmuxBaseArgs(), 'attach-session', '-t', attachSessionId],
-      cwd: window.cwd,
-      env: {
-        ...env,
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor',
-      },
-    };
+  async findWindow(terminalId: string) {
+    await this.ensureSession(Deno.env.get('HOME') ?? Deno.cwd());
+    return await this.findWindowByTerminalId(terminalId);
   }
 
-  async killAttachment(attachSessionId: string) {
-    await this.run(['kill-session', '-t', attachSessionId], { env: getTerminalProcessEnv(this.env) }, [0, 1]);
+  async openControlClient(handlers: PortalTmuxControlClientHandlers) {
+    const env = getTerminalProcessEnv(this.env);
+    await this.ensureSession(Deno.env.get('HOME') ?? Deno.cwd());
+    const client = this.controlClientFactory({
+      args: [...this.tmuxBaseArgs(), '-C', 'attach-session', '-t', this.sessionName],
+      env,
+      handlers,
+      debug: (event, details) => this.debug(event, details),
+    });
+    await client.start();
+    return client;
   }
 
   async killWindow(terminalId: string) {
     const window = await this.findWindowByTerminalId(terminalId);
     if (!window) return;
-    await this.run(['kill-window', '-t', window.target], { cwd: window.cwd, env: getTerminalProcessEnv(this.env) }, [
+    await this.run(['kill-window', '-t', window.windowId], { cwd: window.cwd, env: getTerminalProcessEnv(this.env) }, [
       0,
       1,
     ]);
@@ -896,21 +996,36 @@ export class TmuxTerminalController implements PortalTmuxController {
   async captureWindow(terminalId: string) {
     const window = await this.findWindowByTerminalId(terminalId);
     if (!window) return '';
+    const screenState = await this.readPaneScreenState(window).catch((): TmuxPaneScreenState => ({ alternateOn: false }));
+    const captureArgs = ['capture-pane', '-p', '-e', '-J'];
+    if (screenState.alternateOn) {
+      captureArgs.push('-a');
+    } else {
+      captureArgs.push('-S', '0');
+    }
+    captureArgs.push('-t', window.paneId);
+
+    const result = await this.run(captureArgs, { cwd: window.cwd, env: getTerminalProcessEnv(this.env) }, [0, 1]);
+    return `${result.stdout}${terminalCursorPositionSequence(screenState.cursor)}`;
+  }
+
+  private async readPaneScreenState(window: TmuxWindowDetails): Promise<TmuxPaneScreenState> {
     const result = await this.run(
       [
-        'capture-pane',
+        'display-message',
         '-p',
-        '-e',
-        '-J',
-        '-S',
-        '-2000',
         '-t',
-        window.target,
+        window.paneId,
+        '#{alternate_on}\t#{cursor_x}\t#{cursor_y}',
       ],
       { cwd: window.cwd, env: getTerminalProcessEnv(this.env) },
       [0, 1],
     );
-    return result.stdout;
+    const [alternateText = '', xText = '', yText = ''] = result.stdout.trim().split('\t');
+    const x = Number(xText);
+    const y = Number(yText);
+    const cursor = Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 ? { x, y } : undefined;
+    return { alternateOn: alternateText === '1', cursor };
   }
 
   private async ensureSession(cwd: string) {
@@ -1007,7 +1122,7 @@ export class TmuxTerminalController implements PortalTmuxController {
     }
   }
 
-  private async listAllWindowDetails() {
+  private async listAllWindowDetails(options: { suppressDebug?: boolean } = {}) {
     const result = await this.run(
       [
         'list-windows',
@@ -1016,6 +1131,8 @@ export class TmuxTerminalController implements PortalTmuxController {
         '-F',
         [
           '#{window_index}',
+          '#{window_id}',
+          '#{pane_id}',
           '#{window_name}',
           '#{@weave_terminal_id}',
           '#{@weave_scope_id}',
@@ -1031,11 +1148,20 @@ export class TmuxTerminalController implements PortalTmuxController {
       { env: getTerminalProcessEnv(this.env) },
       [0, 1],
     );
-    if (result.code !== 0) return [];
+    if (result.code !== 0) {
+      if (!options.suppressDebug) {
+        this.debug('tmux.windows.list', { code: result.code, stderr: result.stderr, count: 0, windows: [] });
+      }
+      return [];
+    }
 
     const windows = result.stdout.split('\n').map((line): TmuxWindowDetails | undefined => {
+      const columns = line.split('\t');
+      const hasTmuxIds = columns.length >= 13;
       const [
         index = '',
+        windowId = '',
+        paneId = '',
         title = '',
         terminalId = '',
         scopeId = '',
@@ -1046,20 +1172,27 @@ export class TmuxTerminalController implements PortalTmuxController {
         portalId = '',
         rootId = '',
         processCommand = '',
-      ] = line.split('\t');
+      ] = hasTmuxIds ? columns : [
+        columns[0],
+        columns[0] ? `@${columns[0]}` : '',
+        columns[0] ? `%${columns[0]}` : '',
+        ...columns.slice(1),
+      ];
       const parsed = parseDeterministicTerminalId(terminalId);
       const effectiveScopeId = scopeId || parsed?.scopeId || '';
       const scope = effectiveScopeId ? parseTerminalScope(effectiveScopeId) : undefined;
       const metadataSlot = Number(slotText);
       const slot = Number.isInteger(metadataSlot) && metadataSlot > 0 ? metadataSlot : parsed?.slot;
       if (
-        !terminalId
-        || !effectiveScopeId
-        || !scope
-        || typeof slot !== 'number'
-        || !Number.isInteger(slot)
-        || slot < 1
-        || parsed?.scopeId !== effectiveScopeId
+        !terminalId ||
+        !effectiveScopeId ||
+        !scope ||
+        typeof slot !== 'number' ||
+        !Number.isInteger(slot) ||
+        slot < 1 ||
+        parsed?.scopeId !== effectiveScopeId ||
+        !windowId ||
+        !paneId
       ) {
         return undefined;
       }
@@ -1076,10 +1209,19 @@ export class TmuxTerminalController implements PortalTmuxController {
         projectId: projectId || scope.projectId || undefined,
         workspaceId: workspaceId || scope.workspaceId || undefined,
         windowIndex: index,
-        target: `${this.sessionName}:${index}`,
+        windowId,
+        paneId,
+        target: windowId || `${this.sessionName}:${index}`,
       };
     }).filter((window): window is TmuxWindowDetails => Boolean(window));
-    return this.sortAndDedupeWindows(windows);
+    const sorted = this.sortAndDedupeWindows(windows);
+    if (!options.suppressDebug) {
+      this.debug('tmux.windows.list', {
+        count: sorted.length,
+        windows: sorted.map(terminalWindowDiagnosticRecord),
+      });
+    }
+    return sorted;
   }
 
   private async findWindowByTerminalId(terminalId: string) {
@@ -1094,19 +1236,7 @@ export class TmuxTerminalController implements PortalTmuxController {
   }
 
   private toRecord(window: TmuxWindowDetails): TerminalWindowRecord {
-    return {
-      terminalId: window.terminalId,
-      slot: window.slot,
-      kind: window.kind,
-      cwd: window.cwd,
-      title: window.title,
-      processName: window.processName,
-      scopeId: window.scopeId,
-      portalId: window.portalId,
-      rootId: window.rootId,
-      projectId: window.projectId,
-      workspaceId: window.workspaceId,
-    };
+    return toTerminalWindowRecord(window);
   }
 
   private async setWindowMetadata(
@@ -1136,10 +1266,6 @@ export class TmuxTerminalController implements PortalTmuxController {
         env: getTerminalProcessEnv(this.env),
       });
     }
-  }
-
-  private attachSessionName(clientId: string, terminalId: string) {
-    return `_weave_attach_${fnv1a(`${clientId}:${terminalId}`).slice(0, 16)}`;
   }
 
   private async run(
@@ -1180,6 +1306,27 @@ export class TmuxTerminalController implements PortalTmuxController {
     return ['-f', this.configPath, '-S', this.socketPath];
   }
 
+  private debug(event: string, details: Record<string, unknown> = {}) {
+    logTerminalDebug(this.env, event, details);
+  }
+
+  private async debugDurableWindowSnapshot(event: string, details: Record<string, unknown> = {}) {
+    if (!terminalDebugEnabled(this.env)) return;
+    try {
+      const windows = await this.listAllWindowDetails({ suppressDebug: true });
+      this.debug(event, {
+        ...details,
+        count: windows.length,
+        windows: windows.map(terminalWindowDiagnosticRecord),
+      });
+    } catch (error) {
+      this.debug(event, {
+        ...details,
+        error: toErrorMessage(error),
+      });
+    }
+  }
+
   private async runCommand(args: string[], options: { cwd?: string; env?: Record<string, string> }) {
     try {
       const command = new Deno.Command('tmux', {
@@ -1212,21 +1359,25 @@ const defaultRoots = (): TerminalPortalRoot[] => [{
 
 export class PortalTerminalHost {
   private readonly config: TerminalPortalConfig;
-  private readonly spawner: PortalPtySpawner;
   private readonly tmux: PortalTmuxController;
   private readonly replayLimitBytes: number;
   private readonly outputBatchMs: number;
+  private readonly replayCaptureSettleMs: number;
   private readonly env: Record<string, string | undefined>;
   private readonly sessions = new Map<string, TerminalSession>();
+  private readonly terminalIdsByPaneId = new Map<string, string>();
+  private readonly terminalIdsByWindowId = new Map<string, string>();
   private readonly clientSessions = new Map<string, Set<string>>();
+  private controlClient?: PortalTmuxControlClient;
+  private closingControlClient = false;
 
   constructor(options: PortalTerminalHostOptions) {
     this.config = options.config;
     this.env = options.env ?? Deno.env.toObject();
-    this.spawner = options.spawner ?? createNativePty;
     this.tmux = options.tmux ?? new TmuxTerminalController({ env: this.env });
     this.replayLimitBytes = options.replayLimitBytes ?? defaultReplayLimitBytes;
     this.outputBatchMs = options.outputBatchMs ?? defaultOutputBatchMs;
+    this.replayCaptureSettleMs = options.replayCaptureSettleMs ?? defaultReplayCaptureSettleMs;
   }
 
   async handleClientMessage(
@@ -1256,13 +1407,13 @@ export class PortalTerminalHost {
       }
 
       if (message.type === 'input') {
-        this.input(parseTerminalId(message.terminalId), parseTerminalInputData(message.data));
+        await this.input(parseTerminalId(message.terminalId), parseTerminalInputData(message.data));
         return;
       }
 
       if (message.type === 'resize') {
         const size = parseTerminalResize(message.cols, message.rows);
-        this.resize(parseTerminalId(message.terminalId), size.cols, size.rows);
+        await this.resize(parseTerminalId(message.terminalId), size.cols, size.rows);
         return;
       }
 
@@ -1298,20 +1449,34 @@ export class PortalTerminalHost {
   dispose() {
     for (const session of this.sessions.values()) {
       this.disposeSession(session);
-      if (!session.exited) session.pty.close();
     }
     this.sessions.clear();
+    this.terminalIdsByPaneId.clear();
+    this.terminalIdsByWindowId.clear();
     this.clientSessions.clear();
+    this.closeControlClient();
   }
 
   private async list(input: TerminalTargetInput & { requestId?: string }, send: (event: TerminalHostEvent) => void) {
     const target = await this.resolveTarget(parseTerminalTargetInput(input));
     const windows = await this.tmux.listWindows(target);
+    this.debug('host.windows.list', {
+      requestId: input.requestId,
+      kind: target.kind,
+      scopeId: target.scopeId,
+      count: windows.length,
+      windows: windows.map(terminalWindowDiagnosticRecord),
+    });
     send({ type: 'windows', requestId: input.requestId, windows });
   }
 
   private async snapshot(input: { requestId?: string }, send: (event: TerminalHostEvent) => void) {
     const windows = await this.tmux.listAllWindows();
+    this.debug('host.windows.snapshot', {
+      requestId: input.requestId,
+      count: windows.length,
+      windows: windows.map(terminalWindowDiagnosticRecord),
+    });
     send({ type: 'windows', requestId: input.requestId, windows });
   }
 
@@ -1321,23 +1486,41 @@ export class PortalTerminalHost {
       env: this.getWeaveEnv(target),
       shell: getDefaultShell(this.env),
     });
+    this.debug('host.window.created', {
+      requestId: input.requestId,
+      window: terminalWindowDiagnosticRecord(window),
+    });
+    const publicWindow = toTerminalWindowRecord(window);
     send({
       type: 'created',
       requestId: input.requestId,
       terminalId: window.terminalId,
       workspaceId: window.workspaceId,
-      window,
+      window: publicWindow,
     });
   }
 
   private async start(input: TerminalStartInput, clientId: string, send: (event: TerminalHostEvent) => void) {
     const normalizedInput = parseTerminalStartInput(input);
+    this.debug('host.start.requested', {
+      clientId,
+      terminalId: normalizedInput.terminalId,
+      kind: normalizedInput.kind,
+      workspaceId: normalizedInput.workspaceId,
+      projectId: normalizedInput.projectId,
+    });
 
     try {
       const existing = this.sessions.get(normalizedInput.terminalId);
       if (existing && !existing.exited) {
+        this.flushOutput(existing);
         this.attach(existing, clientId, send);
-        this.resize(normalizedInput.terminalId, normalizedInput.cols, normalizedInput.rows);
+        await this.resize(normalizedInput.terminalId, normalizedInput.cols, normalizedInput.rows);
+        this.debug('host.start.reused-session', {
+          clientId,
+          terminalId: existing.terminalId,
+          subscribers: existing.subscribers.size,
+        });
         this.sendStarted(existing, send);
         this.sendReplay(existing, send);
         return;
@@ -1349,27 +1532,27 @@ export class PortalTerminalHost {
         env: this.getWeaveEnv({ ...target, terminalId: normalizedInput.terminalId }),
         shell: getDefaultShell(this.env),
       });
-      const attachCommand = await this.tmux.getAttachCommand(window.terminalId, clientId);
-      const pty = await this.spawner(attachCommand.file, attachCommand.args, {
-        cols: normalizedInput.cols,
-        rows: normalizedInput.rows,
-        cwd: attachCommand.cwd,
-        env: attachCommand.env,
+      await this.ensureControlClient();
+      await this.controlClient?.resize(window.windowId, normalizedInput.cols, normalizedInput.rows);
+      const replay = await this.captureReplay(window) ?? '';
+      this.debug('host.start.control-session', {
+        clientId,
+        window: terminalWindowDiagnosticRecord(window),
       });
 
       const session: TerminalSession = {
         sessionId: window.terminalId,
         kind: window.kind,
         terminalId: window.terminalId,
-        attachSessionId: attachCommand.attachSessionId,
         window,
+        windowId: window.windowId,
+        paneId: window.paneId,
         projectId: window.projectId,
         workspaceId: window.workspaceId,
         cwd: window.cwd,
-        pty,
         cols: normalizedInput.cols,
         rows: normalizedInput.rows,
-        replay: '',
+        replay: replay ?? '',
         pendingOutput: '',
         subscribers: new Map([[clientId, { send }]]),
         disposables: [],
@@ -1377,13 +1560,10 @@ export class PortalTerminalHost {
       };
 
       this.trackClientSession(clientId, window.terminalId);
-      session.disposables.push(
-        pty.onData((data) => this.queueOutput(session, data)),
-        pty.onExit((event) => this.handleExit(session, event)),
-      );
       this.sessions.set(window.terminalId, session);
+      this.terminalIdsByPaneId.set(window.paneId, window.terminalId);
+      this.terminalIdsByWindowId.set(window.windowId, window.terminalId);
       this.sendStarted(session, send);
-      const replay = await this.tmux.captureWindow?.(window.terminalId).catch(() => '');
       if (replay) {
         send({ type: 'replay', terminalId: window.terminalId, workspaceId: window.workspaceId, data: replay });
       }
@@ -1397,13 +1577,14 @@ export class PortalTerminalHost {
     }
   }
 
-  private input(terminalId: string, data: string) {
+  private async input(terminalId: string, data: string) {
     const session = this.sessions.get(terminalId);
     if (!session || session.exited) throw new Error('Terminal session is not running.');
-    session.pty.write(data);
+    await this.ensureControlClient();
+    await this.controlClient?.input(session.paneId, data);
   }
 
-  private resize(terminalId: string, cols: number, rows: number) {
+  private async resize(terminalId: string, cols: number, rows: number) {
     const session = this.sessions.get(terminalId);
     if (!session || session.exited) return;
     const nextCols = parseDimension(cols, session.cols, 10, 400);
@@ -1412,7 +1593,16 @@ export class PortalTerminalHost {
 
     session.cols = nextCols;
     session.rows = nextRows;
-    session.pty.resize(nextCols, nextRows);
+    await this.ensureControlClient();
+    await this.controlClient?.resize(session.windowId, nextCols, nextRows);
+  }
+
+  private async captureReplay(window: PortalTmuxWindowRecord) {
+    if (!this.tmux.captureWindow) return undefined;
+    if (this.replayCaptureSettleMs > 0) await delay(this.replayCaptureSettleMs);
+    const capturedReplay = await this.tmux.captureWindow(window.terminalId).catch(() => undefined);
+    if (capturedReplay === undefined) return undefined;
+    return normalizeCapturedTerminalReplay(capturedReplay);
   }
 
   private async close(terminalId: string) {
@@ -1427,24 +1617,28 @@ export class PortalTerminalHost {
 
   private detach(terminalId: string, clientId: string) {
     const session = this.sessions.get(terminalId);
+    this.debug('host.detach.requested', {
+      clientId,
+      terminalId,
+      hasSession: Boolean(session),
+      subscribers: session?.subscribers.size ?? 0,
+    });
     session?.subscribers.delete(clientId);
     const terminalIds = this.clientSessions.get(clientId);
     terminalIds?.delete(terminalId);
     if (terminalIds?.size === 0) this.clientSessions.delete(clientId);
     if (session && session.subscribers.size === 0) {
-      this.disposeSession(session);
-      session.exited = true;
-      session.pty.close();
-      this.sessions.delete(terminalId);
+      this.debug('host.detach.unsubscribed-session', {
+        clientId,
+        terminalId,
+      });
     }
   }
 
   private async resolveTarget(input: NormalizedTerminalTargetInput): Promise<ResolvedTerminalTarget> {
     const cwd = await this.resolveCwd(input);
     await this.assertDirectory(cwd);
-    const canonicalPortalId = input.kind === 'general'
-      ? input.portalId ?? this.config.portalId
-      : input.portalId;
+    const canonicalPortalId = input.kind === 'general' ? input.portalId ?? this.config.portalId : input.portalId;
     const scope: TerminalScope = input.kind === 'workspace'
       ? {
         kind: input.kind,
@@ -1475,6 +1669,7 @@ export class PortalTerminalHost {
     const weaveEnv: Record<string, string> = {
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
+      PROMPT_EOL_MARK: '',
       WEAVE_TERMINAL_KIND: input.kind,
       WEAVE_WORKSPACE: input.cwd,
     };
@@ -1538,7 +1733,7 @@ export class PortalTerminalHost {
       workspaceId: session.workspaceId,
       sessionId: session.sessionId,
       cwd: session.cwd,
-      pid: session.pty.pid,
+      pid: undefined,
       cols: session.cols,
       rows: session.rows,
     });
@@ -1587,7 +1782,7 @@ export class PortalTerminalHost {
     }
   }
 
-  private handleExit(session: TerminalSession, event: PortalPtyExitEvent) {
+  private handleExit(session: TerminalSession, event: { exitCode?: number; signal?: number | string }) {
     if (session.exited) return;
     this.flushOutput(session);
     session.exited = true;
@@ -1600,6 +1795,7 @@ export class PortalTerminalHost {
     });
     this.disposeSession(session);
     this.sessions.delete(session.terminalId);
+    this.closeControlClientIfIdle();
   }
 
   private disposeSession(session: TerminalSession) {
@@ -1607,12 +1803,80 @@ export class PortalTerminalHost {
       clearTimeout(session.outputTimer);
       session.outputTimer = undefined;
     }
-    if (session.attachSessionId) {
-      void this.tmux.killAttachment(session.attachSessionId).catch(() => undefined);
-      session.attachSessionId = undefined;
-    }
+    this.terminalIdsByPaneId.delete(session.paneId);
+    this.terminalIdsByWindowId.delete(session.windowId);
     for (const disposable of session.disposables) disposable.dispose();
     session.disposables = [];
+  }
+
+  private debug(event: string, details: Record<string, unknown> = {}) {
+    logTerminalDebug(this.env, event, details);
+  }
+
+  private async ensureControlClient() {
+    if (this.controlClient) return;
+    this.closingControlClient = false;
+    this.controlClient = await this.tmux.openControlClient({
+      onOutput: (paneId, data) => this.handleControlOutput(paneId, data),
+      onWindowClose: (windowId) => this.handleControlWindowClose(windowId),
+      onExit: (reason) => this.handleControlExit(reason),
+      onError: (error) => this.handleControlError(error),
+    });
+  }
+
+  private handleControlOutput(paneId: string, data: string) {
+    if (!data) return;
+    const terminalId = this.terminalIdsByPaneId.get(paneId);
+    if (!terminalId) return;
+    const session = this.sessions.get(terminalId);
+    if (!session || session.exited) return;
+    this.queueOutput(session, data);
+  }
+
+  private handleControlWindowClose(windowId: string) {
+    const terminalId = this.terminalIdsByWindowId.get(windowId);
+    if (!terminalId) return;
+    const session = this.sessions.get(terminalId);
+    if (session) {
+      this.handleExit(session, {});
+      return;
+    }
+    this.terminalIdsByWindowId.delete(windowId);
+  }
+
+  private handleControlExit(reason?: string) {
+    this.controlClient = undefined;
+    if (this.closingControlClient) return;
+    const sessions = [...this.sessions.values()].filter((session) => !session.exited);
+    for (const session of sessions) {
+      this.flushOutput(session);
+      this.broadcast(session, {
+        type: 'error',
+        terminalId: session.terminalId,
+        workspaceId: session.workspaceId,
+        error: reason || 'tmux control client exited.',
+      });
+      this.disposeSession(session);
+      this.sessions.delete(session.terminalId);
+    }
+  }
+
+  private handleControlError(error: Error) {
+    this.debug('host.control.error', { error: error.message });
+    this.handleControlExit(error.message);
+  }
+
+  private closeControlClientIfIdle() {
+    if (this.sessions.size > 0) return;
+    this.closeControlClient();
+  }
+
+  private closeControlClient() {
+    const controlClient = this.controlClient;
+    if (!controlClient) return;
+    this.closingControlClient = true;
+    this.controlClient = undefined;
+    controlClient.close();
   }
 
   private broadcast(session: TerminalSession, event: TerminalHostEvent) {

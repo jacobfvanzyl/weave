@@ -3,8 +3,10 @@ import {
   getActiveTerminalPanelTab,
   getRestoredActiveTerminalTabId,
   getSortedUniqueTerminalWindows,
+  getTerminalDirectoryDisplayName,
   getTerminalPanelTabLabel,
   getTerminalSessionRenderItems,
+  mergeTerminalPanelTabMeta,
 } from '../../packages/client/src/components/terminal/terminal-panel-tabs';
 
 describe('terminal panel tab rendering', () => {
@@ -57,5 +59,49 @@ describe('terminal panel tab rendering', () => {
       title: 'weave-1-abc123',
       cwd: '/repo',
     })).toBe('/repo');
+  });
+
+  it('uses Starship-style paths instead of generated terminal labels for idle shells', () => {
+    expect(getTerminalPanelTabLabel({
+      id: 'terminal-2',
+      label: 'Terminal 2',
+      title: 'Terminal 2',
+      cwd: '/Users/jaco/Documents/Keyphase/odin',
+    })).toBe('odin');
+
+    expect(getTerminalPanelTabLabel({
+      id: 'terminal-2',
+      label: 'Terminal 2',
+      title: 'jaco@host:/Users/jaco/Documents/Keyphase/odin',
+      cwd: '/Users/jaco/Documents/Keyphase/odin',
+    })).toBe('odin');
+  });
+
+  it('formats idle shell paths like the configured Starship directory module', () => {
+    expect(getTerminalDirectoryDisplayName('/Users/jaco')).toBe('~');
+    expect(getTerminalDirectoryDisplayName('/Users/jaco/tmp/weave-short')).toBe('~/tmp/weave-short');
+    expect(getTerminalDirectoryDisplayName('/Users/jaco/tmp/weave-starship-check/a/b/c/d/e')).toBe('b/c/d/e');
+    expect(getTerminalDirectoryDisplayName('/Users/jaco/Documents/VeeZee/weave/packages/client/src')).toBe('weave/packages/client/src');
+    expect(getTerminalDirectoryDisplayName('/Users/jaco/Documents/VeeZee/weave/packages/client/src/foo')).toBe('packages/client/src/foo');
+  });
+
+  it('does not clear durable tab names when session metadata is incomplete', () => {
+    const tab = {
+      id: 'terminal-1',
+      label: 'Terminal 1',
+      cwd: '/repo/workspace',
+      title: 'Terminal 1',
+      status: 'running',
+    };
+
+    expect(mergeTerminalPanelTabMeta(tab, {
+      cwd: undefined,
+      error: undefined,
+      status: 'connecting',
+      title: undefined,
+    })).toEqual({
+      ...tab,
+      status: 'connecting',
+    });
   });
 });

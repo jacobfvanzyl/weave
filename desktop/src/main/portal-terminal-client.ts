@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
@@ -80,7 +79,9 @@ type PortalSupervisorOptions = {
 
 const terminalEventChannel = 'terminal:event';
 const defaultPortalWsPort = '4112';
-const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth'];
+const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth', 'terminal.tmux-control-mode'];
+const desktopPortalLaunchDisabledMessage =
+  'Desktop Portal auto-launch is disabled. Start Portal separately with "npm run portal:dev" or set WEAVE_PORTAL_COMMAND to opt into a custom Portal launcher.';
 
 const getAvailablePort = () => new Promise<number>((resolve, reject) => {
   const server = net.createServer();
@@ -282,52 +283,10 @@ export class PortalSupervisor {
 
   private getPortalCommand() {
     const configuredCommand = process.env.WEAVE_PORTAL_COMMAND?.trim();
-    if (configuredCommand) {
-      return {
-        file: configuredCommand,
-        args: splitExtraArgs(process.env.WEAVE_PORTAL_ARGS),
-      };
-    }
-
-    const packagedPortal = process.resourcesPath ? path.join(process.resourcesPath, 'portal') : undefined;
-    const binaryCandidates = [
-      packagedPortal,
-      path.resolve(process.cwd(), '../portal/dist/portal'),
-      path.resolve(process.cwd(), 'portal/dist/portal'),
-      path.resolve(__dirname, '../../portal/dist/portal'),
-      path.resolve(__dirname, '../../../portal/dist/portal'),
-    ].filter((candidate): candidate is string => Boolean(candidate));
-    const binaryPath = binaryCandidates.find(candidate => existsSync(candidate));
-    if (binaryPath) {
-      return {
-        file: binaryPath,
-        args: splitExtraArgs(process.env.WEAVE_PORTAL_ARGS),
-      };
-    }
-
-    const candidates = [
-      path.resolve(process.cwd(), '../portal/src/main.ts'),
-      path.resolve(process.cwd(), 'portal/src/main.ts'),
-      path.resolve(__dirname, '../../portal/src/main.ts'),
-      path.resolve(__dirname, '../../../portal/src/main.ts'),
-    ];
-    const sourcePath = candidates.find(candidate => existsSync(candidate));
-    if (!sourcePath) {
-      throw new Error('Could not find Portal. Set WEAVE_PORTAL_COMMAND to a compiled Portal binary.');
-    }
-
+    if (!configuredCommand) throw new Error(desktopPortalLaunchDisabledMessage);
     return {
-      file: process.env.WEAVE_DENO_BIN?.trim() || 'deno',
-      args: [
-        'run',
-        '--allow-net',
-        '--allow-read',
-        '--allow-write',
-        '--allow-env',
-        '--allow-ffi',
-        '--allow-run',
-        sourcePath,
-      ],
+      file: configuredCommand,
+      args: splitExtraArgs(process.env.WEAVE_PORTAL_ARGS),
     };
   }
 
@@ -467,12 +426,15 @@ export class PortalTerminalClient {
     this.send(connection, { type: 'resize', terminalId, cols, rows });
   }
 
-  async close(terminalId: string) {
-    const connection = this.connections.get(terminalId);
+  async close(terminalId: string, input?: TerminalTargetInput) {
+    const connection = input
+      ? await this.getConnection(this.getTargetConnectionId(input))
+      : this.connections.get(terminalId);
     if (!connection) return;
     this.send(connection, { type: 'close', terminalId });
-    connection.socket.close();
-    this.connections.delete(terminalId);
+    const terminalConnection = this.connections.get(terminalId);
+    if (terminalConnection && terminalConnection !== connection) terminalConnection.socket.close();
+    if (terminalConnection) this.connections.delete(terminalId);
   }
 
   async detach(terminalId: string, webContents: TerminalWebContents) {

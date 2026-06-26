@@ -60,10 +60,11 @@ export const useWorkspaceTargets = ({
   const hasChatPaneTarget = activeSurface.kind === 'thread';
   const hasThreadTitle = Boolean(activeThread && !['New chat', '...'].includes(activeThread.title));
   const { projects, projectsQuery } = useProjectsWithLiveGitState(resourceId);
-  const { data: portals = [] } = useQuery({
+  const portalsQuery = useQuery({
     queryKey: ['portals', resourceId],
     queryFn: listPortals,
   });
+  const portals = portalsQuery.data ?? [];
   const onlinePortals = portals.filter(portal => portal.status === 'online');
   const onlinePortalIds = new Set(onlinePortals.map(portal => portal.portalId));
   const defaultGlobalPortal = onlinePortals[0];
@@ -138,6 +139,7 @@ export const useWorkspaceTargets = ({
     notesTarget,
     onlinePortalIds,
     onlinePortals,
+    portalsQuery,
     portals,
     projects,
     projectsQuery,
