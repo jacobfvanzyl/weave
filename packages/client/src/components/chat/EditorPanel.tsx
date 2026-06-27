@@ -383,6 +383,7 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
               ref={editorRef}
               key={openFile.path}
               path={openFile.path}
+              languageIntelligenceTarget={editorTarget}
               value={content}
               onChange={setContent}
               onSave={() => void handleSave()}

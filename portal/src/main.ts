@@ -1,4 +1,5 @@
 import { PortalEditorHost, type PortalEditorTarget } from './editor.ts';
+import { isLspClientEnvelope, PortalLspHost } from './lsp.ts';
 import { PortalVaultHost } from './vault.ts';
 import { isTerminalClientEnvelope, PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
 import {
@@ -29,14 +30,14 @@ import {
   getGitLog,
   getGitShow,
   getGitStatus,
+  GitWorktreeRemoveDirtyError,
   inspectGit,
   inspectGitBranchCleanup,
   listGitBranches,
   listGitWorktrees,
+  pullGitUpstream,
   readAgentsMd,
   removeGitWorktree,
-  GitWorktreeRemoveDirtyError,
-  pullGitUpstream,
   runGit,
   switchGitWorktree,
   validateGitWorktree,
@@ -92,7 +93,13 @@ const defaultHttpServerUrl = 'http://localhost:4111';
 const defaultWsServerUrl = 'ws://localhost:4112';
 const defaultName = 'Mage Portal';
 const version = '0.1.0';
-const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth', 'terminal.tmux-control-mode'];
+const requiredControlCapabilities = [
+  'terminal',
+  'editor',
+  'lsp',
+  'terminal.tmux-source-of-truth',
+  'terminal.tmux-control-mode',
+];
 const macWindowCapabilities = [
   'portal.window.list',
   'portal.window.session',
@@ -265,7 +272,7 @@ const authTokenFromLegacyMap = (rawTokens: string | undefined) => {
     throw new Error('WEAVE_AUTH_TOKENS must be an object token map or replaced with WEAVE_OWNER_TOKEN.');
   }
 
-  const tokens = Object.keys(parsed).filter(token => token.trim());
+  const tokens = Object.keys(parsed).filter((token) => token.trim());
   if (tokens.length !== 1) {
     throw new Error('WEAVE_AUTH_TOKENS is unsupported for multiple tokens. Set one WEAVE_OWNER_TOKEN instead.');
   }
@@ -274,10 +281,10 @@ const authTokenFromLegacyMap = (rawTokens: string | undefined) => {
 };
 
 const getLoginAuthToken = (flags: Record<string, string | boolean>) =>
-  stringFlag(flags, 'token')
-    ?? Deno.env.get('WEAVE_OWNER_TOKEN')?.trim()
-    ?? Deno.env.get('WEAVE_AUTH_TOKEN')?.trim()
-    ?? authTokenFromLegacyMap(Deno.env.get('WEAVE_AUTH_TOKENS'));
+  stringFlag(flags, 'token') ??
+    Deno.env.get('WEAVE_OWNER_TOKEN')?.trim() ??
+    Deno.env.get('WEAVE_AUTH_TOKEN')?.trim() ??
+    authTokenFromLegacyMap(Deno.env.get('WEAVE_AUTH_TOKENS'));
 
 const login = async (flags: Record<string, string | boolean>) => {
   const httpServerUrl = normalizeHttpUrl(stringFlag(flags, 'server') ?? defaultHttpServerUrl);
@@ -659,7 +666,11 @@ const gitWorktreeRemoveTool = async (config: ResolvedPortalConfig, request: Reco
   const args = request.args as Record<string, unknown> | undefined ?? {};
   const root = await resolveWorkspaceRoot(config, { ...request, workspacePath: undefined });
   try {
-    const result = await removeGitWorktree(root, args, typeof request.workspacePath === 'string' ? request.workspacePath : undefined);
+    const result = await removeGitWorktree(
+      root,
+      args,
+      typeof request.workspacePath === 'string' ? request.workspacePath : undefined,
+    );
     return { ok: true, ...result };
   } catch (error) {
     if (error instanceof GitWorktreeRemoveDirtyError) {
@@ -884,13 +895,15 @@ const buildLineDiff = (oldLines: string[], newLines: string[]) => {
 };
 
 const formatUnifiedHunk = (ops: DiffOp[]) => {
-  const oldRangeLength = ops.filter(op => op.type !== 'insert').length;
-  const newRangeLength = ops.filter(op => op.type !== 'delete').length;
+  const oldRangeLength = ops.filter((op) => op.type !== 'insert').length;
+  const newRangeLength = ops.filter((op) => op.type !== 'delete').length;
   const output = [
-    `@@ -${formatUnifiedRange(ops[0].oldStart, oldRangeLength)} +${formatUnifiedRange(ops[0].newStart, newRangeLength)} @@`,
+    `@@ -${formatUnifiedRange(ops[0].oldStart, oldRangeLength)} +${
+      formatUnifiedRange(ops[0].newStart, newRangeLength)
+    } @@`,
   ];
 
-  ops.forEach(op => {
+  ops.forEach((op) => {
     const prefix = op.type === 'insert' ? '+' : op.type === 'delete' ? '-' : ' ';
     output.push(`${prefix}${op.line}`);
   });
@@ -1038,6 +1051,7 @@ const editorInputFromToolCall = (request: Record<string, unknown>) => {
 const handleToolCall = async (
   config: ResolvedPortalConfig,
   editorHost: PortalEditorHost,
+  lspHost: PortalLspHost,
   vaultHost: PortalVaultHost,
   windowHost: PortalWindowHost,
   ws: WebSocket,
@@ -1067,6 +1081,10 @@ const handleToolCall = async (
       ? await editorHost.move(editorInputFromToolCall(request) as Parameters<PortalEditorHost['move']>[0])
       : request.tool === 'portal.editor.delete'
       ? await editorHost.delete(editorInputFromToolCall(request) as Parameters<PortalEditorHost['delete']>[0])
+      : request.tool === 'portal.lsp.session'
+      ? await lspHost.createSession(editorInputFromToolCall(request) as Parameters<PortalLspHost['createSession']>[0])
+      : request.tool === 'portal.lsp.query'
+      ? await lspHost.query(editorInputFromToolCall(request) as Parameters<PortalLspHost['query']>[0])
       : request.tool === 'portal.vault.index'
       ? await vaultHost.index(editorInputFromToolCall(request) as Parameters<PortalVaultHost['index']>[0])
       : request.tool === 'portal.vault.read'
@@ -1151,6 +1169,9 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'portal.editor.mkdir',
     'portal.editor.move',
     'portal.editor.delete',
+    'portal.lsp',
+    'portal.lsp.session',
+    'portal.lsp.query',
     'portal.vault.index',
     'portal.vault.read',
     'portal.vault.write',
@@ -1199,6 +1220,7 @@ const connectOnce = (
   config: ResolvedPortalConfig,
   terminalHost: PortalTerminalHost,
   editorHost: PortalEditorHost,
+  lspHost: PortalLspHost,
   vaultHost: PortalVaultHost,
   windowHost: PortalWindowHost,
   onSocket?: (ws: WebSocket) => void,
@@ -1260,18 +1282,30 @@ const connectOnce = (
         return;
       }
 
-      if (message.type === 'tool.call') void handleToolCall(config, editorHost, vaultHost, windowHost, ws, message);
+      if (isLspClientEnvelope(message)) {
+        void lspHost.handleClientMessage(message.clientId, message.message, (lspEvent) => {
+          ws.send(JSON.stringify({ type: 'lsp.event', clientId: message.clientId, event: lspEvent }));
+        });
+        return;
+      }
+
+      if (message.type === 'tool.call') {
+        void handleToolCall(config, editorHost, lspHost, vaultHost, windowHost, ws, message);
+      }
     };
 
     ws.onerror = () => {
       cleanup();
-      if (!accepted) reject(new Error('WebSocket connection failed'));
+      if (!accepted) {
+        reject(new Error('WebSocket connection failed'));
+      }
     };
 
     ws.onclose = (event) => {
       cleanup();
       terminalHost.detachClientsByPrefix('relay:');
       windowHost.detachClientsByPrefix('window:');
+      lspHost.detachClientsByPrefix('relay-lsp:');
       console.log(`Socket closed: ${event.code} ${event.reason}`.trim());
       resolve();
     };
@@ -1310,6 +1344,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
 
   const terminalHost = new PortalTerminalHost({ config });
   const editorHost = new PortalEditorHost({ config });
+  const lspHost = new PortalLspHost({ config });
   const vaultHost = new PortalVaultHost({ config });
   const windowHost = new PortalWindowHost({ config });
   const controlToken = noControl ? undefined : stringFlag(flags, 'control-token') ?? crypto.randomUUID();
@@ -1320,20 +1355,31 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   let runtimeInterval: ReturnType<typeof setInterval> | undefined;
   let controlServer: Deno.HttpServer<Deno.NetAddr> | undefined;
   let runtime: PortalRuntimeFile | undefined;
+  let cleanupPromise: Promise<void> | undefined;
+  let stopFallbackTimer: ReturnType<typeof setTimeout> | undefined;
   const controlCapabilities = await getControlCapabilities(windowStream);
 
   const cleanup = async () => {
-    if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
-    terminalHost.dispose();
-    windowHost.dispose();
-    activeSocket?.close();
-    if (controlServer) await controlServer.shutdown().catch(() => undefined);
-    await removePortalRuntime(runtimePath).catch(() => undefined);
+    if (cleanupPromise) return await cleanupPromise;
+    cleanupPromise = (async () => {
+      if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
+      terminalHost.dispose();
+      await lspHost.dispose();
+      windowHost.dispose();
+      activeSocket?.close();
+      if (controlServer) await controlServer.shutdown().catch(() => undefined);
+      await removePortalRuntime(runtimePath).catch(() => undefined);
+    })();
+    return await cleanupPromise;
   };
 
   const requestStop = () => {
+    if (stopping) return;
     stopping = true;
     activeSocket?.close();
+    stopFallbackTimer = setTimeout(() => {
+      void cleanup().finally(() => Deno.exit(0));
+    }, 2_000);
   };
 
   console.log(`Portal daemon: ${config.portalId}`);
@@ -1342,6 +1388,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
     controlServer = startTerminalControlServer({
       host: terminalHost,
       editor: editorHost,
+      lsp: lspHost,
       vault: vaultHost,
       hostname: controlHost,
       port: controlPort,
@@ -1396,7 +1443,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
 
   while (!stopping) {
     try {
-      await connectOnce(config, terminalHost, editorHost, vaultHost, windowHost, (ws) => {
+      await connectOnce(config, terminalHost, editorHost, lspHost, vaultHost, windowHost, (ws) => {
         activeSocket = ws;
       });
       retryMs = 1_000;
@@ -1411,6 +1458,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
     retryMs = Math.min(retryMs * 2, 30_000);
   }
 
+  if (stopFallbackTimer !== undefined) clearTimeout(stopFallbackTimer);
   await cleanup();
 };
 

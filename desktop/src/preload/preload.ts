@@ -56,6 +56,8 @@ const bridge: WeaveDesktopBridge = {
     ipcRenderer.invoke('editor:move', { target, fromPath, toPath, overwrite }) as Promise<EditorOperationResult>,
   editorDelete: (target: EditorTarget, path: string, recursive?: boolean) =>
     ipcRenderer.invoke('editor:delete', { target, path, recursive }) as Promise<EditorOperationResult>,
+  lspCreateSession: (target: EditorTarget, path: string, languageId?: string, serverId?: string) =>
+    ipcRenderer.invoke('lsp:create-session', { target, path, languageId, serverId }),
 };
 
 contextBridge.exposeInMainWorld('weaveDesktop', bridge);

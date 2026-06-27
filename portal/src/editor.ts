@@ -176,6 +176,44 @@ const flattenInput = <T extends Record<string, unknown>>(input: T) => {
   return { ...rest, ...target };
 };
 
+export const joinPortalEditorPath = joinPath;
+
+export const assertPortalPathWithinRoot = (
+  root: string,
+  candidate: string,
+  message = 'Editor path cannot escape the Workspace workspace.',
+) => {
+  const normalizedRoot = trimTrailingSlash(normalizePath(root));
+  const normalizedCandidate = trimTrailingSlash(normalizePath(candidate));
+  if (normalizedCandidate === normalizedRoot) return;
+  if (!normalizedCandidate.startsWith(`${normalizedRoot}/`)) throw new Error(message);
+};
+
+export const resolvePortalEditorWorkspaceRoot = async (
+  config: PortalEditorConfig,
+  input: Record<string, unknown>,
+) => {
+  const workspacePath = optionalString(input.workspacePath);
+  if (workspacePath) return await Deno.realPath(workspacePath);
+
+  const projectId = optionalString(input.projectId);
+  const mount = projectId ? (config.mounts ?? []).find((item) => item.projectId === projectId) : undefined;
+  if (mount) return await Deno.realPath(mount.localPath);
+
+  const rootId = optionalString(input.rootId);
+  const repoPath = optionalString(input.repoPath);
+  if (rootId && repoPath) {
+    const root = getRoots(config).find((item) => item.id === rootId);
+    if (!root) throw new Error(`Unknown root: ${rootId}`);
+    const rootPath = await Deno.realPath(root.path);
+    const target = await Deno.realPath(joinPath(rootPath, parseEditorPath(repoPath, 'repoPath')));
+    assertPortalPathWithinRoot(rootPath, target, 'Path escapes Portal root');
+    return target;
+  }
+
+  throw new Error(`Project is not mounted: ${String(input.projectId)}`);
+};
+
 export class PortalEditorHost {
   private readonly config: PortalEditorConfig;
   private readonly maxReadBytes: number;
@@ -342,25 +380,7 @@ export class PortalEditorHost {
   }
 
   private async resolveWorkspaceRoot(input: Record<string, unknown>) {
-    const workspacePath = optionalString(input.workspacePath);
-    if (workspacePath) return await Deno.realPath(workspacePath);
-
-    const projectId = optionalString(input.projectId);
-    const mount = projectId ? (this.config.mounts ?? []).find((item) => item.projectId === projectId) : undefined;
-    if (mount) return await Deno.realPath(mount.localPath);
-
-    const rootId = optionalString(input.rootId);
-    const repoPath = optionalString(input.repoPath);
-    if (rootId && repoPath) {
-      const root = getRoots(this.config).find((item) => item.id === rootId);
-      if (!root) throw new Error(`Unknown root: ${rootId}`);
-      const rootPath = await Deno.realPath(root.path);
-      const target = await Deno.realPath(joinPath(rootPath, parseEditorPath(repoPath, 'repoPath')));
-      this.assertWithinRoot(rootPath, target, 'Path escapes Portal root');
-      return target;
-    }
-
-    throw new Error(`Project is not mounted: ${String(input.projectId)}`);
+    return await resolvePortalEditorWorkspaceRoot(this.config, input);
   }
 
   private async resolveExistingPath(root: string, relativePath: string) {
@@ -372,10 +392,7 @@ export class PortalEditorHost {
   }
 
   private assertWithinRoot(root: string, candidate: string, message = 'Editor path cannot escape the Workspace workspace.') {
-    const normalizedRoot = trimTrailingSlash(normalizePath(root));
-    const normalizedCandidate = trimTrailingSlash(normalizePath(candidate));
-    if (normalizedCandidate === normalizedRoot) return;
-    if (!normalizedCandidate.startsWith(`${normalizedRoot}/`)) throw new Error(message);
+    assertPortalPathWithinRoot(root, candidate, message);
   }
 
   private async statMaybe(path: string) {

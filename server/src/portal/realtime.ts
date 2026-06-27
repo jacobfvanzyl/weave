@@ -6,6 +6,12 @@ import {
   handleTerminalPortalMessage,
 } from './terminal-relay';
 import {
+  connectLspRelayClient,
+  disconnectLspRelayClient,
+  forwardLspClientMessage,
+  handleLspPortalMessage,
+} from './lsp-relay';
+import {
   connectWindowRelayClient,
   disconnectWindowRelayClient,
   forwardWindowClientMessage,
@@ -142,6 +148,42 @@ const connectWindowClient = (ws: RealtimeSocket, url: URL) => {
   ws.addEventListener('error', () => disconnectWindowRelayClient(connected.clientId));
 };
 
+const connectLspClient = (ws: RealtimeSocket, url: URL) => {
+  const connected = connectLspRelayClient({
+    token: url.searchParams.get('token') ?? '',
+    ws,
+  });
+
+  if (!connected) {
+    closeUnauthorized(ws, 'invalid LSP session token');
+    return;
+  }
+
+  ws.send(JSON.stringify({
+    type: 'lsp.accepted',
+    clientId: connected.clientId,
+    sessionId: connected.token.sessionId,
+    portalId: connected.token.portalId,
+  }));
+  onMessage(ws, message => {
+    try {
+      forwardLspClientMessage(connected.clientId, message);
+    } catch (error) {
+      ws.send(JSON.stringify({
+        type: 'lsp.event',
+        clientId: connected.clientId,
+        event: {
+          type: 'error',
+          sessionId: connected.token.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  });
+  ws.addEventListener('close', () => disconnectLspRelayClient(connected.clientId));
+  ws.addEventListener('error', () => disconnectLspRelayClient(connected.clientId));
+};
+
 const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraLike) => {
   const portalId = url.searchParams.get('portalId') ?? '';
   const token = url.searchParams.get('token') ?? '';
@@ -157,6 +199,7 @@ const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraL
 
   onMessage(ws, message => {
     if (handleTerminalPortalMessage(message)) return;
+    if (handleLspPortalMessage(message)) return;
     if (handleWindowPortalMessage(message)) return;
     if (handlePortalMessage(message)) return;
 
@@ -186,7 +229,12 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
   const runtime = denoRuntime();
   server = runtime.serve({ port, onListen: () => undefined }, (request: Request) => {
     const url = new URL(request.url);
-    if (url.pathname !== '/portals/connect' && url.pathname !== '/terminals/connect' && url.pathname !== '/windows/connect') {
+    if (
+      url.pathname !== '/portals/connect' &&
+      url.pathname !== '/terminals/connect' &&
+      url.pathname !== '/windows/connect' &&
+      url.pathname !== '/lsp/connect'
+    ) {
       return new Response(JSON.stringify({ error: 'not found' }), {
         status: 404,
         headers: { 'content-type': 'application/json' },
@@ -205,6 +253,7 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
     socket.addEventListener('open', () => {
       if (url.pathname === '/terminals/connect') return connectTerminalClient(ws, url);
       if (url.pathname === '/windows/connect') return connectWindowClient(ws, url);
+      if (url.pathname === '/lsp/connect') return connectLspClient(ws, url);
       void connectPortalDaemon(ws, url, mastra);
     });
     return response;

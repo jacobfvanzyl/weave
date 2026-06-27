@@ -8,6 +8,7 @@ import type {
   EditorTarget,
   EditorWriteInput,
 } from '../shared/editor';
+import type { LspSessionInput } from '../shared/language-intelligence';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
 
@@ -105,5 +106,15 @@ export const parseEditorDeleteInput = (input: unknown): EditorDeleteInput => {
     target: parseEditorTarget(input.target),
     path: parseEditorPath(input.path),
     recursive: input.recursive,
+  };
+};
+
+export const parseLspSessionInput = (input: unknown): LspSessionInput => {
+  if (!isRecord(input)) throw new Error('LSP session input is required.');
+  return {
+    target: parseEditorTarget(input.target),
+    path: parseEditorPath(input.path),
+    languageId: optionalString(input.languageId),
+    serverId: optionalString(input.serverId),
   };
 };

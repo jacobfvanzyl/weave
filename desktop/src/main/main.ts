@@ -13,8 +13,10 @@ import {
   parseEditorMoveInput,
   parseEditorReadInput,
   parseEditorWriteInput,
+  parseLspSessionInput,
 } from './editor-input';
 import { PortalEditorClient } from './portal-editor-client';
+import { PortalLspClient } from './portal-lsp-client';
 import {
   parseTerminalInputData,
   parseTerminalId,
@@ -28,6 +30,7 @@ let settingsStore: ConnectionSettingsStore | undefined;
 let portalSupervisor: PortalSupervisor | undefined;
 let portalTerminalClient: PortalTerminalClient | undefined;
 let portalEditorClient: PortalEditorClient | undefined;
+let portalLspClient: PortalLspClient | undefined;
 
 const appName = 'Weave';
 const devAppIconPath = app.isPackaged ? undefined : path.join(process.cwd(), 'assets', 'icon.png');
@@ -208,6 +211,24 @@ const getPortalEditorClient = () => {
   return portalEditorClient;
 };
 
+const getPortalLspClient = () => {
+  if (!settingsStore) throw new Error('Connection settings store is not initialized.');
+  if (!portalSupervisor) {
+    portalSupervisor = new PortalSupervisor({
+      settingsStore,
+      homePath: app.getPath('home'),
+    });
+  }
+  if (!portalLspClient) {
+    portalLspClient = new PortalLspClient({
+      supervisor: portalSupervisor,
+      resolveWorkspace: resolveEditorWorkspace,
+    });
+  }
+
+  return portalLspClient;
+};
+
 const registerIpcHandlers = () => {
   ipcMain.handle('connection:get-settings', () => getSettingsStore().getSettings());
   ipcMain.handle('connection:save-settings', (_event, input: unknown) =>
@@ -270,6 +291,9 @@ const registerIpcHandlers = () => {
   );
   ipcMain.handle('editor:delete', (_event, input: unknown) =>
     getPortalEditorClient().delete(parseEditorDeleteInput(input)),
+  );
+  ipcMain.handle('lsp:create-session', (_event, input: unknown) =>
+    getPortalLspClient().createSession(parseLspSessionInput(input)),
   );
 };
 

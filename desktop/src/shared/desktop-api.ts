@@ -6,6 +6,7 @@ import type {
   TerminalWindowRecord,
 } from './terminal';
 import type { EditorFile, EditorListResult, EditorOperationResult, EditorTarget, EditorWriteResult } from './editor';
+import type { LspSessionResult } from './language-intelligence';
 
 export type DesktopConnectionSettings = {
   mastraUrl: string;
@@ -42,4 +43,5 @@ export type WeaveDesktopBridge = {
   editorMkdir: (target: EditorTarget, path: string) => Promise<EditorOperationResult>;
   editorMove: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<EditorOperationResult>;
   editorDelete: (target: EditorTarget, path: string, recursive?: boolean) => Promise<EditorOperationResult>;
+  lspCreateSession: (target: EditorTarget, path: string, languageId?: string, serverId?: string) => Promise<LspSessionResult>;
 };

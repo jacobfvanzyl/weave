@@ -27,6 +27,7 @@ const sharedClientPackages = [
   '@codemirror/lang-json',
   '@codemirror/lang-markdown',
   '@codemirror/language',
+  '@codemirror/lsp-client',
   '@codemirror/search',
   '@codemirror/state',
   '@codemirror/view',

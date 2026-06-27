@@ -8,6 +8,7 @@ import { serverModules } from '../../server/src/modules';
 import { chatRoutes } from '../../server/src/modules/chat/routes/chat';
 import { chatStateRoutes } from '../../server/src/modules/chat/routes/chat-state';
 import { editorRoutes } from '../../server/src/modules/code/routes/editor';
+import { lspRoutes } from '../../server/src/modules/code/routes/lsp';
 import { projectRoutes } from '../../server/src/modules/code/routes/projects';
 import { terminalRoutes } from '../../server/src/modules/code/routes/terminals';
 import { vaultRoutes } from '../../server/src/modules/notes/routes/vault';
@@ -25,6 +26,7 @@ describe('backend route ownership', () => {
   it('registers canonical route prefixes at their owning boundaries', () => {
     expect(paths(projectRoutes).every(path => path.startsWith('/code/projects') || path === '/code/workspaces/resolve')).toBe(true);
     expect(paths(editorRoutes).every(path => path.startsWith('/code/editor'))).toBe(true);
+    expect(paths(lspRoutes).every(path => path.startsWith('/code/lsp'))).toBe(true);
     expect(paths(terminalRoutes).every(path => path.startsWith('/code/terminals'))).toBe(true);
     expect(paths(vaultRoutes).every(path => path.startsWith('/notes/vault'))).toBe(true);
     expect(paths(chatStateRoutes).every(path => path === '/owner/me' || path.startsWith('/chat/threads'))).toBe(true);
@@ -51,7 +53,7 @@ describe('backend route ownership', () => {
     const contributions = listAgentContributions();
     expect(contributions.map(contribution => contribution.moduleId).sort()).toEqual(['chat', 'code', 'notes']);
     expect(contributions.find(contribution => contribution.moduleId === 'code')?.tools?.map(tool => tool.id))
-      .toEqual(expect.arrayContaining(['read', 'bash', 'git_status']));
+      .toEqual(expect.arrayContaining(['read', 'bash', 'git_status', 'code_diagnostics', 'rename_preview', 'format_preview']));
     expect(contributions.find(contribution => contribution.moduleId === 'notes')?.tools?.map(tool => tool.id))
       .toEqual(expect.arrayContaining(['vault_index', 'vault_read', 'vault_write']));
   });

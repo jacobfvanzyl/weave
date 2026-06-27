@@ -79,7 +79,7 @@ type PortalSupervisorOptions = {
 
 const terminalEventChannel = 'terminal:event';
 const defaultPortalWsPort = '4112';
-const requiredControlCapabilities = ['terminal', 'editor', 'terminal.tmux-source-of-truth', 'terminal.tmux-control-mode'];
+const requiredControlCapabilities = ['terminal', 'editor', 'lsp', 'terminal.tmux-source-of-truth', 'terminal.tmux-control-mode'];
 const desktopPortalLaunchDisabledMessage =
   'Desktop Portal auto-launch is disabled. Start Portal separately with "deno task portal:dev" or set WEAVE_PORTAL_COMMAND to opt into a custom Portal launcher.';
 

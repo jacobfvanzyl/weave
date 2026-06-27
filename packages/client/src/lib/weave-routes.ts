@@ -53,6 +53,7 @@ export const weaveRoutePaths = {
       `/code/projects/${encodePath(projectId)}/workspaces/${encodePath(workspaceId)}/removal-preview`,
     resolveWorkspace: () => '/code/workspaces/resolve',
     editor: (action: string) => `/code/editor/${encodePath(action)}`,
+    lspSession: () => '/code/lsp/session',
     terminalToken: () => '/code/terminals/token',
   },
   notes: {
@@ -131,6 +132,7 @@ export const weaveRoutes = {
       url(weaveRoutePaths.code.workspaceRemovalPreview(projectId, workspaceId)),
     resolveWorkspace: () => url(weaveRoutePaths.code.resolveWorkspace()),
     editor: (action: string) => url(weaveRoutePaths.code.editor(action)),
+    lspSession: () => url(weaveRoutePaths.code.lspSession()),
     terminalToken: () => url(weaveRoutePaths.code.terminalToken()),
   },
   notes: {

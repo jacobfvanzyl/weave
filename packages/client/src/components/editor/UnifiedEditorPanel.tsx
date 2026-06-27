@@ -1682,6 +1682,7 @@ export const UnifiedEditorPanel = ({
         key={`${mode}:${openBuffer.path}`}
         editorMode={mode}
         path={openBuffer.path}
+        languageIntelligenceTarget={mode === 'code' ? editorTarget : undefined}
         value={content}
         wikiLinkSuggestions={noteSuggestions}
         onChange={setActiveBufferValue}

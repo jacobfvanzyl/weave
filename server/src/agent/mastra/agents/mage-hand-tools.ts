@@ -23,6 +23,19 @@ import {
   vaultUploadTool,
   vaultWriteTool,
 } from '../tools/portal-tools';
+import {
+  codeActionPreviewTool,
+  codeActionsTool,
+  codeDefinitionTool,
+  codeDiagnosticsTool,
+  codeHoverTool,
+  codeIntelCapabilitiesTool,
+  codeReferencesTool,
+  codeSymbolsTool,
+  formatPreviewTool,
+  renamePreviewTool,
+  workspaceSymbolsTool,
+} from '../tools/language-intelligence-tools';
 
 export const mageHandTools = {
   renameThreadTool,
@@ -41,6 +54,17 @@ export const mageHandTools = {
   git_branch: gitBranchTool,
   git_switch: gitSwitchTool,
   git_worktree: gitWorktreeTool,
+  code_intel_capabilities: codeIntelCapabilitiesTool,
+  code_diagnostics: codeDiagnosticsTool,
+  code_hover: codeHoverTool,
+  code_definition: codeDefinitionTool,
+  code_references: codeReferencesTool,
+  code_symbols: codeSymbolsTool,
+  workspace_symbols: workspaceSymbolsTool,
+  code_actions: codeActionsTool,
+  code_action_preview: codeActionPreviewTool,
+  rename_preview: renamePreviewTool,
+  format_preview: formatPreviewTool,
   vault_index: vaultIndexTool,
   vault_read: vaultReadTool,
   vault_write: vaultWriteTool,

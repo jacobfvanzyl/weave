@@ -9,16 +9,19 @@ import {
 } from '@atomic-editor/editor';
 import '@atomic-editor/editor/styles.css';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import type { Extension } from '@codemirror/state';
+import { Compartment, type Extension } from '@codemirror/state';
 import { EditorView, GutterMarker, gutter, gutters, keymap, type ViewUpdate } from '@codemirror/view';
 import { css } from '@codemirror/lang-css';
 import { html } from '@codemirror/lang-html';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
+import { LSPClient, languageServerExtensions } from '@codemirror/lsp-client';
 import { tags as t } from '@lezer/highlight';
 import { getCM, vim } from '@replit/codemirror-vim';
 import { basicSetup } from 'codemirror';
+import type { EditorTarget } from '../../lib/editor-types';
+import { createLspSession, createLspWebSocketTransport, detectEditorLanguageId } from '../../lib/language-intelligence';
 
 export type VimMode =
   | 'normal'
@@ -33,6 +36,7 @@ export type VimMode =
 type CodeMirrorEditorProps = {
   editorMode?: 'code' | 'notes';
   path?: string;
+  languageIntelligenceTarget?: EditorTarget;
   value: string;
   readOnly?: boolean;
   wikiLinkSuggestions?: WikiLinkSuggestion[];
@@ -244,6 +248,7 @@ const getLanguageExtension = (filePath: string | undefined): Extension[] => {
 export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(({
   editorMode = 'code',
   path,
+  languageIntelligenceTarget,
   value,
   readOnly,
   wikiLinkSuggestions = [],
@@ -262,6 +267,7 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
   const onVimModeChangeRef = useRef(onVimModeChange);
   const wikiLinkSuggestionsRef = useRef(wikiLinkSuggestions);
   const isSyncingRef = useRef(false);
+  const lspCompartment = useMemo(() => new Compartment(), []);
   const languageExtensions = useMemo(() => getLanguageExtension(path), [path]);
   const notesMarkdownExtensions = useMemo<Extension[]>(() => {
     const isNotesMarkdown = editorMode === 'notes' && /\.(md|mdx|markdown)$/i.test(path ?? '');
@@ -377,6 +383,7 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
         EditorView.editable.of(!readOnly),
         saveKeymap,
         updateListener,
+        lspCompartment.of([]),
         ...languageExtensions,
         ...notesMarkdownExtensions,
       ],
@@ -411,7 +418,70 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEdi
       view.destroy();
       if (viewRef.current === view) viewRef.current = null;
     };
-  }, [languageExtensions, notesMarkdownExtensions, path, readOnly]);
+  }, [languageExtensions, lspCompartment, notesMarkdownExtensions, path, readOnly]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return undefined;
+
+    view.dispatch({ effects: lspCompartment.reconfigure([]) });
+    if (editorMode !== 'code' || !path || !languageIntelligenceTarget) return undefined;
+
+    const languageId = detectEditorLanguageId(path);
+    if (!languageId) return undefined;
+
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    let pendingTransport: ReturnType<typeof createLspWebSocketTransport> | undefined;
+
+    void (async () => {
+      try {
+        const session = await createLspSession({ target: languageIntelligenceTarget, path, languageId });
+        if (disposed) return;
+        if (session.status !== 'ready' || !session.documentUri || !session.rootUri) {
+          if (session.error) console.info(`Language intelligence unavailable for ${path}: ${session.error}`);
+          return;
+        }
+
+        const socketTransport = createLspWebSocketTransport(session);
+        pendingTransport = socketTransport;
+        await socketTransport.ready;
+        if (disposed) {
+          socketTransport.close();
+          return;
+        }
+
+        const client = new LSPClient({
+          rootUri: session.rootUri,
+          timeout: 8_000,
+          extensions: languageServerExtensions(),
+          unhandledNotification: () => undefined,
+        });
+        client.connect(socketTransport.transport);
+        view.dispatch({
+          effects: lspCompartment.reconfigure(client.plugin(session.documentUri, session.languageId ?? languageId)),
+        });
+        cleanup = () => {
+          if (viewRef.current === view) {
+            view.dispatch({ effects: lspCompartment.reconfigure([]) });
+          }
+          client.disconnect();
+          window.setTimeout(() => socketTransport.close(), 0);
+        };
+      } catch (error) {
+        pendingTransport?.close();
+        if (!disposed) {
+          console.info(`Language intelligence unavailable for ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      if (cleanup) cleanup();
+      else pendingTransport?.close();
+    };
+  }, [editorMode, languageIntelligenceTarget, lspCompartment, path]);
 
   useEffect(() => {
     const view = viewRef.current;

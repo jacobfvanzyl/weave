@@ -1,4 +1,5 @@
 import type { PortalEditorHost } from './editor.ts';
+import type { PortalLspClientMessage, PortalLspHost } from './lsp.ts';
 import type { PortalVaultHost } from './vault.ts';
 
 export type TerminalSessionKind = 'workspace' | 'general';
@@ -114,6 +115,7 @@ type TerminalSubscriber = {
 };
 
 type PortalEditorControlHost = Pick<PortalEditorHost, 'list' | 'read' | 'write' | 'mkdir' | 'move' | 'delete'>;
+type PortalLspControlHost = Pick<PortalLspHost, 'createSession' | 'handleClientMessage' | 'detachClient' | 'dispose'>;
 
 type TerminalSession = {
   sessionId: string;
@@ -996,7 +998,9 @@ export class TmuxTerminalController implements PortalTmuxController {
   async captureWindow(terminalId: string) {
     const window = await this.findWindowByTerminalId(terminalId);
     if (!window) return '';
-    const screenState = await this.readPaneScreenState(window).catch((): TmuxPaneScreenState => ({ alternateOn: false }));
+    const screenState = await this.readPaneScreenState(window).catch((): TmuxPaneScreenState => ({
+      alternateOn: false,
+    }));
     const captureArgs = ['capture-pane', '-p', '-e', '-J'];
     if (screenState.alternateOn) {
       captureArgs.push('-a');
@@ -1898,6 +1902,7 @@ export const isTerminalClientEnvelope = (message: Record<string, unknown>): mess
 export const startTerminalControlServer = (input: {
   host: PortalTerminalHost;
   editor?: PortalEditorControlHost;
+  lsp?: PortalLspControlHost;
   vault?: PortalVaultHost;
   hostname: string;
   port: number;
@@ -1918,9 +1923,10 @@ export const startTerminalControlServer = (input: {
     if (url.pathname === '/health') return Response.json({ ok: true, ...(input.metadata ?? {}) });
     if (url.pathname === '/shutdown') {
       setTimeout(() => {
-        void Promise.resolve(input.onShutdown?.()).finally(() => {
+        void Promise.resolve(input.onShutdown?.()).finally(async () => {
           input.host.dispose();
-          void server.shutdown();
+          await input.lsp?.dispose();
+          await server.shutdown().catch(() => undefined);
         });
       }, 0);
       return Response.json({ ok: true });
@@ -1956,6 +1962,18 @@ export const startTerminalControlServer = (input: {
           ? await input.editor.move(body as Parameters<PortalEditorControlHost['move']>[0])
           : await input.editor.delete(body as Parameters<PortalEditorControlHost['delete']>[0]);
         return Response.json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return Response.json({ error: message }, { status: 400 });
+      }
+    }
+
+    if (url.pathname === '/lsp/session') {
+      if (!input.lsp) return new Response('not found', { status: 404 });
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      try {
+        const body = await request.json().catch(() => ({})) as Parameters<PortalLspControlHost['createSession']>[0];
+        return Response.json(await input.lsp.createSession(body));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return Response.json({ error: message }, { status: 400 });
@@ -2000,6 +2018,40 @@ export const startTerminalControlServer = (input: {
         const message = error instanceof Error ? error.message : String(error);
         return Response.json({ error: message }, { status: 400 });
       }
+    }
+
+    if (url.pathname === '/lsp') {
+      if (!input.lsp) return new Response('not found', { status: 404 });
+      const { socket, response } = Deno.upgradeWebSocket(request);
+      const socketClientId = `local-lsp:${crypto.randomUUID()}`;
+      const socketClientIds = new Set([socketClientId]);
+
+      socket.onmessage = (event) => {
+        const parsed = JSON.parse(String(event.data)) as Record<string, unknown>;
+        const clientId = typeof parsed.clientId === 'string' ? parsed.clientId : socketClientId;
+        socketClientIds.add(clientId);
+        const message = parsed.message && typeof parsed.message === 'object'
+          ? parsed.message as PortalLspClientMessage
+          : parsed as PortalLspClientMessage;
+        void input.lsp?.handleClientMessage(clientId, message, (lspEvent) => {
+          socket.send(JSON.stringify({ type: 'lsp.event', clientId, event: lspEvent }));
+        }).catch((error) => {
+          socket.send(JSON.stringify({
+            type: 'lsp.event',
+            clientId,
+            event: { type: 'error', error: error instanceof Error ? error.message : String(error) },
+          }));
+        });
+      };
+
+      socket.onclose = () => {
+        for (const clientId of socketClientIds) input.lsp?.detachClient(clientId);
+      };
+      socket.onerror = () => {
+        for (const clientId of socketClientIds) input.lsp?.detachClient(clientId);
+      };
+
+      return response;
     }
 
     if (url.pathname !== '/terminal') return new Response('not found', { status: 404 });
