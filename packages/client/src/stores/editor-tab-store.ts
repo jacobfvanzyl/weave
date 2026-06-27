@@ -4,6 +4,7 @@ import type { EditorMode } from '../lib/editor-types';
 
 export type EditorTab = {
   id: string;
+  isPreview?: true;
   path: string;
 };
 
@@ -13,6 +14,9 @@ export type EditorTabSet = {
 };
 
 export type EditorTabsChange = EditorTab[] | ((tabs: EditorTab[]) => EditorTab[]);
+export type OpenEditorTabOptions = {
+  preview?: boolean;
+};
 
 type PersistedEditorTabStoreState = {
   editorTabsByTarget: Record<string, EditorTabSet | undefined>;
@@ -20,7 +24,8 @@ type PersistedEditorTabStoreState = {
 
 type EditorTabStoreState = PersistedEditorTabStoreState & {
   closeEditorTab: (targetKey: string, tabId: string) => void;
-  openEditorTab: (targetKey: string, path: string) => EditorTab;
+  openEditorTab: (targetKey: string, path: string, options?: OpenEditorTabOptions) => EditorTab;
+  pinEditorTab: (targetKey: string, tabId: string) => void;
   renameEditorTab: (targetKey: string, fromPath: string, toPath: string) => void;
   reorderEditorTabs: (targetKey: string, activeId: string, overId: string) => void;
   setActiveEditorTab: (targetKey: string, tabId: string | undefined) => void;
@@ -33,8 +38,9 @@ export const getEditorTabTargetKey = (mode: EditorMode, projectId: string, works
 
 export const getEditorTabId = (targetKey: string, path: string) => `${targetKey}:tab:${encodeURIComponent(path)}`;
 
-export const createEditorTab = (targetKey: string, path: string): EditorTab => ({
+export const createEditorTab = (targetKey: string, path: string, options: OpenEditorTabOptions = {}): EditorTab => ({
   id: getEditorTabId(targetKey, path),
+  ...(options.preview ? { isPreview: true as const } : {}),
   path,
 });
 
@@ -55,10 +61,35 @@ const normalizeTabs = (targetKey: string, tabs: EditorTab[]) => {
     const path = tab.path.trim();
     if (!path || seenPaths.has(path)) continue;
     seenPaths.add(path);
-    normalized.push(createEditorTab(targetKey, path));
+    normalized.push(createEditorTab(targetKey, path, { preview: tab.isPreview }));
   }
   return normalized;
 };
+
+const pinEditorTabState = (targetKey: string, tab: EditorTab): EditorTab => (
+  tab.isPreview ? createEditorTab(targetKey, tab.path) : tab
+);
+
+const getPersistableTabSet = (targetKey: string, tabSet: EditorTabSet): EditorTabSet => {
+  const tabs = tabSet.tabs
+    .filter(tab => !tab.isPreview)
+    .map(tab => createEditorTab(targetKey, tab.path));
+  return {
+    tabs,
+    activeTabId: tabs.some(tab => tab.id === tabSet.activeTabId)
+      ? tabSet.activeTabId
+      : tabs[0]?.id,
+  };
+};
+
+const partializeEditorTabStore = (state: EditorTabStoreState): PersistedEditorTabStoreState => ({
+  editorTabsByTarget: Object.fromEntries(
+    Object.entries(state.editorTabsByTarget).map(([targetKey, tabSet]) => [
+      targetKey,
+      tabSet ? getPersistableTabSet(targetKey, tabSet) : tabSet,
+    ]),
+  ),
+});
 
 const getNextActiveTabId = (tabs: EditorTab[], closedTabId: string, activeTabId: string | undefined) => {
   if (activeTabId !== closedTabId) return activeTabId;
@@ -90,27 +121,52 @@ export const useEditorTabStore = create<EditorTabStoreState>()(
             },
           };
         }),
-      openEditorTab: (targetKey, path) => {
-        const nextTab = createEditorTab(targetKey, path);
+      openEditorTab: (targetKey, path, options = {}) => {
+        let openedTab = createEditorTab(targetKey, path, { preview: options.preview });
         set(state => {
           const current = getTabSet(state, targetKey);
-          const tabs = current.tabs.some(tab => tab.id === nextTab.id)
+          const existingTab = current.tabs.find(tab => tab.id === openedTab.id);
+          const tabs = existingTab
             ? current.tabs
-            : [...current.tabs, nextTab];
+                .filter(tab => tab.id === existingTab.id || !tab.isPreview)
+                .map(tab => tab.id === existingTab.id && !options.preview ? pinEditorTabState(targetKey, tab) : tab)
+            : [
+                openedTab,
+                ...current.tabs.filter(tab => !tab.isPreview),
+              ];
+          openedTab = tabs.find(tab => tab.id === openedTab.id) ?? openedTab;
           return {
             editorTabsByTarget: {
               ...state.editorTabsByTarget,
-              [targetKey]: { tabs, activeTabId: nextTab.id },
+              [targetKey]: { tabs, activeTabId: openedTab.id },
             },
           };
         });
-        return nextTab;
+        return openedTab;
       },
+      pinEditorTab: (targetKey, tabId) =>
+        set(state => {
+          const current = getTabSet(state, targetKey);
+          let didChange = false;
+          const tabs = current.tabs.map(tab => {
+            if (tab.id !== tabId || !tab.isPreview) return tab;
+            didChange = true;
+            return createEditorTab(targetKey, tab.path);
+          });
+          if (!didChange) return state;
+          return {
+            editorTabsByTarget: {
+              ...state.editorTabsByTarget,
+              [targetKey]: { ...current, tabs },
+            },
+          };
+        }),
       renameEditorTab: (targetKey, fromPath, toPath) =>
         set(state => {
           const current = getTabSet(state, targetKey);
           const fromId = getEditorTabId(targetKey, fromPath);
-          const toTab = createEditorTab(targetKey, toPath);
+          const sourceTab = current.tabs.find(tab => tab.id === fromId);
+          const toTab = createEditorTab(targetKey, toPath, { preview: sourceTab?.isPreview });
           let didChange = false;
           const tabs = normalizeTabs(targetKey, current.tabs.map(tab => {
             if (tab.id !== fromId) return tab;
@@ -170,7 +226,7 @@ export const useEditorTabStore = create<EditorTabStoreState>()(
     }),
     {
       name: 'weave-editor-tabs',
-      partialize: state => ({ editorTabsByTarget: state.editorTabsByTarget }),
+      partialize: partializeEditorTabStore,
     },
   ),
 );

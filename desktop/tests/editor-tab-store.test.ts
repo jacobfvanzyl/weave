@@ -40,7 +40,7 @@ describe('editor tab store', () => {
     vi.resetModules();
   });
 
-  it('persists tab path order and active tab without content state', async () => {
+  it('opens new tabs at the start and persists stable tab order without content state', async () => {
     const { storage, useEditorTabStore, getEditorTabTargetKey } = await loadFreshEditorTabStore();
     const targetKey = getEditorTabTargetKey('code', 'project-1', 'workspace-1');
 
@@ -49,7 +49,7 @@ describe('editor tab store', () => {
 
     expect(useEditorTabStore.getState().editorTabsByTarget[targetKey]).toEqual({
       activeTabId: second.id,
-      tabs: [first, second],
+      tabs: [second, first],
     });
 
     const persisted = storage.getItem('weave-editor-tabs');
@@ -57,7 +57,7 @@ describe('editor tab store', () => {
     const persistedTabSet = JSON.parse(persisted ?? '{}').state.editorTabsByTarget[targetKey];
     expect(persistedTabSet).toEqual({
       activeTabId: second.id,
-      tabs: [first, second],
+      tabs: [second, first],
     });
     expect(persistedTabSet.tabs.map((tab: Record<string, unknown>) => Object.keys(tab).sort())).toEqual([
       ['id', 'path'],
@@ -72,11 +72,11 @@ describe('editor tab store', () => {
     const second = useEditorTabStore.getState().openEditorTab(targetKey, 'Sketch.excalidraw');
     const third = useEditorTabStore.getState().openEditorTab(targetKey, 'Zed.md');
 
-    useEditorTabStore.getState().reorderEditorTabs(targetKey, third.id, first.id);
+    useEditorTabStore.getState().reorderEditorTabs(targetKey, first.id, third.id);
 
     expect(useEditorTabStore.getState().editorTabsByTarget[targetKey]).toEqual({
       activeTabId: third.id,
-      tabs: [third, first, second],
+      tabs: [first, third, second],
     });
   });
 
@@ -90,14 +90,62 @@ describe('editor tab store', () => {
     useEditorTabStore.getState().setActiveEditorTab(targetKey, second.id);
     useEditorTabStore.getState().closeEditorTab(targetKey, second.id);
     expect(useEditorTabStore.getState().editorTabsByTarget[targetKey]).toEqual({
-      activeTabId: third.id,
-      tabs: [first, third],
+      activeTabId: first.id,
+      tabs: [third, first],
     });
 
-    useEditorTabStore.getState().closeEditorTab(targetKey, third.id);
+    useEditorTabStore.getState().closeEditorTab(targetKey, first.id);
     expect(useEditorTabStore.getState().editorTabsByTarget[targetKey]).toEqual({
-      activeTabId: first.id,
-      tabs: [first],
+      activeTabId: third.id,
+      tabs: [third],
+    });
+  });
+
+  it('keeps preview tabs in memory but excludes them from persisted storage', async () => {
+    const { storage, useEditorTabStore, getEditorTabTargetKey } = await loadFreshEditorTabStore();
+    const targetKey = getEditorTabTargetKey('code', 'project-1', 'workspace-1');
+
+    const stable = useEditorTabStore.getState().openEditorTab(targetKey, 'src/a.ts');
+    const preview = useEditorTabStore.getState().openEditorTab(targetKey, 'src/b.ts', { preview: true });
+
+    expect(preview).toEqual({
+      id: preview.id,
+      isPreview: true,
+      path: 'src/b.ts',
+    });
+    expect(useEditorTabStore.getState().editorTabsByTarget[targetKey]).toEqual({
+      activeTabId: preview.id,
+      tabs: [preview, stable],
+    });
+
+    const persisted = storage.getItem('weave-editor-tabs');
+    expect(persisted).toBeTruthy();
+    const persistedTabSet = JSON.parse(persisted ?? '{}').state.editorTabsByTarget[targetKey];
+    expect(persistedTabSet).toEqual({
+      activeTabId: stable.id,
+      tabs: [stable],
+    });
+  });
+
+  it('pins preview tabs into stable persisted tabs', async () => {
+    const { storage, useEditorTabStore, getEditorTabTargetKey } = await loadFreshEditorTabStore();
+    const targetKey = getEditorTabTargetKey('notes', 'project-1', 'workspace-1');
+
+    const preview = useEditorTabStore.getState().openEditorTab(targetKey, 'Draft.md', { preview: true });
+    useEditorTabStore.getState().pinEditorTab(targetKey, preview.id);
+
+    const pinned = { id: preview.id, path: 'Draft.md' };
+    expect(useEditorTabStore.getState().editorTabsByTarget[targetKey]).toEqual({
+      activeTabId: preview.id,
+      tabs: [pinned],
+    });
+
+    const persisted = storage.getItem('weave-editor-tabs');
+    expect(persisted).toBeTruthy();
+    const persistedTabSet = JSON.parse(persisted ?? '{}').state.editorTabsByTarget[targetKey];
+    expect(persistedTabSet).toEqual({
+      activeTabId: preview.id,
+      tabs: [pinned],
     });
   });
 

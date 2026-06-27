@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
@@ -145,6 +145,7 @@ const minimumMainEditorColumns = 80;
 const defaultMinimumMainEditorWidthPx = minimumMainEditorColumns * 8;
 const explorerSlideOverCloseDelayMs = 120;
 const explorerFileOpenSingleClickDelayMs = 450;
+const explorerBorderHoverWidthPx = 10;
 const editorColumnMeasureText = '0'.repeat(minimumMainEditorColumns);
 
 const getBufferDirty = (buffer: EditorBuffer | undefined) => Boolean(buffer && buffer.value !== buffer.content);
@@ -473,6 +474,7 @@ type SortableEditorTabProps = {
   icon: ReactNode;
   label: string;
   onClose: () => void;
+  onPin: () => void;
   onRename: () => void;
   onSelect: () => void;
   renameInput?: ReactNode;
@@ -487,6 +489,7 @@ const SortableEditorTab = ({
   icon,
   label,
   onClose,
+  onPin,
   onRename,
   onSelect,
   renameInput,
@@ -527,14 +530,18 @@ const SortableEditorTab = ({
           onDoubleClick={event => {
             event.preventDefault();
             event.stopPropagation();
-            onRename();
+            if (tab.isPreview) onPin();
+            else onRename();
           }}
           {...sortableAttributes}
           {...listeners}
         >
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">{icon}</span>
-            <span className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap [direction:rtl] [text-align:left]">
+            <span className={cn(
+              'block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap [direction:rtl] [text-align:left]',
+              tab.isPreview && 'italic',
+            )}>
               <span className="[direction:ltr] [unicode-bidi:isolate]">
                 {label}
               </span>
@@ -592,6 +599,7 @@ export const UnifiedEditorPanel = ({
   const activeEditorTabId = editorTabSet?.activeTabId;
   const closePersistedEditorTab = useEditorTabStore(state => state.closeEditorTab);
   const openPersistedEditorTab = useEditorTabStore(state => state.openEditorTab);
+  const pinPersistedEditorTab = useEditorTabStore(state => state.pinEditorTab);
   const renamePersistedEditorTab = useEditorTabStore(state => state.renameEditorTab);
   const reorderEditorTabs = useEditorTabStore(state => state.reorderEditorTabs);
   const setActiveEditorTab = useEditorTabStore(state => state.setActiveEditorTab);
@@ -608,6 +616,7 @@ export const UnifiedEditorPanel = ({
   const fileOpenClickTimeoutRef = useRef<number | undefined>(undefined);
   const renameCommitInFlightRef = useRef(false);
   const renameCancelRef = useRef(false);
+  const explorerBorderHoverRef = useRef(false);
   const pendingRevealRef = useRef<{ requestId: number; path: string; line: number } | undefined>(
     undefined,
   );
@@ -641,13 +650,14 @@ export const UnifiedEditorPanel = ({
   const hasDirtyBuffers = Object.values(buffersByTabId).some(getBufferDirty);
   const shouldPersistExplorerOpen = !activeEditorTab;
   const canDockExplorer = editorBodyWidth - explorerRailWidthPx >= minimumMainEditorWidthPx;
-  const isExplorerSlideOverMode = !canDockExplorer;
   const isExplorerDocked = (isExplorerVisible || shouldPersistExplorerOpen) && canDockExplorer;
-  const isExplorerSlideOverVisible = isExplorerSlideOverMode && (isExplorerSlideOverOpen || shouldPersistExplorerOpen);
+  const canUseExplorerSlideOver = !isExplorerDocked;
+  const isExplorerSlideOverVisible = canUseExplorerSlideOver && (isExplorerSlideOverOpen || shouldPersistExplorerOpen);
   const editorPanelStyle = useMemo(() => ({
     '--weave-editor-gutter-width': `${Math.max(44, editorGutterWidth)}px`,
   }) as CSSProperties, [editorGutterWidth]);
   const isExplorerActive = isExplorerDocked || isExplorerSlideOverVisible;
+  const hasBreadcrumb = Boolean(breadcrumb);
   const modeIndicator = editorModeIndicatorStyles[vimMode];
   const statusLabel = isSaving ? 'saving' : isFileLoading ? 'loading' : undefined;
   const activeNote = activePath
@@ -664,6 +674,7 @@ export const UnifiedEditorPanel = ({
   const excalidrawBufferKey = openBuffer && mode === 'notes' && isExcalidrawPath(openBuffer.path)
     ? `${openBuffer.path}:${openBuffer.version}`
     : undefined;
+  const isCodeMirrorOpen = Boolean(openBuffer && !excalidrawBufferKey);
   const excalidrawInitialSerialized = useMemo(() => (
     excalidrawInitialData ? serializeRestoredExcalidrawData(excalidrawInitialData) : undefined
   ), [excalidrawInitialData]);
@@ -709,12 +720,61 @@ export const UnifiedEditorPanel = ({
     });
   }, []);
 
+  const clearEditorTabState = useCallback((tabId: string) => {
+    setBuffersByTabId(current => {
+      if (!current[tabId]) return current;
+      const next = { ...current };
+      delete next[tabId];
+      return next;
+    });
+    setFailedBufferTabIds(current => {
+      if (!current.has(tabId)) return current;
+      const next = new Set(current);
+      next.delete(tabId);
+      return next;
+    });
+  }, []);
+
+  const clearEditorTabStates = useCallback((tabIds: string[]) => {
+    if (tabIds.length === 0) return;
+    const tabIdSet = new Set(tabIds);
+    setBuffersByTabId(current => {
+      let didChange = false;
+      const next = { ...current };
+      for (const tabId of tabIdSet) {
+        if (!next[tabId]) continue;
+        didChange = true;
+        delete next[tabId];
+      }
+      return didChange ? next : current;
+    });
+    setFailedBufferTabIds(current => {
+      let didChange = false;
+      const next = new Set(current);
+      for (const tabId of tabIdSet) {
+        if (!next.delete(tabId)) continue;
+        didChange = true;
+      }
+      return didChange ? next : current;
+    });
+  }, []);
+
+  const closePreviewEditorTab = useCallback((tab: EditorTab | undefined) => {
+    if (!tab?.isPreview) return;
+    closePersistedEditorTab(editorTabTargetKey, tab.id);
+    clearEditorTabState(tab.id);
+  }, [clearEditorTabState, closePersistedEditorTab, editorTabTargetKey]);
+
   const setActiveBufferValue = useCallback((value: string) => {
     if (!activeEditorTab) return;
+    const currentBuffer = buffersByTabId[activeEditorTab.id];
+    if (activeEditorTab.isPreview && currentBuffer && value !== currentBuffer.value) {
+      pinPersistedEditorTab(editorTabTargetKey, activeEditorTab.id);
+    }
     updateBuffer(activeEditorTab.id, buffer => (
       value === buffer.value ? buffer : withBufferValue(buffer, value)
     ));
-  }, [activeEditorTab, updateBuffer]);
+  }, [activeEditorTab, buffersByTabId, editorTabTargetKey, pinPersistedEditorTab, updateBuffer]);
 
   const scheduleExcalidrawResize = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -819,28 +879,59 @@ export const UnifiedEditorPanel = ({
   }, []);
 
   const openExplorerSlideOver = useCallback(() => {
-    if (!isExplorerSlideOverMode) return;
+    if (!canUseExplorerSlideOver) return;
     clearExplorerSlideOverCloseTimeout();
     setIsExplorerSlideOverOpen(true);
-  }, [clearExplorerSlideOverCloseTimeout, isExplorerSlideOverMode]);
+  }, [canUseExplorerSlideOver, clearExplorerSlideOverCloseTimeout]);
 
   const scheduleExplorerSlideOverClose = useCallback(() => {
-    if (!isExplorerSlideOverMode || shouldPersistExplorerOpen) return;
+    if (!canUseExplorerSlideOver || shouldPersistExplorerOpen) return;
     clearExplorerSlideOverCloseTimeout();
     explorerSlideOverCloseTimeoutRef.current = window.setTimeout(() => {
       explorerSlideOverCloseTimeoutRef.current = undefined;
       setIsExplorerSlideOverOpen(false);
     }, explorerSlideOverCloseDelayMs);
-  }, [clearExplorerSlideOverCloseTimeout, isExplorerSlideOverMode, shouldPersistExplorerOpen]);
+  }, [canUseExplorerSlideOver, clearExplorerSlideOverCloseTimeout, shouldPersistExplorerOpen]);
 
   const toggleExplorerRail = useCallback(() => {
-    if (isExplorerSlideOverMode) {
-      clearExplorerSlideOverCloseTimeout();
+    clearExplorerSlideOverCloseTimeout();
+    if (!canDockExplorer) {
       setIsExplorerSlideOverOpen(open => !open);
       return;
     }
+
     setIsExplorerVisible(visible => !visible);
-  }, [clearExplorerSlideOverCloseTimeout, isExplorerSlideOverMode]);
+    setIsExplorerSlideOverOpen(false);
+  }, [canDockExplorer, clearExplorerSlideOverCloseTimeout]);
+
+  const closeExplorerAfterFileOpen = useCallback(() => {
+    if (!canUseExplorerSlideOver) return;
+    closeExplorerSlideOver();
+  }, [canUseExplorerSlideOver, closeExplorerSlideOver]);
+
+  const handleEditorBodyMouseMove = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!canUseExplorerSlideOver) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('[data-weave-editor-explorer]')) return;
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const isInsideHoverEdge = rect.right - event.clientX <= explorerBorderHoverWidthPx;
+    if (isInsideHoverEdge) {
+      explorerBorderHoverRef.current = true;
+      openExplorerSlideOver();
+      return;
+    }
+
+    if (!explorerBorderHoverRef.current) return;
+    explorerBorderHoverRef.current = false;
+    scheduleExplorerSlideOverClose();
+  }, [canUseExplorerSlideOver, openExplorerSlideOver, scheduleExplorerSlideOverClose]);
+
+  const handleEditorBodyMouseLeave = useCallback(() => {
+    if (!canUseExplorerSlideOver) return;
+    explorerBorderHoverRef.current = false;
+    scheduleExplorerSlideOverClose();
+  }, [canUseExplorerSlideOver, scheduleExplorerSlideOverClose]);
 
   const handleHidePanel = useCallback(() => {
     if (!confirmDiscardAllDirty()) return;
@@ -899,18 +990,28 @@ export const UnifiedEditorPanel = ({
     }
   }, [codeBackend, editorTarget, expandedPaths, mode, vaultBackend, vaultTarget]);
 
-  const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean } = {}) => {
+  const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean; preview?: boolean } = {}) => {
     if (mode === 'notes' && !isNotesOpenablePath(path)) return false;
 
+    const shouldPreview = options.preview ?? true;
     const existingTab = editorTabs.find(tab => tab.path === path);
+    const previewTabIdsToClose = editorTabs
+      .filter(tab => tab.isPreview && tab.path !== path)
+      .map(tab => tab.id);
     if (existingTab && buffersByTabId[existingTab.id]) {
+      if (activeEditorTab?.id !== existingTab.id) closePreviewEditorTab(activeEditorTab);
       setActiveEditorTab(editorTabTargetKey, existingTab.id);
       if (options.focusEditor ?? true) setBufferFocusRequest(request => request + 1);
       return true;
     }
 
-    const tab = existingTab ?? openPersistedEditorTab(editorTabTargetKey, path);
-    if (existingTab) setActiveEditorTab(editorTabTargetKey, existingTab.id);
+    const tab = existingTab ?? openPersistedEditorTab(editorTabTargetKey, path, { preview: shouldPreview });
+    if (existingTab) {
+      if (activeEditorTab?.id !== existingTab.id) closePreviewEditorTab(activeEditorTab);
+      setActiveEditorTab(editorTabTargetKey, existingTab.id);
+    } else {
+      clearEditorTabStates(previewTabIdsToClose);
+    }
     setFailedBufferTabIds(current => {
       if (!current.has(tab.id)) return current;
       const next = new Set(current);
@@ -927,7 +1028,9 @@ export const UnifiedEditorPanel = ({
         ? isExcalidrawPath(file.path) ? 'excalidraw' : 'markdown'
         : undefined;
       const loadedBuffer = createLoadedBuffer(file, mediaType);
-      const loadedTab = file.path === tab.path ? tab : openPersistedEditorTab(editorTabTargetKey, file.path);
+      const loadedTab = file.path === tab.path
+        ? tab
+        : openPersistedEditorTab(editorTabTargetKey, file.path, { preview: tab.isPreview });
       setBuffersByTabId(current => {
         const next = { ...current, [loadedTab.id]: loadedBuffer };
         if (loadedTab.id !== tab.id) delete next[tab.id];
@@ -951,8 +1054,11 @@ export const UnifiedEditorPanel = ({
       setIsFileLoading(false);
     }
   }, [
+    activeEditorTab,
     buffersByTabId,
+    clearEditorTabStates,
     closePersistedEditorTab,
+    closePreviewEditorTab,
     codeBackend,
     editorTabTargetKey,
     editorTabs,
@@ -1076,8 +1182,8 @@ export const UnifiedEditorPanel = ({
   }, [content, openBuffer?.path]);
 
   useEffect(() => {
-    if (canDockExplorer) closeExplorerSlideOver();
-  }, [canDockExplorer, closeExplorerSlideOver]);
+    if (isExplorerDocked) closeExplorerSlideOver();
+  }, [closeExplorerSlideOver, isExplorerDocked]);
 
   useEffect(() => () => clearExplorerSlideOverCloseTimeout(), [clearExplorerSlideOverCloseTimeout]);
 
@@ -1111,10 +1217,10 @@ export const UnifiedEditorPanel = ({
       fileOpenClickTimeoutRef.current = window.setTimeout(() => {
         fileOpenClickTimeoutRef.current = undefined;
         void loadFile(node.path);
-        if (isExplorerSlideOverMode) closeExplorerSlideOver();
+        closeExplorerAfterFileOpen();
       }, explorerFileOpenSingleClickDelayMs);
     }
-  }, [clearPendingFileOpen, closeExplorerSlideOver, isExplorerSlideOverMode, loadFile, mode, startRename, toggleDirectory]);
+  }, [clearPendingFileOpen, closeExplorerAfterFileOpen, loadFile, mode, startRename, toggleDirectory]);
 
   const handleNodeDoubleClick = useCallback((node: TreeNode) => {
     if (node.type !== 'file' || (mode !== 'code' && !isNotesOpenablePath(node.path))) return;
@@ -1309,7 +1415,11 @@ export const UnifiedEditorPanel = ({
       const result = mode === 'code'
         ? await codeBackend.write(editorTarget, path, nextContent)
         : await vaultBackend.write(vaultTarget, path, nextContent);
+      const previewTabIdsToClose = editorTabs
+        .filter(tab => tab.isPreview && tab.path !== result.path)
+        .map(tab => tab.id);
       const tab = openPersistedEditorTab(editorTabTargetKey, result.path);
+      clearEditorTabStates(previewTabIdsToClose);
       setBuffersByTabId(current => ({
         ...current,
         [tab.id]: createLoadedBuffer({
@@ -1329,7 +1439,7 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(createError));
       return false;
     }
-  }, [closeExplorerSlideOver, codeBackend, editorTabTargetKey, editorTarget, mode, openPersistedEditorTab, refreshExplorer, vaultBackend, vaultTarget]);
+  }, [clearEditorTabStates, closeExplorerSlideOver, codeBackend, editorTabTargetKey, editorTabs, editorTarget, mode, openPersistedEditorTab, refreshExplorer, vaultBackend, vaultTarget]);
 
   const createDrawing = useCallback(async (rawPath: string) => {
     const path = normalizeRelativePath(rawPath);
@@ -1340,7 +1450,11 @@ export const UnifiedEditorPanel = ({
     setError(undefined);
     try {
       const result = await vaultBackend.write(vaultTarget, drawingPath, drawingContent);
+      const previewTabIdsToClose = editorTabs
+        .filter(tab => tab.isPreview && tab.path !== result.path)
+        .map(tab => tab.id);
       const tab = openPersistedEditorTab(editorTabTargetKey, result.path);
+      clearEditorTabStates(previewTabIdsToClose);
       setBuffersByTabId(current => ({
         ...current,
         [tab.id]: createLoadedBuffer({
@@ -1361,7 +1475,7 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(createError));
       return false;
     }
-  }, [closeExplorerSlideOver, editorTabTargetKey, openPersistedEditorTab, refreshExplorer, scheduleExcalidrawResize, vaultBackend, vaultTarget]);
+  }, [clearEditorTabStates, closeExplorerSlideOver, editorTabTargetKey, editorTabs, openPersistedEditorTab, refreshExplorer, scheduleExcalidrawResize, vaultBackend, vaultTarget]);
 
   const getSelectedCreateDirectory = useCallback(() => {
     if (!selectedNode) return '';
@@ -1701,27 +1815,21 @@ export const UnifiedEditorPanel = ({
   }, [editorTabTargetKey, reorderEditorTabs]);
 
   const selectEditorTab = useCallback((tab: EditorTab) => {
+    if (activeEditorTab?.id !== tab.id) closePreviewEditorTab(activeEditorTab);
     setActiveEditorTab(editorTabTargetKey, tab.id);
     if (buffersByTabId[tab.id]) setBufferFocusRequest(request => request + 1);
-  }, [buffersByTabId, editorTabTargetKey, setActiveEditorTab]);
+  }, [activeEditorTab, buffersByTabId, closePreviewEditorTab, editorTabTargetKey, setActiveEditorTab]);
 
   const closeEditorTab = useCallback((tab: EditorTab) => {
     const buffer = buffersByTabId[tab.id];
     if (!confirmDiscardBuffer(buffer, tab.path)) return;
     closePersistedEditorTab(editorTabTargetKey, tab.id);
-    setBuffersByTabId(current => {
-      if (!current[tab.id]) return current;
-      const next = { ...current };
-      delete next[tab.id];
-      return next;
-    });
-    setFailedBufferTabIds(current => {
-      if (!current.has(tab.id)) return current;
-      const next = new Set(current);
-      next.delete(tab.id);
-      return next;
-    });
-  }, [buffersByTabId, closePersistedEditorTab, confirmDiscardBuffer, editorTabTargetKey]);
+    clearEditorTabState(tab.id);
+  }, [buffersByTabId, clearEditorTabState, closePersistedEditorTab, confirmDiscardBuffer, editorTabTargetKey]);
+
+  const pinEditorTab = useCallback((tab: EditorTab) => {
+    pinPersistedEditorTab(editorTabTargetKey, tab.id);
+  }, [editorTabTargetKey, pinPersistedEditorTab]);
 
   const renderEditorTabs = () => (
     <DndContext
@@ -1753,6 +1861,7 @@ export const UnifiedEditorPanel = ({
               renameInput={isRenaming ? renderRenameInput('h-5 w-full') : undefined}
               tab={tab}
               onClose={() => closeEditorTab(tab)}
+              onPin={() => pinEditorTab(tab)}
               onRename={() => startRename(tab.path, 'tab')}
               onSelect={() => selectEditorTab(tab)}
             />
@@ -1762,10 +1871,10 @@ export const UnifiedEditorPanel = ({
     </DndContext>
   );
 
-  const explorerToggleLabel = isExplorerSlideOverMode
-    ? 'Open explorer'
-    : isExplorerVisible ? 'Hide explorer' : 'Show explorer';
-  const explorerToggleHoverHandlers = isExplorerSlideOverMode
+  const explorerToggleLabel = canDockExplorer
+    ? isExplorerVisible ? 'Hide explorer' : 'Show explorer'
+    : isExplorerSlideOverVisible ? 'Close explorer' : 'Open explorer';
+  const explorerToggleHoverHandlers = canUseExplorerSlideOver
     ? {
         onMouseEnter: openExplorerSlideOver,
         onMouseLeave: scheduleExplorerSlideOverClose,
@@ -1916,15 +2025,20 @@ export const UnifiedEditorPanel = ({
             {mode === 'notes' ? <StickyNote size={15} className="shrink-0 text-muted-foreground" /> : <Code2 size={15} className="shrink-0 text-muted-foreground" />}
           </div>
           <div
-            className="flex min-w-0 max-w-[55%] shrink items-stretch self-stretch overflow-x-auto"
+            className={cn(
+              'flex min-w-0 items-stretch self-stretch overflow-x-auto',
+              hasBreadcrumb ? 'max-w-[55%] shrink' : 'flex-1',
+            )}
             role="tablist"
             aria-label={mode === 'notes' ? 'Open notes' : 'Open code buffers'}
           >
             {editorTabs.length > 0 ? renderEditorTabs() : null}
           </div>
-          <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden px-3">
-            {breadcrumb ? <div className="min-w-0 max-w-full truncate">{breadcrumb}</div> : null}
-          </div>
+          {hasBreadcrumb ? (
+            <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden px-3">
+              <div className="min-w-0 max-w-full truncate">{breadcrumb}</div>
+            </div>
+          ) : null}
           <div className="flex shrink-0 items-center gap-1 pr-3">
             {statusLabel ? <span className="self-center shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span> : null}
             <Button size="icon-xs" variant="ghost" aria-label="Save buffer" title="Save buffer" disabled={!openBuffer || !isDirty || isSaving} onClick={() => void handleSave()}>
@@ -1941,7 +2055,12 @@ export const UnifiedEditorPanel = ({
             </Button>
           </div>
         </div>
-        <div ref={editorBodyRef} className="relative flex min-h-0 flex-1">
+        <div
+          ref={editorBodyRef}
+          className="relative flex min-h-0 flex-1"
+          onMouseMove={handleEditorBodyMouseMove}
+          onMouseLeave={handleEditorBodyMouseLeave}
+        >
           <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
             {renderEditorBody()}
             {isFileLoading ? (
@@ -1959,31 +2078,37 @@ export const UnifiedEditorPanel = ({
           {isExplorerSlideOverVisible ? renderExplorerRail('slide-over') : null}
         </div>
         <div className="relative flex h-9 shrink-0 items-center">
-          <div
-            className="h-full shrink-0 bg-[var(--weave-editor-gutter-background)]"
-            style={{ width: 'var(--weave-editor-gutter-width)' }}
-            aria-hidden="true"
-          />
-          <div
-            className="pointer-events-none absolute bottom-0 top-0 w-px bg-border"
-            style={{ left: 'calc(var(--weave-editor-gutter-width) - 2px)' }}
-            aria-hidden="true"
-          />
+          {isCodeMirrorOpen ? (
+            <>
+              <div
+                className="h-full shrink-0 bg-[var(--weave-editor-gutter-background)]"
+                style={{ width: 'var(--weave-editor-gutter-width)' }}
+                aria-hidden="true"
+              />
+              <div
+                className="pointer-events-none absolute bottom-0 top-0 w-px bg-border"
+                style={{ left: 'calc(var(--weave-editor-gutter-width) - 2px)' }}
+                aria-hidden="true"
+              />
+            </>
+          ) : null}
           <div
             className="pointer-events-none absolute right-0 top-0 h-px bg-border"
-            style={{ left: 'calc(var(--weave-editor-gutter-width) - 1px)' }}
+            style={{ left: isCodeMirrorOpen ? 'calc(var(--weave-editor-gutter-width) - 1px)' : 0 }}
             aria-hidden="true"
           />
           <div className="flex h-full min-w-0 flex-1 items-center gap-2 px-3">
-            <span
-              className="inline-flex h-5 min-w-[4.75rem] shrink-0 items-center justify-center rounded-sm px-2 text-[11px] font-bold"
-              style={{
-                backgroundColor: modeIndicator.background,
-                color: modeIndicator.foreground,
-              }}
-            >
-              {modeIndicator.label}
-            </span>
+            {isCodeMirrorOpen ? (
+              <span
+                className="inline-flex h-5 min-w-[4.75rem] shrink-0 items-center justify-center rounded-sm px-2 text-[11px] font-bold"
+                style={{
+                  backgroundColor: modeIndicator.background,
+                  color: modeIndicator.foreground,
+                }}
+              >
+                {modeIndicator.label}
+              </span>
+            ) : null}
             <div className="min-w-0 flex-1" aria-hidden="true" />
             <Button
               className={isExplorerActive ? 'bg-accent' : undefined}
