@@ -140,13 +140,9 @@ const getExplorerFileLabel = (path: string, mode: EditorMode) => {
   return getEditorFileLabel(path, mode);
 };
 
-const explorerRailWidthPx = 20 * 16;
-const minimumMainEditorColumns = 80;
-const defaultMinimumMainEditorWidthPx = minimumMainEditorColumns * 8;
 const explorerSlideOverCloseDelayMs = 120;
 const explorerFileOpenSingleClickDelayMs = 450;
 const explorerBorderHoverWidthPx = 10;
-const editorColumnMeasureText = '0'.repeat(minimumMainEditorColumns);
 
 const getBufferDirty = (buffer: EditorBuffer | undefined) => Boolean(buffer && buffer.value !== buffer.content);
 
@@ -172,25 +168,6 @@ const withBufferValue = (buffer: EditorBuffer, value: string): EditorBuffer => (
   value,
   dirty: value !== buffer.content,
 });
-
-function useMeasuredElementWidth<T extends HTMLElement>(initialWidth = 0) {
-  const ref = useRef<T | null>(null);
-  const [width, setWidth] = useState(initialWidth);
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return undefined;
-
-    const updateWidth = () => setWidth(element.getBoundingClientRect().width);
-    updateWidth();
-
-    const resizeObserver = new ResizeObserver(updateWidth);
-    resizeObserver.observe(element);
-    return () => resizeObserver.disconnect();
-  }, []);
-
-  return [ref, width] as const;
-}
 
 const createEmptyExcalidrawFile = () => serializeExcalidrawAsJSON(
   [],
@@ -621,8 +598,7 @@ export const UnifiedEditorPanel = ({
     undefined,
   );
   const handledFollowRequestIdRef = useRef<number | undefined>(undefined);
-  const [editorBodyRef, editorBodyWidth] = useMeasuredElementWidth<HTMLDivElement>(typeof window === 'undefined' ? 0 : window.innerWidth);
-  const [columnMeasureRef, minimumMainEditorWidthPx] = useMeasuredElementWidth<HTMLSpanElement>(defaultMinimumMainEditorWidthPx);
+  const editorBodyRef = useRef<HTMLDivElement | null>(null);
   const [activeTab, setActiveTab] = useState<ExplorerTab>('explorer');
   const [query, setQuery] = useState('');
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(['']));
@@ -649,14 +625,14 @@ export const UnifiedEditorPanel = ({
   const isDirty = getBufferDirty(openBuffer);
   const hasDirtyBuffers = Object.values(buffersByTabId).some(getBufferDirty);
   const shouldPersistExplorerOpen = !activeEditorTab;
-  const canDockExplorer = editorBodyWidth - explorerRailWidthPx >= minimumMainEditorWidthPx;
-  const isExplorerDocked = (isExplorerVisible || shouldPersistExplorerOpen) && canDockExplorer;
-  const canUseExplorerSlideOver = !isExplorerDocked;
-  const isExplorerSlideOverVisible = canUseExplorerSlideOver && (isExplorerSlideOverOpen || shouldPersistExplorerOpen);
+  const isExplorerLockedOpen = isExplorerVisible || shouldPersistExplorerOpen;
+  const canUseExplorerSlideOver = !isExplorerLockedOpen;
+  const isExplorerSlideOverVisible = canUseExplorerSlideOver && isExplorerSlideOverOpen;
+  const isExplorerOverlayVisible = isExplorerLockedOpen || isExplorerSlideOverVisible;
   const editorPanelStyle = useMemo(() => ({
     '--weave-editor-gutter-width': `${Math.max(44, editorGutterWidth)}px`,
   }) as CSSProperties, [editorGutterWidth]);
-  const isExplorerActive = isExplorerDocked || isExplorerSlideOverVisible;
+  const isExplorerActive = isExplorerOverlayVisible;
   const hasBreadcrumb = Boolean(breadcrumb);
   const modeIndicator = editorModeIndicatorStyles[vimMode];
   const statusLabel = isSaving ? 'saving' : isFileLoading ? 'loading' : undefined;
@@ -885,24 +861,19 @@ export const UnifiedEditorPanel = ({
   }, [canUseExplorerSlideOver, clearExplorerSlideOverCloseTimeout]);
 
   const scheduleExplorerSlideOverClose = useCallback(() => {
-    if (!canUseExplorerSlideOver || shouldPersistExplorerOpen) return;
+    if (!canUseExplorerSlideOver) return;
     clearExplorerSlideOverCloseTimeout();
     explorerSlideOverCloseTimeoutRef.current = window.setTimeout(() => {
       explorerSlideOverCloseTimeoutRef.current = undefined;
       setIsExplorerSlideOverOpen(false);
     }, explorerSlideOverCloseDelayMs);
-  }, [canUseExplorerSlideOver, clearExplorerSlideOverCloseTimeout, shouldPersistExplorerOpen]);
+  }, [canUseExplorerSlideOver, clearExplorerSlideOverCloseTimeout]);
 
   const toggleExplorerRail = useCallback(() => {
     clearExplorerSlideOverCloseTimeout();
-    if (!canDockExplorer) {
-      setIsExplorerSlideOverOpen(open => !open);
-      return;
-    }
-
     setIsExplorerVisible(visible => !visible);
     setIsExplorerSlideOverOpen(false);
-  }, [canDockExplorer, clearExplorerSlideOverCloseTimeout]);
+  }, [clearExplorerSlideOverCloseTimeout]);
 
   const closeExplorerAfterFileOpen = useCallback(() => {
     if (!canUseExplorerSlideOver) return;
@@ -1182,8 +1153,8 @@ export const UnifiedEditorPanel = ({
   }, [content, openBuffer?.path]);
 
   useEffect(() => {
-    if (isExplorerDocked) closeExplorerSlideOver();
-  }, [closeExplorerSlideOver, isExplorerDocked]);
+    if (isExplorerLockedOpen) closeExplorerSlideOver();
+  }, [closeExplorerSlideOver, isExplorerLockedOpen]);
 
   useEffect(() => () => clearExplorerSlideOverCloseTimeout(), [clearExplorerSlideOverCloseTimeout]);
 
@@ -1871,9 +1842,9 @@ export const UnifiedEditorPanel = ({
     </DndContext>
   );
 
-  const explorerToggleLabel = canDockExplorer
-    ? isExplorerVisible ? 'Hide explorer' : 'Show explorer'
-    : isExplorerSlideOverVisible ? 'Close explorer' : 'Open explorer';
+  const explorerToggleLabel = isExplorerLockedOpen
+    ? 'Hide explorer'
+    : isExplorerSlideOverVisible ? 'Keep explorer open' : 'Show explorer';
   const explorerToggleHoverHandlers = canUseExplorerSlideOver
     ? {
         onMouseEnter: openExplorerSlideOver,
@@ -1881,17 +1852,12 @@ export const UnifiedEditorPanel = ({
       }
     : {};
 
-  const renderExplorerRail = (presentation: 'docked' | 'slide-over') => {
+  const renderExplorerRail = (presentation: 'locked' | 'slide-over') => {
     const isSlideOver = presentation === 'slide-over';
 
     return (
       <aside
-        className={cn(
-          'flex w-80 min-w-64 shrink-0 flex-col bg-card',
-          isSlideOver
-            ? 'absolute bottom-2 right-2 top-2 z-20 max-w-[calc(100%-1rem)] overflow-hidden rounded-md border border-border bg-card shadow-md'
-            : 'border-l border-border',
-        )}
+        className="absolute bottom-0 right-0 top-0 z-20 flex w-80 max-w-full flex-col overflow-hidden border-l border-border bg-card"
         data-weave-editor-explorer
         data-presentation={presentation}
         onMouseEnter={isSlideOver ? openExplorerSlideOver : undefined}
@@ -2013,13 +1979,6 @@ export const UnifiedEditorPanel = ({
         data-expanded={isExpanded ? 'true' : 'false'}
         style={editorPanelStyle}
       >
-        <span
-          ref={columnMeasureRef}
-          className="pointer-events-none fixed -left-[9999px] -top-[9999px] font-mono text-sm opacity-0"
-          aria-hidden="true"
-        >
-          {editorColumnMeasureText}
-        </span>
         <div className="flex h-10 shrink-0 items-center border-b border-border" data-weave-editor-titlebar data-weave-editor-tab-bar>
           <div className="flex h-full shrink-0 items-center justify-center border-r border-border" style={{ width: 'var(--weave-editor-gutter-width)' }}>
             {mode === 'notes' ? <StickyNote size={15} className="shrink-0 text-muted-foreground" /> : <Code2 size={15} className="shrink-0 text-muted-foreground" />}
@@ -2074,8 +2033,7 @@ export const UnifiedEditorPanel = ({
               </div>
             ) : null}
           </div>
-          {isExplorerDocked ? renderExplorerRail('docked') : null}
-          {isExplorerSlideOverVisible ? renderExplorerRail('slide-over') : null}
+          {isExplorerOverlayVisible ? renderExplorerRail(isExplorerLockedOpen ? 'locked' : 'slide-over') : null}
         </div>
         <div className="relative flex h-9 shrink-0 items-center">
           {isCodeMirrorOpen ? (
@@ -2120,7 +2078,7 @@ export const UnifiedEditorPanel = ({
               onClick={toggleExplorerRail}
               {...explorerToggleHoverHandlers}
             >
-              {isExplorerActive ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+              {isExplorerLockedOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
             </Button>
           </div>
         </div>
