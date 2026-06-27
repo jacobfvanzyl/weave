@@ -8,6 +8,7 @@ export type DynamicProfileSummary = {
   description?: string;
   model?: string;
   reasoningEffort?: string;
+  serviceTier?: string;
   tools: string[];
   skills: string[];
   prompts: string[];

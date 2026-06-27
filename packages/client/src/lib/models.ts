@@ -8,6 +8,18 @@ export type ModelOption = {
   providerName?: string;
   providerLogoUrl?: string;
   contextWindow?: number;
+  supportedReasoningEfforts?: Array<{
+    effort: string;
+    label: string;
+    description?: string;
+  }>;
+  defaultReasoningEffort?: string;
+  serviceTiers?: Array<{
+    id: string;
+    name: string;
+    description?: string;
+  }>;
+  defaultServiceTier?: string | null;
 };
 
 export type ModelConfig = {

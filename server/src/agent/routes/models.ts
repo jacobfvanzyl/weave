@@ -1,4 +1,5 @@
 import { defineRoute } from '../../server/routes';
+import { getOpenAIModelCapabilities, type OpenAIReasoningEffortOption, type OpenAIServiceTierOption } from '../model-capabilities';
 
 export type ModelOption = {
   id: string;
@@ -7,6 +8,10 @@ export type ModelOption = {
   providerName?: string;
   providerLogoUrl?: string;
   contextWindow?: number;
+  supportedReasoningEfforts?: OpenAIReasoningEffortOption[];
+  defaultReasoningEffort?: string;
+  serviceTiers?: OpenAIServiceTierOption[];
+  defaultServiceTier?: string | null;
 };
 
 type ModelsDevModel = {
@@ -88,6 +93,7 @@ const modelOption = (id: string, catalog?: ModelsDevCatalog, label?: string): Mo
   const parts = splitModelId(id);
   const provider = parts ? catalog?.[parts.providerId] : undefined;
   const contextWindow = contextWindowForModel(id, catalog);
+  const capabilities = getOpenAIModelCapabilities(id);
   return {
     id,
     label: label ?? labelForModel(id, catalog),
@@ -95,6 +101,18 @@ const modelOption = (id: string, catalog?: ModelsDevCatalog, label?: string): Mo
     ...(provider?.name ? { providerName: provider.name } : parts ? { providerName: fallbackName(parts.providerId) } : {}),
     ...(parts ? { providerLogoUrl: `${modelsDevLogoUrl}/${encodeURIComponent(parts.providerId)}.svg` } : {}),
     ...(contextWindow ? { contextWindow } : {}),
+    ...(capabilities.supportedReasoningEfforts.length > 0
+      ? {
+          supportedReasoningEfforts: capabilities.supportedReasoningEfforts,
+          defaultReasoningEffort: capabilities.defaultReasoningEffort,
+        }
+      : {}),
+    ...(capabilities.serviceTiers.length > 0
+      ? {
+          serviceTiers: capabilities.serviceTiers,
+          defaultServiceTier: capabilities.defaultServiceTier ?? null,
+        }
+      : {}),
   };
 };
 

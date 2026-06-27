@@ -21,17 +21,17 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Brain, Check, ChevronRight, Clipboard, Crosshair, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, UserRoundCog, X } from 'lucide-react';
+import { Brain, Check, ChevronRight, Clipboard, Crosshair, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, UserRoundCog, X, Zap } from 'lucide-react';
 import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
 import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
-import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput } from '../../lib/models';
+import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput, type ModelOption } from '../../lib/models';
 import { listProfiles, type DynamicProfileSummary, type ProfileResolutionContext } from '../../lib/profiles-api';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
-import { useChatStore, type ChatThread, type ReasoningEffort } from '../../stores/chat-store';
+import { useChatStore, type ChatThread, type ReasoningEffort, type ServiceTier } from '../../stores/chat-store';
 import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -1069,26 +1069,88 @@ const ProfilePicker = () => {
   );
 };
 
-const reasoningOptions: Array<{ value: ReasoningEffort; label: string; detail: string }> = [
-  { value: 'off', label: 'Off', detail: 'No reasoning' },
-  { value: 'minimal', label: 'Fast', detail: 'Minimal thinking' },
+type ReasoningOption = { value: ReasoningEffort; label: string; detail?: string };
+
+const defaultFallbackReasoningOption: ReasoningOption = { value: 'medium', label: 'Medium', detail: 'Balanced reasoning' };
+const fallbackReasoningOptions: ReasoningOption[] = [
   { value: 'low', label: 'Low', detail: 'Light reasoning' },
-  { value: 'medium', label: 'Medium', detail: 'Balanced reasoning' },
+  defaultFallbackReasoningOption,
   { value: 'high', label: 'High', detail: 'Deeper reasoning' },
+  { value: 'xhigh', label: 'Extra High', detail: 'Extra reasoning depth' },
 ];
+
+const asReasoningEffort = (value: unknown): ReasoningEffort | undefined =>
+  value === 'none' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh'
+    ? value
+    : undefined;
+
+const asServiceTier = (value: unknown): ServiceTier | undefined =>
+  value === 'auto' || value === 'default' || value === 'flex' || value === 'priority'
+    ? value
+    : undefined;
+
+const activeModelId = (selectedModel: string, modelConfig: Awaited<ReturnType<typeof fetchModelConfig>> | undefined) =>
+  selectedModel || modelConfig?.defaultModel || '';
+
+const activeModelOption = (modelId: string, modelOptions: ModelOption[]) =>
+  modelOptions.find(model => model.id === modelId);
+
+const reasoningOptionsForModel = (model: ModelOption | undefined, isLoaded: boolean): ReasoningOption[] => {
+  if (!model) return isLoaded ? [] : fallbackReasoningOptions;
+
+  const options = model?.supportedReasoningEfforts
+    ?.map(option => {
+      const value = asReasoningEffort(option.effort);
+      return value
+        ? {
+            value,
+            label: option.label,
+            ...(option.description ? { detail: option.description } : {}),
+          }
+        : undefined;
+    })
+    .filter((option): option is ReasoningOption => Boolean(option)) ?? [];
+  return options;
+};
 
 const ReasoningPicker = () => {
   const isRunning = useThread(state => state.isRunning);
   const reasoningEffort = useChatStore(state => state.reasoningEffort);
   const setReasoningEffort = useChatStore(state => state.setReasoningEffort);
-  const active = reasoningOptions.find(option => option.value === reasoningEffort) ?? reasoningOptions[3];
+  const selectedModel = useChatStore(state => state.selectedModel);
+  const { data: modelConfig } = useQuery({
+    queryKey: ['models'],
+    queryFn: fetchModelConfig,
+    staleTime: 1000 * 60 * 5,
+  });
+  const modelOptions = modelConfig?.options ?? [];
+  const activeModel = activeModelId(selectedModel, modelConfig);
+  const model = activeModelOption(activeModel, modelOptions);
+  const reasoningOptions = useMemo(() => reasoningOptionsForModel(model, Boolean(modelConfig)), [model, modelConfig]);
+  const defaultReasoningEffort = asReasoningEffort(model?.defaultReasoningEffort)
+    ?? reasoningOptions.find(option => option.value === 'medium')?.value
+    ?? reasoningOptions[0]?.value
+    ?? 'medium';
+  const active = reasoningOptions.find(option => option.value === reasoningEffort)
+    ?? reasoningOptions.find(option => option.value === defaultReasoningEffort)
+    ?? reasoningOptions[0]
+    ?? defaultFallbackReasoningOption;
+
+  useEffect(() => {
+    if (reasoningOptions.length > 0 && !reasoningOptions.some(option => option.value === reasoningEffort)) {
+      setReasoningEffort(defaultReasoningEffort);
+    }
+  }, [defaultReasoningEffort, reasoningEffort, reasoningOptions, setReasoningEffort]);
+
+  if (reasoningOptions.length === 0) return null;
 
   return (
     <Select
       value={active.value}
       onValueChange={value => {
-        if (value === 'off' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high') {
-          setReasoningEffort(value);
+        const next = asReasoningEffort(value);
+        if (next && reasoningOptions.some(option => option.value === next)) {
+          setReasoningEffort(next);
         }
       }}
       disabled={isRunning}
@@ -1106,12 +1168,62 @@ const ReasoningPicker = () => {
           <SelectItem key={option.value} value={option.value}>
             <span className="flex min-w-0 flex-col">
               <span className="truncate">{option.label}</span>
-              <span className="truncate text-xs text-muted-foreground">{option.detail}</span>
+              {option.detail ? <span className="truncate text-xs text-muted-foreground">{option.detail}</span> : null}
             </span>
           </SelectItem>
         ))}
       </SelectPopup>
     </Select>
+  );
+};
+
+const ServiceTierToggle = () => {
+  const isRunning = useThread(state => state.isRunning);
+  const selectedModel = useChatStore(state => state.selectedModel);
+  const serviceTier = useChatStore(state => state.serviceTier);
+  const setServiceTier = useChatStore(state => state.setServiceTier);
+  const { data: modelConfig } = useQuery({
+    queryKey: ['models'],
+    queryFn: fetchModelConfig,
+    staleTime: 1000 * 60 * 5,
+  });
+  const modelOptions = modelConfig?.options ?? [];
+  const activeModel = activeModelId(selectedModel, modelConfig);
+  const model = activeModelOption(activeModel, modelOptions);
+  const activeServiceTier = serviceTier ? asServiceTier(serviceTier) : undefined;
+  const priorityTier = model?.serviceTiers?.find(tier => tier.id === 'priority');
+  const supportsActiveServiceTier = Boolean(activeServiceTier && model?.serviceTiers?.some(tier => tier.id === activeServiceTier));
+  const enabled = activeServiceTier === 'priority' && supportsActiveServiceTier;
+
+  useEffect(() => {
+    if (activeServiceTier && modelConfig && !supportsActiveServiceTier) setServiceTier(null);
+  }, [activeServiceTier, modelConfig, setServiceTier, supportsActiveServiceTier]);
+
+  if (!priorityTier) return null;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={(
+          <Button
+            type="button"
+            aria-label="Fast mode"
+            aria-pressed={enabled}
+            disabled={isRunning}
+            variant="ghost"
+            className={cn(
+              'h-9 w-9 justify-center px-0 text-muted-foreground hover:bg-muted hover:text-foreground sm:w-auto sm:px-2',
+              enabled && 'bg-muted text-foreground',
+            )}
+            onClick={() => setServiceTier(enabled ? null : 'priority')}
+          >
+            <Zap size={16} className="shrink-0 sm:mr-1" />
+            <span className="hidden sm:block">Fast</span>
+          </Button>
+        )}
+      />
+      <TooltipPopup>{priorityTier.description ?? priorityTier.name}</TooltipPopup>
+    </Tooltip>
   );
 };
 
@@ -1498,6 +1610,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
           <ModelPicker />
           <ProfilePicker />
           <ReasoningPicker />
+          <ServiceTierToggle />
           <PlanPanelToggle threadId={threadId} />
           <FollowWritesToggle canFollowWrites={canFollowWrites} />
         </div>
@@ -1762,8 +1875,18 @@ const AssistantChatRuntime = ({
   const resourceId = useChatStore(state => state.resourceId);
   const selectedModel = useChatStore(state => state.selectedModel);
   const reasoningEffort = useChatStore(state => state.reasoningEffort);
+  const serviceTier = useChatStore(state => state.serviceTier);
   const chatApi = getChatUrl();
   const resumeRunIdRef = useRef<string | undefined>(undefined);
+  const { data: modelConfig } = useQuery({
+    queryKey: ['models'],
+    queryFn: fetchModelConfig,
+    staleTime: 1000 * 60 * 5,
+  });
+  const modelOptions = modelConfig?.options ?? [];
+  const activeModel = activeModelId(selectedModel, modelConfig);
+  const model = activeModelOption(activeModel, modelOptions);
+  const requestServiceTier = serviceTier && model?.serviceTiers?.some(tier => tier.id === serviceTier) ? serviceTier : null;
   const { data: runState } = useQuery({
     queryKey: ['thread-run', resourceId, threadId],
     queryFn: () => getThreadRunState(threadId),
@@ -1804,6 +1927,7 @@ const AssistantChatRuntime = ({
               messages: latestUserMessageOnly(requestMessages),
               ...(selectedModel ? { model: selectedModel } : {}),
               reasoningEffort,
+              ...(requestServiceTier ? { serviceTier: requestServiceTier } : {}),
               memory: {
                 thread: threadId,
               },
@@ -1811,7 +1935,7 @@ const AssistantChatRuntime = ({
           };
         },
       }),
-    [chatApi, reasoningEffort, selectedModel, threadId],
+    [chatApi, reasoningEffort, requestServiceTier, selectedModel, threadId],
   );
   const transport = useDynamicChatTransport(currentTransport);
 

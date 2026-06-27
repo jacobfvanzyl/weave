@@ -194,6 +194,7 @@ Deno.test('detectLspLanguageId maps common web language files', () => {
   assertEquals(detectLspLanguageId('styles/app.css'), 'css');
   assertEquals(detectLspLanguageId('public/index.html'), 'html');
   assertEquals(detectLspLanguageId('README.md'), 'markdown');
+  assertEquals(detectLspLanguageId('lib/main.dart'), 'dart');
 });
 
 Deno.test('PortalLspHost reports missing configured binaries without throwing', async () =>

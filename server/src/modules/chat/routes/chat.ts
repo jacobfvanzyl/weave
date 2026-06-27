@@ -12,6 +12,7 @@ import {
   subscribeThreadContextUsage,
   type ThreadContextUsageSnapshot,
 } from '../../../agent/runtime';
+import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from '../../../agent/model-capabilities';
 
 const agentId = 'mage-hand';
 const maxImageAttachmentBytes = 10 * 1024 * 1024;
@@ -33,14 +34,12 @@ const routeSubscriptionModel = (model: unknown) => {
   return `chatgpt/codex/${model.slice('openai/'.length)}`;
 };
 
-const normalizeReasoningEffort = (value: unknown) =>
-  value === 'off' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high'
-    ? value
-    : undefined;
+const hasOwn = (value: unknown, key: string) =>
+  Boolean(value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key));
 
 const buildProviderOptions = (
   providerOptions: unknown,
-  options: { reasoningEffort?: string; threadId?: unknown; resourceId?: string },
+  options: { reasoningEffort?: string; serviceTier?: string; threadId?: unknown; resourceId?: string },
 ) => {
   const base = providerOptions && typeof providerOptions === 'object'
     ? providerOptions as Record<string, unknown>
@@ -48,14 +47,19 @@ const buildProviderOptions = (
   const openai = base.openai && typeof base.openai === 'object'
     ? base.openai as Record<string, unknown>
     : {};
+  const openaiPatch = {
+    ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+    ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
+  };
+  const hasOpenAIPatch = Object.keys(openaiPatch).length > 0;
 
   return {
     ...base,
-    ...(options.reasoningEffort
+    ...(hasOpenAIPatch
       ? {
           openai: {
             ...openai,
-            reasoningEffort: options.reasoningEffort,
+            ...openaiPatch,
           },
         }
       : {}),
@@ -878,14 +882,24 @@ export const chatRoutes = [
       });
 
       const routedModel = routeSubscriptionModel(params?.model);
-      const reasoningEffort = normalizeReasoningEffort(params?.reasoningEffort)
-        ?? normalizeReasoningEffort(resolvedProfile?.profile.reasoningEffort);
+      const providerModel = routedModel ?? params?.model;
+      const requestHasReasoningEffort = hasOwn(params, 'reasoningEffort');
+      const requestHasServiceTier = hasOwn(params, 'serviceTier');
+      const reasoningEffort = normalizeOpenAIReasoningEffort(
+        requestHasReasoningEffort ? params?.reasoningEffort : resolvedProfile?.profile.reasoningEffort,
+        providerModel,
+        { fallbackToDefault: true },
+      );
+      const serviceTier = requestHasServiceTier
+        ? normalizeOpenAIServiceTier(params?.serviceTier, providerModel)
+        : normalizeOpenAIServiceTier(resolvedProfile?.profile.serviceTier, providerModel);
       console.info('[chat] stream request', {
         agentId,
         profileId: resolvedProfile?.profile.id,
         selectedModel: params?.model,
         routedModel,
         reasoningEffort: reasoningEffort ?? 'default',
+        serviceTier: serviceTier ?? 'default',
         threadId,
         resourceId,
         memory: memoryPolicy?.status,
@@ -910,7 +924,7 @@ export const chatRoutes = [
           params: {
             ...params,
             ...(routedModel ? { model: routedModel } : {}),
-            providerOptions: buildProviderOptions(params.providerOptions, { reasoningEffort, threadId, resourceId }),
+            providerOptions: buildProviderOptions(params.providerOptions, { reasoningEffort, serviceTier, threadId, resourceId }),
             memory: params.memory && typeof params.memory === 'object'
               ? {
                   ...params.memory,

@@ -11,6 +11,7 @@ import { storageAuthToken, storageUrl } from '../storage-config';
 import { baseWorkspace } from '../workspace';
 import { builtinDefaultProfile, getProfileContext } from '../profiles/resolver';
 import { mageHandTools } from './mage-hand-tools';
+import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from '../../model-capabilities';
 
 const createSharedMemory = () => {
   const embeddingModel = process.env.WEAVE_MEMORY_EMBEDDING_MODEL?.trim();
@@ -47,6 +48,24 @@ const sharedMemory = createSharedMemory();
 
 const resolveProfile = (requestContext: any) => getProfileContext(requestContext)?.profile ?? builtinDefaultProfile;
 
+const resolveProfileModel = (requestContext: any) => resolveProfile(requestContext).model ?? builtinDefaultProfile.model!;
+
+const resolveOpenAIProviderOptions = (requestContext: any) => {
+  const profile = resolveProfile(requestContext);
+  const model = resolveProfileModel(requestContext);
+  const reasoningEffort = normalizeOpenAIReasoningEffort(profile.reasoningEffort, model, { fallbackToDefault: true });
+  const serviceTier = normalizeOpenAIServiceTier(profile.serviceTier, model);
+
+  return reasoningEffort || serviceTier
+    ? {
+        openai: {
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(serviceTier ? { serviceTier } : {}),
+        },
+      }
+    : undefined;
+};
+
 const gitOnlyToolKeys = new Set(['writePlanTool', 'updatePlanTool']);
 
 const isToolAvailableForContext = (key: string, requestContext: any) =>
@@ -63,16 +82,15 @@ const resolveTools = ({ requestContext }: { requestContext: any }) => {
 export const mageHandAgent = new Agent({
   id: 'mage-hand',
   name: 'Mage Hand',
-  instructions: ({ requestContext }) => ({
-    role: 'system' as const,
-    content: resolveProfile(requestContext).instructions,
-    providerOptions: {
-      openai: {
-        reasoningEffort: resolveProfile(requestContext).reasoningEffort ?? 'medium',
-      },
-    },
-  }),
-  model: ({ requestContext }) => resolveProfile(requestContext).model ?? builtinDefaultProfile.model!,
+  instructions: ({ requestContext }) => {
+    const providerOptions = resolveOpenAIProviderOptions(requestContext);
+    return {
+      role: 'system' as const,
+      content: resolveProfile(requestContext).instructions,
+      ...(providerOptions ? { providerOptions } : {}),
+    };
+  },
+  model: ({ requestContext }) => resolveProfileModel(requestContext),
   workspace: baseWorkspace,
   tools: resolveTools,
   inputProcessors: [

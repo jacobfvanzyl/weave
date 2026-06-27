@@ -165,6 +165,7 @@ Deno.test('official OpenAI options pass through with subscription-required store
         textVerbosity: 'high',
         parallelToolCalls: false,
         reasoningEffort: 'low',
+        serviceTier: 'priority',
       },
     },
   } as any);
@@ -179,6 +180,7 @@ Deno.test('official OpenAI options pass through with subscription-required store
   assertEquals((body.text as Record<string, unknown> | undefined)?.verbosity, 'high');
   assertEquals(body.parallel_tool_calls, false);
   assertEquals((body.reasoning as Record<string, unknown> | undefined)?.effort, 'low');
+  assertEquals(body.service_tier, 'priority');
 });
 
 Deno.test('only subscription-required store false is added to official defaults', async () => {

@@ -17,6 +17,7 @@ export type LspLanguageId =
   | 'css'
   | 'html'
   | 'markdown'
+  | 'dart'
   | 'graphql'
   | string;
 
@@ -221,6 +222,13 @@ const defaultToolRegistry: Record<string, ToolRegistryEntry> = {
     categories: ['lsp', 'linter', 'formatter'],
     detectionHints: ['biome.json', 'biome.jsonc'],
   },
+  dart: {
+    id: 'dart',
+    binary: 'dart',
+    package: 'Dart SDK',
+    categories: ['lsp', 'linter', 'formatter'],
+    detectionHints: ['pubspec.yaml', 'analysis_options.yaml'],
+  },
 };
 
 const defaultServerAdapters: Record<string, ServerAdapter> = {
@@ -275,6 +283,17 @@ const defaultServerAdapters: Record<string, ServerAdapter> = {
     enabled: true,
     priority: 100,
   },
+  dart: {
+    id: 'dart',
+    toolId: 'dart',
+    command: 'dart',
+    args: ['language-server', '--protocol=lsp'],
+    languages: ['dart'],
+    rootMarkers: ['pubspec.yaml', 'analysis_options.yaml', '.dart_tool/package_config.json', '.git'],
+    configFiles: ['pubspec.yaml', 'analysis_options.yaml'],
+    enabled: true,
+    priority: 100,
+  },
   biome: {
     id: 'biome',
     toolId: 'biome',
@@ -311,6 +330,7 @@ const languageByExtension: Array<[RegExp, LspLanguageId]> = [
   [/\.css$/i, 'css'],
   [/\.html?$/i, 'html'],
   [/\.mdx?$/i, 'markdown'],
+  [/\.dart$/i, 'dart'],
   [/\.graphql$/i, 'graphql'],
   [/\.gql$/i, 'graphql'],
 ];

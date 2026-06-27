@@ -61,6 +61,7 @@ export const detectEditorLanguageId = (path: string) => {
   if (lower.endsWith('.css')) return 'css';
   if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
   if (lower.endsWith('.md') || lower.endsWith('.mdx')) return 'markdown';
+  if (lower.endsWith('.dart')) return 'dart';
   if (lower.endsWith('.graphql') || lower.endsWith('.gql')) return 'graphql';
   return undefined;
 };

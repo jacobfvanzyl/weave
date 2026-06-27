@@ -15,6 +15,7 @@ const profileSummary = (profile: DynamicProfile) => ({
   description: profile.description,
   model: profile.model,
   reasoningEffort: profile.reasoningEffort,
+  serviceTier: profile.serviceTier,
   tools: profile.tools,
   skills: profile.skills,
   prompts: profile.prompts,

@@ -30,6 +30,7 @@ export type DynamicProfile = {
   instructions: string;
   model?: string;
   reasoningEffort?: string;
+  serviceTier?: string;
   tools: string[];
   skills: string[];
   prompts: string[];
@@ -80,6 +81,7 @@ export const builtinDefaultProfile: DynamicProfile = {
     'You are Mage Hand, a helpful, concise assistant. Be direct, practical, and use available tools when they help.',
   model: process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.5',
   reasoningEffort: 'medium',
+  serviceTier: undefined,
   tools: ['renameThreadTool', 'writePlanTool', 'updatePlanTool', 'webSearch', 'webExtract'],
   skills: [],
   prompts: [],
@@ -146,6 +148,7 @@ const parseProfileFile = (file: WeaveContextFile): DynamicProfile | undefined =>
     instructions,
     model: optionalString(data.model),
     reasoningEffort: optionalString(data['reasoning-effort']) ?? optionalString(data.reasoningEffort),
+    serviceTier: optionalString(data['service-tier']) ?? optionalString(data.serviceTier),
     tools: stringArray(data.tools),
     skills: stringArray(data.skills),
     prompts: stringArray(data.prompts),

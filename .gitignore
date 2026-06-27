@@ -14,5 +14,6 @@ portal/native/window-stream-native/build/
 *.duckdb
 *.duckdb.*
 server/src/mastra/public/.data/
+server/.data/
 .netlify
 .vercel

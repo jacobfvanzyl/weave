@@ -57,11 +57,13 @@ export type ThreadPlan = {
   isBusy?: boolean;
 };
 
-export type ReasoningEffort = 'off' | 'minimal' | 'low' | 'medium' | 'high';
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ServiceTier = 'auto' | 'default' | 'flex' | 'priority';
 
 type PersistedChatState = {
   selectedModel: string;
-  reasoningEffort: ReasoningEffort;
+  reasoningEffort: ReasoningEffort | 'off';
+  serviceTier?: ServiceTier | 'fast' | null;
   followWrites: boolean;
   showToolCalls: boolean;
   showReasoning: boolean;
@@ -74,6 +76,7 @@ type ChatState = {
   threads: ChatThread[];
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  serviceTier: ServiceTier | null;
   followWrites: boolean;
   showToolCalls: boolean;
   showReasoning: boolean;
@@ -87,6 +90,7 @@ type ChatState = {
   threadOpenabilityContext: ThreadOpenabilityContext;
   setSelectedModel: (model: string) => void;
   setReasoningEffort: (reasoningEffort: ReasoningEffort) => void;
+  setServiceTier: (serviceTier: ServiceTier | null) => void;
   setFollowWrites: (followWrites: boolean) => void;
   setShowToolCalls: (showToolCalls: boolean) => void;
   setShowReasoning: (showReasoning: boolean) => void;
@@ -121,6 +125,19 @@ const createLocalThread = (id = createClientId('thread')): ChatThread => {
 };
 
 const isDraftThread = (thread: ChatThread | undefined) => thread?.draft === true;
+const normalizeReasoningEffort = (value: unknown): ReasoningEffort =>
+  value === 'off' || value === 'minimal'
+    ? 'low'
+    : value === 'none' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh'
+    ? value
+    : 'medium';
+
+const normalizeServiceTier = (value: unknown): ServiceTier | null =>
+  value === 'fast'
+    ? 'priority'
+    : value === 'auto' || value === 'default' || value === 'flex' || value === 'priority'
+    ? value
+    : null;
 
 const initialThread = createLocalThread(initialSurfaceThreadId);
 const toSurfaceThread = (thread: ChatThread): ThreadSurfaceContext => ({ id: thread.id, workspaceId: thread.workspaceId });
@@ -160,6 +177,7 @@ export const useChatStore = create<ChatState>()(
       threads: [initialThread],
       selectedModel: '',
       reasoningEffort: 'medium',
+      serviceTier: null,
       followWrites: false,
       showToolCalls: true,
       showReasoning: true,
@@ -173,6 +191,7 @@ export const useChatStore = create<ChatState>()(
       threadOpenabilityContext: emptyThreadOpenabilityContext,
       setSelectedModel: selectedModel => set({ selectedModel }),
       setReasoningEffort: reasoningEffort => set({ reasoningEffort }),
+      setServiceTier: serviceTier => set({ serviceTier }),
       setFollowWrites: followWrites => set({ followWrites }),
       setShowToolCalls: showToolCalls => set({ showToolCalls }),
       setShowReasoning: showReasoning => set({ showReasoning }),
@@ -445,15 +464,13 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'weave-chat',
-      version: 12,
+      version: 13,
       migrate: persistedState => {
         const state = persistedState as Partial<PersistedChatState>;
-        const reasoningEffort = state.reasoningEffort;
         return {
           selectedModel: typeof state.selectedModel === 'string' ? state.selectedModel : '',
-          reasoningEffort: reasoningEffort === 'off' || reasoningEffort === 'minimal' || reasoningEffort === 'low' || reasoningEffort === 'medium' || reasoningEffort === 'high'
-            ? reasoningEffort
-            : 'medium',
+          reasoningEffort: normalizeReasoningEffort(state.reasoningEffort),
+          serviceTier: normalizeServiceTier(state.serviceTier),
           followWrites: typeof state.followWrites === 'boolean' ? state.followWrites : false,
           showToolCalls: typeof state.showToolCalls === 'boolean' ? state.showToolCalls : true,
           showReasoning: typeof state.showReasoning === 'boolean' ? state.showReasoning : true,
@@ -466,6 +483,7 @@ export const useChatStore = create<ChatState>()(
       partialize: state => ({
         selectedModel: state.selectedModel,
         reasoningEffort: state.reasoningEffort,
+        serviceTier: state.serviceTier,
         followWrites: state.followWrites,
         showToolCalls: state.showToolCalls,
         showReasoning: state.showReasoning,

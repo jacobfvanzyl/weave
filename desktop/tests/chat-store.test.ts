@@ -55,7 +55,8 @@ describe('chat store', () => {
       storage.setItem('weave-chat', JSON.stringify({
         state: {
           selectedModel: 'openai/test',
-          reasoningEffort: 'low',
+          reasoningEffort: 'xhigh',
+          serviceTier: 'fast',
           showToolCalls: false,
           showReasoning: false,
           showPlanPanel: false,
@@ -67,12 +68,29 @@ describe('chat store', () => {
 
     expect(useChatStore.getState()).toMatchObject({
       selectedModel: 'openai/test',
-      reasoningEffort: 'low',
+      reasoningEffort: 'xhigh',
+      serviceTier: 'priority',
       followWrites: false,
       showToolCalls: false,
       showReasoning: false,
       showPlanPanel: false,
       toolActivityCollapsed: { 'message-1:0': true },
     });
+  });
+
+  it('migrates legacy persisted reasoning aliases to the fastest current effort', async () => {
+    for (const reasoningEffort of ['off', 'minimal']) {
+      const { useChatStore } = await loadFreshChatStore(storage => {
+        storage.setItem('weave-chat', JSON.stringify({
+          state: {
+            selectedModel: 'openai/gpt-5.5',
+            reasoningEffort,
+          },
+          version: 11,
+        }));
+      });
+
+      expect(useChatStore.getState().reasoningEffort).toBe('low');
+    }
   });
 });

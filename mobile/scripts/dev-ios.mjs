@@ -209,8 +209,25 @@ const trimToken = value => {
   return trimmed || undefined;
 };
 
+const tokenFromLegacyMap = rawTokens => {
+  const raw = trimToken(rawTokens);
+  if (!raw) return undefined;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const tokens = Object.keys(parsed).filter(token => token.trim());
+    return tokens.length === 1 ? tokens[0] : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const getAuthTokenFromEnv = env =>
-  trimToken(env.WEAVE_OWNER_TOKEN) ?? trimToken(env.WEAVE_AUTH_TOKEN);
+  trimToken(env.WEAVE_OWNER_TOKEN) ??
+  trimToken(env.WEAVE_AUTH_TOKEN) ??
+  trimToken(env.VITE_WEAVE_AUTH_TOKEN) ??
+  tokenFromLegacyMap(env.WEAVE_AUTH_TOKENS);
 
 const readServerEnv = async () => {
   try {
@@ -501,7 +518,7 @@ try {
   const viteEnv = {
     VITE_MASTRA_URL: devServerUrl,
     VITE_WEAVE_DEV_CONNECTION_OVERRIDE: '1',
-    ...(devAuthToken ? { WEAVE_AUTH_TOKEN: devAuthToken } : {}),
+    ...(devAuthToken ? { WEAVE_AUTH_TOKEN: devAuthToken, VITE_WEAVE_AUTH_TOKEN: devAuthToken } : {}),
   };
 
   log(`Using Weave server ${devServerUrl}`);
