@@ -1,0 +1,19 @@
+{
+  "Annotation": "meta",
+  "BlockComment": "comment",
+  "Boolean": "constant",
+  "BuiltinType": "type",
+  "DocBlockComment": "comment",
+  "DocLineComment": "comment",
+  "Dot": "operator",
+  "Identifier": "variable",
+  "Keyword": "keyword",
+  "LineComment": "comment",
+  "Null": "constant",
+  "Number": "constant",
+  "Operator": "operator",
+  "Punctuation": "operator",
+  "RecordField": "property",
+  "String": "string",
+  "TypeIdentifier": "type"
+}

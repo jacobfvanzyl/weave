@@ -1,0 +1,25 @@
+# Flutter class and comments
+
+/// Widget docs
+@immutable
+class AccountCard extends StatelessWidget {
+  final int count = 1;
+  Widget build(BuildContext context) {
+    return Text('count: $count');
+  }
+}
+/* nested /* block */ comment */
+
+==>
+
+SourceFile(DocLineComment,Item(Annotation(Identifier)),Item(Keyword(class)),Item(TypeIdentifier),Item(Keyword(extends)),Item(TypeIdentifier),Item(Block(Item(Keyword(final)),Item(BuiltinType(BuiltinType)),Item(Identifier),Item(Operator),Item(Number),Item(Punctuation),Item(TypeIdentifier),Item(Identifier),Item(Parenthesized(Item(TypeIdentifier),Item(Identifier))),Item(Block(Item(Keyword(return)),Item(TypeIdentifier),Item(Parenthesized(Item(String))),Item(Punctuation))))),BlockComment)
+
+# Records and extension
+
+extension AccountRecord on (String, int) {
+  bool get isReady => this.$2 > 0;
+}
+
+==>
+
+SourceFile(Item(Keyword(extension)),Item(TypeIdentifier),Item(Keyword(on)),Item(Parenthesized(Item(TypeIdentifier),Item(Punctuation),Item(BuiltinType(BuiltinType)))),Item(Block(Item(BuiltinType(BuiltinType)),Item(Keyword(get)),Item(Identifier),Item(Operator),Item(Keyword(this)),Item(Dot),Item(RecordField),Item(Operator),Item(Number),Item(Punctuation))))

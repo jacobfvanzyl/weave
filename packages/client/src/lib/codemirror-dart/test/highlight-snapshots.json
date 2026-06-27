@@ -1,0 +1,335 @@
+[
+  {
+    "name": "core dart tokens",
+    "source": "/// docs\n@immutable\nclass AccountCard {\n  final int count = 1;\n  final text = 'value $count';\n}\n",
+    "spans": [
+      {
+        "from": 0,
+        "to": 8,
+        "text": "/// docs",
+        "node": "DocLineComment",
+        "category": "comment"
+      },
+      {
+        "from": 9,
+        "to": 19,
+        "text": "@immutable",
+        "node": "Annotation",
+        "category": "meta"
+      },
+      {
+        "from": 10,
+        "to": 19,
+        "text": "immutable",
+        "node": "Identifier",
+        "category": "variable"
+      },
+      {
+        "from": 20,
+        "to": 25,
+        "text": "class",
+        "node": "Keyword",
+        "category": "keyword"
+      },
+      {
+        "from": 26,
+        "to": 37,
+        "text": "AccountCard",
+        "node": "TypeIdentifier",
+        "category": "type"
+      },
+      {
+        "from": 42,
+        "to": 47,
+        "text": "final",
+        "node": "Keyword",
+        "category": "keyword"
+      },
+      {
+        "from": 48,
+        "to": 51,
+        "text": "int",
+        "node": "BuiltinType",
+        "category": "type"
+      },
+      {
+        "from": 52,
+        "to": 57,
+        "text": "count",
+        "node": "Identifier",
+        "category": "variable"
+      },
+      {
+        "from": 58,
+        "to": 59,
+        "text": "=",
+        "node": "Operator",
+        "category": "operator"
+      },
+      {
+        "from": 60,
+        "to": 61,
+        "text": "1",
+        "node": "Number",
+        "category": "constant"
+      },
+      {
+        "from": 61,
+        "to": 62,
+        "text": ";",
+        "node": "Punctuation",
+        "category": "operator"
+      },
+      {
+        "from": 65,
+        "to": 70,
+        "text": "final",
+        "node": "Keyword",
+        "category": "keyword"
+      },
+      {
+        "from": 71,
+        "to": 75,
+        "text": "text",
+        "node": "Identifier",
+        "category": "variable"
+      },
+      {
+        "from": 76,
+        "to": 77,
+        "text": "=",
+        "node": "Operator",
+        "category": "operator"
+      },
+      {
+        "from": 78,
+        "to": 92,
+        "text": "'value $count'",
+        "node": "String",
+        "category": "string"
+      },
+      {
+        "from": 92,
+        "to": 93,
+        "text": ";",
+        "node": "Punctuation",
+        "category": "operator"
+      }
+    ]
+  },
+  {
+    "name": "records and operators",
+    "source": "extension PairExt on (String, int) {\n  bool get ready => this.$2 > 0;\n}\n",
+    "spans": [
+      {
+        "from": 0,
+        "to": 9,
+        "text": "extension",
+        "node": "Keyword",
+        "category": "keyword"
+      },
+      {
+        "from": 10,
+        "to": 17,
+        "text": "PairExt",
+        "node": "TypeIdentifier",
+        "category": "type"
+      },
+      {
+        "from": 18,
+        "to": 20,
+        "text": "on",
+        "node": "Keyword",
+        "category": "keyword"
+      },
+      {
+        "from": 22,
+        "to": 28,
+        "text": "String",
+        "node": "TypeIdentifier",
+        "category": "type"
+      },
+      {
+        "from": 28,
+        "to": 29,
+        "text": ",",
+        "node": "Punctuation",
+        "category": "operator"
+      },
+      {
+        "from": 30,
+        "to": 33,
+        "text": "int",
+        "node": "BuiltinType",
+        "category": "type"
+      },
+      {
+        "from": 39,
+        "to": 43,
+        "text": "bool",
+        "node": "BuiltinType",
+        "category": "type"
+      },
+      {
+        "from": 44,
+        "to": 47,
+        "text": "get",
+        "node": "Keyword",
+        "category": "keyword"
+      },
+      {
+        "from": 48,
+        "to": 53,
+        "text": "ready",
+        "node": "Identifier",
+        "category": "variable"
+      },
+      {
+        "from": 54,
+        "to": 56,
+        "text": "=>",
+        "node": "Operator",
+        "category": "operator"
+      },
+      {
+        "from": 57,
+        "to": 61,
+        "text": "this",
+        "node": "Keyword",
+        "category": "keyword"
+      },
+      {
+        "from": 61,
+        "to": 62,
+        "text": ".",
+        "node": "Dot",
+        "category": "operator"
+      },
+      {
+        "from": 62,
+        "to": 64,
+        "text": "$2",
+        "node": "RecordField",
+        "category": "property"
+      },
+      {
+        "from": 65,
+        "to": 66,
+        "text": ">",
+        "node": "Operator",
+        "category": "operator"
+      },
+      {
+        "from": 67,
+        "to": 68,
+        "text": "0",
+        "node": "Number",
+        "category": "constant"
+      },
+      {
+        "from": 68,
+        "to": 69,
+        "text": ";",
+        "node": "Punctuation",
+        "category": "operator"
+      }
+    ]
+  },
+  {
+    "name": "comments and literals",
+    "source": "// todo\n/* block */\n/** docs */\nfinal ready = true;\nfinal nothing = null;\n",
+    "spans": [
+      {
+        "from": 0,
+        "to": 7,
+        "text": "// todo",
+        "node": "LineComment",
+        "category": "comment"
+      },
+      {
+        "from": 8,
+        "to": 19,
+        "text": "/* block */",
+        "node": "BlockComment",
+        "category": "comment"
+      },
+      {
+        "from": 20,
+        "to": 31,
+        "text": "/** docs */",
+        "node": "DocBlockComment",
+        "category": "comment"
+      },
+      {
+        "from": 32,
+        "to": 37,
+        "text": "final",
+        "node": "Keyword",
+        "category": "keyword"
+      },
+      {
+        "from": 38,
+        "to": 43,
+        "text": "ready",
+        "node": "Identifier",
+        "category": "variable"
+      },
+      {
+        "from": 44,
+        "to": 45,
+        "text": "=",
+        "node": "Operator",
+        "category": "operator"
+      },
+      {
+        "from": 46,
+        "to": 50,
+        "text": "true",
+        "node": "Boolean",
+        "category": "constant"
+      },
+      {
+        "from": 50,
+        "to": 51,
+        "text": ";",
+        "node": "Punctuation",
+        "category": "operator"
+      },
+      {
+        "from": 52,
+        "to": 57,
+        "text": "final",
+        "node": "Keyword",
+        "category": "keyword"
+      },
+      {
+        "from": 58,
+        "to": 65,
+        "text": "nothing",
+        "node": "Identifier",
+        "category": "variable"
+      },
+      {
+        "from": 66,
+        "to": 67,
+        "text": "=",
+        "node": "Operator",
+        "category": "operator"
+      },
+      {
+        "from": 68,
+        "to": 72,
+        "text": "null",
+        "node": "Null",
+        "category": "constant"
+      },
+      {
+        "from": 72,
+        "to": 73,
+        "text": ";",
+        "node": "Punctuation",
+        "category": "operator"
+      }
+    ]
+  }
+]
