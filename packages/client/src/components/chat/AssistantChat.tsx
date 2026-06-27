@@ -21,14 +21,14 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Brain, Check, ChevronRight, Clipboard, Crosshair, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, UserRoundCog, X, Zap } from 'lucide-react';
+import { Brain, Check, ChevronRight, Clipboard, Crosshair, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
 import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
 import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
 import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
-import { fetchModelConfig, getResolvedModelDisplayName, resolveModelInput, type ModelOption } from '../../lib/models';
+import { fetchModelConfig, getResolvedModelDisplayName, type ModelOption } from '../../lib/models';
 import { listProfiles, type DynamicProfileSummary, type ProfileResolutionContext } from '../../lib/profiles-api';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
 import { useChatStore, type ChatThread, type ReasoningEffort, type ServiceTier } from '../../stores/chat-store';
@@ -37,6 +37,7 @@ import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
 import { CommandPanel } from '../ui/command';
+import { Menu, MenuGroupLabel, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubPopup, MenuSubTrigger, MenuTrigger } from '../ui/menu';
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../ui/tooltip';
 import { CodeBlock } from './CodeBlock';
@@ -939,69 +940,6 @@ const ThreadMessage = () => (
   </MessagePrimitive.Root>
 );
 
-const ModelPicker = () => {
-  const isRunning = useThread(state => state.isRunning);
-  const selectedModel = useChatStore(state => state.selectedModel);
-  const setSelectedModel = useChatStore(state => state.setSelectedModel);
-  const { data: modelConfig } = useQuery({
-    queryKey: ['models'],
-    queryFn: fetchModelConfig,
-    staleTime: 1000 * 60 * 5,
-  });
-  const modelOptions = modelConfig?.options ?? [];
-  const activeModel = selectedModel || modelConfig?.defaultModel || '';
-  const activeOption = modelOptions.find(model => model.id === activeModel);
-
-  useEffect(() => {
-    if (!selectedModel && modelConfig?.defaultModel) setSelectedModel(modelConfig.defaultModel);
-  }, [modelConfig?.defaultModel, selectedModel, setSelectedModel]);
-
-  return (
-    <div className="model-picker min-w-0 shrink-0">
-      <Select
-        value={activeModel}
-        onValueChange={value => {
-          if (value) setSelectedModel(resolveModelInput(value, modelOptions) ?? value);
-        }}
-        disabled={isRunning || modelOptions.length === 0}
-      >
-        <SelectTrigger
-          aria-label="Model"
-          className="h-9 w-9 justify-center border-transparent bg-transparent px-0 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground sm:w-auto sm:max-w-52 sm:justify-start sm:px-2"
-          variant="ghost"
-        >
-          {activeOption?.providerLogoUrl ? (
-            <span
-              className="h-5 w-5 shrink-0 bg-current sm:mr-1"
-              style={{
-                WebkitMask: `url("${activeOption.providerLogoUrl}") center / contain no-repeat`,
-                mask: `url("${activeOption.providerLogoUrl}") center / contain no-repeat`,
-              }}
-              title={activeOption.providerName}
-              aria-hidden="true"
-            />
-          ) : (
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-muted-foreground/40 text-[10px] font-semibold sm:mr-1">AI</span>
-          )}
-          <SelectValue className="hidden min-w-0 text-left sm:block">
-            {activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : 'Model'}
-          </SelectValue>
-        </SelectTrigger>
-        <SelectPopup align="end" className="max-h-72">
-          {modelOptions.map(model => (
-            <SelectItem key={model.id} value={model.id}>
-              <span className="flex min-w-0 flex-col">
-                <span className="truncate">{model.label}</span>
-                <span className="truncate text-xs text-muted-foreground">{model.id}</span>
-              </span>
-            </SelectItem>
-          ))}
-        </SelectPopup>
-      </Select>
-    </div>
-  );
-};
-
 const ProfilePicker = () => {
   const threadId = useContext(ThreadIdContext);
   const isRunning = useThread(state => state.isRunning);
@@ -1051,7 +989,7 @@ const ProfilePicker = () => {
           className="h-9 w-9 justify-center border-transparent bg-transparent px-0 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground disabled:opacity-60 sm:w-auto sm:max-w-44 sm:justify-start sm:px-2"
           variant="ghost"
         >
-          <UserRoundCog size={16} className="shrink-0 sm:mr-1" />
+          <Brain size={16} className="shrink-0 sm:mr-1" />
           <SelectValue className="hidden min-w-0 text-left sm:block">{activeProfile.name}</SelectValue>
         </SelectTrigger>
         <SelectPopup align="start" className="max-h-72">
@@ -1113,11 +1051,32 @@ const reasoningOptionsForModel = (model: ModelOption | undefined, isLoaded: bool
   return options;
 };
 
-const ReasoningPicker = () => {
+const reasoningToneClassName = (value: ReasoningEffort | undefined) => {
+  switch (value) {
+    case 'low':
+      return 'text-success hover:text-success';
+    case 'medium':
+      return 'text-blue hover:text-blue';
+    case 'high':
+      return 'text-peach hover:text-peach';
+    case 'xhigh':
+      return 'text-[var(--ctp-maroon)] hover:text-[var(--ctp-maroon)]';
+    default:
+      return 'text-muted-foreground hover:text-foreground';
+  }
+};
+
+const reasoningMenuLabel = (option: ReasoningOption) =>
+  option.value === 'low' ? 'Light' : option.label;
+
+const ModelSettingsPicker = () => {
   const isRunning = useThread(state => state.isRunning);
+  const selectedModel = useChatStore(state => state.selectedModel);
+  const setSelectedModel = useChatStore(state => state.setSelectedModel);
   const reasoningEffort = useChatStore(state => state.reasoningEffort);
   const setReasoningEffort = useChatStore(state => state.setReasoningEffort);
-  const selectedModel = useChatStore(state => state.selectedModel);
+  const serviceTier = useChatStore(state => state.serviceTier);
+  const setServiceTier = useChatStore(state => state.setServiceTier);
   const { data: modelConfig } = useQuery({
     queryKey: ['models'],
     queryFn: fetchModelConfig,
@@ -1135,6 +1094,22 @@ const ReasoningPicker = () => {
     ?? reasoningOptions.find(option => option.value === defaultReasoningEffort)
     ?? reasoningOptions[0]
     ?? defaultFallbackReasoningOption;
+  const activeReasoningValue = reasoningOptions.length > 0 ? active.value : undefined;
+  const activeServiceTier = serviceTier ? asServiceTier(serviceTier) : undefined;
+  const priorityTier = model?.serviceTiers?.find(tier => tier.id === 'priority');
+  const supportsActiveServiceTier = Boolean(activeServiceTier && model?.serviceTiers?.some(tier => tier.id === activeServiceTier));
+  const fastEnabled = activeServiceTier === 'priority' && supportsActiveServiceTier;
+  const disabled = isRunning || modelOptions.length === 0;
+  const modelLabel = activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : 'Model';
+  const titleParts = [
+    modelLabel,
+    reasoningOptions.length > 0 ? `Reasoning: ${reasoningMenuLabel(active)}` : undefined,
+    priorityTier ? `Speed: ${fastEnabled ? priorityTier.name : 'Standard'}` : undefined,
+  ].filter(Boolean);
+
+  useEffect(() => {
+    if (!selectedModel && modelConfig?.defaultModel) setSelectedModel(modelConfig.defaultModel);
+  }, [modelConfig?.defaultModel, selectedModel, setSelectedModel]);
 
   useEffect(() => {
     if (reasoningOptions.length > 0 && !reasoningOptions.some(option => option.value === reasoningEffort)) {
@@ -1142,88 +1117,94 @@ const ReasoningPicker = () => {
     }
   }, [defaultReasoningEffort, reasoningEffort, reasoningOptions, setReasoningEffort]);
 
-  if (reasoningOptions.length === 0) return null;
-
-  return (
-    <Select
-      value={active.value}
-      onValueChange={value => {
-        const next = asReasoningEffort(value);
-        if (next && reasoningOptions.some(option => option.value === next)) {
-          setReasoningEffort(next);
-        }
-      }}
-      disabled={isRunning}
-    >
-      <SelectTrigger
-        aria-label="Reasoning level"
-        className="h-9 w-9 justify-center border-transparent bg-transparent px-0 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground sm:w-auto sm:justify-start sm:px-2"
-        variant="ghost"
-      >
-        <Brain size={16} className="shrink-0" />
-        <SelectValue className="hidden min-w-0 text-left sm:block">{active.label}</SelectValue>
-      </SelectTrigger>
-      <SelectPopup align="start" className="max-h-72">
-        {reasoningOptions.map(option => (
-          <SelectItem key={option.value} value={option.value}>
-            <span className="flex min-w-0 flex-col">
-              <span className="truncate">{option.label}</span>
-              {option.detail ? <span className="truncate text-xs text-muted-foreground">{option.detail}</span> : null}
-            </span>
-          </SelectItem>
-        ))}
-      </SelectPopup>
-    </Select>
-  );
-};
-
-const ServiceTierToggle = () => {
-  const isRunning = useThread(state => state.isRunning);
-  const selectedModel = useChatStore(state => state.selectedModel);
-  const serviceTier = useChatStore(state => state.serviceTier);
-  const setServiceTier = useChatStore(state => state.setServiceTier);
-  const { data: modelConfig } = useQuery({
-    queryKey: ['models'],
-    queryFn: fetchModelConfig,
-    staleTime: 1000 * 60 * 5,
-  });
-  const modelOptions = modelConfig?.options ?? [];
-  const activeModel = activeModelId(selectedModel, modelConfig);
-  const model = activeModelOption(activeModel, modelOptions);
-  const activeServiceTier = serviceTier ? asServiceTier(serviceTier) : undefined;
-  const priorityTier = model?.serviceTiers?.find(tier => tier.id === 'priority');
-  const supportsActiveServiceTier = Boolean(activeServiceTier && model?.serviceTiers?.some(tier => tier.id === activeServiceTier));
-  const enabled = activeServiceTier === 'priority' && supportsActiveServiceTier;
-
   useEffect(() => {
     if (activeServiceTier && modelConfig && !supportsActiveServiceTier) setServiceTier(null);
   }, [activeServiceTier, modelConfig, setServiceTier, supportsActiveServiceTier]);
 
-  if (!priorityTier) return null;
-
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={(
-          <Button
-            type="button"
-            aria-label="Fast mode"
-            aria-pressed={enabled}
-            disabled={isRunning}
-            variant="ghost"
-            className={cn(
-              'h-9 w-9 justify-center px-0 text-muted-foreground hover:bg-muted hover:text-foreground sm:w-auto sm:px-2',
-              enabled && 'bg-muted text-foreground',
-            )}
-            onClick={() => setServiceTier(enabled ? null : 'priority')}
-          >
-            <Zap size={16} className="shrink-0 sm:mr-1" />
-            <span className="hidden sm:block">Fast</span>
-          </Button>
-        )}
-      />
-      <TooltipPopup>{priorityTier.description ?? priorityTier.name}</TooltipPopup>
-    </Tooltip>
+    <div className="model-picker min-w-0 shrink-0">
+      <Menu>
+        <MenuTrigger
+          render={(
+            <Button
+              type="button"
+              aria-label="Model, reasoning, and speed"
+              title={titleParts.join(' - ')}
+              disabled={disabled}
+              variant="ghost"
+              className={cn(
+                'h-9 min-w-0 max-w-44 justify-start px-2 hover:bg-muted sm:max-w-52',
+                reasoningToneClassName(activeReasoningValue),
+              )}
+            >
+              {fastEnabled ? <Zap size={16} className="shrink-0" /> : null}
+              <span className="min-w-0 truncate">{modelLabel}</span>
+            </Button>
+          )}
+        />
+        <MenuPopup align="start" sideOffset={4} className="w-64 sm:w-72">
+          {reasoningOptions.length > 0 ? (
+            <>
+              <MenuRadioGroup
+                value={active.value}
+                onValueChange={value => {
+                  const next = asReasoningEffort(value);
+                  if (next && reasoningOptions.some(option => option.value === next)) {
+                    setReasoningEffort(next);
+                  }
+                }}
+              >
+                <MenuGroupLabel>Reasoning</MenuGroupLabel>
+                {reasoningOptions.map(option => (
+                  <MenuRadioItem key={option.value} value={option.value} indicatorPosition="end">
+                    <span className="truncate">{reasoningMenuLabel(option)}</span>
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+              <MenuSeparator />
+            </>
+          ) : null}
+          <MenuSub>
+            <MenuSubTrigger className="min-w-0">
+              <span className="min-w-0 truncate">{modelLabel}</span>
+            </MenuSubTrigger>
+            <MenuSubPopup className="w-72">
+              <MenuRadioGroup value={activeModel} onValueChange={value => setSelectedModel(value)}>
+                {modelOptions.map(option => (
+                  <MenuRadioItem key={option.id} value={option.id} indicatorPosition="end" className="min-h-10">
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate">{option.label}</span>
+                      <span className="truncate text-xs text-muted-foreground">{option.id}</span>
+                    </span>
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuSubPopup>
+          </MenuSub>
+          {priorityTier ? (
+            <MenuSub>
+              <MenuSubTrigger>Speed</MenuSubTrigger>
+              <MenuSubPopup className="w-64">
+                <MenuRadioGroup
+                  value={fastEnabled ? 'priority' : 'standard'}
+                  onValueChange={value => setServiceTier(value === 'priority' ? 'priority' : null)}
+                >
+                  <MenuRadioItem value="standard" indicatorPosition="end">
+                    <span className="truncate">Standard</span>
+                  </MenuRadioItem>
+                  <MenuRadioItem value="priority" indicatorPosition="end">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Zap size={16} className="shrink-0" />
+                      <span className="truncate">{priorityTier.name}</span>
+                    </span>
+                  </MenuRadioItem>
+                </MenuRadioGroup>
+              </MenuSubPopup>
+            </MenuSub>
+          ) : null}
+        </MenuPopup>
+      </Menu>
+    </div>
   );
 };
 
@@ -1607,10 +1588,8 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
               <Plus size={18} strokeWidth={2.5} />
             </ComposerPrimitive.AddAttachment>
           )}
-          <ModelPicker />
+          <ModelSettingsPicker />
           <ProfilePicker />
-          <ReasoningPicker />
-          <ServiceTierToggle />
           <PlanPanelToggle threadId={threadId} />
           <FollowWritesToggle canFollowWrites={canFollowWrites} />
         </div>
