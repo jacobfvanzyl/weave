@@ -12,7 +12,7 @@ class AccountCard extends StatelessWidget {
 
 ==>
 
-SourceFile(DocLineComment,Item(Annotation(Identifier)),Item(Keyword(class)),Item(TypeIdentifier),Item(Keyword(extends)),Item(TypeIdentifier),Item(Block(Item(Keyword(final)),Item(BuiltinType(BuiltinType)),Item(Identifier),Item(Operator),Item(Number),Item(Punctuation),Item(TypeIdentifier),Item(Identifier),Item(Parenthesized(Item(TypeIdentifier),Item(Identifier))),Item(Block(Item(Keyword(return)),Item(TypeIdentifier),Item(Parenthesized(Item(String))),Item(Punctuation))))),BlockComment)
+SourceFile(DocLineComment,Item(Annotation(Identifier)),Item(Keyword(class)),Item(TypeIdentifier),Item(Keyword(extends)),Item(TypeIdentifier),Item(Block(Item(Keyword(final)),Item(BuiltinType(BuiltinType)),Item(Identifier),Item(Operator),Item(Number),Item(Punctuation),Item(TypeIdentifier),Item(FunctionName),Item(Parenthesized(Item(TypeIdentifier),Item(ParameterName))),Item(Block(Item(Keyword(return)),Item(TypeIdentifier),Item(Parenthesized(Item(String))),Item(Punctuation))))),BlockComment)
 
 # Records and extension
 

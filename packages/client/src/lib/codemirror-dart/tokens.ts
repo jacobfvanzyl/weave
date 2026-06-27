@@ -1,5 +1,13 @@
 import { ExternalTokenizer, type InputStream } from "@lezer/lr";
-import { BlockComment, DocBlockComment, String } from "./parser.terms";
+import {
+  ArgumentLabel,
+  BlockComment,
+  DocBlockComment,
+  FunctionName,
+  ParameterName,
+  PropertyName,
+  String as StringToken,
+} from "./parser.terms";
 
 const Slash: number = 47;
 const Star: number = 42;
@@ -9,6 +17,95 @@ const Backslash: number = 92;
 const LowerR: number = 114;
 const Newline: number = 10;
 const CarriageReturn: number = 13;
+const LeftParen: number = 40;
+const Colon: number = 58;
+const Comma: number = 44;
+const Equal: number = 61;
+const GreaterThan: number = 62;
+const Question: number = 63;
+const RightParen: number = 41;
+const RightBrace: number = 125;
+const DotChar: number = 46;
+const Underscore: number = 95;
+const Space: number = 32;
+const Tab: number = 9;
+
+const isLowercase = (code: number) => code >= 97 && code <= 122;
+const isUppercase = (code: number) => code >= 65 && code <= 90;
+const isDigit = (code: number) => code >= 48 && code <= 57;
+const isIdentifierPart = (code: number) =>
+  isLowercase(code) || isUppercase(code) || isDigit(code) ||
+  code === Underscore;
+const isHorizontalSpace = (code: number) => code === Space || code === Tab;
+const isWhitespace = (code: number) =>
+  isHorizontalSpace(code) || code === Newline || code === CarriageReturn;
+const canEndTypeExpression = (code: number) =>
+  isIdentifierPart(code) || code === GreaterThan || code === Question ||
+  code === RightParen;
+const reservedWords = new Set([
+  "abstract",
+  "as",
+  "assert",
+  "async",
+  "await",
+  "base",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "covariant",
+  "default",
+  "deferred",
+  "do",
+  "else",
+  "enum",
+  "export",
+  "extends",
+  "extension",
+  "external",
+  "factory",
+  "false",
+  "final",
+  "finally",
+  "for",
+  "get",
+  "hide",
+  "if",
+  "implements",
+  "import",
+  "in",
+  "interface",
+  "is",
+  "late",
+  "library",
+  "mixin",
+  "new",
+  "null",
+  "on",
+  "operator",
+  "part",
+  "required",
+  "rethrow",
+  "return",
+  "sealed",
+  "set",
+  "show",
+  "static",
+  "super",
+  "switch",
+  "sync",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "var",
+  "when",
+  "while",
+  "with",
+  "yield",
+]);
 
 const scanBlockComment = (input: InputStream) => {
   if (input.next !== Slash || input.peek(1) !== Star) return false;
@@ -58,7 +155,7 @@ const scanString = (input: InputStream) => {
 
   while (input.next >= 0) {
     if (!triple && (input.next === Newline || input.next === CarriageReturn)) {
-      input.acceptToken(String);
+      input.acceptToken(StringToken);
       return true;
     }
     if (!raw && input.next === Backslash) {
@@ -70,22 +167,104 @@ const scanString = (input: InputStream) => {
       if (triple) {
         if (input.peek(1) === quote && input.peek(2) === quote) {
           input.advance(3);
-          input.acceptToken(String);
+          input.acceptToken(StringToken);
           return true;
         }
       } else {
         input.advance();
-        input.acceptToken(String);
+        input.acceptToken(StringToken);
         return true;
       }
     }
     input.advance();
   }
 
-  input.acceptToken(String);
+  input.acceptToken(StringToken);
   return true;
 };
 
+const skipWhitespace = (input: InputStream, offset: number) => {
+  while (isWhitespace(input.peek(offset))) offset += 1;
+  return offset;
+};
+
+const skipIdentifier = (input: InputStream, offset: number) => {
+  if (!isLowercase(input.peek(offset)) && input.peek(offset) !== Underscore) {
+    return -1;
+  }
+  offset += 1;
+  while (isIdentifierPart(input.peek(offset))) offset += 1;
+  return offset;
+};
+
+const isLambdaParameterTail = (input: InputStream) => {
+  let offset = 0;
+  while (true) {
+    offset = skipWhitespace(input, offset);
+    const next = input.peek(offset);
+    if (next === Comma) {
+      offset = skipWhitespace(input, offset + 1);
+      offset = skipIdentifier(input, offset);
+      if (offset < 0) return false;
+      continue;
+    }
+    if (next !== RightParen) return false;
+
+    offset = skipWhitespace(input, offset + 1);
+    return input.peek(offset) === Equal &&
+      input.peek(offset + 1) === GreaterThan;
+  }
+};
+
+const scanIdentifierRole = (input: InputStream) => {
+  if (!isLowercase(input.next) && input.next !== Underscore) return false;
+
+  let lookBehindOffset = -1;
+  const followsSpace = isHorizontalSpace(input.peek(lookBehindOffset));
+  while (isHorizontalSpace(input.peek(lookBehindOffset))) lookBehindOffset -= 1;
+  const previousNonSpace = input.peek(lookBehindOffset);
+
+  let word = String.fromCharCode(input.next);
+  input.advance();
+  while (isIdentifierPart(input.next)) {
+    word += String.fromCharCode(input.next);
+    input.advance();
+  }
+
+  if (
+    input.next === LeftParen &&
+    (previousNonSpace === DotChar || !reservedWords.has(word))
+  ) {
+    input.acceptToken(FunctionName);
+    return true;
+  }
+  if (previousNonSpace === DotChar) {
+    input.acceptToken(PropertyName);
+    return true;
+  }
+  if (input.next === Colon) {
+    input.acceptToken(ArgumentLabel);
+    return true;
+  }
+  if (
+    (previousNonSpace === LeftParen || previousNonSpace === Comma) &&
+    isLambdaParameterTail(input)
+  ) {
+    input.acceptToken(ParameterName);
+    return true;
+  }
+  if (
+    followsSpace &&
+    canEndTypeExpression(previousNonSpace) &&
+    (input.next === Comma || input.next === RightParen ||
+      input.next === RightBrace)
+  ) {
+    input.acceptToken(ParameterName);
+    return true;
+  }
+  return false;
+};
+
 export const dartTokens = new ExternalTokenizer((input) => {
-  scanBlockComment(input) || scanString(input);
+  scanBlockComment(input) || scanString(input) || scanIdentifierRole(input);
 });

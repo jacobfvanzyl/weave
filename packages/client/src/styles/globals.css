@@ -160,6 +160,8 @@
   --weave-syntax-operator: var(--ctp-sky);
   --weave-syntax-comment: var(--ctp-overlay1);
   --weave-syntax-meta: var(--ctp-flamingo);
+  --weave-syntax-parameter: var(--ctp-maroon);
+  --weave-syntax-self: var(--ctp-red);
   --weave-syntax-heading: var(--ctp-mauve);
   --weave-syntax-emphasis: var(--ctp-pink);
   --weave-syntax-inserted: var(--ctp-green);
@@ -263,6 +265,8 @@
   --weave-syntax-operator: var(--ctp-sky);
   --weave-syntax-comment: var(--ctp-overlay1);
   --weave-syntax-meta: var(--ctp-flamingo);
+  --weave-syntax-parameter: var(--ctp-maroon);
+  --weave-syntax-self: var(--ctp-red);
   --weave-syntax-heading: var(--ctp-mauve);
   --weave-syntax-emphasis: var(--ctp-pink);
   --weave-syntax-inserted: var(--ctp-green);

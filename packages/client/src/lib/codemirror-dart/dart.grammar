@@ -5,6 +5,10 @@ Item {
   Parenthesized |
   Bracketed |
   Block |
+  ArgumentLabel |
+  FunctionName |
+  ParameterName |
+  PropertyName |
   Keyword |
   BuiltinType |
   Boolean |
@@ -50,7 +54,7 @@ kw<term> { @specialize[@name={term}]<identifier, term> }
 
 @skip { whitespace | LineComment | DocLineComment | BlockComment | DocBlockComment }
 
-@external tokens dartTokens from "./tokens" { String, BlockComment, DocBlockComment }
+@external tokens dartTokens from "./tokens" { String, BlockComment, DocBlockComment, FunctionName, ArgumentLabel, ParameterName, PropertyName }
 
 @tokens {
   whitespace { $[ \t\n\r]+ }

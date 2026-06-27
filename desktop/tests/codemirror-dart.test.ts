@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { classHighlighter, highlightTree } from "@lezer/highlight";
+import {
+  classHighlighter,
+  highlightTree,
+  tagHighlighter,
+  tags as t,
+} from "@lezer/highlight";
 import { dartLanguage } from "../../packages/client/src/lib/codemirror-dart";
 
 describe("vendored Dart Lezer grammar", () => {
@@ -32,7 +37,9 @@ describe("vendored Dart Lezer grammar", () => {
       "import 'dart:ui';",
       "class DragScrollBehavior extends MaterialScrollBehavior {",
       "  async function() {",
+      "    if (ready) {",
       "    await run();",
+      "    }",
       "  }",
       "}",
     ].join("\n");
@@ -54,7 +61,88 @@ describe("vendored Dart Lezer grammar", () => {
       "class",
       "extends",
       "async",
+      "if",
       "await",
     ]);
+  });
+
+  it("tags Dart call names, parameters, self references, and decorators", () => {
+    const source = [
+      "@Riverpod(keepAlive: true)",
+      "Future<void> appStartup(Ref ref) async {",
+      "  ref.watch(sharedPrefsProvider);",
+      "  ref.onDispose(() {",
+      "    ref.invalidate(sharedPrefsProvider);",
+      "  });",
+      "}",
+      "class AppStartupWidget {",
+      "  const AppStartupWidget({required this.onLoaded, super.key});",
+      "  Widget build(BuildContext context, WidgetRef ref) {",
+      "    return appStartupState.when(",
+      "      primary: palette.primary,",
+      "      onSurface: flavor.text,",
+      "      fontFamily: GoogleFonts.comfortaa().fontFamily,",
+      "      loading: () => onLoaded(context),",
+      "      error: (e, st) => e.toString(),",
+      "    );",
+      "  }",
+      "}",
+    ].join("\n");
+    const semanticHighlighter = tagHighlighter([
+      { tag: t.atom, class: "constant" },
+      { tag: t.function(t.variableName), class: "function" },
+      { tag: t.propertyName, class: "property" },
+      { tag: t.special(t.variableName), class: "parameter" },
+      { tag: t.self, class: "self" },
+      { tag: t.keyword, class: "keyword" },
+    ]);
+    const highlights: Array<{ text: string; className: string }> = [];
+
+    highlightTree(
+      dartLanguage.parser.parse(source),
+      semanticHighlighter,
+      (from, to, className) => {
+        highlights.push({ text: source.slice(from, to), className });
+      },
+    );
+
+    const textsForClass = (className: string) =>
+      highlights
+        .filter((highlight) => highlight.className.includes(className))
+        .map((highlight) => highlight.text);
+
+    expect(textsForClass("constant")).toContain("@Riverpod");
+    expect(textsForClass("function")).toEqual(
+      expect.arrayContaining([
+        "appStartup",
+        "watch",
+        "onDispose",
+        "invalidate",
+        "build",
+        "when",
+        "comfortaa",
+        "onLoaded",
+        "toString",
+      ]),
+    );
+    expect(textsForClass("parameter")).toEqual(
+      expect.arrayContaining([
+        "keepAlive",
+        "ref",
+        "context",
+        "loading",
+        "error",
+      ]),
+    );
+    expect(textsForClass("self")).toEqual(
+      expect.arrayContaining(["this", "super"]),
+    );
+    expect(textsForClass("property")).toEqual(
+      expect.arrayContaining([
+        "primary",
+        "text",
+        "fontFamily",
+      ]),
+    );
   });
 });

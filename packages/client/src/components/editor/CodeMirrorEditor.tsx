@@ -116,8 +116,9 @@ const weaveHighlightStyle = HighlightStyle.define([
     tag: [t.constant(t.variableName), t.standard(t.variableName)],
     color: "var(--weave-syntax-constant)",
   },
+  { tag: [t.self], color: "var(--weave-syntax-self)" },
   {
-    tag: [t.definitionKeyword, t.self, t.operator, t.derefOperator],
+    tag: [t.definitionKeyword, t.operator, t.derefOperator],
     color: "var(--weave-syntax-operator)",
   },
   {
@@ -128,6 +129,10 @@ const weaveHighlightStyle = HighlightStyle.define([
   {
     tag: [t.meta, t.processingInstruction, t.annotation],
     color: "var(--weave-syntax-meta)",
+  },
+  {
+    tag: [t.special(t.variableName)],
+    color: "var(--weave-syntax-parameter)",
   },
   {
     tag: [t.heading, t.strong],
