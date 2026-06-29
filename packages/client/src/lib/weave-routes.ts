@@ -68,6 +68,7 @@ export const weaveRoutePaths = {
     projects: () => '/projects',
     project: (projectId: string) => `/projects/${encodePath(projectId)}`,
     projectProfile: (projectId: string) => `/projects/${encodePath(projectId)}/profile`,
+    reorderProjects: () => '/projects/reorder',
   },
   agent: {
     models: () => '/agent/models',
@@ -147,6 +148,7 @@ export const weaveRoutes = {
     projects: () => url(weaveRoutePaths.compat.projects()),
     project: (projectId: string) => url(weaveRoutePaths.compat.project(projectId)),
     projectProfile: (projectId: string) => url(weaveRoutePaths.compat.projectProfile(projectId)),
+    reorderProjects: () => url(weaveRoutePaths.compat.reorderProjects()),
   },
   agent: {
     models: () => url(weaveRoutePaths.agent.models()),

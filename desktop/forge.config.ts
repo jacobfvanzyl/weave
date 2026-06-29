@@ -8,20 +8,26 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
+const clientAppId = process.env.WEAVE_CLIENT_APP === 'coppermind' || process.env.VITE_WEAVE_CLIENT_APP === 'coppermind'
+  ? 'coppermind'
+  : 'flare';
+const appName = clientAppId === 'coppermind' ? 'Coppermind' : 'Flare';
+const appBundleId = clientAppId === 'coppermind' ? 'com.veezee.coppermind' : 'com.veezee.flare';
 
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    executableName: 'Weave',
+    appBundleId,
+    executableName: appName,
     extraResource: [path.join(workspaceRoot, 'portal/dist/portal')],
     icon: 'assets/icon',
-    name: 'Weave',
+    name: appName,
   },
   rebuildConfig: {},
   makers: [
     new MakerZIP({}, ['darwin']),
     new MakerDMG({
-      name: 'Weave',
+      name: appName,
       overwrite: true,
     }),
   ],

@@ -34,11 +34,20 @@ let portalEditorClient: PortalEditorClient | undefined;
 let portalLspClient: PortalLspClient | undefined;
 let desktopPerfSampler: ReturnType<typeof startDesktopPerfSampler> | undefined;
 
-const appName = 'Weave';
+const clientAppId = process.env.WEAVE_CLIENT_APP === 'coppermind' || process.env.VITE_WEAVE_CLIENT_APP === 'coppermind'
+  ? 'coppermind'
+  : 'flare';
+const appName = clientAppId === 'coppermind' ? 'Coppermind' : 'Flare';
+const appUserDataPath = process.env.WEAVE_DESKTOP_USER_DATA || path.join(app.getPath('appData'), appName);
+const sharedConnectionUserDataPath = process.env.WEAVE_DESKTOP_CONNECTION_USER_DATA
+  || process.env.WEAVE_DESKTOP_USER_DATA
+  || path.join(app.getPath('appData'), 'Weave');
 const devAppIconPath = app.isPackaged ? undefined : path.join(process.cwd(), 'assets', 'icon.png');
 
+process.title = appName;
 app.setName(appName);
-app.setPath('userData', process.env.WEAVE_DESKTOP_USER_DATA || path.join(app.getPath('appData'), appName));
+app.setAboutPanelOptions({ applicationName: appName });
+app.setPath('userData', appUserDataPath);
 
 const getSettingsStore = () => {
   if (!settingsStore) {
@@ -307,7 +316,7 @@ const createWindow = () => {
     height: 860,
     minWidth: 960,
     minHeight: 640,
-    title: 'Weave',
+    title: appName,
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
     vibrancy: 'sidebar',
@@ -347,7 +356,7 @@ const createWindow = () => {
 
 app.whenReady().then(() => {
   settingsStore = new ConnectionSettingsStore({
-    userDataPath: app.getPath('userData'),
+    userDataPath: sharedConnectionUserDataPath,
     encryption: safeStorage,
   });
 

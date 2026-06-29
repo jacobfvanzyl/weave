@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { createClientAppPersistStorage, getClientAppStorageKey } from '../lib/client-app';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -39,7 +40,8 @@ export const useThemeStore = create<ThemeState>()(
       },
     }),
     {
-      name: 'weave-theme',
+      name: getClientAppStorageKey('weave-theme'),
+      storage: createClientAppPersistStorage('weave-theme'),
       partialize: state => ({ mode: state.mode }),
       onRehydrateStorage: () => state => applyTheme(state?.mode ?? 'system'),
     },

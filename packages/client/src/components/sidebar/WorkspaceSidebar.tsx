@@ -5,9 +5,10 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, Download, Folder, FolderCode, FolderOpen, GitBranch, GripVertical, History, Link, Loader2, Lock, MoreHorizontal, Plus, RotateCcw, Shell, SquarePen, StickyNote, TerminalSquare, Trash2, X } from 'lucide-react';
-import { adoptWorkspace, ApiError, createWorkspace, createProject, deleteWorkspace, deleteProject, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, listPortals, listProjectBranches, pullWorkspaceGitUpstream, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type DiscoveredWorktree, type RemovedWorkspaceSnapshot, type WorkspaceBranchMode, type WorkspaceBranchOption } from '../../lib/chat-state-api';
+import { adoptWorkspace, ApiError, createWorkspace, createProject, deleteWorkspace, deleteProject, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, listPortals, listProjectBranches, pullWorkspaceGitUpstream, reorderAllProjects, reorderWorkspaces, reorderProjects, reorderThreads, updateWorkspace, type CreateProjectInput, type CreateWorkspaceInput, type DiscoveredWorktree, type RemovedWorkspaceSnapshot, type WorkspaceBranchMode, type WorkspaceBranchOption } from '../../lib/chat-state-api';
+import { getClientAppStorageItem, setClientAppStorageItem } from '../../lib/client-app';
 import { cn } from '../../lib/cn';
-import { projectBelongsToProduct, projectKindForProduct, type ProductId } from '../../lib/products';
+import { projectBelongsToProduct, productForProjectKind, projectKindForProduct, type ProductId } from '../../lib/products';
 import { createThreadOpenabilityContext, isOpenableThread, sortThreadsForDisplay } from '../../lib/thread-eligibility';
 import { createWorkspaceDraftDefaults, getDefaultWorkspaceBase } from '../../lib/workspace-create-defaults';
 import { projectsQueryKey, useProjectsWithLiveGitState, workspaceGitStateQueryKey } from '../../lib/workspace-git-state';
@@ -50,7 +51,7 @@ const branchMenuRefreshThrottleMs = 15_000;
 
 const loadCollapsedProjectIds = (product: ProductId) => {
   try {
-    const value = window.localStorage.getItem(collapsedProjectsStorageKey(product));
+    const value = getClientAppStorageItem(collapsedProjectsStorageKey(product));
     const parsed = value ? JSON.parse(value) : [];
     return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string') : [];
   } catch {
@@ -227,6 +228,8 @@ type WorkspaceSidebarProps = {
   onClose?: () => void;
   presentation?: 'inline' | 'overlay';
   product?: ProductId;
+  projectProducts?: ProductId[];
+  showPlainThreads?: boolean;
 };
 
 export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>(({
@@ -235,6 +238,8 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   onClose,
   presentation = 'inline',
   product = 'code',
+  projectProducts,
+  showPlainThreads = false,
 }, ref) => {
   const {
     resourceId,
@@ -280,7 +285,10 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>(() => loadCollapsedProjectIds(product));
   const [pendingBranchActionKey, setPendingBranchActionKey] = useState<string | null>(null);
   const { projects } = useProjectsWithLiveGitState(resourceId);
-  const productProjects = projects.filter(project => projectBelongsToProduct(project, product));
+  const sidebarProducts = projectProducts?.length ? projectProducts : [product];
+  const sidebarProductSet = new Set(sidebarProducts);
+  const productProjects = projects.filter(project => sidebarProductSet.has(productForProjectKind(project.projectKind)));
+  const creatableProjectKinds = Array.from(new Set(sidebarProducts.map(projectKindForProduct)));
   const createWorkspaceProject = createWorkspaceProjectId ? projects.find(project => project.id === createWorkspaceProjectId) : undefined;
   const attachWorkspaceProject = attachWorkspaceProjectId ? projects.find(project => project.id === attachWorkspaceProjectId) : undefined;
   const removeWorkspaceProject = removeWorkspaceTarget ? projects.find(project => project.id === removeWorkspaceTarget.projectId) : undefined;
@@ -359,7 +367,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     }
   };
   const onlinePortalCount = portals.filter(portal => portal.status === 'online').length;
-  const plainThreads = product === 'chat'
+  const plainThreads = showPlainThreads
     ? sortThreadsForDisplay(threads.filter(thread => (!thread.projectId || thread.adHoc) && thread.archived !== true))
     : [];
   const threadsByProject = new Map(productProjects.map(project => [project.id, sortThreadsForDisplay(threads.filter(thread => thread.projectId === project.id && !thread.adHoc))]));
@@ -545,10 +553,10 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   }, [product]);
 
   useEffect(() => {
-    window.localStorage.setItem(collapsedProjectsStorageKey(product), JSON.stringify(collapsedProjectIds));
+    setClientAppStorageItem(collapsedProjectsStorageKey(product), JSON.stringify(collapsedProjectIds));
   }, [collapsedProjectIds, product]);
   const archivedDialogThreads = archivedDialogScopeId === 'plain'
-    ? threads.filter(thread => product === 'chat' && (!thread.projectId || thread.adHoc) && thread.archived)
+    ? threads.filter(thread => showPlainThreads && (!thread.projectId || thread.adHoc) && thread.archived)
     : threads.filter(thread => {
       if (!archivedDialogScopeId || !thread.archived) return false;
       if (thread.workspaceId) return thread.workspaceId === archivedDialogScopeId;
@@ -673,7 +681,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       )}
     >
       <div className="min-h-0 flex-1 -mr-4 space-y-4 overflow-x-hidden overflow-y-auto pr-5">
-        {product === 'chat' ? <div className="space-y-2">
+        {showPlainThreads ? <div className="space-y-2">
           <SidebarSectionHeader label="Threads">
             <div className="flex items-center">
               <Button
@@ -773,7 +781,17 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
             }}
             onReorder={async (activeId, overId) => {
               const ordered = moveItem(sortedProjects, activeId, overId);
-              await reorderProjects(ordered.map(item => item.id), product);
+              if (sidebarProductSet.size > 1) {
+                const orderedQueue = [...ordered];
+                const allProjectsInMixedOrder = projects.map(project =>
+                  sidebarProductSet.has(productForProjectKind(project.projectKind))
+                    ? orderedQueue.shift() ?? project
+                    : project
+                );
+                await reorderAllProjects(allProjectsInMixedOrder.map(item => item.id));
+              } else {
+                await reorderProjects(ordered.map(item => item.id), product);
+              }
               await invalidateProjects();
             }}
           >
@@ -1278,7 +1296,8 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
         <GitProjectDirectoryPicker
           portals={portals.filter(portal => portal.status === 'online')}
           isCreating={isCreatingProject}
-          projectKind={projectKindForProduct(product)}
+          projectKind={creatableProjectKinds.length === 1 ? creatableProjectKinds[0] : undefined}
+          projectKinds={creatableProjectKinds}
           createError={createProjectError}
           onCancel={() => {
             setIsCreateProjectDialogOpen(false);
@@ -1288,7 +1307,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
             setIsCreatingProject(true);
             setCreateProjectError(null);
             try {
-              await createProject({ ...input, projectKind: projectKindForProduct(product) });
+              await createProject({ ...input, projectKind: input.projectKind ?? projectKindForProduct(product) });
               setIsCreateProjectDialogOpen(false);
               await invalidateProjects();
             } catch (error) {

@@ -606,6 +606,18 @@ export const reorderProjects = async (projectIds: string[], product: ProductId =
   return result.projects;
 };
 
+export const reorderAllProjects = async (projectIds: string[]) => {
+  const result = await parseJson<{ projects: Project[] }>(
+    await fetch(weaveRoutes.compat.reorderProjects(), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ projectIds }),
+    }),
+  );
+
+  return result.projects;
+};
+
 export const createWorkspace = async (projectId: string, input: string | CreateWorkspaceInput) => {
   const body = typeof input === 'string'
     ? { name: input, mode: 'newBranch' satisfies WorkspaceBranchMode, branch: input }

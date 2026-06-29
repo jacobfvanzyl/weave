@@ -1,5 +1,5 @@
 export { Providers } from './app/providers';
-export { WebConnectionApp } from './app/web-connection';
+export { ClientAppWebConnectionApp, CoppermindConnectionApp, FlareConnectionApp, WebConnectionApp } from './app/web-connection';
 export { WeaveAppShell } from './components/app-shell/WeaveAppShell';
 export { ChatPage } from './components/chat/ChatPage';
 export { ConnectionApp } from './components/connection/ConnectionApp';
@@ -10,6 +10,20 @@ export {
   getChatUrl,
   getMastraUrl,
 } from './lib/mastra-client';
+export {
+  clientAppDefinitions,
+  getBuildClientAppId,
+  getClientAppDefinition,
+  getClientAppNavigationProducts,
+  getClientAppProductLabel,
+  getClientAppSelectableProducts,
+  getClientAppSidebarProducts,
+  isProductAllowedForClientApp,
+  isProductSelectableForClientApp,
+  sanitizeProductForClientApp,
+  type ClientAppDefinition,
+  type ClientAppId,
+} from './lib/client-app';
 export type {
   ConnectionAdapter,
   ConnectionInput,

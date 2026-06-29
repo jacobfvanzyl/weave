@@ -6,6 +6,8 @@ type WeaveClientDefineOptions = {
   workspaceEnv: EnvMap;
 };
 
+type ClientAppId = 'flare' | 'coppermind';
+
 const firstNonEmpty = (...values: Array<string | undefined>) =>
   values.map(value => value?.trim()).find((value): value is string => Boolean(value));
 
@@ -35,6 +37,20 @@ export const resolveWeaveClientAuthToken = ({ appEnv, shellEnv, workspaceEnv }: 
     workspaceEnv.VITE_WEAVE_AUTH_TOKEN,
   );
 
+export const resolveWeaveClientApp = ({ appEnv, shellEnv, workspaceEnv }: WeaveClientDefineOptions): ClientAppId => {
+  const value = firstNonEmpty(
+    shellEnv.WEAVE_CLIENT_APP,
+    shellEnv.VITE_WEAVE_CLIENT_APP,
+    appEnv.VITE_WEAVE_CLIENT_APP,
+    appEnv.WEAVE_CLIENT_APP,
+    workspaceEnv.VITE_WEAVE_CLIENT_APP,
+    workspaceEnv.WEAVE_CLIENT_APP,
+  )?.toLowerCase();
+
+  return value === 'coppermind' ? 'coppermind' : 'flare';
+};
+
 export const createWeaveClientDefines = (options: WeaveClientDefineOptions) => ({
   __WEAVE_AUTH_TOKEN__: JSON.stringify(resolveWeaveClientAuthToken(options) ?? null),
+  __WEAVE_CLIENT_APP__: JSON.stringify(resolveWeaveClientApp(options)),
 });

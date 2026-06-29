@@ -5,10 +5,12 @@ import { Keyboard, KeyboardResize, KeyboardStyle } from '@capacitor/keyboard';
 import { Animation, StatusBar, Style } from '@capacitor/status-bar';
 import { MobileConnectionApp } from '@weave/client/app/mobile-connection';
 import { Providers } from '@weave/client/app/providers';
+import { getClientAppDefinition } from '@weave/client/lib/client-app';
 import './styles.css';
 
 const configureNativeShell = async () => {
   const root = document.documentElement;
+  root.dataset.weaveClientApp = getClientAppDefinition().id;
   root.dataset.weaveRuntime = 'mobile';
   root.dataset.weavePlatform = Capacitor.getPlatform();
 

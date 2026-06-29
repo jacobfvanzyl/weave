@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { createClientAppPersistStorage, getClientAppStorageItem, getClientAppStorageKey } from '../lib/client-app';
 import { createClientId } from '../lib/client-id';
 import { workspaceRefKey } from '../lib/thread-eligibility';
 
@@ -254,7 +255,7 @@ const readLegacyChatSurfaceState = () => {
   if (!storage) return undefined;
 
   try {
-    const raw = storage.getItem('weave-chat');
+    const raw = getClientAppStorageItem('weave-chat');
     if (!raw) return undefined;
     const parsed = JSON.parse(raw) as PersistedLegacyChatEnvelope;
     return parsed.state;
@@ -561,8 +562,9 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
       restoreSurfaceSnapshot: snapshot => set(snapshot),
     }),
     {
-      name: 'weave-surface',
+      name: getClientAppStorageKey('weave-surface'),
       version: 1,
+      storage: createClientAppPersistStorage('weave-surface'),
       migrate: persistedState => {
         const legacyState = getInitialPersistedSurfaceState();
         return normalizePersistedSurfaceState(persistedState, legacyState);

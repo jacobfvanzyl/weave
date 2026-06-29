@@ -21,27 +21,25 @@ export const AppTopBar = ({
     <div className="weave-appbar-left-actions flex min-w-0 items-center gap-2 justify-self-start">
       {leftActions}
     </div>
-    {centerContent ? (
-      <div className="weave-appbar-center-content flex min-w-0 max-w-full items-center justify-center truncate text-center">
-        {centerContent}
-      </div>
-    ) : projectName || threadTitle ? (
-      <h2 className="flex min-w-0 max-w-full items-center justify-center gap-1 truncate text-center text-sm font-medium text-foreground">
-        {projectName ? (
-          <>
-            <span className="min-w-0 truncate text-foreground">{projectName}</span>
-            {workspaceName ? (
-              <>
-                <span className="shrink-0 text-muted-foreground">/</span>
-                <span className="min-w-0 truncate text-muted-foreground">{workspaceName}</span>
-              </>
-            ) : null}
-            {threadTitle ? <span className="shrink-0 text-muted-foreground">/</span> : null}
-          </>
-        ) : null}
-        {threadTitle ? <span className="min-w-0 truncate text-foreground">{threadTitle}</span> : null}
-      </h2>
-    ) : null}
+    <div className="weave-appbar-center-content flex min-w-0 max-w-full items-center justify-center truncate text-center">
+      {centerContent ? centerContent : projectName || threadTitle ? (
+        <h2 className="flex min-w-0 max-w-full items-center justify-center gap-1 truncate text-center text-sm font-medium text-foreground">
+          {projectName ? (
+            <>
+              <span className="min-w-0 truncate text-foreground">{projectName}</span>
+              {workspaceName ? (
+                <>
+                  <span className="shrink-0 text-muted-foreground">/</span>
+                  <span className="min-w-0 truncate text-muted-foreground">{workspaceName}</span>
+                </>
+              ) : null}
+              {threadTitle ? <span className="shrink-0 text-muted-foreground">/</span> : null}
+            </>
+          ) : null}
+          {threadTitle ? <span className="min-w-0 truncate text-foreground">{threadTitle}</span> : null}
+        </h2>
+      ) : null}
+    </div>
     <div className="flex min-w-0 items-center gap-3 justify-self-end">
       {rightActions}
     </div>

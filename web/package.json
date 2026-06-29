@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
+    "dev:flare": "WEAVE_CLIENT_APP=flare VITE_WEAVE_CLIENT_APP=flare vite --host 0.0.0.0 --port 5173",
+    "dev:coppermind": "WEAVE_CLIENT_APP=coppermind VITE_WEAVE_CLIENT_APP=coppermind vite --host 0.0.0.0 --port 5173",
     "build": "tsc -b && vite build",
+    "build:flare": "WEAVE_CLIENT_APP=flare VITE_WEAVE_CLIENT_APP=flare tsc -b && WEAVE_CLIENT_APP=flare VITE_WEAVE_CLIENT_APP=flare vite build",
+    "build:coppermind": "WEAVE_CLIENT_APP=coppermind VITE_WEAVE_CLIENT_APP=coppermind tsc -b && WEAVE_CLIENT_APP=coppermind VITE_WEAVE_CLIENT_APP=coppermind vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -39,6 +43,7 @@
     "@iconify/react": "^6.0.2",
     "@lezer/common": "^1.2.3",
     "@lezer/highlight": "^1.2.3",
+    "@lezer/lr": "^1.4.10",
     "@replit/codemirror-vim": "^6.3.0",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-hotkeys": "0.10.0",

@@ -15,6 +15,7 @@ import { Spinner } from '../ui/spinner';
 type GitProjectDirectoryPickerProps = {
   portals: PortalConnection[];
   projectKind?: 'general' | 'git' | 'notes';
+  projectKinds?: Array<'general' | 'git' | 'notes'>;
   isCreating?: boolean;
   createError?: string | null;
   onCancel: () => void;
@@ -44,18 +45,27 @@ const normalizeBrowseResult = (result: PortalBrowseResult | null, requestedPath:
 };
 
 const projectKindLabel = (projectKind: 'general' | 'git' | 'notes') =>
-  projectKind === 'git' ? 'Code' : projectKind === 'notes' ? 'Notes' : 'General';
+  projectKind === 'git' ? 'Code' : projectKind === 'notes' ? 'Notes' : 'Threads';
+
+const allProjectKinds: Array<'general' | 'git' | 'notes'> = ['general', 'git', 'notes'];
+
+const projectKindsDescription = (projectKinds: Array<'general' | 'git' | 'notes'>) =>
+  projectKinds.map(projectKindLabel).join(' or ');
 
 export const GitProjectDirectoryPicker = ({
   portals,
   projectKind: fixedProjectKind,
+  projectKinds,
   isCreating = false,
   createError,
   onCancel,
   onCreate,
 }: GitProjectDirectoryPickerProps) => {
+  const availableProjectKinds = fixedProjectKind
+    ? [fixedProjectKind]
+    : (projectKinds?.length ? projectKinds : allProjectKinds);
   const [projectName, setProjectName] = useState('');
-  const [projectKind, setProjectKind] = useState<'general' | 'git' | 'notes'>(fixedProjectKind ?? 'general');
+  const [projectKind, setProjectKind] = useState<'general' | 'git' | 'notes'>(availableProjectKinds[0] ?? 'general');
   const onlinePortals = useMemo(() => portals.filter(portal => portal.status === 'online'), [portals]);
   const [selectedPortalId, setSelectedPortalId] = useState(() => onlinePortals[0]?.portalId ?? '');
   const selectedPortal = onlinePortals.find(portal => portal.portalId === selectedPortalId) ?? onlinePortals[0];
@@ -68,7 +78,8 @@ export const GitProjectDirectoryPicker = ({
 
   useEffect(() => {
     if (fixedProjectKind) setProjectKind(fixedProjectKind);
-  }, [fixedProjectKind]);
+    else if (!availableProjectKinds.includes(projectKind)) setProjectKind(availableProjectKinds[0] ?? 'general');
+  }, [availableProjectKinds, fixedProjectKind, projectKind]);
 
   useEffect(() => {
     if (onlinePortals.length === 0) {
@@ -132,7 +143,7 @@ export const GitProjectDirectoryPicker = ({
         <DialogHeader className="flex-row items-start justify-between gap-3">
           <div className="min-w-0">
             <DialogTitle>Create Project</DialogTitle>
-            <DialogDescription>{fixedProjectKind ? projectKindLabel(fixedProjectKind) : 'General, Code, or Notes'}</DialogDescription>
+            <DialogDescription>{projectKindsDescription(availableProjectKinds)}</DialogDescription>
           </div>
           <DialogClose render={<Button size="icon-sm" variant="ghost" aria-label="Close directory picker" />}>
             <X size={16} />
@@ -157,16 +168,19 @@ export const GitProjectDirectoryPicker = ({
               <FieldLabel>Type</FieldLabel>
               <Select
                 value={projectKind}
-                onValueChange={value => setProjectKind(value === 'git' || value === 'notes' ? value : 'general')}
+                onValueChange={value => {
+                  const nextProjectKind = value === 'git' || value === 'notes' ? value : 'general';
+                  if (availableProjectKinds.includes(nextProjectKind)) setProjectKind(nextProjectKind);
+                }}
                 disabled={isCreating}
               >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopup>
-                  <SelectItem value="general">General</SelectItem>
-                  <SelectItem value="git">Code</SelectItem>
-                  <SelectItem value="notes">Notes</SelectItem>
+                  {availableProjectKinds.includes('general') ? <SelectItem value="general">Threads</SelectItem> : null}
+                  {availableProjectKinds.includes('git') ? <SelectItem value="git">Code</SelectItem> : null}
+                  {availableProjectKinds.includes('notes') ? <SelectItem value="notes">Notes</SelectItem> : null}
                 </SelectPopup>
               </Select>
             </Field>

@@ -1,7 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { getClientAppDefinition } from '@weave/client/lib/client-app';
 import { configureMastraConnection } from '@weave/client/lib/mastra-client';
 import './styles.css';
+
+const clientApp = getClientAppDefinition();
 
 const renderRoot = (children: React.ReactNode) => {
   ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -28,7 +31,7 @@ const renderBootstrapError = (error: unknown) => {
   renderRoot(
     <main className="grid h-dvh place-items-center bg-background px-6 text-foreground">
       <div className="w-full max-w-md space-y-3 rounded-lg border border-border bg-popover p-6 text-popover-foreground shadow-2xl">
-        <h1 className="text-lg font-semibold">Weave failed to start</h1>
+        <h1 className="text-lg font-semibold">{clientApp.displayName} failed to start</h1>
         <p className="break-words text-sm text-muted-foreground">{message}</p>
       </div>
     </main>,
@@ -43,7 +46,9 @@ const bootstrap = async () => {
   }
 
   const root = document.documentElement;
+  document.title = clientApp.displayName;
   root.dataset.theme = 'mocha';
+  root.dataset.weaveClientApp = clientApp.id;
   root.dataset.weaveWindowType = 'electron';
   root.classList.add('dark');
   root.style.colorScheme = 'dark';

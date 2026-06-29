@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { archiveServerThread, createProjectThread, createServerThread, deleteServerThread, renameServerThread, type RemovedWorkspaceSnapshot } from '../lib/chat-state-api';
+import { createClientAppPersistStorage, getClientAppStorageKey } from '../lib/client-app';
 import { createClientId } from '../lib/client-id';
 import {
   createThreadOpenabilityContext,
@@ -579,8 +580,9 @@ export const useChatStore = create<ChatState>()(
       },
     }),
     {
-      name: 'weave-chat',
+      name: getClientAppStorageKey('weave-chat'),
       version: 13,
+      storage: createClientAppPersistStorage('weave-chat'),
       migrate: persistedState => {
         const state = persistedState as Partial<PersistedChatState>;
         return {
