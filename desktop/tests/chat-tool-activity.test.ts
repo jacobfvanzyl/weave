@@ -4,9 +4,16 @@ import {
   getAutoCollapsedAssistantTextPartIndices,
 } from '../../packages/client/src/components/chat/assistant-content-ranges';
 import {
+  buildProposalImplementationMessage,
+  buildProposalImplementationUserMessage,
+  getProposalActionDisplay,
+  getProposalActionDisplayLabel,
+} from '../../packages/client/src/components/chat/proposal-implementation';
+import {
   getToolActivityFollowTarget,
   getToolActivitySideEffect,
   getToolResultText,
+  isProposalTool,
   isHiddenToolCall,
   shouldRenderToolActivityChildren,
   summarizeToolActivity,
@@ -14,6 +21,119 @@ import {
 } from '../../packages/client/src/components/chat/tool-activity';
 
 describe('chat tool activity helpers', () => {
+  it('builds scoped proposal implementation instructions', () => {
+    const message = buildProposalImplementationMessage({
+      proposalPath: '.agents/proposals/demo.md',
+      approvedItemIds: ['item-1', 'item-2'],
+    });
+
+    expect(message).toContain('Implement the approved proposal items from .agents/proposals/demo.md.');
+    expect(message).toContain('Approved item ids: item-1, item-2');
+    expect(message).toContain('Implement only approved items.');
+    expect(message).toContain('Do not implement pending, rejected, stale, or changes-requested items.');
+    expect(message).toContain('update the proposal artifact');
+  });
+
+  it('builds compact display metadata for proposal implementation messages', () => {
+    const message = buildProposalImplementationUserMessage({
+      id: 'request-1',
+      proposalPath: '.agents/proposals/demo.md',
+      approvedItemIds: ['item-1', 'item-2'],
+      requestedAt: '2026-06-29T10:00:00.000Z',
+    });
+
+    expect(message.text).toContain('Implement the approved proposal items from .agents/proposals/demo.md.');
+    expect(message.metadata).toMatchObject({
+      proposalImplementation: {
+        proposalPath: '.agents/proposals/demo.md',
+        approvedItemIds: ['item-1', 'item-2'],
+        mode: 'implement',
+        requestedAt: '2026-06-29T10:00:00.000Z',
+      },
+      weaveDisplay: {
+        kind: 'proposal_implementation_request',
+        proposalPath: '.agents/proposals/demo.md',
+      },
+    });
+    expect(getProposalActionDisplay(message.metadata)).toEqual({ kind: 'proposal_implementation_request' });
+    expect(getProposalActionDisplayLabel({ kind: 'proposal_implementation_request' })).toBe('Implement proposal');
+  });
+
+  it('builds compact display metadata for proposal feedback messages', () => {
+    const message = buildProposalImplementationUserMessage({
+      id: 'request-2',
+      proposalPath: '.agents/proposals/demo.md',
+      approvedItemIds: [],
+      mode: 'address_feedback',
+      requestedAt: '2026-06-29T10:05:00.000Z',
+    });
+
+    expect(message.text).toContain('Address review feedback for the proposal at .agents/proposals/demo.md.');
+    expect(message.metadata).toMatchObject({
+      proposalImplementation: {
+        proposalPath: '.agents/proposals/demo.md',
+        approvedItemIds: [],
+        mode: 'address_feedback',
+        requestedAt: '2026-06-29T10:05:00.000Z',
+      },
+      weaveDisplay: {
+        kind: 'proposal_review_feedback',
+        proposalPath: '.agents/proposals/demo.md',
+      },
+    });
+    expect(getProposalActionDisplay(message.metadata)).toEqual({ kind: 'proposal_review_feedback' });
+    expect(getProposalActionDisplayLabel({ kind: 'proposal_review_feedback' })).toBe('Revise proposal');
+  });
+
+  it('classifies legacy proposal implementation metadata for compact rendering', () => {
+    expect(getProposalActionDisplay({
+      proposalImplementation: {
+        proposalPath: '.agents/proposals/demo.md',
+        mode: 'address_feedback',
+      },
+    })).toEqual({ kind: 'proposal_review_feedback' });
+
+    expect(getProposalActionDisplay({
+      proposalImplementation: {
+        proposalPath: '.agents/proposals/demo.md',
+        mode: 'implement',
+      },
+    })).toEqual({ kind: 'proposal_implementation_request' });
+  });
+
+  it('classifies nested assistant-ui custom metadata for compact rendering', () => {
+    expect(getProposalActionDisplay({
+      custom: {
+        weaveDisplay: {
+          kind: 'proposal_review_feedback',
+        },
+      },
+    })).toEqual({ kind: 'proposal_review_feedback' });
+
+    expect(getProposalActionDisplay({
+      custom: {
+        proposalImplementation: {
+          proposalPath: '.agents/proposals/demo.md',
+          mode: 'implement',
+        },
+      },
+    })).toEqual({ kind: 'proposal_implementation_request' });
+  });
+
+  it('classifies persisted proposal action messages without metadata from text', () => {
+    expect(getProposalActionDisplay(undefined, [
+      'Address review feedback for the proposal at .agents/proposals/demo.md.',
+      '',
+      'Before editing anything, read the proposal artifact and its review comments.',
+    ].join('\n'))).toEqual({ kind: 'proposal_review_feedback' });
+
+    expect(getProposalActionDisplay(null, [
+      'Implement the approved proposal items from .agents/proposals/demo.md.',
+      '',
+      'Approved item ids: item-1, item-2',
+    ].join('\n'))).toEqual({ kind: 'proposal_implementation_request' });
+  });
+
   it('does not split tool activity groups on hidden reasoning parts', () => {
     const parts = [
       { type: 'tool-call', toolCallId: 'read-1', toolName: 'read', args: { path: 'a.ts' }, result: 'ok' },
@@ -102,6 +222,13 @@ describe('chat tool activity helpers', () => {
       args: { title: 'A sharper thread title' },
       rawStatus: 'complete',
     })).toEqual({ type: 'renameThread', title: 'A sharper thread title' });
+  });
+
+  it('does not treat removed apply_proposal calls as proposal activity', () => {
+    expect(isProposalTool('write_proposal')).toBe(true);
+    expect(isProposalTool('update_proposal')).toBe(true);
+    expect(isProposalTool('apply_proposal')).toBe(false);
+    expect(isProposalTool('applyProposalTool')).toBe(false);
   });
 
   it('extracts legacy and artifact plan side effects', () => {

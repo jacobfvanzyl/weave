@@ -149,6 +149,26 @@ describe('editor tab store', () => {
     });
   });
 
+  it('stores explorer visibility per editor target', async () => {
+    const { storage, useEditorTabStore, getEditorTabTargetKey, defaultEditorExplorerVisible } = await loadFreshEditorTabStore();
+    const firstTargetKey = getEditorTabTargetKey('code', 'project-1', 'workspace-1');
+    const secondTargetKey = getEditorTabTargetKey('code', 'project-1', 'workspace-2');
+
+    expect(useEditorTabStore.getState().explorerVisibleByTarget[firstTargetKey] ?? defaultEditorExplorerVisible)
+      .toBe(true);
+
+    useEditorTabStore.getState().setExplorerVisible(firstTargetKey, false);
+    expect(useEditorTabStore.getState().explorerVisibleByTarget[firstTargetKey]).toBe(false);
+    expect(useEditorTabStore.getState().explorerVisibleByTarget[secondTargetKey] ?? defaultEditorExplorerVisible)
+      .toBe(true);
+
+    const persisted = storage.getItem('weave-editor-tabs');
+    expect(persisted).toBeTruthy();
+    expect(JSON.parse(persisted ?? '{}').state.explorerVisibleByTarget).toEqual({
+      [firstTargetKey]: false,
+    });
+  });
+
   it('rehydrates persisted tabs without file content fields', async () => {
     const targetKey = 'notes:project-1:workspace-1';
     const tabId = (path: string) => `${targetKey}:tab:${encodeURIComponent(path)}`;
@@ -172,6 +192,7 @@ describe('editor tab store', () => {
 
     const rehydratedTab = useEditorTabStore.getState().editorTabsByTarget[targetKey]?.tabs[0];
     expect(useEditorTabStore.getState().editorTabsByTarget[targetKey]).toEqual(persistedTabSet);
+    expect(useEditorTabStore.getState().explorerVisibleByTarget).toEqual({});
     expect(Object.prototype.hasOwnProperty.call(rehydratedTab, 'content')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(rehydratedTab, 'version')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(rehydratedTab, 'dirty')).toBe(false);

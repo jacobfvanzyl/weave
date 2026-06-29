@@ -35,6 +35,8 @@ registerAgentContribution({
     { id: 'format_preview', description: 'Preview LSP formatting edits without applying them.' },
     { id: 'update_plan', description: 'Update the plan artifact for the current Code workspace.' },
     { id: 'write_plan', description: 'Write a plan artifact for the current Code workspace.' },
+    { id: 'write_proposal', description: 'Write a proposed change artifact for the current Code workspace.' },
+    { id: 'update_proposal', description: 'Update proposed change approval and review state for the current Code workspace.' },
   ],
   sources: [
     { id: 'code.workspace.context', description: 'Workspace AGENTS.md and .weave context discovered through Portal.' },

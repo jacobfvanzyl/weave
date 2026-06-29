@@ -20,6 +20,7 @@ export type OpenEditorTabOptions = {
 
 type PersistedEditorTabStoreState = {
   editorTabsByTarget: Record<string, EditorTabSet | undefined>;
+  explorerVisibleByTarget: Record<string, boolean | undefined>;
 };
 
 type EditorTabStoreState = PersistedEditorTabStoreState & {
@@ -30,7 +31,10 @@ type EditorTabStoreState = PersistedEditorTabStoreState & {
   reorderEditorTabs: (targetKey: string, activeId: string, overId: string) => void;
   setActiveEditorTab: (targetKey: string, tabId: string | undefined) => void;
   setEditorTabs: (targetKey: string, tabs: EditorTabsChange) => void;
+  setExplorerVisible: (targetKey: string, visible: boolean) => void;
 };
+
+export const defaultEditorExplorerVisible = true;
 
 export const getEditorTabTargetKey = (mode: EditorMode, projectId: string, workspaceId: string) => (
   `${mode}:${projectId}:${workspaceId}`
@@ -89,6 +93,9 @@ const partializeEditorTabStore = (state: EditorTabStoreState): PersistedEditorTa
       tabSet ? getPersistableTabSet(targetKey, tabSet) : tabSet,
     ]),
   ),
+  explorerVisibleByTarget: Object.fromEntries(
+    Object.entries(state.explorerVisibleByTarget).filter(([, visible]) => typeof visible === 'boolean'),
+  ),
 });
 
 const getNextActiveTabId = (tabs: EditorTab[], closedTabId: string, activeTabId: string | undefined) => {
@@ -106,6 +113,7 @@ export const useEditorTabStore = create<EditorTabStoreState>()(
   persist(
     (set, get) => ({
       editorTabsByTarget: {},
+      explorerVisibleByTarget: {},
       closeEditorTab: (targetKey, tabId) =>
         set(state => {
           const current = getTabSet(state, targetKey);
@@ -220,6 +228,16 @@ export const useEditorTabStore = create<EditorTabStoreState>()(
                   ? current.activeTabId
                   : nextTabs[0]?.id,
               },
+            },
+          };
+        }),
+      setExplorerVisible: (targetKey, visible) =>
+        set(state => {
+          if ((state.explorerVisibleByTarget[targetKey] ?? defaultEditorExplorerVisible) === visible) return state;
+          return {
+            explorerVisibleByTarget: {
+              ...state.explorerVisibleByTarget,
+              [targetKey]: visible,
             },
           };
         }),

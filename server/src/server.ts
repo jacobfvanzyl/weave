@@ -7,6 +7,8 @@ import { registerServerModules } from './modules/types';
 import { serverModules } from './modules';
 import { registerCompatibilityRoutes } from './server/compatibility-routes';
 import type { ServerVariables } from './server/types';
+import { startServerPerfSampler } from './server/perf';
+import { getChatPerfSnapshot } from './modules/chat/routes/chat';
 
 const port = Number(process.env.PORT ?? process.env.WEAVE_SERVER_PORT ?? 4111);
 const auth = loadOwnerAuthConfig();
@@ -63,6 +65,10 @@ agentCore.registerRoutes(app);
 portalCore.registerRoutes(app, { mastra });
 registerServerModules(app, { auth, agent: agentCore, portal: portalCore }, serverModules);
 registerCompatibilityRoutes(app);
+
+startServerPerfSampler({
+  sample: () => ({ chat: getChatPerfSnapshot() }),
+});
 
 Deno.serve({ port }, app.fetch);
 

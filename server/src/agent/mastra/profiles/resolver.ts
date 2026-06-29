@@ -213,6 +213,8 @@ const expandProfileToolsForProjectKind = (
   const expanded = new Set(tools);
   if (projectKind === 'git' && expanded.has('updatePlanTool')) {
     expanded.add('writePlanTool');
+    expanded.add('writeProposalTool');
+    expanded.add('updateProposalTool');
   }
   return [...expanded];
 };

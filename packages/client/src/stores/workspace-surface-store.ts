@@ -8,6 +8,8 @@ export type ActiveSurface =
   | { kind: 'workspace'; projectId: string; workspaceId: string };
 
 export type MainPane = 'chat' | 'editor' | 'terminal';
+export type TerminalPaneColumn = 'left' | 'right';
+export type EditorSlotMode = 'editor' | 'proposal_review';
 
 export type PaneVisibility = {
   chatOpen: boolean;
@@ -43,6 +45,9 @@ type PersistedLegacyChatEnvelope = {
 
 type SurfaceLayout = {
   paneVisibility: PaneVisibility;
+  editorSlotMode: EditorSlotMode;
+  activeProposalPath?: string;
+  activeProposalFilePath?: string;
   maximizedPane: MainPane | null;
   preMaximizePaneVisibility?: PaneVisibility;
 };
@@ -51,7 +56,11 @@ type WorkspaceSurfaceState = {
   threadId: string;
   activeSurface: ActiveSurface;
   paneVisibility: PaneVisibility;
+  editorSlotMode: EditorSlotMode;
+  activeProposalPath?: string;
+  activeProposalFilePath?: string;
   surfaceLayouts: Record<string, SurfaceLayout | undefined>;
+  terminalPaneColumnsByWorkspace: Record<string, TerminalPaneColumn | undefined>;
   editorFollowRequest?: EditorFollowRequest;
   maximizedPane: MainPane | null;
   preMaximizePaneVisibility?: PaneVisibility;
@@ -59,22 +68,36 @@ type WorkspaceSurfaceState = {
   selectWorkspace: (projectId: string, workspaceId: string) => void;
   syncThreads: (threads: ThreadSurfaceContext[], options?: { selectThreadId?: string; workspaceRefs?: ReadonlySet<string> }) => void;
   openPane: (pane: MainPane) => void;
+  openProposalReview: (proposalPath: string, options?: { filePath?: string }) => void;
+  closeProposalReview: () => void;
   closePane: (pane: MainPane) => void;
   togglePane: (pane: MainPane) => void;
   toggleMaximizedPane: (pane: MainPane) => void;
   restoreMaximizedPane: () => void;
+  setTerminalPaneColumn: (projectId: string, workspaceId: string, column: TerminalPaneColumn) => void;
+  toggleTerminalPaneColumn: (projectId: string, workspaceId: string) => void;
   requestEditorFollow: (request: Omit<EditorFollowRequest, 'id'>) => void;
   restoreSurfaceSnapshot: (snapshot: WorkspaceSurfaceSnapshot) => void;
 };
 
 export type WorkspaceSurfaceSnapshot = Pick<
   WorkspaceSurfaceState,
-  'threadId' | 'activeSurface' | 'paneVisibility' | 'surfaceLayouts' | 'maximizedPane' | 'preMaximizePaneVisibility'
+  | 'threadId'
+  | 'activeSurface'
+  | 'paneVisibility'
+  | 'editorSlotMode'
+  | 'activeProposalPath'
+  | 'activeProposalFilePath'
+  | 'surfaceLayouts'
+  | 'terminalPaneColumnsByWorkspace'
+  | 'maximizedPane'
+  | 'preMaximizePaneVisibility'
 >;
 
 export const initialSurfaceThreadId = createClientId('thread');
 
 export const defaultPaneVisibility: PaneVisibility = { chatOpen: true, editorOpen: false, terminalOpen: false };
+export const defaultTerminalPaneColumn: TerminalPaneColumn = 'left';
 
 export const getPaneVisibilityForThread = (thread: ThreadSurfaceContext | undefined): PaneVisibility => ({
   chatOpen: true,
@@ -102,19 +125,24 @@ const isPaneOpen = (paneVisibility: PaneVisibility, pane: MainPane) => (
       : paneVisibility.terminalOpen
 );
 
+const isPersistedTerminalPaneColumn = (value: unknown): value is TerminalPaneColumn => value === 'left' || value === 'right';
+
 const surfaceLayoutKey = (surface: ActiveSurface) =>
   surface.kind === 'thread'
     ? `thread:${surface.threadId}`
     : `workspace:${surface.projectId}:${surface.workspaceId}`;
 
-const captureSurfaceLayout = (state: Pick<WorkspaceSurfaceState, 'paneVisibility' | 'maximizedPane' | 'preMaximizePaneVisibility'>): SurfaceLayout => ({
+const captureSurfaceLayout = (state: Pick<WorkspaceSurfaceState, 'paneVisibility' | 'editorSlotMode' | 'activeProposalPath' | 'activeProposalFilePath' | 'maximizedPane' | 'preMaximizePaneVisibility'>): SurfaceLayout => ({
   paneVisibility: state.paneVisibility,
+  editorSlotMode: state.editorSlotMode,
+  activeProposalPath: state.activeProposalPath,
+  activeProposalFilePath: state.activeProposalFilePath,
   maximizedPane: state.maximizedPane,
   preMaximizePaneVisibility: state.preMaximizePaneVisibility,
 });
 
 const saveCurrentSurfaceLayout = (
-  state: Pick<WorkspaceSurfaceState, 'activeSurface' | 'paneVisibility' | 'surfaceLayouts' | 'maximizedPane' | 'preMaximizePaneVisibility'>,
+  state: Pick<WorkspaceSurfaceState, 'activeSurface' | 'paneVisibility' | 'editorSlotMode' | 'activeProposalPath' | 'activeProposalFilePath' | 'surfaceLayouts' | 'maximizedPane' | 'preMaximizePaneVisibility'>,
 ) => ({
   ...state.surfaceLayouts,
   [surfaceLayoutKey(state.activeSurface)]: captureSurfaceLayout(state),
@@ -122,12 +150,18 @@ const saveCurrentSurfaceLayout = (
 
 const defaultThreadSurfaceLayout = (thread: ThreadSurfaceContext | undefined): SurfaceLayout => ({
   paneVisibility: getPaneVisibilityForThread(thread),
+  editorSlotMode: 'editor',
+  activeProposalPath: undefined,
+  activeProposalFilePath: undefined,
   maximizedPane: null,
   preMaximizePaneVisibility: undefined,
 });
 
 const defaultWorkspaceSurfaceLayout = (): SurfaceLayout => ({
   paneVisibility: getEditorOnlyPaneVisibility(),
+  editorSlotMode: 'editor',
+  activeProposalPath: undefined,
+  activeProposalFilePath: undefined,
   maximizedPane: null,
   preMaximizePaneVisibility: undefined,
 });
@@ -176,6 +210,9 @@ const normalizePersistedSurfaceLayout = (value: unknown): SurfaceLayout | undefi
     : paneVisibility;
   return {
     paneVisibility: normalizedPaneVisibility,
+    editorSlotMode: record.editorSlotMode === 'proposal_review' ? 'proposal_review' : 'editor',
+    activeProposalPath: typeof record.activeProposalPath === 'string' ? record.activeProposalPath : undefined,
+    activeProposalFilePath: typeof record.activeProposalFilePath === 'string' ? record.activeProposalFilePath : undefined,
     maximizedPane,
     preMaximizePaneVisibility: maximizedPane
       ? normalizePersistedPaneVisibility(record.preMaximizePaneVisibility)
@@ -191,6 +228,15 @@ const normalizePersistedSurfaceLayouts = (value: unknown): Record<string, Surfac
     if (normalizedLayout) layouts[key] = normalizedLayout;
   }
   return layouts;
+};
+
+const normalizePersistedTerminalPaneColumns = (value: unknown): Record<string, TerminalPaneColumn | undefined> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const columns: Record<string, TerminalPaneColumn | undefined> = {};
+  for (const [key, column] of Object.entries(value)) {
+    if (key && isPersistedTerminalPaneColumn(column)) columns[key] = column;
+  }
+  return columns;
 };
 
 const isPersistedMainPane = (value: unknown): value is MainPane => value === 'chat' || value === 'editor' || value === 'terminal';
@@ -229,7 +275,11 @@ const getInitialPersistedSurfaceState = () => {
       ? legacyState.activeSurface
       : { kind: 'thread' as const, threadId },
     paneVisibility: normalizePersistedPaneVisibility(legacyState?.paneVisibility) ?? defaultPaneVisibility,
+    editorSlotMode: 'editor' as const,
+    activeProposalPath: undefined,
+    activeProposalFilePath: undefined,
     surfaceLayouts: {},
+    terminalPaneColumnsByWorkspace: {},
     maximizedPane: isPersistedMainPane(legacyState?.maximizedPane) ? legacyState.maximizedPane : null,
     preMaximizePaneVisibility: normalizePersistedPaneVisibility(legacyState?.preMaximizePaneVisibility),
   };
@@ -255,7 +305,7 @@ const getThreadById = (threads: ThreadSurfaceContext[], threadId: string) => thr
 
 const normalizePersistedSurfaceState = (
   persistedState: unknown,
-  fallback: Pick<WorkspaceSurfaceState, 'threadId' | 'activeSurface' | 'paneVisibility' | 'surfaceLayouts' | 'maximizedPane' | 'preMaximizePaneVisibility'>,
+  fallback: Pick<WorkspaceSurfaceState, 'threadId' | 'activeSurface' | 'paneVisibility' | 'editorSlotMode' | 'activeProposalPath' | 'activeProposalFilePath' | 'surfaceLayouts' | 'terminalPaneColumnsByWorkspace' | 'maximizedPane' | 'preMaximizePaneVisibility'>,
 ) => {
   const state = persistedState && typeof persistedState === 'object'
     ? persistedState as Partial<WorkspaceSurfaceState>
@@ -270,7 +320,13 @@ const normalizePersistedSurfaceState = (
     threadId,
     activeSurface: isPersistedActiveSurface(state.activeSurface) ? state.activeSurface : fallback.activeSurface,
     paneVisibility: normalizedPaneVisibility,
+    editorSlotMode: state.editorSlotMode === 'proposal_review' ? 'proposal_review' : fallback.editorSlotMode,
+    activeProposalPath: typeof state.activeProposalPath === 'string' ? state.activeProposalPath : fallback.activeProposalPath,
+    activeProposalFilePath: typeof state.activeProposalFilePath === 'string' ? state.activeProposalFilePath : fallback.activeProposalFilePath,
     surfaceLayouts: normalizePersistedSurfaceLayouts(state.surfaceLayouts ?? fallback.surfaceLayouts),
+    terminalPaneColumnsByWorkspace: normalizePersistedTerminalPaneColumns(
+      state.terminalPaneColumnsByWorkspace ?? fallback.terminalPaneColumnsByWorkspace,
+    ),
     maximizedPane,
     preMaximizePaneVisibility: maximizedPane
       ? normalizePersistedPaneVisibility(state.preMaximizePaneVisibility) ?? fallback.preMaximizePaneVisibility
@@ -305,6 +361,9 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
               chatOpen: true,
               ...(options?.preserveTerminalVisibility ? { terminalOpen: state.paneVisibility.terminalOpen } : {}),
             },
+            editorSlotMode: layout.editorSlotMode,
+            activeProposalPath: layout.activeProposalPath,
+            activeProposalFilePath: layout.activeProposalFilePath,
             maximizedPane,
             preMaximizePaneVisibility: maximizedPane ? layout.preMaximizePaneVisibility : undefined,
           };
@@ -318,6 +377,9 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
             activeSurface: nextActiveSurface,
             surfaceLayouts,
             paneVisibility: layout.paneVisibility,
+            editorSlotMode: layout.editorSlotMode,
+            activeProposalPath: layout.activeProposalPath,
+            activeProposalFilePath: layout.activeProposalFilePath,
             maximizedPane: layout.maximizedPane,
             preMaximizePaneVisibility: layout.preMaximizePaneVisibility,
           };
@@ -334,6 +396,9 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
               activeSurface: nextActiveSurface,
               surfaceLayouts,
               paneVisibility: layout.paneVisibility,
+              editorSlotMode: layout.editorSlotMode,
+              activeProposalPath: layout.activeProposalPath,
+              activeProposalFilePath: layout.activeProposalFilePath,
               maximizedPane: layout.maximizedPane,
               preMaximizePaneVisibility: layout.preMaximizePaneVisibility,
             };
@@ -358,6 +423,9 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
             activeSurface: nextActiveSurface,
             surfaceLayouts,
             paneVisibility: repairedLayout?.paneVisibility ?? state.paneVisibility,
+            editorSlotMode: repairedLayout?.editorSlotMode ?? state.editorSlotMode,
+            activeProposalPath: repairedLayout?.activeProposalPath ?? state.activeProposalPath,
+            activeProposalFilePath: repairedLayout?.activeProposalFilePath ?? state.activeProposalFilePath,
             maximizedPane: repairedLayout ? repairedLayout.maximizedPane : state.maximizedPane,
             preMaximizePaneVisibility: repairedLayout
               ? repairedLayout.preMaximizePaneVisibility
@@ -372,6 +440,30 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
               maximizedPane: null,
               preMaximizePaneVisibility: undefined,
             }),
+      openProposalReview: (proposalPath, options) =>
+        set(state => ({
+          activeProposalPath: proposalPath,
+          activeProposalFilePath: options?.filePath ?? state.activeProposalFilePath,
+          editorSlotMode: 'proposal_review',
+          paneVisibility: setPaneOpen(
+            state.maximizedPane && state.preMaximizePaneVisibility
+              ? state.preMaximizePaneVisibility
+              : state.paneVisibility,
+            'editor',
+            true,
+          ),
+          maximizedPane: null,
+          preMaximizePaneVisibility: undefined,
+        })),
+      closeProposalReview: () =>
+        set(state => ({
+          editorSlotMode: 'editor',
+          activeProposalPath: undefined,
+          activeProposalFilePath: undefined,
+          paneVisibility: setPaneOpen(state.paneVisibility, 'editor', true),
+          maximizedPane: state.maximizedPane === 'editor' ? null : state.maximizedPane,
+          preMaximizePaneVisibility: state.maximizedPane === 'editor' ? undefined : state.preMaximizePaneVisibility,
+        })),
       closePane: pane =>
         set(state => {
           const restoredVisibility = state.maximizedPane === pane && state.preMaximizePaneVisibility
@@ -425,12 +517,37 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
               preMaximizePaneVisibility: undefined,
             }
           : state),
+      setTerminalPaneColumn: (projectId, workspaceId, column) =>
+        set(state => {
+          const key = workspaceRefKey(projectId, workspaceId);
+          if (state.terminalPaneColumnsByWorkspace[key] === column) return state;
+          return {
+            terminalPaneColumnsByWorkspace: {
+              ...state.terminalPaneColumnsByWorkspace,
+              [key]: column,
+            },
+          };
+        }),
+      toggleTerminalPaneColumn: (projectId, workspaceId) =>
+        set(state => {
+          const key = workspaceRefKey(projectId, workspaceId);
+          const currentColumn = state.terminalPaneColumnsByWorkspace[key] ?? defaultTerminalPaneColumn;
+          return {
+            terminalPaneColumnsByWorkspace: {
+              ...state.terminalPaneColumnsByWorkspace,
+              [key]: currentColumn === 'left' ? 'right' : 'left',
+            },
+          };
+        }),
       requestEditorFollow: request =>
         set(state => ({
           editorFollowRequest: {
             ...request,
             id: editorFollowRequestId += 1,
           },
+          editorSlotMode: 'editor',
+          activeProposalPath: state.editorSlotMode === 'proposal_review' ? state.activeProposalPath : undefined,
+          activeProposalFilePath: state.editorSlotMode === 'proposal_review' ? request.path : state.activeProposalFilePath,
           paneVisibility: setPaneOpen(
             state.maximizedPane && state.preMaximizePaneVisibility
               ? state.preMaximizePaneVisibility
@@ -458,7 +575,11 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
         threadId: state.threadId,
         activeSurface: state.activeSurface,
         paneVisibility: state.paneVisibility,
+        editorSlotMode: state.editorSlotMode,
+        activeProposalPath: state.activeProposalPath,
+        activeProposalFilePath: state.activeProposalFilePath,
         surfaceLayouts: state.surfaceLayouts,
+        terminalPaneColumnsByWorkspace: state.terminalPaneColumnsByWorkspace,
         maximizedPane: state.maximizedPane,
         preMaximizePaneVisibility: state.preMaximizePaneVisibility,
       }),

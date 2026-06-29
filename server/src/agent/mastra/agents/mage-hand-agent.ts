@@ -66,7 +66,7 @@ const resolveOpenAIProviderOptions = (requestContext: any) => {
     : undefined;
 };
 
-const gitOnlyToolKeys = new Set(['writePlanTool', 'updatePlanTool']);
+const gitOnlyToolKeys = new Set(['writePlanTool', 'updatePlanTool', 'writeProposalTool', 'updateProposalTool']);
 
 const isToolAvailableForContext = (key: string, requestContext: any) =>
   !gitOnlyToolKeys.has(key) || getProfileContext(requestContext)?.projectKind === 'git';

@@ -33,6 +33,7 @@
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language": "^6.12.3",
+    "@codemirror/merge": "^6.12.2",
     "@codemirror/search": "^6.5.11",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.0",
@@ -66,6 +67,7 @@
     "shiki": "^4.0.2",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.18",
+    "yaml": "^2.9.0",
     "zustand": "^5.0.9"
   },
   "devDependencies": {

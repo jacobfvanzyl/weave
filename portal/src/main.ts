@@ -10,6 +10,7 @@ import {
   resolveWindowStreamConfig,
   type WindowStreamConfig,
 } from './window.ts';
+import { logPortalPerfEvent, startPortalPerfSampler } from './perf.ts';
 import {
   checkPortalRuntimeHealth,
   getPortalConfigPath,
@@ -1241,14 +1242,17 @@ const connectOnce = (
 
     ws.onopen = () => {
       console.log(`Connected socket: ${url.origin}`);
+      logPortalPerfEvent('socket_open', { origin: url.origin });
     };
 
     ws.onmessage = async (event) => {
-      const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+      const rawMessage = String(event.data);
+      const message = JSON.parse(rawMessage) as Record<string, unknown>;
       console.log('<-', JSON.stringify(message));
 
       if (message.type === 'portal.accepted') {
         accepted = true;
+        logPortalPerfEvent('socket_accepted', { origin: url.origin });
         ws.send(JSON.stringify({
           type: 'portal.hello',
           name: config.name,
@@ -1297,6 +1301,7 @@ const connectOnce = (
     ws.onerror = () => {
       cleanup();
       if (!accepted) {
+        logPortalPerfEvent('socket_error', { origin: url.origin, accepted });
         reject(new Error('WebSocket connection failed'));
       }
     };
@@ -1307,6 +1312,13 @@ const connectOnce = (
       windowHost.detachClientsByPrefix('window:');
       lspHost.detachClientsByPrefix('relay-lsp:');
       console.log(`Socket closed: ${event.code} ${event.reason}`.trim());
+      logPortalPerfEvent('socket_close', {
+        origin: url.origin,
+        accepted,
+        code: event.code,
+        reason: event.reason,
+        bufferedAmount: ws.bufferedAmount,
+      });
       resolve();
     };
   });
@@ -1358,11 +1370,36 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   let cleanupPromise: Promise<void> | undefined;
   let stopFallbackTimer: ReturnType<typeof setTimeout> | undefined;
   const controlCapabilities = await getControlCapabilities(windowStream);
+  let retryMs = 1_000;
+  const perfSampler = startPortalPerfSampler({
+    sample: () => ({
+      portal: {
+        portalId: config.portalId,
+        stopping,
+        retryMs,
+        activeSocket: activeSocket
+          ? {
+              readyState: activeSocket.readyState,
+              bufferedAmount: activeSocket.bufferedAmount,
+            }
+          : undefined,
+        control: {
+          enabled: Boolean(controlToken && controlPort !== undefined),
+          host: controlHost,
+          port: runtime?.controlPort,
+          capabilityCount: controlCapabilities.length,
+        },
+      },
+      terminal: terminalHost.getPerfSnapshot(),
+      lsp: lspHost.getPerfSnapshot(),
+    }),
+  });
 
   const cleanup = async () => {
     if (cleanupPromise) return await cleanupPromise;
     cleanupPromise = (async () => {
       if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
+      perfSampler.stop();
       terminalHost.dispose();
       await lspHost.dispose();
       windowHost.dispose();
@@ -1433,7 +1470,6 @@ const daemon = async (flags: Record<string, string | boolean>) => {
     console.log('Local control: disabled');
   }
 
-  let retryMs = 1_000;
   try {
     Deno.addSignalListener('SIGINT', requestStop);
     Deno.addSignalListener('SIGTERM', requestStop);

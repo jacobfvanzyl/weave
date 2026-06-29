@@ -15,6 +15,8 @@ type EditorPaneProps = {
   terminalSlot?: ReactNode;
   onClose: () => void;
   onExpandedChange: (isExpanded: boolean) => void;
+  proposalBackFilePath?: string;
+  onBackToProposalPreview?: (path: string) => void;
 };
 
 export const EditorPane = ({
@@ -27,6 +29,8 @@ export const EditorPane = ({
   terminalSlot,
   onClose,
   onExpandedChange,
+  proposalBackFilePath,
+  onBackToProposalPreview,
 }: EditorPaneProps) => (
   <div
     key="editor"
@@ -43,6 +47,8 @@ export const EditorPane = ({
           isExpanded={isMaximized}
           mode={mode}
           onExpandedChange={onExpandedChange}
+          proposalBackFilePath={proposalBackFilePath}
+          onBackToProposalPreview={onBackToProposalPreview}
           target={target}
           onHide={onClose}
         />

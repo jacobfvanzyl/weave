@@ -627,6 +627,24 @@ class LspRuntime {
     return this.initializeResult && isRecord(this.initializeResult) ? this.initializeResult.capabilities : undefined;
   }
 
+  getPerfSnapshot() {
+    return {
+      key: this.key,
+      serverId: this.adapter.id,
+      pid: this.process?.pid,
+      disposed: this.disposed,
+      started: Boolean(this.process),
+      pendingCount: this.pending.size,
+      subscriberCount: this.subscribers.size,
+      clientCount: this.clientSessions.size,
+      diagnosticUriCount: this.diagnostics.size,
+      diagnosticRefreshTimerCount: this.diagnosticRefreshTimers.size,
+      initializing: Boolean(this.initializing),
+      initializingWaiterCount: this.initializing?.waiters.length ?? 0,
+      idleTimerActive: this.idleTimer !== undefined,
+    };
+  }
+
   async start() {
     if (this.startPromise) return await this.startPromise;
     this.startPromise = this.startOnce();
@@ -1218,6 +1236,19 @@ export class PortalLspHost {
     for (const clientId of [...this.clientSessions.keys()]) {
       if (clientId.startsWith(prefix)) this.detachClient(clientId);
     }
+  }
+
+  getPerfSnapshot() {
+    const runtimes = [...this.runtimes.values()].map(runtime => runtime.getPerfSnapshot());
+    return {
+      sessionCount: this.sessions.size,
+      readySessionCount: [...this.sessions.values()].filter(session => session.status === 'ready').length,
+      runtimeCount: runtimes.length,
+      clientCount: this.clientSessions.size,
+      pendingRequestCount: runtimes.reduce((count, runtime) => count + runtime.pendingCount, 0),
+      childPids: runtimes.flatMap(runtime => runtime.pid === undefined ? [] : [runtime.pid]),
+      runtimes,
+    };
   }
 
   async query(input: PortalLspQueryInput) {

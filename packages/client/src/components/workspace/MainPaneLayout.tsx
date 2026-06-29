@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Children, type ReactNode } from 'react';
 
 type MainPaneLayoutProps = {
   children: ReactNode;
@@ -6,9 +6,26 @@ type MainPaneLayoutProps = {
   isEmpty: boolean;
 };
 
-export const MainPaneLayout = ({ children, emptyState, isEmpty }: MainPaneLayoutProps) => (
-  <div className="flex min-h-0 flex-1">
-    {children}
-    {isEmpty ? emptyState : null}
-  </div>
-);
+export const MainPaneLayout = ({ children, emptyState, isEmpty }: MainPaneLayoutProps) => {
+  const panes = Children.toArray(children);
+  const paneChildren = panes.flatMap((pane, index) => (
+    index === 0
+      ? [pane]
+      : [
+        <div
+          key={`main-pane-divider-${index}`}
+          className="w-px shrink-0 bg-border"
+          aria-hidden="true"
+          data-weave-main-pane-divider
+        />,
+        pane,
+      ]
+  ));
+
+  return (
+    <div className="flex min-h-0 flex-1">
+      {paneChildren}
+      {isEmpty ? emptyState : null}
+    </div>
+  );
+};

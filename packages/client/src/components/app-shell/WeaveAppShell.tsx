@@ -3,12 +3,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, MessageSquare, MonitorUp, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
 import { projectBelongsToProduct, productForProjectKind, productLabels, type ProductId } from '../../lib/products';
+import { shouldShowProposalReview } from '../../lib/proposal-review-state';
 import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
+import { workspaceRefKey } from '../../lib/thread-eligibility';
 import { useChatStore, type ChatThread } from '../../stores/chat-store';
 import { useAppShellStore } from '../../stores/app-shell-store';
 import { useProductStore } from '../../stores/product-store';
 import { generalTerminalId, useTerminalStore } from '../../stores/terminal-store';
-import { useWorkspaceSurfaceStore, type MainPane } from '../../stores/workspace-surface-store';
+import { defaultTerminalPaneColumn, useWorkspaceSurfaceStore, type MainPane } from '../../stores/workspace-surface-store';
 import { Button } from '../ui/button';
 import { ShortcutProvider } from '../shortcuts';
 import { AppSidebarHost } from './AppSidebarHost';
@@ -16,6 +18,7 @@ import { useAppShortcuts } from './useAppShortcuts';
 import { useShellLayout } from './useShellLayout';
 import { ChatPane } from '../chat/ChatPane';
 import { EditorPane } from '../editor/EditorPane';
+import { ProposalReviewPane } from '../proposals/ProposalReviewPane';
 import { GlobalTerminalOverlay } from '../terminal/GlobalTerminalOverlay';
 import { TerminalPaneHost } from '../terminal/TerminalPaneHost';
 import type { TerminalPanelTab, TerminalPanelTabsChange, TerminalPanelTarget } from '../terminal/TerminalPanel';
@@ -99,21 +102,26 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
   const selectWorkspaceSurface = useWorkspaceSurfaceStore(state => state.selectWorkspace);
   const threads = useChatStore(state => state.threads);
-  const threadPlans = useChatStore(state => state.threadPlans);
-  const showPlanPanel = useChatStore(state => state.showPlanPanel);
   const runningThreadIds = useChatStore(state => state.runningThreadIds);
   const setServerThreads = useChatStore(state => state.setServerThreads);
   const newThread = useChatStore(state => state.newThread);
   const selectThreadSurface = useChatStore(state => state.selectThread);
-  const setShowPlanPanel = useChatStore(state => state.setShowPlanPanel);
   const paneVisibility = useWorkspaceSurfaceStore(state => state.paneVisibility);
   const maximizedPane = useWorkspaceSurfaceStore(state => state.maximizedPane);
   const editorFollowRequest = useWorkspaceSurfaceStore(state => state.editorFollowRequest);
+  const editorSlotMode = useWorkspaceSurfaceStore(state => state.editorSlotMode);
+  const activeProposalPath = useWorkspaceSurfaceStore(state => state.activeProposalPath);
+  const activeProposalFilePath = useWorkspaceSurfaceStore(state => state.activeProposalFilePath);
   const openPane = useWorkspaceSurfaceStore(state => state.openPane);
+  const openProposalReview = useWorkspaceSurfaceStore(state => state.openProposalReview);
   const closePane = useWorkspaceSurfaceStore(state => state.closePane);
+  const closeProposalReview = useWorkspaceSurfaceStore(state => state.closeProposalReview);
+  const requestEditorFollow = useWorkspaceSurfaceStore(state => state.requestEditorFollow);
   const togglePane = useWorkspaceSurfaceStore(state => state.togglePane);
   const toggleMaximizedPane = useWorkspaceSurfaceStore(state => state.toggleMaximizedPane);
   const restoreMaximizedPane = useWorkspaceSurfaceStore(state => state.restoreMaximizedPane);
+  const terminalPaneColumnsByWorkspace = useWorkspaceSurfaceStore(state => state.terminalPaneColumnsByWorkspace);
+  const toggleTerminalPaneColumn = useWorkspaceSurfaceStore(state => state.toggleTerminalPaneColumn);
   const queryClient = useQueryClient();
   const activeProduct = useProductStore(state => state.activeProduct);
   const setActiveProduct = useProductStore(state => state.setActiveProduct);
@@ -138,6 +146,8 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     projects,
     projectsQuery,
   } = workspaceTargets;
+  const hasInitializedThreads = useChatStore(state => state.hasInitializedThreads);
+  const activeThreadProposal = useChatStore(state => state.threadProposals[activeThreadId]);
   const activeProject = workspaceTargets.activeProject && projectBelongsToProduct(workspaceTargets.activeProject, activeProduct)
     ? workspaceTargets.activeProject
     : undefined;
@@ -147,7 +157,6 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const generalTerminalTarget = activeProduct === 'code' ? workspaceTargets.generalTerminalTarget : undefined;
   const terminalTarget = activeProduct === 'code' ? workspaceTargets.terminalTarget : undefined;
   const hasWindowStreamPortal = activeProduct === 'code' && workspaceTargets.hasWindowStreamPortal;
-  const activePlan = threadPlans[activeThreadId];
   const projectById = useMemo(() => new Map(projects.map(project => [project.id, project])), [projects]);
   const productForProjectId = useCallback((projectId: string): ProductId | undefined => {
     const project = projectById.get(projectId);
@@ -161,6 +170,22 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const activeSurfaceProduct = activeSurface.kind === 'workspace'
     ? productForProjectId(activeSurface.projectId)
     : productForThread(activeThread);
+  const activeSurfaceKey = activeSurface.kind === 'thread'
+    ? `thread:${activeSurface.threadId}`
+    : `workspace:${activeSurface.projectId}:${activeSurface.workspaceId}`;
+  const currentProposalReviewKey = activeProposalPath ? `${activeSurfaceKey}:proposal:${activeProposalPath}` : undefined;
+  const [validatedProposalReviewKey, setValidatedProposalReviewKey] = useState<string | undefined>();
+  const canAutoShowActiveProposalReview = Boolean(
+    activeSurface.kind === 'thread'
+      && activeThreadProposal?.path === activeProposalPath
+      && shouldShowProposalReview(activeThreadProposal),
+  );
+  const canBackToActiveProposalReview = Boolean(
+    editorSlotMode === 'editor'
+      && activeProposalPath
+      && activeThreadProposal?.path === activeProposalPath
+      && shouldShowProposalReview(activeThreadProposal),
+  );
   const canFollowWrites = Boolean(editorTarget && activeThread?.workspaceId && activeSurface.kind === 'thread');
   const showChatPane = hasChatPaneTarget && paneVisibility.chatOpen;
   const isChatMaximized = maximizedPane === 'chat';
@@ -173,12 +198,17 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   const isTerminalOnlyPane = showTerminalPane && !showChatPane && !showEditorPane;
   const isTerminalEffectivelyMaximized = isTerminalMaximized || isTerminalOnlyPane;
   const canToggleTerminalMaximized = isTerminalMaximized || showChatPane || showEditorPane;
+  const terminalWorkspaceRef = terminalTarget ? workspaceRefKey(terminalTarget.projectId, terminalTarget.workspaceId) : undefined;
+  const terminalPaneColumn = terminalWorkspaceRef
+    ? terminalPaneColumnsByWorkspace[terminalWorkspaceRef] ?? defaultTerminalPaneColumn
+    : defaultTerminalPaneColumn;
+  const canToggleTerminalPaneColumn = Boolean(showTerminalPane && showChatPane && showEditorPane && terminalTarget);
   const visibleMainPaneMinimumWidthPx = (showChatPane ? chatContentMaxWidthPx : 0)
     + (showEditorPane ? editorMinimumWidthPx : 0)
     + (showTerminalPane && !showChatPane && !showEditorPane ? editorMinimumWidthPx : 0);
   const terminalHost = showTerminalPane
     ? showChatPane && showEditorPane
-      ? 'chat'
+      ? terminalPaneColumn === 'right' ? 'editor' : 'chat'
       : showEditorPane
         ? 'editor'
         : showChatPane
@@ -562,6 +592,30 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
   }, [isFetched, projects, projectsQuery.isFetched, serverThreads, setServerThreads]);
 
   useEffect(() => {
+    if (editorSlotMode !== 'proposal_review' || !activeProposalPath || !currentProposalReviewKey) {
+      if (validatedProposalReviewKey) setValidatedProposalReviewKey(undefined);
+      return;
+    }
+    if (!hasInitializedThreads) return;
+    if (validatedProposalReviewKey === currentProposalReviewKey) return;
+
+    if (canAutoShowActiveProposalReview) {
+      setValidatedProposalReviewKey(currentProposalReviewKey);
+      return;
+    }
+
+    closeProposalReview();
+  }, [
+    activeProposalPath,
+    canAutoShowActiveProposalReview,
+    closeProposalReview,
+    currentProposalReviewKey,
+    editorSlotMode,
+    hasInitializedThreads,
+    validatedProposalReviewKey,
+  ]);
+
+  useEffect(() => {
     if (!isFetched || !projectsQuery.isFetched || activeSurfaceProduct === activeProduct) return;
 
     if (activeProduct === 'code' || activeProduct === 'notes') {
@@ -656,6 +710,18 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     else window.requestAnimationFrame(focusTerminal);
   }, [focusChat, focusEditor, focusTerminal, hasChatPaneTarget, hasEditorPaneTarget, hasTerminalPaneTarget, toggleMaximizedPane]);
 
+  const handleTerminalPaneColumnToggle = useCallback(() => {
+    if (!terminalTarget || !canToggleTerminalPaneColumn) return;
+    toggleTerminalPaneColumn(terminalTarget.projectId, terminalTarget.workspaceId);
+    window.requestAnimationFrame(focusTerminal);
+  }, [
+    canToggleTerminalPaneColumn,
+    focusTerminal,
+    terminalTarget?.projectId,
+    terminalTarget?.workspaceId,
+    toggleTerminalPaneColumn,
+  ]);
+
   const shortcutCommands = useAppShortcuts({
     createThreadFromShortcut,
     focusChat,
@@ -671,8 +737,6 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     hasGeneralTerminalTarget,
     hasTerminalTarget,
     isSidebarOpen,
-    setShowPlanPanel,
-    showPlanPanel,
     showSidebarPreview,
     toggleSidebar,
   });
@@ -807,19 +871,19 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
       onTabsChange={handleTerminalTabsChange}
       tabs={terminalTabs}
       target={terminalTarget}
+      terminalColumn={canToggleTerminalPaneColumn ? terminalPaneColumn : undefined}
       transport={terminalTransport}
+      onTerminalColumnToggle={canToggleTerminalPaneColumn ? handleTerminalPaneColumnToggle : undefined}
       variant={variant}
     />
   ) : null;
 
   const renderChatPane = () => showChatPane ? (
     <ChatPane
-      activePlan={activePlan}
       activeThreadId={activeThreadId}
       breadcrumb={breadcrumbPane === 'chat' ? contextBreadcrumb : undefined}
       isMaximized={isChatMaximized}
       runningThreadIds={runningThreadIds}
-      showPlanPanel={showPlanPanel}
       surfaceRef={chatSurfaceRef}
       terminalSlot={showTerminalInChatPane ? renderTerminalPanel('pane') : undefined}
       threads={threads}
@@ -840,22 +904,62 @@ export const WeaveAppShell = ({ connectionSettingsButton }: WeaveAppShellProps =
     </div>
   ) : null;
 
-  const renderEditorPane = () => showEditorPane && (editorTarget || notesTarget) ? (
-    <EditorPane
-      breadcrumb={breadcrumbPane === 'editor' && !isSidebarSurfaceVisible ? editorBreadcrumb : undefined}
-      followRequest={editorFollowRequest}
-      focusRequest={editorFocusRequest}
-      isMaximized={isEditorMaximized}
-      mode={notesTarget ? 'notes' : 'code'}
-      target={(notesTarget ?? editorTarget)!}
-      terminalSlot={showTerminalInEditorPane ? renderTerminalPanel('pane') : undefined}
-      onClose={() => closePane('editor')}
-      onExpandedChange={nextExpanded => {
-        if (nextExpanded) handleMainPaneMaximizeToggle('editor');
-        else restoreMaximizedPane();
-      }}
-    />
-  ) : null;
+  const renderEditorPane = () => {
+    if (!showEditorPane || (!editorTarget && !notesTarget)) return null;
+
+    if (
+      editorSlotMode === 'proposal_review'
+      && activeProposalPath
+      && editorTarget
+      && validatedProposalReviewKey === currentProposalReviewKey
+    ) {
+      return (
+        <ProposalReviewPane
+          key="proposal-review"
+          proposalPath={activeProposalPath}
+          target={editorTarget}
+          threadId={activeThreadId}
+          isMaximized={isEditorMaximized}
+          terminalSlot={showTerminalInEditorPane ? renderTerminalPanel('pane') : undefined}
+          selectedFilePath={activeProposalFilePath}
+          onClose={closeProposalReview}
+          onOpenSource={path => {
+            if (!activeThread?.workspaceId) return;
+            requestEditorFollow({
+              threadId: activeThreadId,
+              workspaceId: activeThread.workspaceId,
+              path,
+              line: 1,
+              toolCallId: 'proposal-review',
+            });
+          }}
+          onExpandedChange={nextExpanded => {
+            if (nextExpanded) handleMainPaneMaximizeToggle('editor');
+            else restoreMaximizedPane();
+          }}
+        />
+      );
+    }
+
+    return (
+      <EditorPane
+        breadcrumb={breadcrumbPane === 'editor' && !isSidebarSurfaceVisible ? editorBreadcrumb : undefined}
+        followRequest={editorFollowRequest}
+        focusRequest={editorFocusRequest}
+        isMaximized={isEditorMaximized}
+        mode={notesTarget ? 'notes' : 'code'}
+        target={(notesTarget ?? editorTarget)!}
+        terminalSlot={showTerminalInEditorPane ? renderTerminalPanel('pane') : undefined}
+        onClose={() => closePane('editor')}
+        proposalBackFilePath={canBackToActiveProposalReview ? activeProposalFilePath : undefined}
+        onBackToProposalPreview={canBackToActiveProposalReview && activeProposalPath ? path => openProposalReview(activeProposalPath, { filePath: path }) : undefined}
+        onExpandedChange={nextExpanded => {
+          if (nextExpanded) handleMainPaneMaximizeToggle('editor');
+          else restoreMaximizedPane();
+        }}
+      />
+    );
+  };
 
   const orderedMainPanes = [renderChatPane(), renderEditorPane(), renderTerminalPane()];
   const headerLeftActions = shouldRenderHeaderLeftActions ? (

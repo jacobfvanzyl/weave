@@ -358,6 +358,20 @@ export class PortalSupervisor {
     }
     throw new Error('Timed out waiting for Portal local terminal control.');
   }
+
+  getPerfSnapshot() {
+    return {
+      portalHome: this.portalHome,
+      runtimePath: this.runtimePath,
+      controlHost: this.controlHost,
+      controlPort: this.controlPort,
+      controlReady: Boolean(this.controlPort && this.controlToken),
+      processPid: this.process?.pid,
+      processExitCode: this.process?.exitCode,
+      processSignalCode: this.process?.signalCode,
+      startInFlight: Boolean(this.started),
+    };
+  }
 }
 
 export class PortalTerminalClient {
@@ -463,6 +477,24 @@ export class PortalTerminalClient {
       connection.socket.close();
     }
     this.connections.clear();
+  }
+
+  getPerfSnapshot() {
+    const connections = [...this.connections.values()];
+    return {
+      connectionCount: connections.length,
+      subscriberCount: connections.reduce((count, connection) => count + connection.subscribers.size, 0),
+      pendingRequestCount: connections.reduce((count, connection) => count + connection.pendingRequests.size, 0),
+      pendingStartCount: connections.filter((connection) => Boolean(connection.pendingStart)).length,
+      connections: connections.map((connection) => ({
+        terminalId: connection.terminalId,
+        readyState: connection.socket.readyState,
+        bufferedAmount: connection.socket.bufferedAmount,
+        subscriberCount: connection.subscribers.size,
+        pendingRequestCount: connection.pendingRequests.size,
+        pendingStart: Boolean(connection.pendingStart),
+      })),
+    };
   }
 
   private async getConnection(terminalId: string) {

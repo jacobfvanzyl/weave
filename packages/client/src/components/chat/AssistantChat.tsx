@@ -21,7 +21,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Brain, Check, ChevronRight, Clipboard, Crosshair, ImageIcon, KeyRound, ListChecks, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
+import { Brain, Check, ChevronRight, Clipboard, Crosshair, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
 import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
@@ -31,6 +31,7 @@ import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, type ModelOption } from '../../lib/models';
 import { listProfiles, type DynamicProfileSummary, type ProfileResolutionContext } from '../../lib/profiles-api';
 import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
+import { shouldShowProposalReview } from '../../lib/proposal-review-state';
 import { useChatStore, type ChatThread, type ReasoningEffort, type ServiceTier } from '../../stores/chat-store';
 import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Badge } from '../ui/badge';
@@ -63,6 +64,8 @@ import {
   toToolActivityCall,
   type ToolActivityCall,
 } from './tool-activity';
+import { GuidedTaskCard } from './GuidedTaskCard';
+import { buildProposalImplementationUserMessage, getProposalActionDisplay, getProposalActionDisplayLabel } from './proposal-implementation';
 
 const ThreadIdContext = createContext<string | null>(null);
 type AutoCollapsedTurnIds = Record<string, true>;
@@ -250,6 +253,7 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
   const activeThreadId = useWorkspaceSurfaceStore(state => state.threadId);
   const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
   const requestEditorFollow = useWorkspaceSurfaceStore(state => state.requestEditorFollow);
+  const openProposalReview = useWorkspaceSurfaceStore(state => state.openProposalReview);
   const appliedEffectsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
@@ -277,8 +281,19 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
             useChatStore.setState(state => ({
               threads: state.threads.map(thread => (thread.id === targetThreadId ? { ...thread, title: effect.title } : thread)),
             }));
-          } else {
+          } else if (effect.type === 'updatePlan') {
             useChatStore.getState().setThreadPlan(targetThreadId, effect.plan);
+          } else {
+            useChatStore.getState().setThreadProposal(targetThreadId, effect.proposal);
+            const proposalReviewPath = shouldShowProposalReview(effect.proposal) ? effect.proposal.path : undefined;
+            if (
+              targetThreadId === activeThreadId
+              && activeSurface.kind === 'thread'
+              && getToolActivityStatus(call) === 'complete'
+              && proposalReviewPath
+            ) {
+              openProposalReview(proposalReviewPath);
+            }
           }
         }
       }
@@ -304,7 +319,7 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
         toolCallId: followTarget.toolCallId,
       });
     }
-  }, [activeSurface.kind, activeThreadId, followWrites, message.content, message.role, requestEditorFollow, threadId, threadWorkspaceId]);
+  }, [activeSurface.kind, activeThreadId, followWrites, message.content, message.role, openProposalReview, requestEditorFollow, threadId, threadWorkspaceId]);
 
   return null;
 };
@@ -912,6 +927,57 @@ const AssistantMessageContent = () => {
   );
 };
 
+const ProposalActionUserBubble = ({ kind }: { kind: 'proposal_review_feedback' | 'proposal_implementation_request' }) => {
+  const isFeedback = kind === 'proposal_review_feedback';
+  const label = getProposalActionDisplayLabel({ kind });
+
+  return (
+    <div
+      className={cn(
+        'chat-message-bubble inline-flex min-w-0 items-center gap-2 rounded-lg border px-3.5 py-2 text-[length:var(--weave-chat-text-size)] font-medium leading-[var(--weave-chat-line-height)] text-[#11111b]',
+        isFeedback
+          ? 'border-warning bg-warning'
+          : 'border-success-button bg-success-button',
+      )}
+    >
+      <GitPullRequestArrow size={14} className="shrink-0" />
+      {label}
+      <div className="text-red-950">
+        <MessagePrimitive.Error />
+      </div>
+    </div>
+  );
+};
+
+const getThreadMessageText = (message: ThreadMessage) =>
+  message.content
+    .filter((part): part is { type: 'text'; text: string } =>
+      part.type === 'text' && 'text' in part && typeof part.text === 'string',
+    )
+    .map(part => part.text)
+    .join('');
+
+const UserMessageContent = () => {
+  const message = useMessage();
+  const proposalActionDisplay = getProposalActionDisplay(message.metadata, getThreadMessageText(message));
+
+  if (proposalActionDisplay) {
+    return <ProposalActionUserBubble kind={proposalActionDisplay.kind} />;
+  }
+
+  return (
+    <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-mauve bg-mauve px-3.5 py-2 text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)] text-primary-foreground">
+      <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
+      <div className="mt-3 flex flex-wrap gap-2 empty:hidden">
+        <MessageImageAttachments />
+      </div>
+      <div className="text-red-950">
+        <MessagePrimitive.Error />
+      </div>
+    </div>
+  );
+};
+
 const ThreadMessage = () => (
   <MessagePrimitive.Root className="chat-message-shell mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
     <MessagePrimitive.If assistant>
@@ -926,15 +992,7 @@ const ThreadMessage = () => (
     </MessagePrimitive.If>
     <MessagePrimitive.If user>
       <div className="chat-message-row flex min-w-0 justify-end">
-        <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-border bg-user px-3.5 py-2 text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)] text-user-foreground">
-          <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
-          <div className="mt-3 flex flex-wrap gap-2 empty:hidden">
-            <MessageImageAttachments />
-          </div>
-          <div className="text-red-950">
-            <MessagePrimitive.Error />
-          </div>
-        </div>
+        <UserMessageContent />
       </div>
     </MessagePrimitive.If>
   </MessagePrimitive.Root>
@@ -1205,32 +1263,6 @@ const ModelSettingsPicker = () => {
         </MenuPopup>
       </Menu>
     </div>
-  );
-};
-
-const PlanPanelToggle = ({ threadId }: { threadId: string | null }) => {
-  const plan = useChatStore(state => threadId ? state.threadPlans[threadId] : undefined);
-  const showPlanPanel = useChatStore(state => state.showPlanPanel);
-  const setShowPlanPanel = useChatStore(state => state.setShowPlanPanel);
-
-  if (!plan) return null;
-
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant="ghost"
-      aria-pressed={showPlanPanel}
-      title={showPlanPanel ? 'Hide plan' : 'Show plan'}
-      onClick={() => setShowPlanPanel(!showPlanPanel)}
-      className={cn(
-        'h-9 shrink-0 gap-2 px-2 text-muted-foreground hover:bg-muted hover:text-foreground',
-        showPlanPanel && 'text-primary',
-      )}
-    >
-      <ListChecks size={16} />
-      <span>Plan</span>
-    </Button>
   );
 };
 
@@ -1590,7 +1622,6 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
           )}
           <ModelSettingsPicker />
           <ProfilePicker />
-          <PlanPanelToggle threadId={threadId} />
           <FollowWritesToggle canFollowWrites={canFollowWrites} />
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -1764,6 +1795,7 @@ const Thread = ({
 }: AutoCollapsedTurnStateProps & { canFollowWrites: boolean }) => {
   const threadId = useContext(ThreadIdContext);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
+  const pendingProposalImplementationRequest = useChatStore(state => threadId ? state.pendingProposalImplementationRequests[threadId] : undefined);
   const isRunning = useThread(state => state.isRunning);
   const messages = useThread(state => state.messages);
   const isEmptyIdleDraft = isDraft && !isRunning && messages.length === 0;
@@ -1795,6 +1827,24 @@ const Thread = ({
     return () => window.cancelAnimationFrame(frame);
   }, [isRunning, messages, updateBottomFollowState]);
 
+  useEffect(() => {
+    if (pendingProposalImplementationRequest?.mode !== 'implement') return undefined;
+    setIsFollowingBottom(true);
+    let secondFrame: number | undefined;
+    const firstFrame = window.requestAnimationFrame(() => {
+      const viewport = viewportRef.current;
+      if (viewport) viewport.scrollTop = viewport.scrollHeight;
+      secondFrame = window.requestAnimationFrame(() => {
+        const nextViewport = viewportRef.current;
+        if (nextViewport) nextViewport.scrollTop = nextViewport.scrollHeight;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [pendingProposalImplementationRequest?.id, pendingProposalImplementationRequest?.mode, setIsFollowingBottom]);
+
   return (
     <ThreadAutoCollapseContext.Provider value={autoCollapseContext}>
       <ThreadPrimitive.Root
@@ -1810,6 +1860,7 @@ const Thread = ({
           <RunningIndicatorTail />
         </ThreadPrimitive.Viewport>
         <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
+          {threadId ? <GuidedTaskCard threadId={threadId} /> : null}
           <Composer canFollowWrites={canFollowWrites} />
         </div>
       </ThreadPrimitive.Root>
@@ -1855,8 +1906,11 @@ const AssistantChatRuntime = ({
   const selectedModel = useChatStore(state => state.selectedModel);
   const reasoningEffort = useChatStore(state => state.reasoningEffort);
   const serviceTier = useChatStore(state => state.serviceTier);
+  const pendingProposalImplementationRequest = useChatStore(state => state.pendingProposalImplementationRequests[threadId]);
+  const consumeProposalImplementationRequest = useChatStore(state => state.consumeProposalImplementationRequest);
   const chatApi = getChatUrl();
   const resumeRunIdRef = useRef<string | undefined>(undefined);
+  const sendingProposalImplementationRequestRef = useRef<string | undefined>(undefined);
   const { data: modelConfig } = useQuery({
     queryKey: ['models'],
     queryFn: fetchModelConfig,
@@ -1946,6 +2000,24 @@ const AssistantChatRuntime = ({
   });
 
   if (transport instanceof AssistantChatTransport) transport.setRuntime(runtime);
+
+  useEffect(() => {
+    const request = pendingProposalImplementationRequest;
+    if (!request) return;
+    if (chat.status !== 'ready' || runState?.active === true) return;
+    if (sendingProposalImplementationRequestRef.current === request.id) return;
+
+    sendingProposalImplementationRequestRef.current = request.id;
+    void chat.sendMessage(buildProposalImplementationUserMessage(request)).then(() => {
+      consumeProposalImplementationRequest(threadId, request.id);
+    }).catch(error => {
+      console.error('[chat] failed to start proposal implementation', error);
+    }).finally(() => {
+      if (sendingProposalImplementationRequestRef.current === request.id) {
+        sendingProposalImplementationRequestRef.current = undefined;
+      }
+    });
+  }, [chat, consumeProposalImplementationRequest, pendingProposalImplementationRequest, runState?.active, threadId]);
 
   useEffect(() => {
     if (runState?.active !== true) {

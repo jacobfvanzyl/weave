@@ -93,4 +93,40 @@ describe('chat store', () => {
       expect(useChatStore.getState().reasoningEffort).toBe('low');
     }
   });
+
+  it('queues and consumes proposal implementation requests without persisting them', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const request = useChatStore.getState().enqueueProposalImplementationRequest('thread-1', {
+      proposalPath: '.agents/proposals/demo.md',
+      approvedItemIds: ['item-1', 'item-2'],
+      requestedAt: '2026-06-28T12:00:00.000Z',
+    });
+
+    expect(request).toMatchObject({
+      proposalPath: '.agents/proposals/demo.md',
+      approvedItemIds: ['item-1', 'item-2'],
+      requestedAt: '2026-06-28T12:00:00.000Z',
+    });
+    expect(useChatStore.getState().pendingProposalImplementationRequests['thread-1']).toEqual(request);
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(true);
+
+    useChatStore.getState().consumeProposalImplementationRequest('thread-1', 'wrong-id');
+    expect(useChatStore.getState().pendingProposalImplementationRequests['thread-1']).toEqual(request);
+
+    useChatStore.getState().consumeProposalImplementationRequest('thread-1', request.id);
+    expect(useChatStore.getState().pendingProposalImplementationRequests['thread-1']).toBeUndefined();
+  });
+
+  it('collapses the guided card when implementation is queued', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    useChatStore.getState().setGuidedTaskExpanded('thread-1', true);
+
+    useChatStore.getState().enqueueProposalImplementationRequest('thread-1', {
+      proposalPath: '.agents/proposals/demo.md',
+      approvedItemIds: ['item-1'],
+      mode: 'implement',
+    });
+
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
+  });
 });

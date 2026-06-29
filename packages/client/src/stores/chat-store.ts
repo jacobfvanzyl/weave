@@ -33,6 +33,7 @@ export type ChatThread = {
   workspacePath?: string;
   removedWorkspace?: RemovedWorkspaceSnapshot;
   latestPlan?: ThreadPlan;
+  latestProposal?: ThreadProposal;
   draft?: boolean;
 };
 
@@ -55,6 +56,45 @@ export type ThreadPlan = {
   updatedAt: string;
   contentHash?: string;
   isBusy?: boolean;
+};
+
+export type ProposalItemStatus = 'pending' | 'approved' | 'changes_requested' | 'rejected' | 'applied' | 'stale';
+export type ProposalStatus = 'draft' | 'ready' | 'partially_approved' | 'approved' | 'changes_requested' | 'applied' | 'rejected' | 'stale';
+
+export type ThreadProposalItem = {
+  id: string;
+  kind: string;
+  status: ProposalItemStatus;
+  title: string;
+  path?: string;
+  additions: number;
+  deletions: number;
+  viewed: boolean;
+  currentHash?: string;
+  proposedHash?: string;
+  comment?: string;
+};
+
+export type ThreadProposal = {
+  id?: string;
+  title?: string;
+  path?: string;
+  planPath?: string;
+  status?: ProposalStatus;
+  summary?: string;
+  items: ThreadProposalItem[];
+  counts: Record<string, number>;
+  updatedAt: string;
+  contentHash?: string;
+  isBusy?: boolean;
+};
+
+export type ProposalImplementationRequest = {
+  id: string;
+  proposalPath: string;
+  approvedItemIds: string[];
+  mode?: 'implement' | 'address_feedback';
+  requestedAt: string;
 };
 
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -85,6 +125,9 @@ type ChatState = {
   completedThreadIds: string[];
   deletedThreadIds: string[];
   threadPlans: Record<string, ThreadPlan | undefined>;
+  threadProposals: Record<string, ThreadProposal | undefined>;
+  pendingProposalImplementationRequests: Record<string, ProposalImplementationRequest | undefined>;
+  guidedTaskExpandedByThread: Record<string, boolean | undefined>;
   toolActivityCollapsed: Record<string, boolean>;
   hasInitializedThreads: boolean;
   threadOpenabilityContext: ThreadOpenabilityContext;
@@ -96,7 +139,12 @@ type ChatState = {
   setShowReasoning: (showReasoning: boolean) => void;
   setShowPlanPanel: (showPlanPanel: boolean) => void;
   setThreadPlan: (threadId: string, plan: ThreadPlan) => void;
+  setThreadProposal: (threadId: string, proposal: ThreadProposal) => void;
   clearThreadPlan: (threadId: string) => void;
+  clearThreadProposal: (threadId: string) => void;
+  enqueueProposalImplementationRequest: (threadId: string, request: Omit<ProposalImplementationRequest, 'id' | 'requestedAt'> & Partial<Pick<ProposalImplementationRequest, 'id' | 'requestedAt'>>) => ProposalImplementationRequest;
+  consumeProposalImplementationRequest: (threadId: string, requestId: string) => void;
+  setGuidedTaskExpanded: (threadId: string, expanded: boolean) => void;
   setToolActivityCollapsed: (groupId: string, collapsed: boolean) => void;
   setDraftThreadProfile: (threadId: string, profileId: string | null) => void;
   setServerThreads: (threads: ChatThread[], projects?: ThreadOpenabilityProject[]) => void;
@@ -165,6 +213,9 @@ const getSurfaceSnapshot = (): WorkspaceSurfaceSnapshot => {
     activeSurface: surface.activeSurface,
     paneVisibility: surface.paneVisibility,
     surfaceLayouts: surface.surfaceLayouts,
+    terminalPaneColumnsByWorkspace: surface.terminalPaneColumnsByWorkspace,
+    editorSlotMode: surface.editorSlotMode,
+    activeProposalPath: surface.activeProposalPath,
     maximizedPane: surface.maximizedPane,
     preMaximizePaneVisibility: surface.preMaximizePaneVisibility,
   };
@@ -186,6 +237,9 @@ export const useChatStore = create<ChatState>()(
       completedThreadIds: [],
       deletedThreadIds: [],
       threadPlans: {},
+      threadProposals: {},
+      pendingProposalImplementationRequests: {},
+      guidedTaskExpandedByThread: {},
       toolActivityCollapsed: {},
       hasInitializedThreads: false,
       threadOpenabilityContext: emptyThreadOpenabilityContext,
@@ -198,10 +252,13 @@ export const useChatStore = create<ChatState>()(
       setShowPlanPanel: showPlanPanel => set({ showPlanPanel }),
       setThreadPlan: (threadId, plan) =>
         set(state => {
-          const isFirstPlanForThread = !state.threadPlans[threadId];
+          const hasBlockedStep = plan.plan.some(item => item.status === 'blocked') || plan.status === 'blocked';
           return {
             threadPlans: { ...state.threadPlans, [threadId]: plan },
-            showPlanPanel: isFirstPlanForThread ? true : state.showPlanPanel,
+            guidedTaskExpandedByThread: {
+              ...state.guidedTaskExpandedByThread,
+              [threadId]: hasBlockedStep ? true : state.guidedTaskExpandedByThread[threadId] ?? false,
+            },
           };
         }),
       clearThreadPlan: threadId =>
@@ -209,6 +266,58 @@ export const useChatStore = create<ChatState>()(
           const { [threadId]: _removed, ...threadPlans } = state.threadPlans;
           return { threadPlans };
         }),
+      setThreadProposal: (threadId, proposal) =>
+        set(state => {
+          const previous = state.threadProposals[threadId];
+          const pendingCount = proposal.counts.pending ?? proposal.items.filter(item => item.status === 'pending').length;
+          const approvedCount = proposal.counts.approved ?? proposal.items.filter(item => item.status === 'approved').length;
+          const hasNewPendingApprovals = pendingCount > 0
+            && (!previous || previous.contentHash !== proposal.contentHash || (previous.counts.pending ?? 0) < pendingCount);
+          const hasNewApprovedImplementation = approvedCount > 0 && (!previous || (previous.counts.approved ?? 0) < approvedCount);
+          const shouldExpand = proposal.status === 'changes_requested' || proposal.status === 'stale' || hasNewPendingApprovals || hasNewApprovedImplementation;
+          return {
+            threadProposals: { ...state.threadProposals, [threadId]: proposal },
+            guidedTaskExpandedByThread: {
+              ...state.guidedTaskExpandedByThread,
+              [threadId]: shouldExpand ? true : state.guidedTaskExpandedByThread[threadId] ?? false,
+            },
+          };
+        }),
+      clearThreadProposal: threadId =>
+        set(state => {
+          const { [threadId]: _removed, ...threadProposals } = state.threadProposals;
+          return { threadProposals };
+        }),
+      enqueueProposalImplementationRequest: (threadId, input) => {
+        const request: ProposalImplementationRequest = {
+          id: input.id ?? createClientId('proposal-implementation'),
+          proposalPath: input.proposalPath,
+          approvedItemIds: input.approvedItemIds,
+          mode: input.mode,
+          requestedAt: input.requestedAt ?? new Date().toISOString(),
+        };
+        set(state => ({
+          pendingProposalImplementationRequests: {
+            ...state.pendingProposalImplementationRequests,
+            [threadId]: request,
+          },
+          guidedTaskExpandedByThread: {
+            ...state.guidedTaskExpandedByThread,
+            [threadId]: request.mode === 'implement' ? false : true,
+          },
+        }));
+        return request;
+      },
+      consumeProposalImplementationRequest: (threadId, requestId) =>
+        set(state => {
+          if (state.pendingProposalImplementationRequests[threadId]?.id !== requestId) return state;
+          const { [threadId]: _removed, ...pendingProposalImplementationRequests } = state.pendingProposalImplementationRequests;
+          return { pendingProposalImplementationRequests };
+        }),
+      setGuidedTaskExpanded: (threadId, expanded) =>
+        set(state => ({
+          guidedTaskExpandedByThread: { ...state.guidedTaskExpandedByThread, [threadId]: expanded },
+        })),
       setToolActivityCollapsed: (groupId, collapsed) =>
         set(state => ({
           toolActivityCollapsed: { ...state.toolActivityCollapsed, [groupId]: collapsed },
@@ -252,10 +361,16 @@ export const useChatStore = create<ChatState>()(
           const fallback = withOpenableThreadFallback(nextThreads, threadOpenabilityContext, state.threads);
           nextThreads = fallback.threads;
           const threadPlans = { ...state.threadPlans };
+          const threadProposals = { ...state.threadProposals };
           for (const thread of nextThreads) {
-            if (!thread.latestPlan) continue;
-            const currentPlan = threadPlans[thread.id];
-            threadPlans[thread.id] = currentPlan?.isBusy ? currentPlan : thread.latestPlan;
+            if (thread.latestPlan) {
+              const currentPlan = threadPlans[thread.id];
+              threadPlans[thread.id] = currentPlan?.isBusy ? currentPlan : thread.latestPlan;
+            }
+            if (thread.latestProposal) {
+              const currentProposal = threadProposals[thread.id];
+              threadProposals[thread.id] = currentProposal?.isBusy ? currentProposal : thread.latestProposal;
+            }
           }
 
           surface.syncThreads(fallback.openableThreads.map(toSurfaceThread), {
@@ -266,6 +381,7 @@ export const useChatStore = create<ChatState>()(
           return {
             threads: nextThreads,
             threadPlans,
+            threadProposals,
             hasInitializedThreads: true,
             threadOpenabilityContext,
           };

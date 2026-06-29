@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp, LoaderCircle, Plus, TerminalSquare, X } from 'lucide-react';
+import { LoaderCircle, Maximize2, Minimize2, Plus, TerminalSquare, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import type { TerminalSessionKind, TerminalTransport } from '../../lib/terminal-types';
+import type { TerminalPaneColumn } from '../../stores/workspace-surface-store';
 import { GhosttyTerminalView, type GhosttyTerminalHandle } from './GhosttyTerminalView';
 import {
   getActiveTerminalPanelTab,
@@ -61,7 +62,9 @@ type TerminalPanelProps = {
   onTabsChange: (tabs: TerminalPanelTabsChange) => void;
   tabs: TerminalPanelTab[];
   target: TerminalPanelTarget;
+  terminalColumn?: TerminalPaneColumn;
   onHide: () => void;
+  onTerminalColumnToggle?: () => void;
   variant?: 'pane' | 'main' | 'overlay';
   transport?: TerminalTransport;
 };
@@ -77,6 +80,26 @@ type TerminalTabMeta = {
   error?: string | undefined;
   status?: TerminalStatus | undefined;
   title?: string | undefined;
+};
+
+const TerminalColumnIcon = ({ column }: { column: TerminalPaneColumn }) => {
+  const tiles: TerminalPaneColumn[] = ['left', 'right', 'left', 'right'];
+  return (
+    <span
+      aria-hidden="true"
+      className="grid size-3.5 grid-cols-2 grid-rows-2 gap-[2px] rounded-[3px] border border-current p-[2px]"
+    >
+      {tiles.map((tile, index) => (
+        <span
+          key={`${tile}-${index}`}
+          className={[
+            'rounded-[1px] bg-current',
+            index >= 2 && tile === column ? 'opacity-100' : 'opacity-25',
+          ].join(' ')}
+        />
+      ))}
+    </span>
+  );
 };
 
 type TerminalSessionViewProps = {
@@ -393,7 +416,9 @@ export const TerminalPanel = ({
   onTabsChange,
   tabs,
   target,
+  terminalColumn,
   onHide,
+  onTerminalColumnToggle,
   transport,
   variant = 'pane',
 }: TerminalPanelProps) => {
@@ -564,15 +589,26 @@ export const TerminalPanel = ({
           {breadcrumb ? <div className="min-w-0 max-w-full truncate">{breadcrumb}</div> : null}
         </div>
         <div className="flex shrink-0 items-center gap-1 pr-3">
+          {terminalColumn && onTerminalColumnToggle ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={terminalColumn === 'left' ? 'Move terminal to right column' : 'Move terminal to left column'}
+              title={terminalColumn === 'left' ? 'Move terminal to right column' : 'Move terminal to left column'}
+              onClick={onTerminalColumnToggle}
+            >
+              <TerminalColumnIcon column={terminalColumn} />
+            </Button>
+          ) : null}
           {variant !== 'overlay' && onExpandedChange ? (
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label={isExpanded ? 'Collapse terminal' : 'Expand terminal'}
-              title={isExpanded ? 'Collapse terminal' : 'Expand terminal'}
+              aria-label={isExpanded ? 'Restore terminal pane' : 'Maximize terminal pane'}
+              title={isExpanded ? 'Restore terminal pane' : 'Maximize terminal pane'}
               onClick={() => onExpandedChange(!isExpanded)}
             >
-              {isExpanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+              {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             </Button>
           ) : null}
           <Button size="icon-xs" variant="ghost" aria-label="Hide terminal" onClick={onHide}>

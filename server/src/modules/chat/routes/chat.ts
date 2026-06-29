@@ -13,6 +13,13 @@ import {
   type ThreadContextUsageSnapshot,
 } from '../../../agent/runtime';
 import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from '../../../agent/model-capabilities';
+import {
+  estimateJsonByteLength,
+  getDenoRuntimeMemorySnapshot,
+  isServerPerfEnabled,
+  logServerPerfEvent,
+  memoryDelta,
+} from '../../../server/perf';
 
 const agentId = 'mage-hand';
 const maxImageAttachmentBytes = 10 * 1024 * 1024;
@@ -429,10 +436,126 @@ type ActiveThreadRun = {
   cleanupTimer?: ReturnType<typeof setTimeout>;
   terminalChunkType?: string;
   error?: string;
+  perf?: ChatRunPerf;
 };
 
 const activeThreadRuns = new Map<string, ActiveThreadRun>();
 const activeThreadRunStatuses = new Set<ActiveThreadRunStatus>(['running', 'cancelling']);
+
+type ChatRunPerf = {
+  startedAtMs: number;
+  memoryBefore: ReturnType<typeof getDenoRuntimeMemorySnapshot>;
+  firstChunkAtMs?: number;
+  chunkCount: number;
+  chunkBytes: number;
+  textDeltaChars: number;
+  reasoningDeltaChars: number;
+  toolChunkCount: number;
+  errorChunkCount: number;
+  chunkTypes: Record<string, number>;
+};
+
+const createChatRunPerf = (): ChatRunPerf | undefined =>
+  isServerPerfEnabled()
+    ? {
+        startedAtMs: Date.now(),
+        memoryBefore: getDenoRuntimeMemorySnapshot(),
+        chunkCount: 0,
+        chunkBytes: 0,
+        textDeltaChars: 0,
+        reasoningDeltaChars: 0,
+        toolChunkCount: 0,
+        errorChunkCount: 0,
+        chunkTypes: {},
+      }
+    : undefined;
+
+const recordChatRunPerfChunk = (run: ActiveThreadRun, chunk: unknown, type: string | undefined) => {
+  const perf = run.perf;
+  if (!perf) return;
+  const now = Date.now();
+  perf.firstChunkAtMs ??= now;
+  perf.chunkCount += 1;
+  const bytes = estimateJsonByteLength(chunk);
+  if (typeof bytes === 'number') perf.chunkBytes += bytes;
+  const chunkType = type ?? 'unknown';
+  perf.chunkTypes[chunkType] = (perf.chunkTypes[chunkType] ?? 0) + 1;
+  if (chunk && typeof chunk === 'object') {
+    const record = chunk as Record<string, unknown>;
+    if (type === 'text-delta' && typeof record.delta === 'string') perf.textDeltaChars += record.delta.length;
+    if (type === 'reasoning-delta' && typeof record.delta === 'string') perf.reasoningDeltaChars += record.delta.length;
+  }
+  if (chunkType.includes('tool')) perf.toolChunkCount += 1;
+  if (chunkType === 'error') perf.errorChunkCount += 1;
+};
+
+export const getChatPerfSnapshot = () => {
+  const runs = [...activeThreadRuns.values()];
+  const statuses: Partial<Record<ActiveThreadRunStatus, number>> = {};
+  let listenerCount = 0;
+  let retainedChunkCount = 0;
+  let perfTrackedChunkBytes = 0;
+  let runningOldestAgeMs: number | undefined;
+
+  for (const run of runs) {
+    statuses[run.status] = (statuses[run.status] ?? 0) + 1;
+    listenerCount += run.listeners.size;
+    retainedChunkCount += run.chunks.length;
+    perfTrackedChunkBytes += run.perf?.chunkBytes ?? 0;
+    if (activeThreadRunStatuses.has(run.status)) {
+      const startedAt = Date.parse(run.startedAt);
+      if (Number.isFinite(startedAt)) {
+        const ageMs = Date.now() - startedAt;
+        runningOldestAgeMs = runningOldestAgeMs === undefined ? ageMs : Math.max(runningOldestAgeMs, ageMs);
+      }
+    }
+  }
+
+  return {
+    activeThreadRunCount: runs.filter(run => activeThreadRunStatuses.has(run.status)).length,
+    retainedThreadRunCount: runs.length,
+    listenerCount,
+    retainedChunkCount,
+    perfTrackedChunkBytes,
+    runningOldestAgeMs,
+    statuses,
+  };
+};
+
+const logChatRunPerfSummary = (
+  run: ActiveThreadRun,
+  status: Exclude<ActiveThreadRunStatus, 'running' | 'cancelling'>,
+) => {
+  const perf = run.perf;
+  if (!perf) return;
+  const memoryAfter = getDenoRuntimeMemorySnapshot();
+  logServerPerfEvent('chat_run_summary', {
+    runId: run.runId,
+    threadId: run.threadId,
+    resourceId: run.resourceId,
+    status,
+    startedAt: run.startedAt,
+    updatedAt: run.updatedAt,
+    durationMs: Date.now() - perf.startedAtMs,
+    timeToFirstChunkMs: perf.firstChunkAtMs === undefined ? undefined : perf.firstChunkAtMs - perf.startedAtMs,
+    chunkCount: perf.chunkCount,
+    chunkBytes: perf.chunkBytes,
+    chunkTypes: perf.chunkTypes,
+    textDeltaChars: perf.textDeltaChars,
+    reasoningDeltaChars: perf.reasoningDeltaChars,
+    toolChunkCount: perf.toolChunkCount,
+    errorChunkCount: perf.errorChunkCount,
+    listenerCount: run.listeners.size,
+    retainedChunkCount: run.chunks.length,
+    submittedUserMessageCount: run.submittedUserMessages.length,
+    terminalChunkType: run.terminalChunkType,
+    error: run.error,
+    memoryBefore: perf.memoryBefore,
+    memoryAfter,
+    memoryDelta: memoryDelta(perf.memoryBefore, memoryAfter),
+    registry: getChatPerfSnapshot(),
+  });
+};
 
 const getResourceId = (c: any) => {
   const resourceId = c.get('requestContext')?.get(MASTRA_RESOURCE_ID_KEY);
@@ -525,6 +648,7 @@ const createActiveThreadRun = (resourceId: string, threadId: string, submittedUs
     chunks: [],
     submittedUserMessages,
     listeners: new Set(),
+    perf: createChatRunPerf(),
   };
   run.contextUsageUnsubscribe = subscribeThreadContextUsage(threadId, resourceId, snapshot => {
     appendThreadRunChunk(run, toContextUsageChunk(snapshot));
@@ -537,6 +661,7 @@ const appendThreadRunChunk = (run: ActiveThreadRun, chunk: unknown) => {
   if (activeThreadRuns.get(run.key) !== run || !activeThreadRunStatuses.has(run.status)) return;
 
   const type = getStreamChunkType(chunk);
+  recordChatRunPerfChunk(run, chunk, type);
   if (type === 'finish' || type === 'abort') run.terminalChunkType = type;
   run.chunks.push(chunk);
   run.updatedAt = new Date().toISOString();
@@ -552,6 +677,7 @@ const settleThreadRun = (run: ActiveThreadRun, status: Exclude<ActiveThreadRunSt
   run.status = status;
   run.updatedAt = new Date().toISOString();
   if (error) run.error = error instanceof Error ? error.message : String(error);
+  logChatRunPerfSummary(run, status);
 
   if (status === 'error') {
     const startedAtMs = Date.parse(run.startedAt);

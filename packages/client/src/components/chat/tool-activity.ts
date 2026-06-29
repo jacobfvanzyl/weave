@@ -19,6 +19,37 @@ export type ToolActivityPlan = {
   isBusy: boolean;
 };
 
+export type ToolActivityProposalItemStatus = 'pending' | 'approved' | 'changes_requested' | 'rejected' | 'applied' | 'stale';
+export type ToolActivityProposalStatus = 'draft' | 'ready' | 'partially_approved' | 'approved' | 'changes_requested' | 'applied' | 'rejected' | 'stale';
+
+export type ToolActivityProposalItem = {
+  id: string;
+  kind: string;
+  status: ToolActivityProposalItemStatus;
+  title: string;
+  path?: string;
+  additions: number;
+  deletions: number;
+  viewed: boolean;
+  currentHash?: string;
+  proposedHash?: string;
+  comment?: string;
+};
+
+export type ToolActivityProposal = {
+  id?: string;
+  title?: string;
+  path?: string;
+  planPath?: string;
+  status?: ToolActivityProposalStatus;
+  summary?: string;
+  items: ToolActivityProposalItem[];
+  counts: Record<string, number>;
+  updatedAt: string;
+  contentHash?: string;
+  isBusy: boolean;
+};
+
 type PlanPayload = {
   id?: string;
   title?: string;
@@ -42,7 +73,8 @@ export type ToolActivityCall = {
 
 export type ToolActivitySideEffect =
   | { type: 'renameThread'; title: string }
-  | { type: 'updatePlan'; plan: ToolActivityPlan };
+  | { type: 'updatePlan'; plan: ToolActivityPlan }
+  | { type: 'updateProposal'; proposal: ToolActivityProposal };
 
 export type ToolActivityFollowTarget = {
   path: string;
@@ -59,9 +91,19 @@ export const isDegradedToolCall = ({ toolName, args, result }: Pick<ToolActivity
 export const isRenameThreadTool = (toolName: string) => ['renameThreadTool', 'rename-thread'].includes(toolName);
 export const isUpdatePlanTool = (toolName: string) =>
   ['writePlanTool', 'write_plan', 'write-plan', 'updatePlanTool', 'update_plan', 'update-plan'].includes(toolName);
+export const isProposalTool = (toolName: string) =>
+  ['writeProposalTool', 'write_proposal', 'write-proposal', 'updateProposalTool', 'update_proposal', 'update-proposal'].includes(toolName);
 
 const isPlanStepStatus = (value: unknown): value is ToolActivityPlanStepStatus =>
   value === 'pending' || value === 'in_progress' || value === 'completed' || value === 'blocked';
+
+const isProposalItemStatus = (value: unknown): value is ToolActivityProposalItemStatus =>
+  value === 'pending' || value === 'approved' || value === 'changes_requested' || value === 'rejected'
+  || value === 'applied' || value === 'stale';
+
+const isProposalStatus = (value: unknown): value is ToolActivityProposalStatus =>
+  value === 'draft' || value === 'ready' || value === 'partially_approved' || value === 'approved'
+  || value === 'changes_requested' || value === 'applied' || value === 'rejected' || value === 'stale';
 
 const getPlanPayload = (result: unknown, args: unknown): PlanPayload | null => {
   const source = result && typeof result === 'object' ? result : args;
@@ -125,12 +167,62 @@ const toThreadPlan = (payload: PlanPayload, isBusy: boolean): ToolActivityPlan =
   isBusy,
 });
 
+const getProposalPayload = (result: unknown, args: unknown): Omit<ToolActivityProposal, 'isBusy'> | null => {
+  const source = result && typeof result === 'object' ? result : args;
+  if (!source || typeof source !== 'object') return null;
+  const record = source as Record<string, unknown>;
+  const sourceItems = Array.isArray(record.items) ? record.items : undefined;
+  if (!sourceItems) return null;
+  const items = sourceItems
+    .map(item => {
+      if (!item || typeof item !== 'object') return null;
+      const itemRecord = item as Record<string, unknown>;
+      if (typeof itemRecord.id !== 'string' || !isProposalItemStatus(itemRecord.status)) return null;
+      const path = typeof itemRecord.path === 'string' ? itemRecord.path : undefined;
+      return {
+        id: itemRecord.id,
+        kind: typeof itemRecord.kind === 'string' ? itemRecord.kind : 'file_edit',
+        status: itemRecord.status,
+        title: typeof itemRecord.title === 'string' ? itemRecord.title : path ?? itemRecord.id,
+        ...(path ? { path } : {}),
+        additions: typeof itemRecord.additions === 'number' ? itemRecord.additions : 0,
+        deletions: typeof itemRecord.deletions === 'number' ? itemRecord.deletions : 0,
+        viewed: itemRecord.viewed === true,
+        ...(typeof itemRecord.current_hash === 'string' ? { currentHash: itemRecord.current_hash } : {}),
+        ...(typeof itemRecord.proposed_hash === 'string' ? { proposedHash: itemRecord.proposed_hash } : {}),
+        ...(typeof itemRecord.comment === 'string' ? { comment: itemRecord.comment } : {}),
+      };
+    })
+    .filter((item): item is ToolActivityProposalItem => item !== null);
+  if (items.length === 0) return null;
+  const countsRecord = record.counts && typeof record.counts === 'object' && !Array.isArray(record.counts)
+    ? record.counts as Record<string, unknown>
+    : {};
+  const counts = Object.fromEntries(Object.entries(countsRecord).filter(([, count]) => typeof count === 'number')) as Record<string, number>;
+  return {
+    items,
+    counts,
+    updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : new Date().toISOString(),
+    ...(typeof record.id === 'string' ? { id: record.id } : {}),
+    ...(typeof record.title === 'string' ? { title: record.title } : {}),
+    ...(typeof record.path === 'string' ? { path: record.path } : {}),
+    ...(typeof record.planPath === 'string' ? { planPath: record.planPath } : {}),
+    ...(isProposalStatus(record.status) ? { status: record.status } : {}),
+    ...(typeof record.summary === 'string' ? { summary: record.summary } : {}),
+    ...(typeof record.contentHash === 'string' ? { contentHash: record.contentHash } : {}),
+  };
+};
+
 export const getToolChipDetail = (toolName: string, args: unknown) => {
   const record = args && typeof args === 'object' ? args as Record<string, unknown> : undefined;
   if (toolName === 'bash' && typeof record?.command === 'string') return record.command;
   if (['read', 'write', 'edit'].includes(toolName) && typeof record?.path === 'string') return record.path;
   if (isUpdatePlanTool(toolName)) {
     if (typeof record?.planPath === 'string') return record.planPath;
+    if (typeof record?.title === 'string') return record.title;
+  }
+  if (isProposalTool(toolName)) {
+    if (typeof record?.proposalPath === 'string') return record.proposalPath;
     if (typeof record?.title === 'string') return record.title;
   }
   return '';
@@ -151,6 +243,7 @@ export const getToolResultText = (toolName: string, result: unknown) => {
     if (typeof record.diff === 'string' && record.diff.trim()) return record.diff;
     if (typeof record.error === 'string') return record.error;
     if (isUpdatePlanTool(toolName) && typeof record.path === 'string') return `Plan artifact updated: ${record.path}`;
+    if (isProposalTool(toolName) && typeof record.path === 'string') return `Proposal artifact updated: ${record.path}`;
   }
   return JSON.stringify(result, null, 2);
 };
@@ -306,6 +399,11 @@ export const getToolActivitySideEffect = (call: ToolActivityCall): ToolActivityS
   if (isUpdatePlanTool(call.toolName)) {
     const payload = getPlanPayload(call.result, call.args);
     return payload ? { type: 'updatePlan', plan: toThreadPlan(payload, getToolActivityStatus(call) === 'running') } : null;
+  }
+
+  if (isProposalTool(call.toolName)) {
+    const payload = getProposalPayload(call.result, call.args);
+    return payload ? { type: 'updateProposal', proposal: { ...payload, isBusy: getToolActivityStatus(call) === 'running' } } : null;
   }
 
   return null;

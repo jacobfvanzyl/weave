@@ -2,6 +2,8 @@
   "tasks": {
     "dev": "deno run --env-file=.env --watch --sloppy-imports --allow-net --allow-read --allow-write=.data,src/mastra/public/.data --allow-env --allow-sys --allow-ffi --node-modules-dir=auto src/server.ts",
     "start": "deno run --env-file=.env --sloppy-imports --allow-net --allow-read --allow-write=.data,src/mastra/public/.data --allow-env --allow-sys --allow-ffi --node-modules-dir=auto src/server.ts",
+    "perf": "WEAVE_PERF_LOG=1 WEAVE_PERF_DIR=../.weave-perf deno run --env-file=.env --sloppy-imports --allow-net --allow-read --allow-write=.data,src/mastra/public/.data,../.weave-perf --allow-env --allow-sys --allow-ffi --node-modules-dir=auto --cpu-prof --cpu-prof-dir=../.weave-perf/profiles/server --cpu-prof-md --cpu-prof-flamegraph src/server.ts",
+    "perf:inspect": "WEAVE_PERF_LOG=1 WEAVE_PERF_DIR=../.weave-perf deno run --env-file=.env --sloppy-imports --allow-net --allow-read --allow-write=.data,src/mastra/public/.data,../.weave-perf --allow-env --allow-sys --allow-ffi --node-modules-dir=auto --inspect=127.0.0.1:9229 src/server.ts",
     "check": "deno check --sloppy-imports --node-modules-dir=auto src/server.ts",
     "build": "deno check --sloppy-imports --node-modules-dir=auto src/server.ts"
   },

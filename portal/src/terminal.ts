@@ -1450,6 +1450,25 @@ export class PortalTerminalHost {
     }
   }
 
+  getPerfSnapshot() {
+    const sessions = [...this.sessions.values()];
+    return {
+      sessionCount: sessions.length,
+      liveSessionCount: sessions.filter(session => !session.exited).length,
+      exitedSessionCount: sessions.filter(session => session.exited).length,
+      clientCount: this.clientSessions.size,
+      subscriberCount: sessions.reduce((count, session) => count + session.subscribers.size, 0),
+      paneMapCount: this.terminalIdsByPaneId.size,
+      windowMapCount: this.terminalIdsByWindowId.size,
+      controlClientActive: Boolean(this.controlClient),
+      controlClientClosing: this.closingControlClient,
+      replayBytes: sessions.reduce((count, session) => count + byteLength(session.replay), 0),
+      pendingOutputBytes: sessions.reduce((count, session) => count + byteLength(session.pendingOutput), 0),
+      pendingOutputSessionCount: sessions.filter(session => Boolean(session.pendingOutput)).length,
+      outputTimerCount: sessions.filter(session => Boolean(session.outputTimer)).length,
+    };
+  }
+
   dispose() {
     for (const session of this.sessions.values()) {
       this.disposeSession(session);

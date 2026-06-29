@@ -30,6 +30,15 @@ describe('chat system instructions', () => {
 
     expect(text).toContain('Repository rules');
     expect(text).toContain('Profile instructions');
+    expect(text).toContain('Guided approval gate');
+    expect(text).toContain('do not move from discussion/planning into source-file implementation until a proposal artifact exists');
+    expect(text).toContain('treat that as approval to create the proposal, not approval to edit source files');
+    expect(text).toContain('Proposal review artifacts');
+    expect(text).toContain('Each file item in a proposal must contain concrete proposed code hunks');
+    expect(text).toContain('Proposal approval is human review feedback');
+    expect(text).toContain('implement only approved items');
+    expect(text).toContain('verify every approved code item is complete in the artifact body');
+    expect(text).toContain('do not infer missing reviewed content from chat history, memory, artifact history, or surrounding files');
     expect(text.includes('# Runtime Context')).toBe(false);
   });
 

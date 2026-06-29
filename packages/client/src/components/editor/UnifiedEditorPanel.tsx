@@ -34,7 +34,7 @@ import { createEditorBackend } from '../../lib/editor-backend';
 import type { EditorEntry, EditorMode, EditorTarget, OpenBuffer } from '../../lib/editor-types';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { getNoteFileDisplayName } from '../../lib/note-display';
-import { getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
+import { defaultEditorExplorerVisible, getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
 import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
 import { createVaultBackend, type VaultAttachment, type VaultIndexResult, type VaultNote, type VaultTarget } from '../../lib/vault-backend';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
@@ -60,6 +60,8 @@ type UnifiedEditorPanelProps = {
   mode: EditorMode;
   onExpandedChange: (isExpanded: boolean) => void;
   onHide: () => void;
+  proposalBackFilePath?: string;
+  onBackToProposalPreview?: (path: string) => void;
   target: UnifiedEditorTarget;
 };
 
@@ -143,6 +145,39 @@ const getExplorerFileLabel = (path: string, mode: EditorMode) => {
 const explorerSlideOverCloseDelayMs = 120;
 const explorerFileOpenSingleClickDelayMs = 450;
 const explorerBorderHoverWidthPx = 10;
+const explorerWindowEdgeExitSlopPx = 32;
+const isPointerAtExplorerEdge = (
+  clientX: number,
+  clientY: number,
+  rect: DOMRect,
+  verticalSlopPx = 0,
+  horizontalSlopPx = explorerBorderHoverWidthPx,
+) => (
+  clientY >= rect.top - verticalSlopPx &&
+  clientY <= rect.bottom + verticalSlopPx &&
+  clientX >= rect.right - horizontalSlopPx
+);
+const isElementInDocument = (target: EventTarget | null, ownerDocument: Document) => (
+  target instanceof Element && ownerDocument.documentElement.contains(target)
+);
+const didPointerLeaveNearExplorerWindowEdge = (
+  event: { clientX: number; clientY: number; relatedTarget: EventTarget | null },
+  hostElement: HTMLElement,
+) => {
+  const rect = hostElement.getBoundingClientRect();
+  if (!isPointerAtExplorerEdge(
+    event.clientX,
+    event.clientY,
+    rect,
+    explorerWindowEdgeExitSlopPx,
+    explorerWindowEdgeExitSlopPx,
+  )) return false;
+  const ownerDocument = hostElement.ownerDocument;
+  const relatedElement = event.relatedTarget instanceof Element ? event.relatedTarget : undefined;
+  if (!isElementInDocument(relatedElement ?? null, ownerDocument)) return true;
+  if (relatedElement === ownerDocument.documentElement || relatedElement === ownerDocument.body) return true;
+  return event.clientX >= rect.right;
+};
 
 const getBufferDirty = (buffer: EditorBuffer | undefined) => Boolean(buffer && buffer.value !== buffer.content);
 
@@ -451,6 +486,7 @@ type SortableEditorTabProps = {
   icon: ReactNode;
   label: string;
   onClose: () => void;
+  onBackToPreview?: () => void;
   onPin: () => void;
   onRename: () => void;
   onSelect: () => void;
@@ -466,6 +502,7 @@ const SortableEditorTab = ({
   icon,
   label,
   onClose,
+  onBackToPreview,
   onPin,
   onRename,
   onSelect,
@@ -492,6 +529,21 @@ const SortableEditorTab = ({
       style={style}
       data-weave-editor-tab={tab.path}
     >
+      {onBackToPreview && !isRenaming ? (
+        <button
+          type="button"
+          className="grid h-full w-8 shrink-0 place-items-center border-r border-border/70 text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label={`Back to preview for ${label}`}
+          title="Back to preview"
+          onClick={event => {
+            event.preventDefault();
+            event.stopPropagation();
+            onBackToPreview();
+          }}
+        >
+          <span className="font-mono text-[11px]" aria-hidden="true">&lt;-</span>
+        </button>
+      ) : null}
       {isRenaming ? (
         <div className="min-w-0 flex-1 px-1">{renameInput}</div>
       ) : (
@@ -555,6 +607,8 @@ export const UnifiedEditorPanel = ({
   mode,
   onExpandedChange,
   onHide,
+  proposalBackFilePath,
+  onBackToProposalPreview,
   target,
 }: UnifiedEditorPanelProps) => {
   const codeBackend = useMemo(() => createEditorBackend(), []);
@@ -574,12 +628,14 @@ export const UnifiedEditorPanel = ({
   const editorTabSet = useEditorTabStore(state => state.editorTabsByTarget[editorTabTargetKey]);
   const editorTabs = editorTabSet?.tabs ?? [];
   const activeEditorTabId = editorTabSet?.activeTabId;
+  const isExplorerVisible = useEditorTabStore(state => state.explorerVisibleByTarget[editorTabTargetKey] ?? defaultEditorExplorerVisible);
   const closePersistedEditorTab = useEditorTabStore(state => state.closeEditorTab);
   const openPersistedEditorTab = useEditorTabStore(state => state.openEditorTab);
   const pinPersistedEditorTab = useEditorTabStore(state => state.pinEditorTab);
   const renamePersistedEditorTab = useEditorTabStore(state => state.renameEditorTab);
   const reorderEditorTabs = useEditorTabStore(state => state.reorderEditorTabs);
   const setActiveEditorTab = useEditorTabStore(state => state.setActiveEditorTab);
+  const setExplorerVisible = useEditorTabStore(state => state.setExplorerVisible);
   const setPersistedEditorTabs = useEditorTabStore(state => state.setEditorTabs);
   const resolvedTheme = getResolvedTheme(useThemeStore(state => state.mode));
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
@@ -594,6 +650,7 @@ export const UnifiedEditorPanel = ({
   const renameCommitInFlightRef = useRef(false);
   const renameCancelRef = useRef(false);
   const explorerBorderHoverRef = useRef(false);
+  const explorerWindowEdgeHoldRef = useRef(false);
   const pendingRevealRef = useRef<{ requestId: number; path: string; line: number } | undefined>(
     undefined,
   );
@@ -611,7 +668,6 @@ export const UnifiedEditorPanel = ({
   const [isExplorerLoading, setIsExplorerLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isExplorerVisible, setIsExplorerVisible] = useState(true);
   const [isExplorerSlideOverOpen, setIsExplorerSlideOverOpen] = useState(false);
   const [vimMode, setVimMode] = useState<VimMode>('normal');
   const [createPathDialog, setCreatePathDialog] = useState<CreatePathDialogState>();
@@ -845,6 +901,7 @@ export const UnifiedEditorPanel = ({
 
   const closeExplorerSlideOver = useCallback(() => {
     clearExplorerSlideOverCloseTimeout();
+    explorerWindowEdgeHoldRef.current = false;
     setIsExplorerSlideOverOpen(false);
   }, [clearExplorerSlideOverCloseTimeout]);
 
@@ -863,6 +920,7 @@ export const UnifiedEditorPanel = ({
   const scheduleExplorerSlideOverClose = useCallback(() => {
     if (!canUseExplorerSlideOver) return;
     clearExplorerSlideOverCloseTimeout();
+    explorerWindowEdgeHoldRef.current = false;
     explorerSlideOverCloseTimeoutRef.current = window.setTimeout(() => {
       explorerSlideOverCloseTimeoutRef.current = undefined;
       setIsExplorerSlideOverOpen(false);
@@ -871,9 +929,17 @@ export const UnifiedEditorPanel = ({
 
   const toggleExplorerRail = useCallback(() => {
     clearExplorerSlideOverCloseTimeout();
-    setIsExplorerVisible(visible => !visible);
+    setExplorerVisible(editorTabTargetKey, !isExplorerVisible);
     setIsExplorerSlideOverOpen(false);
-  }, [clearExplorerSlideOverCloseTimeout]);
+  }, [clearExplorerSlideOverCloseTimeout, editorTabTargetKey, isExplorerVisible, setExplorerVisible]);
+
+  const holdExplorerSlideOverForWindowEdgeExit = useCallback(() => {
+    if (!canUseExplorerSlideOver) return;
+    explorerWindowEdgeHoldRef.current = true;
+    explorerBorderHoverRef.current = true;
+    clearExplorerSlideOverCloseTimeout();
+    setIsExplorerSlideOverOpen(true);
+  }, [canUseExplorerSlideOver, clearExplorerSlideOverCloseTimeout]);
 
   const closeExplorerAfterFileOpen = useCallback(() => {
     if (!canUseExplorerSlideOver) return;
@@ -886,10 +952,18 @@ export const UnifiedEditorPanel = ({
     if (target instanceof Element && target.closest('[data-weave-editor-explorer]')) return;
 
     const rect = event.currentTarget.getBoundingClientRect();
-    const isInsideHoverEdge = rect.right - event.clientX <= explorerBorderHoverWidthPx;
+    const isInsideHoverEdge = isPointerAtExplorerEdge(event.clientX, event.clientY, rect);
     if (isInsideHoverEdge) {
+      explorerWindowEdgeHoldRef.current = false;
       explorerBorderHoverRef.current = true;
       openExplorerSlideOver();
+      return;
+    }
+
+    if (explorerWindowEdgeHoldRef.current) {
+      explorerWindowEdgeHoldRef.current = false;
+      explorerBorderHoverRef.current = false;
+      scheduleExplorerSlideOverClose();
       return;
     }
 
@@ -898,11 +972,90 @@ export const UnifiedEditorPanel = ({
     scheduleExplorerSlideOverClose();
   }, [canUseExplorerSlideOver, openExplorerSlideOver, scheduleExplorerSlideOverClose]);
 
-  const handleEditorBodyMouseLeave = useCallback(() => {
+  const handleExplorerHoverMouseLeave = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (!canUseExplorerSlideOver) return;
+    const editorBody = editorBodyRef.current;
+    if (editorBody && didPointerLeaveNearExplorerWindowEdge(event, editorBody)) {
+      holdExplorerSlideOverForWindowEdgeExit();
+      return;
+    }
     explorerBorderHoverRef.current = false;
     scheduleExplorerSlideOverClose();
-  }, [canUseExplorerSlideOver, scheduleExplorerSlideOverClose]);
+  }, [canUseExplorerSlideOver, holdExplorerSlideOverForWindowEdgeExit, scheduleExplorerSlideOverClose]);
+
+  const handleEditorBodyMouseLeave = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    handleExplorerHoverMouseLeave(event);
+  }, [handleExplorerHoverMouseLeave]);
+
+  useEffect(() => {
+    if (!canUseExplorerSlideOver) return undefined;
+
+    const releaseExplorerWindowEdgeHold = () => {
+      explorerWindowEdgeHoldRef.current = false;
+      explorerBorderHoverRef.current = false;
+    };
+
+    const handleWindowMouseMove = (event: MouseEvent) => {
+      if (!explorerWindowEdgeHoldRef.current) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest('[data-weave-editor-explorer]')) {
+        clearExplorerSlideOverCloseTimeout();
+        return;
+      }
+
+      const editorBody = editorBodyRef.current;
+      if (!editorBody) {
+        releaseExplorerWindowEdgeHold();
+        scheduleExplorerSlideOverClose();
+        return;
+      }
+
+      const rect = editorBody.getBoundingClientRect();
+      if (isPointerAtExplorerEdge(
+        event.clientX,
+        event.clientY,
+        rect,
+        explorerWindowEdgeExitSlopPx,
+        explorerWindowEdgeExitSlopPx,
+      )) {
+        clearExplorerSlideOverCloseTimeout();
+        setIsExplorerSlideOverOpen(true);
+        return;
+      }
+
+      releaseExplorerWindowEdgeHold();
+      scheduleExplorerSlideOverClose();
+    };
+
+    const handleWindowBlur = () => {
+      releaseExplorerWindowEdgeHold();
+      closeExplorerSlideOver();
+    };
+
+    const handleDocumentMouseOut = (event: MouseEvent) => {
+      const editorBody = editorBodyRef.current;
+      if (!editorBody || !didPointerLeaveNearExplorerWindowEdge(event, editorBody)) return;
+      holdExplorerSlideOverForWindowEdgeExit();
+    };
+
+    const ownerDocument = editorBodyRef.current?.ownerDocument ?? window.document;
+    window.addEventListener('mousemove', handleWindowMouseMove);
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('mouseout', handleDocumentMouseOut, true);
+    ownerDocument.addEventListener('mouseout', handleDocumentMouseOut, true);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('mouseout', handleDocumentMouseOut, true);
+      ownerDocument.removeEventListener('mouseout', handleDocumentMouseOut, true);
+    };
+  }, [
+    canUseExplorerSlideOver,
+    clearExplorerSlideOverCloseTimeout,
+    closeExplorerSlideOver,
+    holdExplorerSlideOverForWindowEdgeExit,
+    scheduleExplorerSlideOverClose,
+  ]);
 
   const handleHidePanel = useCallback(() => {
     if (!confirmDiscardAllDirty()) return;
@@ -1832,6 +1985,7 @@ export const UnifiedEditorPanel = ({
               renameInput={isRenaming ? renderRenameInput('h-5 w-full') : undefined}
               tab={tab}
               onClose={() => closeEditorTab(tab)}
+              onBackToPreview={proposalBackFilePath === tab.path && onBackToProposalPreview ? () => onBackToProposalPreview(tab.path) : undefined}
               onPin={() => pinEditorTab(tab)}
               onRename={() => startRename(tab.path, 'tab')}
               onSelect={() => selectEditorTab(tab)}
@@ -1848,7 +2002,7 @@ export const UnifiedEditorPanel = ({
   const explorerToggleHoverHandlers = canUseExplorerSlideOver
     ? {
         onMouseEnter: openExplorerSlideOver,
-        onMouseLeave: scheduleExplorerSlideOverClose,
+        onMouseLeave: handleExplorerHoverMouseLeave,
       }
     : {};
 
@@ -1861,7 +2015,7 @@ export const UnifiedEditorPanel = ({
         data-weave-editor-explorer
         data-presentation={presentation}
         onMouseEnter={isSlideOver ? openExplorerSlideOver : undefined}
-        onMouseLeave={isSlideOver ? scheduleExplorerSlideOverClose : undefined}
+        onMouseLeave={isSlideOver ? handleExplorerHoverMouseLeave : undefined}
       >
         <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
           <Button
@@ -1972,7 +2126,7 @@ export const UnifiedEditorPanel = ({
   return (
     <>
       <section
-        className="relative z-10 flex h-full min-h-0 min-w-0 flex-1 basis-0 flex-col border-l border-border bg-background transition-[width] duration-150 ease-out"
+        className="relative z-10 flex h-full min-h-0 min-w-0 flex-1 basis-0 flex-col bg-background transition-[width] duration-150 ease-out"
         data-weave-editor-panel
         data-weave-editor-mode={mode}
         data-weave-surface="editor"

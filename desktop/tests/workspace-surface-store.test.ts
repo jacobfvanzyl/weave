@@ -117,6 +117,35 @@ describe('workspace surface store', () => {
     });
   });
 
+  it('defaults terminal placement to the left column and stores preferences per workspace', async () => {
+    const { defaultTerminalPaneColumn, useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
+    const workspace1Key = workspaceRefKey('project-1', 'workspace-1');
+    const workspace2Key = workspaceRefKey('project-1', 'workspace-2');
+
+    useWorkspaceSurfaceStore.getState().selectWorkspace('project-1', 'workspace-1');
+    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspace1Key] ?? defaultTerminalPaneColumn)
+      .toBe('left');
+
+    useWorkspaceSurfaceStore.getState().toggleTerminalPaneColumn('project-1', 'workspace-1');
+    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspace1Key]).toBe('right');
+
+    useWorkspaceSurfaceStore.getState().selectWorkspace('project-1', 'workspace-2');
+    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspace2Key] ?? defaultTerminalPaneColumn)
+      .toBe('left');
+
+    useWorkspaceSurfaceStore.getState().setTerminalPaneColumn('project-1', 'workspace-2', 'right');
+    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace).toMatchObject({
+      [workspace1Key]: 'right',
+      [workspace2Key]: 'right',
+    });
+
+    useWorkspaceSurfaceStore.getState().toggleTerminalPaneColumn('project-1', 'workspace-2');
+    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace).toMatchObject({
+      [workspace1Key]: 'right',
+      [workspace2Key]: 'left',
+    });
+  });
+
   it('restores workspace pane layouts from persisted surface state', async () => {
     const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore(storage => {
       storage.setItem('weave-surface', JSON.stringify({
@@ -131,6 +160,9 @@ describe('workspace surface store', () => {
               preMaximizePaneVisibility: { chatOpen: false, editorOpen: true, terminalOpen: true },
             },
           },
+          terminalPaneColumnsByWorkspace: {
+            [workspaceRefKey('project-1', 'workspace-1')]: 'right',
+          },
           maximizedPane: null,
         },
         version: 1,
@@ -141,9 +173,41 @@ describe('workspace surface store', () => {
     expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
       activeSurface: { kind: 'workspace', projectId: 'project-1', workspaceId: 'workspace-1' },
       paneVisibility: { chatOpen: false, editorOpen: false, terminalOpen: true },
+      terminalPaneColumnsByWorkspace: {
+        [workspaceRefKey('project-1', 'workspace-1')]: 'right',
+      },
       maximizedPane: 'terminal',
       preMaximizePaneVisibility: { chatOpen: false, editorOpen: true, terminalOpen: true },
     });
+  });
+
+  it('normalizes persisted terminal placement preferences', async () => {
+    const { defaultTerminalPaneColumn, useWorkspaceSurfaceStore } = await loadFreshSurfaceStore(storage => {
+      storage.setItem('weave-surface', JSON.stringify({
+        state: {
+          threadId: 'thread-1',
+          activeSurface: { kind: 'thread', threadId: 'thread-1' },
+          paneVisibility: { chatOpen: true, editorOpen: false, terminalOpen: false },
+          surfaceLayouts: {},
+          terminalPaneColumnsByWorkspace: {
+            [workspaceRefKey('project-1', 'workspace-1')]: 'right',
+            [workspaceRefKey('project-1', 'workspace-2')]: 'center',
+            [workspaceRefKey('project-1', 'workspace-3')]: false,
+            '': 'left',
+          },
+          maximizedPane: null,
+        },
+        version: 1,
+      }));
+    });
+
+    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace).toEqual({
+      [workspaceRefKey('project-1', 'workspace-1')]: 'right',
+    });
+    expect(
+      useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspaceRefKey('project-1', 'workspace-2')] ??
+        defaultTerminalPaneColumn,
+    ).toBe('left');
   });
 
   it('normalizes same-version persisted surface layouts before restoring them', async () => {
@@ -300,6 +364,30 @@ describe('workspace surface store', () => {
     });
   });
 
+  it('restores terminal placement preferences from surface snapshots', async () => {
+    const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
+    const workspaceKey = workspaceRefKey('project-1', 'workspace-1');
+
+    useWorkspaceSurfaceStore.getState().setTerminalPaneColumn('project-1', 'workspace-1', 'right');
+    const snapshot = {
+      threadId: useWorkspaceSurfaceStore.getState().threadId,
+      activeSurface: useWorkspaceSurfaceStore.getState().activeSurface,
+      paneVisibility: useWorkspaceSurfaceStore.getState().paneVisibility,
+      surfaceLayouts: useWorkspaceSurfaceStore.getState().surfaceLayouts,
+      terminalPaneColumnsByWorkspace: useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace,
+      editorSlotMode: useWorkspaceSurfaceStore.getState().editorSlotMode,
+      activeProposalPath: useWorkspaceSurfaceStore.getState().activeProposalPath,
+      maximizedPane: useWorkspaceSurfaceStore.getState().maximizedPane,
+      preMaximizePaneVisibility: useWorkspaceSurfaceStore.getState().preMaximizePaneVisibility,
+    };
+
+    useWorkspaceSurfaceStore.getState().setTerminalPaneColumn('project-1', 'workspace-1', 'left');
+    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspaceKey]).toBe('left');
+
+    useWorkspaceSurfaceStore.getState().restoreSurfaceSnapshot(snapshot);
+    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspaceKey]).toBe('right');
+  });
+
   it('stores editor follow requests ephemerally and opens the editor pane', async () => {
     const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
 
@@ -335,5 +423,31 @@ describe('workspace surface store', () => {
     });
 
     expect(useWorkspaceSurfaceStore.getState().editorFollowRequest?.id).toBeGreaterThan(firstRequestId ?? 0);
+  });
+
+  it('preserves the proposal file path when opening source from review', async () => {
+    const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
+
+    useWorkspaceSurfaceStore.getState().openProposalReview('.agents/proposals/demo.md');
+    useWorkspaceSurfaceStore.getState().requestEditorFollow({
+      threadId: 'thread-1',
+      workspaceId: 'workspace-1',
+      path: 'src/file.ts',
+      line: 1,
+      toolCallId: 'proposal-review',
+    });
+
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      editorSlotMode: 'editor',
+      activeProposalPath: '.agents/proposals/demo.md',
+      activeProposalFilePath: 'src/file.ts',
+    });
+
+    useWorkspaceSurfaceStore.getState().openProposalReview('.agents/proposals/demo.md', { filePath: 'src/file.ts' });
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      editorSlotMode: 'proposal_review',
+      activeProposalPath: '.agents/proposals/demo.md',
+      activeProposalFilePath: 'src/file.ts',
+    });
   });
 });

@@ -25,12 +25,14 @@ import {
   parseTerminalTargetInput,
 } from './terminal-input';
 import { PortalSupervisor, PortalTerminalClient } from './portal-terminal-client';
+import { startDesktopPerfSampler } from './perf';
 
 let settingsStore: ConnectionSettingsStore | undefined;
 let portalSupervisor: PortalSupervisor | undefined;
 let portalTerminalClient: PortalTerminalClient | undefined;
 let portalEditorClient: PortalEditorClient | undefined;
 let portalLspClient: PortalLspClient | undefined;
+let desktopPerfSampler: ReturnType<typeof startDesktopPerfSampler> | undefined;
 
 const appName = 'Weave';
 const devAppIconPath = app.isPackaged ? undefined : path.join(process.cwd(), 'assets', 'icon.png');
@@ -353,6 +355,17 @@ app.whenReady().then(() => {
   registerIpcHandlers();
   if (devAppIconPath && process.platform === 'darwin') app.dock?.setIcon(devAppIconPath);
   createWindow();
+  desktopPerfSampler = startDesktopPerfSampler({
+    sample: () => ({
+      portalSupervisor: portalSupervisor?.getPerfSnapshot(),
+      portalTerminalClient: portalTerminalClient?.getPerfSnapshot(),
+      portalClients: {
+        terminal: Boolean(portalTerminalClient),
+        editor: Boolean(portalEditorClient),
+        lsp: Boolean(portalLspClient),
+      },
+    }),
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -367,5 +380,6 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  desktopPerfSampler?.stop();
   portalTerminalClient?.dispose();
 });

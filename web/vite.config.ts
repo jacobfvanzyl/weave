@@ -27,6 +27,7 @@ const sharedClientPackages = [
   '@codemirror/lang-json',
   '@codemirror/lang-markdown',
   '@codemirror/language',
+  '@codemirror/merge',
   '@codemirror/search',
   '@codemirror/state',
   '@codemirror/view',
@@ -55,6 +56,7 @@ const sharedClientPackages = [
   'shiki',
   'tailwind-merge',
   'tailwindcss',
+  'yaml',
   'zustand',
 ] as const;
 

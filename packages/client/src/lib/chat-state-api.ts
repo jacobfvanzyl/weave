@@ -2,7 +2,16 @@ import type { UIMessage } from 'ai';
 import { getAuthHeaders } from './mastra-client';
 import { weaveRoutes } from './weave-routes';
 import { productForProjectKind, type ProductId } from './products';
-import type { ChatThread, PlanStepStatus, ThreadPlan, ThreadPlanStep } from '../stores/chat-store';
+import type {
+  ChatThread,
+  PlanStepStatus,
+  ProposalItemStatus,
+  ProposalStatus,
+  ThreadPlan,
+  ThreadPlanStep,
+  ThreadProposal,
+  ThreadProposalItem,
+} from '../stores/chat-store';
 
 type ServerThread = {
   id: string;
@@ -221,6 +230,60 @@ const toThreadPlan = (value: unknown): ThreadPlan | undefined => {
   };
 };
 
+const isProposalStatus = (value: unknown): value is ProposalStatus =>
+  value === 'draft' || value === 'ready' || value === 'partially_approved' || value === 'approved'
+  || value === 'changes_requested' || value === 'applied' || value === 'rejected' || value === 'stale';
+
+const isProposalItemStatus = (value: unknown): value is ProposalItemStatus =>
+  value === 'pending' || value === 'approved' || value === 'changes_requested' || value === 'rejected'
+  || value === 'applied' || value === 'stale';
+
+const toProposalItem = (value: unknown): ThreadProposalItem | undefined => {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+  if (typeof record?.id !== 'string' || !isProposalItemStatus(record.status)) return undefined;
+  return {
+    id: record.id,
+    kind: typeof record.kind === 'string' ? record.kind : 'file_edit',
+    status: record.status,
+    title: typeof record.title === 'string' ? record.title : typeof record.path === 'string' ? record.path : record.id,
+    path: typeof record.path === 'string' ? record.path : undefined,
+    additions: typeof record.additions === 'number' ? record.additions : 0,
+    deletions: typeof record.deletions === 'number' ? record.deletions : 0,
+    viewed: record.viewed === true,
+    currentHash: typeof record.current_hash === 'string' ? record.current_hash : undefined,
+    proposedHash: typeof record.proposed_hash === 'string' ? record.proposed_hash : undefined,
+    comment: typeof record.comment === 'string' ? record.comment : undefined,
+  };
+};
+
+const toThreadProposal = (value: unknown): ThreadProposal | undefined => {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+  const sourceItems = Array.isArray(record?.items) ? record.items : undefined;
+  if (!sourceItems) return undefined;
+  const items = sourceItems.map(toProposalItem).filter((item): item is ThreadProposalItem => Boolean(item));
+  if (items.length === 0) return undefined;
+  const countsRecord = record?.counts && typeof record.counts === 'object' && !Array.isArray(record.counts)
+    ? record.counts as Record<string, unknown>
+    : {};
+  const counts = Object.fromEntries(Object.entries(countsRecord).filter(([, count]) => typeof count === 'number')) as Record<string, number>;
+  return {
+    items,
+    counts,
+    updatedAt: typeof record?.updatedAt === 'string' ? record.updatedAt : new Date().toISOString(),
+    ...(typeof record?.id === 'string' ? { id: record.id } : {}),
+    ...(typeof record?.title === 'string' ? { title: record.title } : {}),
+    ...(typeof record?.path === 'string' ? { path: record.path } : {}),
+    ...(typeof record?.planPath === 'string' ? { planPath: record.planPath } : {}),
+    ...(isProposalStatus(record?.status) ? { status: record.status } : {}),
+    ...(typeof record?.summary === 'string' ? { summary: record.summary } : {}),
+    ...(typeof record?.contentHash === 'string' ? { contentHash: record.contentHash } : {}),
+  };
+};
+
 const toChatThread = (thread: ServerThread): ChatThread => ({
   id: thread.id,
   title: thread.title || '...',
@@ -235,6 +298,7 @@ const toChatThread = (thread: ServerThread): ChatThread => ({
   workspacePath: typeof thread.metadata?.workspacePath === 'string' ? thread.metadata.workspacePath : undefined,
   removedWorkspace: toRemovedWorkspace(thread.metadata?.removedWorkspace),
   latestPlan: toThreadPlan(thread.metadata?.latestPlan),
+  latestProposal: toThreadProposal(thread.metadata?.latestProposal),
 });
 
 export class ApiError extends Error {

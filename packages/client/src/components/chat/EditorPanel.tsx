@@ -315,7 +315,7 @@ export const EditorPanel = ({ focusRequest = 0, isExpanded, onExpandedChange, ta
 
   return (
     <section
-      className="relative z-10 flex h-full min-h-0 min-w-0 flex-1 basis-0 flex-col border-l border-border bg-background transition-[width] duration-150 ease-out"
+      className="relative z-10 flex h-full min-h-0 min-w-0 flex-1 basis-0 flex-col bg-background transition-[width] duration-150 ease-out"
       data-weave-editor-panel
       data-weave-surface="editor"
       data-expanded={isExpanded ? 'true' : 'false'}

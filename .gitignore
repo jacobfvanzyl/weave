@@ -6,6 +6,7 @@ target
 desktop/.vite
 desktop/out
 portal/native/window-stream-native/build/
+.weave-perf/
 .mastra
 .env.development
 .env

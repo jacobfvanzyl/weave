@@ -140,6 +140,8 @@ describe('dynamic profile resolver', () => {
       'updatePlanTool',
       'read',
       'writePlanTool',
+      'writeProposalTool',
+      'updateProposalTool',
     ]);
 
     expect(__profileResolverTest.expandProfileToolsForProjectKind([

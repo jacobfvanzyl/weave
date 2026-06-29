@@ -17,8 +17,6 @@ type UseAppShortcutsInput = {
   hasGeneralTerminalTarget: boolean;
   hasTerminalTarget: boolean;
   isSidebarOpen: boolean;
-  setShowPlanPanel: (showPlanPanel: boolean) => void;
-  showPlanPanel: boolean;
   showSidebarPreview: boolean;
   toggleSidebar: () => void;
 };
@@ -38,8 +36,6 @@ export const useAppShortcuts = ({
   hasGeneralTerminalTarget,
   hasTerminalTarget,
   isSidebarOpen,
-  setShowPlanPanel,
-  showPlanPanel,
   showSidebarPreview,
   toggleSidebar,
 }: UseAppShortcutsInput) => useMemo<ShortcutCommand[]>(() => [
@@ -78,12 +74,6 @@ export const useAppShortcuts = ({
     label: 'New thread',
     surface: 'chat',
     run: createThreadFromShortcut,
-  },
-  {
-    id: 'plan.toggle',
-    label: 'Toggle plan',
-    surface: 'plan',
-    run: () => setShowPlanPanel(!showPlanPanel),
   },
   {
     id: 'terminal.globalToggle',
@@ -140,8 +130,6 @@ export const useAppShortcuts = ({
   hasGeneralTerminalTarget,
   hasTerminalTarget,
   isSidebarOpen,
-  setShowPlanPanel,
-  showPlanPanel,
   showSidebarPreview,
   toggleSidebar,
 ]);

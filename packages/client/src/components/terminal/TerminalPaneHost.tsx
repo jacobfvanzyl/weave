@@ -1,6 +1,7 @@
 import { Suspense, type ReactNode } from 'react';
 import { TerminalPanel, type TerminalPanelTab, type TerminalPanelTabsChange, type TerminalPanelTarget } from './TerminalPanel';
 import type { TerminalTransport } from '../../lib/terminal-types';
+import type { TerminalPaneColumn } from '../../stores/workspace-surface-store';
 
 type TerminalPaneHostProps = {
   activeTabId?: string;
@@ -21,7 +22,9 @@ type TerminalPaneHostProps = {
   onTabsChange: (tabs: TerminalPanelTabsChange) => void;
   tabs: TerminalPanelTab[];
   target?: TerminalPanelTarget;
+  terminalColumn?: TerminalPaneColumn;
   transport?: TerminalTransport;
+  onTerminalColumnToggle?: () => void;
   variant: 'pane' | 'main';
 };
 
@@ -44,7 +47,9 @@ export const TerminalPaneHost = ({
   onTabsChange,
   tabs,
   target,
+  terminalColumn,
   transport,
+  onTerminalColumnToggle,
   variant,
 }: TerminalPaneHostProps) => target ? (
   <Suspense fallback={null}>
@@ -69,7 +74,9 @@ export const TerminalPaneHost = ({
       onTabsChange={onTabsChange}
       tabs={tabs}
       target={target}
+      terminalColumn={terminalColumn}
       transport={transport}
+      onTerminalColumnToggle={onTerminalColumnToggle}
       onHide={onHide}
       variant={variant}
     />
