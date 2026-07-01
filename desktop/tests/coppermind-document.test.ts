@@ -2,11 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { DocSnapshot } from '@blocksuite/store';
 import {
   coppermindBlockSuitePackageVersion,
+  coppermindCanvasCellGapPx,
+  coppermindCellWidthPx,
   addCoppermindBlockSuiteSection,
+  createCoppermindNextCanvasCellXYWH,
+  createCoppermindSectionXYWHAtCenter,
   createCoppermindBlockSuiteRuntime,
   deleteCoppermindBlockSuiteSection,
   disposeCoppermindBlockSuiteRuntime,
   getCoppermindBlockSuiteSections,
+  placeCoppermindBlockSuiteSection,
+  unplaceCoppermindBlockSuiteSection,
 } from '../../packages/client/src/lib/coppermind-blocksuite';
 import {
   createEmptyCoppermindDocument,
@@ -114,7 +120,9 @@ describe('Coppermind .cpr document structure', () => {
 
     expect(root.flavour).toBe('affine:page');
     expect(findSnapshotBlock(root, 'affine:surface')).toBeTruthy();
-    expect(findSnapshotBlock(root, 'affine:note')).toBeTruthy();
+    const note = findSnapshotBlock(root, 'affine:note');
+    expect(note).toBeTruthy();
+    expect((note?.props as { displayMode?: unknown } | undefined)?.displayMode).toBe('doc');
     expect(findSnapshotBlock(root, 'affine:paragraph')).toBeTruthy();
   });
 
@@ -164,26 +172,108 @@ describe('Coppermind .cpr document structure', () => {
         {
           childCount: 1,
           isEmpty: false,
+          placement: { state: 'unplaced' },
           title: 'First section',
         },
       ]);
 
       const secondSectionId = addCoppermindBlockSuiteSection(runtime.doc);
       const sections = getCoppermindBlockSuiteSections(runtime.doc);
-      const firstNote = runtime.doc.getBlockById(sections[0].id) as { xywh?: string } | null;
-      const secondNote = runtime.doc.getBlockById(secondSectionId) as { xywh?: string } | null;
 
       expect(sections).toHaveLength(2);
       expect(sections[1]).toMatchObject({
         childCount: 1,
         id: secondSectionId,
         isEmpty: true,
-        title: 'Untitled section 2',
+        placement: { state: 'unplaced' },
+        title: 'Untitled cell 2',
       });
-      expect(JSON.parse(secondNote?.xywh ?? '[]')[0]).toBeGreaterThan(JSON.parse(firstNote?.xywh ?? '[]')[0]);
 
       expect(deleteCoppermindBlockSuiteSection(runtime.doc, secondSectionId)).toBe(true);
       expect(getCoppermindBlockSuiteSections(runtime.doc)).toHaveLength(1);
+    } finally {
+      disposeCoppermindBlockSuiteRuntime(runtime);
+    }
+  });
+
+  it('places and unplaces BlockSuite sections without changing Page order', () => {
+    const runtime = createCoppermindBlockSuiteRuntime({
+      docId: 'doc:notebook',
+      now: new Date('2026-06-30T10:00:00.000Z'),
+      paragraphTexts: ['First section'],
+      title: 'Notebook',
+    });
+
+    try {
+      const secondSectionId = addCoppermindBlockSuiteSection(runtime.doc);
+      const firstSectionId = getCoppermindBlockSuiteSections(runtime.doc)[0].id;
+      const xywh = createCoppermindSectionXYWHAtCenter(1200, 900);
+
+      expect(xywh[2]).toBe(coppermindCellWidthPx);
+      expect(placeCoppermindBlockSuiteSection(runtime.doc, secondSectionId, xywh)).toBe(true);
+      expect(getCoppermindBlockSuiteSections(runtime.doc)).toMatchObject([
+        {
+          id: firstSectionId,
+          placement: { state: 'unplaced' },
+        },
+        {
+          id: secondSectionId,
+          placement: { state: 'placed', xywh },
+        },
+      ]);
+
+      expect(unplaceCoppermindBlockSuiteSection(runtime.doc, secondSectionId)).toBe(true);
+      expect(getCoppermindBlockSuiteSections(runtime.doc)).toMatchObject([
+        {
+          id: firstSectionId,
+          placement: { state: 'unplaced' },
+        },
+        {
+          id: secondSectionId,
+          placement: { state: 'unplaced' },
+        },
+      ]);
+    } finally {
+      disposeCoppermindBlockSuiteRuntime(runtime);
+    }
+  });
+
+  it('calculates new canvas cell placement centered below placed bounds', () => {
+    const runtime = createCoppermindBlockSuiteRuntime({
+      docId: 'doc:notebook',
+      now: new Date('2026-06-30T10:00:00.000Z'),
+      paragraphTexts: ['First section'],
+      title: 'Notebook',
+    });
+
+    try {
+      const firstSectionId = getCoppermindBlockSuiteSections(runtime.doc)[0].id;
+      const firstXYWH = createCoppermindNextCanvasCellXYWH(getCoppermindBlockSuiteSections(runtime.doc));
+
+      expect(firstXYWH).toEqual([
+        -coppermindCellWidthPx / 2,
+        0,
+        coppermindCellWidthPx,
+        firstXYWH[3],
+      ]);
+
+      expect(placeCoppermindBlockSuiteSection(runtime.doc, firstSectionId, firstXYWH)).toBe(true);
+      expect(createCoppermindNextCanvasCellXYWH(getCoppermindBlockSuiteSections(runtime.doc))).toEqual([
+        -coppermindCellWidthPx / 2,
+        firstXYWH[1] + firstXYWH[3] + coppermindCanvasCellGapPx,
+        coppermindCellWidthPx,
+        firstXYWH[3],
+      ]);
+
+      const secondSectionId = addCoppermindBlockSuiteSection(runtime.doc);
+      const lowerCustomBounds: [number, number, number, number] = [1600, 1200, 300, 180];
+      expect(placeCoppermindBlockSuiteSection(runtime.doc, secondSectionId, lowerCustomBounds)).toBe(true);
+      expect(createCoppermindNextCanvasCellXYWH(getCoppermindBlockSuiteSections(runtime.doc))).toEqual([
+        -coppermindCellWidthPx / 2,
+        lowerCustomBounds[1] + lowerCustomBounds[3] + coppermindCanvasCellGapPx,
+        coppermindCellWidthPx,
+        firstXYWH[3],
+      ]);
     } finally {
       disposeCoppermindBlockSuiteRuntime(runtime);
     }

@@ -1,22 +1,33 @@
+import { NoteDisplayMode } from '@blocksuite/blocks';
 import { AffineSchemas } from '@blocksuite/blocks/schemas';
 import { DocCollection, Job, Schema, Text, type BlockModel, type Doc, type DocSnapshot } from '@blocksuite/store';
 
 export const coppermindBlockSuitePackageVersion = '0.19.5';
+export const coppermindCellWidthPx = 794;
+export const coppermindCanvasCellGapPx = 32;
 
-const defaultSectionWidth = 800;
+const defaultSectionWidth = coppermindCellWidthPx;
 const defaultSectionHeight = 640;
-const sectionGap = 160;
 type SerializedXYWH = `[${number},${number},${number},${number}]`;
+const noteDisplayModePageOnly = NoteDisplayMode.DocOnly;
+const noteDisplayModePageAndCanvas = NoteDisplayMode.DocAndEdgeless;
 
 export type CoppermindBlockSuiteRuntime = {
   collection: DocCollection;
   doc: Doc;
 };
 
+export type CoppermindBlockSuiteSectionXYWH = [x: number, y: number, w: number, h: number];
+
+export type CoppermindBlockSuiteSectionPlacement =
+  | { state: 'unplaced' }
+  | { state: 'placed'; xywh: CoppermindBlockSuiteSectionXYWH };
+
 export type CoppermindBlockSuiteSection = {
   childCount: number;
   id: string;
   isEmpty: boolean;
+  placement: CoppermindBlockSuiteSectionPlacement;
   title: string;
 };
 
@@ -78,10 +89,59 @@ const getSectionTitle = (note: BlockModel, index: number) => {
   });
   const firstTextBlock = note.children.find(child => getBlockText(child));
 
-  return getBlockText(heading ?? firstTextBlock ?? note) || `Untitled section ${index + 1}`;
+  return getBlockText(heading ?? firstTextBlock ?? note) || `Untitled cell ${index + 1}`;
 };
 
-const parseSerializedXYWH = (value: string | undefined) => {
+const defaultSectionXYWH = (): CoppermindBlockSuiteSectionXYWH => [
+  0,
+  0,
+  defaultSectionWidth,
+  defaultSectionHeight,
+];
+
+export const createCoppermindSectionXYWHAtCenter = (
+  x: number,
+  y: number,
+): CoppermindBlockSuiteSectionXYWH => [
+  x - defaultSectionWidth / 2,
+  y - defaultSectionHeight / 2,
+  defaultSectionWidth,
+  defaultSectionHeight,
+];
+
+export const createCoppermindSectionXYWHAtTopLeft = (
+  x: number,
+  y: number,
+): CoppermindBlockSuiteSectionXYWH => [
+  x,
+  y,
+  defaultSectionWidth,
+  defaultSectionHeight,
+];
+
+export const createCoppermindNextCanvasCellXYWH = (
+  sections: CoppermindBlockSuiteSection[],
+): CoppermindBlockSuiteSectionXYWH => {
+  const placedBounds = sections.flatMap(section => (
+    section.placement.state === 'placed' ? [section.placement.xywh] : []
+  ));
+  const lowestPlacedBottom = placedBounds.reduce(
+    (lowest, [, y, , height]) => Math.max(lowest, y + height),
+    Number.NEGATIVE_INFINITY,
+  );
+  const y = Number.isFinite(lowestPlacedBottom)
+    ? Math.max(0, lowestPlacedBottom + coppermindCanvasCellGapPx)
+    : 0;
+
+  return [
+    -defaultSectionWidth / 2,
+    y,
+    defaultSectionWidth,
+    defaultSectionHeight,
+  ];
+};
+
+const parseSerializedXYWH = (value: string | undefined): CoppermindBlockSuiteSectionXYWH | undefined => {
   if (!value) return undefined;
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -91,7 +151,7 @@ const parseSerializedXYWH = (value: string | undefined) => {
       && parsed.every(item => typeof item === 'number' && Number.isFinite(item))
     ) {
       const [x, y, w, h] = parsed;
-      return { x, y, w, h };
+      return [x, y, w, h];
     }
   } catch {
     return undefined;
@@ -99,27 +159,15 @@ const parseSerializedXYWH = (value: string | undefined) => {
   return undefined;
 };
 
-const serializeXYWH = ({ x, y, w, h }: { x: number; y: number; w: number; h: number }) => (
+const serializeXYWH = ([x, y, w, h]: CoppermindBlockSuiteSectionXYWH) => (
   `[${Math.round(x)},${Math.round(y)},${Math.round(w)},${Math.round(h)}]` as SerializedXYWH
 );
 
-const getNextSectionXYWH = (notes: CoppermindBlockModel[]) => {
-  const lastBound = notes
-    .map(note => parseSerializedXYWH(note.xywh))
-    .filter((bound): bound is { x: number; y: number; w: number; h: number } => Boolean(bound))
-    .at(-1);
-
-  if (!lastBound) {
-    return serializeXYWH({ x: 0, y: 0, w: defaultSectionWidth, h: defaultSectionHeight });
-  }
-
-  return serializeXYWH({
-    x: lastBound.x + lastBound.w + sectionGap,
-    y: lastBound.y,
-    w: lastBound.w || defaultSectionWidth,
-    h: lastBound.h || defaultSectionHeight,
-  });
-};
+const getSectionPlacement = (note: CoppermindBlockModel): CoppermindBlockSuiteSectionPlacement => (
+  note.displayMode === noteDisplayModePageOnly
+    ? { state: 'unplaced' }
+    : { state: 'placed', xywh: parseSerializedXYWH(note.xywh) ?? defaultSectionXYWH() }
+);
 
 export const createCoppermindBlockSuiteRuntime = ({
   docId,
@@ -134,7 +182,7 @@ export const createCoppermindBlockSuiteRuntime = ({
   doc.load(() => {
     const pageBlockId = doc.addBlock('affine:page', { title: new Text(title) });
     doc.addBlock('affine:surface', {}, pageBlockId);
-    const noteId = doc.addBlock('affine:note', {}, pageBlockId);
+    const noteId = doc.addBlock('affine:note', { displayMode: noteDisplayModePageOnly }, pageBlockId);
     for (const text of normalizeParagraphTexts(paragraphTexts)) {
       doc.addBlock('affine:paragraph', { text: new Text(text) }, noteId);
     }
@@ -155,6 +203,7 @@ export const getCoppermindBlockSuiteSections = (doc: Doc): CoppermindBlockSuiteS
     childCount: note.children.length,
     id: note.id,
     isEmpty: !note.children.some(blockHasAuthoredContent),
+    placement: getSectionPlacement(note),
     title: getSectionTitle(note, index),
   }))
 );
@@ -163,14 +212,36 @@ export const addCoppermindBlockSuiteSection = (doc: Doc) => {
   const root = doc.root;
   if (!root) throw new Error('Cannot add a Coppermind section before the document root is loaded.');
 
-  const notes = getPageVisibleNotes(doc);
   const noteId = doc.addBlock(
     'affine:note',
-    { xywh: getNextSectionXYWH(notes) },
+    { displayMode: noteDisplayModePageOnly },
     root,
   );
   doc.addBlock('affine:paragraph', {}, noteId);
   return noteId;
+};
+
+export const placeCoppermindBlockSuiteSection = (
+  doc: Doc,
+  sectionId: string,
+  xywh: CoppermindBlockSuiteSectionXYWH,
+) => {
+  const section = doc.getBlockById(sectionId);
+  if (!section || section.flavour !== 'affine:note') return false;
+
+  doc.updateBlock(section, {
+    displayMode: noteDisplayModePageAndCanvas,
+    xywh: serializeXYWH(xywh),
+  });
+  return true;
+};
+
+export const unplaceCoppermindBlockSuiteSection = (doc: Doc, sectionId: string) => {
+  const section = doc.getBlockById(sectionId);
+  if (!section || section.flavour !== 'affine:note') return false;
+
+  doc.updateBlock(section, { displayMode: noteDisplayModePageOnly });
+  return true;
 };
 
 export const deleteCoppermindBlockSuiteSection = (doc: Doc, sectionId: string) => {

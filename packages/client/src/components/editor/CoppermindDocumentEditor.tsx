@@ -21,27 +21,38 @@ import {
   Circle,
   Diamond,
   Eraser,
+  Focus,
   GitBranch,
   Hand,
+  Maximize2,
+  Minus,
   MousePointer2,
   Pencil,
   Plus,
+  Rows3,
   Square,
   SquareRoundCorner,
   Trash2,
   Triangle,
   type LucideIcon,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type DragEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   addCoppermindBlockSuiteSection,
+  coppermindCanvasCellGapPx,
+  coppermindCellWidthPx,
+  createCoppermindNextCanvasCellXYWH,
+  createCoppermindSectionXYWHAtTopLeft,
   deleteCoppermindBlockSuiteSection,
   disposeCoppermindBlockSuiteRuntime,
   exportCoppermindBlockSuiteSnapshot,
   getCoppermindBlockSuiteSections,
   importCoppermindBlockSuiteRuntime,
+  placeCoppermindBlockSuiteSection,
+  unplaceCoppermindBlockSuiteSection,
   type CoppermindBlockSuiteSection,
   type CoppermindBlockSuiteRuntime,
+  type CoppermindBlockSuiteSectionXYWH,
 } from '../../lib/coppermind-blocksuite';
 import {
   isCoppermindDocumentV2,
@@ -83,6 +94,106 @@ type CoppermindCanvasToolState = {
   brushLineWidth: LineWidth;
   shapeFillColor: string;
   shapeName: ShapeName;
+};
+
+type CoppermindCanvasPoint = {
+  x: number;
+  y: number;
+};
+
+type CoppermindCanvasApi = {
+  clearSelection: () => void;
+  fitToPageWidth: () => void;
+  fitToScreen: () => void;
+  focusSectionForEditing: (xywh: CoppermindBlockSuiteSectionXYWH) => void;
+  getViewportSnapshot: () => CoppermindCanvasViewportSnapshot | undefined;
+  getModelPointFromClientPoint: (clientX: number, clientY: number) => CoppermindCanvasPoint | undefined;
+  locateSection: (
+    sectionId: string,
+    xywh: CoppermindBlockSuiteSectionXYWH,
+    options?: { editing?: boolean },
+  ) => void;
+  resetZoom: () => void;
+  restoreViewport: (snapshot: CoppermindCanvasViewportSnapshot) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+};
+
+type CoppermindBlockSuiteTextChild = {
+  id: string;
+  text?: unknown;
+};
+
+type CoppermindBlockSuiteNoteModel = {
+  children?: CoppermindBlockSuiteTextChild[];
+};
+
+type CoppermindCanvasViewport = {
+  ZOOM_MAX?: number;
+  ZOOM_MIN?: number;
+  center?: { x: number; y: number };
+  centerX?: number;
+  centerY?: number;
+  height?: number;
+  left?: number;
+  smoothZoom?: (zoom: number) => void;
+  top?: number;
+  zoom: number;
+  setViewport: (zoom: number, center: [number, number], smooth?: boolean) => void;
+  setZoom?: (zoom: number) => void;
+  toModelCoord?: (viewX: number, viewY: number) => [number, number];
+  toModelCoordFromClientCoord?: (point: [number, number]) => [number, number];
+  viewportUpdated?: {
+    on: (callback: () => void) => { dispose: () => void };
+  };
+  width?: number;
+};
+
+type CoppermindCanvasSelection = {
+  clear?: () => void;
+  clearLast?: () => void;
+  editing?: boolean;
+  selectedIds?: string[];
+  set: (selection: { elements: string[]; editing?: boolean }) => void;
+  slots?: {
+    updated?: {
+      on: (callback: () => void) => { dispose: () => void };
+    };
+  };
+  surfaceSelections?: Array<{ editing?: boolean }>;
+};
+
+type CoppermindEdgelessRootBlock = HTMLElement & {
+  gfx?: {
+    selection?: CoppermindCanvasSelection;
+    tool?: CoppermindCanvasToolController;
+    viewport?: CoppermindCanvasViewport;
+  };
+  service?: {
+    setZoomByStep?: (step: number) => void;
+    selection?: CoppermindCanvasSelection;
+    viewport?: CoppermindCanvasViewport;
+    zoomToFit?: () => void;
+  };
+};
+
+type CoppermindCanvasViewportState = {
+  zoom: number;
+};
+
+type CoppermindCanvasViewportSnapshot = {
+  center: [number, number];
+  zoom: number;
+};
+
+type CoppermindCanvasSelectionState = {
+  editing: boolean;
+  selectedIds: string[];
+};
+
+type CoppermindCanvasEditViewportSession = {
+  sectionId: string;
+  viewport: CoppermindCanvasViewportSnapshot;
 };
 
 type LoadedCoppermindState =
@@ -135,6 +246,13 @@ const canvasShapeFillColors = [
   ShapeFillColor.White,
 ];
 
+const canvasFitPageWidthPaddingPx = 96;
+const canvasEditViewportTopPaddingPx = 32;
+const canvasEditViewportVerticalPaddingPx = 64;
+const canvasZoomStep = 0.25;
+const canvasZoomMin = 0.1;
+const canvasZoomMax = 6;
+
 const canvasShapeTools: Array<{
   icon: LucideIcon;
   label: string;
@@ -172,9 +290,11 @@ const coppermindBlockSuiteStyles = `
   :root[data-theme="mocha"] [data-weave-editor-coppermind],
   :root[data-theme="mocha"] [data-weave-editor-coppermind] [data-theme="dark"] {
     color-scheme: dark;
+    --coppermind-cell-width: ${coppermindCellWidthPx}px;
     --affine-font-family: var(--font-ui);
     --affine-font-code-family: var(--font-code);
     --affine-font-mono-family: var(--font-code);
+    --affine-blue: var(--ctp-mauve);
     --affine-brand-color: var(--ctp-mauve);
     --affine-primary-color: var(--ctp-mauve);
     --affine-primary-color-04: color-mix(in oklab, var(--ctp-mauve) 10%, transparent);
@@ -247,6 +367,9 @@ const coppermindBlockSuiteStyles = `
   [data-weave-editor-coppermind] page-editor affine-note {
     display: block;
     position: relative;
+    box-sizing: border-box;
+    width: var(--coppermind-cell-width);
+    max-width: var(--coppermind-cell-width);
     overflow: visible;
     margin: 8px 0;
     padding: 18px;
@@ -320,7 +443,10 @@ const coppermindBlockSuiteStyles = `
     color: var(--ctp-text);
   }
 
-  [data-weave-editor-coppermind] edgeless-toolbar-widget {
+  [data-weave-editor-coppermind] affine-edgeless-zoom-toolbar-widget,
+  [data-weave-editor-coppermind] edgeless-toolbar-widget,
+  [data-weave-editor-coppermind] edgeless-zoom-toolbar,
+  [data-weave-editor-coppermind] zoom-bar-toggle-button {
     display: none !important;
   }
 `;
@@ -383,19 +509,189 @@ const shapeStrokeFromFill = (fillColor: string) => {
   return isTransparentColor(strokeColor) ? LineColor.Grey : strokeColor;
 };
 
+const coppermindSectionDragDataType = 'application/x-coppermind-section-id';
+
+const isSectionDragEvent = (event: DragEvent<HTMLElement>) => (
+  Array.from(event.dataTransfer.types).includes(coppermindSectionDragDataType)
+);
+
+const getEdgelessRootBlock = (
+  editor: EdgelessEditor,
+  doc: Doc,
+): CoppermindEdgelessRootBlock | undefined => {
+  const rootId = doc.root?.id;
+  if (!rootId) return undefined;
+  return editor.std?.view.getBlock(rootId) as CoppermindEdgelessRootBlock | undefined;
+};
+
 const getCanvasToolController = (
   editor: EdgelessEditor,
   doc: Doc,
 ): CoppermindCanvasToolController | undefined => {
-  const rootId = doc.root?.id;
-  if (!rootId) return undefined;
-
-  const rootBlock = editor.std?.view.getBlock(rootId) as {
-    gfx?: {
-      tool?: CoppermindCanvasToolController;
-    };
-  } | undefined;
+  const rootBlock = getEdgelessRootBlock(editor, doc);
   return rootBlock?.gfx?.tool;
+};
+
+const createCanvasApi = (
+  editor: EdgelessEditor,
+  doc: Doc,
+): CoppermindCanvasApi | undefined => {
+  const getRootBlock = () => getEdgelessRootBlock(editor, doc);
+  const getViewport = () => getRootBlock()?.gfx?.viewport ?? getRootBlock()?.service?.viewport;
+  const getService = () => getRootBlock()?.service;
+  const getSelection = () => getRootBlock()?.gfx?.selection ?? getRootBlock()?.service?.selection;
+  const clearSelection = () => {
+    const selection = getSelection();
+    selection?.clear?.();
+    selection?.clearLast?.();
+  };
+  const clampZoom = (zoom: number, viewport: CoppermindCanvasViewport) => (
+    Math.min(viewport.ZOOM_MAX ?? canvasZoomMax, Math.max(viewport.ZOOM_MIN ?? canvasZoomMin, zoom))
+  );
+  const getCenter = (viewport: CoppermindCanvasViewport): [number, number] => [
+    viewport.centerX ?? viewport.center?.x ?? 0,
+    viewport.centerY ?? viewport.center?.y ?? 0,
+  ];
+  const getViewportSnapshot = (): CoppermindCanvasViewportSnapshot | undefined => {
+    const currentViewport = getViewport();
+    if (!currentViewport) return undefined;
+
+    return {
+      center: getCenter(currentViewport),
+      zoom: currentViewport.zoom,
+    };
+  };
+  const smoothZoom = (zoom: number) => {
+    const currentViewport = getViewport();
+    if (!currentViewport) return;
+    const nextZoom = clampZoom(zoom, currentViewport);
+    if (currentViewport.smoothZoom) {
+      currentViewport.smoothZoom(nextZoom);
+      return;
+    }
+    currentViewport.setViewport(nextZoom, getCenter(currentViewport), true);
+  };
+  const focusSectionTextStart = (sectionId: string) => {
+    const section = doc.getBlockById(sectionId) as CoppermindBlockSuiteNoteModel | null;
+    const firstTextChild = section?.children?.find(child => child.text);
+    const selection = editor.std?.selection;
+    if (!firstTextChild || !selection) return;
+
+    selection.setGroup('note', [
+      selection.create('text', {
+        from: {
+          blockId: firstTextChild.id,
+          index: 0,
+          length: 0,
+        },
+        to: null,
+      }),
+    ]);
+  };
+  const viewport = getViewport();
+  if (!viewport) return undefined;
+
+  return {
+    clearSelection: () => {
+      clearSelection();
+      window.requestAnimationFrame(clearSelection);
+    },
+    fitToPageWidth: () => {
+      const currentViewport = getViewport();
+      if (!currentViewport) return;
+
+      const viewportWidth = currentViewport.width ?? 0;
+      const availableWidth = Math.max(1, viewportWidth - canvasFitPageWidthPaddingPx);
+      const nextZoom = clampZoom(availableWidth / coppermindCellWidthPx, currentViewport);
+      const [, centerY] = getCenter(currentViewport);
+      currentViewport.setViewport(nextZoom, [0, centerY], true);
+    },
+    fitToScreen: () => {
+      getService()?.zoomToFit?.();
+    },
+    focusSectionForEditing: xywh => {
+      const currentViewport = getViewport();
+      if (!currentViewport) return;
+
+      const [x, y, width, height] = xywh;
+      const viewportWidth = currentViewport.width ?? 0;
+      const viewportHeight = currentViewport.height ?? 0;
+      const availableWidth = Math.max(1, viewportWidth - canvasFitPageWidthPaddingPx);
+      const nextZoom = clampZoom(availableWidth / Math.max(1, width), currentViewport);
+      const availableHeight = Math.max(1, viewportHeight - canvasEditViewportVerticalPaddingPx);
+      const nextCenterY = height * nextZoom > availableHeight
+        ? y + (viewportHeight / 2 - canvasEditViewportTopPaddingPx) / nextZoom
+        : y + height / 2;
+
+      currentViewport.setViewport(
+        nextZoom,
+        [x + width / 2, nextCenterY],
+        true,
+      );
+    },
+    getViewportSnapshot,
+    getModelPointFromClientPoint: (clientX, clientY) => {
+      const currentViewport = getViewport();
+      if (!currentViewport) return undefined;
+
+      const point = currentViewport.toModelCoordFromClientCoord
+        ? currentViewport.toModelCoordFromClientCoord([clientX, clientY])
+        : currentViewport.toModelCoord?.(
+          clientX - (currentViewport.left ?? 0),
+          clientY - (currentViewport.top ?? 0),
+        );
+      if (!point) return undefined;
+
+      const [x, y] = point;
+      return { x, y };
+    },
+    locateSection: (sectionId, xywh, options) => {
+      const currentViewport = getViewport();
+      if (!currentViewport) return;
+
+      const [x, y, w, h] = xywh;
+      if (!options?.editing) {
+        currentViewport.setViewport(
+          currentViewport.zoom,
+          [x + w / 2, y + h / 2],
+          true,
+        );
+      }
+
+      window.requestAnimationFrame(() => {
+        getSelection()?.set({ elements: [sectionId], editing: options?.editing ?? false });
+        if (options?.editing) {
+          window.requestAnimationFrame(() => focusSectionTextStart(sectionId));
+        }
+      });
+    },
+    resetZoom: () => {
+      smoothZoom(1);
+    },
+    restoreViewport: snapshot => {
+      const currentViewport = getViewport();
+      if (!currentViewport) return;
+      currentViewport.setViewport(snapshot.zoom, snapshot.center, true);
+    },
+    zoomIn: () => {
+      const service = getService();
+      if (service?.setZoomByStep) {
+        service.setZoomByStep(canvasZoomStep);
+        return;
+      }
+      const currentViewport = getViewport();
+      if (currentViewport) smoothZoom(currentViewport.zoom + canvasZoomStep);
+    },
+    zoomOut: () => {
+      const service = getService();
+      if (service?.setZoomByStep) {
+        service.setZoomByStep(-canvasZoomStep);
+        return;
+      }
+      const currentViewport = getViewport();
+      if (currentViewport) smoothZoom(currentViewport.zoom - canvasZoomStep);
+    },
+  };
 };
 
 const getCanvasToolState = (
@@ -709,7 +1005,124 @@ const CoppermindCanvasToolbar = ({
   );
 };
 
-const BlockSuiteEditorMount = ({ doc, mode }: { doc: Doc; mode: CoppermindEditorMode }) => {
+const CoppermindCanvasViewportToolbar = ({
+  api,
+  editPunchInEnabled,
+  onArrangeAsPage,
+  onToggleEditPunchIn,
+  zoom,
+}: {
+  api?: CoppermindCanvasApi;
+  editPunchInEnabled: boolean;
+  onArrangeAsPage: () => void;
+  onToggleEditPunchIn: () => void;
+  zoom?: number;
+}) => {
+  const disabled = !api;
+  const formattedZoom = `${Math.round((zoom ?? 1) * 100)}%`;
+  const viewportButton = ({
+    active,
+    icon: Icon,
+    label,
+    onClick,
+  }: {
+    active?: boolean;
+    icon: LucideIcon;
+    label: string;
+    onClick: () => void;
+  }) => (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={active}
+      disabled={disabled}
+      className={cn(
+        'grid h-8 w-full place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45',
+        active && 'bg-primary/20 text-primary shadow-sm hover:bg-primary/25 hover:text-primary',
+      )}
+      onClick={onClick}
+    >
+      <Icon size={17} strokeWidth={2} />
+    </button>
+  );
+
+  return (
+    <div className="pointer-events-none absolute left-4 top-4 z-30">
+      <div
+        className="pointer-events-auto inline-flex flex-col gap-1 rounded-lg border border-border bg-card/95 p-1 shadow-xl backdrop-blur"
+        onClick={event => event.stopPropagation()}
+        onDoubleClick={event => event.stopPropagation()}
+        onPointerDown={event => event.stopPropagation()}
+      >
+        <div className="grid w-36 grid-cols-3 gap-1">
+          {viewportButton({
+            icon: Maximize2,
+            label: 'Fit to screen',
+            onClick: () => api?.fitToScreen(),
+          })}
+          {viewportButton({
+            icon: Rows3,
+            label: 'Arrange as page',
+            onClick: onArrangeAsPage,
+          })}
+          {viewportButton({
+            active: editPunchInEnabled,
+            icon: Focus,
+            label: editPunchInEnabled ? 'Disable edit punch-in' : 'Enable edit punch-in',
+            onClick: onToggleEditPunchIn,
+          })}
+        </div>
+        <div className="grid w-36 grid-cols-3 gap-1 border-t border-border pt-1">
+          <button
+            type="button"
+            aria-label="Zoom out"
+            title="Zoom out"
+            disabled={disabled}
+            className="grid h-8 w-full place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+            onClick={() => api?.zoomOut()}
+          >
+            <Minus size={17} strokeWidth={2.2} />
+          </button>
+          <button
+            type="button"
+            aria-label="Reset zoom"
+            title="Reset zoom"
+            disabled={disabled}
+            className="h-8 w-full rounded-md px-2 text-sm tabular-nums text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-45"
+            onClick={() => api?.resetZoom()}
+          >
+            {formattedZoom}
+          </button>
+          <button
+            type="button"
+            aria-label="Zoom in"
+            title="Zoom in"
+            disabled={disabled}
+            className="grid h-8 w-full place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+            onClick={() => api?.zoomIn()}
+          >
+            <Plus size={18} strokeWidth={2.1} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const BlockSuiteEditorMount = ({
+  doc,
+  mode,
+  onCanvasApiChange,
+  onCanvasViewportChange,
+  onCanvasSelectionChange,
+}: {
+  doc: Doc;
+  mode: CoppermindEditorMode;
+  onCanvasApiChange?: (api: CoppermindCanvasApi | undefined) => void;
+  onCanvasViewportChange?: (state: CoppermindCanvasViewportState | undefined) => void;
+  onCanvasSelectionChange?: (state: CoppermindCanvasSelectionState) => void;
+}) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [canvasEditPropsStore, setCanvasEditPropsStore] = useState<EditPropsStore>();
   const [canvasToolController, setCanvasToolController] = useState<CoppermindCanvasToolController>();
@@ -724,6 +1137,8 @@ const BlockSuiteEditorMount = ({ doc, mode }: { doc: Doc; mode: CoppermindEditor
     let disposed = false;
     let resolveFrame: number | undefined;
     let syncFrame: number | undefined;
+    let selectionSubscription: { dispose: () => void } | undefined;
+    let viewportSubscription: { dispose: () => void } | undefined;
     let resolveAttempts = 0;
 
     editor.doc = doc;
@@ -749,6 +1164,30 @@ const BlockSuiteEditorMount = ({ doc, mode }: { doc: Doc; mode: CoppermindEditor
 
         setCanvasToolController(controller);
         setCanvasEditPropsStore(editPropsStore);
+        onCanvasApiChange?.(createCanvasApi(editor, doc));
+        const viewport = getEdgelessRootBlock(editor, doc)?.gfx?.viewport
+          ?? getEdgelessRootBlock(editor, doc)?.service?.viewport;
+        const emitCanvasViewport = () => {
+          onCanvasViewportChange?.(viewport ? { zoom: viewport.zoom } : undefined);
+        };
+        emitCanvasViewport();
+        viewportSubscription?.dispose();
+        viewportSubscription = viewport?.viewportUpdated?.on(emitCanvasViewport);
+        const selection = getEdgelessRootBlock(editor, doc)?.gfx?.selection
+          ?? getEdgelessRootBlock(editor, doc)?.service?.selection;
+        const emitCanvasSelection = () => {
+          const selectedIds = selection?.selectedIds ?? [];
+          const editing = selection?.editing
+            ?? selection?.surfaceSelections?.some(item => item.editing)
+            ?? false;
+          if (selectedIds.length === 0) {
+            selection?.clearLast?.();
+          }
+          onCanvasSelectionChange?.({ editing, selectedIds });
+        };
+        emitCanvasSelection();
+        selectionSubscription?.dispose();
+        selectionSubscription = selection?.slots?.updated?.on(emitCanvasSelection);
 
         const syncToolState = () => {
           if (disposed) return;
@@ -760,6 +1199,8 @@ const BlockSuiteEditorMount = ({ doc, mode }: { doc: Doc; mode: CoppermindEditor
 
       void editor.updateComplete.then(resolveCanvasController);
     } else {
+      onCanvasApiChange?.(undefined);
+      onCanvasViewportChange?.(undefined);
       setCanvasToolController(undefined);
       setCanvasEditPropsStore(undefined);
       setCanvasToolState(undefined);
@@ -767,6 +1208,11 @@ const BlockSuiteEditorMount = ({ doc, mode }: { doc: Doc; mode: CoppermindEditor
 
     return () => {
       disposed = true;
+      onCanvasApiChange?.(undefined);
+      onCanvasViewportChange?.(undefined);
+      onCanvasSelectionChange?.({ editing: false, selectedIds: [] });
+      selectionSubscription?.dispose();
+      viewportSubscription?.dispose();
       if (resolveFrame !== undefined) window.cancelAnimationFrame(resolveFrame);
       if (syncFrame !== undefined) window.cancelAnimationFrame(syncFrame);
       setCanvasToolController(undefined);
@@ -775,7 +1221,7 @@ const BlockSuiteEditorMount = ({ doc, mode }: { doc: Doc; mode: CoppermindEditor
       editor.remove();
       mount.replaceChildren();
     };
-  }, [doc, mode]);
+  }, [doc, mode, onCanvasApiChange, onCanvasSelectionChange, onCanvasViewportChange]);
 
   return (
     <div className="relative h-full min-h-0 w-full">
@@ -820,76 +1266,137 @@ const InvalidCoppermindFallback = ({
 
 const CoppermindSectionOutline = ({
   activeSectionId,
+  canPlaceSections = true,
+  mode,
   onAddSection,
   onDeleteSection,
+  onDragSection,
+  onPlaceSection,
   onSelectSection,
+  onUnplaceSection,
   sections,
 }: {
   activeSectionId?: string;
-  onAddSection: () => void;
+  canPlaceSections?: boolean;
+  mode: CoppermindEditorMode;
+  onAddSection?: () => void;
   onDeleteSection: (section: CoppermindBlockSuiteSection) => void;
+  onDragSection?: (section: CoppermindBlockSuiteSection, event: DragEvent<HTMLElement>) => void;
+  onPlaceSection?: (section: CoppermindBlockSuiteSection) => void;
   onSelectSection: (sectionId: string) => void;
+  onUnplaceSection?: (section: CoppermindBlockSuiteSection) => void;
   sections: CoppermindBlockSuiteSection[];
-}) => (
-  <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card/80 text-foreground">
-    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-      <div className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">
-        Sections
-      </div>
-      <Button
-        aria-label="Add section"
-        title="Add section"
-        size="icon-xs"
-        variant="ghost"
-        className="text-muted-foreground hover:text-foreground"
-        onClick={onAddSection}
-      >
-        <Plus size={14} />
-      </Button>
-    </div>
-    <div className="min-h-0 flex-1 overflow-y-auto p-2">
-      {sections.length ? (
-        <div className="grid gap-1">
-          {sections.map((section, index) => (
-            <div
-              key={section.id}
-              className={cn(
-                'group flex min-h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-xs text-muted-foreground hover:border-border hover:bg-accent/70 hover:text-foreground',
-                activeSectionId === section.id && 'border-primary/45 bg-accent text-foreground shadow-sm',
-              )}
-            >
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                onClick={() => onSelectSection(section.id)}
-              >
-                <span className="w-5 shrink-0 text-[11px] tabular-nums text-muted-foreground/75">
-                  {index + 1}
-                </span>
-                <span className="min-w-0 flex-1 truncate">{section.title}</span>
-              </button>
-              <Button
-                aria-label={`Delete ${section.title}`}
-                title="Delete section"
-                size="icon-xs"
-                variant="ghost"
-                className="opacity-0 text-muted-foreground hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
-                onClick={event => {
-                  event.stopPropagation();
-                  onDeleteSection(section);
-                }}
-              >
-                <Trash2 size={13} />
-              </Button>
-            </div>
-          ))}
+}) => {
+  const isCanvasMode = mode === 'edgeless';
+  const canAddSection = !isCanvasMode || canPlaceSections;
+
+  return (
+    <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card/80 text-foreground">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+        <div className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">
+          Cells
         </div>
-      ) : (
-        <div className="px-2 py-3 text-xs text-muted-foreground">No sections</div>
-      )}
-    </div>
-  </aside>
-);
+        {onAddSection ? (
+          <Button
+            aria-label="Add cell"
+            size="icon-xs"
+            variant="ghost"
+            className="text-muted-foreground hover:text-foreground"
+            disabled={!canAddSection}
+            title={canAddSection ? 'Add cell' : 'Canvas is still loading'}
+            onClick={onAddSection}
+          >
+            <Plus size={14} />
+          </Button>
+        ) : null}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        {sections.length ? (
+          <div className="grid gap-1">
+            {sections.map((section, index) => {
+              const isPlaced = section.placement.state === 'placed';
+              const canDrag = isCanvasMode && !isPlaced && canPlaceSections;
+              const isSelectable = !isCanvasMode || isPlaced;
+              const hasHoverFill = !isCanvasMode || isPlaced;
+              const isActive = activeSectionId === section.id && isSelectable;
+
+              return (
+                <div
+                  key={section.id}
+                  className={cn(
+                    'group flex min-h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground',
+                    !isActive && 'hover:border-border',
+                    hasHoverFill && 'hover:bg-accent/70',
+                    isCanvasMode && isPlaced && 'bg-muted/70 text-foreground hover:bg-muted',
+                    isActive && 'border-primary/45 bg-accent text-foreground shadow-sm hover:border-primary/45',
+                    canDrag && 'cursor-grab active:cursor-grabbing',
+                  )}
+                  draggable={canDrag}
+                  title={
+                    isCanvasMode
+                      ? isPlaced
+                        ? 'Double-click to remove cell from canvas'
+                        : canPlaceSections
+                          ? 'Double-click to place cell on canvas'
+                          : undefined
+                      : undefined
+                  }
+                  onDoubleClick={() => {
+                    if (!isCanvasMode) return;
+                    if (isPlaced) {
+                      onUnplaceSection?.(section);
+                      return;
+                    }
+                    if (canPlaceSections) {
+                      onPlaceSection?.(section);
+                    }
+                  }}
+                  onDragStart={event => {
+                    if (!canDrag) return;
+                    onDragSection?.(section, event);
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    onClick={() => {
+                      if (!isSelectable) return;
+                      onSelectSection(section.id);
+                    }}
+                  >
+                    <span className="w-5 shrink-0 text-[11px] tabular-nums text-muted-foreground/75">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{section.title}</span>
+                  </button>
+                  <Button
+                    aria-label={`Delete ${section.title}`}
+                    title="Delete cell"
+                    size="icon-xs"
+                    variant="ghost"
+                    className={cn(
+                      'text-muted-foreground hover:text-destructive',
+                      !isCanvasMode && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                    )}
+                    onClick={event => {
+                      event.stopPropagation();
+                      onDeleteSection(section);
+                    }}
+                    onDoubleClick={event => event.stopPropagation()}
+                  >
+                    <Trash2 size={13} />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="px-2 py-3 text-xs text-muted-foreground">No cells</div>
+        )}
+      </div>
+    </aside>
+  );
+};
 
 const CoppermindModeToggle = ({
   mode,
@@ -923,6 +1430,9 @@ export const CoppermindDocumentEditor = ({
   const [mode, setMode] = useState<CoppermindEditorMode>('page');
   const [loadedState, setLoadedState] = useState<LoadedCoppermindState>({ status: 'loading' });
   const [activeSectionId, setActiveSectionId] = useState<string | undefined>(undefined);
+  const [canvasApi, setCanvasApi] = useState<CoppermindCanvasApi | undefined>(undefined);
+  const [canvasEditPunchInEnabled, setCanvasEditPunchInEnabled] = useState(true);
+  const [canvasViewport, setCanvasViewport] = useState<CoppermindCanvasViewportState | undefined>(undefined);
   const [sections, setSections] = useState<CoppermindBlockSuiteSection[]>([]);
   const onChangeRef = useRef(onChange);
   const loadedDocumentRef = useRef<CoppermindDocument | undefined>(undefined);
@@ -930,6 +1440,14 @@ export const CoppermindDocumentEditor = ({
   const lastSerializedRef = useRef<string | undefined>(undefined);
   const loadTokenRef = useRef(0);
   const modeRef = useRef<CoppermindEditorMode>('page');
+  const canvasApiRef = useRef<CoppermindCanvasApi | undefined>(undefined);
+  const canvasEditViewportSessionRef = useRef<CoppermindCanvasEditViewportSession | undefined>(undefined);
+  const canvasEditPunchInEnabledRef = useRef(true);
+  const canvasSelectionStateRef = useRef<CoppermindCanvasSelectionState>({
+    editing: false,
+    selectedIds: [],
+  });
+  const sectionsRef = useRef<CoppermindBlockSuiteSection[]>([]);
   const shellRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -939,6 +1457,10 @@ export const CoppermindDocumentEditor = ({
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+
+  useEffect(() => {
+    sectionsRef.current = sections;
+  }, [sections]);
 
   const emitCurrentDocument = useCallback(() => {
     const runtime = loadedRuntimeRef.current;
@@ -971,11 +1493,21 @@ export const CoppermindDocumentEditor = ({
     const runtime = loadedRuntimeRef.current;
     const nextSections = runtime ? getCoppermindBlockSuiteSections(runtime.doc) : [];
     setSections(nextSections);
-    setActiveSectionId(current => (
-      current && nextSections.some(section => section.id === current)
-        ? current
-        : nextSections[0]?.id
-    ));
+    setActiveSectionId(current => {
+      const currentSection = nextSections.find(section => section.id === current);
+      if (
+        currentSection
+        && (modeRef.current !== 'edgeless' || currentSection.placement.state === 'placed')
+      ) {
+        return current;
+      }
+
+      if (modeRef.current === 'edgeless') {
+        return undefined;
+      }
+
+      return nextSections[0]?.id;
+    });
   }, []);
 
   const markActiveSection = useCallback((sectionId: string | undefined, shouldScroll = false) => {
@@ -1018,9 +1550,18 @@ export const CoppermindDocumentEditor = ({
   }, []);
 
   const selectSection = useCallback((sectionId: string) => {
+    if (mode === 'edgeless') {
+      const section = sections.find(item => item.id === sectionId);
+      if (section?.placement.state === 'placed') {
+        setActiveSectionId(sectionId);
+        canvasApi?.locateSection(section.id, section.placement.xywh);
+      }
+      return;
+    }
+
     setActiveSectionId(sectionId);
     window.requestAnimationFrame(() => markActiveSection(sectionId, true));
-  }, [markActiveSection]);
+  }, [canvasApi, markActiveSection, mode, sections]);
 
   const addSection = useCallback(() => {
     const runtime = loadedRuntimeRef.current;
@@ -1031,6 +1572,18 @@ export const CoppermindDocumentEditor = ({
     setActiveSectionId(sectionId);
     window.requestAnimationFrame(() => markActiveSection(sectionId, true));
   }, [markActiveSection, refreshSections]);
+
+  const addSectionToCanvas = useCallback(() => {
+    const runtime = loadedRuntimeRef.current;
+    if (!runtime || !canvasApi) return;
+
+    const xywh = createCoppermindNextCanvasCellXYWH(getCoppermindBlockSuiteSections(runtime.doc));
+    const sectionId = addCoppermindBlockSuiteSection(runtime.doc);
+    placeCoppermindBlockSuiteSection(runtime.doc, sectionId, xywh);
+    refreshSections();
+    setActiveSectionId(sectionId);
+    window.requestAnimationFrame(() => canvasApi.locateSection(sectionId, xywh, { editing: true }));
+  }, [canvasApi, refreshSections]);
 
   const deleteSection = useCallback((section: CoppermindBlockSuiteSection) => {
     const runtime = loadedRuntimeRef.current;
@@ -1046,6 +1599,176 @@ export const CoppermindDocumentEditor = ({
     deleteCoppermindBlockSuiteSection(runtime.doc, section.id);
     refreshSections();
   }, [refreshSections]);
+
+  const handleCanvasApiChange = useCallback((api: CoppermindCanvasApi | undefined) => {
+    canvasApiRef.current = api;
+    setCanvasApi(api);
+    if (!api) {
+      canvasEditViewportSessionRef.current = undefined;
+      canvasSelectionStateRef.current = { editing: false, selectedIds: [] };
+    }
+  }, []);
+
+  const handleCanvasViewportChange = useCallback((state: CoppermindCanvasViewportState | undefined) => {
+    setCanvasViewport(state);
+  }, []);
+
+  const punchInToEditingCanvasSelection = useCallback((
+    selectedSection: CoppermindBlockSuiteSection,
+    xywh: CoppermindBlockSuiteSectionXYWH,
+  ) => {
+    const api = canvasApiRef.current;
+    if (!api) return;
+
+    const editSession = canvasEditViewportSessionRef.current;
+    if (editSession?.sectionId === selectedSection.id) return;
+
+    const viewport = api.getViewportSnapshot();
+    if (viewport) {
+      canvasEditViewportSessionRef.current = {
+        sectionId: selectedSection.id,
+        viewport,
+      };
+    }
+    api.focusSectionForEditing(xywh);
+  }, []);
+
+  const restoreCanvasEditViewportSession = useCallback(() => {
+    const api = canvasApiRef.current;
+    const editSession = canvasEditViewportSessionRef.current;
+    if (!api || !editSession) return;
+
+    canvasEditViewportSessionRef.current = undefined;
+    api.restoreViewport(editSession.viewport);
+  }, []);
+
+  const handleCanvasSelectionChange = useCallback((selectionState: CoppermindCanvasSelectionState) => {
+    canvasSelectionStateRef.current = selectionState;
+    const selectedIdSet = new Set(selectionState.selectedIds);
+    const selectedSection = sectionsRef.current.find(section => (
+      section.placement.state === 'placed' && selectedIdSet.has(section.id)
+    ));
+    const selectedPlacement = selectedSection?.placement;
+    setActiveSectionId(selectedSection?.id);
+    const api = canvasApiRef.current;
+    const editSession = canvasEditViewportSessionRef.current;
+
+    if (api && selectedSection && selectedPlacement?.state === 'placed' && selectionState.editing) {
+      if (!canvasEditPunchInEnabledRef.current) {
+        restoreCanvasEditViewportSession();
+        return;
+      }
+      punchInToEditingCanvasSelection(selectedSection, selectedPlacement.xywh);
+      return;
+    }
+
+    if (editSession && (!selectionState.editing || selectedSection?.id !== editSession.sectionId)) {
+      restoreCanvasEditViewportSession();
+    }
+  }, [punchInToEditingCanvasSelection, restoreCanvasEditViewportSession]);
+
+  const toggleCanvasEditPunchIn = useCallback(() => {
+    const nextEnabled = !canvasEditPunchInEnabledRef.current;
+    canvasEditPunchInEnabledRef.current = nextEnabled;
+    setCanvasEditPunchInEnabled(nextEnabled);
+
+    if (!nextEnabled) {
+      restoreCanvasEditViewportSession();
+      return;
+    }
+
+    const selectionState = canvasSelectionStateRef.current;
+    if (!selectionState.editing) return;
+
+    const selectedIdSet = new Set(selectionState.selectedIds);
+    const selectedSection = sectionsRef.current.find(section => (
+      section.placement.state === 'placed' && selectedIdSet.has(section.id)
+    ));
+    if (!selectedSection || selectedSection.placement.state !== 'placed') return;
+
+    punchInToEditingCanvasSelection(selectedSection, selectedSection.placement.xywh);
+  }, [punchInToEditingCanvasSelection, restoreCanvasEditViewportSession]);
+
+  const placeSectionWithXYWH = useCallback((
+    section: CoppermindBlockSuiteSection,
+    xywh: CoppermindBlockSuiteSectionXYWH,
+  ) => {
+    const runtime = loadedRuntimeRef.current;
+    if (!runtime) return;
+
+    if (!placeCoppermindBlockSuiteSection(runtime.doc, section.id, xywh)) return;
+    refreshSections();
+    setActiveSectionId(section.id);
+    window.requestAnimationFrame(() => canvasApi?.locateSection(section.id, xywh));
+  }, [canvasApi, refreshSections]);
+
+  const placeSectionInNextCanvasSlot = useCallback((section: CoppermindBlockSuiteSection) => {
+    placeSectionWithXYWH(section, createCoppermindNextCanvasCellXYWH(sections));
+  }, [placeSectionWithXYWH, sections]);
+
+  const unplaceSectionFromCanvas = useCallback((section: CoppermindBlockSuiteSection) => {
+    const runtime = loadedRuntimeRef.current;
+    if (!runtime) return;
+
+    if (!unplaceCoppermindBlockSuiteSection(runtime.doc, section.id)) return;
+    canvasApi?.clearSelection();
+    refreshSections();
+    setActiveSectionId(undefined);
+  }, [canvasApi, refreshSections]);
+
+  const arrangeCellsAsPage = useCallback(() => {
+    const runtime = loadedRuntimeRef.current;
+    if (!runtime) return;
+
+    const orderedSections = getCoppermindBlockSuiteSections(runtime.doc);
+    const defaultHeight = createCoppermindNextCanvasCellXYWH([])[3];
+    let y = 0;
+
+    for (const section of orderedSections) {
+      const height = section.placement.state === 'placed'
+        ? section.placement.xywh[3]
+        : defaultHeight;
+      placeCoppermindBlockSuiteSection(runtime.doc, section.id, [
+        -coppermindCellWidthPx / 2,
+        y,
+        coppermindCellWidthPx,
+        height,
+      ]);
+      y += height + coppermindCanvasCellGapPx;
+    }
+
+    refreshSections();
+    window.requestAnimationFrame(() => canvasApi?.fitToScreen());
+  }, [canvasApi, refreshSections]);
+
+  const dragSectionFromSidebar = useCallback((
+    section: CoppermindBlockSuiteSection,
+    event: DragEvent<HTMLElement>,
+  ) => {
+    if (section.placement.state !== 'unplaced') return;
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData(coppermindSectionDragDataType, section.id);
+    event.dataTransfer.setData('text/plain', section.title);
+  }, []);
+
+  const handleCanvasDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!canvasApi || !isSectionDragEvent(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  }, [canvasApi]);
+
+  const handleCanvasDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!canvasApi || !isSectionDragEvent(event)) return;
+    event.preventDefault();
+
+    const sectionId = event.dataTransfer.getData(coppermindSectionDragDataType);
+    const section = sections.find(item => item.id === sectionId);
+    if (!section || section.placement.state !== 'unplaced') return;
+
+    const point = canvasApi.getModelPointFromClientPoint(event.clientX, event.clientY);
+    if (!point) return;
+    placeSectionWithXYWH(section, createCoppermindSectionXYWHAtTopLeft(point.x, point.y));
+  }, [canvasApi, placeSectionWithXYWH, sections]);
 
   useEffect(() => {
     if (value === lastSerializedRef.current) return;
@@ -1207,30 +1930,46 @@ export const CoppermindDocumentEditor = ({
       ) : null}
       <div className="min-h-0 flex-1 overflow-hidden bg-background">
         {loadedState.status === 'ready' ? (
-          mode === 'page' ? (
-            <div className="flex h-full min-h-0">
-              <CoppermindSectionOutline
-                activeSectionId={activeSectionId}
-                sections={sections}
-                onAddSection={addSection}
-                onDeleteSection={deleteSection}
-                onSelectSection={selectSection}
-              />
-              <div className="min-h-0 flex-1 overflow-visible">
-                <BlockSuiteEditorMount
-                  key={`${loadedState.runtime.doc.id}:${mode}`}
-                  doc={loadedState.runtime.doc}
-                  mode={mode}
-                />
-              </div>
-            </div>
-          ) : (
-            <BlockSuiteEditorMount
-              key={`${loadedState.runtime.doc.id}:${mode}`}
-              doc={loadedState.runtime.doc}
+          <div className="flex h-full min-h-0">
+            <CoppermindSectionOutline
+              activeSectionId={activeSectionId}
+              canPlaceSections={Boolean(canvasApi)}
               mode={mode}
+              sections={sections}
+              onAddSection={mode === 'page' ? addSection : addSectionToCanvas}
+              onDeleteSection={deleteSection}
+              onDragSection={mode === 'edgeless' ? dragSectionFromSidebar : undefined}
+              onPlaceSection={mode === 'edgeless' ? placeSectionInNextCanvasSlot : undefined}
+              onSelectSection={selectSection}
+              onUnplaceSection={mode === 'edgeless' ? unplaceSectionFromCanvas : undefined}
             />
-          )
+            <div
+              className={cn(
+                'relative min-h-0 flex-1',
+                mode === 'page' ? 'overflow-visible' : 'overflow-hidden',
+              )}
+              onDragOver={mode === 'edgeless' ? handleCanvasDragOver : undefined}
+              onDrop={mode === 'edgeless' ? handleCanvasDrop : undefined}
+            >
+              <BlockSuiteEditorMount
+                key={`${loadedState.runtime.doc.id}:${mode}`}
+                doc={loadedState.runtime.doc}
+                mode={mode}
+                onCanvasApiChange={mode === 'edgeless' ? handleCanvasApiChange : undefined}
+                onCanvasViewportChange={mode === 'edgeless' ? handleCanvasViewportChange : undefined}
+                onCanvasSelectionChange={mode === 'edgeless' ? handleCanvasSelectionChange : undefined}
+              />
+              {mode === 'edgeless' ? (
+                <CoppermindCanvasViewportToolbar
+                  api={canvasApi}
+                  editPunchInEnabled={canvasEditPunchInEnabled}
+                  zoom={canvasViewport?.zoom}
+                  onArrangeAsPage={arrangeCellsAsPage}
+                  onToggleEditPunchIn={toggleCanvasEditPunchIn}
+                />
+              ) : null}
+            </div>
+          </div>
         ) : loadedState.status === 'invalid' ? (
           <InvalidCoppermindFallback
             message={loadedState.message}
