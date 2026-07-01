@@ -17,6 +17,10 @@ const sharedClientPackages = [
   '@assistant-ui/react-ai-sdk',
   '@atomic-editor/editor',
   '@base-ui/react',
+  '@blocksuite/blocks',
+  '@blocksuite/presets',
+  '@blocksuite/store',
+  '@toeverything/theme',
   '@capacitor/preferences',
   '@criblinc/docker-names',
   '@codemirror/autocomplete',
@@ -59,6 +63,7 @@ const sharedClientPackages = [
   'tailwind-merge',
   'tailwindcss',
   'yaml',
+  'yjs',
   'zustand',
 ] as const;
 

@@ -46,6 +46,7 @@ export type NotesVaultEntry = {
 
 export type NotesVaultNote = {
   path: string;
+  documentType?: 'markdown' | 'coppermind';
   title: string;
   headings: string[];
   tags: string[];

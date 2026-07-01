@@ -18,6 +18,7 @@ export type PortalVaultEntry = {
 
 export type PortalVaultNote = {
   path: string;
+  documentType?: 'markdown' | 'coppermind';
   title: string;
   headings: string[];
   tags: string[];
@@ -174,7 +175,8 @@ export const parseVaultPath = (value: unknown, name = 'path') => {
 const getFileVersion = (details: Deno.FileInfo) => `${details.mtime?.getTime() ?? 0}:${details.size}`;
 const isMarkdownPath = (path: string) => /\.(md|markdown)$/i.test(path);
 const isExcalidrawPath = (path: string) => /\.excalidraw$/i.test(path);
-const isTextVaultPath = (path: string) => isMarkdownPath(path) || isExcalidrawPath(path) || /\.canvas$/i.test(path) || /\.json$/i.test(path);
+const isCoppermindPath = (path: string) => /\.cpr$/i.test(path);
+const isTextVaultPath = (path: string) => isMarkdownPath(path) || isExcalidrawPath(path) || isCoppermindPath(path) || /\.canvas$/i.test(path) || /\.json$/i.test(path);
 
 const decodeUtf8 = (bytes: Uint8Array) => {
   try {
@@ -248,12 +250,77 @@ const parseMarkdownNote = (path: string, content: string, details: Deno.FileInfo
 
   return {
     path,
+    documentType: 'markdown',
     title,
     headings,
     tags,
     links: [...links].sort(),
     embeds: [...embeds].sort(),
     properties,
+    mtimeMs: details.mtime?.getTime(),
+    size: details.size,
+    preview,
+  };
+};
+
+const getBlockSuiteText = (value: unknown) => {
+  if (typeof value === 'string') return value.trim();
+  if (!isRecord(value) || !Array.isArray(value.delta)) return '';
+  return value.delta
+    .map(operation => isRecord(operation) && typeof operation.insert === 'string' ? operation.insert : '')
+    .join('')
+    .trim();
+};
+
+const collectBlockSuiteSnapshotText = (block: unknown, texts: string[]) => {
+  if (!isRecord(block)) return;
+  const props = isRecord(block.props) ? block.props : {};
+  const blockText = getBlockSuiteText(props.text);
+  if (blockText) texts.push(blockText);
+
+  const children = Array.isArray(block.children) ? block.children : [];
+  for (const child of children) collectBlockSuiteSnapshotText(child, texts);
+};
+
+const getCoppermindV2Preview = (parsed: Record<string, unknown>) => {
+  const blocksuite = isRecord(parsed.blocksuite) ? parsed.blocksuite : {};
+  const snapshot = isRecord(blocksuite.snapshot) ? blocksuite.snapshot : {};
+  const texts: string[] = [];
+  collectBlockSuiteSnapshotText(snapshot.blocks, texts);
+  return texts.join(' ');
+};
+
+const getCoppermindV1Preview = (parsed: Record<string, unknown>) => {
+  const blocks = Array.isArray(parsed.blocks) ? parsed.blocks : [];
+  return blocks
+    .map(block => isRecord(block) && typeof block.text === 'string' ? block.text.trim() : '')
+    .filter(Boolean)
+    .join(' ');
+};
+
+const parseCoppermindNote = (path: string, content: string, details: Deno.FileInfo): PortalVaultNote => {
+  let title = removeExtension(getBasename(path));
+  let preview = '';
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    const metadata = isRecord(parsed.metadata) ? parsed.metadata : {};
+    if (typeof metadata.title === 'string' && metadata.title.trim()) title = metadata.title.trim();
+    preview = (parsed.version === 2 ? getCoppermindV2Preview(parsed) : getCoppermindV1Preview(parsed))
+      .replace(/\s+/g, ' ')
+      .slice(0, 240);
+  } catch {
+    preview = 'Invalid Coppermind document';
+  }
+
+  return {
+    path,
+    documentType: 'coppermind',
+    title,
+    headings: [],
+    tags: [],
+    links: [],
+    embeds: [],
+    properties: {},
     mtimeMs: details.mtime?.getTime(),
     size: details.size,
     preview,
@@ -268,8 +335,10 @@ const targetCandidates = (target: string) => {
   return [
     normalized,
     normalized.endsWith('.md') ? normalized : `${normalized}.md`,
+    normalized.endsWith('.cpr') ? normalized : `${normalized}.cpr`,
     basename,
     `${basename}.md`,
+    `${basename}.cpr`,
   ];
 };
 
@@ -313,9 +382,12 @@ export class PortalVaultHost {
         if (!entry.isFile || visited >= maxIndexedFiles) continue;
         visited += 1;
 
-        if (isMarkdownPath(entryRelativePath) && stat.size <= this.maxIndexBytes) {
+        if ((isMarkdownPath(entryRelativePath) || isCoppermindPath(entryRelativePath)) && stat.size <= this.maxIndexBytes) {
           const bytes = await Deno.readFile(entryAbsolutePath);
-          notes.push(parseMarkdownNote(entryRelativePath, decodeUtf8(bytes), stat));
+          const content = decodeUtf8(bytes);
+          notes.push(isCoppermindPath(entryRelativePath)
+            ? parseCoppermindNote(entryRelativePath, content, stat)
+            : parseMarkdownNote(entryRelativePath, content, stat));
           continue;
         }
 

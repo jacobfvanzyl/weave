@@ -19,6 +19,9 @@
     "@atomic-editor/editor": "^0.4.3",
     "@azurity/pure-nerd-font": "^3.0.5",
     "@base-ui/react": "^1.5.0",
+    "@blocksuite/blocks": "0.19.5",
+    "@blocksuite/presets": "0.19.5",
+    "@blocksuite/store": "0.19.5",
     "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/commands": "^6.10.0",
     "@codemirror/lang-css": "^6.3.1",
@@ -48,6 +51,7 @@
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-hotkeys": "0.10.0",
     "@tanstack/react-query": "^5.90.12",
+    "@toeverything/theme": "1.1.23",
     "@vitejs/plugin-react": "^5.1.1",
     "@weave/client": "file:../packages/client",
     "ai": "^6.0.53",
@@ -66,7 +70,11 @@
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.18",
     "yaml": "^2.9.0",
+    "yjs": "^13.6.31",
     "zustand": "^5.0.9"
+  },
+  "overrides": {
+    "@blocksuite/icons": "2.1.75"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.19",

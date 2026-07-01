@@ -21,6 +21,10 @@
     "@atomic-editor/editor": "^0.4.3",
     "@azurity/pure-nerd-font": "^3.0.5",
     "@base-ui/react": "^1.5.0",
+    "@blocksuite/blocks": "0.19.5",
+    "@blocksuite/presets": "0.19.5",
+    "@blocksuite/store": "0.19.5",
+    "@toeverything/theme": "1.1.23",
     "@criblinc/docker-names": "^1.2.2",
     "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/commands": "^6.10.0",
@@ -61,6 +65,7 @@
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.18",
     "yaml": "^2.9.0",
+    "yjs": "^13.6.31",
     "zustand": "^5.0.9"
   },
   "peerDependencies": {

@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { CaptureUpdateAction, Excalidraw, restore as restoreExcalidrawData, serializeAsJSON as serializeExcalidrawAsJSON } from '@excalidraw/excalidraw';
-import '@excalidraw/excalidraw/index.css';
 import {
+  Brain,
   ChevronDown,
   ChevronRight,
   Code2,
@@ -30,10 +29,16 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { createEmptyCoppermindDocumentContent, normalizeCoppermindDocumentPath } from '../../lib/coppermind-document';
+import {
+  getDefaultDocumentExtension,
+  getEditorDocumentLabel,
+  getEditorDocumentMediaType,
+  isEditorPathOpenable,
+  resolveEditorDocumentKind,
+} from '../../lib/editor-document-kind';
 import { createEditorBackend } from '../../lib/editor-backend';
 import type { EditorEntry, EditorMode, EditorTarget, OpenBuffer } from '../../lib/editor-types';
-import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
-import { getNoteFileDisplayName } from '../../lib/note-display';
 import { defaultEditorExplorerVisible, getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
 import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
 import { createVaultBackend, type VaultAttachment, type VaultIndexResult, type VaultNote, type VaultTarget } from '../../lib/vault-backend';
@@ -42,10 +47,9 @@ import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../ui/dialog';
 import { Input } from '../ui/input';
-import { CodeMirrorEditor, editorCanvasBackgroundColor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
-import { ExcalidrawCanvasControls, type ExcalidrawCanvasAppState } from './ExcalidrawCanvasControls';
-import { ExcalidrawPencilToolOverlay } from './ExcalidrawPencilToolOverlay';
-import { useApplePencilExcalidrawControls } from './useApplePencilExcalidrawControls';
+import { CodeMirrorEditor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
+import { CoppermindDocumentEditor } from './CoppermindDocumentEditor';
+import { createEmptyExcalidrawFile, ExcalidrawDocumentEditor, normalizeExcalidrawContent } from './ExcalidrawDocumentEditor';
 
 export type UnifiedEditorTarget = EditorTarget & {
   projectName: string;
@@ -95,16 +99,10 @@ type TreeNode = {
   mtimeMs?: number;
 };
 
-type ExcalidrawComponentProps = ComponentProps<typeof Excalidraw>;
-type ExcalidrawImperativeAPI = Parameters<NonNullable<ExcalidrawComponentProps['excalidrawAPI']>>[0];
-type ExcalidrawChangeHandler = NonNullable<ExcalidrawComponentProps['onChange']>;
-type ExcalidrawTopRightRenderer = NonNullable<ExcalidrawComponentProps['renderTopRightUI']>;
-type RestoredExcalidrawData = ReturnType<typeof restoreExcalidrawData>;
-
 const toErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
-const isMarkdownPath = (path: string | undefined) => Boolean(path && /\.(md|markdown)$/i.test(path));
-const isExcalidrawPath = (path: string | undefined) => Boolean(path && /\.excalidraw$/i.test(path));
-const isNotesOpenablePath = (path: string | undefined) => isMarkdownPath(path) || isExcalidrawPath(path);
+const getDocumentKind = (mode: EditorMode, path: string | undefined) => (
+  path ? resolveEditorDocumentKind({ mode, path }) : undefined
+);
 const getParentPath = (path: string) => path.split('/').filter(Boolean).slice(0, -1).join('/');
 const getBasename = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 const getFileExtension = (path: string) => {
@@ -118,28 +116,26 @@ const normalizeMarkdownPath = (value: string) => {
   if (!path) return '';
   return /\.(md|markdown)$/i.test(path) ? path : `${path}.md`;
 };
+const normalizeNotesDocumentPath = (value: string) => {
+  const path = normalizeRelativePath(value);
+  if (!path) return '';
+  return /\.(md|markdown|cpr)$/i.test(path) ? path : normalizeCoppermindDocumentPath(path);
+};
 const normalizeRenameFileName = (value: string, currentPath: string, mode: EditorMode) => {
   const name = normalizeRelativePath(value);
   if (!name || name.includes('/')) return '';
   if (mode !== 'notes' || /\.[^/.]+$/i.test(name)) return name;
-  if (isMarkdownPath(currentPath) || isExcalidrawPath(currentPath)) return `${name}${getFileExtension(currentPath) || '.md'}`;
+  const kind = getDocumentKind(mode, currentPath);
+  if (kind === 'markdown' || kind === 'excalidraw' || kind === 'coppermind') {
+    return `${name}${getFileExtension(currentPath) || getDefaultDocumentExtension(kind)}`;
+  }
   return name;
 };
 
 const getRenameDisplayName = (path: string, mode: EditorMode) => {
-  if (mode === 'notes' && isMarkdownPath(path)) return getNoteFileDisplayName(path);
+  const kind = getDocumentKind(mode, path);
+  if (kind === 'markdown' || kind === 'excalidraw' || kind === 'coppermind') return getEditorDocumentLabel(path, mode);
   return getBasename(path);
-};
-
-const getEditorFileLabel = (path: string, mode: EditorMode) => {
-  if (mode === 'notes' && isMarkdownPath(path)) return getNoteFileDisplayName(path);
-  if (mode === 'notes' && isExcalidrawPath(path)) return getBasename(path).replace(/\.excalidraw$/i, '');
-  return getBasename(path);
-};
-
-const getExplorerFileLabel = (path: string, mode: EditorMode) => {
-  if (mode === 'notes' && isExcalidrawPath(path)) return getBasename(path).replace(/\.excalidraw$/i, '');
-  return getEditorFileLabel(path, mode);
 };
 
 const explorerSlideOverCloseDelayMs = 120;
@@ -204,58 +200,6 @@ const withBufferValue = (buffer: EditorBuffer, value: string): EditorBuffer => (
   dirty: value !== buffer.content,
 });
 
-const createEmptyExcalidrawFile = () => serializeExcalidrawAsJSON(
-  [],
-  { viewBackgroundColor: editorCanvasBackgroundColor },
-  {},
-  'local',
-);
-
-const excalidrawDarkFilteredEditorBackgroundColor = '#eeeeff';
-
-const isDefaultExcalidrawBackground = (value: unknown) => {
-  if (typeof value !== 'string') return true;
-  const normalized = value.trim().toLowerCase();
-  return !normalized || normalized === '#fff' || normalized === '#ffffff' || normalized === 'white' || normalized === 'transparent';
-};
-
-const getExcalidrawAppStateWithEditorBackground = (appState: unknown) => {
-  const appStateRecord = appState && typeof appState === 'object'
-    ? { ...(appState as Record<string, unknown>) }
-    : {};
-  const hasStoredBackground = Object.prototype.hasOwnProperty.call(appStateRecord, 'viewBackgroundColor');
-  if (!hasStoredBackground || isDefaultExcalidrawBackground(appStateRecord.viewBackgroundColor)) {
-    appStateRecord.viewBackgroundColor = editorCanvasBackgroundColor;
-  }
-  return appStateRecord;
-};
-
-const isEditorCanvasBackground = (value: unknown) => (
-  typeof value === 'string' && value.trim().toLowerCase() === editorCanvasBackgroundColor
-);
-
-const isDarkFilteredEditorCanvasBackground = (value: unknown) => (
-  typeof value === 'string' && value.trim().toLowerCase() === excalidrawDarkFilteredEditorBackgroundColor
-);
-
-const getExcalidrawRuntimeAppState = (appState: RestoredExcalidrawData['appState'], theme: 'light' | 'dark') => {
-  const runtimeAppState = { ...appState };
-  // Excalidraw dark mode applies invert(93%) hue-rotate(180deg) to canvas pixels.
-  // Feed it the pre-filtered equivalent so the visible canvas matches CodeMirror.
-  if (theme === 'dark' && isEditorCanvasBackground(runtimeAppState.viewBackgroundColor)) {
-    runtimeAppState.viewBackgroundColor = excalidrawDarkFilteredEditorBackgroundColor;
-  }
-  return runtimeAppState;
-};
-
-const getExcalidrawStoredAppState = (appState: Parameters<typeof serializeExcalidrawAsJSON>[1]) => {
-  const storedAppState = { ...appState };
-  if (isDarkFilteredEditorCanvasBackground(storedAppState.viewBackgroundColor)) {
-    storedAppState.viewBackgroundColor = editorCanvasBackgroundColor;
-  }
-  return storedAppState;
-};
-
 const formatDrawingTimestamp = (date: Date) => {
   const pad = (value: number) => value.toString().padStart(2, '0');
   return [
@@ -272,48 +216,6 @@ const formatDrawingTimestamp = (date: Date) => {
     pad(date.getSeconds()),
   ].join('');
 };
-
-const parseExcalidrawStoredData = (content: string): RestoredExcalidrawData => {
-  try {
-    const parsed = content ? JSON.parse(content) as Record<string, unknown> : {};
-    const elements = Array.isArray(parsed.elements) ? parsed.elements as any : [];
-    return restoreExcalidrawData(
-      {
-        elements,
-        appState: getExcalidrawAppStateWithEditorBackground(parsed.appState) as any,
-        files: parsed.files && typeof parsed.files === 'object' ? parsed.files as any : {},
-      },
-      { viewBackgroundColor: editorCanvasBackgroundColor },
-      null,
-    );
-  } catch {
-    return restoreExcalidrawData(
-      { elements: [], appState: { viewBackgroundColor: editorCanvasBackgroundColor }, files: {} },
-      { viewBackgroundColor: editorCanvasBackgroundColor },
-      null,
-    );
-  }
-};
-
-const parseExcalidrawInitialData = (content: string, theme: 'light' | 'dark'): RestoredExcalidrawData => {
-  const storedData = parseExcalidrawStoredData(content);
-  return {
-    ...storedData,
-    appState: getExcalidrawRuntimeAppState(storedData.appState, theme),
-  };
-};
-
-const serializeExcalidrawScene = ([elements, appState, files]: Parameters<ExcalidrawChangeHandler>) => (
-  serializeExcalidrawAsJSON(elements, getExcalidrawStoredAppState(appState), files, 'local')
-);
-
-const serializeRestoredExcalidrawData = (data: RestoredExcalidrawData) => (
-  serializeExcalidrawAsJSON(data.elements, getExcalidrawStoredAppState(data.appState), data.files, 'local')
-);
-
-function normalizeExcalidrawContent(content: string) {
-  return serializeRestoredExcalidrawData(parseExcalidrawStoredData(content));
-}
 
 const editorModeIndicatorStyles: Record<VimMode, { label: string; foreground: string; background: string }> = {
   normal: { label: 'NORMAL', foreground: '#181825', background: '#89b4fa' },
@@ -431,7 +333,7 @@ const buildNotesTree = (index: VaultIndexResult | undefined, rootName: string) =
     if (isIgnoredExplorerPath(note.path)) continue;
     insertPath(root, note.path, 'file', {
       note,
-      mediaType: 'markdown',
+      mediaType: note.documentType ?? 'markdown',
       size: note.size,
       mtimeMs: note.mtimeMs,
     });
@@ -639,11 +541,6 @@ export const UnifiedEditorPanel = ({
   const setPersistedEditorTabs = useEditorTabStore(state => state.setEditorTabs);
   const resolvedTheme = getResolvedTheme(useThemeStore(state => state.mode));
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
-  const excalidrawApiRef = useRef<ExcalidrawImperativeAPI | null>(null);
-  const excalidrawSurfaceRef = useRef<HTMLDivElement | null>(null);
-  const skippedInitialExcalidrawChangeKeyRef = useRef<string | undefined>(undefined);
-  const excalidrawResizeFrameRef = useRef<number | undefined>(undefined);
-  const excalidrawResizeTimeoutRef = useRef<number | undefined>(undefined);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const explorerSlideOverCloseTimeoutRef = useRef<number | undefined>(undefined);
   const fileOpenClickTimeoutRef = useRef<number | undefined>(undefined);
@@ -699,23 +596,8 @@ export const UnifiedEditorPanel = ({
     ? vaultIndex?.attachments.find(attachment => attachment.path === activePath)
     : selectedNode?.attachment;
   const activeBacklinks = activeNote ? vaultIndex?.backlinks[activeNote.path] ?? [] : [];
-  const excalidrawInitialData = useMemo(() => {
-    if (!openBuffer || mode !== 'notes' || !isExcalidrawPath(openBuffer.path)) return undefined;
-    return parseExcalidrawInitialData(openBuffer.value, resolvedTheme);
-  }, [mode, openBuffer?.path, openBuffer?.version, resolvedTheme]);
-  const excalidrawBufferKey = openBuffer && mode === 'notes' && isExcalidrawPath(openBuffer.path)
-    ? `${openBuffer.path}:${openBuffer.version}`
-    : undefined;
-  const isCodeMirrorOpen = Boolean(openBuffer && !excalidrawBufferKey);
-  const excalidrawInitialSerialized = useMemo(() => (
-    excalidrawInitialData ? serializeRestoredExcalidrawData(excalidrawInitialData) : undefined
-  ), [excalidrawInitialData]);
-  const excalidrawViewBackgroundColor = excalidrawInitialData?.appState.viewBackgroundColor ?? editorCanvasBackgroundColor;
-  const applePencilExcalidrawControls = useApplePencilExcalidrawControls(
-    excalidrawApiRef,
-    excalidrawSurfaceRef,
-    Boolean(excalidrawBufferKey),
-  );
+  const activeDocumentKind = getDocumentKind(mode, openBuffer?.path);
+  const isCodeMirrorOpen = Boolean(openBuffer && (activeDocumentKind === 'code' || activeDocumentKind === 'markdown'));
 
   const tree = useMemo(() => (
     mode === 'code'
@@ -725,10 +607,10 @@ export const UnifiedEditorPanel = ({
   const visibleTree = useMemo(() => filterTree(tree, query, true) ?? tree, [query, tree]);
   const existingExplorerPaths = useMemo(() => collectTreePaths(tree), [tree]);
   const noteSuggestions = useMemo(() => (vaultIndex?.notes ?? []).map(note => ({
-    target: note.path.replace(/\.(md|markdown)$/i, ''),
-    label: getNoteFileDisplayName(note.path),
-    detail: note.title && note.title !== getNoteFileDisplayName(note.path) ? `${note.path} · ${note.title}` : note.path,
-  })), [vaultIndex?.notes]);
+    target: note.path.replace(/\.(md|markdown|cpr)$/i, ''),
+    label: getEditorDocumentLabel(note.path, mode),
+    detail: note.title && note.title !== getEditorDocumentLabel(note.path, mode) ? `${note.path} · ${note.title}` : note.path,
+  })), [mode, vaultIndex?.notes]);
   const editorTabSensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 5 } }),
@@ -808,77 +690,9 @@ export const UnifiedEditorPanel = ({
     ));
   }, [activeEditorTab, buffersByTabId, editorTabTargetKey, pinPersistedEditorTab, updateBuffer]);
 
-  const scheduleExcalidrawResize = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    if (excalidrawResizeFrameRef.current !== undefined) window.cancelAnimationFrame(excalidrawResizeFrameRef.current);
-    if (excalidrawResizeTimeoutRef.current !== undefined) window.clearTimeout(excalidrawResizeTimeoutRef.current);
-
-    const notifyResize = () => window.dispatchEvent(new Event('resize'));
-    excalidrawResizeFrameRef.current = window.requestAnimationFrame(() => {
-      excalidrawResizeFrameRef.current = undefined;
-      notifyResize();
-    });
-    excalidrawResizeTimeoutRef.current = window.setTimeout(() => {
-      excalidrawResizeTimeoutRef.current = undefined;
-      notifyResize();
-    }, 180);
-  }, []);
-
-  const handleExcalidrawApi = useCallback((api: ExcalidrawImperativeAPI) => {
-    excalidrawApiRef.current = api;
-    scheduleExcalidrawResize();
-  }, [scheduleExcalidrawResize]);
-
-  useEffect(() => {
-    if (!excalidrawBufferKey) return;
-    excalidrawApiRef.current?.updateScene({
-      appState: { viewBackgroundColor: excalidrawViewBackgroundColor },
-      captureUpdate: CaptureUpdateAction.NEVER,
-    });
-  }, [excalidrawBufferKey, excalidrawViewBackgroundColor]);
-
-  const handleExcalidrawChange = useCallback((...snapshot: Parameters<ExcalidrawChangeHandler>) => {
-    const serializedScene = serializeExcalidrawScene(snapshot);
-    if (excalidrawBufferKey && skippedInitialExcalidrawChangeKeyRef.current !== excalidrawBufferKey) {
-      skippedInitialExcalidrawChangeKeyRef.current = excalidrawBufferKey;
-      if (serializedScene === excalidrawInitialSerialized) return;
-    }
-    setActiveBufferValue(serializedScene);
-  }, [excalidrawBufferKey, excalidrawInitialSerialized, setActiveBufferValue]);
-
-  const handleExcalidrawAppStateChange = useCallback((appState: ExcalidrawCanvasAppState) => {
-    if (!excalidrawBufferKey) return;
-    const api = excalidrawApiRef.current;
-    if (!api) return;
-
-    const serializedScene = serializeExcalidrawAsJSON(
-      api.getSceneElementsIncludingDeleted(),
-      getExcalidrawStoredAppState(appState as Parameters<typeof serializeExcalidrawAsJSON>[1]),
-      api.getFiles(),
-      'local',
-    );
-    setActiveBufferValue(serializedScene);
-  }, [excalidrawBufferKey, setActiveBufferValue]);
-
-  const renderExcalidrawTopRightUI = useCallback<ExcalidrawTopRightRenderer>((_isMobile, appState) => (
-    <ExcalidrawCanvasControls
-      apiRef={excalidrawApiRef}
-      appState={appState}
-      onAppStateChange={handleExcalidrawAppStateChange}
-    />
-  ), [handleExcalidrawAppStateChange]);
-
   const focusEditorSurface = useCallback(() => {
-    if (mode === 'notes' && isExcalidrawPath(openBuffer?.path)) {
-      const fallbackTarget = editorBodyRef.current;
-      const focusTarget = fallbackTarget?.querySelector<HTMLElement>('[contenteditable="true"], textarea, input, canvas, .excalidraw') ?? fallbackTarget;
-      focusTarget?.focus({ preventScroll: true });
-      scheduleExcalidrawResize();
-      return;
-    }
-
     editorRef.current?.focus();
-  }, [editorBodyRef, mode, openBuffer?.path, scheduleExcalidrawResize]);
+  }, []);
 
   const revealLineWithoutFocus = useCallback((line: number) => {
     let secondFrame: number | undefined;
@@ -1115,7 +929,7 @@ export const UnifiedEditorPanel = ({
   }, [codeBackend, editorTarget, expandedPaths, mode, vaultBackend, vaultTarget]);
 
   const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean; preview?: boolean } = {}) => {
-    if (mode === 'notes' && !isNotesOpenablePath(path)) return false;
+    if (!isEditorPathOpenable(mode, path)) return false;
 
     const shouldPreview = options.preview ?? true;
     const existingTab = editorTabs.find(tab => tab.path === path);
@@ -1148,9 +962,7 @@ export const UnifiedEditorPanel = ({
       const file = mode === 'code'
         ? await codeBackend.read(editorTarget, path)
         : await vaultBackend.read(vaultTarget, path);
-      const mediaType = mode === 'notes'
-        ? isExcalidrawPath(file.path) ? 'excalidraw' : 'markdown'
-        : undefined;
+      const mediaType = getEditorDocumentMediaType(getDocumentKind(mode, file.path));
       const loadedBuffer = createLoadedBuffer(file, mediaType);
       const loadedTab = file.path === tab.path
         ? tab
@@ -1194,18 +1006,8 @@ export const UnifiedEditorPanel = ({
     vaultTarget,
   ]);
 
-  useEffect(() => {
-    configureExcalidrawAssetPath();
-  }, []);
-
-  useEffect(() => {
-    if (mode === 'notes' && isExcalidrawPath(openBuffer?.path)) scheduleExcalidrawResize();
-  }, [isExpanded, mode, openBuffer?.path, scheduleExcalidrawResize]);
-
   useEffect(() => () => {
     if (typeof window === 'undefined') return;
-    if (excalidrawResizeFrameRef.current !== undefined) window.cancelAnimationFrame(excalidrawResizeFrameRef.current);
-    if (excalidrawResizeTimeoutRef.current !== undefined) window.clearTimeout(excalidrawResizeTimeoutRef.current);
     if (fileOpenClickTimeoutRef.current !== undefined) window.clearTimeout(fileOpenClickTimeoutRef.current);
   }, []);
 
@@ -1245,12 +1047,17 @@ export const UnifiedEditorPanel = ({
 
   useEffect(() => {
     if (focusRequest === 0) return undefined;
+    if (!isCodeMirrorOpen) {
+      setBufferFocusRequest(request => request + 1);
+      return undefined;
+    }
     const animationFrame = window.requestAnimationFrame(focusEditorSurface);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [focusEditorSurface, focusRequest]);
+  }, [focusEditorSurface, focusRequest, isCodeMirrorOpen]);
 
   useEffect(() => {
     if (bufferFocusRequest === 0 || !openBuffer) return undefined;
+    if (!isCodeMirrorOpen) return undefined;
 
     let secondFrame: number | undefined;
     const firstFrame = window.requestAnimationFrame(() => {
@@ -1261,7 +1068,7 @@ export const UnifiedEditorPanel = ({
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame !== undefined) window.cancelAnimationFrame(secondFrame);
     };
-  }, [bufferFocusRequest, focusEditorSurface, openBuffer?.path]);
+  }, [bufferFocusRequest, focusEditorSurface, isCodeMirrorOpen, openBuffer?.path]);
 
   useEffect(() => {
     if (!followRequest || mode !== 'code' || followRequest.workspaceId !== target.workspaceId) return;
@@ -1331,7 +1138,7 @@ export const UnifiedEditorPanel = ({
       toggleDirectory(node.path);
       return;
     }
-    if (node.type === 'file' && (mode === 'code' || isNotesOpenablePath(node.path))) {
+    if (node.type === 'file' && isEditorPathOpenable(mode, node.path)) {
       if (clickDetail > 1) {
         startRename(node.path, 'explorer');
         return;
@@ -1347,7 +1154,7 @@ export const UnifiedEditorPanel = ({
   }, [clearPendingFileOpen, closeExplorerAfterFileOpen, loadFile, mode, startRename, toggleDirectory]);
 
   const handleNodeDoubleClick = useCallback((node: TreeNode) => {
-    if (node.type !== 'file' || (mode !== 'code' && !isNotesOpenablePath(node.path))) return;
+    if (node.type !== 'file' || !isEditorPathOpenable(mode, node.path)) return;
     startRename(node.path, 'explorer');
   }, [mode, startRename]);
 
@@ -1392,9 +1199,7 @@ export const UnifiedEditorPanel = ({
       const file = mode === 'code'
         ? await codeBackend.read(editorTarget, openBuffer.path)
         : await vaultBackend.read(vaultTarget, openBuffer.path);
-      const mediaType = mode === 'notes'
-        ? isExcalidrawPath(file.path) ? 'excalidraw' : 'markdown'
-        : undefined;
+      const mediaType = getEditorDocumentMediaType(getDocumentKind(mode, file.path));
       const nextBuffer = createLoadedBuffer(file, mediaType);
       const nextTabId = getEditorTabId(editorTabTargetKey, file.path);
       if (file.path !== openBuffer.path) renamePersistedEditorTab(editorTabTargetKey, openBuffer.path, file.path);
@@ -1448,10 +1253,10 @@ export const UnifiedEditorPanel = ({
 
       setSelectedNode(undefined);
       if (sourceTab) {
-        if (mode === 'code' || isNotesOpenablePath(targetPath)) {
+        if (isEditorPathOpenable(mode, targetPath)) {
           const targetTabId = getEditorTabId(editorTabTargetKey, targetPath);
           renamePersistedEditorTab(editorTabTargetKey, sourcePath, targetPath);
-          const mediaType = mode === 'notes' ? isExcalidrawPath(targetPath) ? 'excalidraw' : 'markdown' : undefined;
+          const mediaType = getEditorDocumentMediaType(getDocumentKind(mode, targetPath));
           if (sourceBuffer && getBufferDirty(sourceBuffer)) {
             setBuffersByTabId(current => {
               const next = {
@@ -1487,14 +1292,14 @@ export const UnifiedEditorPanel = ({
             return next;
           });
         }
-      } else if (openBuffer?.path === sourcePath && (mode === 'code' || isNotesOpenablePath(targetPath))) {
+      } else if (openBuffer?.path === sourcePath && isEditorPathOpenable(mode, targetPath)) {
           const file = mode === 'code'
             ? await codeBackend.read(editorTarget, targetPath)
             : await vaultBackend.read(vaultTarget, targetPath);
           const tab = openPersistedEditorTab(editorTabTargetKey, file.path);
           setBuffersByTabId(current => ({
             ...current,
-            [tab.id]: createLoadedBuffer(file, mode === 'notes' ? isExcalidrawPath(file.path) ? 'excalidraw' : 'markdown' : undefined),
+            [tab.id]: createLoadedBuffer(file, getEditorDocumentMediaType(getDocumentKind(mode, file.path))),
           }));
       }
 
@@ -1530,10 +1335,12 @@ export const UnifiedEditorPanel = ({
   }, []);
 
   const createFile = useCallback(async (rawPath: string) => {
-    const path = mode === 'notes' ? normalizeMarkdownPath(rawPath) : normalizeRelativePath(rawPath);
+    const path = mode === 'notes' ? normalizeNotesDocumentPath(rawPath) : normalizeRelativePath(rawPath);
     if (!path) return false;
 
-    const nextContent = '';
+    const nextContent = mode === 'notes' && getDocumentKind(mode, path) === 'coppermind'
+      ? createEmptyCoppermindDocumentContent({ path })
+      : '';
     setError(undefined);
     try {
       const result = mode === 'code'
@@ -1552,7 +1359,7 @@ export const UnifiedEditorPanel = ({
           version: result.version,
           size: result.size,
           mtimeMs: result.mtimeMs,
-        }, mode === 'notes' ? 'markdown' : undefined),
+        }, getEditorDocumentMediaType(getDocumentKind(mode, result.path))),
       }));
       setBufferFocusRequest(request => request + 1);
       setExpandedPaths(current => new Set([...current, getParentPath(result.path)]));
@@ -1592,14 +1399,13 @@ export const UnifiedEditorPanel = ({
       setBufferFocusRequest(request => request + 1);
       setExpandedPaths(current => new Set([...current, getParentPath(result.path)]));
       closeExplorerSlideOver();
-      scheduleExcalidrawResize();
       await refreshExplorer();
       return true;
     } catch (createError) {
       setError(toErrorMessage(createError));
       return false;
     }
-  }, [clearEditorTabStates, closeExplorerSlideOver, editorTabTargetKey, editorTabs, openPersistedEditorTab, refreshExplorer, scheduleExcalidrawResize, vaultBackend, vaultTarget]);
+  }, [clearEditorTabStates, closeExplorerSlideOver, editorTabTargetKey, editorTabs, openPersistedEditorTab, refreshExplorer, vaultBackend, vaultTarget]);
 
   const getSelectedCreateDirectory = useCallback(() => {
     if (!selectedNode) return '';
@@ -1608,7 +1414,7 @@ export const UnifiedEditorPanel = ({
 
   const createNoteInSelectedDirectory = useCallback(async () => {
     const directoryPath = getSelectedCreateDirectory();
-    const path = createUniquePath(directoryPath, 'Untitled', '.md', existingExplorerPaths);
+    const path = createUniquePath(directoryPath, 'Untitled', '.cpr', existingExplorerPaths);
     await createFile(path);
   }, [createFile, existingExplorerPaths, getSelectedCreateDirectory]);
 
@@ -1762,16 +1568,19 @@ export const UnifiedEditorPanel = ({
       isActive && 'bg-selected-thread',
     );
     const rowStyle = { paddingLeft: 8 + depth * 14 };
+    const rowKind = getDocumentKind(mode, node.path);
     const rowIcon = isDirectory ? (
       isExpandedNode ? <FolderOpen size={14} className="shrink-0 text-muted-foreground" /> : <Folder size={14} className="shrink-0 text-muted-foreground" />
-    ) : isExcalidrawPath(node.path) ? (
+    ) : rowKind === 'excalidraw' ? (
       <PencilRuler size={14} className="shrink-0 text-muted-foreground" />
+    ) : rowKind === 'coppermind' ? (
+      <Brain size={14} className="shrink-0 text-muted-foreground" />
     ) : (
       <FileIcon size={14} className="shrink-0 text-muted-foreground" />
     );
     const rowLabel = isDirectory
       ? node.name
-      : node.note ? getNoteFileDisplayName(node.note.path) : getExplorerFileLabel(node.path, mode);
+      : node.note ? getEditorDocumentLabel(node.note.path, mode) : getEditorDocumentLabel(node.path, mode);
 
     return (
       <div key={node.id} className="relative">
@@ -1886,31 +1695,29 @@ export const UnifiedEditorPanel = ({
     if (!openBuffer) {
       return <div className="grid h-full place-items-center text-xs text-muted-foreground">No file selected</div>;
     }
-    if (mode === 'notes' && isExcalidrawPath(openBuffer.path)) {
+
+    const documentKind = getDocumentKind(mode, openBuffer.path);
+    if (documentKind === 'excalidraw') {
       return (
-        <div
-          ref={excalidrawSurfaceRef}
-          className="relative h-full w-full"
-          data-weave-editor-excalidraw
-          data-weave-pencil-input-active={applePencilExcalidrawControls.isPencilInputActive ? 'true' : undefined}
-          data-weave-pencil-active={applePencilExcalidrawControls.isPencilChromeHidden ? 'true' : undefined}
-          style={{ '--weave-excalidraw-background': editorCanvasBackgroundColor } as CSSProperties}
-        >
-          <Excalidraw
-            autoFocus
-            excalidrawAPI={handleExcalidrawApi}
-            key={`${openBuffer.path}:${openBuffer.version}`}
-            initialData={excalidrawInitialData}
-            name={openBuffer.path}
-            onChange={handleExcalidrawChange}
-            renderTopRightUI={renderExcalidrawTopRightUI}
-            theme={resolvedTheme}
-          />
-          <ExcalidrawPencilToolOverlay
-            overlay={applePencilExcalidrawControls.toolOverlay}
-            onSelectTool={applePencilExcalidrawControls.selectTool}
-          />
-        </div>
+        <ExcalidrawDocumentEditor
+          focusRequest={bufferFocusRequest}
+          isExpanded={isExpanded}
+          path={openBuffer.path}
+          theme={resolvedTheme}
+          value={openBuffer.value}
+          version={openBuffer.version}
+          onChange={setActiveBufferValue}
+        />
+      );
+    }
+
+    if (documentKind === 'coppermind') {
+      return (
+        <CoppermindDocumentEditor
+          focusRequest={bufferFocusRequest}
+          value={openBuffer.value}
+          onChange={setActiveBufferValue}
+        />
       );
     }
 
@@ -1966,13 +1773,16 @@ export const UnifiedEditorPanel = ({
         {editorTabs.map(tab => {
           const isSelected = tab.id === activeEditorTab?.id;
           const tabBuffer = buffersByTabId[tab.id];
-          const label = getEditorFileLabel(tab.path, mode);
+          const label = getEditorDocumentLabel(tab.path, mode);
           const isRenaming = renameState?.origin === 'tab' && renameState.path === tab.path;
-          const icon = mode === 'notes'
-            ? isExcalidrawPath(tab.path)
-              ? <PencilRuler size={12} className="text-muted-foreground" />
-              : <StickyNote size={12} className="text-muted-foreground" />
-            : <FileIcon size={12} className="text-muted-foreground" />;
+          const tabKind = getDocumentKind(mode, tab.path);
+          const icon = tabKind === 'excalidraw'
+            ? <PencilRuler size={12} className="text-muted-foreground" />
+            : tabKind === 'coppermind'
+              ? <Brain size={12} className="text-muted-foreground" />
+            : tabKind === 'markdown'
+              ? <StickyNote size={12} className="text-muted-foreground" />
+              : <FileIcon size={12} className="text-muted-foreground" />;
           return (
             <SortableEditorTab
               key={tab.id}
@@ -2120,7 +1930,7 @@ export const UnifiedEditorPanel = ({
     : createPathDialog?.kind === 'drawing'
       ? 'Drawing.excalidraw'
       : mode === 'notes'
-        ? 'Note.md'
+        ? 'Note.cpr'
         : 'path/to/file.ts';
 
   return (
