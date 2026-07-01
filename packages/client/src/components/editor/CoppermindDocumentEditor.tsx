@@ -17,7 +17,7 @@ import type { Doc } from '@blocksuite/store';
 import type { Signal } from '@preact/signals-core';
 import '@toeverything/theme/style.css';
 import {
-  ChevronDown,
+  ChevronRight,
   Circle,
   Diamond,
   Eraser,
@@ -902,6 +902,29 @@ const CoppermindCanvasToolbar = ({
     if (disabled) setOpenMenu(undefined);
   }, [disabled]);
 
+  useEffect(() => {
+    if (disabled || !controller) return undefined;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setOpenMenu(undefined);
+      controller.setTool('default');
+      const activeElement = document.activeElement;
+      if (
+        activeElement instanceof HTMLElement
+        && activeElement.closest('[data-coppermind-canvas-toolbar="true"]')
+      ) {
+        activeElement.blur();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [controller, disabled]);
+
   const toolButton = ({
     icon: Icon,
     id,
@@ -918,7 +941,7 @@ const CoppermindCanvasToolbar = ({
     const isActive = state?.activeTool === id;
     const isMenuOpen = menu && openMenu === menu;
 
-    return (
+    const button = (
       <button
         type="button"
         aria-label={label}
@@ -927,7 +950,7 @@ const CoppermindCanvasToolbar = ({
         className={cn(
           'rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45',
           menu
-            ? 'inline-grid h-9 min-w-9 grid-cols-[1fr_auto] items-center gap-0.5 px-2'
+            ? 'grid h-9 w-[2.875rem] grid-cols-[1.125rem_auto] items-center justify-start gap-0.5 px-1.5 [&>svg:first-child]:justify-self-center'
             : 'grid h-9 w-9 place-items-center p-0',
           (isActive || isMenuOpen) && 'bg-primary/20 text-primary shadow-sm',
         )}
@@ -937,8 +960,21 @@ const CoppermindCanvasToolbar = ({
         }}
       >
         <Icon size={18} strokeWidth={2} />
-        {menu ? <ChevronDown size={13} strokeWidth={2} /> : null}
+        {menu ? <ChevronRight size={13} strokeWidth={2} /> : null}
       </button>
+    );
+
+    if (!menu) return button;
+
+    return (
+      <div className="relative">
+        {button}
+        {isMenuOpen && state ? (
+          <div className="absolute left-full top-1/2 z-30 ml-2 max-w-[calc(100vw-7rem)] -translate-y-1/2 overflow-x-auto rounded-lg border border-border bg-card/95 p-2 shadow-xl backdrop-blur">
+            <CoppermindCanvasMenu bindings={bindings} menu={menu} state={state} />
+          </div>
+        ) : null}
+      </div>
     );
   };
 
@@ -947,14 +983,12 @@ const CoppermindCanvasToolbar = ({
   const pointerLabel = state?.activeTool === 'pan' ? 'Hand' : 'Select';
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex justify-center px-4">
+    <div className="pointer-events-none absolute bottom-5 left-5 z-20 flex">
       <div className="pointer-events-auto relative">
-        {openMenu && state ? (
-          <div className="absolute bottom-full left-1/2 mb-2 max-w-[calc(100vw-4rem)] -translate-x-1/2 overflow-x-auto rounded-lg border border-border bg-card/95 p-2 shadow-xl backdrop-blur">
-            <CoppermindCanvasMenu bindings={bindings} menu={openMenu} state={state} />
-          </div>
-        ) : null}
-        <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-card/95 p-1 shadow-xl backdrop-blur">
+        <div
+          data-coppermind-canvas-toolbar="true"
+          className="inline-flex flex-col items-start gap-1 rounded-lg border border-border bg-card/95 p-1 shadow-xl backdrop-blur"
+        >
           <button
             type="button"
             aria-label={pointerLabel}
@@ -971,14 +1005,6 @@ const CoppermindCanvasToolbar = ({
           >
             <PointerIcon size={18} strokeWidth={2} />
           </button>
-          <div className="mx-1 h-5 w-px bg-border" />
-          {toolButton({
-            icon: GitBranch,
-            id: 'connector',
-            label: 'Connector',
-            onClick: bindings.selectConnector,
-          })}
-          <div className="mx-1 h-5 w-px bg-border" />
           {toolButton({
             icon: Pencil,
             id: 'brush',
@@ -998,6 +1024,12 @@ const CoppermindCanvasToolbar = ({
             label: 'Shape',
             menu: 'shape',
             onClick: () => bindings.selectShape(state?.shapeName),
+          })}
+          {toolButton({
+            icon: GitBranch,
+            id: 'connector',
+            label: 'Connector',
+            onClick: bindings.selectConnector,
           })}
         </div>
       </div>
