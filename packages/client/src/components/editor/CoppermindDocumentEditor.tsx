@@ -181,6 +181,12 @@ type CoppermindCanvasViewportState = {
   zoom: number;
 };
 
+type CoppermindBlockElement = HTMLElement & {
+  model?: {
+    id?: string;
+  };
+};
+
 type CoppermindCanvasViewportSnapshot = {
   center: [number, number];
   zoom: number;
@@ -449,6 +455,13 @@ const coppermindBlockSuiteStyles = `
   [data-weave-editor-coppermind] zoom-bar-toggle-button {
     display: none !important;
   }
+
+  [data-weave-editor-coppermind] affine-edgeless-note:not([data-coppermind-canvas-editing="true"]) :is(rich-text, [contenteditable="true"]) {
+    caret-color: transparent;
+    pointer-events: none;
+    user-select: none;
+  }
+
 `;
 
 const getElementFromNode = (node: Node | null) => (
@@ -459,6 +472,12 @@ const getClosestSectionElement = (element: Element | null, root: HTMLElement) =>
   const note = element?.closest<HTMLElement>('affine-note');
   return note && root.contains(note) ? note : undefined;
 };
+
+const getBlockElementId = (element: CoppermindBlockElement | undefined) => (
+  element?.dataset.blockId
+    ?? element?.getAttribute('data-block-id')
+    ?? element?.model?.id
+);
 
 let blockSuiteElementsRegistered = false;
 
@@ -1171,6 +1190,16 @@ const BlockSuiteEditorMount = ({
     let syncFrame: number | undefined;
     let selectionSubscription: { dispose: () => void } | undefined;
     let viewportSubscription: { dispose: () => void } | undefined;
+    let lastCanvasSelectionState: CoppermindCanvasSelectionState = {
+      editing: false,
+      selectedIds: [],
+    };
+    let isMiddleButtonPanning = false;
+    let middleButtonPanClearHandle: number | undefined;
+    let canvasCellEditingStateSyncFrame: number | undefined;
+    let canvasCellEditingStateObserver: MutationObserver | undefined;
+    let suppressCanvasCellTextInput = false;
+    let setCanvasSelectionEditing: ((noteId: string, editing: boolean) => void) | undefined;
     let resolveAttempts = 0;
 
     editor.doc = doc;
@@ -1180,7 +1209,208 @@ const BlockSuiteEditorMount = ({
     editor.className = 'block h-full min-h-0 w-full';
     mount.replaceChildren(editor);
 
+    const clearMiddleButtonPanSoon = () => {
+      if (middleButtonPanClearHandle !== undefined) {
+        window.clearTimeout(middleButtonPanClearHandle);
+      }
+      middleButtonPanClearHandle = window.setTimeout(() => {
+        middleButtonPanClearHandle = undefined;
+        isMiddleButtonPanning = false;
+      }, 150);
+    };
+    const handleMiddleButtonPointerDown = (event: PointerEvent) => {
+      if (event.button !== 1) return;
+      if (middleButtonPanClearHandle !== undefined) {
+        window.clearTimeout(middleButtonPanClearHandle);
+        middleButtonPanClearHandle = undefined;
+      }
+      isMiddleButtonPanning = true;
+    };
+    const handleMiddleButtonPointerEnd = (event: PointerEvent) => {
+      if (event.button !== 1 && (event.buttons & 4) !== 0) return;
+      clearMiddleButtonPanSoon();
+    };
+    const clearMiddleButtonPan = () => {
+      if (middleButtonPanClearHandle !== undefined) {
+        window.clearTimeout(middleButtonPanClearHandle);
+        middleButtonPanClearHandle = undefined;
+      }
+      isMiddleButtonPanning = false;
+    };
+    const clearNativeLayerText = (layer: HTMLElement) => {
+      for (const node of Array.from(layer.childNodes)) {
+        if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()) {
+          node.remove();
+        }
+      }
+    };
+    const clearCanvasCellNativeLayerText = () => {
+      for (const layer of mount.querySelectorAll<HTMLElement>('.affine-note-mask, .note-background')) {
+        clearNativeLayerText(layer);
+      }
+    };
+    const syncCanvasCellEditingState = () => {
+      clearCanvasCellNativeLayerText();
+      const editableIds = new Set(
+        lastCanvasSelectionState.editing ? lastCanvasSelectionState.selectedIds : [],
+      );
+      for (const note of mount.querySelectorAll<CoppermindBlockElement>('affine-edgeless-note')) {
+        const noteId = getBlockElementId(note);
+        if (noteId && editableIds.has(noteId)) {
+          note.dataset.coppermindCanvasEditing = 'true';
+        } else {
+          delete note.dataset.coppermindCanvasEditing;
+        }
+      }
+    };
+    const scheduleCanvasCellEditingStateSync = () => {
+      if (canvasCellEditingStateSyncFrame !== undefined) return;
+      canvasCellEditingStateSyncFrame = window.requestAnimationFrame(() => {
+        canvasCellEditingStateSyncFrame = undefined;
+        syncCanvasCellEditingState();
+      });
+    };
+    const getNativeSelectionElements = () => {
+      const selection = mount.ownerDocument.getSelection();
+      if (!selection || selection.rangeCount === 0) return [];
+
+      const range = selection.getRangeAt(0);
+      const elements = [
+        getElementFromNode(range.commonAncestorContainer),
+        getElementFromNode(selection.anchorNode),
+        getElementFromNode(selection.focusNode),
+      ];
+
+      return elements.filter((element): element is Element => Boolean(element && mount.contains(element)));
+    };
+
+    const getNativeSelectionNote = () => {
+      for (const element of getNativeSelectionElements()) {
+        const note = element.closest<HTMLElement>('affine-edgeless-note');
+        if (note && mount.contains(note)) return note;
+      }
+      return undefined;
+    };
+
+    const isNativeSelectionInBlockText = () => (
+      getNativeSelectionElements().some(element => (
+        Boolean(element.closest('rich-text, .inline-editor'))
+      ))
+    );
+
+    const isCanvasCellNativeLayerInput = () => (
+      suppressCanvasCellTextInput
+      || (Boolean(getNativeSelectionNote()) && !isNativeSelectionInBlockText())
+    );
+
+    const clearNativeSelectionNoteLayerText = () => {
+      const note = getNativeSelectionNote();
+      if (!note) return;
+      for (const layer of note.querySelectorAll<HTMLElement>('.affine-note-mask, .note-background')) {
+        clearNativeLayerText(layer);
+      }
+    };
+
+    const suppressCanvasCellNativeLayerInput = (event: Event) => {
+      if (!isCanvasCellNativeLayerInput()) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      clearNativeSelectionNoteLayerText();
+      mount.ownerDocument.getSelection()?.removeAllRanges();
+      if (mount.ownerDocument.activeElement instanceof HTMLElement) {
+        mount.ownerDocument.activeElement.blur();
+      }
+      suppressCanvasCellTextInput = false;
+    };
+    const suppressCanvasCellNativeLayerKeydown = (event: KeyboardEvent) => {
+      if (
+        event.metaKey
+        || event.ctrlKey
+        || event.altKey
+        || (
+          event.key.length !== 1
+          && !['Backspace', 'Delete', 'Enter'].includes(event.key)
+        )
+      ) {
+        return;
+      }
+      suppressCanvasCellNativeLayerInput(event);
+    };
+    const getCanvasCellFromPointerEvent = (event: PointerEvent | MouseEvent) => {
+      const path = event.composedPath();
+      for (const target of path) {
+        if (target instanceof HTMLElement) {
+          const note = target.closest<HTMLElement>('affine-edgeless-note');
+          if (note && mount.contains(note)) return note;
+        }
+      }
+
+      const target = mount.ownerDocument.elementFromPoint(event.clientX, event.clientY);
+      return target?.closest<HTMLElement>('affine-edgeless-note') ?? undefined;
+    };
+    const isPointInCanvasCellBlockText = (note: HTMLElement, clientX: number, clientY: number) => (
+      [...note.querySelectorAll<HTMLElement>('rich-text, .inline-editor')].some(element => {
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+
+        const hitSlop = 4;
+        return (
+          clientX >= rect.left - hitSlop
+          && clientX <= rect.right + hitSlop
+          && clientY >= rect.top - hitSlop
+          && clientY <= rect.bottom + hitSlop
+        );
+      })
+    );
+    const clearCanvasCellTextSelectionSoon = (note: HTMLElement) => {
+      const noteId = getBlockElementId(note as CoppermindBlockElement);
+      window.requestAnimationFrame(() => {
+        if (!suppressCanvasCellTextInput) return;
+        if (noteId) {
+          setCanvasSelectionEditing?.(noteId, false);
+        }
+
+        if (isNativeSelectionInBlockText()) {
+          mount.ownerDocument.getSelection()?.removeAllRanges();
+        }
+        if (mount.ownerDocument.activeElement instanceof HTMLElement) {
+          mount.ownerDocument.activeElement.blur();
+        }
+      });
+    };
+    const handleCanvasCellTextPointer = (event: PointerEvent | MouseEvent) => {
+      const note = getCanvasCellFromPointerEvent(event);
+      if (!note) {
+        suppressCanvasCellTextInput = false;
+        return;
+      }
+
+      suppressCanvasCellTextInput = !isPointInCanvasCellBlockText(note, event.clientX, event.clientY);
+      if (suppressCanvasCellTextInput) {
+        clearCanvasCellTextSelectionSoon(note);
+      }
+    };
+
     if (mode === 'edgeless' && editor instanceof EdgelessEditor) {
+      canvasCellEditingStateObserver = new MutationObserver(scheduleCanvasCellEditingStateSync);
+      canvasCellEditingStateObserver.observe(mount, {
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
+      mount.addEventListener('pointerdown', handleMiddleButtonPointerDown, true);
+      mount.addEventListener('pointerdown', handleCanvasCellTextPointer, true);
+      mount.addEventListener('click', handleCanvasCellTextPointer, true);
+      mount.addEventListener('dblclick', handleCanvasCellTextPointer, true);
+      mount.ownerDocument.addEventListener('beforeinput', suppressCanvasCellNativeLayerInput, true);
+      mount.ownerDocument.addEventListener('compositionstart', suppressCanvasCellNativeLayerInput, true);
+      mount.ownerDocument.addEventListener('paste', suppressCanvasCellNativeLayerInput, true);
+      mount.ownerDocument.addEventListener('keydown', suppressCanvasCellNativeLayerKeydown, true);
+      window.addEventListener('pointerup', handleMiddleButtonPointerEnd, true);
+      window.addEventListener('pointercancel', clearMiddleButtonPan, true);
+      window.addEventListener('blur', clearMiddleButtonPan);
+
       const resolveCanvasController = () => {
         if (disposed || !(editor instanceof EdgelessEditor)) return;
 
@@ -1207,15 +1437,49 @@ const BlockSuiteEditorMount = ({
         viewportSubscription = viewport?.viewportUpdated?.on(emitCanvasViewport);
         const selection = getEdgelessRootBlock(editor, doc)?.gfx?.selection
           ?? getEdgelessRootBlock(editor, doc)?.service?.selection;
+        setCanvasSelectionEditing = (noteId, editing) => {
+          selection?.set({ elements: [noteId], editing });
+        };
         const emitCanvasSelection = () => {
           const selectedIds = selection?.selectedIds ?? [];
           const editing = selection?.editing
             ?? selection?.surfaceSelections?.some(item => item.editing)
             ?? false;
+          const activeTool = normalizeCanvasToolId(controller.currentToolOption$.value.type);
+          const isPanningSelectionGap = (
+            (activeTool === 'pan' || isMiddleButtonPanning)
+            && selectedIds.length === 0
+            && lastCanvasSelectionState.selectedIds.length > 0
+          );
+
+          if (isPanningSelectionGap) {
+            const preservedSelectedIds = [...lastCanvasSelectionState.selectedIds];
+            lastCanvasSelectionState = {
+              editing: false,
+              selectedIds: preservedSelectedIds,
+            };
+            syncCanvasCellEditingState();
+            window.requestAnimationFrame(() => {
+              if (
+                (
+                  normalizeCanvasToolId(controller.currentToolOption$.value.type) === 'pan'
+                  || isMiddleButtonPanning
+                )
+                && (selection?.selectedIds ?? []).length === 0
+              ) {
+                selection?.set({ elements: preservedSelectedIds, editing: false });
+              }
+            });
+            onCanvasSelectionChange?.(lastCanvasSelectionState);
+            return;
+          }
+
           if (selectedIds.length === 0) {
             selection?.clearLast?.();
           }
-          onCanvasSelectionChange?.({ editing, selectedIds });
+          lastCanvasSelectionState = { editing, selectedIds };
+          syncCanvasCellEditingState();
+          onCanvasSelectionChange?.(lastCanvasSelectionState);
         };
         emitCanvasSelection();
         selectionSubscription?.dispose();
@@ -1247,6 +1511,23 @@ const BlockSuiteEditorMount = ({
       viewportSubscription?.dispose();
       if (resolveFrame !== undefined) window.cancelAnimationFrame(resolveFrame);
       if (syncFrame !== undefined) window.cancelAnimationFrame(syncFrame);
+      if (middleButtonPanClearHandle !== undefined) window.clearTimeout(middleButtonPanClearHandle);
+      if (canvasCellEditingStateSyncFrame !== undefined) {
+        window.cancelAnimationFrame(canvasCellEditingStateSyncFrame);
+      }
+      canvasCellEditingStateObserver?.disconnect();
+      setCanvasSelectionEditing = undefined;
+      mount.removeEventListener('pointerdown', handleMiddleButtonPointerDown, true);
+      mount.removeEventListener('pointerdown', handleCanvasCellTextPointer, true);
+      mount.removeEventListener('click', handleCanvasCellTextPointer, true);
+      mount.removeEventListener('dblclick', handleCanvasCellTextPointer, true);
+      mount.ownerDocument.removeEventListener('beforeinput', suppressCanvasCellNativeLayerInput, true);
+      mount.ownerDocument.removeEventListener('compositionstart', suppressCanvasCellNativeLayerInput, true);
+      mount.ownerDocument.removeEventListener('paste', suppressCanvasCellNativeLayerInput, true);
+      mount.ownerDocument.removeEventListener('keydown', suppressCanvasCellNativeLayerKeydown, true);
+      window.removeEventListener('pointerup', handleMiddleButtonPointerEnd, true);
+      window.removeEventListener('pointercancel', clearMiddleButtonPan, true);
+      window.removeEventListener('blur', clearMiddleButtonPan);
       setCanvasToolController(undefined);
       setCanvasEditPropsStore(undefined);
       setCanvasToolState(undefined);
