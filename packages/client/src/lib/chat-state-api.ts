@@ -771,6 +771,7 @@ export type ThreadRunState = {
   runId?: string;
   startedAt?: string;
   updatedAt?: string;
+  durationMs?: number;
   error?: string;
 };
 

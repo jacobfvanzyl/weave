@@ -37,6 +37,51 @@ describe('chat active run registry', () => {
     await expect(closedRead).resolves.toEqual({ done: true, value: undefined });
   });
 
+  it('carries run timing metadata through hydrated assistant messages', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-07-02T10:00:00.000Z'));
+      const run = __chatRunRegistryTest.create('resource-1', 'thread-1');
+      __chatRunRegistryTest.append(run, {
+        type: 'start',
+        messageId: 'assistant-1',
+        messageMetadata: __chatRunRegistryTest.runTimingMetadata(run, 'running'),
+      });
+      __chatRunRegistryTest.append(run, { type: 'text-start', id: 'text-1' });
+      __chatRunRegistryTest.append(run, { type: 'text-delta', id: 'text-1', delta: 'Done.' });
+
+      vi.setSystemTime(new Date('2026-07-02T10:00:19.000Z'));
+      __chatRunRegistryTest.append(run, {
+        type: 'finish',
+        messageMetadata: __chatRunRegistryTest.runTimingMetadata(run, 'completed'),
+      });
+      __chatRunRegistryTest.complete(run);
+
+      expect(__chatRunRegistryTest.snapshot(run)).toMatchObject({
+        active: false,
+        status: 'completed',
+        durationMs: 19_000,
+      });
+      expect(__chatRunRegistryTest.uiMessages('resource-1', 'thread-1')).toEqual([
+        expect.objectContaining({
+          id: 'assistant-1',
+          metadata: {
+            weaveRunTiming: {
+              runId: run.runId,
+              status: 'completed',
+              startedAt: '2026-07-02T10:00:00.000Z',
+              completedAt: '2026-07-02T10:00:19.000Z',
+              durationMs: 19_000,
+            },
+          },
+        }),
+      ]);
+    } finally {
+      __chatRunRegistryTest.clear();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the submitted user message available for late hydration', () => {
     const submittedMessage = {
       id: 'user-1',

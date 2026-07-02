@@ -20,8 +20,39 @@ import {
   summarizeToolActivity,
   toToolActivityCall,
 } from '../../packages/client/src/components/chat/tool-activity';
+import {
+  formatWorkDuration,
+  getWorkedForLabel,
+  getWorkingForLabel,
+} from '../../packages/client/src/components/chat/turn-timing';
 
 describe('chat tool activity helpers', () => {
+  it('formats live and completed turn timing labels', () => {
+    expect(formatWorkDuration(19_900)).toBe('19s');
+    expect(formatWorkDuration(65_000)).toBe('1m05s');
+    expect(formatWorkDuration(3_665_000)).toBe('1h01m');
+
+    expect(getWorkingForLabel('2026-07-02T10:00:00.000Z', Date.parse('2026-07-02T10:00:19.000Z'))).toBe('Working for 19s');
+    expect(getWorkingForLabel(undefined, Date.parse('2026-07-02T10:00:19.000Z'))).toBe('Working...');
+    expect(getWorkedForLabel({
+      weaveRunTiming: {
+        runId: 'run-1',
+        status: 'completed',
+        startedAt: '2026-07-02T10:00:00.000Z',
+        completedAt: '2026-07-02T10:00:19.000Z',
+      },
+    })).toBe('Worked for 19s');
+    expect(getWorkedForLabel({
+      weaveRunTiming: {
+        runId: 'run-1',
+        status: 'running',
+        startedAt: '2026-07-02T10:00:00.000Z',
+      },
+    })).toBeNull();
+    expect(getWorkedForLabel({ custom: { weaveRunTiming: { durationMs: 19_000 } } })).toBe('Worked for 19s');
+    expect(getWorkedForLabel({})).toBeNull();
+  });
+
   it('builds scoped proposal implementation instructions', () => {
     const message = buildProposalImplementationMessage({
       proposalPath: '.agents/proposals/demo.md',

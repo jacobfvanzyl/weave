@@ -74,6 +74,7 @@ import {
 } from './tool-activity';
 import { GuidedTaskCard } from './GuidedTaskCard';
 import { buildProposalImplementationUserMessage, getProposalActionDisplay, getProposalActionDisplayLabel } from './proposal-implementation';
+import { getWorkedForLabel, getWorkingForLabel } from './turn-timing';
 
 const ThreadIdContext = createContext<string | null>(null);
 type AutoCollapsedTurnIds = Record<string, true>;
@@ -101,6 +102,19 @@ const areAutoCollapsedTurnIdsEqual = (left: AutoCollapsedTurnIds, right: AutoCol
   const leftIds = Object.keys(left);
   const rightIds = Object.keys(right);
   return leftIds.length === rightIds.length && leftIds.every(id => right[id]);
+};
+
+const useSecondTicker = (enabled: boolean) => {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    setNowMs(Date.now());
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [enabled]);
+
+  return nowMs;
 };
 
 const fallbackProfile: DynamicProfileSummary = {
@@ -610,14 +624,19 @@ const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string;
 
 MarkdownText.displayName = 'MarkdownText';
 
-const RunningIndicator = () => (
-  <span aria-label="Agent working" className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-    <Loader2 size={14} className="shrink-0 animate-spin text-primary" />
-    <span>Working...</span>
-  </span>
-);
+const RunningIndicator = ({ startedAt }: { startedAt: string | undefined }) => {
+  const nowMs = useSecondTicker(Boolean(startedAt));
+  const label = getWorkingForLabel(startedAt, nowMs);
 
-const RunningIndicatorTail = () => {
+  return (
+    <span aria-label={label} className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+      <Loader2 size={14} className="shrink-0 animate-spin text-primary" />
+      <span>{label}</span>
+    </span>
+  );
+};
+
+const RunningIndicatorTail = ({ startedAt }: { startedAt: string | undefined }) => {
   const isRunning = useThread(state => state.isRunning);
   if (!isRunning) return null;
 
@@ -625,7 +644,7 @@ const RunningIndicatorTail = () => {
     <div className="chat-message-shell mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
       <div className="chat-message-row flex min-w-0 justify-start">
         <div className="chat-message-bubble min-w-0 max-w-full text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)]">
-          <RunningIndicator />
+          <RunningIndicator startedAt={startedAt} />
         </div>
       </div>
     </div>
@@ -954,7 +973,7 @@ const ToolActivityGroupChildren = ({ indices }: { indices: readonly number[] }) 
   </>
 );
 
-const CollapsedTurnWorkToggle = ({ onExpand }: { onExpand: () => void }) => (
+const CollapsedTurnWorkToggle = ({ label, onExpand }: { label: string; onExpand: () => void }) => (
   <button
     type="button"
     className="group mb-2 flex max-w-full items-center gap-2 text-left text-xs font-medium text-muted-foreground/70 transition-colors hover:text-muted-foreground"
@@ -962,17 +981,19 @@ const CollapsedTurnWorkToggle = ({ onExpand }: { onExpand: () => void }) => (
     onClick={onExpand}
   >
     <ChevronRight size={13} className="shrink-0 transition-transform group-hover:translate-x-0.5" />
-    <span>Show work</span>
+    <span>{label}</span>
   </button>
 );
 
 const AssistantGroupedContent = ({
   deferCodeHighlight,
   autoCollapsed,
+  collapsedWorkLabel,
   onExpandCollapsedTurn,
 }: {
   deferCodeHighlight: boolean;
   autoCollapsed: boolean;
+  collapsedWorkLabel: string;
   onExpandCollapsedTurn: () => void;
 }) => {
   const parts = useAuiState(state => state.message.parts);
@@ -986,7 +1007,7 @@ const AssistantGroupedContent = ({
   if (autoCollapsedTextIndices.length > 0) {
     return (
       <>
-        <CollapsedTurnWorkToggle onExpand={onExpandCollapsedTurn} />
+        <CollapsedTurnWorkToggle label={collapsedWorkLabel} onExpand={onExpandCollapsedTurn} />
         {autoCollapsedTextIndices.map(index => {
           const part = parts[index];
           return getPartType(part) === 'text' && part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string'
@@ -1039,6 +1060,7 @@ const AssistantMessageContent = () => {
   } = useContext(ThreadAutoCollapseContext);
   const isEmptyAssistantMessage = message.role === 'assistant' && !hasRenderableAssistantContent(message, showReasoning);
   const isAssistantStreaming = message.role === 'assistant' && message.status?.type === 'running';
+  const collapsedWorkLabel = getWorkedForLabel(message.metadata) ?? 'Show work';
   const previousAssistantStatusRef = useRef(message.role === 'assistant' ? message.status?.type : undefined);
 
   useEffect(() => {
@@ -1071,6 +1093,7 @@ const AssistantMessageContent = () => {
       {message.role === 'assistant' ? (
         <AssistantGroupedContent
           autoCollapsed={Boolean(autoCollapsedTurnIds[message.id]) && !isAssistantStreaming}
+          collapsedWorkLabel={collapsedWorkLabel}
           deferCodeHighlight={isAssistantStreaming}
           onExpandCollapsedTurn={() => expandCollapsedTurn(message.id)}
         />
@@ -2064,9 +2087,10 @@ const isViewportAtBottom = (element: HTMLElement) =>
 
 const Thread = ({
   autoCollapseContext,
+  activeRunStartedAt,
   canFollowWrites,
   setIsFollowingBottom,
-}: AutoCollapsedTurnStateProps & { canFollowWrites: boolean }) => {
+}: AutoCollapsedTurnStateProps & { activeRunStartedAt: string | undefined; canFollowWrites: boolean }) => {
   const threadId = useContext(ThreadIdContext);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
   const pendingProposalImplementationRequest = useChatStore(state => threadId ? state.pendingProposalImplementationRequests[threadId] : undefined);
@@ -2131,7 +2155,7 @@ const Thread = ({
           onScroll={updateBottomFollowState}
         >
           <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
-          <RunningIndicatorTail />
+          <RunningIndicatorTail startedAt={activeRunStartedAt} />
         </ThreadPrimitive.Viewport>
         <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
           {threadId ? <GuidedTaskCard threadId={threadId} /> : null}
@@ -2325,6 +2349,7 @@ const AssistantChatRuntime = ({
         <IdleActiveThreadRefresher threadId={threadId} />
         <Thread
           autoCollapseContext={autoCollapseContext}
+          activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
           canFollowWrites={canFollowWrites}
           setIsFollowingBottom={setIsFollowingBottom}
         />

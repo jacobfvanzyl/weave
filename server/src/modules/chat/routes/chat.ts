@@ -455,6 +455,8 @@ type RunUiMessage = {
   metadata?: unknown;
 };
 
+type RunTimingStatus = 'running' | 'completed' | 'cancelled' | 'error';
+
 type PendingToolInput = {
   text: string;
   toolName: string;
@@ -613,10 +615,38 @@ const toThreadRunSnapshot = (run: ActiveThreadRun | undefined) => ({
         runId: run.runId,
         startedAt: run.startedAt,
         updatedAt: run.updatedAt,
+        durationMs: getRunDurationMs(run, isActiveThreadRun(run) ? Date.now() : Date.parse(run.updatedAt)),
         ...(run.error ? { error: run.error } : {}),
       }
     : {}),
 });
+
+const getRunDurationMs = (run: Pick<ActiveThreadRun, 'startedAt'>, endMs = Date.now()) => {
+  const startedAtMs = Date.parse(run.startedAt);
+  if (!Number.isFinite(startedAtMs)) return undefined;
+  return Math.max(0, (Number.isFinite(endMs) ? endMs : Date.now()) - startedAtMs);
+};
+
+const buildRunTimingMetadata = (
+  run: ActiveThreadRun,
+  status: RunTimingStatus,
+  now = new Date(),
+) => {
+  const nowIso = now.toISOString();
+  const startedAtMs = Date.parse(run.startedAt);
+  const nowMs = now.getTime();
+  const durationMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : undefined;
+
+  return {
+    weaveRunTiming: {
+      runId: run.runId,
+      status,
+      startedAt: run.startedAt,
+      ...(status !== 'running' ? { completedAt: nowIso } : {}),
+      ...(status !== 'running' && durationMs !== undefined ? { durationMs } : {}),
+    },
+  };
+};
 
 const toContextUsageChunk = (snapshot: ThreadContextUsageSnapshot) => ({
   type: 'data-context-usage' as const,
@@ -1417,6 +1447,7 @@ export const __chatRunRegistryTest = {
   pump: startThreadRunPump,
   buffer: bufferAssistantTextStream,
   snapshot: toThreadRunSnapshot,
+  runTimingMetadata: buildRunTimingMetadata,
   get: getThreadRun,
   uiMessages: getThreadRunUiMessages,
   clear: () => {
@@ -1583,6 +1614,16 @@ export const chatRoutes = [
           version: 'v6',
           sendReasoning: true,
           defaultOptions: { maxSteps: 1000 },
+          ...(run
+            ? {
+                messageMetadata: ({ part }: { part?: unknown }) => {
+                  if (!isRecord(part)) return undefined;
+                  if (part.type === 'start') return buildRunTimingMetadata(run, 'running');
+                  if (part.type === 'finish') return buildRunTimingMetadata(run, 'completed');
+                  return undefined;
+                },
+              }
+            : {}),
           params: {
             ...params,
             ...(routedModel ? { model: routedModel } : {}),
