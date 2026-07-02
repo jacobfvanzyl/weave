@@ -1,7 +1,9 @@
 import { createJSONStorage, type StateStorage } from 'zustand/middleware';
 import { productLabels, type ProductId } from './products';
 
-export type ClientAppId = 'flare' | 'coppermind';
+export type ClientAppId = 'weave';
+export type LegacyClientAppId = 'flare' | 'coppermind';
+export type ClientAppInputId = ClientAppId | LegacyClientAppId;
 
 export type ClientAppDefinition = {
   id: ClientAppId;
@@ -14,38 +16,41 @@ export type ClientAppDefinition = {
   productLabels: Partial<Record<ProductId, string>>;
 };
 
-const clientAppIds = new Set<ClientAppId>(['flare', 'coppermind']);
+const canonicalClientAppIds = new Set<ClientAppId>(['weave']);
+const legacyClientAppIds = new Set<LegacyClientAppId>(['flare', 'coppermind']);
+const legacyStorageAppIds: LegacyClientAppId[] = ['coppermind', 'flare'];
 
-export const clientAppDefinitions: Record<ClientAppId, ClientAppDefinition> = {
-  flare: {
-    id: 'flare',
-    displayName: 'Flare',
-    allowedProducts: ['code'],
-    defaultProduct: 'code',
-    productLabels: {
-      code: 'Code',
-    },
-  },
-  coppermind: {
-    id: 'coppermind',
-    displayName: 'Coppermind',
-    allowedProducts: ['notes', 'chat'],
-    selectableProducts: ['notes'],
-    navigationProducts: [],
-    sidebarProducts: ['notes', 'chat'],
-    defaultProduct: 'notes',
-    productLabels: {
-      notes: 'Notes',
-      chat: 'Threads',
-    },
+const weaveClientAppDefinition: ClientAppDefinition = {
+  id: 'weave',
+  displayName: 'Weave',
+  allowedProducts: ['code', 'notes', 'chat'],
+  navigationProducts: [],
+  sidebarProducts: ['code', 'notes', 'chat'],
+  defaultProduct: 'code',
+  productLabels: {
+    code: 'Git',
+    notes: 'Notes',
+    chat: 'Threads',
   },
 };
 
-export const isClientAppId = (value: unknown): value is ClientAppId =>
-  typeof value === 'string' && clientAppIds.has(value as ClientAppId);
+export const clientAppDefinitions: Record<ClientAppId | LegacyClientAppId, ClientAppDefinition> = {
+  weave: weaveClientAppDefinition,
+  flare: weaveClientAppDefinition,
+  coppermind: weaveClientAppDefinition,
+};
 
-export const resolveClientAppId = (value: unknown): ClientAppId =>
-  isClientAppId(value) ? value : 'flare';
+export const isClientAppId = (value: unknown): value is ClientAppId =>
+  typeof value === 'string' && canonicalClientAppIds.has(value as ClientAppId);
+
+export const isLegacyClientAppId = (value: unknown): value is LegacyClientAppId =>
+  typeof value === 'string' && legacyClientAppIds.has(value as LegacyClientAppId);
+
+export const resolveClientAppId = (value: unknown): ClientAppId => {
+  if (isClientAppId(value)) return value;
+  if (isLegacyClientAppId(value)) return 'weave';
+  return 'weave';
+};
 
 export const getBuildClientAppId = (): ClientAppId =>
   resolveClientAppId(
@@ -53,8 +58,8 @@ export const getBuildClientAppId = (): ClientAppId =>
   );
 
 export const getClientAppDefinition = (
-  value: ClientAppId | ClientAppDefinition = getBuildClientAppId(),
-): ClientAppDefinition => typeof value === 'string' ? clientAppDefinitions[value] : value;
+  value: ClientAppInputId | ClientAppDefinition = getBuildClientAppId(),
+): ClientAppDefinition => typeof value === 'string' ? clientAppDefinitions[resolveClientAppId(value)] : value;
 
 export const isProductAllowedForClientApp = (
   product: ProductId,
@@ -95,6 +100,28 @@ export const getClientAppStorageKey = (
   app: ClientAppDefinition = getClientAppDefinition(),
 ) => `${key}.${app.id}`;
 
+const getClientAppStorageFallbackKeys = (
+  key: string,
+  app: ClientAppDefinition = getClientAppDefinition(),
+) => [
+  getClientAppStorageKey(key, app),
+  key,
+  ...legacyStorageAppIds.map(id => `${key}.${id}`),
+];
+
+const getFirstClientAppStorageValue = (
+  storage: Storage | undefined,
+  key: string,
+  app: ClientAppDefinition = getClientAppDefinition(),
+) => {
+  if (!storage) return null;
+  for (const fallbackKey of getClientAppStorageFallbackKeys(key, app)) {
+    const value = storage.getItem(fallbackKey);
+    if (value !== null) return { key: fallbackKey, value };
+  }
+  return null;
+};
+
 const getBrowserStorage = () => {
   if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
   if (typeof globalThis !== 'undefined' && 'localStorage' in globalThis) {
@@ -110,11 +137,9 @@ export const getClientAppStorageItem = (
   const storage = getBrowserStorage();
   if (!storage) return null;
   const scopedKey = getClientAppStorageKey(key, app);
-  const scopedValue = storage.getItem(scopedKey);
-  if (scopedValue !== null) return scopedValue;
-  const legacyValue = storage.getItem(key);
-  if (legacyValue !== null) storage.setItem(scopedKey, legacyValue);
-  return legacyValue;
+  const fallback = getFirstClientAppStorageValue(storage, key, app);
+  if (fallback && fallback.key !== scopedKey) storage.setItem(scopedKey, fallback.value);
+  return fallback?.value ?? null;
 };
 
 export const setClientAppStorageItem = (
@@ -130,11 +155,9 @@ export const createClientAppPersistStorage = <T>(key: string) =>
     const storage = getBrowserStorage();
     const scopedStorage: StateStorage = {
       getItem: name => {
-        const scopedValue = storage?.getItem(name);
-        if (scopedValue !== null && scopedValue !== undefined) return scopedValue;
-        const legacyValue = storage?.getItem(key) ?? null;
-        if (legacyValue !== null) storage?.setItem(name, legacyValue);
-        return legacyValue;
+        const fallback = getFirstClientAppStorageValue(storage, key);
+        if (fallback && fallback.key !== name) storage?.setItem(name, fallback.value);
+        return fallback?.value ?? null;
       },
       setItem: (name, value) => {
         storage?.setItem(name, value);

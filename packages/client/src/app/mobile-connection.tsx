@@ -1,12 +1,12 @@
 import { ConnectionApp } from '../components/connection/ConnectionApp';
 import { WeaveAppShell } from '../components/app-shell/WeaveAppShell';
-import { clientAppDefinitions, getClientAppDefinition, type ClientAppDefinition, type ClientAppId } from '../lib/client-app';
+import { clientAppDefinitions, getClientAppDefinition, type ClientAppDefinition, type ClientAppInputId } from '../lib/client-app';
 import { createMobileConnectionAdapter } from '../lib/mobile-connection-adapter';
 
 const mobileConnectionAdapter = createMobileConnectionAdapter();
 
 type MobileConnectionAppProps = {
-  clientApp?: ClientAppId | ClientAppDefinition;
+  clientApp?: ClientAppInputId | ClientAppDefinition;
 };
 
 export const ClientAppMobileConnectionApp = ({ clientApp }: MobileConnectionAppProps = {}) => {
@@ -24,6 +24,8 @@ export const ClientAppMobileConnectionApp = ({ clientApp }: MobileConnectionAppP
 };
 
 export const MobileConnectionApp = ClientAppMobileConnectionApp;
+
+export const WeaveMobileConnectionApp = ClientAppMobileConnectionApp;
 
 export const FlareMobileConnectionApp = () => (
   <ClientAppMobileConnectionApp clientApp={clientAppDefinitions.flare} />

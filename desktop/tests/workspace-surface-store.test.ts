@@ -63,6 +63,29 @@ describe('workspace surface store', () => {
     });
   });
 
+  it('hydrates from old Coppermind-scoped surface storage without deleting it', async () => {
+    const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore(storage => {
+      storage.setItem('weave-surface.coppermind', JSON.stringify({
+        state: {
+          threadId: 'notes-thread',
+          activeSurface: { kind: 'workspace', projectId: 'notes-project', workspaceId: 'notes-workspace' },
+          paneVisibility: { chatOpen: false, editorOpen: true, terminalOpen: false },
+          surfaceLayouts: {},
+          maximizedPane: null,
+        },
+        version: 1,
+      }));
+    });
+
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      threadId: 'notes-thread',
+      activeSurface: { kind: 'workspace', projectId: 'notes-project', workspaceId: 'notes-workspace' },
+      paneVisibility: { chatOpen: false, editorOpen: true, terminalOpen: false },
+    });
+    expect(Boolean(localStorage.getItem('weave-surface.coppermind'))).toBe(true);
+    expect(Boolean(localStorage.getItem('weave-surface.weave'))).toBe(true);
+  });
+
   it('selects threads and workspaces with the expected pane defaults', async () => {
     const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
 

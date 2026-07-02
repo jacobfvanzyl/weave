@@ -40,10 +40,6 @@ let portalEditorClient: PortalEditorClient | undefined;
 let portalLspClient: PortalLspClient | undefined;
 let desktopPerfSampler: ReturnType<typeof startDesktopPerfSampler> | undefined;
 
-const clientAppId = process.env.WEAVE_CLIENT_APP === 'coppermind' || process.env.VITE_WEAVE_CLIENT_APP === 'coppermind'
-  ? 'coppermind'
-  : 'flare';
-
 const ipcErrorResult = (error: unknown) => ({
   __weaveIpcError: true,
   message: error instanceof Error ? error.message : String(error),
@@ -56,7 +52,7 @@ const handleIpcResult = async <T>(operation: () => T | Promise<T>) => {
     return ipcErrorResult(error);
   }
 };
-const appName = clientAppId === 'coppermind' ? 'Coppermind' : 'Flare';
+const appName = 'Weave';
 const appUserDataPath = process.env.WEAVE_DESKTOP_USER_DATA || path.join(app.getPath('appData'), appName);
 const sharedConnectionUserDataPath = process.env.WEAVE_DESKTOP_CONNECTION_USER_DATA
   || process.env.WEAVE_DESKTOP_USER_DATA

@@ -1,9 +1,7 @@
 import type { RefObject, ReactNode } from 'react';
 import { getClientAppSidebarProducts, type ClientAppDefinition } from '../../lib/client-app';
 import type { ProductId } from '../../lib/products';
-import { ChatSidebar } from '../products/ChatSidebar';
-import { CodeSidebar } from '../products/CodeSidebar';
-import { NotesSidebar } from '../products/NotesSidebar';
+import { WorkspaceSidebar } from '../sidebar/WorkspaceSidebar';
 
 type AppSidebarHostProps = {
   closeOnPinnedSelect: boolean;
@@ -34,8 +32,8 @@ export const AppSidebarHost = ({
   onOpenSidebarPreview,
   onScheduleSidebarPreviewClose,
 }: AppSidebarHostProps) => {
-  const Sidebar = product === 'notes' ? NotesSidebar : product === 'chat' ? ChatSidebar : CodeSidebar;
   const sidebarProducts = getClientAppSidebarProducts(clientApp);
+  const sidebarProduct = sidebarProducts.length > 1 ? clientApp.defaultProduct : product;
   const showPlainThreads = sidebarProducts.includes('chat');
 
   return (
@@ -47,10 +45,11 @@ export const AppSidebarHost = ({
             aria-label="Close sidebar"
             onClick={onCloseSidebar}
           />
-          <Sidebar
+          <WorkspaceSidebar
             ref={sidebarRef}
             closeOnSelect={closeOnPinnedSelect}
             connectionSettingsButton={connectionSettingsButton}
+            product={sidebarProduct}
             projectProducts={sidebarProducts}
             showPlainThreads={showPlainThreads}
             onClose={onCloseSidebar}
@@ -74,11 +73,12 @@ export const AppSidebarHost = ({
               onClick={onCloseSidebarPreview}
             />
           ) : null}
-          <Sidebar
+          <WorkspaceSidebar
             ref={sidebarRef}
             presentation="overlay"
             closeOnSelect
             connectionSettingsButton={connectionSettingsButton}
+            product={sidebarProduct}
             projectProducts={sidebarProducts}
             showPlainThreads={showPlainThreads}
             onClose={onCloseSidebarPreview}

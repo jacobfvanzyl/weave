@@ -39,7 +39,7 @@ describe('product store', () => {
     vi.resetModules();
   });
 
-  it('defaults to the Flare product and sanitizes legacy Chat state', async () => {
+  it('keeps persisted product mode within the merged Weave surface', async () => {
     const { useProductStore } = await loadFreshProductStore(storage => {
       storage.setItem('weave.product-mode.v1', JSON.stringify({
         state: { activeProduct: 'chat' },
@@ -47,9 +47,20 @@ describe('product store', () => {
       }));
     });
 
-    expect(useProductStore.getState().activeProduct).toBe('code');
+    expect(useProductStore.getState().activeProduct).toBe('chat');
 
     useProductStore.getState().setActiveProduct('notes');
+    expect(useProductStore.getState().activeProduct).toBe('notes');
+  });
+
+  it('defaults unknown product state to Git/code', async () => {
+    const { useProductStore } = await loadFreshProductStore(storage => {
+      storage.setItem('weave.product-mode.v1', JSON.stringify({
+        state: { activeProduct: 'unknown' },
+        version: 1,
+      }));
+    });
+
     expect(useProductStore.getState().activeProduct).toBe('code');
   });
 });

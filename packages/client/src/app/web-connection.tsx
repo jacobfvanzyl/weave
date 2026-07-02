@@ -1,12 +1,12 @@
 import { ConnectionApp } from '../components/connection/ConnectionApp';
 import { WeaveAppShell } from '../components/app-shell/WeaveAppShell';
-import { clientAppDefinitions, getClientAppDefinition, type ClientAppDefinition, type ClientAppId } from '../lib/client-app';
+import { clientAppDefinitions, getClientAppDefinition, type ClientAppDefinition, type ClientAppInputId } from '../lib/client-app';
 import { createWebConnectionAdapter } from '../lib/web-connection-adapter';
 
 const webConnectionAdapter = createWebConnectionAdapter();
 
 type WebConnectionAppProps = {
-  clientApp?: ClientAppId | ClientAppDefinition;
+  clientApp?: ClientAppInputId | ClientAppDefinition;
 };
 
 export const ClientAppWebConnectionApp = ({ clientApp }: WebConnectionAppProps = {}) => {
@@ -24,6 +24,8 @@ export const ClientAppWebConnectionApp = ({ clientApp }: WebConnectionAppProps =
 };
 
 export const WebConnectionApp = ClientAppWebConnectionApp;
+
+export const WeaveConnectionApp = ClientAppWebConnectionApp;
 
 export const FlareConnectionApp = () => (
   <ClientAppWebConnectionApp clientApp={clientAppDefinitions.flare} />

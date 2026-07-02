@@ -9,7 +9,7 @@ import {
   isProductAllowedForClientApp,
   sanitizeProductForClientApp,
   type ClientAppDefinition,
-  type ClientAppId,
+  type ClientAppInputId,
 } from '../../lib/client-app';
 import { projectBelongsToProduct, productForProjectKind, type ProductId } from '../../lib/products';
 import { shouldShowProposalReview } from '../../lib/proposal-review-state';
@@ -101,7 +101,7 @@ const terminalSyncKey = (target?: TerminalPanelTarget) => target ? [
 ].join(':') : undefined;
 
 type WeaveAppShellProps = {
-  clientApp?: ClientAppId | ClientAppDefinition;
+  clientApp?: ClientAppInputId | ClientAppDefinition;
   connectionSettingsButton?: ReactNode;
 };
 
@@ -139,7 +139,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const { editorMinimumMeasureRef, editorMinimumWidthPx, pageRef, pageWidth } = useMainPaneMetrics();
   const sidebarSurfaceRef = useRef<HTMLElement | null>(null);
   const chatSurfaceRef = useRef<HTMLDivElement | null>(null);
-  const hasAppliedDefaultSurfaceRef = useRef(false);
   const isPortraitViewport = useIsPortraitViewport();
   const isElectronWindow = isElectronWindowNow();
   const workspaceTargets = useWorkspaceTargets({
@@ -188,16 +187,17 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     ? workspaceTargets.activeProject
     : undefined;
   const activeWorkspace = activeProject ? workspaceTargets.activeWorkspace : undefined;
-  const editorTarget = isActiveSurfaceSupported && activeSurfaceProduct === 'code' ? workspaceTargets.editorTarget : undefined;
+  const hasCodeSurfaceContext = isActiveSurfaceSupported && activeSurfaceProduct === 'code';
+  const editorTarget = hasCodeSurfaceContext ? workspaceTargets.editorTarget : undefined;
   const notesTarget = isActiveSurfaceSupported && activeSurfaceProduct === 'notes' ? workspaceTargets.notesTarget : undefined;
-  const rawGeneralTerminalTarget = activeProduct === 'code' ? workspaceTargets.generalTerminalTarget : undefined;
+  const rawGeneralTerminalTarget = hasCodeSurfaceContext ? workspaceTargets.generalTerminalTarget : undefined;
   const generalTerminalTarget = useMemo(() => rawGeneralTerminalTarget ? ({
     ...rawGeneralTerminalTarget,
     title: `${clientApp.displayName} Terminal`,
   }) : undefined, [clientApp.displayName, rawGeneralTerminalTarget]);
-  const terminalTarget = isActiveSurfaceSupported && activeSurfaceProduct === 'code' ? workspaceTargets.terminalTarget : undefined;
-  const hasWindowStreamPortal = activeProduct === 'code' && workspaceTargets.hasWindowStreamPortal;
-  const canShowWindowStream = clientApp.id !== 'flare' && hasWindowStreamPortal;
+  const terminalTarget = hasCodeSurfaceContext ? workspaceTargets.terminalTarget : undefined;
+  const hasWindowStreamPortal = hasCodeSurfaceContext && workspaceTargets.hasWindowStreamPortal;
+  const canShowWindowStream = hasWindowStreamPortal;
   const activeSurfaceKey = activeSurface.kind === 'thread'
     ? `thread:${activeSurface.threadId}`
     : `workspace:${activeSurface.projectId}:${activeSurface.workspaceId}`;
@@ -655,28 +655,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   useEffect(() => {
     if (!isFetched || !projectsQuery.isFetched) return;
 
-    if (
-      !hasAppliedDefaultSurfaceRef.current
-      && clientApp.id === 'coppermind'
-      && activeProduct === 'notes'
-      && activeSurfaceProduct === 'chat'
-      && activeThread?.draft === true
-      && !activeThread.projectId
-      && !activeThread.workspaceId
-    ) {
-      hasAppliedDefaultSurfaceRef.current = true;
-      const nextProject = projects.find(project =>
-        projectBelongsToProduct(project, 'notes') && project.workspaces.length > 0
-      );
-      const nextWorkspace = nextProject?.workspaces[0];
-      if (nextProject && nextWorkspace) {
-        selectWorkspaceSurface(nextProject.id, nextWorkspace.id);
-        return;
-      }
-    } else if (!hasAppliedDefaultSurfaceRef.current) {
-      hasAppliedDefaultSurfaceRef.current = true;
-    }
-
     if (isActiveSurfaceSupported) return;
 
     if (activeProduct === 'code' || activeProduct === 'notes') {
@@ -702,8 +680,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     if (isProductAllowedForClientApp('chat', clientApp)) void newThread();
   }, [
     activeProduct,
-    activeSurfaceProduct,
-    activeThread,
     clientApp,
     isActiveSurfaceSupported,
     isFetched,
@@ -825,9 +801,8 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
 
   useEffect(() => {
     if (!shouldCloseUnavailableTerminalPane({
-      activeProduct,
       hasTerminalPaneTarget,
-      hasWorkspaceTerminalContext,
+      hasWorkspaceTerminalContext: hasCodeSurfaceContext && hasWorkspaceTerminalContext,
       isPortalsFetched: workspaceTargets.portalsQuery.isFetched,
       isProjectsFetched: projectsQuery.isFetched,
       terminalOpen: paneVisibility.terminalOpen,
@@ -836,8 +811,8 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     }
     closePane('terminal');
   }, [
-    activeProduct,
     closePane,
+    hasCodeSurfaceContext,
     hasTerminalPaneTarget,
     hasWorkspaceTerminalContext,
     paneVisibility.terminalOpen,

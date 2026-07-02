@@ -1,7 +1,4 @@
-import type { ProductId } from '../../lib/products';
-
 type ShouldCloseUnavailableTerminalPaneInput = {
-  activeProduct: ProductId;
   hasTerminalPaneTarget: boolean;
   hasWorkspaceTerminalContext: boolean;
   isPortalsFetched: boolean;
@@ -10,7 +7,6 @@ type ShouldCloseUnavailableTerminalPaneInput = {
 };
 
 export const shouldCloseUnavailableTerminalPane = ({
-  activeProduct,
   hasTerminalPaneTarget,
   hasWorkspaceTerminalContext,
   isPortalsFetched,
@@ -19,8 +15,7 @@ export const shouldCloseUnavailableTerminalPane = ({
 }: ShouldCloseUnavailableTerminalPaneInput) => {
   if (!terminalOpen || hasTerminalPaneTarget) return false;
   if (
-    activeProduct === 'code'
-    && hasWorkspaceTerminalContext
+    hasWorkspaceTerminalContext
     && (!isProjectsFetched || !isPortalsFetched)
   ) {
     return false;

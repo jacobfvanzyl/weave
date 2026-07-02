@@ -8,11 +8,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
-const clientAppId = process.env.WEAVE_CLIENT_APP === 'coppermind' || process.env.VITE_WEAVE_CLIENT_APP === 'coppermind'
-  ? 'coppermind'
-  : 'flare';
-const appName = clientAppId === 'coppermind' ? 'Coppermind' : 'Flare';
-const appBundleId = clientAppId === 'coppermind' ? 'com.veezee.coppermind' : 'com.veezee.flare';
+const appName = 'Weave';
+const appBundleId = 'com.veezee.weave';
 
 const config: ForgeConfig = {
   packagerConfig: {

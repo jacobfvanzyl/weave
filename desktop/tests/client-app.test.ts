@@ -40,52 +40,62 @@ describe('client app definitions', () => {
     vi.resetModules();
   });
 
-  it('defaults to Flare and defines the split app surfaces', async () => {
+  it('defaults to Weave and resolves legacy app ids as aliases', async () => {
     const { module } = await loadClientApp();
 
-    expect(module.getBuildClientAppId()).toBe('flare');
-    expect(module.clientAppDefinitions.flare).toMatchObject({
-      displayName: 'Flare',
-      allowedProducts: ['code'],
+    expect(module.getBuildClientAppId()).toBe('weave');
+    expect(module.resolveClientAppId('flare')).toBe('weave');
+    expect(module.resolveClientAppId('coppermind')).toBe('weave');
+    expect(module.clientAppDefinitions.weave).toMatchObject({
+      displayName: 'Weave',
+      allowedProducts: ['code', 'notes', 'chat'],
+      navigationProducts: [],
+      sidebarProducts: ['code', 'notes', 'chat'],
       defaultProduct: 'code',
     });
-    expect(module.clientAppDefinitions.coppermind).toMatchObject({
-      displayName: 'Coppermind',
-      allowedProducts: ['notes', 'chat'],
-      selectableProducts: ['notes'],
-      navigationProducts: [],
-      sidebarProducts: ['notes', 'chat'],
-      defaultProduct: 'notes',
-    });
+    expect(module.clientAppDefinitions.flare).toBe(module.clientAppDefinitions.weave);
+    expect(module.clientAppDefinitions.coppermind).toBe(module.clientAppDefinitions.weave);
   });
 
-  it('sanitizes products to the active app boundary', async () => {
+  it('allows all internal products while hiding top-level product navigation', async () => {
     const { module } = await loadClientApp();
+    const app = module.clientAppDefinitions.weave;
 
-    expect(module.sanitizeProductForClientApp('chat', module.clientAppDefinitions.flare)).toBe('code');
-    expect(module.sanitizeProductForClientApp('code', module.clientAppDefinitions.coppermind)).toBe('notes');
-    expect(module.sanitizeProductForClientApp('chat', module.clientAppDefinitions.coppermind)).toBe('notes');
-    expect(module.isProductAllowedForClientApp('chat', module.clientAppDefinitions.coppermind)).toBe(true);
-    expect(module.isProductSelectableForClientApp('chat', module.clientAppDefinitions.coppermind)).toBe(false);
-    expect(module.getClientAppNavigationProducts(module.clientAppDefinitions.coppermind)).toEqual([]);
-    expect(module.getClientAppSidebarProducts(module.clientAppDefinitions.coppermind)).toEqual(['notes', 'chat']);
-    expect(module.getClientAppProductLabel(module.clientAppDefinitions.coppermind, 'chat')).toBe('Threads');
+    expect(module.sanitizeProductForClientApp('chat', app)).toBe('chat');
+    expect(module.sanitizeProductForClientApp('notes', app)).toBe('notes');
+    expect(module.sanitizeProductForClientApp(undefined, app)).toBe('code');
+    expect(module.isProductAllowedForClientApp('chat', app)).toBe(true);
+    expect(module.isProductSelectableForClientApp('chat', app)).toBe(true);
+    expect(module.getClientAppNavigationProducts(app)).toEqual([]);
+    expect(module.getClientAppSidebarProducts(app)).toEqual(['code', 'notes', 'chat']);
+    expect(module.getClientAppProductLabel(app, 'code')).toBe('Git');
+    expect(module.getClientAppProductLabel(app, 'chat')).toBe('Threads');
   });
 
-  it('reads legacy storage as a fallback and writes app-scoped keys', async () => {
+  it('reads legacy storage as a fallback and writes Weave-scoped keys', async () => {
     const storage = createStorage();
     storage.setItem('weave-theme', 'legacy');
     const { module } = await loadClientApp(storage);
 
-    expect(module.getClientAppStorageItem('weave-theme', module.clientAppDefinitions.flare)).toBe('legacy');
+    expect(module.getClientAppStorageItem('weave-theme', module.clientAppDefinitions.weave)).toBe('legacy');
     expect(storage.getItem('weave-theme')).toBe('legacy');
-    expect(storage.getItem('weave-theme.flare')).toBe('legacy');
+    expect(storage.getItem('weave-theme.weave')).toBe('legacy');
 
-    module.setClientAppStorageItem('weave-theme', 'flare', module.clientAppDefinitions.flare);
-    module.setClientAppStorageItem('weave-theme', 'coppermind', module.clientAppDefinitions.coppermind);
+    module.setClientAppStorageItem('weave-theme', 'weave', module.clientAppDefinitions.weave);
 
     expect(storage.getItem('weave-theme')).toBe('legacy');
-    expect(storage.getItem('weave-theme.flare')).toBe('flare');
+    expect(storage.getItem('weave-theme.weave')).toBe('weave');
+  });
+
+  it('imports old Coppermind and Flare scoped storage without deleting it', async () => {
+    const storage = createStorage();
+    storage.setItem('weave-theme.coppermind', 'coppermind');
+    storage.setItem('weave-theme.flare', 'flare');
+    const { module } = await loadClientApp(storage);
+
+    expect(module.getClientAppStorageItem('weave-theme')).toBe('coppermind');
+    expect(storage.getItem('weave-theme.weave')).toBe('coppermind');
     expect(storage.getItem('weave-theme.coppermind')).toBe('coppermind');
+    expect(storage.getItem('weave-theme.flare')).toBe('flare');
   });
 });

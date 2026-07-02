@@ -7,7 +7,6 @@ import { _electron as electron, expect as playwrightExpect, type ElectronApplica
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const runSmoke = process.env.WEAVE_ELECTRON_SMOKE === '1';
-const smokeClientApp = process.env.WEAVE_ELECTRON_SMOKE_APP === 'coppermind' ? 'coppermind' : 'flare';
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
@@ -281,13 +280,11 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     rmSync(userDataPath, { recursive: true, force: true });
   });
 
-  it.skipIf(smokeClientApp !== 'flare')('exercises disconnected auth, saved auth, Flare shell render, shortcuts, and no renderer Node API', async () => {
+  it('exercises disconnected auth, saved auth, merged Weave shell render, shortcuts, and no renderer Node API', async () => {
     app = await electron.launch({
       args: [path.resolve(testDirectory, '../.vite/build/main.js')],
       env: {
         ...process.env,
-        WEAVE_CLIENT_APP: 'flare',
-        VITE_WEAVE_CLIENT_APP: 'flare',
         WEAVE_DESKTOP_SERVER_URL: serverUrl,
         WEAVE_DESKTOP_USER_DATA: userDataPath,
         WEAVE_AUTH_TOKEN: '',
@@ -301,9 +298,9 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await page.getByLabel('Auth token').fill('test-token');
     await page.getByRole('button', { name: 'Save' }).click();
     await page.getByLabel('Connection settings').waitFor({ timeout: 5_000 });
-    expect(await app.evaluate(({ app }) => app.getName())).toBe('Flare');
-    await playwrightExpect(page).toHaveTitle('Flare');
-    expect(await page.locator('html').getAttribute('data-weave-client-app')).toBe('flare');
+    expect(await app.evaluate(({ app }) => app.getName())).toBe('Weave');
+    await playwrightExpect(page).toHaveTitle('Weave');
+    expect(await page.locator('html').getAttribute('data-weave-client-app')).toBe('weave');
     const hideSidebarAppRegion = await page.getByRole('button', { name: 'Hide sidebar' }).evaluate(element =>
       getComputedStyle(element).getPropertyValue('-webkit-app-region'),
     );
@@ -312,10 +309,26 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     );
     expect(hideSidebarAppRegion === 'drag').toBe(false);
     expect(hideSidebarIconAppRegion === 'drag').toBe(false);
+    await playwrightExpect(page.getByRole('button', { name: 'Switch to Notes' })).toHaveCount(0);
     await playwrightExpect(page.getByRole('button', { name: 'Switch to Threads' })).toHaveCount(0);
     await playwrightExpect(page.getByRole('button', { name: 'Switch to Code' })).toHaveCount(0);
+
+    const sidebar = page.locator('[data-weave-thread-sidebar]');
+    await playwrightExpect(sidebar.getByText('Loose thought')).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(sidebar.getByText('Smoke Code')).toBeVisible();
+    await playwrightExpect(sidebar.getByText('Smoke Notes')).toBeVisible();
+    await playwrightExpect(sidebar.getByText('Smoke Threads')).toBeVisible();
+    const threadBox = await sidebar.getByText('Loose thought').boundingBox();
+    const projectsBox = await sidebar.getByText('Projects', { exact: true }).boundingBox();
+    expect(threadBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(projectsBox?.y ?? 0);
+
     const appHeader = page.locator('header').first();
     const appBarBreadcrumb = appHeader.locator('[data-weave-context-breadcrumb]');
+    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
+
+    await sidebar.getByRole('button', { name: /main/ }).first().click({ force: true });
     await playwrightExpect(appBarBreadcrumb).toBeVisible({ timeout: 5_000 });
     await playwrightExpect(appBarBreadcrumb).toContainText('Smoke Code');
     await playwrightExpect(appBarBreadcrumb).toContainText('main');
@@ -324,16 +337,30 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     const generalTerminalToggle = page.getByRole('button', { name: 'Show general terminal' });
     await generalTerminalToggle.waitFor({ timeout: 5_000 });
     await playwrightExpect(generalTerminalToggle.locator('[data-weave-terminal-count-badge]')).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toBeVisible();
+    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toBeVisible();
+
+    await sidebar.getByRole('button', { name: 'Expanded Project Smoke Notes', exact: true }).click({ force: true });
+    await playwrightExpect(appBarBreadcrumb).toContainText('Smoke Notes');
+    await playwrightExpect(appBarBreadcrumb).toContainText('Vault');
+    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Hide notes' })).toBeVisible();
+
+    await sidebar.getByRole('button', { name: /^Loose thought$/ }).click({ force: true });
+    await playwrightExpect(appBarBreadcrumb).toContainText('Loose thought');
+    await playwrightExpect(page.locator('[data-weave-main-pane="chat"] [data-weave-context-breadcrumb]')).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Hide notes' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show notes' })).toHaveCount(0);
+
     await page.getByRole('button', { name: 'Hide sidebar' }).click();
     const showSidebarButton = page.getByRole('button', { name: 'Show sidebar' }).first();
     await showSidebarButton.waitFor({ timeout: 5_000 });
     await showSidebarButton.click();
     await page.getByRole('button', { name: 'Hide sidebar' }).waitFor({ timeout: 5_000 });
-    await page.getByRole('button', { name: 'Create thread in main' }).click();
-    await playwrightExpect(page.locator('[data-weave-main-pane="chat"] [data-weave-context-breadcrumb]')).toHaveCount(0);
-
-    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
-    await playwrightExpect(page.locator('[data-weave-window-stream-overlay]')).toHaveCount(0);
 
     const shortcut = process.platform === 'darwin' ? 'Meta+Shift+K' : 'Control+Shift+K';
     const composer = page.locator('[data-weave-active-thread="true"] textarea');
@@ -361,54 +388,5 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
 
     expect(await page.evaluate(() => typeof window.require)).toBe('undefined');
     expect(await page.locator('body').evaluate(element => getComputedStyle(element).colorScheme)).toBe('dark');
-  }, 60_000);
-
-  it.skipIf(smokeClientApp !== 'coppermind')('mounts Coppermind with Notes and Threads but no code-only controls', async () => {
-    app = await electron.launch({
-      args: [path.resolve(testDirectory, '../.vite/build/main.js')],
-      env: {
-        ...process.env,
-        WEAVE_CLIENT_APP: 'coppermind',
-        VITE_WEAVE_CLIENT_APP: 'coppermind',
-        WEAVE_DESKTOP_SERVER_URL: serverUrl,
-        WEAVE_DESKTOP_USER_DATA: userDataPath,
-        WEAVE_AUTH_TOKEN: '',
-      },
-    });
-
-    const page = await app.firstWindow();
-    await page.waitForLoadState('domcontentloaded');
-    await page.getByLabel('Auth token').waitFor({ timeout: 5_000 });
-    await page.getByLabel('Auth token').fill('test-token');
-    await page.getByRole('button', { name: 'Save' }).click();
-    await page.getByLabel('Connection settings').waitFor({ timeout: 5_000 });
-
-    expect(await app.evaluate(({ app }) => app.getName())).toBe('Coppermind');
-    await playwrightExpect(page).toHaveTitle('Coppermind');
-    expect(await page.locator('html').getAttribute('data-weave-client-app')).toBe('coppermind');
-    await playwrightExpect(page.getByRole('button', { name: 'Switch to Notes' })).toHaveCount(0);
-    await playwrightExpect(page.getByRole('button', { name: 'Switch to Threads' })).toHaveCount(0);
-    await playwrightExpect(page.getByRole('button', { name: 'Switch to Code' })).toHaveCount(0);
-    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toHaveCount(0);
-    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
-    const appHeader = page.locator('header').first();
-    const appBarBreadcrumb = appHeader.locator('[data-weave-context-breadcrumb]');
-    await playwrightExpect(appBarBreadcrumb).toBeVisible({ timeout: 5_000 });
-    await playwrightExpect(appBarBreadcrumb).toContainText('Smoke Notes');
-    await playwrightExpect(appBarBreadcrumb).toContainText('Vault');
-    await playwrightExpect(page.locator('[data-weave-main-pane="editor"] [data-weave-context-breadcrumb]')).toHaveCount(0);
-    const sidebar = page.locator('[data-weave-thread-sidebar]');
-    await playwrightExpect(sidebar.getByText('Loose thought')).toBeVisible();
-    await playwrightExpect(sidebar.getByText('Smoke Notes')).toBeVisible();
-    await playwrightExpect(sidebar.getByText('Smoke Threads')).toBeVisible();
-    await playwrightExpect(sidebar.getByText('Smoke Code')).toHaveCount(0);
-    const threadBox = await sidebar.getByText('Loose thought').boundingBox();
-    const projectsBox = await sidebar.getByText('Projects', { exact: true }).boundingBox();
-    expect(threadBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(projectsBox?.y ?? 0);
-    await sidebar.getByText('Loose thought').click();
-    await playwrightExpect(appBarBreadcrumb).toContainText('Loose thought');
-    await playwrightExpect(page.locator('[data-weave-main-pane="chat"] [data-weave-context-breadcrumb]')).toHaveCount(0);
-    await playwrightExpect(page.getByRole('button', { name: 'Hide notes' })).toHaveCount(0);
-    await playwrightExpect(page.getByRole('button', { name: 'Show notes' })).toHaveCount(0);
   }, 60_000);
 });

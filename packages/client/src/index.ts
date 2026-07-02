@@ -1,5 +1,5 @@
 export { Providers } from './app/providers';
-export { ClientAppWebConnectionApp, CoppermindConnectionApp, FlareConnectionApp, WebConnectionApp } from './app/web-connection';
+export { ClientAppWebConnectionApp, CoppermindConnectionApp, FlareConnectionApp, WeaveConnectionApp, WebConnectionApp } from './app/web-connection';
 export { WeaveAppShell } from './components/app-shell/WeaveAppShell';
 export { ChatPage } from './components/chat/ChatPage';
 export { ConnectionApp } from './components/connection/ConnectionApp';
@@ -23,6 +23,8 @@ export {
   sanitizeProductForClientApp,
   type ClientAppDefinition,
   type ClientAppId,
+  type ClientAppInputId,
+  type LegacyClientAppId,
 } from './lib/client-app';
 export type {
   ConnectionAdapter,

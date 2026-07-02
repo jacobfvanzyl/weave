@@ -45,7 +45,7 @@ const normalizeBrowseResult = (result: PortalBrowseResult | null, requestedPath:
 };
 
 const projectKindLabel = (projectKind: 'general' | 'git' | 'notes') =>
-  projectKind === 'git' ? 'Code' : projectKind === 'notes' ? 'Notes' : 'Threads';
+  projectKind === 'git' ? 'Git' : projectKind === 'notes' ? 'Notes' : 'Threads';
 
 const allProjectKinds: Array<'general' | 'git' | 'notes'> = ['general', 'git', 'notes'];
 
@@ -179,7 +179,7 @@ export const GitProjectDirectoryPicker = ({
                 </SelectTrigger>
                 <SelectPopup>
                   {availableProjectKinds.includes('general') ? <SelectItem value="general">Threads</SelectItem> : null}
-                  {availableProjectKinds.includes('git') ? <SelectItem value="git">Code</SelectItem> : null}
+                  {availableProjectKinds.includes('git') ? <SelectItem value="git">Git</SelectItem> : null}
                   {availableProjectKinds.includes('notes') ? <SelectItem value="notes">Notes</SelectItem> : null}
                 </SelectPopup>
               </Select>

@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "dev:flare": "WEAVE_CLIENT_APP=flare VITE_WEAVE_CLIENT_APP=flare vite --host 0.0.0.0 --port 5173",
-    "dev:coppermind": "WEAVE_CLIENT_APP=coppermind VITE_WEAVE_CLIENT_APP=coppermind vite --host 0.0.0.0 --port 5173",
+    "dev:flare": "npm run dev",
+    "dev:coppermind": "npm run dev",
     "build": "tsc -b && vite build",
-    "build:flare": "WEAVE_CLIENT_APP=flare VITE_WEAVE_CLIENT_APP=flare tsc -b && WEAVE_CLIENT_APP=flare VITE_WEAVE_CLIENT_APP=flare vite build",
-    "build:coppermind": "WEAVE_CLIENT_APP=coppermind VITE_WEAVE_CLIENT_APP=coppermind tsc -b && WEAVE_CLIENT_APP=coppermind VITE_WEAVE_CLIENT_APP=coppermind vite build",
+    "build:flare": "npm run build",
+    "build:coppermind": "npm run build",
     "preview": "vite preview"
   },
   "dependencies": {

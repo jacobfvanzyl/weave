@@ -46,17 +46,27 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { ScrollArea } from '../ui/scroll-area';
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
 
-const collapsedProjectsStorageKey = (product: ProductId) => `weave.product-sidebar.${product}.collapsedProjectIds.v1`;
+type SidebarProjectScope = ProductId | 'all';
+
+const collapsedProjectsStorageKey = (scope: SidebarProjectScope) => `weave.product-sidebar.${scope}.collapsedProjectIds.v1`;
 const branchMenuRefreshThrottleMs = 15_000;
 
-const loadCollapsedProjectIds = (product: ProductId) => {
+const parseCollapsedProjectIds = (value: string | null) => {
   try {
-    const value = getClientAppStorageItem(collapsedProjectsStorageKey(product));
     const parsed = value ? JSON.parse(value) : [];
     return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string') : [];
   } catch {
-    return [];
+    return undefined;
   }
+};
+
+const loadCollapsedProjectIds = (scope: SidebarProjectScope) => {
+  const scopes: SidebarProjectScope[] = scope === 'all' ? ['all', 'code', 'notes', 'chat'] : [scope];
+  for (const nextScope of scopes) {
+    const parsed = parseCollapsedProjectIds(getClientAppStorageItem(collapsedProjectsStorageKey(nextScope)));
+    if (parsed) return parsed;
+  }
+  return [];
 };
 
 const sortManual = <T extends { sortOrder?: number; updatedAt: string }>(items: T[]) => [...items].sort((a, b) =>
@@ -282,10 +292,11 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   const [attachWorkspaceName, setAttachWorkspaceName] = useState('');
   const [isAttachingWorkspace, setIsAttachingWorkspace] = useState(false);
   const [attachWorkspaceError, setAttachWorkspaceError] = useState<string | null>(null);
-  const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>(() => loadCollapsedProjectIds(product));
+  const sidebarProducts = projectProducts?.length ? projectProducts : [product];
+  const collapsedProjectScope: SidebarProjectScope = sidebarProducts.length > 1 ? 'all' : product;
+  const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>(() => loadCollapsedProjectIds(collapsedProjectScope));
   const [pendingBranchActionKey, setPendingBranchActionKey] = useState<string | null>(null);
   const { projects } = useProjectsWithLiveGitState(resourceId);
-  const sidebarProducts = projectProducts?.length ? projectProducts : [product];
   const sidebarProductSet = new Set(sidebarProducts);
   const productProjects = projects.filter(project => sidebarProductSet.has(productForProjectKind(project.projectKind)));
   const creatableProjectKinds = Array.from(new Set(sidebarProducts.map(projectKindForProduct)));
@@ -549,12 +560,12 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
   ]);
 
   useEffect(() => {
-    setCollapsedProjectIds(loadCollapsedProjectIds(product));
-  }, [product]);
+    setCollapsedProjectIds(loadCollapsedProjectIds(collapsedProjectScope));
+  }, [collapsedProjectScope]);
 
   useEffect(() => {
-    setClientAppStorageItem(collapsedProjectsStorageKey(product), JSON.stringify(collapsedProjectIds));
-  }, [collapsedProjectIds, product]);
+    setClientAppStorageItem(collapsedProjectsStorageKey(collapsedProjectScope), JSON.stringify(collapsedProjectIds));
+  }, [collapsedProjectIds, collapsedProjectScope]);
   const archivedDialogThreads = archivedDialogScopeId === 'plain'
     ? threads.filter(thread => showPlainThreads && (!thread.projectId || thread.adHoc) && thread.archived)
     : threads.filter(thread => {
@@ -837,6 +848,10 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                           )}
                           onClick={() => {
                             if (shouldSuppressSelection()) return;
+                            if (project.projectKind === 'notes' && notesWorkspace) {
+                              selectWorkspaceSurface(project.id, notesWorkspace.id);
+                              return;
+                            }
                             toggleProjectCollapsed(project.id);
                           }}
                         >
