@@ -208,6 +208,26 @@ export const getCoppermindBlockSuiteSections = (doc: Doc): CoppermindBlockSuiteS
   }))
 );
 
+export const reorderCoppermindBlockSuiteSection = (
+  doc: Doc,
+  activeId: string,
+  overId: string,
+) => {
+  if (activeId === overId) return false;
+  const root = doc.root;
+  if (!root) return false;
+
+  const sections = getPageVisibleNotes(doc);
+  const activeIndex = sections.findIndex(section => section.id === activeId);
+  const overIndex = sections.findIndex(section => section.id === overId);
+  if (activeIndex < 0 || overIndex < 0) return false;
+
+  const activeSection = sections[activeIndex];
+  const overSection = sections[overIndex];
+  doc.moveBlocks([activeSection], root, overSection, activeIndex > overIndex);
+  return true;
+};
+
 export const addCoppermindBlockSuiteSection = (doc: Doc) => {
   const root = doc.root;
   if (!root) throw new Error('Cannot add a Coppermind section before the document root is loaded.');

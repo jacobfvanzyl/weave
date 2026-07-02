@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DocSnapshot } from '@blocksuite/store';
+import { Text, type Doc, type DocSnapshot } from '@blocksuite/store';
 import {
   coppermindBlockSuitePackageVersion,
   coppermindCanvasCellGapPx,
@@ -12,6 +12,7 @@ import {
   disposeCoppermindBlockSuiteRuntime,
   getCoppermindBlockSuiteSections,
   placeCoppermindBlockSuiteSection,
+  reorderCoppermindBlockSuiteSection,
   unplaceCoppermindBlockSuiteSection,
 } from '../../packages/client/src/lib/coppermind-blocksuite';
 import {
@@ -51,6 +52,13 @@ const getSnapshotText = (value: unknown) => {
         : ''
     ))
     .join('');
+};
+
+const setSectionText = (doc: Doc, sectionId: string, text: string) => {
+  const section = doc.getBlockById(sectionId);
+  const paragraph = section?.children[0];
+  if (!paragraph) throw new Error(`expected section ${sectionId} to have a paragraph`);
+  doc.updateBlock(paragraph, { text: new Text(text) });
 };
 
 const legacyDocument = (): LegacyCoppermindDocument => ({
@@ -233,6 +241,68 @@ describe('Coppermind .cpr document structure', () => {
           placement: { state: 'unplaced' },
         },
       ]);
+    } finally {
+      disposeCoppermindBlockSuiteRuntime(runtime);
+    }
+  });
+
+  it('reorders BlockSuite sections while preserving contents and placement', () => {
+    const runtime = createCoppermindBlockSuiteRuntime({
+      docId: 'doc:notebook',
+      now: new Date('2026-06-30T10:00:00.000Z'),
+      paragraphTexts: ['First section'],
+      title: 'Notebook',
+    });
+
+    try {
+      const firstSectionId = getCoppermindBlockSuiteSections(runtime.doc)[0].id;
+      const secondSectionId = addCoppermindBlockSuiteSection(runtime.doc);
+      const thirdSectionId = addCoppermindBlockSuiteSection(runtime.doc);
+      const xywh = createCoppermindSectionXYWHAtCenter(1200, 900);
+
+      setSectionText(runtime.doc, secondSectionId, 'Second section');
+      setSectionText(runtime.doc, thirdSectionId, 'Third section');
+      expect(placeCoppermindBlockSuiteSection(runtime.doc, secondSectionId, xywh)).toBe(true);
+
+      expect(reorderCoppermindBlockSuiteSection(runtime.doc, thirdSectionId, firstSectionId)).toBe(true);
+      expect(getCoppermindBlockSuiteSections(runtime.doc)).toMatchObject([
+        { id: thirdSectionId, title: 'Third section', placement: { state: 'unplaced' } },
+        { id: firstSectionId, title: 'First section', placement: { state: 'unplaced' } },
+        { id: secondSectionId, title: 'Second section', placement: { state: 'placed', xywh } },
+      ]);
+
+      expect(reorderCoppermindBlockSuiteSection(runtime.doc, thirdSectionId, secondSectionId)).toBe(true);
+      expect(getCoppermindBlockSuiteSections(runtime.doc)).toMatchObject([
+        { id: firstSectionId, title: 'First section', placement: { state: 'unplaced' } },
+        { id: secondSectionId, title: 'Second section', placement: { state: 'placed', xywh } },
+        { id: thirdSectionId, title: 'Third section', placement: { state: 'unplaced' } },
+      ]);
+    } finally {
+      disposeCoppermindBlockSuiteRuntime(runtime);
+    }
+  });
+
+  it('ignores invalid BlockSuite section reorder requests', () => {
+    const runtime = createCoppermindBlockSuiteRuntime({
+      docId: 'doc:notebook',
+      now: new Date('2026-06-30T10:00:00.000Z'),
+      paragraphTexts: ['First section'],
+      title: 'Notebook',
+    });
+
+    try {
+      const firstSectionId = getCoppermindBlockSuiteSections(runtime.doc)[0].id;
+      const secondSectionId = addCoppermindBlockSuiteSection(runtime.doc);
+      const surfaceId = runtime.doc.root?.children.find(child => child.flavour === 'affine:surface')?.id;
+      const originalOrder = getCoppermindBlockSuiteSections(runtime.doc).map(section => section.id);
+
+      expect(reorderCoppermindBlockSuiteSection(runtime.doc, firstSectionId, firstSectionId)).toBe(false);
+      expect(reorderCoppermindBlockSuiteSection(runtime.doc, 'missing-section', secondSectionId)).toBe(false);
+      expect(reorderCoppermindBlockSuiteSection(runtime.doc, firstSectionId, 'missing-section')).toBe(false);
+      if (surfaceId) {
+        expect(reorderCoppermindBlockSuiteSection(runtime.doc, firstSectionId, surfaceId)).toBe(false);
+      }
+      expect(getCoppermindBlockSuiteSections(runtime.doc).map(section => section.id)).toEqual(originalOrder);
     } finally {
       disposeCoppermindBlockSuiteRuntime(runtime);
     }

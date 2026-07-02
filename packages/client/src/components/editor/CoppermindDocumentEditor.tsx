@@ -1,4 +1,18 @@
 import {
+  DndContext,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DraggableAttributes,
+  type DraggableSyntheticListeners,
+} from '@dnd-kit/core';
+import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
   ColorScheme,
   EditPropsStore,
   EdgelessEditorBlockSpecs,
@@ -23,6 +37,7 @@ import {
   Eraser,
   Focus,
   GitBranch,
+  GripVertical,
   Hand,
   Maximize2,
   Minus,
@@ -36,7 +51,7 @@ import {
   Triangle,
   type LucideIcon,
 } from 'lucide-react';
-import { type DragEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { type DragEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   addCoppermindBlockSuiteSection,
   coppermindCanvasCellGapPx,
@@ -49,6 +64,7 @@ import {
   getCoppermindBlockSuiteSections,
   importCoppermindBlockSuiteRuntime,
   placeCoppermindBlockSuiteSection,
+  reorderCoppermindBlockSuiteSection,
   unplaceCoppermindBlockSuiteSection,
   type CoppermindBlockSuiteSection,
   type CoppermindBlockSuiteRuntime,
@@ -1580,6 +1596,69 @@ const InvalidCoppermindFallback = ({
   );
 };
 
+const CoppermindSectionSortableList = ({
+  children,
+  items,
+  onReorder,
+}: {
+  children: ReactNode;
+  items: string[];
+  onReorder: (activeId: string, overId: string) => void;
+}) => {
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 5 } }),
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      onReorder(String(active.id), String(over.id));
+    }
+  };
+
+  return (
+    <DndContext
+      collisionDetection={closestCenter}
+      modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+      sensors={sensors}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext items={items} strategy={verticalListSortingStrategy}>
+        {children}
+      </SortableContext>
+    </DndContext>
+  );
+};
+
+const CoppermindSortableSectionItem = ({
+  children,
+  id,
+}: {
+  children: (props: {
+    attributes: DraggableAttributes;
+    listeners: DraggableSyntheticListeners;
+    ref: (node: HTMLElement | null) => void;
+  }) => ReactNode;
+  id: string;
+}) => {
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn('relative', isDragging && 'z-20 opacity-90 shadow-lg')}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+    >
+      {children({
+        attributes,
+        listeners,
+        ref: setActivatorNodeRef,
+      })}
+    </div>
+  );
+};
+
 const CoppermindSectionOutline = ({
   activeSectionId,
   canPlaceSections = true,
@@ -1588,6 +1667,7 @@ const CoppermindSectionOutline = ({
   onDeleteSection,
   onDragSection,
   onPlaceSection,
+  onReorderSection,
   onSelectSection,
   onUnplaceSection,
   sections,
@@ -1599,12 +1679,14 @@ const CoppermindSectionOutline = ({
   onDeleteSection: (section: CoppermindBlockSuiteSection) => void;
   onDragSection?: (section: CoppermindBlockSuiteSection, event: DragEvent<HTMLElement>) => void;
   onPlaceSection?: (section: CoppermindBlockSuiteSection) => void;
+  onReorderSection: (activeId: string, overId: string) => void;
   onSelectSection: (sectionId: string) => void;
   onUnplaceSection?: (section: CoppermindBlockSuiteSection) => void;
   sections: CoppermindBlockSuiteSection[];
 }) => {
   const isCanvasMode = mode === 'edgeless';
   const canAddSection = !isCanvasMode || canPlaceSections;
+  const sectionIds = sections.map(section => section.id);
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card/80 text-foreground">
@@ -1628,84 +1710,121 @@ const CoppermindSectionOutline = ({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {sections.length ? (
-          <div className="grid gap-1">
-            {sections.map((section, index) => {
-              const isPlaced = section.placement.state === 'placed';
-              const canDrag = isCanvasMode && !isPlaced && canPlaceSections;
-              const isSelectable = !isCanvasMode || isPlaced;
-              const hasHoverFill = !isCanvasMode || isPlaced;
-              const isActive = activeSectionId === section.id && isSelectable;
+          <CoppermindSectionSortableList items={sectionIds} onReorder={onReorderSection}>
+            <div className="grid gap-1">
+              {sections.map((section, index) => {
+                const isPlaced = section.placement.state === 'placed';
+                const canDrag = isCanvasMode && !isPlaced && canPlaceSections;
+                const isSelectable = !isCanvasMode || isPlaced;
+                const hasHoverFill = !isCanvasMode || isPlaced;
+                const isActive = activeSectionId === section.id && isSelectable;
 
-              return (
-                <div
-                  key={section.id}
-                  className={cn(
-                    'group flex min-h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground',
-                    !isActive && 'hover:border-border',
-                    hasHoverFill && 'hover:bg-accent/70',
-                    isCanvasMode && isPlaced && 'bg-muted/70 text-foreground hover:bg-muted',
-                    isActive && 'border-primary/45 bg-accent text-foreground shadow-sm hover:border-primary/45',
-                    canDrag && 'cursor-grab active:cursor-grabbing',
-                  )}
-                  draggable={canDrag}
-                  title={
-                    isCanvasMode
-                      ? isPlaced
-                        ? 'Double-click to remove cell from canvas'
-                        : canPlaceSections
-                          ? 'Double-click to place cell on canvas'
-                          : undefined
-                      : undefined
-                  }
-                  onDoubleClick={() => {
-                    if (!isCanvasMode) return;
-                    if (isPlaced) {
-                      onUnplaceSection?.(section);
-                      return;
-                    }
-                    if (canPlaceSections) {
-                      onPlaceSection?.(section);
-                    }
-                  }}
-                  onDragStart={event => {
-                    if (!canDrag) return;
-                    onDragSection?.(section, event);
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                    onClick={() => {
-                      if (!isSelectable) return;
-                      onSelectSection(section.id);
-                    }}
-                  >
-                    <span className="w-5 shrink-0 text-[11px] tabular-nums text-muted-foreground/75">
-                      {index + 1}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">{section.title}</span>
-                  </button>
-                  <Button
-                    aria-label={`Delete ${section.title}`}
-                    title="Delete cell"
-                    size="icon-xs"
-                    variant="ghost"
-                    className={cn(
-                      'text-muted-foreground hover:text-destructive',
-                      !isCanvasMode && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                return (
+                  <CoppermindSortableSectionItem key={section.id} id={section.id}>
+                    {({ attributes, listeners, ref }) => (
+                      <div
+                        className={cn(
+                          'group flex min-h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground',
+                          !isActive && 'hover:border-border',
+                          hasHoverFill && 'hover:bg-accent/70',
+                          isCanvasMode && isPlaced && 'bg-muted/70 text-foreground hover:bg-muted',
+                          isActive && 'border-primary/45 bg-accent text-foreground shadow-sm hover:border-primary/45',
+                          canDrag && 'cursor-grab active:cursor-grabbing',
+                        )}
+                        draggable={canDrag}
+                        title={
+                          isCanvasMode
+                            ? isPlaced
+                              ? 'Double-click to remove cell from canvas'
+                              : canPlaceSections
+                                ? 'Double-click to place cell on canvas'
+                                : undefined
+                            : undefined
+                        }
+                        onDoubleClick={() => {
+                          if (!isCanvasMode) return;
+                          if (isPlaced) {
+                            onUnplaceSection?.(section);
+                            return;
+                          }
+                          if (canPlaceSections) {
+                            onPlaceSection?.(section);
+                          }
+                        }}
+                        onDragStart={event => {
+                          const startedOnReorderHandle = event.target instanceof Element
+                            && Boolean(event.target.closest('[data-coppermind-section-reorder-handle="true"]'));
+                          if (!canDrag || startedOnReorderHandle) {
+                            event.preventDefault();
+                            return;
+                          }
+                          onDragSection?.(section, event);
+                        }}
+                      >
+                        <Button
+                          ref={ref}
+                          aria-label={`Reorder ${section.title}`}
+                          title="Drag to reorder cell"
+                          size="icon-xs"
+                          variant="ghost"
+                          className="cursor-grab touch-none select-none text-muted-foreground/60 hover:text-foreground active:cursor-grabbing"
+                          data-coppermind-section-reorder-handle="true"
+                          draggable={false}
+                          style={{ touchAction: 'none' }}
+                          onClick={event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
+                          onDoubleClick={event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
+                          onDragStart={event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
+                          {...attributes}
+                          {...listeners}
+                        >
+                          <GripVertical size={13} />
+                        </Button>
+                        <button
+                          type="button"
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                          onClick={() => {
+                            if (!isSelectable) return;
+                            onSelectSection(section.id);
+                          }}
+                        >
+                          <span className="w-5 shrink-0 text-[11px] tabular-nums text-muted-foreground/75">
+                            {index + 1}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{section.title}</span>
+                        </button>
+                        <Button
+                          aria-label={`Delete ${section.title}`}
+                          title="Delete cell"
+                          size="icon-xs"
+                          variant="ghost"
+                          className={cn(
+                            'text-muted-foreground hover:text-destructive',
+                            !isCanvasMode && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                          )}
+                          onClick={event => {
+                            event.stopPropagation();
+                            onDeleteSection(section);
+                          }}
+                          onDoubleClick={event => event.stopPropagation()}
+                        >
+                          <Trash2 size={13} />
+                        </Button>
+                      </div>
                     )}
-                    onClick={event => {
-                      event.stopPropagation();
-                      onDeleteSection(section);
-                    }}
-                    onDoubleClick={event => event.stopPropagation()}
-                  >
-                    <Trash2 size={13} />
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
+                  </CoppermindSortableSectionItem>
+                );
+              })}
+            </div>
+          </CoppermindSectionSortableList>
         ) : (
           <div className="px-2 py-3 text-xs text-muted-foreground">No cells</div>
         )}
@@ -2057,6 +2176,14 @@ export const CoppermindDocumentEditor = ({
     window.requestAnimationFrame(() => canvasApi?.fitToScreen());
   }, [canvasApi, refreshSections]);
 
+  const reorderSection = useCallback((activeId: string, overId: string) => {
+    const runtime = loadedRuntimeRef.current;
+    if (!runtime) return;
+
+    if (!reorderCoppermindBlockSuiteSection(runtime.doc, activeId, overId)) return;
+    refreshSections();
+  }, [refreshSections]);
+
   const dragSectionFromSidebar = useCallback((
     section: CoppermindBlockSuiteSection,
     event: DragEvent<HTMLElement>,
@@ -2256,6 +2383,7 @@ export const CoppermindDocumentEditor = ({
               onDeleteSection={deleteSection}
               onDragSection={mode === 'edgeless' ? dragSectionFromSidebar : undefined}
               onPlaceSection={mode === 'edgeless' ? placeSectionInNextCanvasSlot : undefined}
+              onReorderSection={reorderSection}
               onSelectSection={selectSection}
               onUnplaceSection={mode === 'edgeless' ? unplaceSectionFromCanvas : undefined}
             />
