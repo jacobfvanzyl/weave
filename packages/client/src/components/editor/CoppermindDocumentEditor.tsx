@@ -97,6 +97,7 @@ import { Button } from '../ui/button';
 
 export type CoppermindDocumentEditorProps = {
   focusRequest?: number;
+  isCellsSidebarOpen?: boolean;
   value: string;
   onChange: (value: string) => void;
 };
@@ -1880,8 +1881,11 @@ const CoppermindSectionOutline = ({
   }, [addMenuOpen]);
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card/80 text-foreground">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+    <aside
+      className="absolute bottom-0 left-0 top-0 z-20 flex w-64 max-w-full flex-col overflow-hidden border-r border-border bg-card text-foreground"
+      data-coppermind-cells-sidebar
+    >
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
         <div className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">
           Cells
         </div>
@@ -2096,6 +2100,7 @@ const CoppermindModeToggle = ({
 
 export const CoppermindDocumentEditor = ({
   focusRequest = 0,
+  isCellsSidebarOpen = true,
   value,
   onChange,
 }: CoppermindDocumentEditorProps) => {
@@ -2803,21 +2808,23 @@ export const CoppermindDocumentEditor = ({
       ) : null}
       <div className="min-h-0 flex-1 overflow-hidden bg-background">
         {loadedState.status === 'ready' ? (
-          <div className="flex h-full min-h-0">
-            <CoppermindSectionOutline
-              activeSectionId={activeSectionId}
-              canPlaceSections={Boolean(canvasApi)}
-              mode={mode}
-              sections={sections}
-              onAddBlocksSection={mode === 'page' ? addBlocksSection : addBlocksSectionToCanvas}
-              onAddInkSection={mode === 'page' ? addInkSection : addInkSectionToCanvas}
-              onDeleteSection={deleteSection}
-              onDragSection={mode === 'edgeless' ? dragSectionFromSidebar : undefined}
-              onPlaceSection={mode === 'edgeless' ? placeSectionInNextCanvasSlot : undefined}
-              onReorderSection={reorderSection}
-              onSelectSection={selectSection}
-              onUnplaceSection={mode === 'edgeless' ? unplaceSectionFromCanvas : undefined}
-            />
+          <div className="relative flex h-full min-h-0">
+            {isCellsSidebarOpen ? (
+              <CoppermindSectionOutline
+                activeSectionId={activeSectionId}
+                canPlaceSections={Boolean(canvasApi)}
+                mode={mode}
+                sections={sections}
+                onAddBlocksSection={mode === 'page' ? addBlocksSection : addBlocksSectionToCanvas}
+                onAddInkSection={mode === 'page' ? addInkSection : addInkSectionToCanvas}
+                onDeleteSection={deleteSection}
+                onDragSection={mode === 'edgeless' ? dragSectionFromSidebar : undefined}
+                onPlaceSection={mode === 'edgeless' ? placeSectionInNextCanvasSlot : undefined}
+                onReorderSection={reorderSection}
+                onSelectSection={selectSection}
+                onUnplaceSection={mode === 'edgeless' ? unplaceSectionFromCanvas : undefined}
+              />
+            ) : null}
             <div
               className={cn(
                 'relative min-h-0 flex-1',

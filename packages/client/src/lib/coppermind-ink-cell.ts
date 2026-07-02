@@ -377,7 +377,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     :host {
       display: block;
       outline: none;
-      touch-action: none;
+      touch-action: auto;
       -webkit-tap-highlight-color: transparent;
       -webkit-touch-callout: none;
       -webkit-user-select: none;
@@ -390,7 +390,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       max-height: var(--coppermind-ink-a4-height);
       overflow: hidden;
       position: relative;
-      touch-action: none;
+      touch-action: auto;
       transition: height 140ms ease;
       user-select: none;
       width: 100%;
@@ -403,7 +403,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
         var(--affine-note-background-white, #fff);
       height: var(--coppermind-ink-a4-height);
       position: relative;
-      touch-action: none;
+      touch-action: auto;
       width: 100%;
     }
 
@@ -413,7 +413,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       inset: 0;
       pointer-events: none;
       position: absolute;
-      touch-action: none;
+      touch-action: auto;
       width: 100%;
     }
 
@@ -439,14 +439,15 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
 
   private _activeTouchId: number | undefined;
 
-  private _fingerPan:
-    | { lastY: number; pointerId: number; source: 'pointer'; target: HTMLElement }
-    | { identifier: number; lastY: number; source: 'touch'; target: HTMLElement }
-    | undefined;
-
   private _draftStroke: CoppermindInkStroke | undefined;
 
   private _activeSheetMetrics: CoppermindInkSheetMetrics | undefined;
+
+  private _selectOnlyStylusTouchHandle: number | undefined;
+
+  private _selectOnlyStylusTouchId: number | undefined;
+
+  private _selectOnlyStylusTouchPending = false;
 
   private _pendingCommitStrokes: CoppermindInkStroke[] = [];
 
@@ -474,6 +475,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       window.cancelAnimationFrame(this._renderFrame);
       this._renderFrame = undefined;
     }
+    this._clearSelectOnlyStylusTouch();
     window.removeEventListener('pointerdown', this._handleWindowPointerStart, true);
     window.removeEventListener('pointermove', this._handleWindowPointerMove, true);
     window.removeEventListener('pointerup', this._handleWindowPointerEnd, true);
@@ -534,6 +536,8 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       hasDraft: Boolean(this._draftStroke),
       isActive: this._isPageModeInkCellActive(),
       pending: this._pendingCommitStrokes.length,
+      selectOnlyTouchId: this._selectOnlyStylusTouchId ?? null,
+      selectOnlyTouchPending: this._selectOnlyStylusTouchPending,
       ...fields,
     });
   }
@@ -552,37 +556,34 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     return this.closest<HTMLElement>('affine-note')?.dataset.coppermindActiveSection === 'true';
   }
 
-  private _getPageScrollTarget() {
-    const pageViewport = this.closest('page-editor')
-      ?.querySelector<HTMLElement>('.affine-page-viewport');
-    if (pageViewport && pageViewport.scrollHeight > pageViewport.clientHeight) return pageViewport;
-
-    let element: Element | null = this;
-    while (element) {
-      if (element instanceof HTMLElement) {
-        const style = window.getComputedStyle(element);
-        if (
-          /(auto|scroll|overlay)/.test(style.overflowY)
-          && element.scrollHeight > element.clientHeight
-        ) {
-          return element;
-        }
-      }
-
-      if (element.parentElement) {
-        element = element.parentElement;
-        continue;
-      }
-
-      const root = element.getRootNode();
-      element = root instanceof ShadowRoot ? root.host : null;
-    }
-
-    return document.scrollingElement instanceof HTMLElement ? document.scrollingElement : undefined;
+  private _armSelectOnlyStylusTouch() {
+    this._clearSelectOnlyStylusTouch();
+    this._selectOnlyStylusTouchPending = true;
+    this._selectOnlyStylusTouchHandle = window.setTimeout(() => {
+      this._clearSelectOnlyStylusTouch();
+    }, 1000);
   }
 
-  private _scrollFingerPan(target: HTMLElement, lastY: number, clientY: number) {
-    target.scrollTop -= clientY - lastY;
+  private _clearSelectOnlyStylusTouch() {
+    if (this._selectOnlyStylusTouchHandle !== undefined) {
+      window.clearTimeout(this._selectOnlyStylusTouchHandle);
+      this._selectOnlyStylusTouchHandle = undefined;
+    }
+    this._selectOnlyStylusTouchId = undefined;
+    this._selectOnlyStylusTouchPending = false;
+  }
+
+  private _consumeSelectOnlyStylusTouch(touch: Touch) {
+    if (
+      !this._selectOnlyStylusTouchPending
+      && this._selectOnlyStylusTouchId !== touch.identifier
+    ) {
+      return false;
+    }
+
+    this._selectOnlyStylusTouchId = touch.identifier;
+    this._selectOnlyStylusTouchPending = false;
+    return true;
   }
 
   private _scheduleRender() {
@@ -824,16 +825,19 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
 
   private _beginStroke(event: PointerEvent) {
     this._debugInput('pointerdown-received', pointerDebugFields(event));
-    if (event.pointerType === 'touch') {
-      this._stopInputEvent(event);
-      this._debugInput('pointerdown-skip-touch', pointerDebugFields(event));
+    if (event.pointerType !== 'pen') {
+      const wasActive = this._isPageModeInkCellActive();
+      if (event.pointerType === 'touch' && !wasActive) {
+        this._armSelectOnlyStylusTouch();
+      }
+      this._debugInput('pointerdown-skip-non-pen', {
+        ...pointerDebugFields(event),
+        armedSelectOnlyTouch: event.pointerType === 'touch' && !wasActive,
+        wasActive,
+      });
       return;
     }
-    if (event.pointerType === 'mouse' && event.button !== 0) {
-      this._debugInput('pointerdown-skip-mouse-button', pointerDebugFields(event));
-      return;
-    }
-    if (event.pointerType === 'pen' && shouldPreferStylusTouchEvents()) {
+    if (shouldPreferStylusTouchEvents()) {
       const sheet = this._getSheet(event.target);
       if (!sheet) {
         this._debugInput('pointerdown-skip-no-sheet', pointerDebugFields(event));
@@ -842,7 +846,10 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
 
       const wasActive = this._isPageModeInkCellActive();
       this._stopInputEvent(event);
-      if (!wasActive) this._dispatchFocus();
+      if (!wasActive) {
+        this._armSelectOnlyStylusTouch();
+        this._dispatchFocus();
+      }
       this._debugInput('pointerdown-defer-stylus-touch', {
         ...pointerDebugFields(event),
         wasActive,
@@ -978,21 +985,8 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       return;
     }
     if (touch && !isStylusTouch(touch)) {
-      const scrollTarget = this._getPageScrollTarget();
-      this._stopInputEvent(event);
-      this._dispatchFocus();
-      this._debugInput('touchstart-finger', {
-        ...touchDebugFields(touch),
-        hasScrollTarget: Boolean(scrollTarget),
-      });
-      if (scrollTarget) {
-        this._fingerPan = {
-          identifier: touch.identifier,
-          lastY: touch.clientY,
-          source: 'touch',
-          target: scrollTarget,
-        };
-      }
+      this._clearSelectOnlyStylusTouch();
+      this._debugInput('touchstart-skip-non-stylus', touchDebugFields(touch));
       return;
     }
 
@@ -1003,6 +997,12 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     const sheet = this._getSheet(event.target);
     if (!sheet) {
       this._debugInput('touchstart-skip-no-sheet', touchDebugFields(touch));
+      return;
+    }
+
+    if (this._consumeSelectOnlyStylusTouch(touch)) {
+      this._stopInputEvent(event);
+      this._debugInput('touchstart-skip-select-only', touchDebugFields(touch));
       return;
     }
 
@@ -1026,18 +1026,6 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
   }
 
   private _extendTouchStroke(event: TouchEvent) {
-    const fingerPan = this._fingerPan;
-    if (fingerPan?.source === 'touch') {
-      const panTouch = Array.from(event.changedTouches)
-        .find(touch => touch.identifier === fingerPan.identifier);
-      if (!panTouch || isStylusTouch(panTouch)) return;
-
-      this._stopInputEvent(event);
-      this._scrollFingerPan(fingerPan.target, fingerPan.lastY, panTouch.clientY);
-      fingerPan.lastY = panTouch.clientY;
-      return;
-    }
-
     const touch = this._getTrackedTouch(event);
     if (!touch || !this._draftStroke || !isStylusTouch(touch)) return;
 
@@ -1046,18 +1034,6 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
   }
 
   private _finishTouchStroke(event: TouchEvent) {
-    const fingerPan = this._fingerPan;
-    if (fingerPan?.source === 'touch') {
-      const panTouch = Array.from(event.changedTouches)
-        .find(touch => touch.identifier === fingerPan.identifier);
-      if (panTouch) {
-        this._stopInputEvent(event);
-        this._fingerPan = undefined;
-        this._debugInput('touchend-finger', touchDebugFields(panTouch));
-      }
-      return;
-    }
-
     const touch = this._getTrackedTouch(event);
     this._debugInput('touchend-received', {
       ...touchDebugFields(touch),
@@ -1081,17 +1057,6 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
   }
 
   private _cancelTouchStroke(event: TouchEvent) {
-    const fingerPan = this._fingerPan;
-    if (fingerPan?.source === 'touch') {
-      const panTouch = Array.from(event.changedTouches)
-        .find(touch => touch.identifier === fingerPan.identifier);
-      if (panTouch) {
-        this._fingerPan = undefined;
-        this._debugInput('touchcancel-finger', touchDebugFields(panTouch));
-      }
-      return;
-    }
-
     const touch = this._getTrackedTouch(event);
     if (!touch) return;
     this._debugInput('touchcancel', touchDebugFields(touch));
@@ -1099,7 +1064,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
   }
 
   private _handleWindowTouchMove = (event: TouchEvent) => {
-    if (this._activeTouchId === undefined && this._fingerPan?.source !== 'touch') return;
+    if (this._activeTouchId === undefined) return;
     this._extendTouchStroke(event);
   };
 
@@ -1109,12 +1074,33 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
   };
 
   private _handleWindowTouchEnd = (event: TouchEvent) => {
-    if (this._activeTouchId === undefined && this._fingerPan?.source !== 'touch') return;
+    if (
+      this._selectOnlyStylusTouchId !== undefined
+      && Array.from(event.changedTouches).some(touch => touch.identifier === this._selectOnlyStylusTouchId)
+    ) {
+      this._stopInputEvent(event);
+      this._debugInput('touchend-select-only', touchDebugFields(
+        Array.from(event.changedTouches).find(touch => touch.identifier === this._selectOnlyStylusTouchId),
+      ));
+      this._clearSelectOnlyStylusTouch();
+      return;
+    }
+    if (this._activeTouchId === undefined) return;
     this._finishTouchStroke(event);
   };
 
   private _handleWindowTouchCancel = (event: TouchEvent) => {
-    if (this._activeTouchId === undefined && this._fingerPan?.source !== 'touch') return;
+    if (
+      this._selectOnlyStylusTouchId !== undefined
+      && Array.from(event.changedTouches).some(touch => touch.identifier === this._selectOnlyStylusTouchId)
+    ) {
+      this._debugInput('touchcancel-select-only', touchDebugFields(
+        Array.from(event.changedTouches).find(touch => touch.identifier === this._selectOnlyStylusTouchId),
+      ));
+      this._clearSelectOnlyStylusTouch();
+      return;
+    }
+    if (this._activeTouchId === undefined) return;
     this._cancelTouchStroke(event);
   };
 

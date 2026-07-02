@@ -18,6 +18,8 @@ import {
   LoaderCircle,
   Maximize2,
   Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   PencilRuler,
@@ -569,6 +571,7 @@ export const UnifiedEditorPanel = ({
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isExplorerSlideOverOpen, setIsExplorerSlideOverOpen] = useState(false);
+  const [isCoppermindCellsSidebarOpen, setIsCoppermindCellsSidebarOpen] = useState(true);
   const [vimMode, setVimMode] = useState<VimMode>('normal');
   const [createPathDialog, setCreatePathDialog] = useState<CreatePathDialogState>();
   const [renameState, setRenameState] = useState<RenameState>();
@@ -601,6 +604,10 @@ export const UnifiedEditorPanel = ({
   const activeBacklinks = activeNote ? vaultIndex?.backlinks[activeNote.path] ?? [] : [];
   const activeDocumentKind = getDocumentKind(mode, openBuffer?.path);
   const isCodeMirrorOpen = Boolean(openBuffer && (activeDocumentKind === 'code' || activeDocumentKind === 'markdown'));
+  const isCoppermindOpen = Boolean(openBuffer && activeDocumentKind === 'coppermind');
+  const coppermindCellsToggleLabel = isCoppermindCellsSidebarOpen
+    ? 'Collapse cells sidebar'
+    : 'Expand cells sidebar';
 
   const tree = useMemo(() => (
     mode === 'code'
@@ -1811,6 +1818,7 @@ export const UnifiedEditorPanel = ({
       return (
         <CoppermindDocumentEditor
           focusRequest={bufferFocusRequest}
+          isCellsSidebarOpen={isCoppermindCellsSidebarOpen}
           value={openBuffer.value}
           onChange={setActiveBufferValue}
         />
@@ -2116,6 +2124,19 @@ export const UnifiedEditorPanel = ({
             aria-hidden="true"
           />
           <div className="flex h-full min-w-0 flex-1 items-center gap-2 px-3">
+            {isCoppermindOpen ? (
+              <Button
+                className={isCoppermindCellsSidebarOpen ? 'bg-accent' : undefined}
+                size="icon-xs"
+                variant="ghost"
+                aria-label={coppermindCellsToggleLabel}
+                title={coppermindCellsToggleLabel}
+                data-active={isCoppermindCellsSidebarOpen ? 'true' : 'false'}
+                onClick={() => setIsCoppermindCellsSidebarOpen(current => !current)}
+              >
+                {isCoppermindCellsSidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+              </Button>
+            ) : null}
             {isCodeMirrorOpen ? (
               <span
                 className="inline-flex h-5 min-w-[4.75rem] shrink-0 items-center justify-center rounded-sm px-2 text-[11px] font-bold"
