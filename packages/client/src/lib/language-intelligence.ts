@@ -1,5 +1,6 @@
 import type { Transport } from '@codemirror/lsp-client';
 import type { EditorTarget } from './editor-types';
+import { detectLanguagePackLspId } from './language-packs/core';
 import { getAuthHeaders } from './mastra-client';
 import { weaveRoutes } from './weave-routes';
 
@@ -50,21 +51,8 @@ type LspEventEnvelope = {
   };
 };
 
-export const detectEditorLanguageId = (path: string) => {
-  const lower = path.toLowerCase();
-  if (lower.endsWith('.tsx')) return 'typescriptreact';
-  if (lower.endsWith('.ts')) return 'typescript';
-  if (lower.endsWith('.jsx')) return 'javascriptreact';
-  if (lower.endsWith('.mjs') || lower.endsWith('.cjs') || lower.endsWith('.js')) return 'javascript';
-  if (lower.endsWith('.jsonc')) return 'jsonc';
-  if (lower.endsWith('.json')) return 'json';
-  if (lower.endsWith('.css')) return 'css';
-  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
-  if (lower.endsWith('.md') || lower.endsWith('.mdx')) return 'markdown';
-  if (lower.endsWith('.dart')) return 'dart';
-  if (lower.endsWith('.graphql') || lower.endsWith('.gql')) return 'graphql';
-  return undefined;
-};
+export const detectEditorLanguageId = (path: string) =>
+  detectLanguagePackLspId(path);
 
 const getDesktopBridge = () => {
   if (typeof window === 'undefined') return undefined;

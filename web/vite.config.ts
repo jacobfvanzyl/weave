@@ -5,71 +5,13 @@ import { fileURLToPath, URL } from 'node:url';
 import path from 'node:path';
 import type { Plugin } from 'vite';
 import { createWeaveClientDefines } from '../scripts/client-vite-env';
+import { isSharedClientPackage } from '../scripts/shared-client-packages';
 
 const webSrc = fileURLToPath(new URL('./src', import.meta.url));
 const webRoot = fileURLToPath(new URL('.', import.meta.url));
 const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
 const clientSrc = fileURLToPath(new URL('../packages/client/src', import.meta.url));
 const clientRoot = fileURLToPath(new URL('../packages/client', import.meta.url));
-const sharedClientPackages = [
-  '@ai-sdk/react',
-  '@assistant-ui/core',
-  '@assistant-ui/react',
-  '@assistant-ui/react-ai-sdk',
-  '@atomic-editor/editor',
-  '@base-ui/react',
-  '@blocksuite/blocks',
-  '@blocksuite/presets',
-  '@blocksuite/store',
-  '@toeverything/theme',
-  '@criblinc/docker-names',
-  '@codemirror/autocomplete',
-  '@codemirror/commands',
-  '@codemirror/lang-css',
-  '@codemirror/lang-html',
-  '@codemirror/lang-javascript',
-  '@codemirror/lang-json',
-  '@codemirror/lang-markdown',
-  '@codemirror/language',
-  '@codemirror/lsp-client',
-  '@codemirror/merge',
-  '@codemirror/search',
-  '@codemirror/state',
-  '@codemirror/view',
-  '@dnd-kit/core',
-  '@dnd-kit/modifiers',
-  '@dnd-kit/sortable',
-  '@dnd-kit/utilities',
-  '@excalidraw/excalidraw',
-  '@lezer/common',
-  '@lezer/highlight',
-  '@lezer/lr',
-  '@replit/codemirror-vim',
-  '@tanstack/react-hotkeys',
-  '@tanstack/react-query',
-  'ai',
-  'class-variance-authority',
-  'clsx',
-  'codemirror',
-  'ghostty-web',
-  'lucide-react',
-  'react',
-  'react-dom',
-  'react-markdown',
-  'rehype-raw',
-  'rehype-sanitize',
-  'remark-gfm',
-  'shiki',
-  'tailwind-merge',
-  'tailwindcss',
-  'yaml',
-  'yjs',
-  'zustand',
-] as const;
-
-const isSharedClientPackage = (source: string) =>
-  sharedClientPackages.some(packageName => source === packageName || source.startsWith(`${packageName}/`));
-
 const sharedClientDependencyResolver = (): Plugin => ({
   name: 'weave-client-dependency-resolver',
   enforce: 'pre',

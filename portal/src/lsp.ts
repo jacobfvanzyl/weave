@@ -6,6 +6,7 @@ import {
   type PortalEditorTarget,
   resolvePortalEditorWorkspaceRoot,
 } from './editor.ts';
+import { detectLanguagePackLspId } from '../../packages/client/src/lib/language-packs/core.ts';
 
 export type LspLanguageId =
   | 'javascript'
@@ -318,25 +319,8 @@ const defaultServerAdapters: Record<string, ServerAdapter> = {
   },
 };
 
-const languageByExtension: Array<[RegExp, LspLanguageId]> = [
-  [/\.tsx$/i, 'typescriptreact'],
-  [/\.ts$/i, 'typescript'],
-  [/\.jsx$/i, 'javascriptreact'],
-  [/\.mjs$/i, 'javascript'],
-  [/\.cjs$/i, 'javascript'],
-  [/\.js$/i, 'javascript'],
-  [/\.jsonc$/i, 'jsonc'],
-  [/\.json$/i, 'json'],
-  [/\.css$/i, 'css'],
-  [/\.html?$/i, 'html'],
-  [/\.mdx?$/i, 'markdown'],
-  [/\.dart$/i, 'dart'],
-  [/\.graphql$/i, 'graphql'],
-  [/\.gql$/i, 'graphql'],
-];
-
 export const detectLspLanguageId = (path: string): LspLanguageId | undefined =>
-  languageByExtension.find(([pattern]) => pattern.test(path))?.[1];
+  detectLanguagePackLspId(path) as LspLanguageId | undefined;
 
 const flattenSessionInput = (input: PortalLspSessionInput | Partial<PortalLspSessionInput>) => {
   const target = isRecord(input.target) ? input.target : {};

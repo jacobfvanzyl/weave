@@ -1,8 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { toggleComment } from "@codemirror/commands";
+import { EditorState } from "@codemirror/state";
+import { describe, expect, it, vi } from "vitest";
 import {
   getCodeMirrorLanguageEntry,
   getCodeMirrorLanguageExtensions,
 } from "../../packages/client/src/lib/codemirror-languages";
+import { registerWeaveVimCommenting } from "../../packages/client/src/lib/codemirror-vim-commenting";
+import {
+  detectLanguagePackLspId,
+  findLanguagePack,
+} from "../../packages/client/src/lib/language-packs/core";
+
+const toggleCommentForPath = (path: string, doc: string) => {
+  const initialState = EditorState.create({
+    doc,
+    extensions: getCodeMirrorLanguageExtensions(path),
+  });
+  let nextState = initialState;
+  const handled = toggleComment({
+    state: initialState,
+    dispatch: (transaction) => {
+      nextState = transaction.state;
+    },
+  });
+  return { handled, doc: nextState.doc.toString() };
+};
 
 describe("CodeMirror language registry", () => {
   it("selects the vendored Dart Lezer package for Dart files", () => {
@@ -10,18 +32,52 @@ describe("CodeMirror language registry", () => {
       id: "dart",
       syntaxProvider: "vendored-lezer",
     });
-    expect(getCodeMirrorLanguageExtensions("lib/main.dart")).toHaveLength(1);
+    expect(getCodeMirrorLanguageExtensions("lib/main.dart").length).toBeGreaterThan(0);
   });
 
-  it("preserves existing CodeMirror language mappings", () => {
+  it("finds source-defined language packs by extension, filename, and pattern", () => {
+    expect(findLanguagePack("src/main.tsx")).toMatchObject({
+      id: "typescriptreact",
+      lsp: { languageId: "typescriptreact" },
+    });
+    expect(findLanguagePack(".env")).toMatchObject({
+      id: "env",
+      comments: { line: "#" },
+    });
+    expect(findLanguagePack(".env.local")).toMatchObject({
+      id: "env",
+      comments: { line: "#" },
+    });
+    expect(findLanguagePack("config.yaml")).toMatchObject({
+      id: "yaml",
+      comments: { line: "#" },
+    });
+    expect(findLanguagePack("config.yml")).toMatchObject({
+      id: "yaml",
+      comments: { line: "#" },
+    });
+  });
+
+  it("detects LSP language IDs from the shared language pack registry", () => {
+    expect(detectLanguagePackLspId("src/main.tsx")).toBe("typescriptreact");
+    expect(detectLanguagePackLspId("src/index.ts")).toBe("typescript");
+    expect(detectLanguagePackLspId("schema.graphql")).toBe("graphql");
+    expect(detectLanguagePackLspId("config.yaml")).toBeUndefined();
+    expect(detectLanguagePackLspId(".env.local")).toBeUndefined();
+  });
+
+  it("projects language packs into CodeMirror language support", () => {
     expect(getCodeMirrorLanguageEntry("src/main.tsx")).toMatchObject({
-      id: "typescript",
+      id: "typescriptreact",
     });
     expect(getCodeMirrorLanguageEntry("src/main.jsx")).toMatchObject({
-      id: "javascript",
+      id: "javascriptreact",
+    });
+    expect(getCodeMirrorLanguageEntry("deno.json")).toMatchObject({
+      id: "json",
     });
     expect(getCodeMirrorLanguageEntry("deno.jsonc")).toMatchObject({
-      id: "json",
+      id: "jsonc",
     });
     expect(getCodeMirrorLanguageEntry("styles/app.css")).toMatchObject({
       id: "css",
@@ -32,10 +88,69 @@ describe("CodeMirror language registry", () => {
     expect(getCodeMirrorLanguageEntry("README.md")).toMatchObject({
       id: "markdown",
     });
+    expect(getCodeMirrorLanguageEntry("config.yaml")).toMatchObject({
+      id: "yaml",
+      syntaxProvider: "codemirror-lezer",
+    });
+    expect(getCodeMirrorLanguageEntry(".env.local")).toMatchObject({
+      id: "env",
+      syntaxProvider: "plain",
+    });
   });
 
   it("falls back to no language extension for unsupported files", () => {
     expect(getCodeMirrorLanguageEntry("archive.unknown")).toBeUndefined();
     expect(getCodeMirrorLanguageExtensions("archive.unknown")).toEqual([]);
+  });
+
+  it.each([
+    ["src/main.ts", "const value = 1;", "// const value = 1;"],
+    ["lib/main.dart", "void main() {}", "// void main() {}"],
+    ["styles/app.css", "body {}", "/* body {} */"],
+    ["public/index.html", "<div></div>", "<!-- <div></div> -->"],
+    ["README.md", "Heading", "<!-- Heading -->"],
+    ["deno.jsonc", "{}", "// {}"],
+    ["config.yaml", "name: weave", "# name: weave"],
+    ["config.yml", "name: weave", "# name: weave"],
+    [".env", "WEAVE=1", "# WEAVE=1"],
+    [".env.local", "WEAVE=1", "# WEAVE=1"],
+    ["sample.env", "WEAVE=1", "# WEAVE=1"],
+    ["schema.graphql", "type Query { id: ID }", "# type Query { id: ID }"],
+  ])("toggles comments for %s", (path, source, expected) => {
+    expect(toggleCommentForPath(path, source)).toEqual({
+      handled: true,
+      doc: expected,
+    });
+  });
+
+  it("keeps strict JSON without comment toggling", () => {
+    expect(toggleCommentForPath("deno.json", "{}")).toEqual({
+      handled: false,
+      doc: "{}",
+    });
+  });
+
+  it("registers the Vim gc comment operator once per Vim API", () => {
+    const vimApi = {
+      defineOperator: vi.fn(),
+      mapCommand: vi.fn(),
+    };
+
+    registerWeaveVimCommenting(vimApi);
+    registerWeaveVimCommenting(vimApi);
+
+    expect(vimApi.defineOperator).toHaveBeenCalledTimes(1);
+    expect(vimApi.defineOperator).toHaveBeenCalledWith(
+      "weaveToggleComment",
+      expect.any(Function),
+    );
+    expect(vimApi.mapCommand).toHaveBeenCalledTimes(1);
+    expect(vimApi.mapCommand).toHaveBeenCalledWith(
+      "gc",
+      "operator",
+      "weaveToggleComment",
+      {},
+      { isEdit: true },
+    );
   });
 });

@@ -1,4 +1,5 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1.0.19';
+import { detectLanguagePackLspId, findLanguagePacksWithLsp } from '../../packages/client/src/lib/language-packs/core.ts';
 import { detectLspLanguageId, PortalLspHost } from './lsp.ts';
 
 type CapturedJsonRpcEvent = {
@@ -189,12 +190,28 @@ const didOpen = async (
 Deno.test('detectLspLanguageId maps common web language files', () => {
   assertEquals(detectLspLanguageId('src/App.tsx'), 'typescriptreact');
   assertEquals(detectLspLanguageId('src/index.ts'), 'typescript');
+  assertEquals(detectLspLanguageId('src/index.mts'), 'typescript');
   assertEquals(detectLspLanguageId('package.json'), 'json');
   assertEquals(detectLspLanguageId('settings.jsonc'), 'jsonc');
   assertEquals(detectLspLanguageId('styles/app.css'), 'css');
   assertEquals(detectLspLanguageId('public/index.html'), 'html');
   assertEquals(detectLspLanguageId('README.md'), 'markdown');
   assertEquals(detectLspLanguageId('lib/main.dart'), 'dart');
+  assertEquals(detectLspLanguageId('schema.graphql'), 'graphql');
+  assertEquals(detectLspLanguageId('schema.gql'), 'graphql');
+  assertEquals(detectLspLanguageId('config.yaml'), undefined);
+  assertEquals(detectLspLanguageId('.env.local'), undefined);
+});
+
+Deno.test('detectLspLanguageId stays aligned with source-defined LSP language packs', () => {
+  for (const pack of findLanguagePacksWithLsp()) {
+    const extension = pack.match.extensions?.[0];
+    const filename = pack.match.filenames?.[0];
+    const samplePath = extension ? `sample.${extension}` : filename;
+    if (!samplePath) throw new Error(`Language pack ${pack.id} has no sample matcher.`);
+
+    assertEquals(detectLspLanguageId(samplePath), detectLanguagePackLspId(samplePath));
+  }
 });
 
 Deno.test('PortalLspHost reports missing configured binaries without throwing', async () =>

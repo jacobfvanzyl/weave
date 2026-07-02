@@ -28,6 +28,7 @@ import { languageServerExtensions, LSPClient } from "@codemirror/lsp-client";
 import { getCM, vim } from "@replit/codemirror-vim";
 import type { EditorTarget } from "../../lib/editor-types";
 import { getCodeMirrorLanguageExtensions } from "../../lib/codemirror-languages";
+import { registerWeaveVimCommenting } from "../../lib/codemirror-vim-commenting";
 import {
   editorBasicSetup,
   editorTheme,
@@ -276,6 +277,8 @@ export const CodeMirrorEditor = forwardRef<
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return undefined;
+
+    registerWeaveVimCommenting();
 
     const saveKeymap = keymap.of([{
       key: "Mod-s",
