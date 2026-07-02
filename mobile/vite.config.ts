@@ -11,6 +11,49 @@ const mobileSrc = fileURLToPath(new URL('./src', import.meta.url));
 const mobileRoot = fileURLToPath(new URL('.', import.meta.url));
 const clientSrc = fileURLToPath(new URL('../packages/client/src', import.meta.url));
 const clientRoot = fileURLToPath(new URL('../packages/client', import.meta.url));
+
+const mobileDeviceLogPlugin = (): Plugin => ({
+  name: 'weave-mobile-device-log',
+  configureServer(server) {
+    server.middlewares.use('/__weave_mobile_log', (req, res, next) => {
+      if (req.method !== 'POST') {
+        next();
+        return;
+      }
+
+      let body = '';
+      req.setEncoding('utf8');
+      req.on('data', chunk => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(body) as {
+            event?: string;
+            fields?: Record<string, unknown>;
+            scope?: string;
+            seq?: number;
+            dt?: number | null;
+          };
+          console.log(
+            `[mobile device] ${payload.scope ?? 'log'}#${payload.seq ?? '-'}`
+            + ` ${payload.event ?? 'event'} dt=${payload.dt ?? '-'}`
+            + ` ${JSON.stringify(payload.fields ?? {})}`,
+          );
+        } catch {
+          console.log(`[mobile device] ${body}`);
+        }
+        res.statusCode = 204;
+        res.end();
+      });
+      req.on('error', () => {
+        res.statusCode = 400;
+        res.end();
+      });
+    });
+  },
+});
+
 const sharedClientDependencyResolver = (): Plugin => ({
   name: 'weave-client-dependency-resolver',
   enforce: 'pre',
@@ -34,7 +77,7 @@ export default defineConfig(({ mode }) => {
   return {
     base: './',
     define: createWeaveClientDefines({ appEnv, shellEnv: mobileOnlyEnv, workspaceEnv: mobileOnlyEnv }),
-    plugins: [sharedClientDependencyResolver(), react(), tailwindcss()],
+    plugins: [mobileDeviceLogPlugin(), sharedClientDependencyResolver(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@weave/client': clientSrc,

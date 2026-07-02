@@ -5,14 +5,18 @@ import {
   coppermindCanvasCellGapPx,
   coppermindCellWidthPx,
   addCoppermindBlockSuiteSection,
+  addCoppermindBlockSuiteInkSection,
   createCoppermindNextCanvasCellXYWH,
   createCoppermindSectionXYWHAtCenter,
   createCoppermindBlockSuiteRuntime,
   deleteCoppermindBlockSuiteSection,
   disposeCoppermindBlockSuiteRuntime,
+  exportCoppermindBlockSuiteSnapshot,
   getCoppermindBlockSuiteSections,
+  importCoppermindBlockSuiteRuntime,
   placeCoppermindBlockSuiteSection,
   reorderCoppermindBlockSuiteSection,
+  setCoppermindInkCellStackState,
   unplaceCoppermindBlockSuiteSection,
 } from '../../packages/client/src/lib/coppermind-blocksuite';
 import {
@@ -24,6 +28,14 @@ import {
   parseCoppermindDocument,
   type LegacyCoppermindDocument,
 } from '../../packages/client/src/lib/coppermind-document';
+import {
+  coppermindInkCellFlavour,
+  type CoppermindInkStroke,
+} from '../../packages/client/src/lib/coppermind-ink-cell';
+import {
+  coppermindA4PageHeightPx,
+  coppermindDefaultCellHeightPx,
+} from '../../packages/client/src/lib/coppermind-layout';
 
 type SnapshotBlock = DocSnapshot['blocks'];
 
@@ -59,6 +71,15 @@ const setSectionText = (doc: Doc, sectionId: string, text: string) => {
   const paragraph = section?.children[0];
   if (!paragraph) throw new Error(`expected section ${sectionId} to have a paragraph`);
   doc.updateBlock(paragraph, { text: new Text(text) });
+};
+
+const setInkStrokeData = (doc: Doc, sectionId: string, strokes: CoppermindInkStroke[]) => {
+  const section = doc.getBlockById(sectionId);
+  const inkCell = section?.children.find(child => child.flavour === coppermindInkCellFlavour);
+  if (!inkCell) throw new Error(`expected section ${sectionId} to have an ink cell`);
+  doc.updateBlock(inkCell, {
+    strokeData: JSON.stringify({ strokes, version: 1 }),
+  });
 };
 
 const legacyDocument = (): LegacyCoppermindDocument => ({
@@ -199,6 +220,92 @@ describe('Coppermind .cpr document structure', () => {
 
       expect(deleteCoppermindBlockSuiteSection(runtime.doc, secondSectionId)).toBe(true);
       expect(getCoppermindBlockSuiteSections(runtime.doc)).toHaveLength(1);
+    } finally {
+      disposeCoppermindBlockSuiteRuntime(runtime);
+    }
+  });
+
+  it('stores ink cells as versioned vector data and round-trips BlockSuite snapshots', async () => {
+    const runtime = createCoppermindBlockSuiteRuntime({
+      docId: 'doc:notebook',
+      now: new Date('2026-06-30T10:00:00.000Z'),
+      paragraphTexts: ['First section'],
+      title: 'Notebook',
+    });
+
+    try {
+      const inkSectionId = addCoppermindBlockSuiteInkSection(runtime.doc);
+      const secondInkSectionId = addCoppermindBlockSuiteInkSection(runtime.doc);
+      const stroke: CoppermindInkStroke = {
+        color: '#111827',
+        id: 'ink:test:1',
+        points: [
+          { t: 0, x: 10, y: 880, pressure: 0.5 },
+          { t: 16, x: 120, y: 900, pressure: 0.72, tiltX: 12, tiltY: -4 },
+        ],
+        width: 2.6,
+      };
+
+      setInkStrokeData(runtime.doc, inkSectionId, [stroke]);
+      expect(setCoppermindInkCellStackState(runtime.doc, secondInkSectionId, 'unstacked')).toBe(true);
+
+      expect(getCoppermindBlockSuiteSections(runtime.doc)).toMatchObject([
+        { kind: 'blocks', height: coppermindDefaultCellHeightPx, title: 'First section' },
+        {
+          id: inkSectionId,
+          isEmpty: false,
+          kind: 'ink',
+          height: 948,
+          stackState: 'auto',
+          title: 'Ink Cell 2',
+        },
+        {
+          id: secondInkSectionId,
+          isEmpty: true,
+          kind: 'ink',
+          height: coppermindDefaultCellHeightPx,
+          stackState: 'unstacked',
+          title: 'Ink Cell 3',
+        },
+      ]);
+
+      const tallStroke: CoppermindInkStroke = {
+        ...stroke,
+        id: 'ink:test:2',
+        points: [{ t: 0, x: 20, y: coppermindA4PageHeightPx + 200 }],
+      };
+      setInkStrokeData(runtime.doc, secondInkSectionId, [tallStroke]);
+      expect(getCoppermindBlockSuiteSections(runtime.doc)[2].height).toBe(coppermindA4PageHeightPx);
+
+      const importedRuntime = await importCoppermindBlockSuiteRuntime(
+        exportCoppermindBlockSuiteSnapshot(runtime),
+      );
+      try {
+        const importedSections = getCoppermindBlockSuiteSections(importedRuntime.doc);
+        expect(importedSections).toMatchObject([
+          { kind: 'blocks', title: 'First section' },
+          { kind: 'ink', height: 948, stackState: 'auto' },
+          { kind: 'ink', height: coppermindA4PageHeightPx, stackState: 'unstacked' },
+        ]);
+
+        const importedInkCell = findSnapshotBlock(
+          exportCoppermindBlockSuiteSnapshot(importedRuntime).blocks,
+          coppermindInkCellFlavour,
+        );
+        const parsedStrokeData = JSON.parse(String(importedInkCell?.props.strokeData ?? '{}')) as {
+          strokes?: CoppermindInkStroke[];
+          version?: number;
+        };
+        expect(parsedStrokeData.version).toBe(1);
+        expect(parsedStrokeData.strokes?.[0]?.points[1]).toMatchObject({
+          pressure: 0.72,
+          tiltX: 12,
+          tiltY: -4,
+          y: 900,
+        });
+      } finally {
+        disposeCoppermindBlockSuiteRuntime(importedRuntime);
+      }
     } finally {
       disposeCoppermindBlockSuiteRuntime(runtime);
     }
