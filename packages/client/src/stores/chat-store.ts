@@ -98,6 +98,14 @@ export type ProposalImplementationRequest = {
   requestedAt: string;
 };
 
+export type SubmittedProposalImplementation = {
+  requestId: string;
+  proposalPath: string;
+  proposalContentHash?: string;
+  mode?: ProposalImplementationRequest['mode'];
+  requestedAt: string;
+};
+
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type ServiceTier = 'auto' | 'default' | 'flex' | 'priority';
 
@@ -128,6 +136,7 @@ type ChatState = {
   threadPlans: Record<string, ThreadPlan | undefined>;
   threadProposals: Record<string, ThreadProposal | undefined>;
   pendingProposalImplementationRequests: Record<string, ProposalImplementationRequest | undefined>;
+  submittedProposalImplementations: Record<string, SubmittedProposalImplementation | undefined>;
   guidedTaskExpandedByThread: Record<string, boolean | undefined>;
   toolActivityCollapsed: Record<string, boolean>;
   hasInitializedThreads: boolean;
@@ -222,6 +231,26 @@ const getSurfaceSnapshot = (): WorkspaceSurfaceSnapshot => {
   };
 };
 
+const withoutRecordKey = <T,>(record: Record<string, T | undefined>, key: string): Record<string, T | undefined> => {
+  const { [key]: _removed, ...rest } = record;
+  return rest;
+};
+
+const shouldClearSubmittedProposalForProposal = (
+  submittedProposal: SubmittedProposalImplementation | undefined,
+  proposal: ThreadProposal,
+) => Boolean(
+  submittedProposal
+    && (
+      submittedProposal.proposalPath !== proposal.path
+      || (
+        submittedProposal.proposalContentHash
+        && proposal.contentHash
+        && submittedProposal.proposalContentHash !== proposal.contentHash
+      )
+    ),
+);
+
 export const useChatStore = create<ChatState>()(
   persist(
     (set, get) => ({
@@ -240,6 +269,7 @@ export const useChatStore = create<ChatState>()(
       threadPlans: {},
       threadProposals: {},
       pendingProposalImplementationRequests: {},
+      submittedProposalImplementations: {},
       guidedTaskExpandedByThread: {},
       toolActivityCollapsed: {},
       hasInitializedThreads: false,
@@ -275,6 +305,8 @@ export const useChatStore = create<ChatState>()(
       setThreadProposal: (threadId, proposal, options = {}) =>
         set(state => {
           const previous = state.threadProposals[threadId];
+          const submittedProposal = state.submittedProposalImplementations[threadId];
+          const shouldClearSubmittedProposal = shouldClearSubmittedProposalForProposal(submittedProposal, proposal);
           const pendingCount = proposal.counts.pending ?? proposal.items.filter(item => item.status === 'pending').length;
           const approvedCount = proposal.counts.approved ?? proposal.items.filter(item => item.status === 'approved').length;
           const hasNewPendingApprovals = pendingCount > 0
@@ -284,6 +316,9 @@ export const useChatStore = create<ChatState>()(
             && (proposal.status === 'changes_requested' || proposal.status === 'stale' || hasNewPendingApprovals || hasNewApprovedImplementation);
           return {
             threadProposals: { ...state.threadProposals, [threadId]: proposal },
+            submittedProposalImplementations: shouldClearSubmittedProposal
+              ? withoutRecordKey(state.submittedProposalImplementations, threadId)
+              : state.submittedProposalImplementations,
             guidedTaskExpandedByThread: {
               ...state.guidedTaskExpandedByThread,
               [threadId]: shouldExpand ? true : state.guidedTaskExpandedByThread[threadId] ?? false,
@@ -292,8 +327,9 @@ export const useChatStore = create<ChatState>()(
         }),
       clearThreadProposal: threadId =>
         set(state => {
-          const { [threadId]: _removed, ...threadProposals } = state.threadProposals;
-          return { threadProposals };
+          const threadProposals = withoutRecordKey(state.threadProposals, threadId);
+          const submittedProposalImplementations = withoutRecordKey(state.submittedProposalImplementations, threadId);
+          return { threadProposals, submittedProposalImplementations };
         }),
       enqueueProposalImplementationRequest: (threadId, input) => {
         const request: ProposalImplementationRequest = {
@@ -303,16 +339,29 @@ export const useChatStore = create<ChatState>()(
           mode: input.mode,
           requestedAt: input.requestedAt ?? new Date().toISOString(),
         };
-        set(state => ({
-          pendingProposalImplementationRequests: {
-            ...state.pendingProposalImplementationRequests,
-            [threadId]: request,
-          },
-          guidedTaskExpandedByThread: {
-            ...state.guidedTaskExpandedByThread,
-            [threadId]: request.mode === 'implement' ? false : true,
-          },
-        }));
+        set(state => {
+          const proposal = state.threadProposals[threadId];
+          return {
+            pendingProposalImplementationRequests: {
+              ...state.pendingProposalImplementationRequests,
+              [threadId]: request,
+            },
+            submittedProposalImplementations: {
+              ...state.submittedProposalImplementations,
+              [threadId]: {
+                requestId: request.id,
+                proposalPath: request.proposalPath,
+                ...(proposal?.path === request.proposalPath && proposal.contentHash ? { proposalContentHash: proposal.contentHash } : {}),
+                ...(request.mode ? { mode: request.mode } : {}),
+                requestedAt: request.requestedAt,
+              },
+            },
+            guidedTaskExpandedByThread: {
+              ...state.guidedTaskExpandedByThread,
+              [threadId]: request.mode === 'implement' ? false : true,
+            },
+          };
+        });
         return request;
       },
       consumeProposalImplementationRequest: (threadId, requestId) =>
@@ -369,6 +418,7 @@ export const useChatStore = create<ChatState>()(
           nextThreads = fallback.threads;
           const threadPlans = { ...state.threadPlans };
           const threadProposals = { ...state.threadProposals };
+          let submittedProposalImplementations = state.submittedProposalImplementations;
           for (const thread of nextThreads) {
             if (thread.latestPlan) {
               const currentPlan = threadPlans[thread.id];
@@ -376,7 +426,11 @@ export const useChatStore = create<ChatState>()(
             }
             if (thread.latestProposal) {
               const currentProposal = threadProposals[thread.id];
-              threadProposals[thread.id] = currentProposal?.isBusy ? currentProposal : thread.latestProposal;
+              const nextProposal = currentProposal?.isBusy ? currentProposal : thread.latestProposal;
+              threadProposals[thread.id] = nextProposal;
+              if (shouldClearSubmittedProposalForProposal(submittedProposalImplementations[thread.id], nextProposal)) {
+                submittedProposalImplementations = withoutRecordKey(submittedProposalImplementations, thread.id);
+              }
             }
           }
 
@@ -389,6 +443,7 @@ export const useChatStore = create<ChatState>()(
             threads: nextThreads,
             threadPlans,
             threadProposals,
+            submittedProposalImplementations,
             hasInitializedThreads: true,
             threadOpenabilityContext,
           };
@@ -471,6 +526,7 @@ export const useChatStore = create<ChatState>()(
               threads: fallback.threads,
               runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
               completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
+              submittedProposalImplementations: withoutRecordKey(state.submittedProposalImplementations, threadId),
             };
           });
           return;
@@ -486,6 +542,7 @@ export const useChatStore = create<ChatState>()(
             threads: fallback.threads,
             runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
             completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
+            submittedProposalImplementations: withoutRecordKey(state.submittedProposalImplementations, threadId),
           };
         });
         await archiveServerThread(threadId, true);
@@ -517,6 +574,7 @@ export const useChatStore = create<ChatState>()(
             runningThreadIds: state.runningThreadIds.filter(id => id !== threadId),
             completedThreadIds: state.completedThreadIds.filter(id => id !== threadId),
             deletedThreadIds: isDraft || state.deletedThreadIds.includes(threadId) ? state.deletedThreadIds : [...state.deletedThreadIds, threadId],
+            submittedProposalImplementations: withoutRecordKey(state.submittedProposalImplementations, threadId),
           };
         });
 
@@ -533,6 +591,7 @@ export const useChatStore = create<ChatState>()(
             runningThreadIds: previousState.runningThreadIds,
             completedThreadIds: previousState.completedThreadIds,
             deletedThreadIds: previousState.deletedThreadIds,
+            submittedProposalImplementations: previousState.submittedProposalImplementations,
           });
           useWorkspaceSurfaceStore.getState().restoreSurfaceSnapshot(previousSurfaceState);
           throw error;

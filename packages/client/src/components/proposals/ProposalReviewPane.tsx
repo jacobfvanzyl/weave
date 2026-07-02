@@ -178,6 +178,22 @@ const liveIssue = (
   message: `Proposal item ${item.id} ${message}`,
 });
 
+const areLiveIssuesEqual = (left: LiveProposalIssueMap, right: LiveProposalIssueMap) => {
+  const leftKeys = Object.keys(left).filter(key => left[key]);
+  const rightKeys = Object.keys(right).filter(key => right[key]);
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every(key => {
+    const leftIssue = left[key];
+    const rightIssue = right[key];
+    return leftIssue?.itemId === rightIssue?.itemId
+      && leftIssue?.code === rightIssue?.code
+      && leftIssue?.message === rightIssue?.message;
+  });
+};
+
+const samePreview = (left: ProposalPreview | null, right: ProposalPreview) =>
+  left?.originalText === right.originalText && left?.proposedText === right.proposedText;
+
 const RequestChangesDialog = ({
   dialog,
   isSaving,
@@ -260,12 +276,13 @@ export const ProposalReviewPane = ({
     target.repoPath ?? '',
     target.workspacePath ?? '',
   ].join('\0');
+  const stableTarget = useMemo(() => target, [targetKey]);
 
   useEffect(() => {
     let cancelled = false;
     if (!proposalRef.current) setIsLoading(true);
     setError(null);
-    void codeBackend.read(target, proposalPath)
+    void codeBackend.read(stableTarget, proposalPath)
       .then(file => {
         if (cancelled) return;
         const parsed = parseProposalArtifact(file.content);
@@ -290,7 +307,7 @@ export const ProposalReviewPane = ({
     return () => {
       cancelled = true;
     };
-  }, [codeBackend, observedProposalHash, proposalPath, selectedFilePath, setThreadProposal, targetKey, threadId]);
+  }, [codeBackend, observedProposalHash, proposalPath, selectedFilePath, setThreadProposal, stableTarget, targetKey, threadId]);
 
   const persistItems = useCallback(async (items: ThreadProposalItem[]) => {
     if (!proposal) return false;
@@ -298,7 +315,7 @@ export const ProposalReviewPane = ({
     setError(null);
     try {
       const nextContent = renderProposalArtifact(proposal, items);
-      const write = await codeBackend.write(target, proposalPath, nextContent, artifactVersion);
+      const write = await codeBackend.write(stableTarget, proposalPath, nextContent, artifactVersion);
       const parsed = parseProposalArtifact(nextContent);
       proposalRef.current = parsed;
       setProposal(parsed);
@@ -311,7 +328,7 @@ export const ProposalReviewPane = ({
     } finally {
       setIsSaving(false);
     }
-  }, [artifactVersion, codeBackend, proposal, proposalPath, setThreadProposal, target, threadId]);
+  }, [artifactVersion, codeBackend, proposal, proposalPath, setThreadProposal, stableTarget, threadId]);
 
   const updateItem = useCallback(async (
     itemId: string,
@@ -339,13 +356,13 @@ export const ProposalReviewPane = ({
         if (!item.path || !completenessRequiredStatuses.has(item.status)) return;
         try {
           if (item.kind === 'file_create') {
-            await codeBackend.hash(target, item.path);
+            await codeBackend.hash(stableTarget, item.path);
             next[item.id] = liveIssue(item, 'source_file_exists', 'is a file_create but the target path now exists.');
             return;
           }
 
           if (!item.currentHash) return;
-          const source = await codeBackend.hash(target, item.path);
+          const source = await codeBackend.hash(stableTarget, item.path);
           if (source.contentHash !== item.currentHash) {
             next[item.id] = liveIssue(item, 'source_hash_mismatch', 'no longer matches current_hash.');
           }
@@ -358,14 +375,14 @@ export const ProposalReviewPane = ({
           );
         }
       }));
-      if (!cancelled) setLiveIssues(next);
+      if (!cancelled) setLiveIssues(previous => areLiveIssuesEqual(previous, next) ? previous : next);
     };
 
     void validateLiveState();
     return () => {
       cancelled = true;
     };
-  }, [codeBackend, codeItems, proposal, targetKey, target]);
+  }, [codeBackend, codeItems, proposal, stableTarget, targetKey]);
   const completeness = useMemo(
     () => getProposalCompleteness(codeItems, proposal?.bodyItems ?? []),
     [codeItems, proposal?.bodyItems],
@@ -480,7 +497,8 @@ export const ProposalReviewPane = ({
   const selectedItem = codeItems.find(item => item.id === selectedItemId) ?? filteredItems[0];
   const selectedBody = proposal?.bodyItems.find(item => item.id === selectedItem?.id);
   const selectedCompleteness = selectedItem ? completenessById.get(selectedItem.id) : undefined;
-  const selectedCompletenessIssue = selectedCompleteness?.issues[0] ?? (selectedItem ? liveIssues[selectedItem.id] : undefined);
+  const selectedLiveIssue = selectedItem ? liveIssues[selectedItem.id] : undefined;
+  const selectedCompletenessIssue = selectedCompleteness?.issues[0] ?? selectedLiveIssue;
   const selectedCounts = selectedItem ? getItemDisplayCounts(selectedItem, selectedBody) : undefined;
   const counts = filteredItems.reduce((acc, item) => {
     const itemCounts = getItemDisplayCounts(item, bodyById.get(item.id));
@@ -491,17 +509,18 @@ export const ProposalReviewPane = ({
 
   useEffect(() => {
     let cancelled = false;
-    setSelectedPreview(null);
     if (!selectedItem || !selectedBody) {
+      setSelectedPreview(null);
       setIsPreviewLoading(false);
       return undefined;
     }
 
     if (selectedBody.currentContent !== undefined || selectedBody.proposedContent !== undefined) {
-      setSelectedPreview({
+      const nextPreview = {
         originalText: selectedBody.currentContent ?? '',
         proposedText: selectedBody.proposedContent ?? selectedBody.diff ?? '',
-      });
+      };
+      setSelectedPreview(previous => samePreview(previous, nextPreview) ? previous : nextPreview);
       setIsPreviewLoading(false);
       return undefined;
     }
@@ -510,37 +529,41 @@ export const ProposalReviewPane = ({
       const proposed = selectedBody.diff
         ? applyUnifiedDiff('', selectedBody.diff)
         : undefined;
-      setSelectedPreview({
+      const nextPreview = {
         originalText: '',
         proposedText: proposed?.ok ? proposed.value.content : selectedBody.diff ?? '',
-      });
+      };
+      setSelectedPreview(previous => samePreview(previous, nextPreview) ? previous : nextPreview);
       setIsPreviewLoading(false);
       return undefined;
     }
 
     if (!selectedItem.path) {
+      setSelectedPreview(null);
       setIsPreviewLoading(false);
       return undefined;
     }
 
-    if (liveIssues[selectedItem.id]) {
-      setSelectedPreview({
+    if (selectedLiveIssue) {
+      const nextPreview = {
         originalText: '',
         proposedText: selectedBody.diff ?? '',
-      });
+      };
+      setSelectedPreview(previous => samePreview(previous, nextPreview) ? previous : nextPreview);
       setIsPreviewLoading(false);
       return undefined;
     }
 
     if (selectedItem.kind === 'file_edit' && selectedBody.diff && selectedItem.currentHash) {
       setIsPreviewLoading(true);
-      void codeBackend.diffPreview(target, selectedItem.path, selectedBody.diff)
+      void codeBackend.diffPreview(stableTarget, selectedItem.path, selectedBody.diff)
         .then(preview => {
           if (cancelled) return;
-          setSelectedPreview({
+          const nextPreview = {
             originalText: preview.currentContent,
             proposedText: preview.proposedContent,
-          });
+          };
+          setSelectedPreview(previous => samePreview(previous, nextPreview) ? previous : nextPreview);
         })
         .catch(reason => {
           if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
@@ -555,9 +578,12 @@ export const ProposalReviewPane = ({
 
     if (selectedItem.kind === 'file_delete' && selectedItem.currentHash) {
       setIsPreviewLoading(true);
-      void codeBackend.read(target, selectedItem.path)
+      void codeBackend.read(stableTarget, selectedItem.path)
         .then(file => {
-          if (!cancelled) setSelectedPreview({ originalText: file.content, proposedText: '' });
+          if (!cancelled) {
+            const nextPreview = { originalText: file.content, proposedText: '' };
+            setSelectedPreview(previous => samePreview(previous, nextPreview) ? previous : nextPreview);
+          }
         })
         .catch(reason => {
           if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
@@ -570,13 +596,28 @@ export const ProposalReviewPane = ({
       };
     }
 
-    setSelectedPreview({
+    const nextPreview = {
       originalText: '',
       proposedText: selectedBody.diff ?? '',
-    });
+    };
+    setSelectedPreview(previous => samePreview(previous, nextPreview) ? previous : nextPreview);
     setIsPreviewLoading(false);
     return undefined;
-  }, [codeBackend, liveIssues, selectedBody, selectedItem, target, targetKey]);
+  }, [
+    codeBackend,
+    selectedBody?.currentContent,
+    selectedBody?.diff,
+    selectedBody?.id,
+    selectedBody?.proposedContent,
+    selectedItem?.currentHash,
+    selectedItem?.id,
+    selectedItem?.kind,
+    selectedItem?.path,
+    selectedLiveIssue?.code,
+    selectedLiveIssue?.message,
+    stableTarget,
+    targetKey,
+  ]);
 
   return (
     <div

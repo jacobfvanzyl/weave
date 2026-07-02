@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ChatThread, ThreadPlan } from '../../packages/client/src/stores/chat-store';
+import type { ChatThread, ThreadPlan, ThreadProposal } from '../../packages/client/src/stores/chat-store';
 
 const createStorage = (): Storage => {
   const values = new Map<string, string>();
@@ -116,6 +116,70 @@ describe('chat store', () => {
 
     useChatStore.getState().consumeProposalImplementationRequest('thread-1', request.id);
     expect(useChatStore.getState().pendingProposalImplementationRequests['thread-1']).toBeUndefined();
+  });
+
+  it('keeps a submitted proposal marker after the queued implementation request is consumed', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const proposal: ThreadProposal = {
+      path: '.agents/proposals/demo.md',
+      items: [
+        { id: 'item-1', kind: 'file_edit', status: 'pending', title: 'Update file', additions: 1, deletions: 0, viewed: false },
+      ],
+      counts: { pending: 1 },
+      updatedAt: '2026-06-18T12:00:00.000Z',
+      contentHash: 'proposal-hash-1',
+    };
+    useChatStore.getState().setThreadProposal('thread-1', proposal);
+
+    const request = useChatStore.getState().enqueueProposalImplementationRequest('thread-1', {
+      proposalPath: '.agents/proposals/demo.md',
+      approvedItemIds: ['item-1'],
+      mode: 'implement',
+      requestedAt: '2026-06-28T12:00:00.000Z',
+    });
+
+    expect(useChatStore.getState().submittedProposalImplementations['thread-1']).toMatchObject({
+      requestId: request.id,
+      proposalPath: '.agents/proposals/demo.md',
+      proposalContentHash: 'proposal-hash-1',
+      mode: 'implement',
+    });
+
+    useChatStore.getState().consumeProposalImplementationRequest('thread-1', request.id);
+    expect(useChatStore.getState().submittedProposalImplementations['thread-1']?.requestId).toBe(request.id);
+  });
+
+  it('clears the submitted proposal marker when a revised proposal artifact arrives', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const proposal: ThreadProposal = {
+      path: '.agents/proposals/demo.md',
+      items: [
+        { id: 'item-1', kind: 'file_edit', status: 'pending', title: 'Update file', additions: 1, deletions: 0, viewed: false },
+      ],
+      counts: { pending: 1 },
+      updatedAt: '2026-06-18T12:00:00.000Z',
+      contentHash: 'proposal-hash-1',
+    };
+    useChatStore.getState().setThreadProposal('thread-1', proposal);
+    useChatStore.getState().enqueueProposalImplementationRequest('thread-1', {
+      proposalPath: '.agents/proposals/demo.md',
+      approvedItemIds: ['item-1'],
+      mode: 'address_feedback',
+    });
+
+    useChatStore.getState().setThreadProposal('thread-1', {
+      ...proposal,
+      contentHash: 'proposal-hash-1',
+      updatedAt: '2026-06-18T12:01:00.000Z',
+    }, { autoExpand: false });
+    expect(useChatStore.getState().submittedProposalImplementations['thread-1']).toBeDefined();
+
+    useChatStore.getState().setThreadProposal('thread-1', {
+      ...proposal,
+      contentHash: 'proposal-hash-2',
+      updatedAt: '2026-06-18T12:02:00.000Z',
+    }, { autoExpand: false });
+    expect(useChatStore.getState().submittedProposalImplementations['thread-1']).toBeUndefined();
   });
 
   it('collapses the guided card when implementation is queued', async () => {

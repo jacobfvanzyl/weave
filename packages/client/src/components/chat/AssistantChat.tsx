@@ -51,6 +51,7 @@ import { CodeBlock } from './CodeBlock';
 import {
   getAutoCollapsedAssistantTextPartIndices,
   getAssistantContentRanges,
+  getDefaultAutoCollapsedAssistantTurnIds,
   getPartType,
   getReasoningText,
   isSteeredUserMessagePart,
@@ -95,6 +96,12 @@ const ThreadAutoCollapseContext = createContext<ThreadAutoCollapseContextValue>(
   liveAssistantTurnIds: {},
 });
 const toolCallCache = new Map<string, Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result' | 'isError'>>();
+
+const areAutoCollapsedTurnIdsEqual = (left: AutoCollapsedTurnIds, right: AutoCollapsedTurnIds) => {
+  const leftIds = Object.keys(left);
+  const rightIds = Object.keys(right);
+  return leftIds.length === rightIds.length && leftIds.every(id => right[id]);
+};
 
 const fallbackProfile: DynamicProfileSummary = {
   id: 'builtin-default',
@@ -2330,7 +2337,9 @@ export const AssistantChat = ({ canFollowWrites, threadId }: AssistantChatProps)
   const resourceId = useChatStore(state => state.resourceId);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
   const isRunning = useChatStore(state => state.runningThreadIds.includes(threadId));
+  const showReasoning = useChatStore(state => state.showReasoning);
   const [autoCollapsedTurnIds, setAutoCollapsedTurnIds] = useState<AutoCollapsedTurnIds>({});
+  const [expandedAutoCollapsedTurnIds, setExpandedAutoCollapsedTurnIds] = useState<AutoCollapsedTurnIds>({});
   const [liveAssistantTurnIds, setLiveAssistantTurnIds] = useState<AutoCollapsedTurnIds>({});
   const isFollowingBottomRef = useRef(true);
   const { data: initialMessages = [], isLoading } = useQuery({
@@ -2342,9 +2351,24 @@ export const AssistantChat = ({ canFollowWrites, threadId }: AssistantChatProps)
 
   useEffect(() => {
     setAutoCollapsedTurnIds({});
+    setExpandedAutoCollapsedTurnIds({});
     setLiveAssistantTurnIds({});
     isFollowingBottomRef.current = true;
   }, [threadId]);
+
+  useEffect(() => {
+    const defaults = getDefaultAutoCollapsedAssistantTurnIds(initialMessages, showReasoning, expandedAutoCollapsedTurnIds);
+    setAutoCollapsedTurnIds(previous => {
+      const next: AutoCollapsedTurnIds = { ...previous };
+      for (const id of Object.keys(expandedAutoCollapsedTurnIds)) {
+        delete next[id];
+      }
+      for (const id of Object.keys(defaults)) {
+        next[id] = true;
+      }
+      return areAutoCollapsedTurnIdsEqual(previous, next) ? previous : next;
+    });
+  }, [expandedAutoCollapsedTurnIds, initialMessages, showReasoning]);
 
   const setIsFollowingBottom = useCallback((value: boolean) => {
     isFollowingBottomRef.current = value;
@@ -2363,10 +2387,17 @@ export const AssistantChat = ({ canFollowWrites, threadId }: AssistantChatProps)
     });
 
     if (!shouldCollapse || !isFollowingBottomRef.current) return;
+    setExpandedAutoCollapsedTurnIds(previous => {
+      if (!previous[messageId]) return previous;
+      const next = { ...previous };
+      delete next[messageId];
+      return next;
+    });
     setAutoCollapsedTurnIds(previous => previous[messageId] ? previous : { ...previous, [messageId]: true });
   }, []);
 
   const expandCollapsedTurn = useCallback((messageId: string) => {
+    setExpandedAutoCollapsedTurnIds(previous => previous[messageId] ? previous : { ...previous, [messageId]: true });
     setAutoCollapsedTurnIds(previous => {
       if (!previous[messageId]) return previous;
       const next = { ...previous };

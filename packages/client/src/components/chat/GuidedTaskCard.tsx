@@ -38,6 +38,7 @@ type GuidedTaskCardProps = {
 export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
   const plan = useChatStore(state => state.threadPlans[threadId]);
   const proposal = useChatStore(state => state.threadProposals[threadId]);
+  const submittedProposalImplementation = useChatStore(state => state.submittedProposalImplementations[threadId]);
   const expanded = useChatStore(state => state.guidedTaskExpandedByThread[threadId] ?? false);
   const setExpanded = useChatStore(state => state.setGuidedTaskExpanded);
   const threadWorkspaceId = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.workspaceId);
@@ -51,7 +52,16 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
   const display = guidedTaskDisplay(plan, proposal, expanded);
   const showBodyHeader = Boolean(display.bodyTitle || display.summary);
   const showProposalPathWarning = Boolean(proposal && !proposal.path);
-  const hasPendingApproval = shouldShowProposalReview(proposal);
+  const hasSubmittedProposal = Boolean(
+    proposal?.path
+      && submittedProposalImplementation?.proposalPath === proposal.path
+      && (
+        !proposal.contentHash
+        || !submittedProposalImplementation.proposalContentHash
+        || proposal.contentHash === submittedProposalImplementation.proposalContentHash
+      ),
+  );
+  const hasPendingApproval = shouldShowProposalReview(proposal) && !hasSubmittedProposal;
   const pendingApprovalCount = getPendingProposalReviewCount(proposal);
 
   const openPlan = () => {

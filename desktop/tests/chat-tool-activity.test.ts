@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getAssistantContentRanges,
   getAutoCollapsedAssistantTextPartIndices,
+  getDefaultAutoCollapsedAssistantTurnIds,
 } from '../../packages/client/src/components/chat/assistant-content-ranges';
 import {
   buildProposalImplementationMessage,
@@ -176,6 +177,57 @@ describe('chat tool activity helpers', () => {
 
     expect(getAutoCollapsedAssistantTextPartIndices(parts, true)).toEqual([2]);
     expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([2]);
+  });
+
+  it('selects trailing final text after persisted dynamic tool parts', () => {
+    const parts = [
+      {
+        type: 'tool-read',
+        toolCallId: 'read-1',
+        input: { path: 'a.ts' },
+        output: 'ok',
+        state: 'output-available',
+      },
+      { type: 'text', text: 'The fix is implemented.' },
+    ];
+
+    expect(getAssistantContentRanges(parts, false)).toEqual([
+      { type: 'tool-activity', indices: [0] },
+      { type: 'part', index: 1 },
+    ]);
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([1]);
+  });
+
+  it('derives default auto-collapsed turns from completed assistant messages', () => {
+    const messages = [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        status: { type: 'complete' },
+        parts: [
+          { type: 'tool-bash', toolCallId: 'call-1', input: { command: 'npm test' }, output: 'ok', state: 'output-available' },
+          { type: 'text', text: 'Done.' },
+        ],
+      },
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        status: { type: 'complete' },
+        parts: [{ type: 'text', text: 'Plain answer.' }],
+      },
+      {
+        id: 'assistant-3',
+        role: 'assistant',
+        status: { type: 'running' },
+        parts: [
+          { type: 'tool-bash', toolCallId: 'call-2', input: { command: 'npm test' }, output: 'ok', state: 'output-available' },
+          { type: 'text', text: 'Still running.' },
+        ],
+      },
+    ];
+
+    expect(getDefaultAutoCollapsedAssistantTurnIds(messages, false)).toEqual({ 'assistant-1': true });
+    expect(getDefaultAutoCollapsedAssistantTurnIds(messages, false, { 'assistant-1': true })).toEqual({});
   });
 
   it('does not auto-collapse plain text-only turns or turns without a final text response', () => {

@@ -5,6 +5,13 @@ export type AssistantContentRange =
   | { type: 'reasoning'; indices: number[] }
   | { type: 'tool-activity'; indices: number[] };
 
+export type AutoCollapsibleAssistantMessage = {
+  id?: string;
+  role?: string;
+  parts?: readonly unknown[];
+  status?: { type?: string };
+};
+
 export const getPartType = (part: unknown) => {
   if (!part || typeof part !== 'object') return '';
   const record = part as Record<string, unknown>;
@@ -47,7 +54,7 @@ export const isVisibleNonReasoningOutputPart = (part: unknown) => {
   const type = getPartType(part);
   if (type === 'reasoning') return false;
   if (type === 'text') return isVisibleTextPart(part);
-  if (type === 'tool-call') return isVisibleToolOutputPart(part);
+  if (toToolActivityCall(part)) return isVisibleToolOutputPart(part);
   if (isSteeredUserMessagePart(part)) return true;
   return false;
 };
@@ -94,6 +101,23 @@ export const getAutoCollapsedAssistantTextPartIndices = (
   return indices;
 };
 
+export const getDefaultAutoCollapsedAssistantTurnIds = (
+  messages: readonly AutoCollapsibleAssistantMessage[],
+  showReasoning: boolean,
+  expandedIds: Record<string, true> = {},
+) => {
+  const ids: Record<string, true> = {};
+
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !message.id || message.status?.type === 'running') continue;
+    if (expandedIds[message.id]) continue;
+    if (getAutoCollapsedAssistantTextPartIndices(message.parts ?? [], showReasoning).length === 0) continue;
+    ids[message.id] = true;
+  }
+
+  return ids;
+};
+
 export const getAssistantContentRanges = (parts: readonly unknown[], showReasoning: boolean): AssistantContentRange[] => {
   const ranges: AssistantContentRange[] = [];
   let reasoningIndices: number[] = [];
@@ -120,11 +144,10 @@ export const getAssistantContentRanges = (parts: readonly unknown[], showReasoni
       continue;
     }
 
-    if (type === 'tool-call') {
-      if (isVisibleToolOutputPart(part)) {
-        flushReasoning();
-        toolIndices.push(index);
-      }
+    if (toToolActivityCall(part)) {
+      if (!isVisibleToolOutputPart(part)) continue;
+      flushReasoning();
+      toolIndices.push(index);
       continue;
     }
 

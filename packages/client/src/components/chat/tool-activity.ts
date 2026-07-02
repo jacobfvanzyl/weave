@@ -248,24 +248,43 @@ export const getToolResultText = (toolName: string, result: unknown) => {
   return JSON.stringify(result, null, 2);
 };
 
+const dynamicToolNameFromType = (type: unknown) =>
+  typeof type === 'string'
+    && type.startsWith('tool-')
+    && !['tool-call', 'tool-invocation', 'tool-result'].includes(type)
+    ? type.slice('tool-'.length)
+    : undefined;
+
 export const isToolCallRecord = (part: unknown): part is Record<string, unknown> =>
-  Boolean(part && typeof part === 'object' && (part as { type?: unknown }).type === 'tool-call');
+  Boolean(
+    part
+      && typeof part === 'object'
+      && (
+        (part as { type?: unknown }).type === 'tool-call'
+        || dynamicToolNameFromType((part as { type?: unknown }).type)
+      ),
+  );
 
 export const getToolCallRawStatus = (part: Record<string, unknown>) => {
   const status = part.status && typeof part.status === 'object' ? part.status as Record<string, unknown> : undefined;
-  return typeof status?.type === 'string' ? status.type : undefined;
+  if (typeof status?.type === 'string') return status.type;
+  if (part.state === 'output-available') return 'complete';
+  if (part.state === 'output-error') return 'error';
+  if (typeof part.state === 'string' && part.state.startsWith('input-')) return 'running';
+  return undefined;
 };
 
 export const toToolActivityCall = (part: unknown): ToolActivityCall | null => {
   if (!isToolCallRecord(part)) return null;
-  if (typeof part.toolCallId !== 'string' || typeof part.toolName !== 'string') return null;
+  const toolName = typeof part.toolName === 'string' ? part.toolName : dynamicToolNameFromType(part.type);
+  if (typeof part.toolCallId !== 'string' || typeof toolName !== 'string') return null;
 
   return {
     toolCallId: part.toolCallId,
-    toolName: part.toolName,
-    args: part.args,
-    result: part.result,
-    isError: Boolean(part.isError),
+    toolName,
+    args: part.args ?? part.input,
+    result: part.result ?? part.output ?? part.errorText,
+    isError: Boolean(part.isError) || part.state === 'output-error',
     rawStatus: getToolCallRawStatus(part),
   };
 };
