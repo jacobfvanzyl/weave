@@ -114,7 +114,18 @@ type TerminalSubscriber = {
   send: (event: TerminalHostEvent) => void;
 };
 
-type PortalEditorControlHost = Pick<PortalEditorHost, 'list' | 'read' | 'write' | 'mkdir' | 'move' | 'delete'>;
+type PortalEditorControlHost = Pick<
+  PortalEditorHost,
+  | 'list'
+  | 'read'
+  | 'write'
+  | 'mkdir'
+  | 'move'
+  | 'delete'
+  | 'handleClientMessage'
+  | 'detachClient'
+  | 'detachClientsByPrefix'
+>;
 type PortalLspControlHost = Pick<PortalLspHost, 'createSession' | 'handleClientMessage' | 'detachClient' | 'dispose'>;
 
 type TerminalSession = {
@@ -1935,6 +1946,17 @@ export const startTerminalControlServer = (input: {
     return token === input.token;
   };
 
+  const parseSocketMessage = (data: unknown) => {
+    try {
+      if (typeof data === 'string') return JSON.parse(data) as Record<string, unknown>;
+      if (data instanceof ArrayBuffer) return JSON.parse(new TextDecoder().decode(data)) as Record<string, unknown>;
+      if (ArrayBuffer.isView(data)) return JSON.parse(new TextDecoder().decode(data)) as Record<string, unknown>;
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   let server: Deno.HttpServer<Deno.NetAddr>;
   server = Deno.serve({ hostname: input.hostname, port: input.port }, async (request) => {
     const url = new URL(request.url);
@@ -1944,11 +1966,31 @@ export const startTerminalControlServer = (input: {
       setTimeout(() => {
         void Promise.resolve(input.onShutdown?.()).finally(async () => {
           input.host.dispose();
+          input.editor?.detachClientsByPrefix?.('local-editor-watch:');
           await input.lsp?.dispose();
           await server.shutdown().catch(() => undefined);
         });
       }, 0);
       return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/editor/watch') {
+      if (!input.editor) return new Response('not found', { status: 404 });
+      if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
+        return new Response('websocket upgrade required', { status: 426 });
+      }
+      const { socket, response } = Deno.upgradeWebSocket(request);
+      const clientId = `local-editor-watch:${crypto.randomUUID()}`;
+      socket.onmessage = event => {
+        const message = parseSocketMessage(event.data);
+        if (!message) return;
+        void input.editor?.handleClientMessage(clientId, message as Parameters<PortalEditorControlHost['handleClientMessage']>[1], watchEvent => {
+          if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(watchEvent));
+        });
+      };
+      socket.onclose = () => input.editor?.detachClient(clientId);
+      socket.onerror = () => input.editor?.detachClient(clientId);
+      return response;
     }
 
     const editorAction = url.pathname === '/editor/list'

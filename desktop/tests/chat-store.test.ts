@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ChatThread, ThreadPlan } from '../../packages/client/src/stores/chat-store';
 
 const createStorage = (): Storage => {
   const values = new Map<string, string>();
@@ -126,6 +127,103 @@ describe('chat store', () => {
       approvedItemIds: ['item-1'],
       mode: 'implement',
     });
+
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
+  });
+
+  it('expands the guided card when a plan completes live', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const basePlan: ThreadPlan = {
+      title: 'Plan Artifact Overhaul',
+      plan: [
+        { id: 'research', step: 'Research current plan tooling', status: 'completed' },
+        { id: 'implement', step: 'Implement artifact-aware plan tools', status: 'pending' },
+      ],
+      completed: 1,
+      total: 2,
+      updatedAt: '2026-06-18T12:00:00.000Z',
+      contentHash: 'pending',
+    };
+
+    useChatStore.getState().setThreadPlan('thread-1', basePlan);
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
+
+    useChatStore.getState().setThreadPlan('thread-1', {
+      ...basePlan,
+      status: 'completed',
+      plan: basePlan.plan.map(item => ({ ...item, status: 'completed' })),
+      completed: 2,
+      contentHash: 'complete',
+    });
+
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(true);
+
+    useChatStore.getState().setGuidedTaskExpanded('thread-1', false);
+    useChatStore.getState().setThreadPlan('thread-1', {
+      ...basePlan,
+      status: 'completed',
+      plan: basePlan.plan.map(item => ({ ...item, status: 'completed' })),
+      completed: 2,
+      contentHash: 'complete',
+    });
+
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
+  });
+
+  it('does not expand the guided card for replayed complete plan effects', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    useChatStore.getState().setGuidedTaskExpanded('thread-1', false);
+
+    useChatStore.getState().setThreadPlan('thread-1', {
+      title: 'Plan Artifact Overhaul',
+      status: 'completed',
+      plan: [
+        { id: 'research', step: 'Research current plan tooling', status: 'completed' },
+        { id: 'implement', step: 'Implement artifact-aware plan tools', status: 'completed' },
+      ],
+      completed: 2,
+      total: 2,
+      updatedAt: '2026-06-18T12:00:00.000Z',
+      contentHash: 'complete',
+    }, { autoExpand: false });
+
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
+  });
+
+  it('does not expand the guided card for replayed proposal effects', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    useChatStore.getState().setGuidedTaskExpanded('thread-1', false);
+
+    useChatStore.getState().setThreadProposal('thread-1', {
+      title: 'Proposal review',
+      path: '.agents/proposals/demo.md',
+      status: 'ready',
+      items: [
+        { id: 'item-1', kind: 'file_edit', status: 'pending', title: 'Update file', additions: 1, deletions: 0, viewed: false },
+      ],
+      counts: { pending: 1 },
+      updatedAt: '2026-06-18T12:00:00.000Z',
+      contentHash: 'proposal',
+    }, { autoExpand: false });
+
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
+  });
+
+  it('collapses the guided card when returning to a thread', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const now = '2026-06-18T12:00:00.000Z';
+    const thread = (id: string): ChatThread => ({
+      id,
+      title: id,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    useChatStore.setState({ threads: [thread('thread-1'), thread('thread-2')] });
+    useChatStore.getState().selectThread('thread-2');
+    useChatStore.getState().setGuidedTaskExpanded('thread-1', true);
+
+    useChatStore.getState().selectThread('thread-1');
 
     expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
   });

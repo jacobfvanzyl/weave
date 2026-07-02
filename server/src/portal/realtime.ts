@@ -12,6 +12,12 @@ import {
   handleLspPortalMessage,
 } from './lsp-relay';
 import {
+  connectEditorWatchRelayClient,
+  disconnectEditorWatchRelayClient,
+  forwardEditorWatchClientMessage,
+  handleEditorWatchPortalMessage,
+} from './editor-watch-relay';
+import {
   connectWindowRelayClient,
   disconnectWindowRelayClient,
   forwardWindowClientMessage,
@@ -184,6 +190,36 @@ const connectLspClient = (ws: RealtimeSocket, url: URL) => {
   ws.addEventListener('error', () => disconnectLspRelayClient(connected.clientId));
 };
 
+const connectEditorWatchClient = (ws: RealtimeSocket, url: URL) => {
+  const connected = connectEditorWatchRelayClient({
+    token: url.searchParams.get('token') ?? '',
+    ws,
+  });
+
+  if (!connected) {
+    closeUnauthorized(ws, 'invalid editor watch token');
+    return;
+  }
+
+  ws.send(JSON.stringify({
+    type: 'editor.watch.accepted',
+    clientId: connected.clientId,
+    portalId: connected.token.portalId,
+  }));
+  onMessage(ws, message => {
+    try {
+      forwardEditorWatchClientMessage(connected.clientId, message);
+    } catch (error) {
+      ws.send(JSON.stringify({
+        type: 'editor.watch.error',
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  });
+  ws.addEventListener('close', () => disconnectEditorWatchRelayClient(connected.clientId));
+  ws.addEventListener('error', () => disconnectEditorWatchRelayClient(connected.clientId));
+};
+
 const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraLike) => {
   const portalId = url.searchParams.get('portalId') ?? '';
   const token = url.searchParams.get('token') ?? '';
@@ -200,6 +236,7 @@ const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraL
   onMessage(ws, message => {
     if (handleTerminalPortalMessage(message)) return;
     if (handleLspPortalMessage(message)) return;
+    if (handleEditorWatchPortalMessage(message)) return;
     if (handleWindowPortalMessage(message)) return;
     if (handlePortalMessage(message)) return;
 
@@ -233,7 +270,8 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
       url.pathname !== '/portals/connect' &&
       url.pathname !== '/terminals/connect' &&
       url.pathname !== '/windows/connect' &&
-      url.pathname !== '/lsp/connect'
+      url.pathname !== '/lsp/connect' &&
+      url.pathname !== '/editor-watch/connect'
     ) {
       return new Response(JSON.stringify({ error: 'not found' }), {
         status: 404,
@@ -254,6 +292,7 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
       if (url.pathname === '/terminals/connect') return connectTerminalClient(ws, url);
       if (url.pathname === '/windows/connect') return connectWindowClient(ws, url);
       if (url.pathname === '/lsp/connect') return connectLspClient(ws, url);
+      if (url.pathname === '/editor-watch/connect') return connectEditorWatchClient(ws, url);
       void connectPortalDaemon(ws, url, mastra);
     });
     return response;

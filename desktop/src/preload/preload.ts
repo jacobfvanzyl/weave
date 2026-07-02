@@ -5,7 +5,15 @@ import type {
   DesktopConnectionTestResult,
   WeaveDesktopBridge,
 } from '../shared/desktop-api';
-import type { EditorFile, EditorListResult, EditorOperationResult, EditorTarget, EditorWriteResult } from '../shared/editor';
+import type {
+  EditorFile,
+  EditorListResult,
+  EditorOperationResult,
+  EditorTarget,
+  EditorWatchEventEnvelope,
+  EditorWatchStartResult,
+  EditorWriteResult,
+} from '../shared/editor';
 import type {
   TerminalHostEvent,
   TerminalStartInput,
@@ -56,6 +64,19 @@ const bridge: WeaveDesktopBridge = {
     ipcRenderer.invoke('editor:move', { target, fromPath, toPath, overwrite }) as Promise<EditorOperationResult>,
   editorDelete: (target: EditorTarget, path: string, recursive?: boolean) =>
     ipcRenderer.invoke('editor:delete', { target, path, recursive }) as Promise<EditorOperationResult>,
+  editorWatchStart: (target: EditorTarget, paths: string[]) =>
+    ipcRenderer.invoke('editor:watch-start', { target, paths }) as Promise<EditorWatchStartResult>,
+  editorWatchUpdate: (subscriptionId: string, paths: string[]) =>
+    ipcRenderer.invoke('editor:watch-update', { subscriptionId, paths }) as Promise<EditorWatchStartResult>,
+  editorWatchStop: (subscriptionId: string) =>
+    ipcRenderer.invoke('editor:watch-stop', { subscriptionId }) as Promise<void>,
+  onEditorWatchEvent: listener => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, watchEvent: EditorWatchEventEnvelope) => {
+      listener(watchEvent);
+    };
+    ipcRenderer.on('editor:watch-event', wrappedListener);
+    return () => ipcRenderer.removeListener('editor:watch-event', wrappedListener);
+  },
   lspCreateSession: (target: EditorTarget, path: string, languageId?: string, serverId?: string) =>
     ipcRenderer.invoke('lsp:create-session', { target, path, languageId, serverId }),
 };

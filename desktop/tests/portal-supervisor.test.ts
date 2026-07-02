@@ -15,7 +15,14 @@ const originalEnv = {
   WEAVE_PORTAL_WS_PORT: process.env.WEAVE_PORTAL_WS_PORT,
 };
 
-const requiredControlCapabilities = ['terminal', 'editor', 'lsp', 'terminal.tmux-source-of-truth', 'terminal.tmux-control-mode'];
+const requiredControlCapabilities = [
+  'terminal',
+  'editor',
+  'editor.watch',
+  'lsp',
+  'terminal.tmux-source-of-truth',
+  'terminal.tmux-control-mode',
+];
 
 const restoreEnv = () => {
   for (const [key, value] of Object.entries(originalEnv)) {

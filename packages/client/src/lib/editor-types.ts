@@ -54,6 +54,18 @@ export type FileOperationResult = {
   version?: string;
 };
 
+export type EditorWatchEvent = {
+  kind: 'any' | 'access' | 'create' | 'modify' | 'rename' | 'remove' | 'other';
+  paths: string[];
+  affectedDirectories: string[];
+  rescan?: boolean;
+};
+
+export type EditorWatchSubscription = {
+  update: (paths: string[]) => Promise<void>;
+  close: () => void;
+};
+
 export type EditorBackend = {
   list: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
   read: (target: EditorTarget, path: string) => Promise<EditorFile>;
@@ -61,4 +73,5 @@ export type EditorBackend = {
   mkdir: (target: EditorTarget, path: string) => Promise<FileOperationResult>;
   move: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<FileOperationResult>;
   delete: (target: EditorTarget, path: string, recursive?: boolean) => Promise<FileOperationResult>;
+  watch?: (target: EditorTarget, paths: string[], listener: (event: EditorWatchEvent) => void) => Promise<EditorWatchSubscription>;
 };

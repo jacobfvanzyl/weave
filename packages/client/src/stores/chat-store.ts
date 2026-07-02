@@ -139,8 +139,8 @@ type ChatState = {
   setShowToolCalls: (showToolCalls: boolean) => void;
   setShowReasoning: (showReasoning: boolean) => void;
   setShowPlanPanel: (showPlanPanel: boolean) => void;
-  setThreadPlan: (threadId: string, plan: ThreadPlan) => void;
-  setThreadProposal: (threadId: string, proposal: ThreadProposal) => void;
+  setThreadPlan: (threadId: string, plan: ThreadPlan, options?: { autoExpand?: boolean }) => void;
+  setThreadProposal: (threadId: string, proposal: ThreadProposal, options?: { autoExpand?: boolean }) => void;
   clearThreadPlan: (threadId: string) => void;
   clearThreadProposal: (threadId: string) => void;
   enqueueProposalImplementationRequest: (threadId: string, request: Omit<ProposalImplementationRequest, 'id' | 'requestedAt'> & Partial<Pick<ProposalImplementationRequest, 'id' | 'requestedAt'>>) => ProposalImplementationRequest;
@@ -251,14 +251,19 @@ export const useChatStore = create<ChatState>()(
       setShowToolCalls: showToolCalls => set({ showToolCalls }),
       setShowReasoning: showReasoning => set({ showReasoning }),
       setShowPlanPanel: showPlanPanel => set({ showPlanPanel }),
-      setThreadPlan: (threadId, plan) =>
+      setThreadPlan: (threadId, plan, options = {}) =>
         set(state => {
+          const previous = state.threadPlans[threadId];
           const hasBlockedStep = plan.plan.some(item => item.status === 'blocked') || plan.status === 'blocked';
+          const isComplete = plan.total > 0 && plan.completed >= plan.total;
+          const wasComplete = Boolean(previous && previous.total > 0 && previous.completed >= previous.total);
+          const completedNow = Boolean(previous) && isComplete && !wasComplete;
+          const shouldExpand = options.autoExpand !== false && (hasBlockedStep || completedNow);
           return {
             threadPlans: { ...state.threadPlans, [threadId]: plan },
             guidedTaskExpandedByThread: {
               ...state.guidedTaskExpandedByThread,
-              [threadId]: hasBlockedStep ? true : state.guidedTaskExpandedByThread[threadId] ?? false,
+              [threadId]: shouldExpand ? true : state.guidedTaskExpandedByThread[threadId] ?? false,
             },
           };
         }),
@@ -267,7 +272,7 @@ export const useChatStore = create<ChatState>()(
           const { [threadId]: _removed, ...threadPlans } = state.threadPlans;
           return { threadPlans };
         }),
-      setThreadProposal: (threadId, proposal) =>
+      setThreadProposal: (threadId, proposal, options = {}) =>
         set(state => {
           const previous = state.threadProposals[threadId];
           const pendingCount = proposal.counts.pending ?? proposal.items.filter(item => item.status === 'pending').length;
@@ -275,7 +280,8 @@ export const useChatStore = create<ChatState>()(
           const hasNewPendingApprovals = pendingCount > 0
             && (!previous || previous.contentHash !== proposal.contentHash || (previous.counts.pending ?? 0) < pendingCount);
           const hasNewApprovedImplementation = approvedCount > 0 && (!previous || (previous.counts.approved ?? 0) < approvedCount);
-          const shouldExpand = proposal.status === 'changes_requested' || proposal.status === 'stale' || hasNewPendingApprovals || hasNewApprovedImplementation;
+          const shouldExpand = options.autoExpand !== false
+            && (proposal.status === 'changes_requested' || proposal.status === 'stale' || hasNewPendingApprovals || hasNewApprovedImplementation);
           return {
             threadProposals: { ...state.threadProposals, [threadId]: proposal },
             guidedTaskExpandedByThread: {
@@ -446,6 +452,10 @@ export const useChatStore = create<ChatState>()(
               ? state.runningThreadIds.filter(id => id !== surfaceThreadId)
               : state.runningThreadIds,
             completedThreadIds: state.completedThreadIds.filter(id => id !== threadId && (!shouldDiscardCurrentDraft || id !== surfaceThreadId)),
+            guidedTaskExpandedByThread: {
+              ...state.guidedTaskExpandedByThread,
+              [threadId]: false,
+            },
           };
         }),
       archiveThread: async threadId => {

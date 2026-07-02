@@ -1,4 +1,4 @@
-import { PortalEditorHost, type PortalEditorTarget } from './editor.ts';
+import { isEditorWatchClientEnvelope, PortalEditorHost, type PortalEditorTarget } from './editor.ts';
 import { isLspClientEnvelope, PortalLspHost } from './lsp.ts';
 import { PortalVaultHost } from './vault.ts';
 import { isTerminalClientEnvelope, PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
@@ -97,6 +97,7 @@ const version = '0.1.0';
 const requiredControlCapabilities = [
   'terminal',
   'editor',
+  'editor.watch',
   'lsp',
   'terminal.tmux-source-of-truth',
   'terminal.tmux-control-mode',
@@ -1170,6 +1171,7 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'portal.editor.mkdir',
     'portal.editor.move',
     'portal.editor.delete',
+    'portal.editor.watch',
     'portal.lsp',
     'portal.lsp.session',
     'portal.lsp.query',
@@ -1279,6 +1281,13 @@ const connectOnce = (
         return;
       }
 
+      if (isEditorWatchClientEnvelope(message)) {
+        void editorHost.handleClientMessage(message.clientId, message.message, (watchEvent) => {
+          ws.send(JSON.stringify({ type: 'editor.watch.event', clientId: message.clientId, event: watchEvent }));
+        });
+        return;
+      }
+
       if (isWindowClientEnvelope(message)) {
         void windowHost.handleClientMessage(message.clientId, message.message, (windowEvent) => {
           ws.send(JSON.stringify({ type: 'window.event', clientId: message.clientId, event: windowEvent }));
@@ -1309,6 +1318,7 @@ const connectOnce = (
     ws.onclose = (event) => {
       cleanup();
       terminalHost.detachClientsByPrefix('relay:');
+      editorHost.detachClientsByPrefix('relay-editor-watch:');
       windowHost.detachClientsByPrefix('window:');
       lspHost.detachClientsByPrefix('relay-lsp:');
       console.log(`Socket closed: ${event.code} ${event.reason}`.trim());
@@ -1401,6 +1411,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
       if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
       perfSampler.stop();
       terminalHost.dispose();
+      editorHost.dispose();
       await lspHost.dispose();
       windowHost.dispose();
       activeSocket?.close();

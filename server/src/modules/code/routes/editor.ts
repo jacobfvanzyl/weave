@@ -1,6 +1,7 @@
 import { defineRoute } from '../../../server/routes';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { productProjectRepository } from '../../../products/project-repository';
+import { issueEditorWatchToken } from '../../../portal/editor-watch-relay';
 import { requestPortalTool, resolvePortalForTarget } from '../../../portal/registry';
 
 const agentId = 'mageHandAgent';
@@ -87,7 +88,12 @@ const parseTarget = (body: Record<string, unknown>): EditorTarget => {
   };
 };
 
-const resolveEditorTarget = async (c: any, resourceId: string, body: Record<string, unknown>) => {
+const resolveEditorTarget = async (
+  c: any,
+  resourceId: string,
+  body: Record<string, unknown>,
+  requiredCapability?: string,
+) => {
   const target = parseTarget(body);
   if (!target.projectId || !target.workspaceId) throw new Error('Project and Workspace are required for this editor.');
 
@@ -107,6 +113,9 @@ const resolveEditorTarget = async (c: any, resourceId: string, body: Record<stri
     workspacePath: workspace.path ?? target.workspacePath,
   });
   if (!portal) throw new Error('No online Portal is available for this editor.');
+  if (requiredCapability && !portal.capabilities.includes(requiredCapability)) {
+    throw new Error('The connected Portal does not support editor file watching yet.');
+  }
 
   return {
     portalId: portal.portalId,
@@ -146,6 +155,19 @@ const handleEditorRoute = async (c: any, tool: string, args: (body: Record<strin
   } catch (error) {
     return errorResponse(c, error);
   }
+};
+
+const getEditorWatchWsUrl = (c: any) => {
+  const configured = process.env.WEAVE_PORTAL_WS_PUBLIC_URL?.replace(/\/+$/, '');
+  if (configured) return `${configured}/editor-watch/connect`;
+
+  const url = new URL(c.req.url);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.port = process.env.WEAVE_PORTAL_WS_PUBLIC_PORT ?? process.env.WEAVE_PORTAL_WS_PORT ?? '4112';
+  url.pathname = '/editor-watch/connect';
+  url.search = '';
+  url.hash = '';
+  return url.toString();
 };
 
 export const editorRoutes = [
@@ -189,5 +211,23 @@ export const editorRoutes = [
       path: optionalString(body.path) ?? '',
       recursive: body.recursive === true,
     })),
+  }),
+  defineRoute('/code/editor/watch-token', {
+    method: 'POST',
+    handler: async c => {
+      try {
+        const resourceId = getResourceId(c);
+        const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+        const target = await resolveEditorTarget(c, resourceId, body, 'portal.editor.watch');
+        const token = issueEditorWatchToken({ resourceId, ...target });
+        return c.json({
+          token,
+          portalId: target.portalId,
+          wsUrl: getEditorWatchWsUrl(c),
+        });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
   }),
 ];

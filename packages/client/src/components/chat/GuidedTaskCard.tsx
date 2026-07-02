@@ -4,13 +4,12 @@ import { shouldShowProposalReview } from '../../lib/proposal-review-state';
 import {
   useChatStore,
   type PlanStepStatus,
-  type ThreadPlan,
-  type ThreadProposal,
 } from '../../stores/chat-store';
 import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
+import { guidedTaskDisplay, isPlanComplete } from './guided-task-card-display';
 
 const PlanStatusGlyph = ({ status }: { status: PlanStepStatus }) => {
   if (status === 'completed') {
@@ -32,34 +31,6 @@ const PlanStatusGlyph = ({ status }: { status: PlanStepStatus }) => {
   return <Circle size={16} className="mt-0.5 shrink-0 text-muted-foreground/60" />;
 };
 
-const proposalSummary = (proposal: ThreadProposal | undefined) => {
-  if (!proposal) return undefined;
-  const approved = proposal.counts.approved ?? 0;
-  const pending = proposal.counts.pending ?? 0;
-  const changesRequested = proposal.counts.changes_requested ?? 0;
-  const rejected = proposal.counts.rejected ?? 0;
-  const stale = proposal.counts.stale ?? 0;
-  const bits = [
-    approved > 0 ? `${approved} approved` : undefined,
-    pending > 0 ? `${pending} pending` : undefined,
-    changesRequested > 0 ? `${changesRequested} changes requested` : undefined,
-    rejected > 0 ? `${rejected} rejected` : undefined,
-    stale > 0 ? `${stale} stale` : undefined,
-  ].filter(Boolean);
-  return bits.join(' · ') || `${proposal.items.length} items`;
-};
-
-const currentTaskLine = (plan: ThreadPlan | undefined, proposal: ThreadProposal | undefined) => {
-  const activeStep = plan?.plan.find(item => item.status === 'in_progress')
-    ?? plan?.plan.find(item => item.status === 'blocked')
-    ?? plan?.plan.find(item => item.status === 'pending')
-    ?? plan?.plan[0];
-  if (activeStep?.step) return activeStep.step;
-  if (proposal?.summary) return proposal.summary;
-  if (proposal) return 'Review proposed changes';
-  return undefined;
-};
-
 type GuidedTaskCardProps = {
   threadId: string;
 };
@@ -75,10 +46,11 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
 
   if (!plan && !proposal) return null;
 
-  const isComplete = Boolean(plan && plan.total > 0 && plan.completed >= plan.total);
+  const complete = isPlanComplete(plan);
   const blockedCount = plan?.plan.filter(item => item.status === 'blocked').length ?? 0;
-  const taskLine = currentTaskLine(plan, proposal) ?? 'Guided task';
-  const summary = proposalSummary(proposal);
+  const display = guidedTaskDisplay(plan, proposal, expanded);
+  const showBodyHeader = Boolean(display.bodyTitle || display.summary);
+  const showProposalPathWarning = Boolean(proposal && !proposal.path);
   const hasPendingApproval = shouldShowProposalReview(proposal);
 
   const openPlan = () => {
@@ -112,10 +84,10 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
           <ChevronDown size={15} className={cn('shrink-0 text-muted-foreground transition-transform', !expanded && '-rotate-90')} />
           {plan?.isBusy ? <Loader2 size={14} className="shrink-0 animate-spin text-primary" /> : null}
           {blockedCount > 0 ? <AlertTriangle size={14} className="shrink-0 text-warning" /> : null}
-          <span className="min-w-0 truncate text-sm font-medium text-foreground">{taskLine}</span>
+          <span className="min-w-0 truncate text-sm font-medium text-foreground">{display.titleRow}</span>
         </CollapsibleTrigger>
         {plan ? (
-          <Badge size="sm" variant={isComplete ? 'success' : 'info'}>
+          <Badge size="sm" variant={complete ? 'success' : 'info'}>
             {plan.completed}/{plan.total}
           </Badge>
         ) : null}
@@ -134,20 +106,22 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
       </div>
       <CollapsiblePanel>
         <div className="border-t border-border px-3 py-3">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-semibold text-foreground">{plan?.title ?? proposal?.title ?? 'Guided task'}</div>
-              {summary ? <div className="mt-1 truncate text-xs text-muted-foreground">{summary}</div> : null}
+          {showBodyHeader ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <div className="min-w-0 flex-1">
+                {display.bodyTitle ? <div className="truncate text-sm font-semibold text-foreground">{display.bodyTitle}</div> : null}
+                {display.summary ? <div className={cn('truncate text-xs text-muted-foreground', display.bodyTitle && 'mt-1')}>{display.summary}</div> : null}
+              </div>
             </div>
-          </div>
-          {proposal && !proposal.path ? (
+          ) : null}
+          {showProposalPathWarning ? (
             <div className="mt-3 flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning-foreground">
               <MessageSquareWarning size={14} className="shrink-0" />
               <span className="min-w-0">Proposal state is present but no artifact path was reported.</span>
             </div>
           ) : null}
           {plan?.plan.length ? (
-            <ol className="mt-3 space-y-2">
+            <ol className={cn('space-y-2', showBodyHeader || showProposalPathWarning ? 'mt-3' : undefined)}>
               {plan.plan.map((item, index) => (
                 <li key={`${item.status}-${item.step}-${index}`} className="flex min-w-0 gap-2 text-sm leading-5">
                   <PlanStatusGlyph status={item.status} />

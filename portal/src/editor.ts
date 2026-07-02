@@ -87,17 +87,77 @@ export type PortalEditorDeleteInput = {
   recursive?: boolean;
 } & PortalEditorTarget;
 
+export type PortalEditorWatchInput = {
+  target?: PortalEditorTarget;
+  paths?: string[];
+} & PortalEditorTarget;
+
 export type PortalEditorOperationResult = {
   ok: true;
   path?: string;
 };
 
+export type PortalEditorWatchEvent = {
+  kind: Deno.FsEvent['kind'] | 'any';
+  paths: string[];
+  affectedDirectories: string[];
+  rescan?: boolean;
+};
+
+export type PortalEditorWatchReadyEvent = {
+  type: 'editor.watch.ready';
+  requestId?: string;
+  paths: string[];
+};
+
+export type PortalEditorWatchChangeEvent = {
+  type: 'editor.watch.change';
+  event: PortalEditorWatchEvent;
+};
+
+export type PortalEditorWatchErrorEvent = {
+  type: 'editor.watch.error';
+  requestId?: string;
+  error: string;
+};
+
+export type PortalEditorWatchHostEvent =
+  | PortalEditorWatchReadyEvent
+  | PortalEditorWatchChangeEvent
+  | PortalEditorWatchErrorEvent;
+
+export type PortalEditorWatchClientMessage =
+  | { type: 'watch.start'; requestId?: string; target?: PortalEditorTarget; paths?: string[] }
+  | { type: 'watch.update'; requestId?: string; paths?: string[] }
+  | { type: 'watch.stop'; requestId?: string };
+
+export type PortalEditorWatchClientEnvelope = {
+  type: 'editor.watch.client';
+  clientId: string;
+  message: PortalEditorWatchClientMessage;
+};
+
+export type PortalEditorWatchEventHandler = (event: PortalEditorWatchEvent) => void | Promise<void>;
+export type PortalEditorWatchErrorHandler = (error: Error) => void | Promise<void>;
+
+export type PortalEditorFsWatcher = AsyncIterable<Deno.FsEvent> & {
+  close: () => void;
+};
+
+export type PortalEditorWatchFactory = (
+  paths: string | string[],
+  options: { recursive: boolean },
+) => PortalEditorFsWatcher;
+
 export type PortalEditorHostOptions = {
   config: PortalEditorConfig;
   maxReadBytes?: number;
+  watchFs?: PortalEditorWatchFactory;
+  watchDebounceMs?: number;
 };
 
 const defaultMaxReadBytes = 2 * 1024 * 1024;
+const defaultWatchDebounceMs = 80;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
 
@@ -176,6 +236,24 @@ const flattenInput = <T extends Record<string, unknown>>(input: T) => {
   return { ...rest, ...target };
 };
 
+const toErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+const requestIdValue = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+const parseEditorWatchPaths = (value: unknown) => {
+  const input = Array.isArray(value) ? value : [''];
+  const paths = input.map((item) => parseEditorPath(item)).filter((item, index, all) => all.indexOf(item) === index);
+  return paths.length ? paths : [''];
+};
+
+const relativePathFromAbsolute = (root: string, path: string) => {
+  const normalizedRoot = trimTrailingSlash(normalizePath(root.replace(/\\/g, '/')));
+  const normalizedPath = trimTrailingSlash(normalizePath(path.replace(/\\/g, '/')));
+  if (normalizedPath === normalizedRoot) return '';
+  if (!normalizedPath.startsWith(`${normalizedRoot}/`)) return undefined;
+  return normalizedPath.slice(normalizedRoot.length + 1);
+};
+
 export const joinPortalEditorPath = joinPath;
 
 export const assertPortalPathWithinRoot = (
@@ -214,13 +292,176 @@ export const resolvePortalEditorWorkspaceRoot = async (
   throw new Error(`Project is not mounted: ${String(input.projectId)}`);
 };
 
+type PortalEditorWatchOptions = {
+  root: string;
+  paths: string[];
+  watchFs: PortalEditorWatchFactory;
+  debounceMs: number;
+  onEvent: PortalEditorWatchEventHandler;
+  onError?: PortalEditorWatchErrorHandler;
+};
+
+type PendingWatchEvent = {
+  kind?: PortalEditorWatchEvent['kind'];
+  paths: Set<string>;
+  affectedDirectories: Set<string>;
+  rescan: boolean;
+};
+
+export class PortalEditorWatchSubscription {
+  private readonly root: string;
+  private readonly watchFs: PortalEditorWatchFactory;
+  private readonly debounceMs: number;
+  private readonly onEvent: PortalEditorWatchEventHandler;
+  private readonly onError?: PortalEditorWatchErrorHandler;
+  private watcher?: PortalEditorFsWatcher;
+  private closed = false;
+  private generation = 0;
+  private paths: string[] = [];
+  private pending?: PendingWatchEvent;
+  private debounceTimer?: ReturnType<typeof setTimeout>;
+
+  constructor(options: PortalEditorWatchOptions) {
+    this.root = options.root;
+    this.watchFs = options.watchFs;
+    this.debounceMs = options.debounceMs;
+    this.onEvent = options.onEvent;
+    this.onError = options.onError;
+    this.paths = options.paths;
+  }
+
+  getPaths() {
+    return [...this.paths];
+  }
+
+  async start() {
+    await this.update(this.paths);
+    return this.getPaths();
+  }
+
+  async update(paths: string[]) {
+    if (this.closed) throw new Error('Editor watch subscription is closed.');
+    const next = await this.resolveWatchPaths(paths);
+    this.generation += 1;
+    const generation = this.generation;
+    this.closeWatcher();
+    this.paths = next.map(path => path.relativePath);
+    if (next.length === 0) return this.getPaths();
+
+    const watcher = this.watchFs(next.map(path => path.absolutePath), { recursive: false });
+    this.watcher = watcher;
+    void this.runWatcher(watcher, generation);
+    return this.getPaths();
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.closeWatcher();
+    if (this.debounceTimer !== undefined) clearTimeout(this.debounceTimer);
+    this.debounceTimer = undefined;
+    this.pending = undefined;
+  }
+
+  private async resolveWatchPaths(paths: string[]) {
+    const resolved = [];
+    for (const relativePath of paths) {
+      const candidate = joinPath(this.root, parseEditorPath(relativePath));
+      assertPortalPathWithinRoot(this.root, candidate);
+      const details = await Deno.stat(candidate).catch((error) => {
+        if (error instanceof Deno.errors.NotFound) return undefined;
+        throw error;
+      });
+      if (!details) {
+        if (!relativePath) throw new Error('Editor workspace root was not found.');
+        continue;
+      }
+      if (!details.isDirectory) {
+        if (!relativePath) throw new Error('Editor workspace root is not a directory.');
+        continue;
+      }
+      const realPath = await Deno.realPath(candidate);
+      assertPortalPathWithinRoot(this.root, realPath);
+      resolved.push({ relativePath, absolutePath: realPath });
+    }
+    return resolved;
+  }
+
+  private async runWatcher(watcher: PortalEditorFsWatcher, generation: number) {
+    try {
+      for await (const event of watcher) {
+        if (this.closed || generation !== this.generation) break;
+        this.queueEvent(event);
+      }
+    } catch (error) {
+      if (this.closed || generation !== this.generation) return;
+      await this.onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private queueEvent(event: Deno.FsEvent) {
+    const normalizedPaths = event.paths
+      .map(path => relativePathFromAbsolute(this.root, path))
+      .filter((path): path is string => path !== undefined);
+    const rescan = event.flag === 'rescan';
+    const affectedDirectories = rescan
+      ? this.paths
+      : normalizedPaths.map(path => getParentPath(path));
+
+    if (!this.pending) {
+      this.pending = { paths: new Set(), affectedDirectories: new Set(), rescan: false };
+    }
+
+    this.pending.kind = this.pending.kind && this.pending.kind !== event.kind ? 'any' : event.kind;
+    normalizedPaths.forEach(path => this.pending?.paths.add(path));
+    affectedDirectories.forEach(path => this.pending?.affectedDirectories.add(path));
+    this.pending.rescan = this.pending.rescan || rescan;
+
+    if (this.debounceTimer !== undefined) clearTimeout(this.debounceTimer);
+    this.debounceTimer = setTimeout(() => this.flushPending(), this.debounceMs);
+  }
+
+  private flushPending() {
+    if (this.debounceTimer !== undefined) clearTimeout(this.debounceTimer);
+    this.debounceTimer = undefined;
+    const pending = this.pending;
+    this.pending = undefined;
+    if (!pending) return;
+    const event: PortalEditorWatchEvent = {
+      kind: pending.kind ?? 'any',
+      paths: [...pending.paths].sort(),
+      affectedDirectories: [...pending.affectedDirectories].sort(),
+      ...(pending.rescan ? { rescan: true } : {}),
+    };
+    void Promise.resolve(this.onEvent(event)).catch(error => void this.onError?.(
+      error instanceof Error ? error : new Error(String(error)),
+    ));
+  }
+
+  private closeWatcher() {
+    const watcher = this.watcher;
+    this.watcher = undefined;
+    watcher?.close();
+  }
+}
+
+export const isEditorWatchClientEnvelope = (message: Record<string, unknown>): message is PortalEditorWatchClientEnvelope =>
+  message.type === 'editor.watch.client' &&
+  typeof message.clientId === 'string' &&
+  Boolean(message.message && typeof message.message === 'object');
+
 export class PortalEditorHost {
   private readonly config: PortalEditorConfig;
   private readonly maxReadBytes: number;
+  private readonly watchFs: PortalEditorWatchFactory;
+  private readonly watchDebounceMs: number;
+  private readonly watchClients = new Map<string, PortalEditorWatchSubscription>();
 
   constructor(options: PortalEditorHostOptions) {
     this.config = options.config;
     this.maxReadBytes = options.maxReadBytes ?? defaultMaxReadBytes;
+    this.watchFs = options.watchFs ?? Deno.watchFs;
+    this.watchDebounceMs = options.watchDebounceMs ?? defaultWatchDebounceMs;
   }
 
   async list(input: PortalEditorListInput): Promise<PortalEditorListResult> {
@@ -377,6 +618,79 @@ export class PortalEditorHost {
     const targetPath = await this.resolveExistingPath(root, relativePath);
     await Deno.remove(targetPath, { recursive: record.recursive === true });
     return { ok: true, path: relativePath };
+  }
+
+  async watch(
+    input: PortalEditorWatchInput,
+    handlers: { onEvent: PortalEditorWatchEventHandler; onError?: PortalEditorWatchErrorHandler },
+  ) {
+    const record = flattenInput(input);
+    const root = await this.resolveWorkspaceRoot(record);
+    const paths = parseEditorWatchPaths(record.paths);
+    const subscription = new PortalEditorWatchSubscription({
+      root,
+      paths,
+      watchFs: this.watchFs,
+      debounceMs: this.watchDebounceMs,
+      onEvent: handlers.onEvent,
+      onError: handlers.onError,
+    });
+    await subscription.start();
+    return subscription;
+  }
+
+  async handleClientMessage(
+    clientId: string,
+    message: PortalEditorWatchClientMessage,
+    send: (event: PortalEditorWatchHostEvent) => void,
+  ) {
+    const requestId = requestIdValue(message.requestId);
+    try {
+      if (message.type === 'watch.start') {
+        this.detachClient(clientId);
+        const subscription = await this.watch({ target: message.target, paths: message.paths }, {
+          onEvent: event => send({ type: 'editor.watch.change', event }),
+          onError: error => send({ type: 'editor.watch.error', error: error.message }),
+        });
+        this.watchClients.set(clientId, subscription);
+        send({ type: 'editor.watch.ready', requestId, paths: subscription.getPaths() });
+        return;
+      }
+
+      if (message.type === 'watch.update') {
+        const subscription = this.watchClients.get(clientId);
+        if (!subscription) throw new Error('Editor watch subscription was not started.');
+        const paths = await subscription.update(parseEditorWatchPaths(message.paths));
+        send({ type: 'editor.watch.ready', requestId, paths });
+        return;
+      }
+
+      if (message.type === 'watch.stop') {
+        this.detachClient(clientId);
+        send({ type: 'editor.watch.ready', requestId, paths: [] });
+        return;
+      }
+
+      throw new Error('Unsupported editor watch message.');
+    } catch (error) {
+      send({ type: 'editor.watch.error', requestId, error: toErrorMessage(error) });
+    }
+  }
+
+  detachClient(clientId: string) {
+    const subscription = this.watchClients.get(clientId);
+    subscription?.close();
+    this.watchClients.delete(clientId);
+  }
+
+  detachClientsByPrefix(prefix: string) {
+    for (const clientId of this.watchClients.keys()) {
+      if (clientId.startsWith(prefix)) this.detachClient(clientId);
+    }
+  }
+
+  dispose() {
+    for (const clientId of [...this.watchClients.keys()]) this.detachClient(clientId);
   }
 
   private async resolveWorkspaceRoot(input: Record<string, unknown>) {

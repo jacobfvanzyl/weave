@@ -346,9 +346,11 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
               threads: state.threads.map(thread => (thread.id === targetThreadId ? { ...thread, title: effect.title } : thread)),
             }));
           } else if (effect.type === 'updatePlan') {
-            useChatStore.getState().setThreadPlan(targetThreadId, effect.plan);
+            const shouldAutoExpand = useChatStore.getState().runningThreadIds.includes(targetThreadId);
+            useChatStore.getState().setThreadPlan(targetThreadId, effect.plan, { autoExpand: shouldAutoExpand });
           } else {
-            useChatStore.getState().setThreadProposal(targetThreadId, effect.proposal);
+            const shouldAutoExpand = useChatStore.getState().runningThreadIds.includes(targetThreadId);
+            useChatStore.getState().setThreadProposal(targetThreadId, effect.proposal, { autoExpand: shouldAutoExpand });
             const proposalReviewPath = shouldShowProposalReview(effect.proposal) ? effect.proposal.path : undefined;
             if (
               targetThreadId === activeThreadId

@@ -5,7 +5,15 @@ import type {
   TerminalTargetInput,
   TerminalWindowRecord,
 } from './terminal';
-import type { EditorFile, EditorListResult, EditorOperationResult, EditorTarget, EditorWriteResult } from './editor';
+import type {
+  EditorFile,
+  EditorListResult,
+  EditorOperationResult,
+  EditorTarget,
+  EditorWatchEventEnvelope,
+  EditorWatchStartResult,
+  EditorWriteResult,
+} from './editor';
 import type { LspSessionResult } from './language-intelligence';
 
 export type DesktopConnectionSettings = {
@@ -43,5 +51,9 @@ export type WeaveDesktopBridge = {
   editorMkdir: (target: EditorTarget, path: string) => Promise<EditorOperationResult>;
   editorMove: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<EditorOperationResult>;
   editorDelete: (target: EditorTarget, path: string, recursive?: boolean) => Promise<EditorOperationResult>;
+  editorWatchStart: (target: EditorTarget, paths: string[]) => Promise<EditorWatchStartResult>;
+  editorWatchUpdate: (subscriptionId: string, paths: string[]) => Promise<EditorWatchStartResult>;
+  editorWatchStop: (subscriptionId: string) => Promise<void>;
+  onEditorWatchEvent: (listener: (event: EditorWatchEventEnvelope) => void) => () => void;
   lspCreateSession: (target: EditorTarget, path: string, languageId?: string, serverId?: string) => Promise<LspSessionResult>;
 };

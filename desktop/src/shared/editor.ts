@@ -75,3 +75,26 @@ export type EditorOperationResult = {
   ok: true;
   path?: string;
 };
+
+export type EditorWatchEvent = {
+  kind: 'any' | 'access' | 'create' | 'modify' | 'rename' | 'remove' | 'other';
+  paths: string[];
+  affectedDirectories: string[];
+  rescan?: boolean;
+};
+
+export type EditorWatchStartInput = {
+  target: EditorTarget;
+  paths: string[];
+};
+
+export type EditorWatchStartResult = {
+  subscriptionId: string;
+  paths: string[];
+};
+
+export type EditorWatchEventEnvelope = {
+  subscriptionId: string;
+  event?: EditorWatchEvent;
+  error?: string;
+};

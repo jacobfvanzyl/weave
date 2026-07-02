@@ -12,6 +12,10 @@ import {
   parseEditorMkdirInput,
   parseEditorMoveInput,
   parseEditorReadInput,
+  parseEditorWatchPaths,
+  parseEditorWatchStartInput,
+  parseEditorWatchStopInput,
+  parseEditorWatchSubscriptionId,
   parseEditorWriteInput,
   parseLspSessionInput,
 } from './editor-input';
@@ -303,6 +307,19 @@ const registerIpcHandlers = () => {
   ipcMain.handle('editor:delete', (_event, input: unknown) =>
     getPortalEditorClient().delete(parseEditorDeleteInput(input)),
   );
+  ipcMain.handle('editor:watch-start', (event, input: unknown) =>
+    getPortalEditorClient().watchStart(parseEditorWatchStartInput(input), event.sender),
+  );
+  ipcMain.handle('editor:watch-update', (_event, input: unknown) => {
+    const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+    return getPortalEditorClient().watchUpdate(
+      parseEditorWatchSubscriptionId(record.subscriptionId),
+      parseEditorWatchPaths(record.paths),
+    );
+  });
+  ipcMain.handle('editor:watch-stop', (_event, input: unknown) =>
+    getPortalEditorClient().watchStop(parseEditorWatchStopInput(input)),
+  );
   ipcMain.handle('lsp:create-session', (_event, input: unknown) =>
     getPortalLspClient().createSession(parseLspSessionInput(input)),
   );
@@ -345,6 +362,7 @@ const createWindow = () => {
   const webContentsId = mainWindow.webContents.id;
   mainWindow.webContents.on('destroyed', () => {
     portalTerminalClient?.detachWebContents(webContentsId);
+    portalEditorClient?.detachWebContents(webContentsId);
   });
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {

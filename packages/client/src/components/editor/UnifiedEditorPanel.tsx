@@ -38,7 +38,7 @@ import {
   resolveEditorDocumentKind,
 } from '../../lib/editor-document-kind';
 import { createEditorBackend } from '../../lib/editor-backend';
-import type { EditorEntry, EditorMode, EditorTarget, OpenBuffer } from '../../lib/editor-types';
+import type { EditorEntry, EditorMode, EditorTarget, EditorWatchSubscription, OpenBuffer } from '../../lib/editor-types';
 import { defaultEditorExplorerVisible, getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
 import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
 import { createVaultBackend, type VaultAttachment, type VaultIndexResult, type VaultNote, type VaultTarget } from '../../lib/vault-backend';
@@ -548,6 +548,9 @@ export const UnifiedEditorPanel = ({
   const renameCancelRef = useRef(false);
   const explorerBorderHoverRef = useRef(false);
   const explorerWindowEdgeHoldRef = useRef(false);
+  const expandedPathsRef = useRef<Set<string>>(new Set(['']));
+  const editorWatchSubscriptionRef = useRef<EditorWatchSubscription | undefined>(undefined);
+  const refreshCodeDirectoriesRef = useRef<(paths: string[]) => Promise<void>>(async () => undefined);
   const pendingRevealRef = useRef<{ requestId: number; path: string; line: number } | undefined>(
     undefined,
   );
@@ -909,6 +912,52 @@ export const UnifiedEditorPanel = ({
     }
   }, [codeBackend, editorTarget]);
 
+  const refreshCodeDirectories = useCallback(async (paths: string[]) => {
+    const uniquePaths = [...new Set(paths.length ? paths : [''])];
+    const results = await Promise.all(uniquePaths.map(async path => {
+      try {
+        return { ok: true as const, result: await codeBackend.list(editorTarget, path) };
+      } catch (refreshError) {
+        return { ok: false as const, path, error: refreshError };
+      }
+    }));
+    const rootFailure = results.find(result => !result.ok && result.path === '');
+    if (rootFailure && !rootFailure.ok) throw rootFailure.error;
+
+    const failedPaths = results
+      .filter((result): result is { ok: false; path: string; error: unknown } => !result.ok)
+      .map(result => result.path);
+    setCodeDirectories(current => {
+      const next = { ...current };
+      for (const result of results) {
+        if (result.ok) next[result.result.path] = result.result.entries;
+      }
+      for (const path of failedPaths) {
+        delete next[path];
+        for (const key of Object.keys(next)) {
+          if (key.startsWith(`${path}/`)) delete next[key];
+        }
+      }
+      return next;
+    });
+    if (failedPaths.length > 0) {
+      setExpandedPaths(current => {
+        const next = new Set(current);
+        for (const path of failedPaths) {
+          next.delete(path);
+          for (const expandedPath of current) {
+            if (expandedPath.startsWith(`${path}/`)) next.delete(expandedPath);
+          }
+        }
+        return next;
+      });
+      setSelectedNode(current => {
+        if (!current) return current;
+        return failedPaths.some(path => current.path === path || current.path.startsWith(`${path}/`)) ? undefined : current;
+      });
+    }
+  }, [codeBackend, editorTarget]);
+
   const refreshExplorer = useCallback(async () => {
     setIsExplorerLoading(true);
     setError(undefined);
@@ -918,15 +967,13 @@ export const UnifiedEditorPanel = ({
         return;
       }
 
-      const paths = Array.from(expandedPaths);
-      const results = await Promise.all(paths.map(path => codeBackend.list(editorTarget, path)));
-      setCodeDirectories(Object.fromEntries(results.map(result => [result.path, result.entries])));
+      await refreshCodeDirectories(Array.from(expandedPaths));
     } catch (refreshError) {
       setError(toErrorMessage(refreshError));
     } finally {
       setIsExplorerLoading(false);
     }
-  }, [codeBackend, editorTarget, expandedPaths, mode, vaultBackend, vaultTarget]);
+  }, [expandedPaths, mode, refreshCodeDirectories, vaultBackend, vaultTarget]);
 
   const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean; preview?: boolean } = {}) => {
     if (!isEditorPathOpenable(mode, path)) return false;
@@ -1012,6 +1059,16 @@ export const UnifiedEditorPanel = ({
   }, []);
 
   useEffect(() => {
+    expandedPathsRef.current = expandedPaths;
+  }, [expandedPaths]);
+
+  useEffect(() => {
+    refreshCodeDirectoriesRef.current = async paths => {
+      await refreshCodeDirectories(paths);
+    };
+  }, [refreshCodeDirectories]);
+
+  useEffect(() => {
     clearPendingFileOpen();
     setQuery('');
     setExpandedPaths(new Set(['']));
@@ -1044,6 +1101,45 @@ export const UnifiedEditorPanel = ({
     }
     void refreshVaultIndex();
   }, [loadCodeDirectory, mode, refreshVaultIndex]);
+
+  useEffect(() => {
+    if (mode !== 'code' || !codeBackend.watch) return undefined;
+    let cancelled = false;
+    void codeBackend.watch(editorTarget, Array.from(expandedPathsRef.current), event => {
+      const expanded = expandedPathsRef.current;
+      const refreshPaths = event.rescan
+        ? Array.from(expanded)
+        : event.affectedDirectories.filter(path => expanded.has(path));
+      if (refreshPaths.length === 0) return;
+      void refreshCodeDirectoriesRef.current(refreshPaths).catch(refreshError => {
+        setError(toErrorMessage(refreshError));
+      });
+    }).then(subscription => {
+      if (cancelled) {
+        subscription.close();
+        return;
+      }
+      editorWatchSubscriptionRef.current = subscription;
+      void subscription.update(Array.from(expandedPathsRef.current)).catch(watchError => {
+        setError(toErrorMessage(watchError));
+      });
+    }).catch(watchError => {
+      if (!cancelled) setError(toErrorMessage(watchError));
+    });
+
+    return () => {
+      cancelled = true;
+      editorWatchSubscriptionRef.current?.close();
+      editorWatchSubscriptionRef.current = undefined;
+    };
+  }, [codeBackend, editorTarget, mode]);
+
+  useEffect(() => {
+    if (mode !== 'code') return;
+    void editorWatchSubscriptionRef.current?.update(Array.from(expandedPaths)).catch(watchError => {
+      setError(toErrorMessage(watchError));
+    });
+  }, [expandedPaths, mode]);
 
   useEffect(() => {
     if (focusRequest === 0) return undefined;

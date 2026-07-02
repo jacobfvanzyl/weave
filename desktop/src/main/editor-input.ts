@@ -6,6 +6,7 @@ import type {
   EditorMoveInput,
   EditorReadInput,
   EditorTarget,
+  EditorWatchStartInput,
   EditorWriteInput,
 } from '../shared/editor';
 import type { LspSessionInput } from '../shared/language-intelligence';
@@ -107,6 +108,28 @@ export const parseEditorDeleteInput = (input: unknown): EditorDeleteInput => {
     path: parseEditorPath(input.path),
     recursive: input.recursive,
   };
+};
+
+export const parseEditorWatchPaths = (value: unknown) => {
+  const input = Array.isArray(value) ? value : [''];
+  const paths = input.map((path, index) => parseEditorPath(path, `paths[${index}]`));
+  return [...new Set(paths.length ? paths : [''])];
+};
+
+export const parseEditorWatchStartInput = (input: unknown): EditorWatchStartInput => {
+  if (!isRecord(input)) throw new Error('editor watch input is required.');
+  return {
+    target: parseEditorTarget(input.target),
+    paths: parseEditorWatchPaths(input.paths),
+  };
+};
+
+export const parseEditorWatchSubscriptionId = (value: unknown) => parseIdentifier(value, 'subscriptionId');
+
+export const parseEditorWatchStopInput = (input: unknown) => {
+  if (typeof input === 'string') return parseEditorWatchSubscriptionId(input);
+  if (!isRecord(input)) throw new Error('editor watch stop input is required.');
+  return parseEditorWatchSubscriptionId(input.subscriptionId);
 };
 
 export const parseLspSessionInput = (input: unknown): LspSessionInput => {
