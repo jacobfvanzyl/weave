@@ -37,13 +37,25 @@ describe('guided task card display', () => {
     });
   });
 
-  it('keeps the first in-progress item in the title row while running', () => {
+  it('uses the plan name when expanded even while a step is running', () => {
     expect(guidedTaskDisplay(plan({
       plan: [
         { id: 'schema', step: 'Confirm Trap Readings base and transactional data models', status: 'completed' },
         { id: 'screens', step: 'Implement Trap Readings screens', status: 'in_progress' },
       ],
     }), undefined, true)).toMatchObject({
+      titleRow: 'Trap Readings Module',
+      bodyTitle: undefined,
+    });
+  });
+
+  it('uses the current task when collapsed and running', () => {
+    expect(guidedTaskDisplay(plan({
+      plan: [
+        { id: 'schema', step: 'Confirm Trap Readings base and transactional data models', status: 'completed' },
+        { id: 'screens', step: 'Implement Trap Readings screens', status: 'in_progress' },
+      ],
+    }), undefined, false)).toMatchObject({
       titleRow: 'Implement Trap Readings screens',
       bodyTitle: 'Trap Readings Module',
     });
@@ -55,5 +67,15 @@ describe('guided task card display', () => {
         { id: 'item-1', kind: 'file_edit', status: 'applied', title: 'Update file', additions: 1, deletions: 0, viewed: false },
       ],
     }))).toBeUndefined();
+  });
+
+  it('omits pending approval count from the body summary', () => {
+    expect(proposalSummary(proposal({
+      counts: { pending: 12 },
+    }))).toBeUndefined();
+
+    expect(proposalSummary(proposal({
+      counts: { approved: 2, pending: 12 },
+    }))).toBe('2 approved');
   });
 });

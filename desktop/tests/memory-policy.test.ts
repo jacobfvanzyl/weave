@@ -385,6 +385,70 @@ describe('tool model output compaction', () => {
     });
   });
 
+  it('summarizes proposal tool-call inputs without raw proposal bodies', () => {
+    const diff = '@@ -1 +1 @@\n-before\n+after';
+    const currentContent = 'before';
+    const proposedContent = 'after';
+    const prompt = [
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool-call',
+          toolCallId: 'call-proposal',
+          toolName: 'writeProposalTool',
+          input: {
+            title: 'Proposal input compaction',
+            summary: 'Compact proposal tool-call bodies.',
+            files: [{
+              kind: 'file_edit',
+              path: 'src/example.ts',
+              diff,
+              currentContent,
+              proposedContent,
+            }],
+          },
+        }],
+      },
+      {
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-proposal',
+          toolName: 'writeProposalTool',
+          output: { type: 'text', value: 'write_proposal\nok: true\npath: .agents/proposals/demo.md' },
+        }],
+      },
+    ];
+
+    const compacted = compactToolHistoryPrompt(prompt as any, { preserveToolSteps: 0 }) as any[];
+    const input = compacted[0].content[0].input;
+
+    expect(compacted).toHaveLength(2);
+    expect(input.files[0]).toMatchObject({
+      kind: 'file_edit',
+      path: 'src/example.ts',
+      diffChars: diff.length,
+      currentContentChars: currentContent.length,
+      proposedContentChars: proposedContent.length,
+    });
+    expect(input.files[0].diffHash).toMatch(/^[a-f0-9]{12}$/);
+    expect(input.files[0].currentContentHash).toMatch(/^[a-f0-9]{12}$/);
+    expect(input.files[0].proposedContentHash).toMatch(/^[a-f0-9]{12}$/);
+    expect(input.files[0].diff).toBeUndefined();
+    expect(input.files[0].currentContent).toBeUndefined();
+    expect(input.files[0].proposedContent).toBeUndefined();
+    const compactedJson = JSON.stringify(compacted);
+    expect(compactedJson.includes(diff)).toBe(false);
+    expect(compactedJson.includes(currentContent)).toBe(false);
+    expect(compactedJson.includes(proposedContent)).toBe(false);
+    expect(compacted[1].content[0]).toMatchObject({
+      type: 'tool-result',
+      toolCallId: 'call-proposal',
+      toolName: 'writeProposalTool',
+    });
+    expect(compacted[1].content[0].output.value).toContain('Compact tool result summary');
+  });
+
   it('does not expose message-list processor hooks that can persist compact summaries', () => {
     const processor = new CompactToolHistoryProcessor();
 

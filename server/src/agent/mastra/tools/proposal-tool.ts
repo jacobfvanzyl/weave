@@ -1,6 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { formatToolModelOutput, hashText } from './model-output';
+import { summarizeProposalToolInput } from './proposal-tool-input-summary';
 import {
   assertProposalItemsCompleteForStatuses,
   countProposalChanges,
@@ -42,33 +43,44 @@ const proposalToolOutputSchema = z.object({
 }).strict();
 
 const proposalCodeItemKindSchema = z.enum(['file_edit', 'file_create', 'file_delete']);
+const writeProposalStatusSchema = z.enum(['draft', 'ready']);
+const updateProposalStatusSchema = z.enum([
+  'draft',
+  'ready',
+  'partially_approved',
+  'approved',
+  'changes_requested',
+  'applied',
+  'rejected',
+  'stale',
+]);
+
+const optionalString = (schema: z.ZodString = z.string()) =>
+  schema.nullish().transform(value => value ?? undefined);
+
+const optionalWriteProposalStatus = writeProposalStatusSchema.nullish().transform(value => value ?? undefined);
+const optionalUpdateProposalStatus = updateProposalStatusSchema.nullish().transform(value => value ?? undefined);
 
 const proposalFileInputSchema = z.object({
-  id: z.string().min(1).max(100).optional(),
+  id: optionalString(z.string().min(1).max(100)),
   kind: proposalCodeItemKindSchema.default('file_edit'),
-  title: z.string().min(1).max(240).optional(),
+  title: optionalString(z.string().min(1).max(240)),
   path: z.string().min(1),
-  description: z.string().optional().describe('Optional human-readable description of this item. Do not put proposed code here.'),
-  rationale: z.string().optional(),
-  diff: z.string().optional().describe('Concrete unified diff hunk(s) for this file. Required for file proposals unless currentContent and proposedContent are provided.'),
-  currentContent: z.string().optional().describe('Exact current file content or relevant current code hunk before the proposed change.'),
-  proposedContent: z.string().optional().describe('Exact proposed file content or relevant proposed code hunk after the change.'),
-  currentHash: z.string().optional(),
-}).strict().refine(file => {
-  if (file.kind === 'file_create') return typeof file.proposedContent === 'string';
-  if (file.kind === 'file_delete') return typeof file.currentContent === 'string';
-  return typeof file.currentContent === 'string' && typeof file.proposedContent === 'string';
-}, {
-  message: 'File proposal items must include concrete body content: file_edit needs currentContent and proposedContent, file_create needs proposedContent, and file_delete needs currentContent.',
-});
+  description: optionalString().describe('Optional human-readable description of this item. Do not put proposed code here.'),
+  rationale: optionalString(),
+  diff: optionalString().describe('Concrete unified diff hunk(s) for this file. Required for file proposals unless required content blocks are provided.'),
+  currentContent: optionalString().describe('Exact current file content or relevant current code hunk before the proposed change.'),
+  proposedContent: optionalString().describe('Exact proposed file content or relevant proposed code hunk after the change.'),
+  currentHash: optionalString(),
+}).strict();
 
 const writeProposalInputSchema = z.object({
   title: z.string().min(1).max(180),
   summary: z.string().min(1).max(500),
-  proposalPath: z.string().optional().describe(`Optional artifact path. Must be ${proposalDirectory}/<name>.md.`),
-  planPath: z.string().optional().describe('Optional linked plan artifact path.'),
-  status: z.enum(['draft', 'ready']).optional(),
-  overview: z.string().optional(),
+  proposalPath: optionalString().describe(`Optional artifact path. Must be ${proposalDirectory}/<name>.md.`),
+  planPath: optionalString().describe('Optional linked plan artifact path.'),
+  status: optionalWriteProposalStatus,
+  overview: optionalString(),
   files: z.array(proposalFileInputSchema).min(1).max(120),
 }).strict();
 
@@ -76,18 +88,18 @@ const proposalItemUpdateInputSchema = z.object({
   id: z.string().min(1).max(100),
   status: proposalItemStatusSchema.optional(),
   viewed: z.boolean().optional(),
-  comment: z.string().optional(),
+  comment: optionalString(),
 }).strict().refine(value => value.status || typeof value.viewed === 'boolean' || typeof value.comment === 'string', {
   message: 'Provide at least one item update',
 });
 
 const updateProposalInputSchema = z.object({
-  proposalPath: z.string().optional().describe(`Optional artifact path. Omit to use the thread's latest proposal. Must be ${proposalDirectory}/<name>.md.`),
-  status: z.enum(['draft', 'ready', 'partially_approved', 'approved', 'changes_requested', 'applied', 'rejected', 'stale']).optional(),
+  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's latest proposal. Must be ${proposalDirectory}/<name>.md.`),
+  status: optionalUpdateProposalStatus,
   approveAllPending: z.boolean().optional(),
   approveAllViewed: z.boolean().optional(),
   rejectAllPending: z.boolean().optional(),
-  requestChanges: z.string().optional(),
+  requestChanges: optionalString(),
   items: z.array(proposalItemUpdateInputSchema).max(120).optional(),
 }).strict().refine(value => Boolean(
   value.status
@@ -100,6 +112,42 @@ const updateProposalInputSchema = z.object({
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+const hasContentBlock = (value: string | undefined) => typeof value === 'string';
+const hasUnifiedDiff = (value: string | undefined) =>
+  typeof value === 'string' && value.trim().length > 0 && /^@@ /m.test(value);
+
+const hasConcreteProposalContent = (file: z.infer<typeof proposalFileInputSchema>) => {
+  if (hasUnifiedDiff(file.diff)) return true;
+  if (file.kind === 'file_create') return hasContentBlock(file.proposedContent);
+  if (file.kind === 'file_delete') return hasContentBlock(file.currentContent);
+  return hasContentBlock(file.currentContent) && hasContentBlock(file.proposedContent);
+};
+
+const proposalContentError = (file: z.infer<typeof proposalFileInputSchema>) => {
+  const required = file.kind === 'file_create'
+    ? 'file_create needs proposedContent'
+    : file.kind === 'file_delete'
+      ? 'file_delete needs currentContent'
+      : 'file_edit needs currentContent and proposedContent';
+  return `File proposal item ${file.path} must include a non-empty unified diff or required content blocks (${required}).`;
+};
+
+const assertProposalFileInputsComplete = (files: Array<z.infer<typeof proposalFileInputSchema>>) => {
+  const incomplete = files.find(file => !hasConcreteProposalContent(file));
+  if (incomplete) throw new Error(proposalContentError(incomplete));
+};
+
+const summarizeToolPayloadInput = ({ input }: { input?: unknown }) => summarizeProposalToolInput(input);
+
+const proposalToolTransform = {
+  display: {
+    input: summarizeToolPayloadInput,
+  },
+  transcript: {
+    input: summarizeToolPayloadInput,
+  },
+};
 
 const toolError = (error: unknown, path?: string) => ({
   ok: false,
@@ -225,6 +273,7 @@ const itemIdForPath = (path: string, index: number) =>
 
 export const writeProposalTool = createTool({
   id: 'write_proposal',
+  strict: true,
   description: [
     'Create a git-scoped proposed change artifact at .agents/proposals/<name>.md.',
     'Use this before mutating source files for Guided work: new features, significant refactors, migrations, schema changes, cross-cutting changes, risky or production-sensitive work, multi-file implementation, or work that already has an ExecPlan artifact.',
@@ -234,12 +283,14 @@ export const writeProposalTool = createTool({
   ].join('\n'),
   inputSchema: writeProposalInputSchema,
   outputSchema: proposalToolOutputSchema,
+  transform: proposalToolTransform,
   execute: async (input, context) => {
     let path: string | undefined;
     try {
       await getGitProposalBinding(context);
       const { threadId } = await getThreadRecord(context);
       const proposalInput = writeProposalInputSchema.parse(input);
+      assertProposalFileInputsComplete(proposalInput.files);
       const artifactPath = proposalInput.proposalPath ? validateProposalPath(proposalInput.proposalPath) : proposalPathForName(proposalInput.title);
       path = artifactPath;
       const now = new Date().toISOString();
@@ -337,9 +388,11 @@ const applyItemUpdates = (items: ProposalItem[], input: z.infer<typeof updatePro
 
 export const updateProposalTool = createTool({
   id: 'update_proposal',
+  strict: true,
   description: 'Update approval, viewed, rejection, or request-changes state in a proposal artifact.',
   inputSchema: updateProposalInputSchema,
   outputSchema: proposalToolOutputSchema,
+  transform: proposalToolTransform,
   execute: async (input, context) => {
     let path: string | undefined;
     try {
@@ -383,6 +436,7 @@ export const updateProposalTool = createTool({
 });
 
 export const __proposalToolTest = {
+  assertProposalFileInputsComplete,
   writeProposalInputSchema,
   updateProposalInputSchema,
 };

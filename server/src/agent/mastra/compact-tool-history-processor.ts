@@ -3,6 +3,7 @@ import type {
   ProcessLLMRequestResult,
   Processor,
 } from '@mastra/core/processors';
+import { summarizeProposalToolInput } from './tools/proposal-tool-input-summary';
 
 const compactToolHistoryPrefix = 'Compact tool result summary';
 
@@ -69,6 +70,15 @@ const isToolCallPart = (part: PromptPart) => part.type === 'tool-call';
 const isToolResultPart = (part: PromptPart) => part.type === 'tool-result';
 
 const hasToolCallPart = (message: PromptMessage) => getContentParts(message).some(isToolCallPart);
+
+const proposalToolNames = new Set([
+  'writeProposalTool',
+  'write_proposal',
+  'write-proposal',
+  'updateProposalTool',
+  'update_proposal',
+  'update-proposal',
+]);
 
 const toolResultOutputToText = (output: unknown): string | null => {
   if (typeof output === 'string') return output;
@@ -183,11 +193,22 @@ const compactToolResultPart = (part: PromptPart) => {
   };
 };
 
+const compactToolCallPart = (part: PromptPart) => {
+  if (!proposalToolNames.has(getToolName(part))) return part;
+
+  const nextPart = {
+    ...part,
+    ...(part.input !== undefined ? { input: summarizeProposalToolInput(part.input) } : {}),
+    ...(part.args !== undefined ? { args: summarizeProposalToolInput(part.args) } : {}),
+  };
+  return nextPart;
+};
+
 const compactAssistantMessage = (message: PromptMessage, preserveToolCallIds: Set<string>) => {
   const nextContent = getContentParts(message).flatMap(part => {
     if (isCompactToolHistoryTextPart(part)) return [];
 
-    if (isToolCallPart(part)) return [part];
+    if (isToolCallPart(part)) return [compactToolCallPart(part)];
 
     if (isToolResultPart(part)) {
       const toolCallId = getToolCallId(part);

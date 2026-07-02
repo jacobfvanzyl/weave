@@ -147,6 +147,27 @@ describe('proposal artifact helpers', () => {
     })).toEqual({ additions: 2, deletions: 0 });
   });
 
+  it('prefers unified diff counts and bounds large content-only comparisons', () => {
+    expect(__proposalArtifactTest.countProposalChanges({
+      kind: 'file_edit',
+      diff: '@@ -1,2 +1,3 @@\n a\n-old\n+new\n+extra',
+      currentContent: 'ignored current content',
+      proposedContent: 'ignored proposed content',
+    })).toEqual({ additions: 2, deletions: 1 });
+
+    const largeCurrent = Array.from({ length: 600 }, (_, index) => `line ${index}`).join('\n');
+    const largeProposed = [
+      ...Array.from({ length: 300 }, (_, index) => `line ${index}`),
+      'changed middle',
+      ...Array.from({ length: 299 }, (_, index) => `line ${index + 301}`),
+    ].join('\n');
+    expect(__proposalArtifactTest.countProposalChanges({
+      kind: 'file_edit',
+      currentContent: largeCurrent,
+      proposedContent: largeProposed,
+    })).toEqual({ additions: 1, deletions: 1 });
+  });
+
   it('marks code items with missing body sections as incomplete', () => {
     const item = {
       ...frontmatter().items[0],
@@ -200,6 +221,34 @@ describe('proposal artifact helpers', () => {
     expect(__proposalArtifactTest.getProposalCompleteness([deleteItem], [
       { id: deleteItem.id, proposedContent: 'not enough' },
     ]).blockingIssues.map(issue => issue.code)).toContain('missing_current_content');
+  });
+
+  it('treats unified diffs as complete proposal review content', () => {
+    const item = {
+      ...frontmatter().items[0],
+      status: 'approved' as const,
+    };
+    const diffOnlyBody = [{ id: item.id, diff: '@@ -1 +1 @@\n-old\n+new' }];
+    const serverResult = __proposalArtifactTest.getProposalCompleteness([item], diffOnlyBody);
+
+    expect(serverResult.blockingIssues).toHaveLength(0);
+    __proposalArtifactTest.assertProposalItemsCompleteForStatuses(
+      [item],
+      diffOnlyBody,
+      ['approved'],
+    );
+
+    const content = __proposalArtifactTest.renderProposalArtifact(frontmatter({ items: [item] }), {
+      items: diffOnlyBody,
+    });
+    const parsed = parseClientProposalArtifact(content);
+    const clientResult = getClientProposalCompleteness(parsed.items, parsed.bodyItems);
+
+    expect(clientResult.blockingIssues).toHaveLength(0);
+    const nextContent = renderClientProposalArtifact(parsed, [
+      { ...parsed.items[0], status: 'approved' },
+    ]);
+    expect(nextContent).toContain('status: approved');
   });
 
   it('blocks approval when concrete content hashes do not match frontmatter hashes', () => {
@@ -259,18 +308,57 @@ describe('proposal artifact helpers', () => {
     ])).toThrow(/missing Proposed Content/);
   });
 
-  it('rejects write_proposal file inputs without concrete content blocks', () => {
-    expect(() => __proposalToolTest.writeProposalInputSchema.parse({
-      title: 'Incomplete proposal',
-      summary: 'Only a diff is not enough.',
+  it('accepts null optional fields and diff-only write_proposal inputs', () => {
+    const parsed = __proposalToolTest.writeProposalInputSchema.parse({
+      title: 'Diff proposal',
+      summary: 'A compact unified diff is enough.',
+      proposalPath: null,
+      planPath: null,
+      overview: null,
       files: [
         {
           kind: 'file_edit',
           path: 'src/App.tsx',
+          title: null,
+          description: null,
+          rationale: null,
           diff: '@@ -1 +1 @@\n-old\n+new',
+          currentContent: null,
+          proposedContent: null,
+          currentHash: null,
         },
       ],
-    })).toThrow(/currentContent and proposedContent/);
+    });
+
+    expect(parsed.title).toBe('Diff proposal');
+    expect(parsed.summary).toBe('A compact unified diff is enough.');
+    expect(parsed.proposalPath).toBeUndefined();
+    expect(parsed.planPath).toBeUndefined();
+    expect(parsed.overview).toBeUndefined();
+    expect(parsed.files[0].path).toBe('src/App.tsx');
+    expect(parsed.files[0].title).toBeUndefined();
+    expect(parsed.files[0].diff).toBe('@@ -1 +1 @@\n-old\n+new');
+    expect(parsed.files[0].currentContent).toBeUndefined();
+    expect(parsed.files[0].proposedContent).toBeUndefined();
+    expect(parsed.files[0].currentHash).toBeUndefined();
+
+    __proposalToolTest.assertProposalFileInputsComplete(parsed.files);
+    expect(() => __proposalToolTest.assertProposalFileInputsComplete(__proposalToolTest.writeProposalInputSchema.parse({
+      title: 'Incomplete proposal',
+      summary: 'No concrete code body is present.',
+      files: [{ kind: 'file_edit', path: 'src/App.tsx' }],
+    }).files)).toThrow(/non-empty unified diff or required content blocks/);
+
+    for (const file of [
+      { kind: 'file_create' as const, path: 'src/new.ts', diff: '@@ -0,0 +1 @@\n+new' },
+      { kind: 'file_delete' as const, path: 'src/old.ts', diff: '@@ -1 +0,0 @@\n-old' },
+    ]) {
+      __proposalToolTest.assertProposalFileInputsComplete(__proposalToolTest.writeProposalInputSchema.parse({
+        title: 'Diff proposal',
+        summary: 'Unified diff is concrete review content.',
+        files: [file],
+      }).files);
+    }
 
     expect(__proposalToolTest.writeProposalInputSchema.parse({
       title: 'Complete proposal',

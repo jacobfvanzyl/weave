@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, ChevronDown, Circle, FileText, GitPullRequestArrow, Loader2, MessageSquareWarning } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { shouldShowProposalReview } from '../../lib/proposal-review-state';
+import { getPendingProposalReviewCount, shouldShowProposalReview } from '../../lib/proposal-review-state';
 import {
   useChatStore,
   type PlanStepStatus,
@@ -52,6 +52,7 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
   const showBodyHeader = Boolean(display.bodyTitle || display.summary);
   const showProposalPathWarning = Boolean(proposal && !proposal.path);
   const hasPendingApproval = shouldShowProposalReview(proposal);
+  const pendingApprovalCount = getPendingProposalReviewCount(proposal);
 
   const openPlan = () => {
     if (!plan?.path || !threadWorkspaceId) return;
@@ -101,6 +102,9 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
           <Button size="xs" variant="ghost" type="button" onClick={openReview}>
             <GitPullRequestArrow size={14} />
             Review
+            <Badge size="sm" variant="info" className="ml-0.5">
+              {pendingApprovalCount}
+            </Badge>
           </Button>
         ) : null}
       </div>

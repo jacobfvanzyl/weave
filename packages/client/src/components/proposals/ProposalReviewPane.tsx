@@ -43,6 +43,7 @@ const getDisplayPath = (path: string | undefined) => path?.split('/').filter(Boo
 
 const codeItemKinds = new Set(['file_edit', 'file_create', 'file_delete']);
 const isCodeProposalItem = (item: ThreadProposalItem) => codeItemKinds.has(item.kind);
+const maxExactContentComparisonCells = 250_000;
 
 const splitComparableLines = (value: string | undefined) => {
   if (!value) return [];
@@ -61,12 +62,7 @@ const countDiffChanges = (diff: string | undefined) => {
   return { additions, deletions };
 };
 
-const countContentChanges = (currentContent: string | undefined, proposedContent: string | undefined) => {
-  const current = splitComparableLines(currentContent);
-  const proposed = splitComparableLines(proposedContent);
-  if (current.length === 0) return { additions: proposed.length, deletions: 0 };
-  if (proposed.length === 0) return { additions: 0, deletions: current.length };
-
+const countExactContentChanges = (current: string[], proposed: string[]) => {
   let previous = new Array(proposed.length + 1).fill(0);
   let next = new Array(proposed.length + 1).fill(0);
   for (const currentLine of current) {
@@ -86,16 +82,51 @@ const countContentChanges = (currentContent: string | undefined, proposedContent
   };
 };
 
+const countBoundedContentChanges = (current: string[], proposed: string[]) => {
+  let prefix = 0;
+  while (prefix < current.length && prefix < proposed.length && current[prefix] === proposed[prefix]) {
+    prefix += 1;
+  }
+
+  let suffix = 0;
+  while (
+    suffix < current.length - prefix
+    && suffix < proposed.length - prefix
+    && current[current.length - suffix - 1] === proposed[proposed.length - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+
+  return {
+    additions: proposed.length - prefix - suffix,
+    deletions: current.length - prefix - suffix,
+  };
+};
+
+const countContentChanges = (currentContent: string | undefined, proposedContent: string | undefined) => {
+  const current = splitComparableLines(currentContent);
+  const proposed = splitComparableLines(proposedContent);
+  if (current.length === 0) return { additions: proposed.length, deletions: 0 };
+  if (proposed.length === 0) return { additions: 0, deletions: current.length };
+
+  if (current.length * proposed.length <= maxExactContentComparisonCells) {
+    return countExactContentChanges(current, proposed);
+  }
+
+  return countBoundedContentChanges(current, proposed);
+};
+
 const getItemDisplayCounts = (item: ThreadProposalItem, bodyItem: ParsedProposalArtifact['bodyItems'][number] | undefined) => {
+  if (bodyItem?.diff) return countDiffChanges(bodyItem.diff);
   if (item.kind === 'file_create') {
     return bodyItem?.proposedContent !== undefined
       ? { additions: splitComparableLines(bodyItem.proposedContent).length, deletions: 0 }
-      : { additions: bodyItem?.diff ? countDiffChanges(bodyItem.diff).additions : item.additions, deletions: 0 };
+      : { additions: item.additions, deletions: 0 };
   }
   if (item.kind === 'file_delete') {
     return bodyItem?.currentContent !== undefined
       ? { additions: 0, deletions: splitComparableLines(bodyItem.currentContent).length }
-      : { additions: 0, deletions: bodyItem?.diff ? countDiffChanges(bodyItem.diff).deletions : item.deletions };
+      : { additions: 0, deletions: item.deletions };
   }
   if (bodyItem?.currentContent !== undefined || bodyItem?.proposedContent !== undefined) {
     return countContentChanges(bodyItem.currentContent, bodyItem.proposedContent);

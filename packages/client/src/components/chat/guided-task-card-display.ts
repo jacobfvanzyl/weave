@@ -3,13 +3,11 @@ import type { ThreadPlan, ThreadProposal } from '../../stores/chat-store';
 export const proposalSummary = (proposal: ThreadProposal | undefined) => {
   if (!proposal) return undefined;
   const approved = proposal.counts.approved ?? 0;
-  const pending = proposal.counts.pending ?? 0;
   const changesRequested = proposal.counts.changes_requested ?? 0;
   const rejected = proposal.counts.rejected ?? 0;
   const stale = proposal.counts.stale ?? 0;
   const bits = [
     approved > 0 ? `${approved} approved` : undefined,
-    pending > 0 ? `${pending} pending` : undefined,
     changesRequested > 0 ? `${changesRequested} changes requested` : undefined,
     rejected > 0 ? `${rejected} rejected` : undefined,
     stale > 0 ? `${stale} stale` : undefined,
@@ -35,8 +33,7 @@ const guidedTaskName = (plan: ThreadPlan | undefined, proposal: ThreadProposal |
 
 export const guidedTaskDisplay = (plan: ThreadPlan | undefined, proposal: ThreadProposal | undefined, expanded: boolean) => {
   const name = guidedTaskName(plan, proposal);
-  const inProgressStep = plan?.plan.find(item => item.status === 'in_progress')?.step;
-  const titleRow = inProgressStep || (expanded || isPlanComplete(plan) ? name : currentTaskLine(plan, proposal) ?? name);
+  const titleRow = expanded || isPlanComplete(plan) ? name : currentTaskLine(plan, proposal) ?? name;
 
   return {
     titleRow,

@@ -131,6 +131,8 @@ const hashText = (value: string) => {
 };
 
 const hasContentBlock = (value: string | undefined) => typeof value === 'string';
+const hasUnifiedDiffBlock = (value: string | undefined) =>
+  typeof value === 'string' && value.trim().length > 0 && /^@@ /m.test(value);
 
 const completenessIssue = (item: ThreadProposalItem, code: ProposalCompletenessIssueCode, message: string): ProposalCompletenessIssue => ({
   itemId: item.id,
@@ -154,10 +156,11 @@ export const getProposalItemCompleteness = (
 
   const needsCurrent = item.kind === 'file_edit' || item.kind === 'file_delete';
   const needsProposed = item.kind === 'file_edit' || item.kind === 'file_create';
-  if (needsCurrent && !hasContentBlock(bodyItem?.currentContent)) {
+  const hasConcreteDiff = hasUnifiedDiffBlock(bodyItem?.diff);
+  if (!hasConcreteDiff && needsCurrent && !hasContentBlock(bodyItem?.currentContent)) {
     issues.push(completenessIssue(item, 'missing_current_content', 'is missing Current Content.'));
   }
-  if (needsProposed && !hasContentBlock(bodyItem?.proposedContent)) {
+  if (!hasConcreteDiff && needsProposed && !hasContentBlock(bodyItem?.proposedContent)) {
     issues.push(completenessIssue(item, 'missing_proposed_content', 'is missing Proposed Content.'));
   }
   if (item.currentHash && hasContentBlock(bodyItem?.currentContent) && hashText(bodyItem.currentContent) !== item.currentHash) {

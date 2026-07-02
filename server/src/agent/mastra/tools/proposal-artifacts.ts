@@ -113,8 +113,11 @@ export type ProposalItemCompleteness = {
 
 const codeProposalItemKinds = new Set<ProposalItemKind>(['file_edit', 'file_create', 'file_delete']);
 const completenessRequiredStatuses = new Set<ProposalItemStatus>(['pending', 'approved', 'applied']);
+const maxExactContentComparisonCells = 250_000;
 
 const hasContentBlock = (value: string | undefined) => typeof value === 'string';
+const hasUnifiedDiffBlock = (value: string | undefined) =>
+  typeof value === 'string' && value.trim().length > 0 && /^@@ /m.test(value);
 
 const issue = (item: ProposalItem, code: ProposalCompletenessIssueCode, message: string): ProposalCompletenessIssue => ({
   itemId: item.id,
@@ -139,10 +142,11 @@ export const getProposalItemCompleteness = (
 
   const needsCurrent = item.kind === 'file_edit' || item.kind === 'file_delete';
   const needsProposed = item.kind === 'file_edit' || item.kind === 'file_create';
-  if (needsCurrent && !hasContentBlock(bodyItem?.currentContent)) {
+  const hasConcreteDiff = hasUnifiedDiffBlock(bodyItem?.diff);
+  if (!hasConcreteDiff && needsCurrent && !hasContentBlock(bodyItem?.currentContent)) {
     issues.push(issue(item, 'missing_current_content', 'is missing Current Content.'));
   }
-  if (needsProposed && !hasContentBlock(bodyItem?.proposedContent)) {
+  if (!hasConcreteDiff && needsProposed && !hasContentBlock(bodyItem?.proposedContent)) {
     issues.push(issue(item, 'missing_proposed_content', 'is missing Proposed Content.'));
   }
   if (item.current_hash && hasContentBlock(bodyItem?.currentContent) && hashText(bodyItem.currentContent) !== item.current_hash) {
@@ -388,12 +392,7 @@ const splitComparableLines = (value: string | undefined) => {
   return normalized ? normalized.split('\n') : [];
 };
 
-const countContentChanges = (currentContent: string | undefined, proposedContent: string | undefined) => {
-  const current = splitComparableLines(currentContent);
-  const proposed = splitComparableLines(proposedContent);
-  if (current.length === 0) return { additions: proposed.length, deletions: 0 };
-  if (proposed.length === 0) return { additions: 0, deletions: current.length };
-
+const countExactContentChanges = (current: string[], proposed: string[]) => {
   let previous = new Array(proposed.length + 1).fill(0);
   let next = new Array(proposed.length + 1).fill(0);
   for (const currentLine of current) {
@@ -413,26 +412,57 @@ const countContentChanges = (currentContent: string | undefined, proposedContent
   };
 };
 
+const countBoundedContentChanges = (current: string[], proposed: string[]) => {
+  let prefix = 0;
+  while (prefix < current.length && prefix < proposed.length && current[prefix] === proposed[prefix]) {
+    prefix += 1;
+  }
+
+  let suffix = 0;
+  while (
+    suffix < current.length - prefix
+    && suffix < proposed.length - prefix
+    && current[current.length - suffix - 1] === proposed[proposed.length - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+
+  return {
+    additions: proposed.length - prefix - suffix,
+    deletions: current.length - prefix - suffix,
+  };
+};
+
+const countContentChanges = (currentContent: string | undefined, proposedContent: string | undefined) => {
+  const current = splitComparableLines(currentContent);
+  const proposed = splitComparableLines(proposedContent);
+  if (current.length === 0) return { additions: proposed.length, deletions: 0 };
+  if (proposed.length === 0) return { additions: 0, deletions: current.length };
+
+  if (current.length * proposed.length <= maxExactContentComparisonCells) {
+    return countExactContentChanges(current, proposed);
+  }
+
+  return countBoundedContentChanges(current, proposed);
+};
+
 export const countProposalChanges = (input: {
   kind?: ProposalItemKind;
   diff?: string;
   currentContent?: string;
   proposedContent?: string;
 }) => {
+  if (input.diff) return countDiffChanges(input.diff);
   if (input.kind === 'file_create') {
-    return input.proposedContent !== undefined
-      ? { additions: splitComparableLines(input.proposedContent).length, deletions: 0 }
-      : { additions: countDiffChanges(input.diff).additions, deletions: 0 };
+    return { additions: splitComparableLines(input.proposedContent).length, deletions: 0 };
   }
   if (input.kind === 'file_delete') {
-    return input.currentContent !== undefined
-      ? { additions: 0, deletions: splitComparableLines(input.currentContent).length }
-      : { additions: 0, deletions: countDiffChanges(input.diff).deletions };
+    return { additions: 0, deletions: splitComparableLines(input.currentContent).length };
   }
   if (input.currentContent !== undefined || input.proposedContent !== undefined) {
     return countContentChanges(input.currentContent, input.proposedContent);
   }
-  return countDiffChanges(input.diff);
+  return { additions: 0, deletions: 0 };
 };
 
 export const __proposalArtifactTest = {
