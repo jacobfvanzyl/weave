@@ -183,6 +183,19 @@ export const editorRoutes = [
       path: optionalString(body.path) ?? '',
     })),
   }),
+  defineRoute('/code/editor/hash', {
+    method: 'POST',
+    handler: async c => handleEditorRoute(c, 'portal.editor.hash', body => ({
+      path: optionalString(body.path) ?? '',
+    })),
+  }),
+  defineRoute('/code/editor/diffPreview', {
+    method: 'POST',
+    handler: async c => handleEditorRoute(c, 'portal.editor.diffPreview', body => ({
+      path: optionalString(body.path) ?? '',
+      diff: typeof body.diff === 'string' ? body.diff : undefined,
+    })),
+  }),
   defineRoute('/code/editor/write', {
     method: 'POST',
     handler: async c => handleEditorRoute(c, 'portal.editor.write', body => ({

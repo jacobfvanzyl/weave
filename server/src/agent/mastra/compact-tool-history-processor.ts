@@ -3,6 +3,7 @@ import type {
   ProcessLLMRequestResult,
   Processor,
 } from '@mastra/core/processors';
+import { hashText } from './tools/model-output';
 import { summarizeProposalToolInput } from './tools/proposal-tool-input-summary';
 
 const compactToolHistoryPrefix = 'Compact tool result summary';
@@ -69,16 +70,102 @@ const isToolCallPart = (part: PromptPart) => part.type === 'tool-call';
 
 const isToolResultPart = (part: PromptPart) => part.type === 'tool-result';
 
-const hasToolCallPart = (message: PromptMessage) => getContentParts(message).some(isToolCallPart);
+const getToolInvocation = (part: PromptPart) =>
+  part.type === 'tool-invocation' && isRecord(part.toolInvocation) ? part.toolInvocation : undefined;
+
+const isToolInvocationPart = (part: PromptPart) => Boolean(getToolInvocation(part));
+
+const getToolInvocationName = (part: PromptPart) => {
+  const invocation = getToolInvocation(part);
+  return typeof invocation?.toolName === 'string' && invocation.toolName.trim() ? invocation.toolName.trim() : 'tool';
+};
+
+const getToolInvocationCallId = (part: PromptPart) => {
+  const invocation = getToolInvocation(part);
+  return typeof invocation?.toolCallId === 'string' && invocation.toolCallId.trim() ? invocation.toolCallId.trim() : undefined;
+};
+
+const hasToolCallPart = (message: PromptMessage) => getContentParts(message).some(part => isToolCallPart(part) || isToolInvocationPart(part));
 
 const proposalToolNames = new Set([
   'writeProposalTool',
   'write_proposal',
   'write-proposal',
+  'writeProposalPatchTool',
+  'write_proposal_patch',
+  'write-proposal-patch',
   'updateProposalTool',
   'update_proposal',
   'update-proposal',
 ]);
+
+const textHashSummary = (value: unknown, prefix: string) => {
+  if (typeof value !== 'string') return [];
+  return [
+    [`${prefix}Chars`, value.length] as const,
+    [`${prefix}Hash`, hashText(value)] as const,
+  ];
+};
+
+const firstErrorLines = (value: unknown) => {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return value
+    .split(/\r?\n/)
+    .filter(line => /error|failed|exception|traceback|denied|not found|invalid/i.test(line))
+    .slice(0, 8)
+    .join('\n')
+    .slice(0, 1_200) || undefined;
+};
+
+const summaryLines = (fields: Array<readonly [string, unknown]>) =>
+  fields
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+    .join('\n');
+
+const compactPortalReadResult = (result: Record<string, unknown>) => summaryLines([
+  ['ok', result.ok],
+  ['path', result.path],
+  ['offset', result.offset],
+  ['limit', result.limit],
+  ['error', result.error],
+  ...textHashSummary(result.content, 'content'),
+]);
+
+const compactPortalBashResult = (result: Record<string, unknown>, args?: Record<string, unknown>) => summaryLines([
+  ['ok', result.ok],
+  ['command', typeof result.command === 'string' ? result.command : args?.command],
+  ['exitCode', result.exitCode],
+  ['error', result.error],
+  ...textHashSummary(result.stdout, 'stdout'),
+  ...textHashSummary(result.stderr, 'stderr'),
+  ['stderrErrors', firstErrorLines(result.stderr)],
+  ['stdoutErrors', firstErrorLines(result.stdout)],
+]);
+
+const compactToolResultForPrompt = (toolName: string, output: unknown, args?: Record<string, unknown>): string | null => {
+  if (isRecord(output) && typeof output.type !== 'string') {
+    if (toolName === 'read') {
+      const summary = compactPortalReadResult(output);
+      if (summary) return summary;
+    }
+    if (toolName === 'bash') {
+      const summary = compactPortalBashResult(output, args);
+      if (summary) return summary;
+    }
+  }
+
+  const summary = toolResultOutputToText(output);
+  if (!summary) return null;
+  if ((toolName === 'read' || toolName === 'bash') && summary.length > 2_000) {
+    return summaryLines([
+      ['resultChars', summary.length],
+      ['resultHash', hashText(summary)],
+      ['firstErrorLines', firstErrorLines(summary)],
+    ]);
+  }
+  return summary;
+};
 
 const toolResultOutputToText = (output: unknown): string | null => {
   if (typeof output === 'string') return output;
@@ -101,6 +188,14 @@ const promptPartText = (part: PromptPart) => {
   if (typeof part.text === 'string') return part.text;
   if (isToolCallPart(part)) return [part.toolName, safeStringify(part.input)].filter(Boolean).join('\n');
   if (isToolResultPart(part)) return [part.toolName, toolResultOutputToText(part.output)].filter(Boolean).join('\n');
+  if (isToolInvocationPart(part)) {
+    const invocation = getToolInvocation(part)!;
+    return [
+      invocation.toolName,
+      safeStringify(invocation.args),
+      safeStringify(invocation.result),
+    ].filter(Boolean).join('\n');
+  }
   if (typeof part.mediaType === 'string') return part.mediaType;
   return safeStringify(part) ?? '';
 };
@@ -145,7 +240,7 @@ export const createCompactToolHistoryPart = (
 export const isLegacyCompactToolHistoryText = (text: string) => {
   if (text.startsWith(`${compactToolHistoryPrefix}\n`)) return true;
 
-  const legacyHeading = /^(read|write|edit|bash|webSearch|webExtract|rename-thread|renameThreadTool|write_plan|writePlanTool|update_plan|updatePlanTool|write_proposal|writeProposalTool|update_proposal|updateProposalTool) result:\s*\n/;
+  const legacyHeading = /^(read|write|edit|bash|webSearch|webExtract|rename-thread|renameThreadTool|write_plan|writePlanTool|update_plan|updatePlanTool|write_proposal|writeProposalTool|write_proposal_patch|writeProposalPatchTool|update_proposal|updateProposalTool) result:\s*\n/;
   if (!legacyHeading.test(text)) return false;
 
   return /(?:^|\n)(ok|path|command|query|results|renamed|updated|completed|total|contentChars|contentHash|exitCode):\s/.test(text);
@@ -173,15 +268,15 @@ const getPreservedToolCallIds = (prompt: PromptMessage[], preserveToolCalls: num
   const toolCallIds = prompt
     .filter(message => message.role === 'assistant')
     .flatMap(message => getContentParts(message)
-      .filter(isToolCallPart)
-      .map(getToolCallId)
+      .filter(part => isToolCallPart(part) || isToolInvocationPart(part))
+      .map(part => isToolCallPart(part) ? getToolCallId(part) : getToolInvocationCallId(part))
       .filter((id): id is string => typeof id === 'string'));
 
   return new Set(toolCallIds.slice(-preserveToolCalls));
 };
 
 const compactToolResultPart = (part: PromptPart) => {
-  const summary = toolResultOutputToText(part.output);
+  const summary = compactToolResultForPrompt(getToolName(part), part.output);
   if (!summary) return null;
 
   return {
@@ -204,11 +299,49 @@ const compactToolCallPart = (part: PromptPart) => {
   return nextPart;
 };
 
+const compactToolInvocationPart = (part: PromptPart, preserveToolCallIds: Set<string>) => {
+  const invocation = getToolInvocation(part);
+  if (!invocation) return part;
+  const toolName = getToolInvocationName(part);
+  const toolCallId = getToolInvocationCallId(part);
+  const args = isRecord(invocation.args) ? invocation.args : undefined;
+  const nextInvocation = {
+    ...invocation,
+    ...(proposalToolNames.has(toolName) && invocation.args !== undefined
+      ? { args: summarizeProposalToolInput(invocation.args) }
+      : {}),
+  };
+
+  if (toolCallId && preserveToolCallIds.has(toolCallId)) {
+    return { ...part, toolInvocation: nextInvocation };
+  }
+
+  if (invocation.result !== undefined) {
+    const summary = compactToolResultForPrompt(toolName, invocation.result, args);
+    if (summary) {
+      return {
+        ...part,
+        toolInvocation: {
+          ...nextInvocation,
+          result: {
+            type: 'text',
+            value: compactSummaryText(toolName, summary, toolCallId),
+          },
+        },
+      };
+    }
+  }
+
+  return { ...part, toolInvocation: nextInvocation };
+};
+
 const compactAssistantMessage = (message: PromptMessage, preserveToolCallIds: Set<string>) => {
   const nextContent = getContentParts(message).flatMap(part => {
     if (isCompactToolHistoryTextPart(part)) return [];
 
     if (isToolCallPart(part)) return [compactToolCallPart(part)];
+
+    if (isToolInvocationPart(part)) return [compactToolInvocationPart(part, preserveToolCallIds)];
 
     if (isToolResultPart(part)) {
       const toolCallId = getToolCallId(part);

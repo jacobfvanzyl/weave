@@ -1,5 +1,5 @@
 import { renameThreadTool } from '../tools/rename-thread-tool';
-import { updateProposalTool, writeProposalTool } from '../tools/proposal-tool';
+import { updateProposalTool, writeProposalPatchTool, writeProposalTool } from '../tools/proposal-tool';
 import { updatePlanTool, writePlanTool } from '../tools/update-plan-tool';
 import { webExtractTool, webSearchTool } from '../tools/web-search-tools';
 import {
@@ -43,6 +43,7 @@ export const mageHandTools = {
   writePlanTool,
   updatePlanTool,
   writeProposalTool,
+  writeProposalPatchTool,
   updateProposalTool,
   webSearch: webSearchTool,
   webExtract: webExtractTool,

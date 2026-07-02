@@ -39,6 +39,39 @@ export type EditorFile = {
   mtimeMs?: number;
 };
 
+export type EditorHashInput = {
+  target: EditorTarget;
+  path: string;
+};
+
+export type EditorHashResult = {
+  path: string;
+  contentHash: string;
+  version: string;
+  size?: number;
+  mtimeMs?: number;
+  lineCount?: number;
+};
+
+export type EditorDiffPreviewInput = {
+  target: EditorTarget;
+  path: string;
+  diff: string;
+};
+
+export type EditorDiffPreviewResult = {
+  path: string;
+  currentHash: string;
+  proposedHash: string;
+  currentContent: string;
+  proposedContent: string;
+  additions: number;
+  deletions: number;
+  version: string;
+  size?: number;
+  mtimeMs?: number;
+};
+
 export type EditorWriteInput = {
   target: EditorTarget;
   path: string;

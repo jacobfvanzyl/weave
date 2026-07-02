@@ -1,7 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import type {
-  EditorFile,
   EditorDeleteInput,
+  EditorDiffPreviewInput,
+  EditorDiffPreviewResult,
+  EditorFile,
+  EditorHashInput,
+  EditorHashResult,
   EditorListInput,
   EditorListResult,
   EditorMkdirInput,
@@ -94,6 +98,21 @@ export class PortalEditorClient {
     });
   }
 
+  async hash(input: EditorHashInput): Promise<EditorHashResult> {
+    return await this.callPortal<EditorHashResult>('hash', {
+      target: await this.resolveTarget(input.target),
+      path: input.path,
+    });
+  }
+
+  async diffPreview(input: EditorDiffPreviewInput): Promise<EditorDiffPreviewResult> {
+    return await this.callPortal<EditorDiffPreviewResult>('diffPreview', {
+      target: await this.resolveTarget(input.target),
+      path: input.path,
+      diff: input.diff,
+    });
+  }
+
   async write(input: EditorWriteInput): Promise<EditorWriteResult> {
     return await this.callPortal<EditorWriteResult>('write', {
       target: await this.resolveTarget(input.target),
@@ -177,7 +196,7 @@ export class PortalEditorClient {
     };
   }
 
-  private async callPortal<T>(action: 'list' | 'read' | 'write' | 'mkdir' | 'move' | 'delete', body: unknown): Promise<T> {
+  private async callPortal<T>(action: 'list' | 'read' | 'hash' | 'diffPreview' | 'write' | 'mkdir' | 'move' | 'delete', body: unknown): Promise<T> {
     const control = await this.supervisor.ensureStarted();
     return await parseResponse<T>(
       await fetch(`${control.httpUrl}/editor/${action}`, {

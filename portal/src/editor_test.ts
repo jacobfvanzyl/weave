@@ -110,6 +110,51 @@ Deno.test('PortalEditorHost writes text files and rejects stale saves', async ()
     );
   }));
 
+Deno.test('PortalEditorHost hashes files without returning content', async () =>
+  await withEditorHost(async ({ root, host }) => {
+    await Deno.writeTextFile(`${root}/README.md`, '# hello\n');
+
+    const hashed = await host.hash({ target: { workspacePath: root }, path: 'README.md' });
+    assertEquals(hashed.path, 'README.md');
+    assertEquals(hashed.contentHash, '9e8b62f81ea5');
+    assertEquals(hashed.size, 8);
+    assertEquals(hashed.lineCount, 1);
+    assertEquals('content' in hashed, false);
+  }));
+
+Deno.test('PortalEditorHost previews unified diffs without writing files', async () =>
+  await withEditorHost(async ({ root, host }) => {
+    await Deno.writeTextFile(`${root}/src.txt`, 'first\nsecond\n');
+
+    const preview = await host.diffPreview({
+      target: { workspacePath: root },
+      path: 'src.txt',
+      diff: [
+        '@@ -1,2 +1,2 @@',
+        ' first',
+        '-second',
+        '+third',
+      ].join('\n'),
+    });
+
+    assertEquals(preview.currentHash, 'dbea9325179e');
+    assertEquals(preview.currentContent, 'first\nsecond\n');
+    assertEquals(preview.proposedContent, 'first\nthird\n');
+    assertEquals(preview.additions, 1);
+    assertEquals(preview.deletions, 1);
+    assertEquals(await Deno.readTextFile(`${root}/src.txt`), 'first\nsecond\n');
+
+    await assertRejects(
+      () => host.diffPreview({
+        target: { workspacePath: root },
+        path: 'src.txt',
+        diff: '@@ -1 +1 @@\n-missing\n+third',
+      }),
+      Error,
+      'does not apply',
+    );
+  }));
+
 Deno.test('PortalEditorHost rejects path traversal and symlinks that escape the Workspace', async () =>
   await withEditorHost(async ({ root, outside, host }) => {
     await Deno.writeTextFile(`${outside}/secret.txt`, 'nope');

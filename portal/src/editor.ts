@@ -1,3 +1,5 @@
+import { applyUnifiedDiff } from '../../packages/client/src/lib/proposal-unified-diff.ts';
+
 export type PortalEditorRoot = {
   id: string;
   name?: string;
@@ -50,6 +52,39 @@ export type PortalEditorReadInput = {
 export type PortalEditorFile = {
   path: string;
   content: string;
+  version: string;
+  size?: number;
+  mtimeMs?: number;
+};
+
+export type PortalEditorHashInput = {
+  target?: PortalEditorTarget;
+  path: string;
+} & PortalEditorTarget;
+
+export type PortalEditorHashResult = {
+  path: string;
+  contentHash: string;
+  version: string;
+  size?: number;
+  mtimeMs?: number;
+  lineCount?: number;
+};
+
+export type PortalEditorDiffPreviewInput = {
+  target?: PortalEditorTarget;
+  path: string;
+  diff: string;
+} & PortalEditorTarget;
+
+export type PortalEditorDiffPreviewResult = {
+  path: string;
+  currentHash: string;
+  proposedHash: string;
+  currentContent: string;
+  proposedContent: string;
+  additions: number;
+  deletions: number;
   version: string;
   size?: number;
   mtimeMs?: number;
@@ -225,6 +260,16 @@ const decodeUtf8 = (bytes: Uint8Array) => {
   } catch {
     throw new Error('Only UTF-8 text files can be opened in the editor.');
   }
+};
+
+const hashBytes = async (bytes: Uint8Array) => {
+  const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 12);
+};
+
+const countTextLines = (content: string) => {
+  if (!content) return 0;
+  return content.endsWith('\n') ? content.slice(0, -1).split('\n').length : content.split('\n').length;
 };
 
 const getRoots = (config: PortalEditorConfig) =>
@@ -519,6 +564,68 @@ export class PortalEditorHost {
     return {
       path: relativePath,
       content: decodeUtf8(bytes),
+      version: getFileVersion(details),
+      size: details.size,
+      mtimeMs: details.mtime?.getTime(),
+    };
+  }
+
+  async hash(input: PortalEditorHashInput): Promise<PortalEditorHashResult> {
+    const record = flattenInput(input);
+    const root = await this.resolveWorkspaceRoot(record);
+    const relativePath = parseEditorPath(record.path);
+    if (!relativePath) throw new Error('path is required.');
+
+    const filePath = await this.resolveExistingPath(root, relativePath);
+    const details = await Deno.stat(filePath);
+    if (!details.isFile) throw new Error('Editor path is not a file.');
+
+    const bytes = await Deno.readFile(filePath);
+    const text = hasBinaryBytes(bytes)
+      ? undefined
+      : (() => {
+          try {
+            return decodeUtf8(bytes);
+          } catch {
+            return undefined;
+          }
+        })();
+    return {
+      path: relativePath,
+      contentHash: await hashBytes(bytes),
+      version: getFileVersion(details),
+      size: details.size,
+      mtimeMs: details.mtime?.getTime(),
+      ...(text !== undefined ? { lineCount: countTextLines(text) } : {}),
+    };
+  }
+
+  async diffPreview(input: PortalEditorDiffPreviewInput): Promise<PortalEditorDiffPreviewResult> {
+    const record = flattenInput(input);
+    const root = await this.resolveWorkspaceRoot(record);
+    const relativePath = parseEditorPath(record.path);
+    if (!relativePath) throw new Error('path is required.');
+    if (typeof record.diff !== 'string') throw new Error('diff must be a string.');
+
+    const filePath = await this.resolveExistingPath(root, relativePath);
+    const details = await Deno.stat(filePath);
+    if (!details.isFile) throw new Error('Editor path is not a file.');
+    if (details.size > this.maxReadBytes) throw new Error('File is too large to preview in the editor.');
+
+    const bytes = await Deno.readFile(filePath);
+    if (hasBinaryBytes(bytes)) throw new Error('Binary files cannot be previewed in the editor.');
+
+    const currentContent = decodeUtf8(bytes);
+    const proposed = applyUnifiedDiff(currentContent, record.diff);
+    if (!proposed.ok) throw new Error(proposed.error);
+    return {
+      path: relativePath,
+      currentHash: await hashBytes(bytes),
+      proposedHash: await hashBytes(new TextEncoder().encode(proposed.value.content)),
+      currentContent,
+      proposedContent: proposed.value.content,
+      additions: proposed.value.additions,
+      deletions: proposed.value.deletions,
       version: getFileVersion(details),
       size: details.size,
       mtimeMs: details.mtime?.getTime(),

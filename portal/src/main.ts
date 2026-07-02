@@ -1073,9 +1073,13 @@ const handleToolCall = async (
       ? await bashTool(config, request)
       : request.tool === 'portal.editor.list'
       ? await editorHost.list(editorInputFromToolCall(request))
-      : request.tool === 'portal.editor.read'
+    : request.tool === 'portal.editor.read'
       ? await editorHost.read(editorInputFromToolCall(request) as Parameters<PortalEditorHost['read']>[0])
-      : request.tool === 'portal.editor.write'
+    : request.tool === 'portal.editor.hash'
+      ? await editorHost.hash(editorInputFromToolCall(request) as Parameters<PortalEditorHost['hash']>[0])
+    : request.tool === 'portal.editor.diffPreview'
+      ? await editorHost.diffPreview(editorInputFromToolCall(request) as Parameters<PortalEditorHost['diffPreview']>[0])
+    : request.tool === 'portal.editor.write'
       ? await editorHost.write(editorInputFromToolCall(request) as Parameters<PortalEditorHost['write']>[0])
       : request.tool === 'portal.editor.mkdir'
       ? await editorHost.mkdir(editorInputFromToolCall(request) as Parameters<PortalEditorHost['mkdir']>[0])
@@ -1167,6 +1171,8 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'terminal',
     'portal.editor.list',
     'portal.editor.read',
+    'portal.editor.hash',
+    'portal.editor.diffPreview',
     'portal.editor.write',
     'portal.editor.mkdir',
     'portal.editor.move',

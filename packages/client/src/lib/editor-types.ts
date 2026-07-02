@@ -31,6 +31,28 @@ export type EditorFile = {
   mtimeMs?: number;
 };
 
+export type EditorHashResult = {
+  path: string;
+  contentHash: string;
+  version: string;
+  size?: number;
+  mtimeMs?: number;
+  lineCount?: number;
+};
+
+export type EditorDiffPreviewResult = {
+  path: string;
+  currentHash: string;
+  proposedHash: string;
+  currentContent: string;
+  proposedContent: string;
+  additions: number;
+  deletions: number;
+  version: string;
+  size?: number;
+  mtimeMs?: number;
+};
+
 export type EditorWriteResult = {
   path: string;
   version: string;
@@ -69,6 +91,8 @@ export type EditorWatchSubscription = {
 export type EditorBackend = {
   list: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
   read: (target: EditorTarget, path: string) => Promise<EditorFile>;
+  hash: (target: EditorTarget, path: string) => Promise<EditorHashResult>;
+  diffPreview: (target: EditorTarget, path: string, diff: string) => Promise<EditorDiffPreviewResult>;
   write: (target: EditorTarget, path: string, content: string, version?: string) => Promise<EditorWriteResult>;
   mkdir: (target: EditorTarget, path: string) => Promise<FileOperationResult>;
   move: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<FileOperationResult>;

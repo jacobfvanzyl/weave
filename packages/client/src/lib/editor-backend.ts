@@ -1,6 +1,8 @@
 import type {
   EditorBackend,
+  EditorDiffPreviewResult,
   EditorFile,
+  EditorHashResult,
   EditorListResult,
   EditorTarget,
   EditorWatchEvent,
@@ -25,6 +27,8 @@ type DesktopEditorWatchEventEnvelope = {
 type DesktopEditorBridge = {
   editorList: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
   editorRead: (target: EditorTarget, path: string) => Promise<EditorFile>;
+  editorHash: (target: EditorTarget, path: string) => Promise<EditorHashResult>;
+  editorDiffPreview: (target: EditorTarget, path: string, diff: string) => Promise<EditorDiffPreviewResult>;
   editorWrite: (target: EditorTarget, path: string, content: string, version?: string) => Promise<EditorWriteResult>;
   editorMkdir: (target: EditorTarget, path: string) => Promise<FileOperationResult>;
   editorMove: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<FileOperationResult>;
@@ -47,6 +51,8 @@ const getDesktopBridge = () => {
   if (
     typeof bridge?.editorList !== 'function'
     || typeof bridge.editorRead !== 'function'
+    || typeof bridge.editorHash !== 'function'
+    || typeof bridge.editorDiffPreview !== 'function'
     || typeof bridge.editorWrite !== 'function'
     || typeof bridge.editorMkdir !== 'function'
     || typeof bridge.editorMove !== 'function'
@@ -70,6 +76,12 @@ const createUnavailableEditorBackend = (): EditorBackend => ({
     throw new Error(unavailableError);
   },
   read: async () => {
+    throw new Error(unavailableError);
+  },
+  hash: async () => {
+    throw new Error(unavailableError);
+  },
+  diffPreview: async () => {
     throw new Error(unavailableError);
   },
   write: async () => {
@@ -210,7 +222,7 @@ export const createEditorBackend = (): EditorBackend => {
   if (!bridge && !isWebEditorBackendAvailable()) return createUnavailableEditorBackend();
 
   if (!bridge) {
-    const request = async <T>(action: 'list' | 'read' | 'write' | 'mkdir' | 'move' | 'delete', body: unknown): Promise<T> => {
+    const request = async <T>(action: 'list' | 'read' | 'hash' | 'diffPreview' | 'write' | 'mkdir' | 'move' | 'delete', body: unknown): Promise<T> => {
       const response = await fetch(weaveRoutes.code.editor(action), {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...getAuthHeaders() },
@@ -234,6 +246,8 @@ export const createEditorBackend = (): EditorBackend => {
     return {
       list: (target, path) => request<EditorListResult>('list', { target, path }),
       read: (target, path) => request<EditorFile>('read', { target, path }),
+      hash: (target, path) => request<EditorHashResult>('hash', { target, path }),
+      diffPreview: (target, path, diff) => request<EditorDiffPreviewResult>('diffPreview', { target, path, diff }),
       write: (target, path, content, version) => request<EditorWriteResult>('write', { target, path, content, version }),
       mkdir: (target, path) => request<FileOperationResult>('mkdir', { target, path }),
       move: (target, fromPath, toPath, overwrite) => request<FileOperationResult>('move', { target, fromPath, toPath, overwrite }),
@@ -250,6 +264,8 @@ export const createEditorBackend = (): EditorBackend => {
   return {
     list: (target, path) => bridge.editorList(target, path),
     read: (target, path) => bridge.editorRead(target, path),
+    hash: (target, path) => bridge.editorHash(target, path),
+    diffPreview: (target, path, diff) => bridge.editorDiffPreview(target, path, diff),
     write: (target, path, content, version) => bridge.editorWrite(target, path, content, version),
     mkdir: (target, path) => bridge.editorMkdir(target, path),
     move: (target, fromPath, toPath, overwrite) => bridge.editorMove(target, fromPath, toPath, overwrite),

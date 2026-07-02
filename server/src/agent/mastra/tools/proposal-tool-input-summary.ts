@@ -20,6 +20,8 @@ export const summarizeProposalToolInput = (input: unknown) => {
     ...(typeof input.proposalPath === 'string' ? { proposalPath: input.proposalPath } : {}),
     ...(typeof input.planPath === 'string' ? { planPath: input.planPath } : {}),
     ...(typeof input.status === 'string' ? { status: input.status } : {}),
+    ...(typeof input.patchPath === 'string' ? { patchPath: input.patchPath } : {}),
+    ...(typeof input.allowDroppingItems === 'boolean' ? { allowDroppingItems: input.allowDroppingItems } : {}),
     ...stringSummary(input.overview, 'overview'),
     ...(Array.isArray(input.files)
       ? {

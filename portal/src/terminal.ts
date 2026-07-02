@@ -118,6 +118,8 @@ type PortalEditorControlHost = Pick<
   PortalEditorHost,
   | 'list'
   | 'read'
+  | 'hash'
+  | 'diffPreview'
   | 'write'
   | 'mkdir'
   | 'move'
@@ -1997,6 +1999,10 @@ export const startTerminalControlServer = (input: {
       ? 'list'
       : url.pathname === '/editor/read'
       ? 'read'
+      : url.pathname === '/editor/hash'
+      ? 'hash'
+      : url.pathname === '/editor/diffPreview'
+      ? 'diffPreview'
       : url.pathname === '/editor/write'
       ? 'write'
       : url.pathname === '/editor/mkdir'
@@ -2015,6 +2021,10 @@ export const startTerminalControlServer = (input: {
           ? await input.editor.list(body as Parameters<PortalEditorControlHost['list']>[0])
           : editorAction === 'read'
           ? await input.editor.read(body as Parameters<PortalEditorControlHost['read']>[0])
+          : editorAction === 'hash'
+          ? await input.editor.hash(body as Parameters<PortalEditorControlHost['hash']>[0])
+          : editorAction === 'diffPreview'
+          ? await input.editor.diffPreview(body as Parameters<PortalEditorControlHost['diffPreview']>[0])
           : editorAction === 'write'
           ? await input.editor.write(body as Parameters<PortalEditorControlHost['write']>[0])
           : editorAction === 'mkdir'

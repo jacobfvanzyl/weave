@@ -22,6 +22,8 @@ const originalWebSocket = (globalThis as any).WebSocket;
 const coreDesktopBridge = {
   editorList: vi.fn(),
   editorRead: vi.fn(),
+  editorHash: vi.fn(),
+  editorDiffPreview: vi.fn(),
   editorWrite: vi.fn(),
   editorMkdir: vi.fn(),
   editorMove: vi.fn(),

@@ -7,6 +7,8 @@ import type {
 } from '../shared/desktop-api';
 import type {
   EditorFile,
+  EditorDiffPreviewResult,
+  EditorHashResult,
   EditorListResult,
   EditorOperationResult,
   EditorTarget,
@@ -21,6 +23,24 @@ import type {
   TerminalTargetInput,
   TerminalWindowRecord,
 } from '../shared/terminal';
+
+type IpcErrorResult = {
+  __weaveIpcError: true;
+  message: string;
+};
+
+const unwrapIpcResult = async <T>(promise: Promise<T | IpcErrorResult>): Promise<T> => {
+  const result = await promise;
+  if (
+    result
+    && typeof result === 'object'
+    && '__weaveIpcError' in result
+    && result.__weaveIpcError === true
+  ) {
+    throw new Error(typeof result.message === 'string' ? result.message : 'Desktop IPC request failed.');
+  }
+  return result as T;
+};
 
 const bridge: WeaveDesktopBridge = {
   getConnectionSettings: () => ipcRenderer.invoke('connection:get-settings') as Promise<DesktopConnectionSettings>,
@@ -53,17 +73,21 @@ const bridge: WeaveDesktopBridge = {
     return () => ipcRenderer.removeListener('terminal:event', wrappedListener);
   },
   editorList: (target: EditorTarget, path?: string) =>
-    ipcRenderer.invoke('editor:list', { target, path }) as Promise<EditorListResult>,
+    unwrapIpcResult<EditorListResult>(ipcRenderer.invoke('editor:list', { target, path })),
   editorRead: (target: EditorTarget, path: string) =>
-    ipcRenderer.invoke('editor:read', { target, path }) as Promise<EditorFile>,
+    unwrapIpcResult<EditorFile>(ipcRenderer.invoke('editor:read', { target, path })),
+  editorHash: (target: EditorTarget, path: string) =>
+    unwrapIpcResult<EditorHashResult>(ipcRenderer.invoke('editor:hash', { target, path })),
+  editorDiffPreview: (target: EditorTarget, path: string, diff: string) =>
+    unwrapIpcResult<EditorDiffPreviewResult>(ipcRenderer.invoke('editor:diff-preview', { target, path, diff })),
   editorWrite: (target: EditorTarget, path: string, content: string, version?: string) =>
-    ipcRenderer.invoke('editor:write', { target, path, content, version }) as Promise<EditorWriteResult>,
+    unwrapIpcResult<EditorWriteResult>(ipcRenderer.invoke('editor:write', { target, path, content, version })),
   editorMkdir: (target: EditorTarget, path: string) =>
-    ipcRenderer.invoke('editor:mkdir', { target, path }) as Promise<EditorOperationResult>,
+    unwrapIpcResult<EditorOperationResult>(ipcRenderer.invoke('editor:mkdir', { target, path })),
   editorMove: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) =>
-    ipcRenderer.invoke('editor:move', { target, fromPath, toPath, overwrite }) as Promise<EditorOperationResult>,
+    unwrapIpcResult<EditorOperationResult>(ipcRenderer.invoke('editor:move', { target, fromPath, toPath, overwrite })),
   editorDelete: (target: EditorTarget, path: string, recursive?: boolean) =>
-    ipcRenderer.invoke('editor:delete', { target, path, recursive }) as Promise<EditorOperationResult>,
+    unwrapIpcResult<EditorOperationResult>(ipcRenderer.invoke('editor:delete', { target, path, recursive })),
   editorWatchStart: (target: EditorTarget, paths: string[]) =>
     ipcRenderer.invoke('editor:watch-start', { target, paths }) as Promise<EditorWatchStartResult>,
   editorWatchUpdate: (subscriptionId: string, paths: string[]) =>

@@ -8,6 +8,8 @@ import { getServerOrigin, isHttpUrl, normalizeMastraUrl, parseDesktopConnectionI
 import { ConnectionSettingsStore } from './settings-store';
 import {
   parseEditorDeleteInput,
+  parseEditorDiffPreviewInput,
+  parseEditorHashInput,
   parseEditorListInput,
   parseEditorMkdirInput,
   parseEditorMoveInput,
@@ -41,6 +43,19 @@ let desktopPerfSampler: ReturnType<typeof startDesktopPerfSampler> | undefined;
 const clientAppId = process.env.WEAVE_CLIENT_APP === 'coppermind' || process.env.VITE_WEAVE_CLIENT_APP === 'coppermind'
   ? 'coppermind'
   : 'flare';
+
+const ipcErrorResult = (error: unknown) => ({
+  __weaveIpcError: true,
+  message: error instanceof Error ? error.message : String(error),
+});
+
+const handleIpcResult = async <T>(operation: () => T | Promise<T>) => {
+  try {
+    return await operation();
+  } catch (error) {
+    return ipcErrorResult(error);
+  }
+};
 const appName = clientAppId === 'coppermind' ? 'Coppermind' : 'Flare';
 const appUserDataPath = process.env.WEAVE_DESKTOP_USER_DATA || path.join(app.getPath('appData'), appName);
 const sharedConnectionUserDataPath = process.env.WEAVE_DESKTOP_CONNECTION_USER_DATA
@@ -289,24 +304,30 @@ const registerIpcHandlers = () => {
   ipcMain.handle('terminal:detach', (event, terminalId: unknown) =>
     getPortalTerminalClient().detach(parseTerminalId(terminalId), event.sender),
   );
-  ipcMain.handle('editor:list', (_event, input: unknown) =>
+  ipcMain.handle('editor:list', (_event, input: unknown) => handleIpcResult(() =>
     getPortalEditorClient().list(parseEditorListInput(input)),
-  );
-  ipcMain.handle('editor:read', (_event, input: unknown) =>
+  ));
+  ipcMain.handle('editor:read', (_event, input: unknown) => handleIpcResult(() =>
     getPortalEditorClient().read(parseEditorReadInput(input)),
-  );
-  ipcMain.handle('editor:write', (_event, input: unknown) =>
+  ));
+  ipcMain.handle('editor:hash', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalEditorClient().hash(parseEditorHashInput(input)),
+  ));
+  ipcMain.handle('editor:diff-preview', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalEditorClient().diffPreview(parseEditorDiffPreviewInput(input)),
+  ));
+  ipcMain.handle('editor:write', (_event, input: unknown) => handleIpcResult(() =>
     getPortalEditorClient().write(parseEditorWriteInput(input)),
-  );
-  ipcMain.handle('editor:mkdir', (_event, input: unknown) =>
+  ));
+  ipcMain.handle('editor:mkdir', (_event, input: unknown) => handleIpcResult(() =>
     getPortalEditorClient().mkdir(parseEditorMkdirInput(input)),
-  );
-  ipcMain.handle('editor:move', (_event, input: unknown) =>
+  ));
+  ipcMain.handle('editor:move', (_event, input: unknown) => handleIpcResult(() =>
     getPortalEditorClient().move(parseEditorMoveInput(input)),
-  );
-  ipcMain.handle('editor:delete', (_event, input: unknown) =>
+  ));
+  ipcMain.handle('editor:delete', (_event, input: unknown) => handleIpcResult(() =>
     getPortalEditorClient().delete(parseEditorDeleteInput(input)),
-  );
+  ));
   ipcMain.handle('editor:watch-start', (event, input: unknown) =>
     getPortalEditorClient().watchStart(parseEditorWatchStartInput(input), event.sender),
   );

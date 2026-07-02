@@ -7,6 +7,8 @@ import type {
 } from './terminal';
 import type {
   EditorFile,
+  EditorDiffPreviewResult,
+  EditorHashResult,
   EditorListResult,
   EditorOperationResult,
   EditorTarget,
@@ -47,6 +49,8 @@ export type WeaveDesktopBridge = {
   onTerminalEvent: (listener: (event: TerminalHostEvent) => void) => () => void;
   editorList: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
   editorRead: (target: EditorTarget, path: string) => Promise<EditorFile>;
+  editorHash: (target: EditorTarget, path: string) => Promise<EditorHashResult>;
+  editorDiffPreview: (target: EditorTarget, path: string, diff: string) => Promise<EditorDiffPreviewResult>;
   editorWrite: (target: EditorTarget, path: string, content: string, version?: string) => Promise<EditorWriteResult>;
   editorMkdir: (target: EditorTarget, path: string) => Promise<EditorOperationResult>;
   editorMove: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<EditorOperationResult>;

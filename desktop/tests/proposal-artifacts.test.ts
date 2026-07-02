@@ -10,6 +10,7 @@ import {
   parseProposalArtifact as parseClientProposalArtifact,
   renderProposalArtifact as renderClientProposalArtifact,
 } from '../../packages/client/src/lib/proposal-artifacts';
+import { applyUnifiedDiff, isLikelyProseUnifiedDiff, parseUnifiedDiff, splitUnifiedDiffByFile } from '../../packages/client/src/lib/proposal-unified-diff';
 
 const frontmatter = (overrides: Partial<ProposalFrontmatter> = {}): ProposalFrontmatter => ({
   weave_proposal_version: proposalArtifactVersion,
@@ -168,6 +169,108 @@ describe('proposal artifact helpers', () => {
     })).toEqual({ additions: 1, deletions: 1 });
   });
 
+  it('validates and applies concrete unified diffs', () => {
+    const applied = applyUnifiedDiff([
+      'import old;',
+      'void main() {}',
+      '',
+    ].join('\n'), [
+      '@@ -1,2 +1,2 @@',
+      '-import old;',
+      '+import new;',
+      ' void main() {}',
+    ].join('\n'));
+
+    expect(applied).toEqual({
+      ok: true,
+      value: {
+        content: ['import new;', 'void main() {}', ''].join('\n'),
+        additions: 1,
+        deletions: 1,
+      },
+    });
+    expect(parseUnifiedDiff('Implementation details:\n- Move the column')).toMatchObject({
+      ok: false,
+    });
+    expect(applyUnifiedDiff('old\n', '@@ -1 +1 @@\n-missing\n+new')).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it('detects prose-like unified diff payloads', () => {
+    expect(isLikelyProseUnifiedDiff([
+      '@@ -1,1 +1,5 @@',
+      '-Old columns in order: Date, Station, Barcode.',
+      '+Implementation details:',
+      '+- Keep the existing Date column builder.',
+      '+- Move the Block column builder after Date.',
+      '+- Remove the Barcode column.',
+      '+- Remove the Total Count column.',
+    ].join('\n'))).toBe(true);
+    expect(isLikelyProseUnifiedDiff('@@ -1 +1 @@\n-final name = old;\n+final name = new;')).toBe(false);
+  });
+
+  it('splits multi-file patches into one file diff per proposal item', () => {
+    const patch = [
+      '--- a/src/one.ts',
+      '+++ b/src/one.ts',
+      '@@ -1 +1 @@',
+      '-one',
+      '+ONE',
+      '--- a/src/two.ts',
+      '+++ b/src/two.ts',
+      '@@ -1 +1 @@',
+      '-two',
+      '+TWO',
+    ].join('\n');
+
+    expect(splitUnifiedDiffByFile(patch)).toMatchObject({
+      ok: true,
+      value: [
+        { path: 'src/one.ts', oldPath: 'src/one.ts', newPath: 'src/one.ts' },
+        { path: 'src/two.ts', oldPath: 'src/two.ts', newPath: 'src/two.ts' },
+      ],
+    });
+    expect(__proposalToolTest.buildProposalFilesFromPatch([
+      { path: 'src/one.ts', description: 'Update one.' },
+      { path: 'src/two.ts', rationale: 'Update two.' },
+    ], patch)).toMatchObject([
+      { kind: 'file_edit', path: 'src/one.ts', description: 'Update one.', diff: expect.stringContaining('ONE') },
+      { kind: 'file_edit', path: 'src/two.ts', rationale: 'Update two.', diff: expect.stringContaining('TWO') },
+    ]);
+  });
+
+  it('rejects patch metadata mismatches, unsupported patch item kinds, and combined item paths', () => {
+    const editPatch = [
+      'diff --git a/src/one.ts b/src/one.ts',
+      '--- a/src/one.ts',
+      '+++ b/src/one.ts',
+      '@@ -1 +1 @@',
+      '-one',
+      '+ONE',
+    ].join('\n');
+    const createPatch = [
+      'diff --git a/src/new.ts b/src/new.ts',
+      'new file mode 100644',
+      '--- /dev/null',
+      '+++ b/src/new.ts',
+      '@@ -0,0 +1 @@',
+      '+new',
+    ].join('\n');
+
+    expect(() => __proposalToolTest.writeProposalInputSchema.parse({
+      title: 'Bad paths',
+      summary: 'Combined paths are invalid.',
+      files: [{ kind: 'file_edit', path: 'src/one.ts and src/two.ts', diff: '@@ -1 +1 @@\n-a\n+b' }],
+    })).toThrow(/exactly one source file/);
+    expect(() => __proposalToolTest.buildProposalFilesFromPatch([
+      { path: 'src/two.ts' },
+    ], editPatch)).toThrow(/paths must match metadata paths exactly/);
+    expect(() => __proposalToolTest.buildProposalFilesFromPatch([
+      { path: 'src/new.ts' },
+    ], createPatch)).toThrow(/supports file_edit diffs only/);
+  });
+
   it('marks code items with missing body sections as incomplete', () => {
     const item = {
       ...frontmatter().items[0],
@@ -216,10 +319,15 @@ describe('proposal artifact helpers', () => {
       ...baseItem,
       id: 'deleted-file',
       kind: 'file_delete' as const,
+      current_hash: 'cba06b5736fa',
       proposed_hash: undefined,
     };
     expect(__proposalArtifactTest.getProposalCompleteness([deleteItem], [
-      { id: deleteItem.id, proposedContent: 'not enough' },
+      { id: deleteItem.id },
+    ]).blockingIssues).toHaveLength(0);
+
+    expect(__proposalArtifactTest.getProposalCompleteness([{ ...deleteItem, current_hash: undefined }], [
+      { id: deleteItem.id },
     ]).blockingIssues.map(issue => issue.code)).toContain('missing_current_content');
   });
 
@@ -249,6 +357,25 @@ describe('proposal artifact helpers', () => {
       { ...parsed.items[0], status: 'approved' },
     ]);
     expect(nextContent).toContain('status: approved');
+  });
+
+  it('requires current_hash for diff-only file edits', () => {
+    const item = {
+      ...frontmatter().items[0],
+      status: 'approved' as const,
+      current_hash: undefined,
+      proposed_hash: undefined,
+    };
+    const result = __proposalArtifactTest.getProposalCompleteness([item], [
+      { id: item.id, diff: '@@ -1 +1 @@\n-old\n+new' },
+    ]);
+
+    expect(result.blockingIssues.map(issue => issue.code)).toContain('missing_current_hash');
+    expect(() => __proposalArtifactTest.assertProposalItemsCompleteForStatuses(
+      [item],
+      [{ id: item.id, diff: '@@ -1 +1 @@\n-old\n+new' }],
+      ['approved'],
+    )).toThrow(/missing current_hash/);
   });
 
   it('blocks approval when concrete content hashes do not match frontmatter hashes', () => {
@@ -347,11 +474,11 @@ describe('proposal artifact helpers', () => {
       title: 'Incomplete proposal',
       summary: 'No concrete code body is present.',
       files: [{ kind: 'file_edit', path: 'src/App.tsx' }],
-    }).files)).toThrow(/non-empty unified diff or required content blocks/);
+    }).files)).toThrow(/file_edit needs a unified diff/);
 
     for (const file of [
       { kind: 'file_create' as const, path: 'src/new.ts', diff: '@@ -0,0 +1 @@\n+new' },
-      { kind: 'file_delete' as const, path: 'src/old.ts', diff: '@@ -1 +0,0 @@\n-old' },
+      { kind: 'file_delete' as const, path: 'src/old.ts' },
     ]) {
       __proposalToolTest.assertProposalFileInputsComplete(__proposalToolTest.writeProposalInputSchema.parse({
         title: 'Diff proposal',
@@ -360,21 +487,41 @@ describe('proposal artifact helpers', () => {
       }).files);
     }
 
-    expect(__proposalToolTest.writeProposalInputSchema.parse({
-      title: 'Complete proposal',
-      summary: 'Concrete current and proposed content is present.',
+    expect(() => __proposalToolTest.assertProposalFileInputsComplete(__proposalToolTest.writeProposalInputSchema.parse({
+      title: 'Legacy body blocks',
+      summary: 'New file_edit proposals must use repository-validated diffs.',
+      files: [{ kind: 'file_edit', path: 'src/App.tsx', currentContent: 'old', proposedContent: 'new' }],
+    }).files)).toThrow(/file_edit needs a unified diff/);
+  });
+
+  it('accepts null optional fields for write_proposal_patch inputs', () => {
+    const parsed = __proposalToolTest.writeProposalPatchInputSchema.parse({
+      title: 'Patch proposal',
+      summary: 'Use a patch file for compact proposal generation.',
+      proposalPath: null,
+      planPath: null,
+      overview: null,
+      status: null,
+      patchPath: '.agents/tmp/proposal.patch',
+      allowDroppingItems: true,
       files: [
         {
-          kind: 'file_edit',
+          id: null,
           path: 'src/App.tsx',
-          currentContent: 'old',
-          proposedContent: 'new',
+          title: null,
+          description: null,
+          rationale: null,
         },
       ],
-    }).files[0]).toMatchObject({
-      currentContent: 'old',
-      proposedContent: 'new',
     });
+
+    expect(parsed.proposalPath).toBeUndefined();
+    expect(parsed.planPath).toBeUndefined();
+    expect(parsed.overview).toBeUndefined();
+    expect(parsed.status).toBeUndefined();
+    expect(parsed.patchPath).toBe('.agents/tmp/proposal.patch');
+    expect(parsed.files[0]).toMatchObject({ path: 'src/App.tsx' });
+    expect(parsed.files[0].id).toBeUndefined();
   });
 
   it('allows client approval persistence for complete code items', () => {

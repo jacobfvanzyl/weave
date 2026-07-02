@@ -1,5 +1,6 @@
 import { parseDocument, stringify } from 'yaml';
 import { z } from 'zod';
+import { countUnifiedDiffChanges, parseUnifiedDiff } from '../../../../../packages/client/src/lib/proposal-unified-diff';
 import { hashText } from './model-output';
 
 export const proposalArtifactVersion = 1;
@@ -93,6 +94,7 @@ export type ParsedProposalArtifact = {
 
 export type ProposalCompletenessIssueCode =
   | 'missing_body_item'
+  | 'missing_current_hash'
   | 'missing_current_content'
   | 'missing_proposed_content'
   | 'current_hash_mismatch'
@@ -117,7 +119,7 @@ const maxExactContentComparisonCells = 250_000;
 
 const hasContentBlock = (value: string | undefined) => typeof value === 'string';
 const hasUnifiedDiffBlock = (value: string | undefined) =>
-  typeof value === 'string' && value.trim().length > 0 && /^@@ /m.test(value);
+  parseUnifiedDiff(value).ok;
 
 const issue = (item: ProposalItem, code: ProposalCompletenessIssueCode, message: string): ProposalCompletenessIssue => ({
   itemId: item.id,
@@ -140,9 +142,12 @@ export const getProposalItemCompleteness = (
     issues.push(issue(item, 'missing_body_item', 'is missing its Markdown body section.'));
   }
 
-  const needsCurrent = item.kind === 'file_edit' || item.kind === 'file_delete';
+  const needsCurrent = item.kind === 'file_edit' || (item.kind === 'file_delete' && !item.current_hash);
   const needsProposed = item.kind === 'file_edit' || item.kind === 'file_create';
   const hasConcreteDiff = hasUnifiedDiffBlock(bodyItem?.diff);
+  if (item.kind === 'file_edit' && hasConcreteDiff && !item.current_hash && !hasContentBlock(bodyItem?.currentContent)) {
+    issues.push(issue(item, 'missing_current_hash', 'is missing current_hash for its Unified Diff.'));
+  }
   if (!hasConcreteDiff && needsCurrent && !hasContentBlock(bodyItem?.currentContent)) {
     issues.push(issue(item, 'missing_current_content', 'is missing Current Content.'));
   }
@@ -376,14 +381,7 @@ export const inferProposalStatus = (items: ProposalItem[]): ProposalStatus => {
 };
 
 export const countDiffChanges = (diff: string | undefined) => {
-  let additions = 0;
-  let deletions = 0;
-  for (const line of diff?.split('\n') ?? []) {
-    if (line.startsWith('+++') || line.startsWith('---')) continue;
-    if (line.startsWith('+')) additions += 1;
-    if (line.startsWith('-')) deletions += 1;
-  }
-  return { additions, deletions };
+  return countUnifiedDiffChanges(diff);
 };
 
 const splitComparableLines = (value: string | undefined) => {

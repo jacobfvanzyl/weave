@@ -7,8 +7,10 @@ import {
   getProposalCompleteness,
   parseProposalArtifact,
   renderProposalArtifact,
+  type ProposalCompletenessIssue,
   type ParsedProposalArtifact,
 } from '../../lib/proposal-artifacts';
+import { applyUnifiedDiff, isMissingPathError } from '../../lib/proposal-unified-diff';
 import { getNextProposalReviewItemId } from '../../lib/proposal-review-state';
 import { cn } from '../../lib/cn';
 import { useChatStore, type ThreadProposalItem } from '../../stores/chat-store';
@@ -157,6 +159,25 @@ type FeedbackDialogState = {
   initialValue: string;
 };
 
+type LiveProposalIssueMap = Record<string, ProposalCompletenessIssue | undefined>;
+
+type ProposalPreview = {
+  originalText: string;
+  proposedText: string;
+};
+
+const completenessRequiredStatuses = new Set(['pending', 'approved', 'applied']);
+
+const liveIssue = (
+  item: ThreadProposalItem,
+  code: ProposalCompletenessIssue['code'],
+  message: string,
+): ProposalCompletenessIssue => ({
+  itemId: item.id,
+  code,
+  message: `Proposal item ${item.id} ${message}`,
+});
+
 const RequestChangesDialog = ({
   dialog,
   isSaving,
@@ -227,6 +248,9 @@ export const ProposalReviewPane = ({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [liveIssues, setLiveIssues] = useState<LiveProposalIssueMap>({});
+  const [selectedPreview, setSelectedPreview] = useState<ProposalPreview | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const proposalRef = useRef<ParsedProposalArtifact | null>(null);
   const targetKey = [
     target.projectId,
@@ -302,6 +326,46 @@ export const ProposalReviewPane = ({
 
   const codeItems = useMemo(() => proposal?.items.filter(isCodeProposalItem) ?? [], [proposal]);
   const bodyById = useMemo(() => new Map((proposal?.bodyItems ?? []).map(item => [item.id, item])), [proposal]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!proposal) {
+      setLiveIssues({});
+      return undefined;
+    }
+
+    const validateLiveState = async () => {
+      const next: LiveProposalIssueMap = {};
+      await Promise.all(codeItems.map(async item => {
+        if (!item.path || !completenessRequiredStatuses.has(item.status)) return;
+        try {
+          if (item.kind === 'file_create') {
+            await codeBackend.hash(target, item.path);
+            next[item.id] = liveIssue(item, 'source_file_exists', 'is a file_create but the target path now exists.');
+            return;
+          }
+
+          if (!item.currentHash) return;
+          const source = await codeBackend.hash(target, item.path);
+          if (source.contentHash !== item.currentHash) {
+            next[item.id] = liveIssue(item, 'source_hash_mismatch', 'no longer matches current_hash.');
+          }
+        } catch (reason) {
+          if (item.kind === 'file_create' && isMissingPathError(reason)) return;
+          next[item.id] = liveIssue(
+            item,
+            'source_read_failed',
+            `could not validate the current source file: ${reason instanceof Error ? reason.message : String(reason)}.`,
+          );
+        }
+      }));
+      if (!cancelled) setLiveIssues(next);
+    };
+
+    void validateLiveState();
+    return () => {
+      cancelled = true;
+    };
+  }, [codeBackend, codeItems, proposal, targetKey, target]);
   const completeness = useMemo(
     () => getProposalCompleteness(codeItems, proposal?.bodyItems ?? []),
     [codeItems, proposal?.bodyItems],
@@ -310,8 +374,13 @@ export const ProposalReviewPane = ({
     () => new Map(completeness.items.map(item => [item.itemId, item])),
     [completeness],
   );
-  const firstBlockingCompletenessIssue = completeness.blockingIssues[0];
-  const firstActionableIncompleteIssue = completeness.items.find(item => item.requiresCompleteness && !item.complete)?.issues[0];
+  const firstLiveCompletenessIssue = codeItems
+    .filter(item => completenessRequiredStatuses.has(item.status))
+    .map(item => liveIssues[item.id])
+    .find((issue): issue is ProposalCompletenessIssue => Boolean(issue));
+  const firstBlockingCompletenessIssue = completeness.blockingIssues[0] ?? firstLiveCompletenessIssue;
+  const firstActionableIncompleteIssue = completeness.items.find(item => item.requiresCompleteness && !item.complete)?.issues[0]
+    ?? firstLiveCompletenessIssue;
 
   const approveAll = useCallback(() => {
     if (!proposal) return;
@@ -411,7 +480,7 @@ export const ProposalReviewPane = ({
   const selectedItem = codeItems.find(item => item.id === selectedItemId) ?? filteredItems[0];
   const selectedBody = proposal?.bodyItems.find(item => item.id === selectedItem?.id);
   const selectedCompleteness = selectedItem ? completenessById.get(selectedItem.id) : undefined;
-  const selectedCompletenessIssue = selectedCompleteness?.issues[0];
+  const selectedCompletenessIssue = selectedCompleteness?.issues[0] ?? (selectedItem ? liveIssues[selectedItem.id] : undefined);
   const selectedCounts = selectedItem ? getItemDisplayCounts(selectedItem, selectedBody) : undefined;
   const counts = filteredItems.reduce((acc, item) => {
     const itemCounts = getItemDisplayCounts(item, bodyById.get(item.id));
@@ -419,6 +488,95 @@ export const ProposalReviewPane = ({
     acc.deletions += itemCounts.deletions;
     return acc;
   }, { additions: 0, deletions: 0 });
+
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedPreview(null);
+    if (!selectedItem || !selectedBody) {
+      setIsPreviewLoading(false);
+      return undefined;
+    }
+
+    if (selectedBody.currentContent !== undefined || selectedBody.proposedContent !== undefined) {
+      setSelectedPreview({
+        originalText: selectedBody.currentContent ?? '',
+        proposedText: selectedBody.proposedContent ?? selectedBody.diff ?? '',
+      });
+      setIsPreviewLoading(false);
+      return undefined;
+    }
+
+    if (selectedItem.kind === 'file_create') {
+      const proposed = selectedBody.diff
+        ? applyUnifiedDiff('', selectedBody.diff)
+        : undefined;
+      setSelectedPreview({
+        originalText: '',
+        proposedText: proposed?.ok ? proposed.value.content : selectedBody.diff ?? '',
+      });
+      setIsPreviewLoading(false);
+      return undefined;
+    }
+
+    if (!selectedItem.path) {
+      setIsPreviewLoading(false);
+      return undefined;
+    }
+
+    if (liveIssues[selectedItem.id]) {
+      setSelectedPreview({
+        originalText: '',
+        proposedText: selectedBody.diff ?? '',
+      });
+      setIsPreviewLoading(false);
+      return undefined;
+    }
+
+    if (selectedItem.kind === 'file_edit' && selectedBody.diff && selectedItem.currentHash) {
+      setIsPreviewLoading(true);
+      void codeBackend.diffPreview(target, selectedItem.path, selectedBody.diff)
+        .then(preview => {
+          if (cancelled) return;
+          setSelectedPreview({
+            originalText: preview.currentContent,
+            proposedText: preview.proposedContent,
+          });
+        })
+        .catch(reason => {
+          if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+        })
+        .finally(() => {
+          if (!cancelled) setIsPreviewLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (selectedItem.kind === 'file_delete' && selectedItem.currentHash) {
+      setIsPreviewLoading(true);
+      void codeBackend.read(target, selectedItem.path)
+        .then(file => {
+          if (!cancelled) setSelectedPreview({ originalText: file.content, proposedText: '' });
+        })
+        .catch(reason => {
+          if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+        })
+        .finally(() => {
+          if (!cancelled) setIsPreviewLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setSelectedPreview({
+      originalText: '',
+      proposedText: selectedBody.diff ?? '',
+    });
+    setIsPreviewLoading(false);
+    return undefined;
+  }, [codeBackend, liveIssues, selectedBody, selectedItem, target, targetKey]);
 
   return (
     <div
@@ -495,7 +653,7 @@ export const ProposalReviewPane = ({
                   disabled={
                     selectedItem.status === 'changes_requested'
                     || isSaving
-                    || (selectedItem.status !== 'approved' && selectedCompleteness?.complete === false)
+                    || (selectedItem.status !== 'approved' && Boolean(selectedCompletenessIssue))
                   }
                   title={
                     selectedItem.status !== 'approved' && selectedCompletenessIssue
@@ -561,11 +719,15 @@ export const ProposalReviewPane = ({
               <div className="grid h-full place-items-center text-sm text-muted-foreground">
                 <Loader2 size={18} className="animate-spin" />
               </div>
+            ) : isPreviewLoading ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                <Loader2 size={18} className="animate-spin" />
+              </div>
             ) : selectedItem ? (
               <DiffViewer
                 path={selectedItem.path}
-                originalText={selectedBody?.currentContent ?? ''}
-                proposedText={selectedBody?.proposedContent ?? selectedBody?.diff ?? ''}
+                originalText={selectedPreview?.originalText ?? selectedBody?.currentContent ?? ''}
+                proposedText={selectedPreview?.proposedText ?? selectedBody?.proposedContent ?? selectedBody?.diff ?? ''}
               />
             ) : (
               <div className="grid h-full place-items-center text-sm text-muted-foreground">No proposal item selected</div>
@@ -597,7 +759,7 @@ export const ProposalReviewPane = ({
             </div>
             {filteredItems.map(item => {
               const itemCompleteness = completenessById.get(item.id);
-              const itemIssue = itemCompleteness?.issues[0];
+              const itemIssue = itemCompleteness?.issues[0] ?? liveIssues[item.id];
               return (
                 <button
                   key={item.id}

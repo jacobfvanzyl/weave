@@ -295,6 +295,95 @@ export const portalBashModelOutput = (output: unknown, maxChars = getCodeToolMod
   );
 };
 
+const payloadTextMaxInlineChars = 2_000;
+const payloadTextPreviewChars = 1_200;
+
+const payloadTextSummary = (value: unknown, prefix: string) => {
+  if (typeof value !== 'string') return {};
+  if (value.length <= payloadTextMaxInlineChars) return { [prefix]: value };
+  return {
+    [`${prefix}Chars`]: value.length,
+    [`${prefix}Hash`]: hashText(value),
+    [`${prefix}Preview`]: value.slice(0, payloadTextPreviewChars),
+    [`${prefix}Truncated`]: true,
+  };
+};
+
+const payloadErrorPreview = (value: unknown) => {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return value
+    .split(/\r?\n/)
+    .filter(line => /error|failed|exception|traceback|denied|not found|invalid/i.test(line))
+    .slice(0, 8)
+    .join('\n')
+    .slice(0, payloadTextPreviewChars) || undefined;
+};
+
+const portalReadPayloadInputSummary = ({ input }: { input?: unknown }) => {
+  const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  return {
+    ...(typeof record.path === 'string' ? { path: record.path } : {}),
+    ...(typeof record.offset === 'number' ? { offset: record.offset } : {}),
+    ...(typeof record.limit === 'number' ? { limit: record.limit } : {}),
+  };
+};
+
+const portalReadPayloadOutputSummary = ({ output }: { output?: unknown }) => {
+  const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+  return {
+    ok: result.ok,
+    ...(typeof result.path === 'string' ? { path: result.path } : {}),
+    ...(typeof result.offset === 'number' ? { offset: result.offset } : {}),
+    ...(typeof result.limit === 'number' ? { limit: result.limit } : {}),
+    ...(typeof result.error === 'string' ? { error: result.error } : {}),
+    ...payloadTextSummary(result.content, 'content'),
+  };
+};
+
+const portalBashPayloadInputSummary = ({ input }: { input?: unknown }) => {
+  const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  return {
+    ...payloadTextSummary(record.command, 'command'),
+    ...(typeof record.timeout === 'number' ? { timeout: record.timeout } : {}),
+  };
+};
+
+const portalBashPayloadOutputSummary = ({ output }: { output?: unknown }) => {
+  const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
+  return {
+    ok: result.ok,
+    ...payloadTextSummary(result.command, 'command'),
+    ...(typeof result.exitCode === 'number' ? { exitCode: result.exitCode } : {}),
+    ...(typeof result.error === 'string' ? { error: result.error } : {}),
+    ...payloadTextSummary(result.stdout, 'stdout'),
+    ...payloadTextSummary(result.stderr, 'stderr'),
+    ...(payloadErrorPreview(result.stderr) ? { stderrErrors: payloadErrorPreview(result.stderr) } : {}),
+    ...(payloadErrorPreview(result.stdout) ? { stdoutErrors: payloadErrorPreview(result.stdout) } : {}),
+  };
+};
+
+const portalReadPayloadTransform = {
+  display: {
+    input: portalReadPayloadInputSummary,
+    output: portalReadPayloadOutputSummary,
+  },
+  transcript: {
+    input: portalReadPayloadInputSummary,
+    output: portalReadPayloadOutputSummary,
+  },
+};
+
+const portalBashPayloadTransform = {
+  display: {
+    input: portalBashPayloadInputSummary,
+    output: portalBashPayloadOutputSummary,
+  },
+  transcript: {
+    input: portalBashPayloadInputSummary,
+    output: portalBashPayloadOutputSummary,
+  },
+};
+
 const vaultIndexModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
   const result = output && typeof output === 'object' ? output as Record<string, any> : {};
   const notes = Array.isArray(result.notes) ? result.notes : [];
@@ -364,6 +453,7 @@ export const portalReadTool = createTool({
     ...(input.offset !== undefined ? { offset: input.offset } : {}),
     ...(input.limit !== undefined ? { limit: input.limit } : {}),
   }),
+  transform: portalReadPayloadTransform,
   toModelOutput: portalReadModelOutput,
 });
 
@@ -417,6 +507,7 @@ export const portalBashTool = createTool({
     await routePortalTool('bash', input, context, input.timeout ? input.timeout * 1000 + 1000 : undefined),
     { command: input.command },
   ),
+  transform: portalBashPayloadTransform,
   toModelOutput: portalBashModelOutput,
 });
 

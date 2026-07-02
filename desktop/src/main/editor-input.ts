@@ -1,6 +1,8 @@
 import path from 'node:path';
 import type {
   EditorDeleteInput,
+  EditorDiffPreviewInput,
+  EditorHashInput,
   EditorListInput,
   EditorMkdirInput,
   EditorMoveInput,
@@ -65,6 +67,24 @@ export const parseEditorReadInput = (input: unknown): EditorReadInput => {
   return {
     target: parseEditorTarget(input.target),
     path: parseEditorPath(input.path),
+  };
+};
+
+export const parseEditorHashInput = (input: unknown): EditorHashInput => {
+  if (!isRecord(input)) throw new Error('editor hash input is required.');
+  return {
+    target: parseEditorTarget(input.target),
+    path: parseEditorPath(input.path),
+  };
+};
+
+export const parseEditorDiffPreviewInput = (input: unknown): EditorDiffPreviewInput => {
+  if (!isRecord(input)) throw new Error('editor diff preview input is required.');
+  if (typeof input.diff !== 'string') throw new Error('diff must be a string.');
+  return {
+    target: parseEditorTarget(input.target),
+    path: parseEditorPath(input.path),
+    diff: input.diff,
   };
 };
 

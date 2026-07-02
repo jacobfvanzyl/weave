@@ -1,5 +1,6 @@
 import { parseDocument, stringify } from 'yaml';
 import type { ProposalItemStatus, ProposalStatus, ThreadProposal, ThreadProposalItem } from '../stores/chat-store';
+import { parseUnifiedDiff } from './proposal-unified-diff';
 
 export type ProposalBodyItem = {
   id: string;
@@ -43,10 +44,15 @@ const completenessRequiredStatuses = new Set<ProposalItemStatus>(['pending', 'ap
 
 export type ProposalCompletenessIssueCode =
   | 'missing_body_item'
+  | 'missing_current_hash'
   | 'missing_current_content'
   | 'missing_proposed_content'
   | 'current_hash_mismatch'
-  | 'proposed_hash_mismatch';
+  | 'proposed_hash_mismatch'
+  | 'source_hash_mismatch'
+  | 'source_file_exists'
+  | 'source_read_failed'
+  | 'diff_apply_failed';
 
 export type ProposalCompletenessIssue = {
   itemId: string;
@@ -132,7 +138,7 @@ const hashText = (value: string) => {
 
 const hasContentBlock = (value: string | undefined) => typeof value === 'string';
 const hasUnifiedDiffBlock = (value: string | undefined) =>
-  typeof value === 'string' && value.trim().length > 0 && /^@@ /m.test(value);
+  parseUnifiedDiff(value).ok;
 
 const completenessIssue = (item: ThreadProposalItem, code: ProposalCompletenessIssueCode, message: string): ProposalCompletenessIssue => ({
   itemId: item.id,
@@ -154,9 +160,12 @@ export const getProposalItemCompleteness = (
     issues.push(completenessIssue(item, 'missing_body_item', 'is missing its Markdown body section.'));
   }
 
-  const needsCurrent = item.kind === 'file_edit' || item.kind === 'file_delete';
+  const needsCurrent = item.kind === 'file_edit' || (item.kind === 'file_delete' && !item.currentHash);
   const needsProposed = item.kind === 'file_edit' || item.kind === 'file_create';
   const hasConcreteDiff = hasUnifiedDiffBlock(bodyItem?.diff);
+  if (item.kind === 'file_edit' && hasConcreteDiff && !item.currentHash && !hasContentBlock(bodyItem?.currentContent)) {
+    issues.push(completenessIssue(item, 'missing_current_hash', 'is missing current_hash for its Unified Diff.'));
+  }
   if (!hasConcreteDiff && needsCurrent && !hasContentBlock(bodyItem?.currentContent)) {
     issues.push(completenessIssue(item, 'missing_current_content', 'is missing Current Content.'));
   }

@@ -449,6 +449,81 @@ describe('tool model output compaction', () => {
     expect(compacted[1].content[0].output.value).toContain('Compact tool result summary');
   });
 
+  it('compacts persisted tool-invocation proposal inputs and long read/bash bodies', () => {
+    const diff = '@@ -1 +1 @@\n-before\n+after';
+    const longContent = `${'patch body\n'.repeat(600)}secret tail`;
+    const longStdout = `${'stdout patch body\n'.repeat(600)}stdout tail`;
+    const prompt = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              state: 'result',
+              toolName: 'writeProposalTool',
+              toolCallId: 'call-proposal',
+              args: {
+                title: 'Proposal input compaction',
+                summary: 'Compact proposal tool-call bodies.',
+                files: [{
+                  kind: 'file_edit',
+                  path: 'src/example.ts',
+                  diff,
+                  currentContent: 'before',
+                  proposedContent: 'after',
+                }],
+              },
+              result: { ok: true, path: '.agents/proposals/demo.md' },
+            },
+          },
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              state: 'result',
+              toolName: 'read',
+              toolCallId: 'call-read',
+              args: { path: '.agents/tmp/proposal.patch' },
+              result: { ok: true, path: '.agents/tmp/proposal.patch', content: longContent },
+            },
+          },
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              state: 'result',
+              toolName: 'bash',
+              toolCallId: 'call-bash',
+              args: { command: 'printf patch' },
+              result: { ok: true, command: 'printf patch', stdout: longStdout, exitCode: 0 },
+            },
+          },
+        ],
+      },
+    ];
+
+    const compacted = compactToolHistoryPrompt(prompt as any, { preserveToolCalls: 0 }) as any[];
+    const [proposalPart, readPart, bashPart] = compacted[0].content;
+    const proposalArgs = proposalPart.toolInvocation.args;
+    const compactedJson = JSON.stringify(compacted);
+
+    expect(proposalArgs.files[0]).toMatchObject({
+      kind: 'file_edit',
+      path: 'src/example.ts',
+      diffChars: diff.length,
+      currentContentChars: 'before'.length,
+      proposedContentChars: 'after'.length,
+    });
+    expect(proposalArgs.files[0].diff).toBeUndefined();
+    expect(readPart.toolInvocation).toMatchObject({ toolName: 'read', toolCallId: 'call-read' });
+    expect(readPart.toolInvocation.result.value).toContain('Compact tool result summary');
+    expect(readPart.toolInvocation.result.value).toContain('contentHash:');
+    expect(bashPart.toolInvocation).toMatchObject({ toolName: 'bash', toolCallId: 'call-bash' });
+    expect(bashPart.toolInvocation.result.value).toContain('stdoutHash:');
+    expect(compactedJson.includes(diff)).toBe(false);
+    expect(compactedJson.includes('secret tail')).toBe(false);
+    expect(compactedJson.includes('stdout tail')).toBe(false);
+  });
+
   it('does not expose message-list processor hooks that can persist compact summaries', () => {
     const processor = new CompactToolHistoryProcessor();
 
@@ -495,7 +570,7 @@ describe('tool model output compaction', () => {
     ];
 
     const compacted = compactToolHistoryPrompt(prompt as any, { preserveToolSteps: 1 });
-    const limited = limitCompactToolHistoryPrompt(compacted as any, 180) as any[];
+    const limited = limitCompactToolHistoryPrompt(compacted as any, 80) as any[];
 
     expect(limited).toEqual([
       { role: 'system', content: 'stable instructions' },
