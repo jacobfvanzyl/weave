@@ -34,16 +34,27 @@ const isVisibleToolOutputPart = (part: unknown) => {
   return call !== null && !isHiddenToolCall(call);
 };
 
+export const isSteeredUserMessagePart = (part: unknown) => {
+  if (!part || typeof part !== 'object') return false;
+  const record = part as Record<string, unknown>;
+  return (
+    record.type === 'data-user-message' ||
+    (record.type === 'data' && record.name === 'user-message')
+  );
+};
+
 export const isVisibleNonReasoningOutputPart = (part: unknown) => {
   const type = getPartType(part);
   if (type === 'reasoning') return false;
   if (type === 'text') return isVisibleTextPart(part);
   if (type === 'tool-call') return isVisibleToolOutputPart(part);
+  if (isSteeredUserMessagePart(part)) return true;
   return false;
 };
 
 const isVisibleAssistantOutputPart = (part: unknown, showReasoning: boolean) =>
-  isVisibleNonReasoningOutputPart(part) || (showReasoning && isVisibleReasoningPart(part));
+  (isVisibleNonReasoningOutputPart(part) && !isSteeredUserMessagePart(part)) ||
+  (showReasoning && isVisibleReasoningPart(part));
 
 export const getAutoCollapsedAssistantTextPartIndices = (
   parts: readonly unknown[],
@@ -62,6 +73,7 @@ export const getAutoCollapsedAssistantTextPartIndices = (
   }
 
   if (finalTextIndex < 0) return [];
+  if (parts.slice(0, finalTextIndex).some(isSteeredUserMessagePart)) return [];
 
   let firstFinalTextIndex = finalTextIndex;
   for (let index = finalTextIndex - 1; index >= 0; index -= 1) {

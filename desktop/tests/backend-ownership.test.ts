@@ -45,6 +45,7 @@ describe('backend route ownership', () => {
     expect(__compatibilityRoutesTest.chatStateAlias('/chat/threads/:threadId/messages')).toBe('/chat-state/threads/:threadId/messages');
     expect(__compatibilityRoutesTest.chatStateAlias('/owner/me')).toBe('/chat-state/me');
     expect(__compatibilityRoutesTest.chatRunAlias('/chat/runs/:threadId')).toBe('/chat/:threadId/run');
+    expect(__compatibilityRoutesTest.chatRunAlias('/chat/runs/:threadId/steer')).toBe('/chat/:threadId/steer');
     expect(__compatibilityRoutesTest.replacePrefix('/portal/window-sessions/token', '/portal/window-sessions', '/window-sessions'))
       .toBe('/window-sessions/token');
   });

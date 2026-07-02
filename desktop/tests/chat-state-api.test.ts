@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configureMastraConnection } from '../../packages/client/src/lib/mastra-client';
-import { cancelThreadRun, createWorkspace, deleteWorkspace, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, getThreadRunState, listProjectBranches, listProjects, listServerThreads, listWorkspaceGitStates, pullWorkspaceGitUpstream, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
+import { cancelThreadRun, createWorkspace, deleteWorkspace, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, getThreadRunState, listProjectBranches, listProjects, listServerThreads, listWorkspaceGitStates, pullWorkspaceGitUpstream, sendThreadSteeringMessage, setProjectProfile, setServerThreadProfile, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
 import { createWorkspaceDraftDefaults } from '../../packages/client/src/lib/workspace-create-defaults';
 import { overlayWorkspaceGitState } from '../../packages/client/src/lib/workspace-git-state';
 import { sortThreadsForDisplay } from '../../packages/client/src/lib/thread-eligibility';
@@ -116,6 +116,53 @@ describe('chat-state Project/Workspace API client', () => {
       ['http://weave.test/chat/runs/thread-1', { headers: { Authorization: 'Bearer token-1' } }],
       ['http://weave.test/chat/runs/thread-1/cancel', { method: 'POST', headers: { Authorization: 'Bearer token-1' } }],
     ]);
+  });
+
+  it('sends steering messages to the active thread run endpoint', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({ ok: true, accepted: true, runId: 'run-1', messageId: 'msg-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(sendThreadSteeringMessage('thread-1', {
+      id: 'user-1',
+      role: 'user',
+      parts: [{ type: 'text', text: 'steer now' }],
+    })).resolves.toEqual({ ok: true, accepted: true, runId: 'run-1', messageId: 'msg-1' });
+
+    expect(fetchMock.mock.calls).toEqual([
+      [
+        'http://weave.test/chat/runs/thread-1/steer',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', Authorization: 'Bearer token-1' },
+          body: JSON.stringify({
+            message: {
+              id: 'user-1',
+              role: 'user',
+              parts: [{ type: 'text', text: 'steer now' }],
+            },
+          }),
+        },
+      ],
+    ]);
+  });
+
+  it('returns not_active when steering races with a completed run', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
+    const run = { active: false, status: 'completed' as const };
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: false, reason: 'not_active', run }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(sendThreadSteeringMessage('thread-1', {
+      id: 'user-1',
+      role: 'user',
+      parts: [{ type: 'text', text: 'steer now' }],
+    })).resolves.toEqual({ ok: false, reason: 'not_active', run });
   });
 
   it('creates workspaces with separate display name and branch action', async () => {

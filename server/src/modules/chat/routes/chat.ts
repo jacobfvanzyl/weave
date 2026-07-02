@@ -1,4 +1,5 @@
 import { handleChatStream } from '@mastra/ai-sdk';
+import type { AgentMessageInput } from '@mastra/core/agent';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { defineRoute } from '../../../server/routes';
 import { attachmentIdFromReference, attachmentModelUrl, attachmentStorage, parseBase64DataUrl, type AttachmentStorage, type StoredAttachmentMetadata } from '../../attachments/storage';
@@ -22,6 +23,7 @@ import {
 } from '../../../server/perf';
 
 const agentId = 'mage-hand';
+const mastraAgentName = 'mageHandAgent';
 const maxImageAttachmentBytes = 10 * 1024 * 1024;
 const activeThreadRunCleanupDelayMs = 5 * 60 * 1000;
 const sseKeepAliveIntervalMs = 15_000;
@@ -108,6 +110,11 @@ const getStreamChunkType = (chunk: unknown) =>
   chunk && typeof chunk === 'object' && typeof (chunk as Record<string, unknown>).type === 'string'
     ? (chunk as Record<string, unknown>).type as string
     : undefined;
+
+const retainUserMessageDataChunk = (chunk: unknown) =>
+  chunk && typeof chunk === 'object' && !Array.isArray(chunk)
+    ? { ...(chunk as Record<string, unknown>), transient: false }
+    : chunk;
 
 const getStreamChunkError = (chunk: unknown) => {
   if (getStreamChunkType(chunk) !== 'error') return undefined;
@@ -340,12 +347,13 @@ const bufferAssistantTextStream = (stream: ReadableStream<unknown>) => new Reada
         }
 
         const type = getStreamChunkType(value);
+        if (type === 'data-user-message' || type === 'start') flushAll();
         const endKind = type ? bufferedAssistantEndTypes[type] : undefined;
         const id = getStreamChunkId(value);
         if (endKind && id) flushKey(getBufferedTextKey(endKind, id), { force: true });
         if (type === 'finish') flushAll();
 
-        controller.enqueue(value);
+        controller.enqueue(type === 'data-user-message' ? retainUserMessageDataChunk(value) : value);
       }
 
       flushAll();
@@ -437,6 +445,22 @@ type ActiveThreadRun = {
   terminalChunkType?: string;
   error?: string;
   perf?: ChatRunPerf;
+};
+
+type RunUiMessage = {
+  id: string;
+  role: 'assistant' | 'user';
+  parts: Array<Record<string, unknown>>;
+  status?: { type: 'running' | 'complete'; reason?: string };
+  metadata?: unknown;
+};
+
+type PendingToolInput = {
+  text: string;
+  toolName: string;
+  dynamic?: boolean;
+  title?: string;
+  toolMetadata?: unknown;
 };
 
 const activeThreadRuns = new Map<string, ActiveThreadRun>();
@@ -626,8 +650,412 @@ const getSubmittedUserMessages = (messages: unknown) => {
   return [];
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const mergeRunMessageMetadata = (current: unknown, next: unknown) => {
+  if (next === undefined || next === null) return current;
+  if (isRecord(current) && isRecord(next)) return { ...current, ...next };
+  return next;
+};
+
+const parsePartialJson = (value: string) => {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+const findRunToolPart = (message: RunUiMessage, toolCallId: string) =>
+  message.parts.find(part => part.toolCallId === toolCallId && (
+    part.type === 'dynamic-tool' ||
+    (typeof part.type === 'string' && part.type.startsWith('tool-'))
+  ));
+
+const upsertRunToolPart = (
+  message: RunUiMessage,
+  options: {
+    toolCallId: string;
+    toolName: string;
+    state: string;
+    input?: unknown;
+    output?: unknown;
+    rawInput?: unknown;
+    errorText?: unknown;
+    dynamic?: boolean;
+    providerExecuted?: unknown;
+    preliminary?: unknown;
+    title?: unknown;
+    toolMetadata?: unknown;
+    providerMetadata?: unknown;
+  },
+) => {
+  const part = findRunToolPart(message, options.toolCallId);
+  const nextType = options.dynamic ? 'dynamic-tool' : `tool-${options.toolName}`;
+  const target = part ?? {
+    type: nextType,
+    toolCallId: options.toolCallId,
+    ...(options.dynamic ? { toolName: options.toolName } : {}),
+  };
+
+  target.state = options.state;
+  if (options.input !== undefined) target.input = options.input;
+  if (options.output !== undefined) target.output = options.output;
+  if (options.rawInput !== undefined) target.rawInput = options.rawInput;
+  if (options.errorText !== undefined) target.errorText = options.errorText;
+  if (options.providerExecuted !== undefined) target.providerExecuted = options.providerExecuted;
+  if (options.preliminary !== undefined) target.preliminary = options.preliminary;
+  if (options.title !== undefined) target.title = options.title;
+  if (options.toolMetadata !== undefined) target.toolMetadata = options.toolMetadata;
+  if (options.providerMetadata !== undefined) {
+    if (options.state === 'output-available' || options.state === 'output-error') {
+      target.resultProviderMetadata = options.providerMetadata;
+    } else {
+      target.callProviderMetadata = options.providerMetadata;
+    }
+  }
+
+  if (!part) message.parts.push(target);
+  return target;
+};
+
+const runSignalContentsToUiParts = (contents: unknown): Array<Record<string, unknown>> => {
+  if (typeof contents === 'string') return contents.length > 0 ? [{ type: 'text', text: contents }] : [];
+  if (!Array.isArray(contents)) return [];
+
+  return contents.flatMap((part): Array<Record<string, unknown>> => {
+    if (!part || typeof part !== 'object') return [];
+    const record = part as Record<string, unknown>;
+    if (record.type === 'text' && typeof record.text === 'string') return [{ type: 'text', text: record.text }];
+
+    if (record.type === 'file') {
+      const mediaType = typeof record.mediaType === 'string'
+        ? record.mediaType
+        : typeof record.mimeType === 'string'
+        ? record.mimeType
+        : undefined;
+      const url = typeof record.url === 'string'
+        ? record.url
+        : typeof record.data === 'string'
+        ? record.data
+        : record.data instanceof URL
+        ? record.data.toString()
+        : undefined;
+      if (!url || !mediaType?.startsWith('image/')) return [];
+
+      return [{
+        type: 'file',
+        url,
+        mediaType,
+        ...(typeof record.filename === 'string' ? { filename: record.filename } : {}),
+        ...(record.providerMetadata !== undefined ? { providerMetadata: record.providerMetadata } : {}),
+      }];
+    }
+
+    return [];
+  });
+};
+
+const buildRunUserMessageFromSignalChunk = (chunk: Record<string, unknown>, fallbackId: string): RunUiMessage | undefined => {
+  const data = chunk.data && typeof chunk.data === 'object' ? chunk.data as Record<string, unknown> : undefined;
+  if (!data) return undefined;
+
+  const parts = runSignalContentsToUiParts(data.contents);
+  if (parts.length === 0) return undefined;
+  const metadata = isRecord(data.metadata) ? data.metadata : undefined;
+  const originalText = typeof metadata?.slashCommandOriginalText === 'string'
+    ? metadata.slashCommandOriginalText
+    : undefined;
+  const attachmentParts = parts.filter(part => part.type === 'file');
+
+  return {
+    id: typeof data.id === 'string' && data.id.trim() ? data.id : fallbackId,
+    role: 'user',
+    parts: originalText ? [{ type: 'text', text: originalText }, ...attachmentParts] : parts,
+    ...(data.metadata !== undefined ? { metadata: data.metadata } : {}),
+  };
+};
+
+const filterRunMessageParts = (message: RunUiMessage) =>
+  message.parts.filter(part => {
+    if (part.type === 'reasoning') return typeof part.text === 'string' && part.text.trim().length > 0;
+    if (part.type === 'text') return typeof part.text === 'string' && part.text.length > 0;
+    return true;
+  });
+
+const buildRunUiMessagesFromChunks = (run: ActiveThreadRun): RunUiMessage[] => {
+  const messages: RunUiMessage[] = [];
+  let message: RunUiMessage | undefined;
+  let activeTextParts: Record<string, Record<string, unknown>> = {};
+  let activeReasoningParts: Record<string, Record<string, unknown>> = {};
+  let partialToolInputs: Record<string, PendingToolInput> = {};
+
+  const defaultAssistantStatus = (): RunUiMessage['status'] =>
+    activeThreadRunStatuses.has(run.status)
+      ? { type: 'running' }
+      : { type: 'complete', ...(run.status === 'cancelled' ? { reason: 'stop' } : {}) };
+
+  const getAssistantMessage = () => {
+    if (!message) {
+      message = {
+        id: `${run.runId}-${messages.length}`,
+        role: 'assistant',
+        parts: [],
+        status: defaultAssistantStatus(),
+      };
+    }
+    return message;
+  };
+
+  const closeAssistantMessage = (status: RunUiMessage['status'] = { type: 'complete' }) => {
+    if (!message) return;
+
+    message.parts = filterRunMessageParts(message);
+    if (message.parts.length > 0) {
+      message.status = status;
+      messages.push(message);
+    }
+
+    message = undefined;
+    activeTextParts = {};
+    activeReasoningParts = {};
+    partialToolInputs = {};
+  };
+
+  for (const chunk of run.chunks) {
+    if (!isRecord(chunk) || typeof chunk.type !== 'string') continue;
+
+    switch (chunk.type) {
+      case 'start': {
+        if (message?.parts.length) closeAssistantMessage({ type: 'complete' });
+        const assistantMessage = getAssistantMessage();
+        if (typeof chunk.messageId === 'string' && chunk.messageId.trim()) assistantMessage.id = chunk.messageId;
+        assistantMessage.metadata = mergeRunMessageMetadata(assistantMessage.metadata, chunk.messageMetadata);
+        break;
+      }
+      case 'message-metadata': {
+        const assistantMessage = getAssistantMessage();
+        assistantMessage.metadata = mergeRunMessageMetadata(assistantMessage.metadata, chunk.messageMetadata);
+        break;
+      }
+      case 'text-start': {
+        if (typeof chunk.id !== 'string') break;
+        const assistantMessage = getAssistantMessage();
+        const part = {
+          type: 'text',
+          text: '',
+          ...(chunk.providerMetadata !== undefined ? { providerMetadata: chunk.providerMetadata } : {}),
+        };
+        activeTextParts[chunk.id] = part;
+        assistantMessage.parts.push(part);
+        break;
+      }
+      case 'text-delta': {
+        if (typeof chunk.id !== 'string' || typeof chunk.delta !== 'string') break;
+        const assistantMessage = getAssistantMessage();
+        const part = activeTextParts[chunk.id] ?? {
+          type: 'text',
+          text: '',
+        };
+        if (!activeTextParts[chunk.id]) {
+          activeTextParts[chunk.id] = part;
+          assistantMessage.parts.push(part);
+        }
+        part.text = `${typeof part.text === 'string' ? part.text : ''}${chunk.delta}`;
+        if (chunk.providerMetadata !== undefined) part.providerMetadata = chunk.providerMetadata;
+        break;
+      }
+      case 'text-end': {
+        if (typeof chunk.id === 'string') delete activeTextParts[chunk.id];
+        break;
+      }
+      case 'reasoning-start': {
+        if (typeof chunk.id !== 'string') break;
+        const assistantMessage = getAssistantMessage();
+        const part = {
+          type: 'reasoning',
+          text: '',
+          ...(chunk.providerMetadata !== undefined ? { providerMetadata: chunk.providerMetadata } : {}),
+        };
+        activeReasoningParts[chunk.id] = part;
+        assistantMessage.parts.push(part);
+        break;
+      }
+      case 'reasoning-delta': {
+        if (typeof chunk.id !== 'string' || typeof chunk.delta !== 'string') break;
+        const assistantMessage = getAssistantMessage();
+        const part = activeReasoningParts[chunk.id] ?? {
+          type: 'reasoning',
+          text: '',
+        };
+        if (!activeReasoningParts[chunk.id]) {
+          activeReasoningParts[chunk.id] = part;
+          assistantMessage.parts.push(part);
+        }
+        part.text = `${typeof part.text === 'string' ? part.text : ''}${chunk.delta}`;
+        if (chunk.providerMetadata !== undefined) part.providerMetadata = chunk.providerMetadata;
+        break;
+      }
+      case 'reasoning-end': {
+        if (typeof chunk.id === 'string') delete activeReasoningParts[chunk.id];
+        break;
+      }
+      case 'start-step': {
+        getAssistantMessage().parts.push({ type: 'step-start' });
+        break;
+      }
+      case 'tool-input-start': {
+        if (typeof chunk.toolCallId !== 'string' || typeof chunk.toolName !== 'string') break;
+        const assistantMessage = getAssistantMessage();
+        partialToolInputs[chunk.toolCallId] = {
+          text: '',
+          toolName: chunk.toolName,
+          dynamic: chunk.dynamic === true,
+          title: typeof chunk.title === 'string' ? chunk.title : undefined,
+          toolMetadata: chunk.toolMetadata,
+        };
+        upsertRunToolPart(assistantMessage, {
+          toolCallId: chunk.toolCallId,
+          toolName: chunk.toolName,
+          state: 'input-streaming',
+          input: undefined,
+          dynamic: chunk.dynamic === true,
+          providerExecuted: chunk.providerExecuted,
+          title: chunk.title,
+          toolMetadata: chunk.toolMetadata,
+          providerMetadata: chunk.providerMetadata,
+        });
+        break;
+      }
+      case 'tool-input-delta': {
+        if (typeof chunk.toolCallId !== 'string' || typeof chunk.inputTextDelta !== 'string') break;
+        const assistantMessage = getAssistantMessage();
+        const pending = partialToolInputs[chunk.toolCallId];
+        if (!pending) break;
+        pending.text += chunk.inputTextDelta;
+        upsertRunToolPart(assistantMessage, {
+          toolCallId: chunk.toolCallId,
+          toolName: pending.toolName,
+          state: 'input-streaming',
+          input: parsePartialJson(pending.text),
+          dynamic: pending.dynamic,
+          title: pending.title,
+          toolMetadata: pending.toolMetadata,
+        });
+        break;
+      }
+      case 'tool-input-available': {
+        if (typeof chunk.toolCallId !== 'string' || typeof chunk.toolName !== 'string') break;
+        const assistantMessage = getAssistantMessage();
+        delete partialToolInputs[chunk.toolCallId];
+        upsertRunToolPart(assistantMessage, {
+          toolCallId: chunk.toolCallId,
+          toolName: chunk.toolName,
+          state: 'input-available',
+          input: chunk.input,
+          dynamic: chunk.dynamic === true,
+          providerExecuted: chunk.providerExecuted,
+          title: chunk.title,
+          toolMetadata: chunk.toolMetadata,
+          providerMetadata: chunk.providerMetadata,
+        });
+        break;
+      }
+      case 'tool-input-error': {
+        if (typeof chunk.toolCallId !== 'string' || typeof chunk.toolName !== 'string') break;
+        const assistantMessage = getAssistantMessage();
+        delete partialToolInputs[chunk.toolCallId];
+        upsertRunToolPart(assistantMessage, {
+          toolCallId: chunk.toolCallId,
+          toolName: chunk.toolName,
+          state: 'output-error',
+          rawInput: chunk.input,
+          errorText: chunk.errorText,
+          dynamic: chunk.dynamic === true,
+          providerExecuted: chunk.providerExecuted,
+          title: chunk.title,
+          toolMetadata: chunk.toolMetadata,
+          providerMetadata: chunk.providerMetadata,
+        });
+        break;
+      }
+      case 'tool-output-available':
+      case 'tool-output-error': {
+        if (typeof chunk.toolCallId !== 'string') break;
+        const assistantMessage = getAssistantMessage();
+        const existingPart = findRunToolPart(assistantMessage, chunk.toolCallId);
+        const existingToolName = typeof existingPart?.toolName === 'string'
+          ? existingPart.toolName
+          : typeof existingPart?.type === 'string' && existingPart.type.startsWith('tool-')
+          ? existingPart.type.slice('tool-'.length)
+          : 'tool';
+        upsertRunToolPart(assistantMessage, {
+          toolCallId: chunk.toolCallId,
+          toolName: existingToolName,
+          state: chunk.type === 'tool-output-available' ? 'output-available' : 'output-error',
+          input: existingPart?.input,
+          rawInput: existingPart?.rawInput,
+          output: chunk.type === 'tool-output-available' ? chunk.output : undefined,
+          errorText: chunk.type === 'tool-output-error' ? chunk.errorText : undefined,
+          dynamic: existingPart?.type === 'dynamic-tool' || chunk.dynamic === true,
+          providerExecuted: chunk.providerExecuted,
+          preliminary: chunk.preliminary,
+          title: existingPart?.title,
+          toolMetadata: chunk.toolMetadata ?? existingPart?.toolMetadata,
+          providerMetadata: chunk.providerMetadata,
+        });
+        break;
+      }
+      case 'file': {
+        getAssistantMessage().parts.push({
+          type: 'file',
+          url: chunk.url,
+          mediaType: chunk.mediaType,
+          ...(chunk.providerMetadata !== undefined ? { providerMetadata: chunk.providerMetadata } : {}),
+        });
+        break;
+      }
+      case 'source-url':
+      case 'source-document': {
+        getAssistantMessage().parts.push({ ...chunk });
+        break;
+      }
+      case 'data-user-message': {
+        closeAssistantMessage({ type: 'complete' });
+        const userMessage = buildRunUserMessageFromSignalChunk(chunk, `${run.runId}-user-${messages.length}`);
+        if (userMessage) messages.push(userMessage);
+        break;
+      }
+      case 'finish': {
+        const assistantMessage = getAssistantMessage();
+        assistantMessage.status = { type: 'complete' };
+        assistantMessage.metadata = mergeRunMessageMetadata(assistantMessage.metadata, chunk.messageMetadata);
+        break;
+      }
+      case 'abort': {
+        if (message) message.status = { type: 'complete', reason: 'stop' };
+        break;
+      }
+      default: {
+        if (chunk.type.startsWith('data-') && chunk.transient !== true) getAssistantMessage().parts.push({ ...chunk });
+        break;
+      }
+    }
+  }
+
+  closeAssistantMessage(message?.status ?? defaultAssistantStatus());
+
+  return messages;
+};
+
 export const getThreadRunSubmittedUserMessages = (resourceId: string | undefined, threadId: string | undefined) =>
   getThreadRun(resourceId, threadId)?.submittedUserMessages ?? [];
+
+export const getThreadRunUiMessages = (resourceId: string | undefined, threadId: string | undefined) => {
+  const run = getThreadRun(resourceId, threadId);
+  return run ? buildRunUiMessagesFromChunks(run) : [];
+};
 
 const createActiveThreadRun = (resourceId: string, threadId: string, submittedUserMessages: unknown[] = []) => {
   const key = threadRunKey(resourceId, threadId);
@@ -911,12 +1339,72 @@ const latestUserMessageOnly = (messages: unknown) => {
 const submittedMessagesForMemory = (messages: unknown, threadId: unknown) =>
   typeof threadId === 'string' && threadId.trim() ? latestUserMessageOnly(messages) : messages;
 
+const getString = (value: unknown) => typeof value === 'string' && value.trim() ? value : undefined;
+
+const toAgentFileData = (value: string) => {
+  try {
+    return new URL(value);
+  } catch {
+    return value;
+  }
+};
+
+const toAgentMessageInput = (message: unknown): AgentMessageInput => {
+  if (!isRecord(message) || message.role !== 'user') {
+    throw new Error('Steering message must be a user message');
+  }
+
+  const contents: Array<Record<string, unknown>> = [];
+  const addText = (text: unknown) => {
+    if (typeof text === 'string' && text.length > 0) contents.push({ type: 'text', text });
+  };
+  const addFile = (file: Record<string, unknown>) => {
+    const mediaType = getString(file.mediaType) ?? getString(file.mimeType) ?? getString(file.contentType);
+    const data = getString(file.data) ?? getString(file.url);
+    if (!data || !mediaType) return;
+    contents.push({
+      type: 'file',
+      data: toAgentFileData(data),
+      mediaType,
+      ...(getString(file.filename) ? { filename: getString(file.filename) } : {}),
+      ...(file.providerOptions !== undefined ? { providerOptions: file.providerOptions } : {}),
+    });
+  };
+
+  if (Array.isArray(message.parts)) {
+    for (const part of message.parts) {
+      if (!isRecord(part)) continue;
+      if (part.type === 'text') addText(part.text);
+      else if (part.type === 'file') addFile(part);
+    }
+  } else {
+    addText(message.content);
+  }
+
+  if (Array.isArray(message.experimental_attachments)) {
+    for (const attachment of message.experimental_attachments) {
+      if (isRecord(attachment)) addFile(attachment);
+    }
+  }
+
+  if (contents.length === 0) {
+    throw new Error('Steering message must include text or complete attachments');
+  }
+
+  return {
+    contents,
+    ...(isRecord(message.metadata) ? { metadata: message.metadata } : {}),
+    ...(isRecord(message.providerOptions) ? { providerOptions: message.providerOptions } : {}),
+  } as unknown as AgentMessageInput;
+};
+
 export const __chatRouteMemoryTest = {
   latestUserMessageOnly,
   getSubmittedUserMessages,
   normalizeMessageImageAttachments,
   sanitizeSubmittedMessagesForMastra,
   submittedMessagesForMemory,
+  toAgentMessageInput,
 };
 
 export const __chatRunRegistryTest = {
@@ -927,8 +1415,10 @@ export const __chatRunRegistryTest = {
   cancel: cancelThreadRun,
   complete: (run: ActiveThreadRun) => settleThreadRun(run, 'completed'),
   pump: startThreadRunPump,
+  buffer: bufferAssistantTextStream,
   snapshot: toThreadRunSnapshot,
   get: getThreadRun,
+  uiMessages: getThreadRunUiMessages,
   clear: () => {
     for (const run of activeThreadRuns.values()) {
       if (run.cleanupTimer) clearTimeout(run.cleanupTimer);
@@ -970,6 +1460,52 @@ export const chatRoutes = [
 
       cancelThreadRun(run);
       return c.json({ ok: true, run: toThreadRunSnapshot(run) });
+    },
+  }),
+  defineRoute('/chat/runs/:threadId/steer', {
+    method: 'POST',
+    handler: async c => {
+      const resourceId = getResourceId(c);
+      const threadId = c.req.param('threadId');
+      const run = getActiveThreadRun(resourceId, threadId);
+      if (!run) {
+        return c.json({ ok: false, reason: 'not_active', run: toThreadRunSnapshot(getThreadRun(resourceId, threadId)) }, 409);
+      }
+
+      const body = await c.req.json();
+      const submittedMessages = Array.isArray(body?.messages)
+        ? body.messages
+        : body?.message
+        ? [body.message]
+        : [];
+      const normalizedMessages = sanitizeSubmittedMessagesForMastra(await normalizeMessageImageAttachments(
+        submittedMessagesForMemory(submittedMessages, threadId),
+        { threadId },
+      ));
+      const submittedUserMessage = getSubmittedUserMessages(normalizedMessages)[0];
+      if (!submittedUserMessage) return c.json({ error: 'Steering requires a user message' }, 400);
+
+      const mastra = c.get('mastra');
+      const agent = await mastra.getAgent(mastraAgentName);
+      const result = agent.sendMessage(toAgentMessageInput(submittedUserMessage), {
+        resourceId,
+        threadId,
+        ifActive: {
+          behavior: 'deliver',
+          attributes: {
+            source: 'composer',
+            delivery: 'while-active',
+          },
+        },
+        ifIdle: { behavior: 'discard' },
+      });
+
+      return c.json({
+        ok: true,
+        accepted: result.accepted,
+        runId: result.runId,
+        messageId: result.signal.id,
+      });
     },
   }),
   defineRoute('/chat/runs', {

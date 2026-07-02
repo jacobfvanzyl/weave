@@ -1,6 +1,5 @@
 import {
   AssistantRuntimeProvider,
-  AuiIf,
   AttachmentPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
@@ -12,7 +11,7 @@ import {
 } from '@assistant-ui/react';
 import type { ReasoningMessagePartProps, ToolCallMessagePartProps } from '@assistant-ui/react';
 import type { ThreadMessage } from '@assistant-ui/core';
-import type { AttachmentAdapter } from '@assistant-ui/core';
+import type { Attachment, AttachmentAdapter, CompleteAttachment, PendingAttachment, ThreadUserMessagePart } from '@assistant-ui/core';
 import type { ChatTransport, UIMessage } from 'ai';
 import { useChat } from '@ai-sdk/react';
 import { AssistantChatTransport, useAISDKRuntime } from '@assistant-ui/react-ai-sdk';
@@ -23,8 +22,15 @@ import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Brain, Check, ChevronRight, Clipboard, Crosshair, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
 import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
+import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, sendThreadSteeringMessage, type ContextUsage } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
+import {
+  abandonComposerDraftServerAck,
+  confirmComposerDraftReceived,
+  loadComposerDraft,
+  markComposerDraftAwaitingServerAck,
+  saveComposerDraft,
+} from '../../lib/composer-drafts';
 import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
 import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
@@ -47,6 +53,7 @@ import {
   getAssistantContentRanges,
   getPartType,
   getReasoningText,
+  isSteeredUserMessagePart,
   isVisibleNonReasoningOutputPart,
 } from './assistant-content-ranges';
 import {
@@ -146,6 +153,63 @@ const imageAttachmentAdapter: AttachmentAdapter = {
     };
   },
   async remove() {},
+};
+
+const isCompleteAttachment = (attachment: Attachment): attachment is CompleteAttachment =>
+  attachment.status.type === 'complete';
+
+const completeComposerAttachment = async (attachment: Attachment) => {
+  if (isCompleteAttachment(attachment)) return attachment;
+  if (attachment.status.type === 'incomplete') throw new Error('Attachment upload did not complete');
+  return imageAttachmentAdapter.send(attachment as PendingAttachment);
+};
+
+const toSteeringFilePart = (part: ThreadUserMessagePart): UIMessage['parts'][number] | null => {
+  if (part.type === 'file') {
+    return {
+      type: 'file',
+      url: part.data,
+      mediaType: part.mimeType,
+      ...(part.filename ? { filename: part.filename } : {}),
+    };
+  }
+
+  if (part.type === 'image') {
+    return {
+      type: 'file',
+      url: part.image,
+      mediaType: 'image/png',
+      ...(part.filename ? { filename: part.filename } : {}),
+    };
+  }
+
+  if (part.type === 'text') return { type: 'text', text: part.text };
+  return null;
+};
+
+const buildSteeringUserMessage = async (
+  text: string,
+  attachments: readonly Attachment[],
+  metadata?: Record<string, unknown>,
+): Promise<UIMessage> => {
+  const parts: UIMessage['parts'] = text.length > 0 ? [{ type: 'text', text }] : [];
+  const completeAttachments = await Promise.all(attachments.map(completeComposerAttachment));
+
+  for (const attachment of completeAttachments) {
+    for (const contentPart of attachment.content) {
+      const part = toSteeringFilePart(contentPart);
+      if (part) parts.push(part);
+    }
+  }
+
+  if (parts.length === 0) throw new Error('Cannot send an empty steering message');
+
+  return {
+    id: crypto.randomUUID(),
+    role: 'user',
+    parts,
+    ...(metadata ? { metadata } : {}),
+  };
 };
 
 const Reasoning = ({ text }: ReasoningMessagePartProps) => {
@@ -660,11 +724,88 @@ const MessageImageAttachments = () => (
   </MessagePrimitive.Attachments>
 );
 
+type SteeredUserMessageFile = {
+  url: string;
+  mediaType: string;
+  filename?: string;
+};
+
+const asObjectRecord = (value: unknown): Record<string, unknown> | undefined =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+
+const getStringValue = (value: unknown) => typeof value === 'string' && value.length > 0 ? value : undefined;
+
+const getSteeredUserMessageData = (part: unknown) => {
+  const record = asObjectRecord(part);
+  if (!record) return undefined;
+  if (record.type === 'data' && record.name === 'user-message') return asObjectRecord(record.data);
+  if (record.type === 'data-user-message') return asObjectRecord(record.data);
+  return undefined;
+};
+
+const getSteeredUserMessageContent = (part: unknown) => {
+  const data = getSteeredUserMessageData(part);
+  if (!data) return undefined;
+
+  const metadata = asObjectRecord(data.metadata);
+  const originalText = getStringValue(metadata?.slashCommandOriginalText);
+  const textParts: string[] = [];
+  const files: SteeredUserMessageFile[] = [];
+  const collectFile = (record: Record<string, unknown>) => {
+    const url = getStringValue(record.url) ?? getStringValue(record.data);
+    const mediaType = getStringValue(record.mediaType) ?? getStringValue(record.mimeType);
+    if (!url || !mediaType?.startsWith('image/')) return;
+    files.push({
+      url,
+      mediaType,
+      ...(getStringValue(record.filename) ? { filename: getStringValue(record.filename) } : {}),
+    });
+  };
+
+  if (typeof data.contents === 'string') {
+    textParts.push(data.contents);
+  } else if (Array.isArray(data.contents)) {
+    for (const entry of data.contents) {
+      const record = asObjectRecord(entry);
+      if (!record) continue;
+      if (record.type === 'text' && typeof record.text === 'string') textParts.push(record.text);
+      if (record.type === 'file') collectFile(record);
+    }
+  }
+
+  const text = (originalText ?? textParts.join('\n\n')).trim();
+  if (!text && files.length === 0) return undefined;
+  return { text, files };
+};
+
+const SteeredUserMessageBoundary = ({ part }: { part: unknown }) => {
+  const content = getSteeredUserMessageContent(part);
+  if (!content) return null;
+
+  return (
+    <div className="my-3 flex w-full justify-end">
+      <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-mauve bg-mauve px-3.5 py-2 text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)] text-primary-foreground">
+        {content.text ? <MarkdownText text={content.text} /> : null}
+        {content.files.length > 0 ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {content.files.map((file, index) => (
+              <div key={`${file.url}:${index}`} className="group relative h-24 w-24 overflow-hidden rounded-md border border-primary-foreground/20 bg-primary-foreground/10">
+                <img src={file.url} alt={file.filename ?? 'Attached image'} className="h-full w-full object-cover" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+};
+
 const hasRenderableAssistantContent = (message: ThreadMessage, showReasoning: boolean) => {
   if (message.role !== 'assistant') return true;
   return message.content.some(part => {
     if (part.type === 'text' && typeof part.text === 'string') return part.text.trim().length > 0;
     if (part.type === 'reasoning' && showReasoning && typeof part.text === 'string') return part.text.trim().length > 0;
+    if (isSteeredUserMessagePart(part)) return true;
     return part.type.startsWith('tool-') || part.type === 'tool-call';
   });
 };
@@ -863,6 +1004,10 @@ const AssistantGroupedContent = ({
         }
 
         const part = parts[range.index];
+        if (isSteeredUserMessagePart(part)) {
+          return <SteeredUserMessageBoundary key={range.index} part={part} />;
+        }
+
         if (getPartType(part) === 'text' && part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') {
           return <MarkdownText key={range.index} text={(part as { text: string }).text} deferCodeHighlight={deferCodeHighlight} />;
         }
@@ -1506,11 +1651,18 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   const resourceId = useChatStore(state => state.resourceId);
   const composerRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const skippedInitialDraftWriteThreadRef = useRef<string | null>(null);
+  const composerTextRef = useRef('');
   const isEmpty = useThread(state => state.messages.length === 0 && !state.isLoading);
+  const isLocalThreadRunning = useThread(state => state.isRunning);
   const composerText = useAuiState(state => state.composer.text);
   const isComposerEmpty = useAuiState(state => state.composer.isEmpty);
+  const composerAttachments = useAuiState(state => state.composer.attachments);
+  const runningThreadIds = useChatStore(state => state.runningThreadIds);
   const thread = useChatStore(state => state.threads.find(item => item.id === threadId));
+  const isThreadRunning = isLocalThreadRunning || Boolean(threadId && runningThreadIds.includes(threadId));
   const isRemovedWorkspaceThread = Boolean(thread?.removedWorkspace);
+  const [isSteeringSending, setIsSteeringSending] = useState(false);
   const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
   const [activeIndex, setActiveIndex] = useState(0);
   const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
@@ -1547,25 +1699,124 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
     setActiveIndex(0);
   }, [slashMatch?.[1]]);
 
+  useEffect(() => {
+    composerTextRef.current = composerText;
+  }, [composerText]);
+
+  useEffect(() => {
+    if (!threadId) return;
+    const draft = loadComposerDraft(threadId);
+    if (draft.length === 0 || composerTextRef.current.length > 0) {
+      skippedInitialDraftWriteThreadRef.current = null;
+      return;
+    }
+
+    skippedInitialDraftWriteThreadRef.current = threadId;
+    aui.composer().setText(draft);
+  }, [aui, threadId]);
+
+  useEffect(() => {
+    if (!threadId) return;
+    if (skippedInitialDraftWriteThreadRef.current === threadId) {
+      skippedInitialDraftWriteThreadRef.current = null;
+      return;
+    }
+
+    saveComposerDraft(threadId, composerText);
+  }, [composerText, threadId]);
+
+  const markDraftAwaitingSend = () => {
+    if (!threadId || composerText.length === 0) return;
+    markComposerDraftAwaitingServerAck(threadId, composerText);
+  };
+
   const selectPrompt = (prompt: PromptSummary) => {
     aui.composer().setText(`/${prompt.name} `);
     setActiveIndex(0);
   };
 
-  const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = event => {
-    if (!slashMatch || promptMatches.length === 0) return;
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setActiveIndex(index => (index + 1) % Math.min(promptMatches.length, 8));
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setActiveIndex(index => (index - 1 + Math.min(promptMatches.length, 8)) % Math.min(promptMatches.length, 8));
-    } else if (event.key === 'Tab' || event.key === 'Enter') {
-      event.preventDefault();
-      selectPrompt(promptMatches[Math.min(activeIndex, promptMatches.length - 1)].prompt);
-    } else if (event.key === 'Escape') {
-      setActiveIndex(0);
+  const sendSteeringMessage = useCallback(async () => {
+    if (!threadId || isSteeringSending || !isSendActive) return;
+
+    const originalText = composerText;
+    const attachments = [...composerAttachments];
+    markComposerDraftAwaitingServerAck(threadId, originalText);
+    setIsSteeringSending(true);
+
+    try {
+      const lastUserText = originalText.trim();
+      const slashCommand = parseSlashCommand(lastUserText);
+      const messageText = slashCommand
+        ? await expandPrompt(slashCommand.name, slashCommand.args, promptContext)
+        : originalText;
+      const metadata = slashCommand
+        ? {
+            slashCommandOriginalText: lastUserText,
+            slashCommandName: slashCommand.name,
+          }
+        : undefined;
+      const message = await buildSteeringUserMessage(messageText, attachments, metadata);
+      const result = await sendThreadSteeringMessage(threadId, message);
+
+      if (!result.ok) {
+        aui.composer().send();
+        return;
+      }
+
+      confirmComposerDraftReceived(threadId);
+      const currentComposer = aui.composer().getState();
+      const sameAttachments =
+        currentComposer.attachments.length === attachments.length &&
+        currentComposer.attachments.every((attachment, index) => attachment.id === attachments[index]?.id);
+      if (currentComposer.text === originalText && sameAttachments) {
+        await aui.composer().reset();
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
+      ]);
+    } catch (error) {
+      abandonComposerDraftServerAck(threadId);
+      const currentText = aui.composer().getState().text;
+      saveComposerDraft(threadId, currentText.length > 0 ? currentText : originalText);
+      console.error('[chat] failed to send steering message', error);
+    } finally {
+      setIsSteeringSending(false);
     }
+  }, [aui, composerAttachments, composerText, isSendActive, isSteeringSending, promptContext, queryClient, resourceId, threadId]);
+
+  const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = event => {
+    if (slashMatch && promptMatches.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setActiveIndex(index => (index + 1) % Math.min(promptMatches.length, 8));
+        return;
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setActiveIndex(index => (index - 1 + Math.min(promptMatches.length, 8)) % Math.min(promptMatches.length, 8));
+        return;
+      } else if (event.key === 'Tab' || event.key === 'Enter') {
+        event.preventDefault();
+        selectPrompt(promptMatches[Math.min(activeIndex, promptMatches.length - 1)].prompt);
+        return;
+      } else if (event.key === 'Escape') {
+        setActiveIndex(0);
+        return;
+      }
+    }
+
+    if (event.key === 'Enter' && !event.shiftKey && isThreadRunning && isSendActive) {
+      event.preventDefault();
+      void sendSteeringMessage();
+    }
+  };
+
+  const handleComposerSubmit: React.FormEventHandler<HTMLFormElement> = event => {
+    if (!isThreadRunning || !isSendActive) return;
+    event.preventDefault();
+    void sendSteeringMessage();
   };
 
   const connectChatGPT = async () => {
@@ -1592,6 +1843,8 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   return (
     <ComposerPrimitive.Root
       ref={composerRef}
+      onSubmitCapture={markDraftAwaitingSend}
+      onSubmit={handleComposerSubmit}
       className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-border bg-card px-4 py-3 shadow-sm"
       data-weave-text-surface="true"
     >
@@ -1626,15 +1879,15 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {isEmpty ? null : <ContextUsageRing threadId={threadId} />}
-          <AuiIf condition={state => !state.thread.isRunning}>
-            {isRemovedWorkspaceThread ? null : isChatGPTConnected ? (
+          {!isThreadRunning ? (
+            isRemovedWorkspaceThread ? null : isChatGPTConnected ? (
               <ComposerPrimitive.Send
                 render={(
                   <Button
                     size="icon-lg"
                     variant={isSendActive ? 'default' : 'ghost'}
                     className={cn(
-                      'h-11 w-11 shrink-0 rounded-full',
+                      'shrink-0 rounded-full',
                       isSendActive
                         ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
                         : 'text-primary',
@@ -1655,16 +1908,28 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
               >
                 <KeyRound size={20} />
               </Button>
-            )}
-          </AuiIf>
-          <AuiIf condition={state => state.thread.isRunning}>
+            )
+          ) : isSendActive ? (
+            <Button
+              type="submit"
+              aria-label="Send steering message"
+              title="Send steering message"
+              disabled={isSteeringSending}
+              size="icon-lg"
+              variant="default"
+              className="shrink-0 rounded-full border-primary bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {isSteeringSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={20} />}
+            </Button>
+          ) : null}
+          {isThreadRunning ? (
             <ComposerPrimitive.Cancel
               onClick={() => void stopThreadRun()}
               render={<Button size="icon-lg" variant="ghost" className="h-11 w-11 shrink-0 rounded-full text-primary" aria-label="Stop generation" title="Stop generation" />}
             >
               <Square size={18} fill="currentColor" strokeWidth={2.5} />
             </ComposerPrimitive.Cancel>
-          </AuiIf>
+          ) : null}
         </div>
       </div>
     </ComposerPrimitive.Root>
@@ -1931,6 +2196,14 @@ const AssistantChatRuntime = ({
     () =>
       new AssistantChatTransport({
         api: chatApi,
+        async fetch(input, init) {
+          const response = await globalThis.fetch(input, init);
+          const method = init?.method?.toUpperCase() ?? 'GET';
+          if (method === 'POST' && response.ok && response.body) {
+            confirmComposerDraftReceived(threadId);
+          }
+          return response;
+        },
         async prepareReconnectToStreamRequest({ id }) {
           return {
             api: `${chatApi}/${id}/stream`,
@@ -1944,6 +2217,7 @@ const AssistantChatRuntime = ({
           const threadTitle = firstUserText?.slice(0, 64);
           const threadBeforePersist = useChatStore.getState().threads.find(thread => thread.id === threadId);
           const promptContext = profileContextForThread(threadId, threadBeforePersist);
+          markComposerDraftAwaitingServerAck(threadId, lastUserText);
           await useChatStore.getState().ensureThreadPersisted(threadId, threadTitle);
           useChatStore.getState().touchThread(threadId, threadTitle, true);
 

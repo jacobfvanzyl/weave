@@ -790,6 +790,33 @@ export const cancelThreadRun = async (threadId: string) => {
   return result.run;
 };
 
+export type ThreadSteeringResult =
+  | { ok: true; accepted: true; runId: string; messageId: string }
+  | { ok: false; reason: 'not_active'; run: ThreadRunState };
+
+export const sendThreadSteeringMessage = async (threadId: string, message: UIMessage): Promise<ThreadSteeringResult> => {
+  const response = await fetch(weaveRoutes.chat.steerRun(threadId), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ message }),
+  });
+
+  if (response.status === 409) {
+    const text = await response.text();
+    const body = (() => {
+      try {
+        return JSON.parse(text) as { error?: unknown; reason?: unknown; run?: ThreadRunState };
+      } catch {
+        return undefined;
+      }
+    })();
+    if (body?.reason === 'not_active' && body.run) return { ok: false, reason: 'not_active', run: body.run };
+    throw new ApiError(typeof body?.error === 'string' ? body.error : text, response.status, { body });
+  }
+
+  return parseJson<{ ok: true; accepted: true; runId: string; messageId: string }>(response);
+};
+
 export type ContextUsage = {
   tokens: number;
   contextWindow?: number;

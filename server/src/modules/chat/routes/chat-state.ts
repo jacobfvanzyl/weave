@@ -9,7 +9,7 @@ import {
   resolveMemoryPolicy,
   resolveProfileContext,
 } from '../../../agent/runtime';
-import { getThreadRunSubmittedUserMessages } from './chat';
+import { getThreadRunSubmittedUserMessages, getThreadRunUiMessages } from './chat';
 import { isHiddenThread } from './thread-visibility';
 
 const agentId = 'mageHandAgent';
@@ -566,8 +566,17 @@ export const chatStateRoutes = [
         const pendingMessages = getThreadRunSubmittedUserMessages(resourceId, threadId)
           .map((message, index) => toPendingSubmittedMessage(message, origin, index))
           .filter((message): message is UiChatMessage => message !== null);
+        const pendingRunMessages = getThreadRunUiMessages(resourceId, threadId);
+        const shouldAppendRunMessages =
+          pendingRunMessages.length > 0 &&
+          (pendingMessages.length > 0 || persistedMessages[persistedMessages.length - 1]?.role !== 'assistant');
 
-        return c.json({ messages: mergePendingSubmittedMessages(persistedMessages, pendingMessages) });
+        return c.json({
+          messages: mergePendingSubmittedMessages(
+            persistedMessages,
+            shouldAppendRunMessages ? [...pendingMessages, ...pendingRunMessages] : pendingMessages,
+          ),
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (message.includes('No thread found')) return c.json({ messages: [] });

@@ -30,6 +30,7 @@ export const weaveRoutePaths = {
     runs: () => '/chat/runs',
     run: (threadId: string) => `/chat/runs/${encodePath(threadId)}`,
     cancelRun: (threadId: string) => `/chat/runs/${encodePath(threadId)}/cancel`,
+    steerRun: (threadId: string) => `/chat/runs/${encodePath(threadId)}/steer`,
   },
   code: {
     projects: () => '/code/projects',
@@ -110,6 +111,7 @@ export const weaveRoutes = {
     runs: () => url(weaveRoutePaths.chat.runs()),
     run: (threadId: string) => url(weaveRoutePaths.chat.run(threadId)),
     cancelRun: (threadId: string) => url(weaveRoutePaths.chat.cancelRun(threadId)),
+    steerRun: (threadId: string) => url(weaveRoutePaths.chat.steerRun(threadId)),
   },
   code: {
     projects: () => url(weaveRoutePaths.code.projects()),

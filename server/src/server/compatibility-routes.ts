@@ -27,6 +27,7 @@ const chatRunAlias = (path: string) => {
   if (path === '/chat/runs') return '/chat';
   if (path === '/chat/runs/:threadId') return '/chat/:threadId/run';
   if (path === '/chat/runs/:threadId/cancel') return '/chat/:threadId/cancel';
+  if (path === '/chat/runs/:threadId/steer') return '/chat/:threadId/steer';
   if (path === '/chat/runs/:threadId/stream') return '/chat/:threadId/stream';
   return undefined;
 };

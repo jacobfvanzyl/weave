@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { recordThreadContextUsage } from '../../server/src/agent/mastra/context-usage';
-import { __chatRunRegistryTest } from '../../server/src/modules/chat/routes/chat';
+import { __chatRunRegistryTest, chatRoutes } from '../../server/src/modules/chat/routes/chat';
 import { __chatStateContextUsageTest } from '../../server/src/modules/chat/routes/chat-state';
+
+const steerRouteHandler = () => {
+  const handler = chatRoutes.find(route => route.path === '/chat/runs/:threadId/steer')?.handler;
+  if (typeof handler !== 'function') throw new Error('steering route not found');
+  return handler as (c: any) => Promise<unknown>;
+};
 
 describe('chat active run registry', () => {
   afterEach(() => {
@@ -42,6 +48,81 @@ describe('chat active run registry', () => {
 
     expect(__chatRunRegistryTest.submittedUserMessages('resource-1', 'thread-1')).toEqual([submittedMessage]);
     expect(__chatRunRegistryTest.submittedUserMessages('other-resource', 'thread-1')).toEqual([]);
+  });
+
+  it('returns not_active when steering a thread without an active run', async () => {
+    const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
+    const response = await steerRouteHandler()({
+      get: (key: string) => key === 'requestContext' ? { get: () => 'resource-1' } : undefined,
+      req: {
+        param: () => 'thread-1',
+        json: async () => ({
+          message: { id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'steer' }] },
+        }),
+      },
+      json,
+    });
+
+    expect(response).toEqual({
+      body: {
+        ok: false,
+        reason: 'not_active',
+        run: { active: false, status: 'idle' },
+      },
+      status: 409,
+    });
+  });
+
+  it('delivers active steering messages through Mastra sendMessage', async () => {
+    __chatRunRegistryTest.create('resource-1', 'thread-1');
+    const sendMessage = vi.fn(() => ({
+      accepted: true,
+      runId: 'mastra-run-1',
+      signal: { id: 'signal-1' },
+    }));
+    const getAgent = vi.fn(async () => ({ sendMessage }));
+    const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
+
+    const response = await steerRouteHandler()({
+      get: (key: string) => {
+        if (key === 'requestContext') return { get: () => 'resource-1' };
+        if (key === 'mastra') return { getAgent };
+        return undefined;
+      },
+      req: {
+        param: () => 'thread-1',
+        json: async () => ({
+          message: { id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'steer' }] },
+        }),
+      },
+      json,
+    });
+
+    expect(getAgent).toHaveBeenCalledWith('mageHandAgent');
+    expect(sendMessage).toHaveBeenCalledWith(
+      { contents: [{ type: 'text', text: 'steer' }] },
+      {
+        resourceId: 'resource-1',
+        threadId: 'thread-1',
+        ifActive: {
+          behavior: 'deliver',
+          attributes: {
+            source: 'composer',
+            delivery: 'while-active',
+          },
+        },
+        ifIdle: { behavior: 'discard' },
+      },
+    );
+    expect(response).toEqual({
+      body: {
+        ok: true,
+        accepted: true,
+        runId: 'mastra-run-1',
+        messageId: 'signal-1',
+      },
+      status: undefined,
+    });
   });
 
   it('streams and replays transient context usage updates during active runs', async () => {
@@ -160,6 +241,102 @@ describe('chat active run registry', () => {
     await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
     expect(__chatRunRegistryTest.cancel(run)).toBe(false);
     expect(__chatRunRegistryTest.snapshot(run)).toMatchObject({ active: false, status: 'cancelled' });
+  });
+
+  it('reconstructs a retained assistant message from cancelled run chunks', () => {
+    const run = __chatRunRegistryTest.create('resource-1', 'thread-1');
+    __chatRunRegistryTest.append(run, { type: 'start', messageId: 'assistant-1' });
+    __chatRunRegistryTest.append(run, { type: 'text-start', id: 'text-1' });
+    __chatRunRegistryTest.append(run, { type: 'text-delta', id: 'text-1', delta: 'partial answer' });
+    __chatRunRegistryTest.append(run, { type: 'tool-input-available', toolCallId: 'call-1', toolName: 'bash', input: { command: 'date' } });
+    __chatRunRegistryTest.cancel(run);
+
+    expect(__chatRunRegistryTest.uiMessages('resource-1', 'thread-1')).toEqual([
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        status: { type: 'complete', reason: 'stop' },
+        parts: [
+          { type: 'text', text: 'partial answer' },
+          {
+            type: 'tool-bash',
+            toolCallId: 'call-1',
+            state: 'input-available',
+            input: { command: 'date' },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('reconstructs retained assistant and steered user messages in stream order', () => {
+    const run = __chatRunRegistryTest.create('resource-1', 'thread-1');
+    __chatRunRegistryTest.append(run, { type: 'start', messageId: 'assistant-1' });
+    __chatRunRegistryTest.append(run, { type: 'text-start', id: 'text-1' });
+    __chatRunRegistryTest.append(run, { type: 'text-delta', id: 'text-1', delta: 'first answer' });
+    __chatRunRegistryTest.append(run, {
+      type: 'data-user-message',
+      transient: true,
+      data: {
+        id: 'steer-1',
+        type: 'user',
+        contents: 'Actually check the narrow case.',
+        createdAt: '2026-07-02T10:00:00.000Z',
+      },
+    });
+    __chatRunRegistryTest.append(run, { type: 'start', messageId: 'assistant-2' });
+    __chatRunRegistryTest.append(run, { type: 'text-start', id: 'text-2' });
+    __chatRunRegistryTest.append(run, { type: 'text-delta', id: 'text-2', delta: 'second answer' });
+
+    expect(__chatRunRegistryTest.uiMessages('resource-1', 'thread-1')).toEqual([
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        status: { type: 'complete' },
+        parts: [{ type: 'text', text: 'first answer' }],
+      },
+      {
+        id: 'steer-1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Actually check the narrow case.' }],
+      },
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        status: { type: 'running' },
+        parts: [{ type: 'text', text: 'second answer' }],
+      },
+    ]);
+  });
+
+  it('flushes buffered assistant text before a steered user message chunk', async () => {
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'partial' });
+        controller.enqueue({
+          type: 'data-user-message',
+          transient: true,
+          data: {
+            id: 'steer-1',
+            type: 'user',
+            contents: 'Steer now',
+            createdAt: '2026-07-02T10:00:00.000Z',
+          },
+        });
+        controller.close();
+      },
+    });
+    const reader = __chatRunRegistryTest.buffer(input).getReader();
+
+    await expect(reader.read()).resolves.toEqual({
+      done: false,
+      value: { type: 'text-delta', id: 'text-1', delta: 'partial' },
+    });
+    await expect(reader.read()).resolves.toMatchObject({
+      done: false,
+      value: { type: 'data-user-message', transient: false, data: { id: 'steer-1' } },
+    });
+    await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
   });
 
   it('marks an active run as errored when the stream emits an error chunk', async () => {

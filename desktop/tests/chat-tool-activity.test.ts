@@ -152,6 +152,21 @@ describe('chat tool activity helpers', () => {
     ]);
   });
 
+  it('keeps steered user message data as a visible assistant content boundary', () => {
+    const parts = [
+      { type: 'text', text: 'First assistant segment.' },
+      { type: 'data', name: 'user-message', data: { id: 'steer-1', contents: 'Use the same IoT checks.' } },
+      { type: 'text', text: 'Second assistant segment.' },
+    ];
+
+    expect(getAssistantContentRanges(parts, false)).toEqual([
+      { type: 'part', index: 0 },
+      { type: 'part', index: 1 },
+      { type: 'part', index: 2 },
+    ]);
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([]);
+  });
+
   it('selects only trailing final text when an assistant turn has earlier visible work', () => {
     const parts = [
       { type: 'reasoning', text: 'I should inspect the repo.' },
