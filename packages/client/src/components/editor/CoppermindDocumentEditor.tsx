@@ -297,6 +297,7 @@ const coppermindBlockSuiteStyles = `
   :root[data-theme="mocha"] [data-weave-editor-coppermind] [data-theme="dark"] {
     color-scheme: dark;
     --coppermind-cell-width: ${coppermindCellWidthPx}px;
+    --coppermind-page-cell-gap: 24px;
     --affine-font-family: var(--font-ui);
     --affine-font-code-family: var(--font-code);
     --affine-font-mono-family: var(--font-code);
@@ -377,7 +378,7 @@ const coppermindBlockSuiteStyles = `
     width: var(--coppermind-cell-width);
     max-width: var(--coppermind-cell-width);
     overflow: visible;
-    margin: 8px 0;
+    margin: 0;
     padding: 18px;
     border: 1px solid rgba(15, 23, 42, 0.14);
     border-radius: 8px;
@@ -392,8 +393,8 @@ const coppermindBlockSuiteStyles = `
     box-shadow: 0 0 0 1px color-mix(in oklab, var(--ctp-crust) 48%, transparent), 0 8px 18px rgba(17, 17, 27, 0.24);
   }
 
-  [data-weave-editor-coppermind] page-editor affine-note:first-of-type {
-    margin-top: 0;
+  [data-weave-editor-coppermind] page-editor affine-note:not(:last-of-type) {
+    margin-bottom: var(--coppermind-page-cell-gap, 24px);
   }
 
   [data-weave-editor-coppermind] page-editor affine-note[data-coppermind-active-section="true"] {
@@ -407,8 +408,10 @@ const coppermindBlockSuiteStyles = `
   }
 
   [data-weave-editor-coppermind] page-editor .affine-page-root-block-container {
+    display: block;
     position: relative;
     overflow: visible;
+    padding-block: var(--coppermind-page-cell-gap, 24px);
     --affine-editor-side-padding: 24px;
   }
 
