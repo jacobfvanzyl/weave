@@ -1,20 +1,5 @@
 import type { ThreadPlan, ThreadProposal } from '../../stores/chat-store';
 
-export const proposalSummary = (proposal: ThreadProposal | undefined) => {
-  if (!proposal) return undefined;
-  const approved = proposal.counts.approved ?? 0;
-  const changesRequested = proposal.counts.changes_requested ?? 0;
-  const rejected = proposal.counts.rejected ?? 0;
-  const stale = proposal.counts.stale ?? 0;
-  const bits = [
-    approved > 0 ? `${approved} approved` : undefined,
-    changesRequested > 0 ? `${changesRequested} changes requested` : undefined,
-    rejected > 0 ? `${rejected} rejected` : undefined,
-    stale > 0 ? `${stale} stale` : undefined,
-  ].filter(Boolean);
-  return bits.length ? bits.join(' · ') : undefined;
-};
-
 const currentTaskLine = (plan: ThreadPlan | undefined, proposal: ThreadProposal | undefined) => {
   const activeStep = plan?.plan.find(item => item.status === 'in_progress')
     ?? plan?.plan.find(item => item.status === 'blocked')
@@ -38,6 +23,6 @@ export const guidedTaskDisplay = (plan: ThreadPlan | undefined, proposal: Thread
   return {
     titleRow,
     bodyTitle: titleRow === name ? undefined : name,
-    summary: proposalSummary(proposal),
+    summary: undefined,
   };
 };

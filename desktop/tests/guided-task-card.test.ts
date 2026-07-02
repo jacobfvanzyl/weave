@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { guidedTaskDisplay, proposalSummary } from '../../packages/client/src/components/chat/guided-task-card-display';
+import { guidedTaskDisplay } from '../../packages/client/src/components/chat/guided-task-card-display';
 import type { ThreadPlan, ThreadProposal } from '../../packages/client/src/stores/chat-store';
 
 const plan = (overrides: Partial<ThreadPlan> = {}): ThreadPlan => ({
@@ -61,21 +61,11 @@ describe('guided task card display', () => {
     });
   });
 
-  it('does not use proposal item count as body summary fallback', () => {
-    expect(proposalSummary(proposal({
-      items: [
-        { id: 'item-1', kind: 'file_edit', status: 'applied', title: 'Update file', additions: 1, deletions: 0, viewed: false },
-      ],
-    }))).toBeUndefined();
-  });
-
-  it('omits pending approval count from the body summary', () => {
-    expect(proposalSummary(proposal({
-      counts: { pending: 12 },
-    }))).toBeUndefined();
-
-    expect(proposalSummary(proposal({
-      counts: { approved: 2, pending: 12 },
-    }))).toBe('2 approved');
+  it('does not show proposal status counts in the card body summary', () => {
+    expect(guidedTaskDisplay(plan(), proposal({
+      counts: { approved: 2, pending: 12, changes_requested: 1 },
+    }), true)).toMatchObject({
+      summary: undefined,
+    });
   });
 });

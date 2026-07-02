@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { getPendingProposalReviewCount, shouldShowProposalReview } from '../../packages/client/src/lib/proposal-review-state';
+import {
+  getNextProposalReviewItemId,
+  getPendingProposalReviewCount,
+  shouldShowProposalReview,
+} from '../../packages/client/src/lib/proposal-review-state';
 import type { ThreadProposal } from '../../packages/client/src/stores/chat-store';
 
 const proposal = (overrides: Partial<ThreadProposal> = {}): ThreadProposal => ({
@@ -50,5 +54,27 @@ describe('proposal review state', () => {
         { ...proposal().items[0], id: 'item-2', status: 'pending' },
       ],
     }))).toBe(1);
+  });
+
+  it('finds the next visible proposal item that still needs review', () => {
+    const items = [
+      { id: 'schema', status: 'pending' as const },
+      { id: 'model', status: 'approved' as const },
+      { id: 'mapper', status: 'changes_requested' as const },
+      { id: 'form', status: 'pending' as const },
+    ];
+
+    expect(getNextProposalReviewItemId(items, 'schema')).toBe('form');
+    expect(getNextProposalReviewItemId(items, 'form')).toBe('schema');
+  });
+
+  it('skips completed review states when advancing proposal review selection', () => {
+    expect(getNextProposalReviewItemId([
+      { id: 'current', status: 'pending' },
+      { id: 'approved', status: 'approved' },
+      { id: 'feedback', status: 'changes_requested' },
+      { id: 'applied', status: 'applied' },
+      { id: 'rejected', status: 'rejected' },
+    ], 'current')).toBeUndefined();
   });
 });

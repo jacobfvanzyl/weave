@@ -9,6 +9,7 @@ import {
   renderProposalArtifact,
   type ParsedProposalArtifact,
 } from '../../lib/proposal-artifacts';
+import { getNextProposalReviewItemId } from '../../lib/proposal-review-state';
 import { cn } from '../../lib/cn';
 import { useChatStore, type ThreadProposalItem } from '../../stores/chat-store';
 import { Button } from '../ui/button';
@@ -268,7 +269,7 @@ export const ProposalReviewPane = ({
   }, [codeBackend, observedProposalHash, proposalPath, selectedFilePath, setThreadProposal, targetKey, threadId]);
 
   const persistItems = useCallback(async (items: ThreadProposalItem[]) => {
-    if (!proposal) return;
+    if (!proposal) return false;
     setIsSaving(true);
     setError(null);
     try {
@@ -279,16 +280,24 @@ export const ProposalReviewPane = ({
       setProposal(parsed);
       setArtifactVersion(write.version);
       setThreadProposal(threadId, parsed);
+      return true;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+      return false;
     } finally {
       setIsSaving(false);
     }
   }, [artifactVersion, codeBackend, proposal, proposalPath, setThreadProposal, target, threadId]);
 
-  const updateItem = useCallback((itemId: string, update: Partial<ThreadProposalItem>) => {
-    if (!proposal) return;
-    void persistItems(proposal.items.map(item => item.id === itemId ? { ...item, ...update } : item));
+  const updateItem = useCallback(async (
+    itemId: string,
+    update: Partial<ThreadProposalItem>,
+    options: { selectItemId?: string } = {},
+  ) => {
+    if (!proposal) return false;
+    const persisted = await persistItems(proposal.items.map(item => item.id === itemId ? { ...item, ...update } : item));
+    if (persisted && options.selectItemId) setSelectedItemId(options.selectItemId);
+    return persisted;
   }, [persistItems, proposal]);
 
   const codeItems = useMemo(() => proposal?.items.filter(isCodeProposalItem) ?? [], [proposal]);
@@ -503,10 +512,15 @@ export const ProposalReviewPane = ({
                       setError(formatProposalCompletenessIssue(selectedCompletenessIssue));
                       return;
                     }
-                    updateItem(selectedItem.id, {
+                    const nextReviewItemId = selectedItem.status === 'approved'
+                      ? undefined
+                      : getNextProposalReviewItemId(filteredItems, selectedItem.id);
+                    void updateItem(selectedItem.id, {
                       status: selectedItem.status === 'approved' ? 'pending' : 'approved',
                       viewed: true,
                       ...(selectedItem.status === 'approved' ? {} : { comment: undefined }),
+                    }, {
+                      selectItemId: nextReviewItemId,
                     });
                   }}
                 >
@@ -596,7 +610,7 @@ export const ProposalReviewPane = ({
                   title={itemIssue ? formatProposalCompletenessIssue(itemIssue) : undefined}
                   onClick={() => {
                     setSelectedItemId(item.id);
-                    if (!item.viewed) updateItem(item.id, { viewed: true });
+                    if (!item.viewed) void updateItem(item.id, { viewed: true });
                   }}
                 >
                   <FileText size={14} className="shrink-0 text-primary" />
