@@ -408,6 +408,10 @@ const coppermindBlockSuiteStyles = `
     overflow-x: visible;
   }
 
+  [data-weave-editor-coppermind] page-editor {
+    --coppermind-page-cell-fill: var(--affine-background-primary-color, #fff);
+  }
+
   [data-weave-editor-coppermind] page-editor affine-note {
     display: block;
     position: relative;
@@ -418,30 +422,41 @@ const coppermindBlockSuiteStyles = `
     margin: 0 auto;
     padding: ${coppermindPageCellPaddingPx}px;
     border: 1px solid rgba(15, 23, 42, 0.14);
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.98);
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
-    transition: border-color 120ms ease, box-shadow 120ms ease;
+    border-right-color: transparent;
+    border-bottom-color: transparent;
+    border-left-color: transparent;
+    border-radius: 0;
+    background: var(--coppermind-page-cell-fill);
+    box-shadow: none;
+    transition: border-color 120ms ease;
   }
 
   :root[data-theme="mocha"] [data-weave-editor-coppermind] page-editor affine-note {
-    border-color: color-mix(in oklab, var(--ctp-text) 10%, transparent);
-    background: color-mix(in oklab, var(--ctp-surface0) 92%, var(--ctp-base));
-    box-shadow: 0 0 0 1px color-mix(in oklab, var(--ctp-crust) 48%, transparent), 0 8px 18px rgba(17, 17, 27, 0.24);
+    border-top-color: color-mix(in oklab, var(--ctp-text) 10%, transparent);
+    border-right-color: transparent;
+    border-bottom-color: transparent;
+    border-left-color: transparent;
+    background: var(--ctp-base);
+    box-shadow: none;
+  }
+
+  [data-weave-editor-coppermind] page-editor affine-note :is(.affine-note-mask, .note-background) {
+    border-radius: 0 !important;
+    background: var(--coppermind-page-cell-fill) !important;
   }
 
   [data-weave-editor-coppermind] page-editor affine-note:not(:last-of-type) {
-    margin-bottom: var(--coppermind-page-cell-gap, 24px);
+    margin-bottom: 0;
   }
 
   [data-weave-editor-coppermind] page-editor affine-note[data-coppermind-active-section="true"] {
     border-color: rgba(124, 58, 237, 0.48);
-    box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.13), 0 1px 2px rgba(15, 23, 42, 0.05);
+    box-shadow: none;
   }
 
   :root[data-theme="mocha"] [data-weave-editor-coppermind] page-editor affine-note[data-coppermind-active-section="true"] {
     border-color: color-mix(in oklab, var(--ctp-mauve) 58%, transparent);
-    box-shadow: 0 0 0 2px color-mix(in oklab, var(--ctp-mauve) 18%, transparent), 0 8px 18px rgba(17, 17, 27, 0.24);
+    box-shadow: none;
   }
 
   [data-weave-editor-coppermind] page-editor affine-note:has(coppermind-ink-cell) {
@@ -462,7 +477,21 @@ const coppermindBlockSuiteStyles = `
     overflow: hidden;
   }
 
-  :root[data-theme="mocha"] [data-weave-editor-coppermind] coppermind-ink-cell .coppermind-ink-cell-sheet {
+  [data-weave-editor-coppermind] page-editor coppermind-ink-cell .coppermind-ink-cell-sheet {
+    background:
+      linear-gradient(to bottom, rgba(148, 163, 184, 0.18) 1px, transparent 1px)
+        0 48px / 100% 32px,
+      var(--coppermind-page-cell-fill);
+  }
+
+  :root[data-theme="mocha"] [data-weave-editor-coppermind] page-editor coppermind-ink-cell .coppermind-ink-cell-sheet {
+    background:
+      linear-gradient(to bottom, color-mix(in oklab, var(--ctp-text) 11%, transparent) 1px, transparent 1px)
+        0 48px / 100% 32px,
+      var(--ctp-base);
+  }
+
+  :root[data-theme="mocha"] [data-weave-editor-coppermind] edgeless-editor coppermind-ink-cell .coppermind-ink-cell-sheet {
     background:
       linear-gradient(to bottom, color-mix(in oklab, var(--ctp-text) 11%, transparent) 1px, transparent 1px)
         0 48px / 100% 32px,
