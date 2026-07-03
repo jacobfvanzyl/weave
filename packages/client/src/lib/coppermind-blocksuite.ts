@@ -5,16 +5,19 @@ import { DocCollection, Job, Schema, Text, type BlockModel, type Doc, type DocSn
 import {
   CoppermindInkCellSchema,
   coppermindInkCellFlavour,
-  getCoppermindInkContentHeight,
+  getCoppermindInkCellHeight,
   getCoppermindInkStrokeCount,
+  normalizeCoppermindInkHeightMode,
   parseCoppermindInkStrokeData,
+  type CoppermindInkHeightMode,
   type CoppermindInkStackState,
 } from './coppermind-ink-cell';
 import {
   coppermindA4PageHeightPx,
+  coppermindCanvasDefaultCellHeightPx,
   coppermindCanvasCellGapPx,
   coppermindCellWidthPx,
-  coppermindDefaultCellHeightPx,
+  coppermindInkCellMinHeightPx,
 } from './coppermind-layout';
 
 export { coppermindCanvasCellGapPx, coppermindCellWidthPx } from './coppermind-layout';
@@ -22,7 +25,7 @@ export { coppermindCanvasCellGapPx, coppermindCellWidthPx } from './coppermind-l
 export const coppermindBlockSuitePackageVersion = '0.19.5';
 
 const defaultSectionWidth = coppermindCellWidthPx;
-const defaultSectionHeight = coppermindDefaultCellHeightPx;
+const defaultSectionHeight = coppermindCanvasDefaultCellHeightPx;
 type SerializedXYWH = `[${number},${number},${number},${number}]`;
 const noteDisplayModePageOnly = NoteDisplayMode.DocOnly;
 const noteDisplayModePageAndCanvas = NoteDisplayMode.DocAndEdgeless;
@@ -42,6 +45,7 @@ export type CoppermindBlockSuiteSectionPlacement =
 export type CoppermindBlockSuiteSection = {
   childCount: number;
   height: number;
+  heightMode?: CoppermindInkHeightMode;
   id: string;
   isEmpty: boolean;
   kind: 'blocks' | 'ink';
@@ -81,6 +85,7 @@ type TextLike = {
 type CoppermindBlockModel = BlockModel & {
   displayMode?: string;
   height?: number;
+  heightMode?: CoppermindInkHeightMode;
   stackState?: CoppermindInkStackState;
   strokeData?: string;
   text?: TextLike;
@@ -115,21 +120,23 @@ const getInkCellModel = (block: BlockModel | undefined) => (
 
 const getInkSectionHeight = (note: BlockModel) => {
   const inkCell = getInkCellModel(getInkCellChild(note));
-  const strokeHeight = getCoppermindInkContentHeight(
+  const heightMode = normalizeCoppermindInkHeightMode(inkCell?.heightMode);
+  const strokeHeight = getCoppermindInkCellHeight(
     parseCoppermindInkStrokeData(inkCell?.strokeData).strokes,
+    heightMode,
   );
-  const modelHeight = Number.isFinite(inkCell?.height)
-    ? inkCell?.height ?? defaultSectionHeight
-    : defaultSectionHeight;
   return Math.min(
     coppermindA4PageHeightPx,
     Math.max(
-      defaultSectionHeight,
-      modelHeight,
+      coppermindInkCellMinHeightPx,
       strokeHeight,
     ),
   );
 };
+
+const getInkHeightMode = (note: BlockModel): CoppermindInkHeightMode => (
+  normalizeCoppermindInkHeightMode(getInkCellModel(getInkCellChild(note))?.heightMode)
+);
 
 const getInkStackState = (note: BlockModel): CoppermindInkStackState => {
   const stackState = getInkCellModel(getInkCellChild(note))?.stackState;
@@ -267,6 +274,7 @@ export const getCoppermindBlockSuiteSections = (doc: Doc): CoppermindBlockSuiteS
   getPageVisibleNotes(doc).map((note, index) => ({
     childCount: note.children.length,
     height: isInkSection(note) ? getInkSectionHeight(note) : defaultSectionHeight,
+    heightMode: isInkSection(note) ? getInkHeightMode(note) : undefined,
     id: note.id,
     isEmpty: !note.children.some(blockHasAuthoredContent),
     kind: isInkSection(note) ? 'ink' : 'blocks',
@@ -333,6 +341,28 @@ export const setCoppermindInkCellStackState = (
   if (!inkCell || inkCell.flavour !== coppermindInkCellFlavour) return false;
 
   doc.updateBlock(inkCell, { stackState });
+  return true;
+};
+
+export const setCoppermindInkCellHeightMode = (
+  doc: Doc,
+  sectionId: string,
+  heightMode: CoppermindInkHeightMode,
+) => {
+  const section = doc.getBlockById(sectionId);
+  if (!section || section.flavour !== 'affine:note') return false;
+
+  const inkCell = getInkCellChild(section);
+  if (!inkCell || inkCell.flavour !== coppermindInkCellFlavour) return false;
+
+  const normalizedHeightMode = normalizeCoppermindInkHeightMode(heightMode);
+  doc.updateBlock(inkCell, {
+    height: getCoppermindInkCellHeight(
+      parseCoppermindInkStrokeData(asCoppermindBlockModel(inkCell).strokeData).strokes,
+      normalizedHeightMode,
+    ),
+    heightMode: normalizedHeightMode,
+  });
   return true;
 };
 

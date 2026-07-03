@@ -91,7 +91,12 @@ import {
   coppermindInkCellElementName,
   registerCoppermindInkCellElements,
 } from '../../lib/coppermind-ink-cell';
-import { coppermindA4PageHeightPx, coppermindDefaultCellHeightPx } from '../../lib/coppermind-layout';
+import {
+  coppermindBlockCellContentMinHeightPx,
+  coppermindInkCellMinHeightPx,
+  coppermindPageEndScrollPaddingPx,
+  coppermindPageCellPaddingPx,
+} from '../../lib/coppermind-layout';
 import { cn } from '../../lib/cn';
 import { Button } from '../ui/button';
 
@@ -410,8 +415,8 @@ const coppermindBlockSuiteStyles = `
     width: var(--coppermind-cell-width);
     max-width: var(--coppermind-cell-width);
     overflow: visible;
-    margin: 0;
-    padding: 18px;
+    margin: 0 auto;
+    padding: ${coppermindPageCellPaddingPx}px;
     border: 1px solid rgba(15, 23, 42, 0.14);
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.98);
@@ -445,15 +450,15 @@ const coppermindBlockSuiteStyles = `
   }
 
   [data-weave-editor-coppermind] page-editor affine-note:has(coppermind-ink-cell) .affine-note-block-container {
-    min-height: ${coppermindDefaultCellHeightPx}px;
-  }
-
-  [data-weave-editor-coppermind] page-editor affine-note[data-coppermind-active-section="true"] coppermind-ink-cell .coppermind-ink-cell-viewport {
-    height: ${coppermindA4PageHeightPx}px !important;
+    line-height: 0;
+    min-height: 0;
+    padding: 0 !important;
   }
 
   [data-weave-editor-coppermind] :is(page-editor, edgeless-editor) coppermind-ink-cell {
     display: block;
+    line-height: normal;
+    min-height: ${coppermindInkCellMinHeightPx}px;
     overflow: hidden;
   }
 
@@ -466,9 +471,12 @@ const coppermindBlockSuiteStyles = `
 
   [data-weave-editor-coppermind] page-editor .affine-page-root-block-container {
     display: block;
+    height: auto;
+    min-height: 100%;
     position: relative;
     overflow: visible;
     padding-block: var(--coppermind-page-cell-gap, 24px);
+    padding-bottom: calc(var(--coppermind-page-cell-gap, 24px) + ${coppermindPageEndScrollPaddingPx}px);
     --affine-editor-side-padding: 24px;
   }
 
@@ -484,7 +492,7 @@ const coppermindBlockSuiteStyles = `
   }
 
   [data-weave-editor-coppermind] page-editor .affine-note-block-container {
-    min-height: 96px;
+    min-height: ${coppermindBlockCellContentMinHeightPx}px;
   }
 
   :root[data-theme="mocha"] [data-weave-editor-coppermind] page-editor .affine-note-block-container.selected {
@@ -2081,7 +2089,7 @@ const CoppermindModeToggle = ({
   mode: CoppermindEditorMode;
   onModeChange: (mode: CoppermindEditorMode) => void;
 }) => (
-  <div className="absolute right-4 top-3 z-20 inline-flex rounded-md border border-border bg-card/95 p-0.5 shadow-lg backdrop-blur">
+  <div className="absolute left-1/2 top-3 z-40 inline-flex -translate-x-1/2 rounded-md border border-border bg-card/95 p-0.5 shadow-lg backdrop-blur">
     {modeOptions.map(item => (
       <button
         key={item.id}
@@ -2215,7 +2223,8 @@ export const CoppermindDocumentEditor = ({
     let activeElement: HTMLElement | undefined;
 
     for (const element of noteElements) {
-      const isActive = Boolean(sectionId && element.dataset.blockId === sectionId);
+      const elementSectionId = element.dataset.blockId;
+      const isActive = Boolean(sectionId && elementSectionId === sectionId);
       if (isActive) activeElement = element;
       if (isActive) {
         element.dataset.coppermindActiveSection = 'true';
@@ -2803,9 +2812,6 @@ export const CoppermindDocumentEditor = ({
       data-weave-editor-coppermind
     >
       <style>{coppermindBlockSuiteStyles}</style>
-      {loadedState.status === 'ready' ? (
-        <CoppermindModeToggle mode={mode} onModeChange={setMode} />
-      ) : null}
       <div className="min-h-0 flex-1 overflow-hidden bg-background">
         {loadedState.status === 'ready' ? (
           <div className="relative flex h-full min-h-0">
@@ -2833,6 +2839,7 @@ export const CoppermindDocumentEditor = ({
               onDragOver={mode === 'edgeless' ? handleCanvasDragOver : undefined}
               onDrop={mode === 'edgeless' ? handleCanvasDrop : undefined}
             >
+              <CoppermindModeToggle mode={mode} onModeChange={setMode} />
               <BlockSuiteEditorMount
                 key={`${loadedState.runtime.doc.id}:${mode}`}
                 doc={loadedState.runtime.doc}

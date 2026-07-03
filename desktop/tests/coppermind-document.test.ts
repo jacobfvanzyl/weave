@@ -16,6 +16,7 @@ import {
   importCoppermindBlockSuiteRuntime,
   placeCoppermindBlockSuiteSection,
   reorderCoppermindBlockSuiteSection,
+  setCoppermindInkCellHeightMode,
   setCoppermindInkCellStackState,
   unplaceCoppermindBlockSuiteSection,
 } from '../../packages/client/src/lib/coppermind-blocksuite';
@@ -30,11 +31,14 @@ import {
 } from '../../packages/client/src/lib/coppermind-document';
 import {
   coppermindInkCellFlavour,
+  getCoppermindInkContentHeight,
   type CoppermindInkStroke,
 } from '../../packages/client/src/lib/coppermind-ink-cell';
 import {
   coppermindA4PageHeightPx,
-  coppermindDefaultCellHeightPx,
+  coppermindCanvasDefaultCellHeightPx,
+  coppermindInkCellMinHeightPx,
+  coppermindInkContentPaddingPx,
 } from '../../packages/client/src/lib/coppermind-layout';
 
 type SnapshotBlock = DocSnapshot['blocks'];
@@ -236,6 +240,7 @@ describe('Coppermind .cpr document structure', () => {
     try {
       const inkSectionId = addCoppermindBlockSuiteInkSection(runtime.doc);
       const secondInkSectionId = addCoppermindBlockSuiteInkSection(runtime.doc);
+      const shortInkSectionId = addCoppermindBlockSuiteInkSection(runtime.doc);
       const stroke: CoppermindInkStroke = {
         color: '#111827',
         id: 'ink:test:1',
@@ -245,17 +250,31 @@ describe('Coppermind .cpr document structure', () => {
         ],
         width: 2.6,
       };
+      const shortStroke: CoppermindInkStroke = {
+        ...stroke,
+        id: 'ink:test:short',
+        points: [
+          { t: 0, x: 20, y: 22, pressure: 0.5 },
+          { t: 16, x: 120, y: 32, pressure: 0.72 },
+        ],
+      };
+      const expectedStrokeHeight = 900 + coppermindInkContentPaddingPx;
 
+      expect(getCoppermindInkContentHeight([])).toBe(coppermindInkCellMinHeightPx);
+      expect(getCoppermindInkContentHeight([shortStroke])).toBe(coppermindInkCellMinHeightPx);
+      expect(getCoppermindInkContentHeight([stroke])).toBe(expectedStrokeHeight);
       setInkStrokeData(runtime.doc, inkSectionId, [stroke]);
+      setInkStrokeData(runtime.doc, shortInkSectionId, [shortStroke]);
       expect(setCoppermindInkCellStackState(runtime.doc, secondInkSectionId, 'unstacked')).toBe(true);
 
       expect(getCoppermindBlockSuiteSections(runtime.doc)).toMatchObject([
-        { kind: 'blocks', height: coppermindDefaultCellHeightPx, title: 'First section' },
+        { kind: 'blocks', height: coppermindCanvasDefaultCellHeightPx, title: 'First section' },
         {
           id: inkSectionId,
           isEmpty: false,
           kind: 'ink',
-          height: 948,
+          height: expectedStrokeHeight,
+          heightMode: 'clamped',
           stackState: 'auto',
           title: 'Ink Cell 2',
         },
@@ -263,11 +282,28 @@ describe('Coppermind .cpr document structure', () => {
           id: secondInkSectionId,
           isEmpty: true,
           kind: 'ink',
-          height: coppermindDefaultCellHeightPx,
+          height: coppermindInkCellMinHeightPx,
+          heightMode: 'clamped',
           stackState: 'unstacked',
           title: 'Ink Cell 3',
         },
+        {
+          id: shortInkSectionId,
+          isEmpty: false,
+          kind: 'ink',
+          height: coppermindInkCellMinHeightPx,
+          heightMode: 'clamped',
+          stackState: 'auto',
+          title: 'Ink Cell 4',
+        },
       ]);
+
+      expect(setCoppermindInkCellHeightMode(runtime.doc, inkSectionId, 'full')).toBe(true);
+      expect(getCoppermindBlockSuiteSections(runtime.doc)[1]).toMatchObject({
+        height: coppermindA4PageHeightPx,
+        heightMode: 'full',
+        kind: 'ink',
+      });
 
       const tallStroke: CoppermindInkStroke = {
         ...stroke,
@@ -284,8 +320,14 @@ describe('Coppermind .cpr document structure', () => {
         const importedSections = getCoppermindBlockSuiteSections(importedRuntime.doc);
         expect(importedSections).toMatchObject([
           { kind: 'blocks', title: 'First section' },
-          { kind: 'ink', height: 948, stackState: 'auto' },
-          { kind: 'ink', height: coppermindA4PageHeightPx, stackState: 'unstacked' },
+          { kind: 'ink', height: coppermindA4PageHeightPx, heightMode: 'full', stackState: 'auto' },
+          {
+            kind: 'ink',
+            height: coppermindA4PageHeightPx,
+            heightMode: 'clamped',
+            stackState: 'unstacked',
+          },
+          { kind: 'ink', height: coppermindInkCellMinHeightPx, heightMode: 'clamped', stackState: 'auto' },
         ]);
 
         const importedInkCell = findSnapshotBlock(
@@ -296,6 +338,7 @@ describe('Coppermind .cpr document structure', () => {
           strokes?: CoppermindInkStroke[];
           version?: number;
         };
+        expect(importedInkCell?.props.heightMode).toBe('full');
         expect(parsedStrokeData.version).toBe(1);
         expect(parsedStrokeData.strokes?.[0]?.points[1]).toMatchObject({
           pressure: 0.72,
@@ -431,7 +474,7 @@ describe('Coppermind .cpr document structure', () => {
         -coppermindCellWidthPx / 2,
         0,
         coppermindCellWidthPx,
-        firstXYWH[3],
+        coppermindCanvasDefaultCellHeightPx,
       ]);
 
       expect(placeCoppermindBlockSuiteSection(runtime.doc, firstSectionId, firstXYWH)).toBe(true);

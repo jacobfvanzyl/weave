@@ -12,13 +12,16 @@ import { literal } from 'lit/static-html.js';
 import {
   coppermindA4PageHeightPx,
   coppermindCellWidthPx,
-  coppermindDefaultCellHeightPx,
+  coppermindInkAutoExpandDistancePx,
+  coppermindInkCellMinHeightPx,
+  coppermindInkContentPaddingPx,
 } from './coppermind-layout';
 
 export const coppermindInkCellFlavour = 'coppermind:ink-cell';
 export const coppermindInkCellElementName = 'coppermind-ink-cell';
 export const coppermindInkCellSchemaVersion = 1;
 
+export type CoppermindInkHeightMode = 'clamped' | 'full';
 export type CoppermindInkStackState = 'auto' | 'unstacked';
 
 export type CoppermindInkPoint = {
@@ -45,6 +48,7 @@ export type CoppermindInkCellPayload = {
 
 export type CoppermindInkCellProps = {
   height: number;
+  heightMode: CoppermindInkHeightMode;
   inkVersion: 1;
   stackState: CoppermindInkStackState;
   strokeData: string;
@@ -58,6 +62,10 @@ const emptyInkPayload: CoppermindInkCellPayload = {
 const createEmptyStrokeData = () => JSON.stringify(emptyInkPayload);
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+export const normalizeCoppermindInkHeightMode = (
+  value: unknown,
+): CoppermindInkHeightMode => (value === 'full' ? 'full' : 'clamped');
 
 type CoppermindInkDebugFields = Record<string, boolean | number | string | null | undefined>;
 
@@ -150,19 +158,37 @@ export const getCoppermindInkStrokeCount = (value: unknown) => (
   parseCoppermindInkStrokeData(value).strokes.length
 );
 
-export const getCoppermindInkContentHeight = (strokes: CoppermindInkStroke[]) => {
-  const maxY = strokes.reduce((currentMax, stroke) => (
+const getCoppermindInkMaxY = (strokes: CoppermindInkStroke[]) => (
+  strokes.reduce((currentMax, stroke) => (
     Math.max(currentMax, ...stroke.points.map(point => point.y))
-  ), 0);
+  ), 0)
+);
 
-  if (maxY <= 0) return coppermindDefaultCellHeightPx;
-  return clamp(Math.ceil(maxY + 48), coppermindDefaultCellHeightPx, coppermindA4PageHeightPx);
+export const getCoppermindInkContentHeight = (strokes: CoppermindInkStroke[]) => {
+  const maxY = getCoppermindInkMaxY(strokes);
+
+  if (maxY <= 0) return coppermindInkCellMinHeightPx;
+  return clamp(
+    Math.ceil(maxY + coppermindInkContentPaddingPx),
+    coppermindInkCellMinHeightPx,
+    coppermindA4PageHeightPx,
+  );
 };
+
+export const getCoppermindInkCellHeight = (
+  strokes: CoppermindInkStroke[],
+  heightMode: CoppermindInkHeightMode = 'clamped',
+) => (
+  normalizeCoppermindInkHeightMode(heightMode) === 'full'
+    ? coppermindA4PageHeightPx
+    : getCoppermindInkContentHeight(strokes)
+);
 
 export const CoppermindInkCellSchema = defineBlockSchema({
   flavour: coppermindInkCellFlavour,
   props: (): CoppermindInkCellProps => ({
-    height: coppermindDefaultCellHeightPx,
+    height: coppermindInkCellMinHeightPx,
+    heightMode: 'clamped',
     inkVersion: 1,
     stackState: 'auto',
     strokeData: createEmptyStrokeData(),
@@ -372,11 +398,32 @@ const drawStrokePath = (
   context.stroke();
 };
 
+const expandInkCellIcon = html`
+  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+    <path d="M15 3h6v6"></path>
+    <path d="m21 3-7 7"></path>
+    <path d="M9 21H3v-6"></path>
+    <path d="m3 21 7-7"></path>
+  </svg>
+`;
+
+const collapseInkCellIcon = html`
+  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+    <path d="M9 3v6H3"></path>
+    <path d="m3 9 7-7"></path>
+    <path d="M15 21v-6h6"></path>
+    <path d="m21 15-7 7"></path>
+  </svg>
+`;
+
 export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCellModel> {
   static override styles = css`
-    :host {
+    coppermind-ink-cell {
       display: block;
+      height: var(--coppermind-ink-cell-height, ${coppermindInkCellMinHeightPx}px);
+      max-height: var(--coppermind-ink-a4-height, ${coppermindA4PageHeightPx}px);
       outline: none;
+      overflow: hidden;
       touch-action: auto;
       -webkit-tap-highlight-color: transparent;
       -webkit-touch-callout: none;
@@ -386,8 +433,8 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
 
     .coppermind-ink-cell-viewport {
       display: block;
-      height: var(--coppermind-ink-cell-height);
-      max-height: var(--coppermind-ink-a4-height);
+      height: var(--coppermind-ink-cell-height, ${coppermindInkCellMinHeightPx}px);
+      max-height: var(--coppermind-ink-a4-height, ${coppermindA4PageHeightPx}px);
       overflow: hidden;
       position: relative;
       touch-action: auto;
@@ -401,7 +448,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
         linear-gradient(to bottom, rgba(148, 163, 184, 0.18) 1px, transparent 1px)
           0 48px / 100% 32px,
         var(--affine-note-background-white, #fff);
-      height: var(--coppermind-ink-a4-height);
+      height: var(--coppermind-ink-a4-height, ${coppermindA4PageHeightPx}px);
       position: relative;
       touch-action: auto;
       width: 100%;
@@ -409,7 +456,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
 
     .coppermind-ink-cell-canvas {
       display: block;
-      height: var(--coppermind-ink-a4-height);
+      height: var(--coppermind-ink-a4-height, ${coppermindA4PageHeightPx}px);
       inset: 0;
       pointer-events: none;
       position: absolute;
@@ -417,20 +464,43 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       width: 100%;
     }
 
-    .coppermind-ink-cell-empty {
+    .coppermind-ink-cell-toggle {
       align-items: center;
-      color: var(--affine-placeholder-color);
+      background: color-mix(in srgb, var(--affine-note-background-white, #fff) 82%, transparent);
+      border: 1px solid color-mix(in srgb, var(--affine-icon-color, #64748b) 22%, transparent);
+      border-radius: 6px;
+      color: var(--affine-icon-color, #64748b);
+      cursor: pointer;
       display: flex;
-      font: 500 12px/1 var(--affine-font-family);
-      inset: 0;
+      height: 28px;
       justify-content: center;
-      opacity: 0.74;
-      pointer-events: none;
+      left: 8px;
+      opacity: 0.72;
+      padding: 0;
       position: absolute;
+      top: 8px;
+      transition: opacity 120ms ease, background-color 120ms ease, border-color 120ms ease;
+      width: 28px;
+      z-index: 2;
     }
 
-    .coppermind-ink-cell-viewport[data-coppermind-ink-empty='false'] .coppermind-ink-cell-empty {
-      display: none;
+    .coppermind-ink-cell-toggle:hover,
+    .coppermind-ink-cell-toggle:focus-visible {
+      background: color-mix(in srgb, var(--affine-note-background-white, #fff) 94%, transparent);
+      border-color: color-mix(in srgb, var(--affine-icon-color, #64748b) 44%, transparent);
+      opacity: 1;
+    }
+
+    .coppermind-ink-cell-toggle:focus-visible {
+      outline: 2px solid var(--affine-primary-color, #8b5cf6);
+      outline-offset: 2px;
+    }
+
+    .coppermind-ink-cell-toggle svg {
+      display: block;
+      height: 16px;
+      pointer-events: none;
+      width: 16px;
     }
 
   `;
@@ -504,6 +574,22 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     return target?.closest(coppermindInkCellElementName) === this;
   }
 
+  private _isEventInInkControl(event: Event) {
+    return event.composedPath().some(item => (
+      item instanceof Element
+      && item.getAttribute('data-coppermind-ink-control') === 'true'
+    ));
+  }
+
+  private _stopControlEvent(event: Event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  private _getHeightMode() {
+    return normalizeCoppermindInkHeightMode(this.model.heightMode);
+  }
+
   private _appendEventPoints(event: PointerEvent) {
     if (!this._draftStroke || !this._activeSheetMetrics) return;
 
@@ -519,6 +605,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       }
       previousPoint = point;
     }
+    this._scheduleAutoExpandIfNeeded();
   }
 
   private _stopInputEvent(event: Event) {
@@ -620,6 +707,54 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     ];
   }
 
+  private _getCurrentRenderedHeight() {
+    const cssHeight = Number.parseFloat(this.style.getPropertyValue('--coppermind-ink-cell-height'));
+    if (Number.isFinite(cssHeight) && cssHeight > 0) return cssHeight;
+
+    const viewportHeight = this._getViewport()?.getBoundingClientRect().height;
+    if (viewportHeight && Number.isFinite(viewportHeight) && viewportHeight > 0) return viewportHeight;
+
+    return coppermindInkCellMinHeightPx;
+  }
+
+  private _getVisibleStrokeMaxY() {
+    const payload = parseCoppermindInkStrokeData(this.model.strokeData);
+    return getCoppermindInkMaxY([
+      ...payload.strokes,
+      ...this._visibleLiveStrokes(),
+    ]);
+  }
+
+  private _getRenderedHeight(strokes: CoppermindInkStroke[], heightMode: CoppermindInkHeightMode) {
+    const contentHeight = getCoppermindInkCellHeight(strokes, heightMode);
+    if (heightMode === 'full' || !this._draftStroke) return contentHeight;
+
+    const maxY = getCoppermindInkMaxY(strokes);
+    const currentHeight = clamp(
+      this._getCurrentRenderedHeight(),
+      coppermindInkCellMinHeightPx,
+      coppermindA4PageHeightPx,
+    );
+    if (maxY < currentHeight - coppermindInkAutoExpandDistancePx) {
+      return Math.max(contentHeight, currentHeight);
+    }
+
+    return clamp(
+      Math.max(contentHeight, currentHeight + coppermindInkAutoExpandDistancePx),
+      coppermindInkCellMinHeightPx,
+      coppermindA4PageHeightPx,
+    );
+  }
+
+  private _scheduleAutoExpandIfNeeded() {
+    if (this._getHeightMode() === 'full' || !this._draftStroke) return;
+
+    const currentHeight = this._getCurrentRenderedHeight();
+    if (this._getVisibleStrokeMaxY() >= currentHeight - coppermindInkAutoExpandDistancePx) {
+      this._scheduleRender();
+    }
+  }
+
   private _getCanvasContext(canvas: HTMLCanvasElement, options: { clear?: boolean } = {}) {
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -655,10 +790,9 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
 
   private _updateInkEmptyState(payload = parseCoppermindInkStrokeData(this.model.strokeData)) {
     const hasLiveStroke = this._visibleLiveStrokes().some(stroke => stroke.points.length > 0);
-    this._getViewport()?.setAttribute(
-      'data-coppermind-ink-empty',
-      payload.strokes.length > 0 || hasLiveStroke ? 'false' : 'true',
-    );
+    const emptyState = payload.strokes.length > 0 || hasLiveStroke ? 'false' : 'true';
+    this._getViewport()?.setAttribute('data-coppermind-ink-empty', emptyState);
+    this.dataset.coppermindInkEmpty = emptyState;
   }
 
   private _syncCommittedStrokeCanvas(payload = parseCoppermindInkStrokeData(this.model.strokeData)) {
@@ -726,6 +860,37 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     drawStrokeSegment(canvasContext.context, this, this._draftStroke, from, to);
   }
 
+  private _syncRenderedLayout(height: number, hasVisibleInk: boolean, heightMode: CoppermindInkHeightMode) {
+    const renderedHeight = `${height}px`;
+    const maxHeight = `${coppermindA4PageHeightPx}px`;
+    this.style.setProperty('--coppermind-ink-a4-height', maxHeight);
+    this.style.setProperty('--coppermind-ink-cell-height', renderedHeight);
+    this.style.height = renderedHeight;
+    this.style.maxHeight = maxHeight;
+    this.dataset.coppermindInkEmpty = hasVisibleInk ? 'false' : 'true';
+    this.dataset.coppermindInkHeightMode = heightMode;
+  }
+
+  private _toggleHeightMode = (event: Event) => {
+    this._stopControlEvent(event);
+    const payload = parseCoppermindInkStrokeData(this.model.strokeData);
+    const strokes = [
+      ...payload.strokes,
+      ...this._visibleLiveStrokes(),
+    ];
+    const heightMode: CoppermindInkHeightMode = this._getHeightMode() === 'full'
+      ? 'clamped'
+      : 'full';
+
+    this._dispatchFocus();
+    this.doc.updateBlock(this.model, {
+      height: getCoppermindInkCellHeight(strokes, heightMode),
+      heightMode,
+      inkVersion: 1,
+    });
+    this._scheduleRender();
+  };
+
   private _beginDraftStroke(point: CoppermindInkPoint) {
     if (this._pendingStrokeCommitHandle !== undefined) {
       window.clearTimeout(this._pendingStrokeCommitHandle);
@@ -738,6 +903,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       width: 2.6,
     };
     this._drawDraftPoint(point);
+    this._scheduleAutoExpandIfNeeded();
   }
 
   private _queueDraftStrokeCommit() {
@@ -778,8 +944,10 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     });
     const payload = parseCoppermindInkStrokeData(this.model.strokeData);
     const strokes = [...payload.strokes, ...pendingStrokes];
+    const heightMode = this._getHeightMode();
     this.doc.updateBlock(this.model, {
-      height: getCoppermindInkContentHeight(strokes),
+      height: getCoppermindInkCellHeight(strokes, heightMode),
+      heightMode,
       inkVersion: 1,
       strokeData: JSON.stringify({ strokes, version: 1 } satisfies CoppermindInkCellPayload),
     });
@@ -825,14 +993,26 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
 
   private _beginStroke(event: PointerEvent) {
     this._debugInput('pointerdown-received', pointerDebugFields(event));
+    if (this._isEventInInkControl(event)) {
+      this._debugInput('pointerdown-skip-control', pointerDebugFields(event));
+      return;
+    }
     if (event.pointerType !== 'pen') {
       const wasActive = this._isPageModeInkCellActive();
-      if (event.pointerType === 'touch' && !wasActive) {
+      const isPageModeMouseSelect = (
+        this.closest('page-editor')
+        && (event.pointerType === 'mouse' || event.pointerType === '')
+        && event.button === 0
+      );
+      if (isPageModeMouseSelect && !wasActive) {
+        this._dispatchFocus();
+      } else if (event.pointerType === 'touch' && !wasActive) {
         this._armSelectOnlyStylusTouch();
       }
       this._debugInput('pointerdown-skip-non-pen', {
         ...pointerDebugFields(event),
         armedSelectOnlyTouch: event.pointerType === 'touch' && !wasActive,
+        selectedByMouse: isPageModeMouseSelect && !wasActive,
         wasActive,
       });
       return;
@@ -954,9 +1134,21 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     } else {
       this._drawDraftPoint(point);
     }
+    this._scheduleAutoExpandIfNeeded();
   }
 
   private _beginTouchStroke(event: TouchEvent) {
+    if (this._isEventInInkControl(event)) {
+      this._debugInput('touchstart-skip-control', {
+        cancelable: event.cancelable,
+        changedTouches: event.changedTouches.length,
+        changedTouchSummary: summarizeTouches(event.changedTouches),
+        targetTouches: event.targetTouches.length,
+        touches: event.touches.length,
+        touchSummary: summarizeTouches(event.touches),
+      });
+      return;
+    }
     const touch = event.changedTouches[0];
     this._debugInput('touchstart-received', {
       ...touchDebugFields(touch),
@@ -1110,20 +1302,26 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     const hasVisibleInk = strokes.length > 0
       || this._pendingCommitStrokes.length > 0
       || Boolean(this._draftStroke);
-    const height = clamp(
-      Number.isFinite(this.model.height) ? this.model.height : coppermindDefaultCellHeightPx,
-      coppermindDefaultCellHeightPx,
-      coppermindA4PageHeightPx,
-    );
+    const heightMode = this._getHeightMode();
+    const visibleStrokes = [
+      ...strokes,
+      ...this._visibleLiveStrokes(),
+    ];
+    const height = this._getRenderedHeight(visibleStrokes, heightMode);
+    const toggleLabel = heightMode === 'full' ? 'Collapse ink cell' : 'Expand ink cell';
+    this._syncRenderedLayout(height, hasVisibleInk, heightMode);
 
     return html`
       <div
         class="coppermind-ink-cell-viewport"
         contenteditable="false"
         data-coppermind-ink-empty=${hasVisibleInk ? 'false' : 'true'}
+        data-coppermind-ink-height-mode=${heightMode}
         style=${styleMap({
           '--coppermind-ink-a4-height': `${coppermindA4PageHeightPx}px`,
           '--coppermind-ink-cell-height': `${height}px`,
+          height: `${height}px`,
+          'max-height': `${coppermindA4PageHeightPx}px`,
         })}
         @pointerdown=${this._beginStroke}
         @pointermove=${this._extendStroke}
@@ -1134,10 +1332,20 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
         @touchend=${this._finishTouchStroke}
         @touchcancel=${this._cancelTouchStroke}
       >
+        <button
+          class="coppermind-ink-cell-toggle"
+          contenteditable="false"
+          data-coppermind-ink-control="true"
+          type="button"
+          aria-label=${toggleLabel}
+          title=${toggleLabel}
+          @click=${this._toggleHeightMode}
+        >
+          ${heightMode === 'full' ? collapseInkCellIcon : expandInkCellIcon}
+        </button>
         <div class="coppermind-ink-cell-sheet">
           <canvas class="coppermind-ink-cell-canvas coppermind-ink-committed-canvas"></canvas>
           <canvas class="coppermind-ink-cell-canvas coppermind-ink-live-canvas"></canvas>
-          ${hasVisibleInk ? null : html`<div class="coppermind-ink-cell-empty">Ink Cell</div>`}
         </div>
       </div>
     `;
