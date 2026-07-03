@@ -32,6 +32,8 @@ import {
 import {
   coppermindInkCellFlavour,
   getCoppermindInkContentHeight,
+  normalizeCoppermindInkBackground,
+  type CoppermindInkBackground,
   type CoppermindInkStroke,
 } from '../../packages/client/src/lib/coppermind-ink-cell';
 import {
@@ -54,6 +56,17 @@ const findSnapshotBlock = (
     if (match) return match;
   }
   return undefined;
+};
+
+const findSnapshotBlocks = (
+  block: SnapshotBlock | undefined,
+  flavour: string,
+): SnapshotBlock[] => {
+  if (!block) return [];
+  return [
+    ...(block.flavour === flavour ? [block] : []),
+    ...(block.children ?? []).flatMap(child => findSnapshotBlocks(child, flavour)),
+  ];
 };
 
 const getSnapshotText = (value: unknown) => {
@@ -84,6 +97,13 @@ const setInkStrokeData = (doc: Doc, sectionId: string, strokes: CoppermindInkStr
   doc.updateBlock(inkCell, {
     strokeData: JSON.stringify({ strokes, version: 1 }),
   });
+};
+
+const setInkBackground = (doc: Doc, sectionId: string, background: CoppermindInkBackground) => {
+  const section = doc.getBlockById(sectionId);
+  const inkCell = section?.children.find(child => child.flavour === coppermindInkCellFlavour);
+  if (!inkCell) throw new Error(`expected section ${sectionId} to have an ink cell`);
+  doc.updateBlock(inkCell, { background });
 };
 
 const legacyDocument = (): LegacyCoppermindDocument => ({
@@ -263,8 +283,13 @@ describe('Coppermind .cpr document structure', () => {
       expect(getCoppermindInkContentHeight([])).toBe(coppermindInkCellMinHeightPx);
       expect(getCoppermindInkContentHeight([shortStroke])).toBe(coppermindInkCellMinHeightPx);
       expect(getCoppermindInkContentHeight([stroke])).toBe(expectedStrokeHeight);
+      expect(normalizeCoppermindInkBackground(undefined)).toBe('college');
+      expect(normalizeCoppermindInkBackground('irish')).toBe('irish');
+      expect(normalizeCoppermindInkBackground('invalid')).toBe('college');
       setInkStrokeData(runtime.doc, inkSectionId, [stroke]);
       setInkStrokeData(runtime.doc, shortInkSectionId, [shortStroke]);
+      setInkBackground(runtime.doc, inkSectionId, 'irish');
+      setInkBackground(runtime.doc, secondInkSectionId, 'grid');
       expect(setCoppermindInkCellStackState(runtime.doc, secondInkSectionId, 'unstacked')).toBe(true);
 
       expect(getCoppermindBlockSuiteSections(runtime.doc)).toMatchObject([
@@ -334,11 +359,16 @@ describe('Coppermind .cpr document structure', () => {
           exportCoppermindBlockSuiteSnapshot(importedRuntime).blocks,
           coppermindInkCellFlavour,
         );
+        const importedInkCells = findSnapshotBlocks(
+          exportCoppermindBlockSuiteSnapshot(importedRuntime).blocks,
+          coppermindInkCellFlavour,
+        );
         const parsedStrokeData = JSON.parse(String(importedInkCell?.props.strokeData ?? '{}')) as {
           strokes?: CoppermindInkStroke[];
           version?: number;
         };
         expect(importedInkCell?.props.heightMode).toBe('full');
+        expect(importedInkCells.map(block => block.props.background)).toEqual(['irish', 'grid', 'college']);
         expect(parsedStrokeData.version).toBe(1);
         expect(parsedStrokeData.strokes?.[0]?.points[1]).toMatchObject({
           pressure: 0.72,

@@ -477,25 +477,24 @@ const coppermindBlockSuiteStyles = `
     overflow: hidden;
   }
 
-  [data-weave-editor-coppermind] page-editor coppermind-ink-cell .coppermind-ink-cell-sheet {
-    background:
-      linear-gradient(to bottom, rgba(148, 163, 184, 0.18) 1px, transparent 1px)
-        0 48px / 100% 32px,
-      var(--coppermind-page-cell-fill);
+  [data-weave-editor-coppermind] page-editor coppermind-ink-cell {
+    --coppermind-ink-paper-color: var(--coppermind-page-cell-fill);
   }
 
-  :root[data-theme="mocha"] [data-weave-editor-coppermind] page-editor coppermind-ink-cell .coppermind-ink-cell-sheet {
-    background:
-      linear-gradient(to bottom, color-mix(in oklab, var(--ctp-text) 11%, transparent) 1px, transparent 1px)
-        0 48px / 100% 32px,
-      var(--ctp-base);
+  :root[data-theme="mocha"] [data-weave-editor-coppermind] page-editor coppermind-ink-cell {
+    --coppermind-ink-grid-color: color-mix(in oklab, var(--ctp-text) 8%, transparent);
+    --coppermind-ink-margin-color: color-mix(in oklab, var(--ctp-red) 28%, transparent);
+    --coppermind-ink-paper-color: var(--ctp-base);
+    --coppermind-ink-rule-color: color-mix(in oklab, var(--ctp-text) 11%, transparent);
+    --coppermind-ink-rule-subtle-color: color-mix(in oklab, var(--ctp-text) 7%, transparent);
   }
 
-  :root[data-theme="mocha"] [data-weave-editor-coppermind] edgeless-editor coppermind-ink-cell .coppermind-ink-cell-sheet {
-    background:
-      linear-gradient(to bottom, color-mix(in oklab, var(--ctp-text) 11%, transparent) 1px, transparent 1px)
-        0 48px / 100% 32px,
-      color-mix(in oklab, var(--ctp-surface0) 92%, var(--ctp-base));
+  :root[data-theme="mocha"] [data-weave-editor-coppermind] edgeless-editor coppermind-ink-cell {
+    --coppermind-ink-grid-color: color-mix(in oklab, var(--ctp-text) 8%, transparent);
+    --coppermind-ink-margin-color: color-mix(in oklab, var(--ctp-red) 28%, transparent);
+    --coppermind-ink-paper-color: color-mix(in oklab, var(--ctp-surface0) 92%, var(--ctp-base));
+    --coppermind-ink-rule-color: color-mix(in oklab, var(--ctp-text) 11%, transparent);
+    --coppermind-ink-rule-subtle-color: color-mix(in oklab, var(--ctp-text) 7%, transparent);
   }
 
   [data-weave-editor-coppermind] page-editor .affine-page-root-block-container {

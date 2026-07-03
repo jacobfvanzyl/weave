@@ -21,8 +21,17 @@ export const coppermindInkCellFlavour = 'coppermind:ink-cell';
 export const coppermindInkCellElementName = 'coppermind-ink-cell';
 export const coppermindInkCellSchemaVersion = 1;
 
+export type CoppermindInkBackground = 'college' | 'irish' | 'grid';
 export type CoppermindInkHeightMode = 'clamped' | 'full';
 export type CoppermindInkStackState = 'auto' | 'unstacked';
+
+const coppermindInkBackgroundDefault: CoppermindInkBackground = 'college';
+
+const coppermindInkBackgroundOptions: Array<{ id: CoppermindInkBackground; label: string }> = [
+  { id: 'college', label: 'College' },
+  { id: 'irish', label: 'Irish' },
+  { id: 'grid', label: 'Grid' },
+];
 
 export type CoppermindInkPoint = {
   pressure?: number;
@@ -47,6 +56,7 @@ export type CoppermindInkCellPayload = {
 };
 
 export type CoppermindInkCellProps = {
+  background: CoppermindInkBackground;
   height: number;
   heightMode: CoppermindInkHeightMode;
   inkVersion: 1;
@@ -66,6 +76,14 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 export const normalizeCoppermindInkHeightMode = (
   value: unknown,
 ): CoppermindInkHeightMode => (value === 'full' ? 'full' : 'clamped');
+
+export const normalizeCoppermindInkBackground = (
+  value: unknown,
+): CoppermindInkBackground => (
+  coppermindInkBackgroundOptions.some(option => option.id === value)
+    ? value as CoppermindInkBackground
+    : coppermindInkBackgroundDefault
+);
 
 type CoppermindInkDebugFields = Record<string, boolean | number | string | null | undefined>;
 
@@ -187,6 +205,7 @@ export const getCoppermindInkCellHeight = (
 export const CoppermindInkCellSchema = defineBlockSchema({
   flavour: coppermindInkCellFlavour,
   props: (): CoppermindInkCellProps => ({
+    background: coppermindInkBackgroundDefault,
     height: coppermindInkCellMinHeightPx,
     heightMode: 'clamped',
     inkVersion: 1,
@@ -416,9 +435,28 @@ const collapseInkCellIcon = html`
   </svg>
 `;
 
+const inkCellMoreIcon = html`
+  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+    <circle cx="12" cy="12" r="1"></circle>
+    <circle cx="19" cy="12" r="1"></circle>
+    <circle cx="5" cy="12" r="1"></circle>
+  </svg>
+`;
+
+const inkCellMenuChevronIcon = html`
+  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+    <path d="m9 18 6-6-6-6"></path>
+  </svg>
+`;
+
 export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCellModel> {
   static override styles = css`
     coppermind-ink-cell {
+      --coppermind-ink-grid-color: rgba(148, 163, 184, 0.14);
+      --coppermind-ink-margin-color: rgba(248, 113, 113, 0.28);
+      --coppermind-ink-paper-color: var(--affine-note-background-white, #fff);
+      --coppermind-ink-rule-color: rgba(148, 163, 184, 0.18);
+      --coppermind-ink-rule-subtle-color: rgba(148, 163, 184, 0.1);
       display: block;
       height: var(--coppermind-ink-cell-height, ${coppermindInkCellMinHeightPx}px);
       max-height: var(--coppermind-ink-a4-height, ${coppermindA4PageHeightPx}px);
@@ -447,11 +485,36 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       background:
         linear-gradient(to bottom, rgba(148, 163, 184, 0.18) 1px, transparent 1px)
           0 48px / 100% 32px,
-        var(--affine-note-background-white, #fff);
+        var(--coppermind-ink-paper-color);
       height: var(--coppermind-ink-a4-height, ${coppermindA4PageHeightPx}px);
       position: relative;
       touch-action: auto;
       width: 100%;
+    }
+
+    coppermind-ink-cell[data-coppermind-ink-background="college"] .coppermind-ink-cell-sheet,
+    .coppermind-ink-cell-viewport[data-coppermind-ink-background="college"] .coppermind-ink-cell-sheet {
+      background:
+        linear-gradient(to bottom, var(--coppermind-ink-rule-color) 1px, transparent 1px)
+          0 48px / 100% 32px,
+        var(--coppermind-ink-paper-color);
+    }
+
+    coppermind-ink-cell[data-coppermind-ink-background="irish"] .coppermind-ink-cell-sheet,
+    .coppermind-ink-cell-viewport[data-coppermind-ink-background="irish"] .coppermind-ink-cell-sheet {
+      background:
+        linear-gradient(to right, transparent 0 64px, var(--coppermind-ink-margin-color) 64px 65px, transparent 65px),
+        linear-gradient(to bottom, transparent 0 23px, var(--coppermind-ink-rule-subtle-color) 23px 24px, transparent 24px 47px, var(--coppermind-ink-rule-color) 47px 48px)
+          0 48px / 100% 48px,
+        var(--coppermind-ink-paper-color);
+    }
+
+    coppermind-ink-cell[data-coppermind-ink-background="grid"] .coppermind-ink-cell-sheet,
+    .coppermind-ink-cell-viewport[data-coppermind-ink-background="grid"] .coppermind-ink-cell-sheet {
+      background:
+        linear-gradient(to right, var(--coppermind-ink-grid-color) 1px, transparent 1px) 0 0 / 24px 24px,
+        linear-gradient(to bottom, var(--coppermind-ink-grid-color) 1px, transparent 1px) 0 0 / 24px 24px,
+        var(--coppermind-ink-paper-color);
     }
 
     .coppermind-ink-cell-canvas {
@@ -464,9 +527,18 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       width: 100%;
     }
 
-    .coppermind-ink-cell-toggle {
+    .coppermind-ink-cell-controls {
+      display: flex;
+      gap: 6px;
+      left: 8px;
+      position: absolute;
+      top: 8px;
+      z-index: 3;
+    }
+
+    .coppermind-ink-cell-control-button {
       align-items: center;
-      background: color-mix(in srgb, var(--affine-note-background-white, #fff) 82%, transparent);
+      background: color-mix(in srgb, var(--coppermind-ink-paper-color) 82%, transparent);
       border: 1px solid color-mix(in srgb, var(--affine-icon-color, #64748b) 22%, transparent);
       border-radius: 6px;
       color: var(--affine-icon-color, #64748b);
@@ -474,35 +546,98 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       display: flex;
       height: 28px;
       justify-content: center;
-      left: 8px;
       opacity: 0.72;
       padding: 0;
-      position: absolute;
-      top: 8px;
       transition: opacity 120ms ease, background-color 120ms ease, border-color 120ms ease;
       width: 28px;
-      z-index: 2;
     }
 
-    .coppermind-ink-cell-toggle:hover,
-    .coppermind-ink-cell-toggle:focus-visible {
-      background: color-mix(in srgb, var(--affine-note-background-white, #fff) 94%, transparent);
+    .coppermind-ink-cell-control-button:hover,
+    .coppermind-ink-cell-control-button:focus-visible,
+    .coppermind-ink-cell-control-button[aria-expanded="true"] {
+      background: color-mix(in srgb, var(--coppermind-ink-paper-color) 94%, transparent);
       border-color: color-mix(in srgb, var(--affine-icon-color, #64748b) 44%, transparent);
       opacity: 1;
     }
 
-    .coppermind-ink-cell-toggle:focus-visible {
+    .coppermind-ink-cell-control-button:focus-visible,
+    .coppermind-ink-cell-menu button:focus-visible {
       outline: 2px solid var(--affine-primary-color, #8b5cf6);
       outline-offset: 2px;
     }
 
-    .coppermind-ink-cell-toggle svg {
+    .coppermind-ink-cell-control-button svg,
+    .coppermind-ink-cell-menu svg {
       display: block;
       height: 16px;
       pointer-events: none;
       width: 16px;
     }
 
+    .coppermind-ink-cell-menu {
+      background: color-mix(in srgb, var(--coppermind-ink-paper-color) 94%, transparent);
+      border: 1px solid color-mix(in srgb, var(--affine-icon-color, #64748b) 22%, transparent);
+      border-radius: 6px;
+      box-shadow: 0 8px 18px rgba(17, 17, 27, 0.24);
+      color: var(--affine-text-primary-color, #111827);
+      left: 76px;
+      min-width: 132px;
+      padding: 4px;
+      position: absolute;
+      top: 8px;
+      z-index: 4;
+    }
+
+    .coppermind-ink-cell-menu-group {
+      position: relative;
+    }
+
+    .coppermind-ink-cell-menu-row,
+    .coppermind-ink-cell-menu-option {
+      align-items: center;
+      background: transparent;
+      border: 0;
+      border-radius: 4px;
+      color: inherit;
+      display: flex;
+      font: inherit;
+      gap: 8px;
+      height: 28px;
+      justify-content: space-between;
+      line-height: 1;
+      min-width: 100%;
+      padding: 0 8px;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .coppermind-ink-cell-menu-row {
+      color: var(--affine-text-secondary-color, #64748b);
+      cursor: default;
+    }
+
+    .coppermind-ink-cell-submenu {
+      background: color-mix(in srgb, var(--coppermind-ink-paper-color) 94%, transparent);
+      border: 1px solid color-mix(in srgb, var(--affine-icon-color, #64748b) 22%, transparent);
+      border-radius: 6px;
+      box-shadow: 0 8px 18px rgba(17, 17, 27, 0.24);
+      left: calc(100% - 1px);
+      min-width: 104px;
+      padding: 4px;
+      position: absolute;
+      top: -5px;
+    }
+
+    .coppermind-ink-cell-menu-option {
+      cursor: pointer;
+    }
+
+    .coppermind-ink-cell-menu-option:hover,
+    .coppermind-ink-cell-menu-option:focus-visible,
+    .coppermind-ink-cell-menu-option[aria-checked="true"] {
+      background: color-mix(in srgb, var(--affine-primary-color, #8b5cf6) 16%, transparent);
+      color: var(--affine-text-primary-color, #111827);
+    }
   `;
 
   private _activePointerId: number | undefined;
@@ -524,6 +659,8 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
   private _pendingStrokeCommitHandle: number | undefined;
 
   private _renderFrame: number | undefined;
+
+  private _isMenuOpen = false;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -588,6 +725,10 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
 
   private _getHeightMode() {
     return normalizeCoppermindInkHeightMode(this.model.heightMode);
+  }
+
+  private _getBackground() {
+    return normalizeCoppermindInkBackground(this.model.background);
   }
 
   private _appendEventPoints(event: PointerEvent) {
@@ -860,16 +1001,35 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     drawStrokeSegment(canvasContext.context, this, this._draftStroke, from, to);
   }
 
-  private _syncRenderedLayout(height: number, hasVisibleInk: boolean, heightMode: CoppermindInkHeightMode) {
+  private _syncRenderedLayout(
+    height: number,
+    hasVisibleInk: boolean,
+    heightMode: CoppermindInkHeightMode,
+    background: CoppermindInkBackground,
+  ) {
     const renderedHeight = `${height}px`;
     const maxHeight = `${coppermindA4PageHeightPx}px`;
     this.style.setProperty('--coppermind-ink-a4-height', maxHeight);
     this.style.setProperty('--coppermind-ink-cell-height', renderedHeight);
     this.style.height = renderedHeight;
     this.style.maxHeight = maxHeight;
+    this.dataset.coppermindInkBackground = background;
     this.dataset.coppermindInkEmpty = hasVisibleInk ? 'false' : 'true';
     this.dataset.coppermindInkHeightMode = heightMode;
   }
+
+  private _closeMenu() {
+    if (!this._isMenuOpen) return;
+    this._isMenuOpen = false;
+    this.requestUpdate();
+  }
+
+  private _toggleMenu = (event: Event) => {
+    this._stopControlEvent(event);
+    this._dispatchFocus();
+    this._isMenuOpen = !this._isMenuOpen;
+    this.requestUpdate();
+  };
 
   private _toggleHeightMode = (event: Event) => {
     this._stopControlEvent(event);
@@ -889,6 +1049,24 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       inkVersion: 1,
     });
     this._scheduleRender();
+  };
+
+  private _setBackground(event: Event, background: CoppermindInkBackground) {
+    this._stopControlEvent(event);
+    const normalizedBackground = normalizeCoppermindInkBackground(background);
+    this._dispatchFocus();
+    this.doc.updateBlock(this.model, {
+      background: normalizedBackground,
+      inkVersion: 1,
+    });
+    this._isMenuOpen = false;
+    this.requestUpdate();
+  }
+
+  private _handleMenuKeydown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return;
+    this._stopControlEvent(event);
+    this._closeMenu();
   };
 
   private _beginDraftStroke(point: CoppermindInkPoint) {
@@ -1104,7 +1282,11 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
   };
 
   private _handleWindowPointerStart = (event: PointerEvent) => {
-    if (!this._isEventInThisInkCell(event)) return;
+    const isInThisCell = this._isEventInThisInkCell(event);
+    if (this._isMenuOpen && (!isInThisCell || !this._isEventInInkControl(event))) {
+      this._closeMenu();
+    }
+    if (!isInThisCell) return;
     this._beginStroke(event);
   };
 
@@ -1261,7 +1443,11 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
   };
 
   private _handleWindowTouchStart = (event: TouchEvent) => {
-    if (!this._isEventInThisInkCell(event)) return;
+    const isInThisCell = this._isEventInThisInkCell(event);
+    if (this._isMenuOpen && (!isInThisCell || !this._isEventInInkControl(event))) {
+      this._closeMenu();
+    }
+    if (!isInThisCell) return;
     this._beginTouchStroke(event);
   };
 
@@ -1303,18 +1489,20 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       || this._pendingCommitStrokes.length > 0
       || Boolean(this._draftStroke);
     const heightMode = this._getHeightMode();
+    const background = this._getBackground();
     const visibleStrokes = [
       ...strokes,
       ...this._visibleLiveStrokes(),
     ];
     const height = this._getRenderedHeight(visibleStrokes, heightMode);
     const toggleLabel = heightMode === 'full' ? 'Collapse ink cell' : 'Expand ink cell';
-    this._syncRenderedLayout(height, hasVisibleInk, heightMode);
+    this._syncRenderedLayout(height, hasVisibleInk, heightMode, background);
 
     return html`
       <div
         class="coppermind-ink-cell-viewport"
         contenteditable="false"
+        data-coppermind-ink-background=${background}
         data-coppermind-ink-empty=${hasVisibleInk ? 'false' : 'true'}
         data-coppermind-ink-height-mode=${heightMode}
         style=${styleMap({
@@ -1332,17 +1520,69 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
         @touchend=${this._finishTouchStroke}
         @touchcancel=${this._cancelTouchStroke}
       >
-        <button
-          class="coppermind-ink-cell-toggle"
-          contenteditable="false"
-          data-coppermind-ink-control="true"
-          type="button"
-          aria-label=${toggleLabel}
-          title=${toggleLabel}
-          @click=${this._toggleHeightMode}
-        >
-          ${heightMode === 'full' ? collapseInkCellIcon : expandInkCellIcon}
-        </button>
+        <div class="coppermind-ink-cell-controls" data-coppermind-ink-control="true">
+          <button
+            class="coppermind-ink-cell-control-button coppermind-ink-cell-toggle"
+            contenteditable="false"
+            data-coppermind-ink-control="true"
+            type="button"
+            aria-label=${toggleLabel}
+            title=${toggleLabel}
+            @click=${this._toggleHeightMode}
+          >
+            ${heightMode === 'full' ? collapseInkCellIcon : expandInkCellIcon}
+          </button>
+          <button
+            class="coppermind-ink-cell-control-button coppermind-ink-cell-more"
+            contenteditable="false"
+            data-coppermind-ink-control="true"
+            type="button"
+            aria-expanded=${this._isMenuOpen ? 'true' : 'false'}
+            aria-haspopup="menu"
+            aria-label="More ink cell options"
+            title="More ink cell options"
+            @click=${this._toggleMenu}
+          >
+            ${inkCellMoreIcon}
+          </button>
+        </div>
+        ${this._isMenuOpen
+          ? html`
+            <div
+              class="coppermind-ink-cell-menu"
+              contenteditable="false"
+              data-coppermind-ink-control="true"
+              role="menu"
+              @keydown=${this._handleMenuKeydown}
+            >
+              <div class="coppermind-ink-cell-menu-group">
+                <div
+                  class="coppermind-ink-cell-menu-row"
+                  aria-haspopup="menu"
+                  role="menuitem"
+                >
+                  <span>Background</span>
+                  ${inkCellMenuChevronIcon}
+                </div>
+                <div class="coppermind-ink-cell-submenu" role="menu" aria-label="Ink cell background">
+                  ${coppermindInkBackgroundOptions.map(option => html`
+                    <button
+                      class="coppermind-ink-cell-menu-option"
+                      contenteditable="false"
+                      data-coppermind-ink-control="true"
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked=${background === option.id ? 'true' : 'false'}
+                      @click=${(event: Event) => this._setBackground(event, option.id)}
+                    >
+                      ${option.label}
+                    </button>
+                  `)}
+                </div>
+              </div>
+            </div>
+          `
+          : null}
         <div class="coppermind-ink-cell-sheet">
           <canvas class="coppermind-ink-cell-canvas coppermind-ink-committed-canvas"></canvas>
           <canvas class="coppermind-ink-cell-canvas coppermind-ink-live-canvas"></canvas>
