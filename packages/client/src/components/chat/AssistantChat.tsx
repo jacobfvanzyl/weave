@@ -47,7 +47,7 @@ import { CommandPanel } from '../ui/command';
 import { Menu, MenuGroupLabel, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubPopup, MenuSubTrigger, MenuTrigger } from '../ui/menu';
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../ui/tooltip';
-import { CodeBlock } from './CodeBlock';
+import { CodeBlock, shouldDeferCodeFenceHighlight } from './CodeBlock';
 import {
   getAutoCollapsedAssistantTextPartIndices,
   getAssistantContentRanges,
@@ -533,7 +533,7 @@ const writeClipboardText = async (text: string) => {
   }
 };
 
-const MarkdownPre = ({ children }: { children: ReactNode }) => {
+const MarkdownPre = ({ children, showCopy = true }: { children: ReactNode; showCopy?: boolean }) => {
   const [isCopied, setIsCopied] = useState(false);
   const resetCopiedRef = useRef<number | null>(null);
   const copyText = useMemo(() => getMarkdownNodeText(children).replace(/\n$/, ''), [children]);
@@ -559,24 +559,26 @@ const MarkdownPre = ({ children }: { children: ReactNode }) => {
   const label = isCopied ? 'Copied' : 'Copy code';
 
   return (
-    <div className="group relative my-3 max-w-full rounded-md bg-muted font-mono text-xs leading-5">
+    <div className="group relative my-3 max-w-full rounded-md bg-muted font-mono text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)]">
       <div className="max-w-full overflow-x-auto p-3 pr-10">{children}</div>
-      <Tooltip>
-        <TooltipTrigger
-          aria-label={label}
-          className={cn(
-            'absolute right-1.5 top-1.5 z-10 inline-flex size-6 items-center justify-center rounded-md border border-border/70 bg-background/90 text-muted-foreground opacity-0 shadow-sm backdrop-blur transition-[background-color,border-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-40 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100',
-            isCopied && 'text-foreground',
-          )}
-          disabled={!copyText}
-          onClick={copyCode}
-          title={label}
-          type="button"
-        >
-          {isCopied ? <Check size={14} /> : <Clipboard size={14} />}
-        </TooltipTrigger>
-        <TooltipPopup side="left">{label}</TooltipPopup>
-      </Tooltip>
+      {showCopy ? (
+        <Tooltip>
+          <TooltipTrigger
+            aria-label={label}
+            className={cn(
+              'absolute right-1.5 top-1.5 z-10 inline-flex size-6 items-center justify-center rounded-md border border-border/70 bg-background/90 text-muted-foreground opacity-0 shadow-sm backdrop-blur transition-[background-color,border-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-40 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100',
+              isCopied && 'text-foreground',
+            )}
+            disabled={!copyText}
+            onClick={copyCode}
+            title={label}
+            type="button"
+          >
+            {isCopied ? <Check size={14} /> : <Clipboard size={14} />}
+          </TooltipTrigger>
+          <TooltipPopup side="left">{label}</TooltipPopup>
+        </Tooltip>
+      ) : null}
     </div>
   );
 };
@@ -599,13 +601,22 @@ const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string;
         em: ({ children }) => <em className="italic">{children}</em>,
         del: ({ children }) => <del className="text-muted-foreground line-through">{children}</del>,
         a: ({ children, href }) => <a href={href} className="break-all text-primary underline underline-offset-2" target="_blank" rel="noreferrer">{children}</a>,
-        code: ({ children, className }) =>
+        code: ({ children, className, node }) =>
           className?.startsWith('language-') ? (
-            <CodeBlock className={className} deferHighlight={deferCodeHighlight}>{String(children)}</CodeBlock>
+            <CodeBlock
+              className={className}
+              deferHighlight={shouldDeferCodeFenceHighlight(text, node?.position, deferCodeHighlight)}
+            >
+              {String(children)}
+            </CodeBlock>
           ) : (
             <code className={cn('break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]', className)}>{children}</code>
           ),
-        pre: ({ children }) => <MarkdownPre>{children}</MarkdownPre>,
+        pre: ({ children, node }) => (
+          <MarkdownPre showCopy={!shouldDeferCodeFenceHighlight(text, node?.position, deferCodeHighlight)}>
+            {children}
+          </MarkdownPre>
+        ),
         blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
         table: ({ children }) => <div className="my-3 max-w-full overflow-x-auto"><table className="w-full border-collapse text-left text-xs">{children}</table></div>,
         thead: ({ children }) => <thead className="border-b border-border bg-muted">{children}</thead>,

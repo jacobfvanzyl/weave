@@ -126,8 +126,8 @@ export const editorTheme = EditorView.theme({
   ".cm-cursor, .cm-dropCursor": {
     borderLeftColor: "var(--weave-editor-caret)",
   },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    backgroundColor: "var(--weave-editor-selection)",
+  ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
+    background: "var(--weave-editor-selection)",
   },
   ".cm-searchMatch": {
     backgroundColor: "var(--weave-editor-search-match)",

@@ -69,7 +69,7 @@
 :root[data-theme="latte"] {
   color-scheme: light;
   --weave-chat-content-max-width: 48rem;
-  --weave-chat-text-size: 14px;
+  --weave-chat-text-size: 15px;
   --weave-chat-line-height: 22px;
   --weave-editor-font-size: 15px;
   --weave-terminal-font-size: 16px;
@@ -314,20 +314,6 @@ input {
   font: inherit;
 }
 
-.shiki-code pre {
-  margin: 0;
-  max-width: 100%;
-  overflow-x: auto;
-  background: transparent !important;
-  font-family: var(--font-code);
-}
-
-.shiki-code code {
-  display: block;
-  background: transparent;
-  font-family: var(--font-code);
-}
-
 .chat-message-bubble,
 .chat-message-bubble * {
   min-width: 0;
@@ -493,7 +479,17 @@ input {
 }
 
 aside[data-weave-thread-sidebar] {
+  --weave-sidebar-font-size: 14px;
+  --weave-sidebar-status-font-size: 11px;
   padding-top: var(--weave-sidebar-padding-top);
+}
+
+aside[data-weave-thread-sidebar] :is(.text-xs, .text-sm) {
+  font-size: var(--weave-sidebar-font-size);
+}
+
+aside[data-weave-thread-sidebar] .text-\[10px\] {
+  font-size: var(--weave-sidebar-status-font-size);
 }
 
 aside[data-weave-thread-sidebar]::after,
