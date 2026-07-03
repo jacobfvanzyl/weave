@@ -50,6 +50,13 @@ type SidebarProjectScope = ProductId | 'all';
 
 const collapsedProjectsStorageKey = (scope: SidebarProjectScope) => `weave.product-sidebar.${scope}.collapsedProjectIds.v1`;
 const branchMenuRefreshThrottleMs = 15_000;
+const sidebarRowOverhangPx = 6;
+const sidebarRowPaddingRightPx = 4;
+const sidebarThreadMenuTranslatePx = 9;
+const sidebarActionRailTranslatePx = sidebarRowOverhangPx - sidebarRowPaddingRightPx + sidebarThreadMenuTranslatePx;
+const singletonVaultActionTranslatePx = sidebarActionRailTranslatePx - sidebarRowOverhangPx;
+const sidebarActionRailStyle = { transform: `translateX(${sidebarActionRailTranslatePx}px)` };
+const singletonVaultActionRailStyle = { transform: `translateX(${singletonVaultActionTranslatePx}px)` };
 
 const parseCollapsedProjectIds = (value: string | null) => {
   try {
@@ -87,6 +94,9 @@ const moveItem = <T extends { id: string }>(items: T[], activeId: string, overId
 const normalizeWorkspacePath = (path: string | null | undefined) => path?.trim().replace(/\/+$/, '').toLowerCase() || '';
 
 const pathBasename = (path: string | undefined) => path?.split('/').filter(Boolean).pop() || '';
+
+const workspaceDisplayLabel = (workspace: { name?: string; path?: string | null } | undefined, fallback: string) =>
+  workspace?.name?.trim() || pathBasename(workspace?.path ?? undefined) || fallback;
 
 const getDiscoveredWorktreeName = (worktree: DiscoveredWorktree) =>
   worktree.branch?.trim() || pathBasename(worktree.path) || 'Workspace';
@@ -261,6 +271,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     deleteThread,
   } = useChatStore();
   const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
+  const isChatPaneOpen = useWorkspaceSurfaceStore(state => state.paneVisibility.chatOpen);
   const selectWorkspace = useWorkspaceSurfaceStore(state => state.selectWorkspace);
   const selectThreadSurface = useChatStore(state => state.selectThread);
   const workspaceTerminalWindowCounts = useTerminalStore(state => state.workspaceTerminalWindowCounts);
@@ -386,28 +397,35 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     project.id,
     sortThreadsForDisplay(threads.filter(thread => thread.projectId === project.id && thread.archived === true && thread.removedWorkspace)),
   ]));
+  const activeThread = activeSurface.kind === 'thread'
+    ? threads.find(thread => thread.id === activeSurface.threadId)
+    : undefined;
+  const shouldElevateThreadSelection = Boolean(activeThread?.projectId && !isChatPaneOpen);
   const sortedProjects = sortManual(productProjects);
+  const vaultProjects = sortedProjects.filter(project => project.projectKind === 'notes');
+  const regularProjects = sortedProjects.filter(project => project.projectKind !== 'notes');
   const toggleProjectCollapsed = (projectId: string) =>
     setCollapsedProjectIds(ids => (ids.includes(projectId) ? ids.filter(id => id !== projectId) : [...ids, projectId]));
-  const collapseProjectsForDrag = () => {
-    openProjectIdsBeforeDragRef.current = sortedProjects
-      .map(project => project.id)
-      .filter(projectId => !collapsedProjectIds.includes(projectId));
-    setCollapsedProjectIds(sortedProjects.map(project => project.id));
+  const collapseProjectsForDrag = (visibleProjects: typeof sortedProjects) => {
+    const visibleProjectIds = visibleProjects.map(project => project.id);
+    openProjectIdsBeforeDragRef.current = visibleProjectIds.filter(projectId => !collapsedProjectIds.includes(projectId));
+    setCollapsedProjectIds(ids => Array.from(new Set([...ids, ...visibleProjectIds])));
   };
   const restoreProjectsAfterDrag = () => {
     const openProjectIds = openProjectIdsBeforeDragRef.current;
     openProjectIdsBeforeDragRef.current = null;
     if (!openProjectIds) return;
-    setCollapsedProjectIds(sortedProjects.map(project => project.id).filter(projectId => !openProjectIds.includes(projectId)));
+    setCollapsedProjectIds(ids => ids.filter(projectId => !openProjectIds.includes(projectId)));
   };
   const suppressSelectionAfterDrag = () => {
     suppressSelectionUntilRef.current = Date.now() + 500;
   };
   const shouldSuppressSelection = () => Date.now() < suppressSelectionUntilRef.current;
-  const isThreadActive = (nextThreadId: string) => activeSurface.kind === 'thread' && activeSurface.threadId === nextThreadId;
+  const isThreadActive = (nextThreadId: string) =>
+    isChatPaneOpen && activeSurface.kind === 'thread' && activeSurface.threadId === nextThreadId;
   const isWorkspaceActive = (projectId: string, workspaceId: string) =>
-    activeSurface.kind === 'workspace' && activeSurface.projectId === projectId && activeSurface.workspaceId === workspaceId;
+    (activeSurface.kind === 'workspace' && activeSurface.projectId === projectId && activeSurface.workspaceId === workspaceId)
+    || (shouldElevateThreadSelection && activeThread?.projectId === projectId && activeThread.workspaceId === workspaceId);
   const selectThread = (nextThreadId: string) => {
     if (shouldSuppressSelection()) return;
     selectThreadSurface(nextThreadId);
@@ -432,6 +450,22 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     const ordered = moveItem((threadsByProject.get(projectId) ?? []).filter(thread => thread.workspaceId === workspaceId && thread.archived !== true), activeId, overId);
     await reorderThreads({ projectId, workspaceId }, ordered.map(thread => thread.id));
     await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
+  };
+  const reorderVisibleProjects = async (visibleProjects: typeof sortedProjects, activeId: string, overId: string) => {
+    const ordered = moveItem(visibleProjects, activeId, overId);
+    if (sidebarProductSet.size > 1) {
+      const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
+      const orderedQueue = [...ordered];
+      const allProjectsInMixedOrder = projects.map(project =>
+        visibleProjectIds.has(project.id)
+          ? orderedQueue.shift() ?? project
+          : project
+      );
+      await reorderAllProjects(allProjectsInMixedOrder.map(item => item.id));
+    } else {
+      await reorderProjects(ordered.map(item => item.id), product);
+    }
+    await invalidateProjects();
   };
   const createPlainThread = async () => {
     await newThread();
@@ -676,137 +710,53 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       </MenuPopup>
     </Menu>
   );
+  const renderProjectSection = (label: 'Vaults' | 'Projects', visibleProjects: typeof sortedProjects, showCreateMenu: boolean) => {
+    if (!visibleProjects.length && !showCreateMenu) return null;
+    const renderSingleVaultAsHeader = label === 'Vaults' && visibleProjects.length === 1;
 
-  return (
-    <aside
-      ref={ref}
-      data-weave-thread-sidebar
-      data-weave-thread-sidebar-overlay={presentation === 'overlay' ? 'true' : undefined}
-      data-weave-surface="sidebar"
-      tabIndex={-1}
-      className={cn(
-        'fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-card py-4 pl-2 pr-4',
-        presentation === 'overlay'
-          ? 'w-96 max-w-[min(24rem,calc(100vw-1rem))]'
-          : 'w-full md:static md:z-auto md:w-96',
-      )}
-    >
-      <div className="min-h-0 flex-1 -mr-4 space-y-4 overflow-x-hidden overflow-y-auto pr-5">
-        {showPlainThreads ? <div className="space-y-2">
-          <SidebarSectionHeader label="Threads">
-            <div className="flex items-center">
-              <Button
-                className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
-                size="icon-xs"
-                variant="ghost"
-                aria-label="Create Thread"
-                onClick={createPlainThread}
-              >
-                <SquarePen size={14} />
-              </Button>
+    return (
+      <div className="space-y-2">
+        {!renderSingleVaultAsHeader ? (
+          <SidebarSectionHeader label={label}>
+            {showCreateMenu ? (
               <Menu>
-                <MenuTrigger render={<Button className="h-5 w-6 translate-x-2.5 text-foreground sm:h-5 sm:w-6" size="icon-xs" variant="ghost" aria-label="Threads menu" />}>
+                <MenuTrigger
+                  render={
+                    <Button
+                      className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={`${label} menu`}
+                      style={sidebarActionRailStyle}
+                    />
+                  }
+                >
                   <MoreHorizontal size={14} />
                 </MenuTrigger>
-                <MenuPopup align="end" sideOffset={4} className="w-40">
-                  <MenuItem onClick={() => setArchivedDialogScopeId('plain')}>
-                    <Archive size={13} />
-                    Archived Threads
+                <MenuPopup align="end" sideOffset={4} className="w-36">
+                  <MenuItem onClick={openCreateProjectDialog}>
+                    <Plus size={13} />
+                    Create Project
                   </MenuItem>
                 </MenuPopup>
               </Menu>
-            </div>
-            <Button
-              className="h-6 w-8 md:hidden"
-              size="icon-xs"
-              variant="ghost"
-              aria-label="Close sidebar"
-              onClick={onClose}
-            >
-              <X size={14} />
-            </Button>
+            ) : null}
           </SidebarSectionHeader>
-        <SortableSection
-          items={plainThreads.map(thread => thread.id)}
-          onDragStart={suppressSelectionAfterDrag}
-          onDragEnd={suppressSelectionAfterDrag}
-          onReorder={reorderPlainThreads}
-        >
-        {plainThreads.map(thread => (
-          <SortableItem
-            key={thread.id}
-            id={thread.id}
-            canDrag={plainThreads.length > 1}
-            showHandle={false}
-            className={cn(
-              'group relative flex min-h-9 min-w-0 w-[calc(100%+6px)] items-center gap-2 rounded-md border border-transparent py-1 pl-2 pr-1 text-left transition-colors',
-              !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-accent',
-            )}
-          >
-            <span
-              aria-hidden="true"
-              data-sidebar-highlight
-              className={cn(
-                'pointer-events-none absolute inset-y-0 left-[-1px] -right-2 rounded-md transition-colors',
-                isThreadActive(thread.id) && 'bg-selected-thread',
-              )}
-            />
-            <SidebarItemButton
-              className="relative min-w-0 flex-1 items-center text-left"
-              onClick={() => selectThread(thread.id)}
-            >
-              <div className="flex min-w-0 items-center text-sm font-normal text-foreground">
-                <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-              </div>
-            </SidebarItemButton>
-            {renderThreadRunningSpinner(thread)}
-            {renderThreadMenu(thread)}
-          </SortableItem>
-        ))}
-        </SortableSection>
-        </div> : null}
-
-        <div className="space-y-2">
-          <SidebarSectionHeader label="Projects">
-            <Menu>
-              <MenuTrigger render={<Button className="h-6 w-8 translate-x-2.5 text-foreground" size="icon-xs" variant="ghost" aria-label="Projects menu" />}>
-                <MoreHorizontal size={14} />
-              </MenuTrigger>
-              <MenuPopup align="end" sideOffset={4} className="w-36">
-                <MenuItem onClick={openCreateProjectDialog}>
-                  <Plus size={13} />
-                  Create Project
-                </MenuItem>
-              </MenuPopup>
-            </Menu>
-          </SidebarSectionHeader>
+        ) : null}
+        {visibleProjects.length > 0 ? (
           <SortableSection
-            items={sortedProjects.map(project => project.id)}
+            items={visibleProjects.map(project => project.id)}
             onDragStart={() => {
               suppressSelectionAfterDrag();
-              collapseProjectsForDrag();
+              collapseProjectsForDrag(visibleProjects);
             }}
             onDragEnd={() => {
               restoreProjectsAfterDrag();
               suppressSelectionAfterDrag();
             }}
-            onReorder={async (activeId, overId) => {
-              const ordered = moveItem(sortedProjects, activeId, overId);
-              if (sidebarProductSet.size > 1) {
-                const orderedQueue = [...ordered];
-                const allProjectsInMixedOrder = projects.map(project =>
-                  sidebarProductSet.has(productForProjectKind(project.projectKind))
-                    ? orderedQueue.shift() ?? project
-                    : project
-                );
-                await reorderAllProjects(allProjectsInMixedOrder.map(item => item.id));
-              } else {
-                await reorderProjects(ordered.map(item => item.id), product);
-              }
-              await invalidateProjects();
-            }}
+            onReorder={(activeId, overId) => void reorderVisibleProjects(visibleProjects, activeId, overId)}
           >
-            {sortedProjects.map(project => {
+            {visibleProjects.map(project => {
               const isCollapsed = collapsedProjectIds.includes(project.id);
               const projectThreads = threadsByProject.get(project.id) ?? [];
               const workspaces = project.workspaces.length > 0 ? project.workspaces : [];
@@ -818,56 +768,99 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                 : [];
               const isNotesProjectActive = Boolean(notesWorkspace && isWorkspaceActive(project.id, notesWorkspace.id));
               const hasProjectThreadAction = project.projectKind === 'general' || project.projectKind === 'notes';
+              const projectAsHeader = renderSingleVaultAsHeader && project.projectKind === 'notes';
 
               return (
                 <SortableItem
                   key={project.id}
                   id={project.id}
-                  canDrag={sortedProjects.length > 1}
+                  canDrag={visibleProjects.length > 1}
                   showHandle={false}
-                  className="-ml-4 py-0.5"
+                  className={cn(projectAsHeader ? 'w-[calc(100%+6px)] py-0.5' : '-ml-4 py-0.5')}
                 >
                   {dragActivator => (
                     <>
                       <div
-                        ref={dragActivator.ref}
-                        className="relative flex w-full cursor-grab touch-none select-none items-center gap-2 text-sm font-normal text-foreground active:cursor-grabbing"
-                        style={{ touchAction: 'none' }}
-                        {...dragActivator.attributes}
-                        {...dragActivator.listeners}
+                        ref={projectAsHeader ? undefined : dragActivator.ref}
+                        className={cn(
+                          projectAsHeader
+                            ? 'relative flex min-h-9 items-center justify-end bg-transparent text-xs font-medium text-muted-foreground'
+                            : 'relative flex w-full cursor-grab touch-none select-none items-center gap-2 text-sm font-normal text-foreground active:cursor-grabbing',
+                        )}
+                        style={projectAsHeader ? undefined : { touchAction: 'none' }}
+                        {...(projectAsHeader ? {} : dragActivator.attributes)}
+                        {...(projectAsHeader ? {} : dragActivator.listeners)}
                       >
-                        {isNotesProjectActive ? (
+                        {isNotesProjectActive && !projectAsHeader ? (
                           <span
                             aria-hidden="true"
                             className="pointer-events-none absolute inset-y-0 left-4 -right-[13px] rounded-md bg-selected-thread"
                           />
                         ) : null}
-                        <SidebarItemButton
-                          className={cn(
-                            'relative ml-[14px] flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left',
-                          )}
-                          onClick={() => {
-                            if (shouldSuppressSelection()) return;
-                            if (project.projectKind === 'notes' && notesWorkspace) {
-                              selectWorkspaceSurface(project.id, notesWorkspace.id);
-                              return;
-                            }
-                            toggleProjectCollapsed(project.id);
-                          }}
-                        >
-                          {!isCollapsed ? (
-                            <FolderOpen size={16} className="shrink-0 text-muted-foreground" aria-label="Expanded Project" />
-                          ) : project.projectKind === 'git' ? (
-                            <FolderCode size={16} className="shrink-0 text-muted-foreground" aria-label="Git Project" />
-                          ) : project.projectKind === 'notes' ? (
-                            <StickyNote size={16} className="shrink-0 text-muted-foreground" aria-label="Notes Project" />
-                          ) : (
-                            <Folder size={16} className="shrink-0 text-muted-foreground" aria-label="General Project" />
-                          )}
-                          <span className="min-w-0 truncate font-medium text-foreground">{project.name}</span>
-                        </SidebarItemButton>
+                        {projectAsHeader ? (
+                          <button
+                            type="button"
+                            className={cn(
+                              'absolute inset-y-0 left-[-1px] -right-2 z-0 flex min-w-0 items-center justify-center rounded-md px-16 text-center text-xs font-medium outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
+                              isNotesProjectActive && 'bg-selected-thread text-foreground',
+                            )}
+                            aria-label={`Select ${project.name}`}
+                            onClick={() => {
+                              if (shouldSuppressSelection()) return;
+                              if (notesWorkspace) selectWorkspaceSurface(project.id, notesWorkspace.id);
+                            }}
+                          >
+                            {project.name}
+                          </button>
+                        ) : (
+                          <SidebarItemButton
+                            className={cn(
+                              'relative ml-[14px] flex min-w-0 flex-1 rounded-md text-left',
+                              project.projectKind === 'notes'
+                                ? 'h-9 flex-col items-stretch justify-center gap-0 px-2 py-0'
+                                : 'items-center gap-2 px-1 py-0.5',
+                            )}
+                            onClick={() => {
+                              if (shouldSuppressSelection()) return;
+                              if (project.projectKind === 'notes' && notesWorkspace) {
+                                selectWorkspaceSurface(project.id, notesWorkspace.id);
+                                return;
+                              }
+                              toggleProjectCollapsed(project.id);
+                            }}
+                          >
+                            {project.projectKind === 'notes' ? (
+                              <>
+                                <div className="flex h-5 min-w-0 items-center gap-1.5">
+                                  <StickyNote size={16} className="shrink-0 text-muted-foreground" aria-label="Notes Project" />
+                                  <span className="min-w-0 truncate font-medium text-foreground">{project.name}</span>
+                                </div>
+                                <div className="flex h-4 min-w-0 items-center pl-[22px] text-[10px] font-normal leading-none text-muted-foreground">
+                                  <span className="truncate">{workspaceDisplayLabel(notesWorkspace, 'Vault')}</span>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                {!isCollapsed ? (
+                                  <FolderOpen size={16} className="shrink-0 text-muted-foreground" aria-label="Expanded Project" />
+                                ) : project.projectKind === 'git' ? (
+                                  <FolderCode size={16} className="shrink-0 text-muted-foreground" aria-label="Git Project" />
+                                ) : (
+                                  <Folder size={16} className="shrink-0 text-muted-foreground" aria-label="General Project" />
+                                )}
+                                <span className="min-w-0 truncate font-medium text-foreground">{project.name}</span>
+                              </>
+                            )}
+                          </SidebarItemButton>
+                        )}
                         {!isCollapsed ? (
-                          <div className={cn('relative flex shrink-0 items-center', hasProjectThreadAction && 'translate-x-2.5')}>
+                          <div
+                            className={cn(
+                              'relative z-10 flex shrink-0 items-center',
+                              !projectAsHeader && hasProjectThreadAction && 'translate-x-2.5',
+                            )}
+                            style={projectAsHeader ? singletonVaultActionRailStyle : undefined}
+                          >
                             {hasProjectThreadAction ? (
                               <Button
                                 className="h-5 w-6 shrink-0 text-foreground sm:h-5 sm:w-6"
@@ -936,8 +929,11 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                       {!isCollapsed ? (
                         <div
                           className={cn(
-                            'relative space-y-2 pl-[15px] before:pointer-events-none before:absolute before:left-4 before:-right-[21px] before:top-[-4px] before:z-10 before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-border',
-                            project.projectKind === 'git' ? 'pb-3 before:bottom-1.5' : 'pb-1 before:bottom-2',
+                            'relative space-y-2',
+                            projectAsHeader
+                              ? 'pb-1'
+                              : 'pl-[15px] before:pointer-events-none before:absolute before:left-4 before:-right-[21px] before:top-[-4px] before:z-10 before:rounded-bl before:border-b-[0.5px] before:border-l-[0.5px] before:border-border',
+                            !projectAsHeader && (project.projectKind === 'git' ? 'pb-3 before:bottom-1.5' : 'pb-1 before:bottom-2'),
                           )}
                         >
                           {project.projectKind === 'general' ? (
@@ -995,8 +991,9 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                   canDrag={notesThreads.length > 1}
                                   showHandle={false}
                                   className={cn(
-                                    'group relative -ml-2 flex min-h-9 min-w-0 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
+                                    'group relative flex min-h-9 min-w-0 items-center gap-2 rounded-md border py-1 pl-2 pr-1 text-left transition-colors',
                                     'border-transparent text-foreground',
+                                    projectAsHeader ? 'w-full' : '-ml-2 w-[calc(100%+0.5rem)]',
                                     !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-accent',
                                   )}
                                 >
@@ -1004,7 +1001,8 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                     aria-hidden="true"
                                     data-sidebar-highlight
                                     className={cn(
-                                      'pointer-events-none absolute inset-y-0 left-2 -right-[14px] rounded-md transition-colors',
+                                      'pointer-events-none absolute inset-y-0 rounded-md transition-colors',
+                                      projectAsHeader ? 'left-[-1px] -right-2' : 'left-2 -right-[14px]',
                                       isThreadActive(thread.id) && 'bg-selected-thread',
                                     )}
                                   />
@@ -1012,12 +1010,12 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                     className="relative min-w-0 flex-1 items-center text-left"
                                     onClick={() => selectThread(thread.id)}
                                   >
-                                    <div className="flex min-w-0 items-center pl-4">
+                                    <div className={cn('flex min-w-0 items-center', !projectAsHeader && 'pl-4')}>
                                       <span className="min-w-0 flex-1 truncate text-sm font-normal text-foreground">{thread.title}</span>
                                     </div>
                                   </SidebarItemButton>
                                   {renderThreadRunningSpinner(thread)}
-                                  {renderThreadMenu(thread, 'translate-x-[15px]')}
+                                  {projectAsHeader ? renderThreadMenu(thread) : renderThreadMenu(thread, 'translate-x-[15px]')}
                                 </SortableItem>
                               ))}
                             </SortableSection>
@@ -1304,7 +1302,113 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
               );
             })}
           </SortableSection>
-        </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  return (
+    <aside
+      ref={ref}
+      data-weave-thread-sidebar
+      data-weave-thread-sidebar-overlay={presentation === 'overlay' ? 'true' : undefined}
+      data-weave-surface="sidebar"
+      tabIndex={-1}
+      className={cn(
+        'fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-card py-4 pl-2 pr-4',
+        presentation === 'overlay'
+          ? 'w-96 max-w-[min(24rem,calc(100vw-1rem))]'
+          : 'w-full md:static md:z-auto md:w-96',
+      )}
+    >
+      <div className="min-h-0 flex-1 -mr-4 space-y-4 overflow-x-hidden overflow-y-auto pr-5">
+        {showPlainThreads ? <div className="space-y-2">
+          <SidebarSectionHeader label="Threads">
+            <div className="flex items-center">
+              <Button
+                className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Create Thread"
+                onClick={createPlainThread}
+                style={sidebarActionRailStyle}
+              >
+                <SquarePen size={14} />
+              </Button>
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Threads menu"
+                      style={sidebarActionRailStyle}
+                    />
+                  }
+                >
+                  <MoreHorizontal size={14} />
+                </MenuTrigger>
+                <MenuPopup align="end" sideOffset={4} className="w-40">
+                  <MenuItem onClick={() => setArchivedDialogScopeId('plain')}>
+                    <Archive size={13} />
+                    Archived Threads
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
+            </div>
+            <Button
+              className="h-6 w-8 md:hidden"
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Close sidebar"
+              onClick={onClose}
+            >
+              <X size={14} />
+            </Button>
+          </SidebarSectionHeader>
+        <SortableSection
+          items={plainThreads.map(thread => thread.id)}
+          onDragStart={suppressSelectionAfterDrag}
+          onDragEnd={suppressSelectionAfterDrag}
+          onReorder={reorderPlainThreads}
+        >
+        {plainThreads.map(thread => (
+          <SortableItem
+            key={thread.id}
+            id={thread.id}
+            canDrag={plainThreads.length > 1}
+            showHandle={false}
+            className={cn(
+              'group relative flex min-h-9 min-w-0 w-[calc(100%+6px)] items-center gap-2 rounded-md border border-transparent py-1 pl-2 pr-1 text-left transition-colors',
+              !isThreadActive(thread.id) && 'hover:[&>[data-sidebar-highlight]]:bg-accent',
+            )}
+          >
+            <span
+              aria-hidden="true"
+              data-sidebar-highlight
+              className={cn(
+                'pointer-events-none absolute inset-y-0 left-[-1px] -right-2 rounded-md transition-colors',
+                isThreadActive(thread.id) && 'bg-selected-thread',
+              )}
+            />
+            <SidebarItemButton
+              className="relative min-w-0 flex-1 items-center text-left"
+              onClick={() => selectThread(thread.id)}
+            >
+              <div className="flex min-w-0 items-center text-sm font-normal text-foreground">
+                <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+              </div>
+            </SidebarItemButton>
+            {renderThreadRunningSpinner(thread)}
+            {renderThreadMenu(thread)}
+          </SortableItem>
+        ))}
+        </SortableSection>
+        </div> : null}
+
+        {renderProjectSection('Vaults', vaultProjects, vaultProjects.length > 0 && regularProjects.length === 0)}
+        {renderProjectSection('Projects', regularProjects, regularProjects.length > 0 || vaultProjects.length === 0)}
       </div>
 
       {isCreateProjectDialogOpen ? (
