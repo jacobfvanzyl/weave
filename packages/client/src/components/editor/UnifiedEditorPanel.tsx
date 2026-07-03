@@ -44,12 +44,13 @@ import type { EditorEntry, EditorMode, EditorTarget, EditorWatchSubscription, Op
 import { defaultEditorExplorerVisible, getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
 import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
+import { useLiveEditorContextStore, type LiveEditorContextRequest } from '../../stores/live-editor-context-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../ui/dialog';
 import { Input } from '../ui/input';
 import { CodeMirrorEditor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
-import { CoppermindDocumentEditor } from './CoppermindDocumentEditor';
+import { CoppermindDocumentEditor, type CoppermindDocumentEditorHandle } from './CoppermindDocumentEditor';
 import { createEmptyExcalidrawFile, ExcalidrawDocumentEditor, normalizeExcalidrawContent } from './ExcalidrawDocumentEditor';
 
 export type UnifiedEditorTarget = EditorTarget & {
@@ -177,6 +178,15 @@ const didPointerLeaveNearExplorerWindowEdge = (
 };
 
 const getBufferDirty = (buffer: EditorBuffer | undefined) => Boolean(buffer && buffer.value !== buffer.content);
+
+const hashText = (value: string) => {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${(hash >>> 0).toString(16).padStart(8, '0')}:${value.length}`;
+};
 
 const createLoadedBuffer = (
   file: { path: string; content: string; version: string; size?: number; mtimeMs?: number },
@@ -538,8 +548,10 @@ export const UnifiedEditorPanel = ({
   const setActiveEditorTab = useEditorTabStore(state => state.setActiveEditorTab);
   const setExplorerVisible = useEditorTabStore(state => state.setExplorerVisible);
   const setPersistedEditorTabs = useEditorTabStore(state => state.setEditorTabs);
+  const registerLiveEditorContextCollector = useLiveEditorContextStore(state => state.registerCollector);
   const resolvedTheme = getResolvedTheme(useThemeStore(state => state.mode));
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
+  const coppermindEditorRef = useRef<CoppermindDocumentEditorHandle | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const explorerSlideOverCloseTimeoutRef = useRef<number | undefined>(undefined);
   const coppermindCellsSidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
@@ -747,6 +759,75 @@ export const UnifiedEditorPanel = ({
     clearExplorerSlideOverCloseTimeout();
     setIsExplorerSlideOverOpen(true);
   }, [canUseExplorerSlideOver, clearExplorerSlideOverCloseTimeout]);
+
+  const collectLiveEditorContext = useCallback((request: LiveEditorContextRequest = {}) => {
+    if (request.projectId && request.projectId !== target.projectId) return undefined;
+    if (request.workspaceId && request.workspaceId !== target.workspaceId) return undefined;
+    if (request.mode && request.mode !== mode) return undefined;
+
+    const activeBuffer = openBuffer
+      ? {
+        contentHash: hashText(openBuffer.value),
+        dirty: getBufferDirty(openBuffer),
+        documentKind: getDocumentKind(mode, openBuffer.path),
+        mediaType: openBuffer.mediaType,
+        path: openBuffer.path,
+        size: openBuffer.size,
+        version: openBuffer.version,
+        ...(
+          isCodeMirrorOpen
+            ? { codeMirror: editorRef.current?.getSnapshot() }
+            : {}
+        ),
+        ...(
+          isCoppermindOpen
+            ? { coppermind: coppermindEditorRef.current?.getSnapshot() }
+            : {}
+        ),
+      }
+      : undefined;
+
+    return {
+      activePath,
+      activeTabId: activeEditorTab?.id,
+      ...(activeBuffer ? { activeBuffer } : {}),
+      mode,
+      openTabs: editorTabs.map(tab => {
+        const buffer = buffersByTabId[tab.id];
+        return {
+          active: tab.id === activeEditorTab?.id,
+          dirty: getBufferDirty(buffer),
+          loaded: Boolean(buffer),
+          path: tab.path,
+          preview: tab.isPreview === true,
+        };
+      }),
+      projectId: target.projectId,
+      projectName: target.projectName,
+      targetKey: editorTabTargetKey,
+      updatedAt: new Date().toISOString(),
+      workspaceId: target.workspaceId,
+      workspaceName: target.workspaceName,
+    };
+  }, [
+    activeEditorTab?.id,
+    activePath,
+    buffersByTabId,
+    editorTabTargetKey,
+    editorTabs,
+    isCodeMirrorOpen,
+    isCoppermindOpen,
+    mode,
+    openBuffer,
+    target.projectId,
+    target.projectName,
+    target.workspaceId,
+    target.workspaceName,
+  ]);
+
+  useEffect(() => (
+    registerLiveEditorContextCollector(editorTabTargetKey, collectLiveEditorContext)
+  ), [collectLiveEditorContext, editorTabTargetKey, registerLiveEditorContextCollector]);
 
   const scheduleExplorerSlideOverClose = useCallback(() => {
     if (!canUseExplorerSlideOver) return;
@@ -1837,6 +1918,7 @@ export const UnifiedEditorPanel = ({
     if (documentKind === 'coppermind') {
       return (
         <CoppermindDocumentEditor
+          ref={coppermindEditorRef}
           focusRequest={bufferFocusRequest}
           isCellsSidebarOpen={isCoppermindCellsSidebarVisible}
           onCellsSidebarMouseEnter={openCoppermindCellsSidebarPreview}

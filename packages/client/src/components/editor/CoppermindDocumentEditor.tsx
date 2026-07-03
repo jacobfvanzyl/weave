@@ -54,7 +54,7 @@ import {
   Ungroup,
   type LucideIcon,
 } from 'lucide-react';
-import { type DragEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { forwardRef, type DragEvent, type ReactNode, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   addCoppermindBlockSuiteBlocksSection,
   addCoppermindBlockSuiteInkSection,
@@ -98,6 +98,7 @@ import {
   coppermindPageCellPaddingPx,
 } from '../../lib/coppermind-layout';
 import { cn } from '../../lib/cn';
+import type { LiveEditorCoppermindSnapshot } from '../../stores/live-editor-context-store';
 import { Button } from '../ui/button';
 
 export type CoppermindDocumentEditorProps = {
@@ -107,6 +108,10 @@ export type CoppermindDocumentEditorProps = {
   onCellsSidebarMouseLeave?: () => void;
   value: string;
   onChange: (value: string) => void;
+};
+
+export type CoppermindDocumentEditorHandle = {
+  getSnapshot: () => LiveEditorCoppermindSnapshot | undefined;
 };
 
 type CoppermindEditorMode = CoppermindDocMode;
@@ -2167,14 +2172,22 @@ const CoppermindModeToggle = ({
   </div>
 );
 
-export const CoppermindDocumentEditor = ({
+const sectionPreviewMaxChars = 700;
+
+const compactPreviewText = (value: string) => value.replace(/\s+/g, ' ').trim();
+const findSectionElement = (root: HTMLElement | null, sectionId: string) => (
+  Array.from(root?.querySelectorAll<HTMLElement>('[data-block-id]') ?? [])
+    .find(element => element.dataset.blockId === sectionId)
+);
+
+export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandle, CoppermindDocumentEditorProps>(({
   focusRequest = 0,
   isCellsSidebarOpen = true,
   onCellsSidebarMouseEnter,
   onCellsSidebarMouseLeave,
   value,
   onChange,
-}: CoppermindDocumentEditorProps) => {
+}, ref) => {
   const [mode, setMode] = useState<CoppermindEditorMode>('page');
   const [loadedState, setLoadedState] = useState<LoadedCoppermindState>({ status: 'loading' });
   const [activeSectionId, setActiveSectionId] = useState<string | undefined>(undefined);
@@ -2199,6 +2212,44 @@ export const CoppermindDocumentEditor = ({
   });
   const sectionsRef = useRef<CoppermindBlockSuiteSection[]>([]);
   const shellRef = useRef<HTMLDivElement | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    getSnapshot: () => {
+      if (loadedState.status !== 'ready') return undefined;
+      const root = shellRef.current;
+      const viewport = canvasApiRef.current?.getViewportSnapshot();
+      return {
+        activeSectionId,
+        canvasSelection: canvasSelectionStateRef.current,
+        mode,
+        sections: sections.map(section => {
+          const sectionElement = findSectionElement(root, section.id);
+          const rawPreview = compactPreviewText(sectionElement?.innerText ?? '');
+          const preview = rawPreview.length > sectionPreviewMaxChars
+            ? rawPreview.slice(0, sectionPreviewMaxChars)
+            : rawPreview;
+          return {
+            childCount: section.childCount,
+            empty: section.isEmpty,
+            id: section.id,
+            kind: section.kind,
+            placement: section.placement,
+            ...(preview ? { preview } : {}),
+            ...(preview.length < rawPreview.length ? { previewTruncated: true } : {}),
+            title: section.title,
+          };
+        }),
+        viewport: viewport
+          ? {
+            center: viewport.center,
+            zoom: viewport.zoom,
+          }
+          : canvasViewport?.zoom
+            ? { zoom: canvasViewport.zoom }
+            : undefined,
+      };
+    },
+  }), [activeSectionId, canvasViewport?.zoom, loadedState.status, mode, sections]);
 
   const clearPageInkInputSection = useCallback(() => {
     pageInkInputSectionIdRef.current = undefined;
@@ -2948,4 +2999,6 @@ export const CoppermindDocumentEditor = ({
       </div>
     </div>
   );
-};
+});
+
+CoppermindDocumentEditor.displayName = 'CoppermindDocumentEditor';

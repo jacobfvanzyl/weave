@@ -67,6 +67,9 @@ export const weaveRoutePaths = {
     action: (action: string) => `/workspace-files/${encodePath(action === 'diffPreview' ? 'diff-preview' : action)}`,
     watchToken: () => '/workspace-files/watch-token',
   },
+  editorContext: {
+    clientToken: () => '/editor-context/client-token',
+  },
   compat: {
     projects: () => '/projects',
     project: (projectId: string) => `/projects/${encodePath(projectId)}`,
@@ -149,6 +152,9 @@ export const weaveRoutes = {
   workspaceFiles: {
     action: (action: string) => url(weaveRoutePaths.workspaceFiles.action(action)),
     watchToken: () => url(weaveRoutePaths.workspaceFiles.watchToken()),
+  },
+  editorContext: {
+    clientToken: () => url(weaveRoutePaths.editorContext.clientToken()),
   },
   compat: {
     projects: () => url(weaveRoutePaths.compat.projects()),

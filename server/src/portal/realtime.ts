@@ -1,5 +1,13 @@
 import { connectPortal, disconnectPortal, handlePortalMessage, updatePortal } from './registry';
 import {
+  connectClientToolHost,
+  consumeClientToolToken,
+  disconnectClientToolHost,
+  handleClientToolMessage,
+  normalizeClientToolHello,
+  updateClientToolHost,
+} from '../client-tools/registry';
+import {
   connectTerminalRelayClient,
   disconnectTerminalRelayClient,
   forwardTerminalClientMessage,
@@ -259,6 +267,35 @@ const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraL
   ws.addEventListener('error', () => disconnectPortal(portalId, ws));
 };
 
+const connectClientToolHostSocket = (ws: RealtimeSocket, url: URL) => {
+  const clientId = url.searchParams.get('clientId') ?? '';
+  const token = url.searchParams.get('token') ?? '';
+  const record = consumeClientToolToken(token, clientId);
+
+  if (!record || !clientId) {
+    closeUnauthorized(ws, 'invalid client tool token');
+    return;
+  }
+
+  const connection = connectClientToolHost({ clientId, userId: record.resourceId, ws });
+  ws.send(JSON.stringify({ type: 'client.accepted', clientId, connectedAt: connection.connectedAt }));
+
+  onMessage(ws, message => {
+    if (handleClientToolMessage(message)) return;
+
+    if (message.type === 'client.hello' || message.type === 'client.update') {
+      updateClientToolHost(clientId, normalizeClientToolHello(message));
+      ws.send(JSON.stringify({ type: `${message.type}.ack`, clientId }));
+      return;
+    }
+
+    if (message.type === 'client.pong') updateClientToolHost(clientId);
+  });
+
+  ws.addEventListener('close', () => disconnectClientToolHost(clientId, ws));
+  ws.addEventListener('error', () => disconnectClientToolHost(clientId, ws));
+};
+
 export const startPortalRealtimeServer = (mastra: MastraLike) => {
   if (server || process.env.WEAVE_PORTAL_WS_DISABLED === 'true') return server;
 
@@ -271,7 +308,8 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
       url.pathname !== '/terminals/connect' &&
       url.pathname !== '/windows/connect' &&
       url.pathname !== '/lsp/connect' &&
-      url.pathname !== '/workspace-files/watch/connect'
+      url.pathname !== '/workspace-files/watch/connect' &&
+      url.pathname !== '/clients/connect'
     ) {
       return new Response(JSON.stringify({ error: 'not found' }), {
         status: 404,
@@ -293,6 +331,7 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
       if (url.pathname === '/windows/connect') return connectWindowClient(ws, url);
       if (url.pathname === '/lsp/connect') return connectLspClient(ws, url);
       if (url.pathname === '/workspace-files/watch/connect') return connectWorkspaceFileWatchClient(ws, url);
+      if (url.pathname === '/clients/connect') return connectClientToolHostSocket(ws, url);
       void connectPortalDaemon(ws, url, mastra);
     });
     return response;

@@ -217,6 +217,7 @@ const expandProfileToolsForProjectKind = (
     expanded.add('writeProposalPatchTool');
     expanded.add('updateProposalTool');
   }
+  if (projectKind === 'git' || projectKind === 'notes') expanded.add('editor_context');
   return [...expanded];
 };
 

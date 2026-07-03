@@ -26,6 +26,7 @@ import { AppSidebarHost } from './AppSidebarHost';
 import { useAppShortcuts } from './useAppShortcuts';
 import { useShellLayout } from './useShellLayout';
 import { ChatPane } from '../chat/ChatPane';
+import { ClientToolHost } from './ClientToolHost';
 import { EditorPane } from '../editor/EditorPane';
 import { ProposalReviewPane } from '../proposals/ProposalReviewPane';
 import { GlobalTerminalOverlay } from '../terminal/GlobalTerminalOverlay';
@@ -1114,9 +1115,16 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
 	        ref={editorMinimumMeasureRef}
 	        className="pointer-events-none fixed -left-[9999px] -top-[9999px] font-mono text-sm opacity-0"
 	        aria-hidden="true"
-	      >
-	        {editorColumnMeasureText}
-	      </span>
+      >
+        {editorColumnMeasureText}
+      </span>
+      <ClientToolHost
+        active={Boolean(activeProject && activeWorkspace)}
+        projectId={activeProject?.id}
+        resourceId={resourceId}
+        threadId={activeThreadId}
+        workspaceId={activeWorkspace?.id}
+      />
       <AppSidebarHost
         closeOnPinnedSelect={isPortraitViewport}
         clientApp={clientApp}

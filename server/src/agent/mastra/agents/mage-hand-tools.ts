@@ -37,6 +37,7 @@ import {
   renamePreviewTool,
   workspaceSymbolsTool,
 } from '../tools/language-intelligence-tools';
+import { editorContextTool } from '../tools/editor-context-tools';
 
 export const mageHandTools = {
   renameThreadTool,
@@ -47,6 +48,7 @@ export const mageHandTools = {
   updateProposalTool,
   webSearch: webSearchTool,
   webExtract: webExtractTool,
+  editor_context: editorContextTool,
   read: portalReadTool,
   write: portalWriteTool,
   edit: portalEditTool,

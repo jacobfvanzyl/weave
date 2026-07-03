@@ -27,6 +27,7 @@ import {
 import { languageServerExtensions, LSPClient } from "@codemirror/lsp-client";
 import { getCM, vim } from "@replit/codemirror-vim";
 import type { EditorTarget } from "../../lib/editor-types";
+import type { LiveEditorCodeMirrorSnapshot, LiveEditorTextRange } from "../../stores/live-editor-context-store";
 import { getCodeMirrorLanguageExtensions } from "../../lib/codemirror-languages";
 import { registerWeaveVimCommenting } from "../../lib/codemirror-vim-commenting";
 import {
@@ -68,6 +69,7 @@ type CodeMirrorEditorProps = {
 
 export type CodeMirrorEditorHandle = {
   focus: () => void;
+  getSnapshot: () => LiveEditorCodeMirrorSnapshot | undefined;
   revealLine: (line: number, options?: { focus?: boolean }) => void;
 };
 
@@ -143,6 +145,37 @@ const toVimMode = (event: VimModeChangeEvent = {}): VimMode => {
     default:
       return "normal";
   }
+};
+
+const textRangePreviewMaxChars = 8_000;
+
+const createTextRangeSnapshot = (
+  view: EditorView,
+  from: number,
+  to: number,
+): LiveEditorTextRange => {
+  const safeFrom = Math.max(0, Math.min(view.state.doc.length, from));
+  const safeTo = Math.max(safeFrom, Math.min(view.state.doc.length, to));
+  const text = view.state.doc.sliceString(safeFrom, safeTo);
+  const preview = text.length > textRangePreviewMaxChars
+    ? text.slice(0, textRangePreviewMaxChars)
+    : text;
+
+  return {
+    from: safeFrom,
+    to: safeTo,
+    fromLine: view.state.doc.lineAt(safeFrom).number,
+    toLine: view.state.doc.lineAt(safeTo).number,
+    text: preview,
+    ...(preview.length < text.length ? { textTruncated: true } : {}),
+  };
+};
+
+const getVisibleRangeSnapshot = (view: EditorView) => {
+  const firstRange = view.visibleRanges[0];
+  const lastRange = view.visibleRanges[view.visibleRanges.length - 1];
+  if (!firstRange || !lastRange) return undefined;
+  return createTextRangeSnapshot(view, firstRange.from, lastRange.to);
 };
 
 export const CodeMirrorEditor = forwardRef<
@@ -233,6 +266,15 @@ export const CodeMirrorEditor = forwardRef<
 
   useImperativeHandle(ref, () => ({
     focus: () => viewRef.current?.focus(),
+    getSnapshot: () => {
+      const view = viewRef.current;
+      if (!view) return undefined;
+      const selection = view.state.selection.main;
+      return {
+        selection: createTextRangeSnapshot(view, selection.from, selection.to),
+        visibleRange: getVisibleRangeSnapshot(view),
+      };
+    },
     revealLine: (line, options = {}) => {
       const view = viewRef.current;
       if (!view) return;
