@@ -1,8 +1,8 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.19';
-import { PortalEditorHost, type PortalEditorFsWatcher, type PortalEditorWatchEvent } from './editor.ts';
+import { PortalWorkspaceFileHost, type PortalWorkspaceFileFsWatcher, type PortalWorkspaceFileWatchEvent } from './workspace-files.ts';
 import { PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
 
-class FakeFsWatcher implements PortalEditorFsWatcher {
+class FakeFsWatcher implements PortalWorkspaceFileFsWatcher {
   readonly paths: string | string[];
   readonly options: { recursive: boolean };
   closed = false;
@@ -49,12 +49,12 @@ const waitForEventCount = async (events: unknown[], count: number) => {
   throw new Error(`Timed out waiting for ${count} events.`);
 };
 
-const withEditorHost = async (
-  callback: (context: { root: string; outside: string; host: PortalEditorHost }) => Promise<void>,
+const withWorkspaceFileHost = async (
+  callback: (context: { root: string; outside: string; host: PortalWorkspaceFileHost }) => Promise<void>,
 ) => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-editor-root-' });
-  const outside = await Deno.makeTempDir({ prefix: 'weave-editor-outside-' });
-  const host = new PortalEditorHost({ config: {}, maxReadBytes: 1024 });
+  const root = await Deno.makeTempDir({ prefix: 'weave-workspace-file-root-' });
+  const outside = await Deno.makeTempDir({ prefix: 'weave-workspace-file-outside-' });
+  const host = new PortalWorkspaceFileHost({ config: {}, maxReadBytes: 1024 });
 
   try {
     await callback({ root: await Deno.realPath(root), outside: await Deno.realPath(outside), host });
@@ -64,8 +64,8 @@ const withEditorHost = async (
   }
 };
 
-Deno.test('PortalEditorHost lists directories before files and reads UTF-8 text files', async () =>
-  await withEditorHost(async ({ root, host }) => {
+Deno.test('PortalWorkspaceFileHost lists directories before files and reads UTF-8 text files', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     await Deno.mkdir(`${root}/src`);
     await Deno.writeTextFile(`${root}/README.md`, '# hello\n');
 
@@ -83,8 +83,8 @@ Deno.test('PortalEditorHost lists directories before files and reads UTF-8 text 
     assertEquals(typeof file.mtimeMs, 'number');
   }));
 
-Deno.test('PortalEditorHost writes text files and rejects stale saves', async () =>
-  await withEditorHost(async ({ root, host }) => {
+Deno.test('PortalWorkspaceFileHost writes text files and rejects stale saves', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     await Deno.writeTextFile(`${root}/notes.txt`, 'first');
     const file = await host.read({ target: { workspacePath: root }, path: 'notes.txt' });
 
@@ -110,8 +110,8 @@ Deno.test('PortalEditorHost writes text files and rejects stale saves', async ()
     );
   }));
 
-Deno.test('PortalEditorHost hashes files without returning content', async () =>
-  await withEditorHost(async ({ root, host }) => {
+Deno.test('PortalWorkspaceFileHost hashes files without returning content', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     await Deno.writeTextFile(`${root}/README.md`, '# hello\n');
 
     const hashed = await host.hash({ target: { workspacePath: root }, path: 'README.md' });
@@ -122,8 +122,8 @@ Deno.test('PortalEditorHost hashes files without returning content', async () =>
     assertEquals('content' in hashed, false);
   }));
 
-Deno.test('PortalEditorHost previews unified diffs without writing files', async () =>
-  await withEditorHost(async ({ root, host }) => {
+Deno.test('PortalWorkspaceFileHost previews unified diffs without writing files', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     await Deno.writeTextFile(`${root}/src.txt`, 'first\nsecond\n');
 
     const preview = await host.diffPreview({
@@ -155,8 +155,8 @@ Deno.test('PortalEditorHost previews unified diffs without writing files', async
     );
   }));
 
-Deno.test('PortalEditorHost rejects path traversal and symlinks that escape the Workspace', async () =>
-  await withEditorHost(async ({ root, outside, host }) => {
+Deno.test('PortalWorkspaceFileHost rejects path traversal and symlinks that escape the Workspace', async () =>
+  await withWorkspaceFileHost(async ({ root, outside, host }) => {
     await Deno.writeTextFile(`${outside}/secret.txt`, 'nope');
     await assertRejects(
       () => host.read({ target: { workspacePath: root }, path: '../secret.txt' }),
@@ -172,8 +172,8 @@ Deno.test('PortalEditorHost rejects path traversal and symlinks that escape the 
     );
   }));
 
-Deno.test('PortalEditorHost rejects binary, oversized, and missing-parent writes', async () =>
-  await withEditorHost(async ({ root, host }) => {
+Deno.test('PortalWorkspaceFileHost rejects binary, oversized, and missing-parent writes', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     await Deno.writeFile(`${root}/bin.dat`, new Uint8Array([0x66, 0x00, 0x6f]));
     await Deno.writeTextFile(`${root}/big.txt`, 'x'.repeat(1025));
 
@@ -193,8 +193,8 @@ Deno.test('PortalEditorHost rejects binary, oversized, and missing-parent writes
     );
   }));
 
-Deno.test('PortalEditorHost creates, moves, and deletes files and directories', async () =>
-  await withEditorHost(async ({ root, host }) => {
+Deno.test('PortalWorkspaceFileHost creates, moves, and deletes files and directories', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     const target = { workspacePath: root };
     assertEquals(await host.mkdir({ target, path: 'src/nested' }), { ok: true, path: 'src/nested' });
 
@@ -226,8 +226,8 @@ Deno.test('PortalEditorHost creates, moves, and deletes files and directories', 
     );
   }));
 
-Deno.test('PortalEditorHost rejects traversal in create, move, and delete operations', async () =>
-  await withEditorHost(async ({ root, host }) => {
+Deno.test('PortalWorkspaceFileHost rejects traversal in create, move, and delete operations', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     const target = { workspacePath: root };
     await Deno.writeTextFile(`${root}/note.md`, 'hello');
 
@@ -248,10 +248,10 @@ Deno.test('PortalEditorHost rejects traversal in create, move, and delete operat
     );
   }));
 
-Deno.test('PortalEditorHost normalizes debounced watch events', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-editor-watch-' });
+Deno.test('PortalWorkspaceFileHost normalizes debounced watch events', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-workspace-file-watch-' });
   const watchers: FakeFsWatcher[] = [];
-  const host = new PortalEditorHost({
+  const host = new PortalWorkspaceFileHost({
     config: {},
     watchDebounceMs: 0,
     watchFs: (paths, options) => {
@@ -260,7 +260,7 @@ Deno.test('PortalEditorHost normalizes debounced watch events', async () => {
       return watcher;
     },
   });
-  const events: PortalEditorWatchEvent[] = [];
+  const events: PortalWorkspaceFileWatchEvent[] = [];
 
   try {
     await Deno.mkdir(`${root}/src`);
@@ -309,10 +309,10 @@ Deno.test('PortalEditorHost normalizes debounced watch events', async () => {
   }
 });
 
-Deno.test('PortalEditorHost rejects escaping watch paths and closes old watchers on update', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-editor-watch-update-' });
+Deno.test('PortalWorkspaceFileHost rejects escaping watch paths and closes old watchers on update', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-workspace-file-watch-update-' });
   const watchers: FakeFsWatcher[] = [];
-  const host = new PortalEditorHost({
+  const host = new PortalWorkspaceFileHost({
     config: {},
     watchFs: (paths, options) => {
       const watcher = new FakeFsWatcher(paths, options);
@@ -343,32 +343,34 @@ Deno.test('PortalEditorHost rejects escaping watch paths and closes old watchers
   }
 });
 
-Deno.test('Portal local control serves editor requests with token auth', async () =>
-  await withEditorHost(async ({ root, host }) => {
+Deno.test('Portal local control serves workspace file requests with token auth', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     await Deno.writeTextFile(`${root}/README.md`, 'hello');
     const terminalHost = new PortalTerminalHost({ config: {} });
     const server = startTerminalControlServer({
       host: terminalHost,
-      editor: host,
+      workspaceFiles: host,
       hostname: '127.0.0.1',
       port: 0,
-      token: 'editor-token',
+      token: 'workspace-file-token',
       metadata: { portalId: 'portal_test' },
     });
     const baseUrl = `http://127.0.0.1:${server.addr.port}`;
 
     try {
-      const unauthorized = await fetch(`${baseUrl}/editor/list`, { method: 'POST' });
+      const unauthorized = await fetch(`${baseUrl}/fs/list`, { method: 'POST' });
       assertEquals(unauthorized.status, 401);
+      assertEquals((await fetch(`${baseUrl}/editor/list?token=workspace-file-token`, { method: 'POST' })).status, 404);
+      assertEquals((await fetch(`${baseUrl}/vault/index?token=workspace-file-token`, { method: 'POST' })).status, 404);
 
-      const list = await fetch(`${baseUrl}/editor/list?token=editor-token`, {
+      const list = await fetch(`${baseUrl}/fs/list?token=workspace-file-token`, {
         method: 'POST',
         body: JSON.stringify({ target: { workspacePath: root }, path: '' }),
       });
       assertEquals(list.ok, true);
       assertEquals((await list.json()).entries.map((entry: { name: string }) => entry.name), ['README.md']);
 
-      const read = await fetch(`${baseUrl}/editor/read?token=editor-token`, {
+      const read = await fetch(`${baseUrl}/fs/read?token=workspace-file-token`, {
         method: 'POST',
         body: JSON.stringify({ target: { workspacePath: root }, path: 'README.md' }),
       });
@@ -379,7 +381,7 @@ Deno.test('Portal local control serves editor requests with token auth', async (
       assertEquals(readBody.size, 5);
       assertEquals(typeof readBody.mtimeMs, 'number');
 
-      const mkdir = await fetch(`${baseUrl}/editor/mkdir?token=editor-token`, {
+      const mkdir = await fetch(`${baseUrl}/fs/mkdir?token=workspace-file-token`, {
         method: 'POST',
         body: JSON.stringify({ target: { workspacePath: root }, path: 'src' }),
       });
@@ -390,10 +392,10 @@ Deno.test('Portal local control serves editor requests with token auth', async (
     }
   }));
 
-Deno.test('Portal local control serves editor watch websocket with token auth', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-editor-watch-control-' });
+Deno.test('Portal local control serves workspace file watch websocket with token auth', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-workspace-file-watch-control-' });
   const watchers: FakeFsWatcher[] = [];
-  const host = new PortalEditorHost({
+  const host = new PortalWorkspaceFileHost({
     config: {},
     watchDebounceMs: 0,
     watchFs: (paths, options) => {
@@ -405,10 +407,10 @@ Deno.test('Portal local control serves editor watch websocket with token auth', 
   const terminalHost = new PortalTerminalHost({ config: {} });
   const server = startTerminalControlServer({
     host: terminalHost,
-    editor: host,
+    workspaceFiles: host,
     hostname: '127.0.0.1',
     port: 0,
-    token: 'editor-token',
+    token: 'workspace-file-token',
     metadata: { portalId: 'portal_test' },
   });
   const baseUrl = `http://127.0.0.1:${server.addr.port}`;
@@ -416,10 +418,10 @@ Deno.test('Portal local control serves editor watch websocket with token auth', 
   try {
     await Deno.mkdir(`${root}/src`);
     const realSrc = await Deno.realPath(`${root}/src`);
-    const unauthorized = await fetch(`${baseUrl}/editor/watch`);
+    const unauthorized = await fetch(`${baseUrl}/fs/watch`);
     assertEquals(unauthorized.status, 401);
 
-    const socket = new WebSocket(`${baseUrl.replace(/^http:/, 'ws:')}/editor/watch?token=editor-token`);
+    const socket = new WebSocket(`${baseUrl.replace(/^http:/, 'ws:')}/fs/watch?token=workspace-file-token`);
     const messages: Array<Record<string, unknown>> = [];
     const waiters: Array<(message: Record<string, unknown>) => void> = [];
     const nextMessage = () =>
@@ -444,13 +446,13 @@ Deno.test('Portal local control serves editor watch websocket with token auth', 
     }));
 
     assertEquals(await nextMessage(), {
-      type: 'editor.watch.ready',
+      type: 'workspace-file.watch.ready',
       requestId: 'start-1',
       paths: ['src'],
     });
     watchers[0].emit({ kind: 'create', paths: [`${realSrc}/new.ts`] });
     assertEquals(await nextMessage(), {
-      type: 'editor.watch.change',
+      type: 'workspace-file.watch.change',
       event: {
         kind: 'create',
         paths: ['src/new.ts'],

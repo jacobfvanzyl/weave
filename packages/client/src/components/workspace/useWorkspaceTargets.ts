@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { listPortals, type Project, type Workspace } from '../../lib/chat-state-api';
-import { isDesktopEditorBackendAvailable, isEditorBackendAvailable } from '../../lib/editor-backend';
+import { isDesktopWorkspaceFileBackendAvailable, isWorkspaceFileBackendAvailable } from '../../lib/workspace-file-backend';
 import { isDesktopTerminalTransportAvailable, isTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { useProjectsWithLiveGitState } from '../../lib/workspace-git-state';
 import type { ChatThread } from '../../stores/chat-store';
@@ -111,8 +111,8 @@ export const useWorkspaceTargets = ({
   const terminalTarget = activeGitWorkspaceTarget && hasAnyTerminalTransport && (hasOnlinePortalForActiveWorkspace || (isElectronWindow && hasDesktopTerminalTransport))
     ? activeGitWorkspaceTarget
     : undefined;
-  const hasDesktopEditorBackend = isDesktopEditorBackendAvailable();
-  const editorTarget = isEditorBackendAvailable() && (hasOnlinePortalForActiveWorkspace || (isElectronWindow && hasDesktopEditorBackend))
+  const hasDesktopWorkspaceFileBackend = isDesktopWorkspaceFileBackendAvailable();
+  const editorTarget = isWorkspaceFileBackendAvailable() && (hasOnlinePortalForActiveWorkspace || (isElectronWindow && hasDesktopWorkspaceFileBackend))
     ? activeGitWorkspaceTarget
     : undefined;
   const notesTarget = activeNotesWorkspaceTarget && isNotesTargetAvailable(activeProject, hasOnlinePortalForActiveWorkspace)

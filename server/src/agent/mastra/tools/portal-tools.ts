@@ -89,10 +89,10 @@ export const resolvePortalForBinding = (binding: Awaited<ReturnType<typeof getTh
     workspacePath: binding.workspacePath,
   })?.portalId;
 
-type VaultToolAction = 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload';
+type FileToolAction = 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload';
 
-const routeNotesVaultTool = async (
-  action: VaultToolAction,
+const routeNotesFileTool = async (
+  action: FileToolAction,
   args: unknown,
   context: any,
   timeoutMs?: number,
@@ -151,14 +151,14 @@ const withPortalMetadata = <T extends PortalBaseOutput>(result: unknown, metadat
   } as T;
 };
 
-const withVaultMetadata = <T extends PortalBaseOutput>(result: unknown, metadata?: Omit<Partial<T>, 'ok' | 'error'>): T => {
+const withFileMetadata = <T extends PortalBaseOutput>(result: unknown, metadata?: Omit<Partial<T>, 'ok' | 'error'>): T => {
   const record = result && typeof result === 'object' && !Array.isArray(result)
     ? result as Record<string, unknown>
     : {};
   const ok = record.ok !== false;
   const error = typeof record.error === 'string'
     ? record.error
-    : ok ? undefined : 'Portal returned an invalid vault result';
+    : ok ? undefined : 'Portal returned an invalid file result';
 
   return {
     ...record,
@@ -384,7 +384,7 @@ const portalBashPayloadTransform = {
   },
 };
 
-const vaultIndexModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
+const fileIndexModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
   const result = output && typeof output === 'object' ? output as Record<string, any> : {};
   const notes = Array.isArray(result.notes) ? result.notes : [];
   const attachments = Array.isArray(result.attachments) ? result.attachments : [];
@@ -396,7 +396,7 @@ const vaultIndexModelOutput = (output: unknown, maxChars = getCodeToolModelOutpu
   }).join('\n');
 
   return formatToolModelOutput(
-    'vault_index',
+    'file_index',
     [
       ['ok', result.ok],
       ['path', result.path],
@@ -409,10 +409,10 @@ const vaultIndexModelOutput = (output: unknown, maxChars = getCodeToolModelOutpu
   );
 };
 
-const vaultReadModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
+const fileReadModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
   const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
   return formatToolModelOutput(
-    'vault_read',
+    'file_read',
     [
       ['ok', result.ok],
       ['path', result.path],
@@ -424,7 +424,7 @@ const vaultReadModelOutput = (output: unknown, maxChars = getCodeToolModelOutput
   );
 };
 
-const vaultOperationModelOutput = (name: string, output: unknown) => {
+const fileOperationModelOutput = (name: string, output: unknown) => {
   const result = output && typeof output === 'object' ? output as Record<string, unknown> : {};
   return formatToolModelOutput(name, [
     ['ok', result.ok],
@@ -511,11 +511,11 @@ export const portalBashTool = createTool({
   toModelOutput: portalBashModelOutput,
 });
 
-export const vaultIndexTool = createTool({
-  id: 'vault_index',
-  description: 'Index the current Notes Project vault. Returns Markdown note metadata, wiki links, embeds, tags, attachments, and backlinks.',
+export const fileIndexTool = createTool({
+  id: 'file_index',
+  description: 'Index the current Notes Project workspace. Returns Markdown and .cpr note metadata, wiki links, embeds, tags, attachments, and backlinks.',
   inputSchema: z.object({
-    path: z.string().optional().describe('Optional folder path relative to the vault root'),
+    path: z.string().optional().describe('Optional folder path relative to the workspace root'),
   }),
   outputSchema: z.object({
     ...portalBaseOutputSchema,
@@ -524,15 +524,15 @@ export const vaultIndexTool = createTool({
     attachments: z.array(z.any()).optional(),
     backlinks: z.record(z.string(), z.array(z.string())).optional(),
   }),
-  execute: async (input, context): Promise<PortalBaseOutput> => withVaultMetadata(await routeNotesVaultTool('index', input, context, 30_000), {}),
-  toModelOutput: vaultIndexModelOutput,
+  execute: async (input, context): Promise<PortalBaseOutput> => withFileMetadata(await routeNotesFileTool('index', input, context, 30_000), {}),
+  toModelOutput: fileIndexModelOutput,
 });
 
-export const vaultReadTool = createTool({
-  id: 'vault_read',
-  description: 'Read a Markdown, Canvas JSON, JSON, or Excalidraw text file from the current Notes Project vault.',
+export const fileReadTool = createTool({
+  id: 'file_read',
+  description: 'Read a Markdown, .cpr, Canvas JSON, JSON, or Excalidraw text file from the current Notes Project workspace.',
   inputSchema: z.object({
-    path: z.string().describe('Path to read, relative to the vault root'),
+    path: z.string().describe('Path to read, relative to the workspace root'),
   }),
   outputSchema: z.object({
     ...portalBaseOutputSchema,
@@ -540,77 +540,77 @@ export const vaultReadTool = createTool({
     version: z.string().optional(),
   }),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('read', input, context), { path: input.path }),
-  toModelOutput: vaultReadModelOutput,
+    withFileMetadata(await routeNotesFileTool('read', input, context), { path: input.path }),
+  toModelOutput: fileReadModelOutput,
 });
 
-export const vaultWriteTool = createTool({
-  id: 'vault_write',
-  description: 'Write a Markdown, Canvas JSON, JSON, or Excalidraw text file in the current Notes Project vault. Creates parent folders as needed.',
+export const fileWriteTool = createTool({
+  id: 'file_write',
+  description: 'Write a Markdown, .cpr, Canvas JSON, JSON, or Excalidraw text file in the current Notes Project workspace. Creates parent folders as needed.',
   inputSchema: z.object({
-    path: z.string().describe('Path to write, relative to the vault root'),
+    path: z.string().describe('Path to write, relative to the workspace root'),
     content: z.string().describe('Full file content'),
-    version: z.string().optional().describe('Optional optimistic file version returned by vault_read'),
+    version: z.string().optional().describe('Optional optimistic file version returned by file_read'),
   }),
   outputSchema: z.object({ ...portalBaseOutputSchema, version: z.string().optional() }),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('write', input, context), { path: input.path }),
-  toModelOutput: output => vaultOperationModelOutput('vault_write', output),
+    withFileMetadata(await routeNotesFileTool('write', input, context), { path: input.path }),
+  toModelOutput: output => fileOperationModelOutput('file_write', output),
 });
 
-export const vaultMkdirTool = createTool({
-  id: 'vault_mkdir',
-  description: 'Create a folder in the current Notes Project vault.',
+export const fileMkdirTool = createTool({
+  id: 'file_mkdir',
+  description: 'Create a folder in the current Notes Project workspace.',
   inputSchema: z.object({
-    path: z.string().describe('Folder path to create, relative to the vault root'),
+    path: z.string().describe('Folder path to create, relative to the workspace root'),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('mkdir', input, context), { path: input.path }),
-  toModelOutput: output => vaultOperationModelOutput('vault_mkdir', output),
+    withFileMetadata(await routeNotesFileTool('mkdir', input, context), { path: input.path }),
+  toModelOutput: output => fileOperationModelOutput('file_mkdir', output),
 });
 
-export const vaultMoveTool = createTool({
-  id: 'vault_move',
-  description: 'Rename or move a file or folder in the current Notes Project vault.',
+export const fileMoveTool = createTool({
+  id: 'file_move',
+  description: 'Rename or move a file or folder in the current Notes Project workspace.',
   inputSchema: z.object({
-    fromPath: z.string().describe('Existing path relative to the vault root'),
-    toPath: z.string().describe('Destination path relative to the vault root'),
+    fromPath: z.string().describe('Existing path relative to the workspace root'),
+    toPath: z.string().describe('Destination path relative to the workspace root'),
     overwrite: z.boolean().optional().describe('Whether to overwrite an existing destination'),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('move', input, context), { path: input.toPath }),
-  toModelOutput: output => vaultOperationModelOutput('vault_move', output),
+    withFileMetadata(await routeNotesFileTool('move', input, context), { path: input.toPath }),
+  toModelOutput: output => fileOperationModelOutput('file_move', output),
 });
 
-export const vaultDeleteTool = createTool({
-  id: 'vault_delete',
-  description: 'Delete a file or folder from the current Notes Project vault.',
+export const fileDeleteTool = createTool({
+  id: 'file_delete',
+  description: 'Delete a file or folder from the current Notes Project workspace.',
   inputSchema: z.object({
-    path: z.string().describe('Path to delete, relative to the vault root'),
+    path: z.string().describe('Path to delete, relative to the workspace root'),
     recursive: z.boolean().optional().describe('Required for deleting non-empty folders'),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('delete', input, context), { path: input.path }),
-  toModelOutput: output => vaultOperationModelOutput('vault_delete', output),
+    withFileMetadata(await routeNotesFileTool('delete', input, context), { path: input.path }),
+  toModelOutput: output => fileOperationModelOutput('file_delete', output),
 });
 
-export const vaultUploadTool = createTool({
-  id: 'vault_upload',
-  description: 'Upload a binary attachment into the current Notes Project vault from base64-encoded content.',
+export const fileUploadTool = createTool({
+  id: 'file_upload',
+  description: 'Upload a binary attachment into the current Notes Project workspace from base64-encoded content.',
   inputSchema: z.object({
-    path: z.string().describe('Attachment path to write, relative to the vault root'),
+    path: z.string().describe('Attachment path to write, relative to the workspace root'),
     base64Content: z.string().describe('Base64-encoded file content'),
     contentType: z.string().optional().describe('Optional MIME type for the attachment'),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
-    withVaultMetadata(await routeNotesVaultTool('upload', input, context), { path: input.path }),
-  toModelOutput: output => vaultOperationModelOutput('vault_upload', output),
+    withFileMetadata(await routeNotesFileTool('upload', input, context), { path: input.path }),
+  toModelOutput: output => fileOperationModelOutput('file_upload', output),
 });
 
 export const __portalToolsTest = {
-  routeNotesVaultTool,
+  routeNotesFileTool,
 };

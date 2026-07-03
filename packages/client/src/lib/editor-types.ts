@@ -88,6 +88,37 @@ export type EditorWatchSubscription = {
   close: () => void;
 };
 
+export type WorkspaceFileNote = {
+  path: string;
+  documentType?: 'markdown' | 'coppermind';
+  title: string;
+  headings: string[];
+  tags: string[];
+  links: string[];
+  embeds: string[];
+  properties: Record<string, string>;
+  mtimeMs?: number;
+  size?: number;
+  preview?: string;
+};
+
+export type WorkspaceFileAttachment = {
+  path: string;
+  name: string;
+  mediaType: 'image' | 'audio' | 'video' | 'pdf' | 'excalidraw' | 'other';
+  size?: number;
+  mtimeMs?: number;
+};
+
+export type WorkspaceFileIndexResult = {
+  path: string;
+  entries: EditorEntry[];
+  notes: WorkspaceFileNote[];
+  attachments: WorkspaceFileAttachment[];
+  backlinks: Record<string, string[]>;
+  checkedAt: string;
+};
+
 export type EditorBackend = {
   list: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
   read: (target: EditorTarget, path: string) => Promise<EditorFile>;
@@ -98,4 +129,13 @@ export type EditorBackend = {
   move: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<FileOperationResult>;
   delete: (target: EditorTarget, path: string, recursive?: boolean) => Promise<FileOperationResult>;
   watch?: (target: EditorTarget, paths: string[], listener: (event: EditorWatchEvent) => void) => Promise<EditorWatchSubscription>;
+};
+
+export type WorkspaceFileTarget = EditorTarget;
+export type WorkspaceFileWatchEvent = EditorWatchEvent;
+export type WorkspaceFileWatchSubscription = EditorWatchSubscription;
+
+export type WorkspaceFileBackend = EditorBackend & {
+  index: (target: EditorTarget, path?: string) => Promise<WorkspaceFileIndexResult>;
+  upload: (target: EditorTarget, path: string, base64Content: string, contentType?: string) => Promise<FileOperationResult>;
 };

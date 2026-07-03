@@ -6,16 +6,17 @@ import type {
   TerminalWindowRecord,
 } from './terminal';
 import type {
-  EditorFile,
-  EditorDiffPreviewResult,
-  EditorHashResult,
-  EditorListResult,
-  EditorOperationResult,
-  EditorTarget,
-  EditorWatchEventEnvelope,
-  EditorWatchStartResult,
-  EditorWriteResult,
-} from './editor';
+  WorkspaceFileFile,
+  WorkspaceFileDiffPreviewResult,
+  WorkspaceFileHashResult,
+  WorkspaceFileIndexResult,
+  WorkspaceFileListResult,
+  WorkspaceFileOperationResult,
+  WorkspaceFileTarget,
+  WorkspaceFileWatchEventEnvelope,
+  WorkspaceFileWatchStartResult,
+  WorkspaceFileWriteResult,
+} from './workspace-file';
 import type { LspSessionResult } from './language-intelligence';
 
 export type DesktopConnectionSettings = {
@@ -47,17 +48,24 @@ export type WeaveDesktopBridge = {
   terminalClose: (terminalId: string, input?: TerminalTargetInput) => Promise<void>;
   terminalDetach: (terminalId: string) => Promise<void>;
   onTerminalEvent: (listener: (event: TerminalHostEvent) => void) => () => void;
-  editorList: (target: EditorTarget, path?: string) => Promise<EditorListResult>;
-  editorRead: (target: EditorTarget, path: string) => Promise<EditorFile>;
-  editorHash: (target: EditorTarget, path: string) => Promise<EditorHashResult>;
-  editorDiffPreview: (target: EditorTarget, path: string, diff: string) => Promise<EditorDiffPreviewResult>;
-  editorWrite: (target: EditorTarget, path: string, content: string, version?: string) => Promise<EditorWriteResult>;
-  editorMkdir: (target: EditorTarget, path: string) => Promise<EditorOperationResult>;
-  editorMove: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<EditorOperationResult>;
-  editorDelete: (target: EditorTarget, path: string, recursive?: boolean) => Promise<EditorOperationResult>;
-  editorWatchStart: (target: EditorTarget, paths: string[]) => Promise<EditorWatchStartResult>;
-  editorWatchUpdate: (subscriptionId: string, paths: string[]) => Promise<EditorWatchStartResult>;
-  editorWatchStop: (subscriptionId: string) => Promise<void>;
-  onEditorWatchEvent: (listener: (event: EditorWatchEventEnvelope) => void) => () => void;
-  lspCreateSession: (target: EditorTarget, path: string, languageId?: string, serverId?: string) => Promise<LspSessionResult>;
+  workspaceFileList: (target: WorkspaceFileTarget, path?: string) => Promise<WorkspaceFileListResult>;
+  workspaceFileRead: (target: WorkspaceFileTarget, path: string) => Promise<WorkspaceFileFile>;
+  workspaceFileHash: (target: WorkspaceFileTarget, path: string) => Promise<WorkspaceFileHashResult>;
+  workspaceFileDiffPreview: (target: WorkspaceFileTarget, path: string, diff: string) => Promise<WorkspaceFileDiffPreviewResult>;
+  workspaceFileWrite: (target: WorkspaceFileTarget, path: string, content: string, version?: string) => Promise<WorkspaceFileWriteResult>;
+  workspaceFileMkdir: (target: WorkspaceFileTarget, path: string) => Promise<WorkspaceFileOperationResult>;
+  workspaceFileMove: (target: WorkspaceFileTarget, fromPath: string, toPath: string, overwrite?: boolean) => Promise<WorkspaceFileOperationResult>;
+  workspaceFileDelete: (target: WorkspaceFileTarget, path: string, recursive?: boolean) => Promise<WorkspaceFileOperationResult>;
+  workspaceFileIndex: (target: WorkspaceFileTarget, path?: string) => Promise<WorkspaceFileIndexResult>;
+  workspaceFileUpload: (
+    target: WorkspaceFileTarget,
+    path: string,
+    base64Content: string,
+    contentType?: string,
+  ) => Promise<WorkspaceFileOperationResult>;
+  workspaceFileWatchStart: (target: WorkspaceFileTarget, paths: string[]) => Promise<WorkspaceFileWatchStartResult>;
+  workspaceFileWatchUpdate: (subscriptionId: string, paths: string[]) => Promise<WorkspaceFileWatchStartResult>;
+  workspaceFileWatchStop: (subscriptionId: string) => Promise<void>;
+  onWorkspaceFileWatchEvent: (listener: (event: WorkspaceFileWatchEventEnvelope) => void) => () => void;
+  lspCreateSession: (target: WorkspaceFileTarget, path: string, languageId?: string, serverId?: string) => Promise<LspSessionResult>;
 };

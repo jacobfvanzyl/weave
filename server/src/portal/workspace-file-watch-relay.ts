@@ -1,6 +1,6 @@
 import { getPortalConnection, sendPortalMessage } from './registry';
 
-export type EditorWatchTokenRecord = {
+export type WorkspaceFileWatchTokenRecord = {
   resourceId: string;
   portalId: string;
   projectId?: string;
@@ -11,42 +11,42 @@ export type EditorWatchTokenRecord = {
   expiresAt: number;
 };
 
-type EditorWatchRelaySocket = {
+type WorkspaceFileWatchRelaySocket = {
   send: (data: string) => void;
   close: (code?: number, reason?: string) => void;
 };
 
-type EditorWatchRelayClient = {
+type WorkspaceFileWatchRelayClient = {
   portalId: string;
-  ws: EditorWatchRelaySocket;
-  token: EditorWatchTokenRecord;
+  ws: WorkspaceFileWatchRelaySocket;
+  token: WorkspaceFileWatchTokenRecord;
 };
 
-const editorWatchTokenTtlMs = 60_000;
-const editorWatchTokens = new Map<string, EditorWatchTokenRecord>();
-const editorWatchClients = new Map<string, EditorWatchRelayClient>();
+const workspaceFileWatchTokenTtlMs = 60_000;
+const workspaceFileWatchTokens = new Map<string, WorkspaceFileWatchTokenRecord>();
+const workspaceFileWatchClients = new Map<string, WorkspaceFileWatchRelayClient>();
 
 const now = () => Date.now();
 
 const cleanupExpiredTokens = () => {
   const at = now();
-  for (const [token, record] of editorWatchTokens) {
-    if (record.expiresAt <= at) editorWatchTokens.delete(token);
+  for (const [token, record] of workspaceFileWatchTokens) {
+    if (record.expiresAt <= at) workspaceFileWatchTokens.delete(token);
   }
 };
 
-export const issueEditorWatchToken = (record: Omit<EditorWatchTokenRecord, 'expiresAt'>) => {
+export const issueWorkspaceFileWatchToken = (record: Omit<WorkspaceFileWatchTokenRecord, 'expiresAt'>) => {
   cleanupExpiredTokens();
-  const token = `editor_watch_${crypto.randomUUID().replace(/-/g, '')}`;
-  editorWatchTokens.set(token, { ...record, expiresAt: now() + editorWatchTokenTtlMs });
+  const token = `workspace_file_watch_${crypto.randomUUID().replace(/-/g, '')}`;
+  workspaceFileWatchTokens.set(token, { ...record, expiresAt: now() + workspaceFileWatchTokenTtlMs });
   return token;
 };
 
-const takeEditorWatchToken = (token: string) => {
+const takeWorkspaceFileWatchToken = (token: string) => {
   cleanupExpiredTokens();
-  const record = editorWatchTokens.get(token);
+  const record = workspaceFileWatchTokens.get(token);
   if (!record) return undefined;
-  editorWatchTokens.delete(token);
+  workspaceFileWatchTokens.delete(token);
   if (record.expiresAt <= now()) return undefined;
   return record;
 };
@@ -85,9 +85,9 @@ const parseWatchPaths = (value: unknown) => {
 
 const requestIdValue = (value: unknown) => optionalString(value);
 
-const sanitizeEditorWatchClientMessage = (
+const sanitizeWorkspaceFileWatchClientMessage = (
   rawMessage: Record<string, unknown>,
-  token: EditorWatchTokenRecord,
+  token: WorkspaceFileWatchTokenRecord,
 ) => {
   if (rawMessage.type === 'watch.start') {
     return {
@@ -120,19 +120,19 @@ const sanitizeEditorWatchClientMessage = (
     };
   }
 
-  throw new Error('Unsupported editor watch message.');
+  throw new Error('Unsupported workspace file watch message.');
 };
 
-export const connectEditorWatchRelayClient = (input: {
+export const connectWorkspaceFileWatchRelayClient = (input: {
   token: string;
-  ws: EditorWatchRelaySocket;
+  ws: WorkspaceFileWatchRelaySocket;
 }) => {
-  const token = takeEditorWatchToken(input.token);
+  const token = takeWorkspaceFileWatchToken(input.token);
   if (!token) return undefined;
   if (!getPortalConnection(token.portalId)) return undefined;
 
-  const clientId = `relay-editor-watch:${crypto.randomUUID()}`;
-  editorWatchClients.set(clientId, {
+  const clientId = `relay-workspace-file-watch:${crypto.randomUUID()}`;
+  workspaceFileWatchClients.set(clientId, {
     portalId: token.portalId,
     ws: input.ws,
     token,
@@ -140,13 +140,13 @@ export const connectEditorWatchRelayClient = (input: {
   return { clientId, token };
 };
 
-export const disconnectEditorWatchRelayClient = (clientId: string) => {
-  const client = editorWatchClients.get(clientId);
+export const disconnectWorkspaceFileWatchRelayClient = (clientId: string) => {
+  const client = workspaceFileWatchClients.get(clientId);
   if (!client) return;
 
   try {
     sendPortalMessage(client.portalId, {
-      type: 'editor.watch.client',
+      type: 'workspace-file.watch.client',
       clientId,
       message: { type: 'watch.stop' },
     });
@@ -154,28 +154,27 @@ export const disconnectEditorWatchRelayClient = (clientId: string) => {
     // Portal is already gone; dropping the relay client is enough.
   }
 
-  editorWatchClients.delete(clientId);
+  workspaceFileWatchClients.delete(clientId);
 };
 
-export const forwardEditorWatchClientMessage = (
+export const forwardWorkspaceFileWatchClientMessage = (
   clientId: string,
   rawMessage: Record<string, unknown>,
 ) => {
-  const client = editorWatchClients.get(clientId);
-  if (!client) throw new Error('Editor watch relay client is not connected.');
-  const message = sanitizeEditorWatchClientMessage(rawMessage, client.token);
-  sendPortalMessage(client.portalId, { type: 'editor.watch.client', clientId, message });
+  const client = workspaceFileWatchClients.get(clientId);
+  if (!client) throw new Error('Workspace file watch relay client is not connected.');
+  const message = sanitizeWorkspaceFileWatchClientMessage(rawMessage, client.token);
+  sendPortalMessage(client.portalId, { type: 'workspace-file.watch.client', clientId, message });
 };
 
-export const handleEditorWatchPortalMessage = (message: Record<string, unknown>) => {
-  if (message.type !== 'editor.watch.event' || typeof message.clientId !== 'string') return false;
-  const client = editorWatchClients.get(message.clientId);
+export const handleWorkspaceFileWatchPortalMessage = (message: Record<string, unknown>) => {
+  if (message.type !== 'workspace-file.watch.event' || typeof message.clientId !== 'string') return false;
+  const client = workspaceFileWatchClients.get(message.clientId);
   if (!client) return true;
   try {
     client.ws.send(JSON.stringify(message.event));
   } catch {
-    disconnectEditorWatchRelayClient(message.clientId);
+    disconnectWorkspaceFileWatchRelayClient(message.clientId);
   }
   return true;
 };
-

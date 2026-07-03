@@ -2,7 +2,6 @@ import { mountRoute } from '../../server/routes';
 import { registerAgentContribution } from '../../agent/contributions';
 import type { ServerModule } from '../types';
 import { productProjectRoutes } from '../code/routes/projects';
-import { vaultRoutes } from './routes/vault';
 
 const notesProjectPath = (path: string) =>
   path === '/code/projects' ? '/notes/projects'
@@ -12,16 +11,16 @@ const notesProjectPath = (path: string) =>
 registerAgentContribution({
   moduleId: 'notes',
   tools: [
-    { id: 'vault_index', description: 'Index the current Notes vault.' },
-    { id: 'vault_read', description: 'Read notes from the current Notes vault.' },
-    { id: 'vault_write', description: 'Write notes in the current Notes vault.' },
-    { id: 'vault_mkdir', description: 'Create folders in the current Notes vault.' },
-    { id: 'vault_move', description: 'Move notes or folders in the current Notes vault.' },
-    { id: 'vault_delete', description: 'Delete notes or folders in the current Notes vault.' },
-    { id: 'vault_upload', description: 'Upload attachments into the current Notes vault.' },
+    { id: 'file_index', description: 'Index the current Notes workspace files.' },
+    { id: 'file_read', description: 'Read files from the current Notes workspace, including Markdown and .cpr documents.' },
+    { id: 'file_write', description: 'Write files in the current Notes workspace, including Markdown and .cpr documents.' },
+    { id: 'file_mkdir', description: 'Create folders in the current Notes workspace.' },
+    { id: 'file_move', description: 'Move files or folders in the current Notes workspace.' },
+    { id: 'file_delete', description: 'Delete files or folders in the current Notes workspace.' },
+    { id: 'file_upload', description: 'Upload attachments into the current Notes workspace.' },
   ],
   sources: [
-    { id: 'notes.vault.context', description: 'Notes vault context resolved through the configured notes storage backend.' },
+    { id: 'notes.workspace-files.context', description: 'Notes workspace-file context resolved through the configured notes storage backend.' },
   ],
 });
 
@@ -32,6 +31,5 @@ export const notesModule: ServerModule = {
       const canonicalPath = notesProjectPath(route.path);
       if (canonicalPath) mountRoute(app, route, { canonicalPath });
     }
-    for (const route of vaultRoutes) mountRoute(app, route);
   },
 };

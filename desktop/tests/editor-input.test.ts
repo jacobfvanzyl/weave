@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { parseEditorWatchStopInput } from '../src/main/editor-input';
+import { parseWorkspaceFileWatchStopInput } from '../src/main/workspace-file-input';
 
-describe('editor input parsing', () => {
-  it('accepts editor watch stop payloads from preload', () => {
-    expect(parseEditorWatchStopInput({ subscriptionId: 'sub-1' })).toBe('sub-1');
+describe('workspace file input parsing', () => {
+  it('accepts workspace file watch stop payloads from preload', () => {
+    expect(parseWorkspaceFileWatchStopInput({ subscriptionId: 'sub-1' })).toBe('sub-1');
   });
 
-  it('accepts direct editor watch stop subscription ids', () => {
-    expect(parseEditorWatchStopInput('sub-1')).toBe('sub-1');
+  it('accepts direct workspace file watch stop subscription ids', () => {
+    expect(parseWorkspaceFileWatchStopInput('sub-1')).toBe('sub-1');
   });
 
-  it('rejects missing editor watch stop subscription ids', () => {
-    expect(() => parseEditorWatchStopInput({})).toThrow('subscriptionId is required.');
+  it('rejects missing workspace file watch stop subscription ids', () => {
+    expect(() => parseWorkspaceFileWatchStopInput({})).toThrow('subscriptionId is required.');
   });
 });

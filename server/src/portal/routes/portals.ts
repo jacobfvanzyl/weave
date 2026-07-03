@@ -126,7 +126,7 @@ export const portalRoutes = [
         const path = c.req.query('path') || '';
         const result = await requestPortalTool({
           portalId,
-          tool: 'portal.fs.list',
+          tool: 'portal.fs.browse',
           args: { rootId, path },
           timeoutMs: 10_000,
         });

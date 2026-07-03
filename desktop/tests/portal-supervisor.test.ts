@@ -17,8 +17,8 @@ const originalEnv = {
 
 const requiredControlCapabilities = [
   'terminal',
-  'editor',
-  'editor.watch',
+  'workspace-files',
+  'workspace-files.watch',
   'lsp',
   'terminal.tmux-source-of-truth',
   'terminal.tmux-control-mode',

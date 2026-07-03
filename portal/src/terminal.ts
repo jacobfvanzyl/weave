@@ -1,6 +1,5 @@
-import type { PortalEditorHost } from './editor.ts';
 import type { PortalLspClientMessage, PortalLspHost } from './lsp.ts';
-import type { PortalVaultHost } from './vault.ts';
+import type { PortalWorkspaceFileHost } from './workspace-files.ts';
 
 export type TerminalSessionKind = 'workspace' | 'general';
 
@@ -114,8 +113,8 @@ type TerminalSubscriber = {
   send: (event: TerminalHostEvent) => void;
 };
 
-type PortalEditorControlHost = Pick<
-  PortalEditorHost,
+type PortalWorkspaceFileControlHost = Pick<
+  PortalWorkspaceFileHost,
   | 'list'
   | 'read'
   | 'hash'
@@ -124,6 +123,8 @@ type PortalEditorControlHost = Pick<
   | 'mkdir'
   | 'move'
   | 'delete'
+  | 'index'
+  | 'upload'
   | 'handleClientMessage'
   | 'detachClient'
   | 'detachClientsByPrefix'
@@ -1933,9 +1934,8 @@ export const isTerminalClientEnvelope = (message: Record<string, unknown>): mess
 
 export const startTerminalControlServer = (input: {
   host: PortalTerminalHost;
-  editor?: PortalEditorControlHost;
+  workspaceFiles?: PortalWorkspaceFileControlHost;
   lsp?: PortalLspControlHost;
-  vault?: PortalVaultHost;
   hostname: string;
   port: number;
   token: string;
@@ -1968,7 +1968,7 @@ export const startTerminalControlServer = (input: {
       setTimeout(() => {
         void Promise.resolve(input.onShutdown?.()).finally(async () => {
           input.host.dispose();
-          input.editor?.detachClientsByPrefix?.('local-editor-watch:');
+          input.workspaceFiles?.detachClientsByPrefix?.('local-workspace-file-watch:');
           await input.lsp?.dispose();
           await server.shutdown().catch(() => undefined);
         });
@@ -1976,62 +1976,70 @@ export const startTerminalControlServer = (input: {
       return Response.json({ ok: true });
     }
 
-    if (url.pathname === '/editor/watch') {
-      if (!input.editor) return new Response('not found', { status: 404 });
+    if (url.pathname === '/fs/watch') {
+      if (!input.workspaceFiles) return new Response('not found', { status: 404 });
       if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
         return new Response('websocket upgrade required', { status: 426 });
       }
       const { socket, response } = Deno.upgradeWebSocket(request);
-      const clientId = `local-editor-watch:${crypto.randomUUID()}`;
+      const clientId = `local-workspace-file-watch:${crypto.randomUUID()}`;
       socket.onmessage = event => {
         const message = parseSocketMessage(event.data);
         if (!message) return;
-        void input.editor?.handleClientMessage(clientId, message as Parameters<PortalEditorControlHost['handleClientMessage']>[1], watchEvent => {
+        void input.workspaceFiles?.handleClientMessage(clientId, message as Parameters<PortalWorkspaceFileControlHost['handleClientMessage']>[1], watchEvent => {
           if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(watchEvent));
         });
       };
-      socket.onclose = () => input.editor?.detachClient(clientId);
-      socket.onerror = () => input.editor?.detachClient(clientId);
+      socket.onclose = () => input.workspaceFiles?.detachClient(clientId);
+      socket.onerror = () => input.workspaceFiles?.detachClient(clientId);
       return response;
     }
 
-    const editorAction = url.pathname === '/editor/list'
+    const fileAction = url.pathname === '/fs/list'
       ? 'list'
-      : url.pathname === '/editor/read'
+      : url.pathname === '/fs/read'
       ? 'read'
-      : url.pathname === '/editor/hash'
+      : url.pathname === '/fs/hash'
       ? 'hash'
-      : url.pathname === '/editor/diffPreview'
+      : url.pathname === '/fs/diff-preview'
       ? 'diffPreview'
-      : url.pathname === '/editor/write'
+      : url.pathname === '/fs/write'
       ? 'write'
-      : url.pathname === '/editor/mkdir'
+      : url.pathname === '/fs/mkdir'
       ? 'mkdir'
-      : url.pathname === '/editor/move'
+      : url.pathname === '/fs/move'
       ? 'move'
-      : url.pathname === '/editor/delete'
+      : url.pathname === '/fs/delete'
       ? 'delete'
+      : url.pathname === '/fs/index'
+      ? 'index'
+      : url.pathname === '/fs/upload'
+      ? 'upload'
       : undefined;
-    if (editorAction) {
-      if (!input.editor) return new Response('not found', { status: 404 });
+    if (fileAction) {
+      if (!input.workspaceFiles) return new Response('not found', { status: 404 });
       if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
       try {
         const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-        const result = editorAction === 'list'
-          ? await input.editor.list(body as Parameters<PortalEditorControlHost['list']>[0])
-          : editorAction === 'read'
-          ? await input.editor.read(body as Parameters<PortalEditorControlHost['read']>[0])
-          : editorAction === 'hash'
-          ? await input.editor.hash(body as Parameters<PortalEditorControlHost['hash']>[0])
-          : editorAction === 'diffPreview'
-          ? await input.editor.diffPreview(body as Parameters<PortalEditorControlHost['diffPreview']>[0])
-          : editorAction === 'write'
-          ? await input.editor.write(body as Parameters<PortalEditorControlHost['write']>[0])
-          : editorAction === 'mkdir'
-          ? await input.editor.mkdir(body as Parameters<PortalEditorControlHost['mkdir']>[0])
-          : editorAction === 'move'
-          ? await input.editor.move(body as Parameters<PortalEditorControlHost['move']>[0])
-          : await input.editor.delete(body as Parameters<PortalEditorControlHost['delete']>[0]);
+        const result = fileAction === 'list'
+          ? await input.workspaceFiles.list(body as Parameters<PortalWorkspaceFileControlHost['list']>[0])
+          : fileAction === 'read'
+          ? await input.workspaceFiles.read(body as Parameters<PortalWorkspaceFileControlHost['read']>[0])
+          : fileAction === 'hash'
+          ? await input.workspaceFiles.hash(body as Parameters<PortalWorkspaceFileControlHost['hash']>[0])
+          : fileAction === 'diffPreview'
+          ? await input.workspaceFiles.diffPreview(body as Parameters<PortalWorkspaceFileControlHost['diffPreview']>[0])
+          : fileAction === 'write'
+          ? await input.workspaceFiles.write(body as Parameters<PortalWorkspaceFileControlHost['write']>[0])
+          : fileAction === 'mkdir'
+          ? await input.workspaceFiles.mkdir(body as Parameters<PortalWorkspaceFileControlHost['mkdir']>[0])
+          : fileAction === 'move'
+          ? await input.workspaceFiles.move(body as Parameters<PortalWorkspaceFileControlHost['move']>[0])
+          : fileAction === 'delete'
+          ? await input.workspaceFiles.delete(body as Parameters<PortalWorkspaceFileControlHost['delete']>[0])
+          : fileAction === 'index'
+          ? await input.workspaceFiles.index(body as Parameters<PortalWorkspaceFileControlHost['index']>[0])
+          : await input.workspaceFiles.upload(body as Parameters<PortalWorkspaceFileControlHost['upload']>[0]);
         return Response.json(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -2045,46 +2053,6 @@ export const startTerminalControlServer = (input: {
       try {
         const body = await request.json().catch(() => ({})) as Parameters<PortalLspControlHost['createSession']>[0];
         return Response.json(await input.lsp.createSession(body));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return Response.json({ error: message }, { status: 400 });
-      }
-    }
-
-    const vaultAction = url.pathname === '/vault/index'
-      ? 'index'
-      : url.pathname === '/vault/read'
-      ? 'read'
-      : url.pathname === '/vault/write'
-      ? 'write'
-      : url.pathname === '/vault/mkdir'
-      ? 'mkdir'
-      : url.pathname === '/vault/move'
-      ? 'move'
-      : url.pathname === '/vault/delete'
-      ? 'delete'
-      : url.pathname === '/vault/upload'
-      ? 'upload'
-      : undefined;
-    if (vaultAction) {
-      if (!input.vault) return new Response('not found', { status: 404 });
-      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
-      try {
-        const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-        const result = vaultAction === 'index'
-          ? await input.vault.index(body as Parameters<PortalVaultHost['index']>[0])
-          : vaultAction === 'read'
-          ? await input.vault.read(body as Parameters<PortalVaultHost['read']>[0])
-          : vaultAction === 'write'
-          ? await input.vault.write(body as Parameters<PortalVaultHost['write']>[0])
-          : vaultAction === 'mkdir'
-          ? await input.vault.mkdir(body as Parameters<PortalVaultHost['mkdir']>[0])
-          : vaultAction === 'move'
-          ? await input.vault.move(body as Parameters<PortalVaultHost['move']>[0])
-          : vaultAction === 'delete'
-          ? await input.vault.delete(body as Parameters<PortalVaultHost['delete']>[0])
-          : await input.vault.upload(body as Parameters<PortalVaultHost['upload']>[0]);
-        return Response.json(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return Response.json({ error: message }, { status: 400 });

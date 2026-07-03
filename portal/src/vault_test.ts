@@ -1,11 +1,11 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.19';
-import { PortalVaultHost } from './vault.ts';
+import { PortalWorkspaceFileHost } from './workspace-files.ts';
 
-const withVaultHost = async (
-  callback: (context: { root: string; host: PortalVaultHost }) => Promise<void>,
+const withWorkspaceFileHost = async (
+  callback: (context: { root: string; host: PortalWorkspaceFileHost }) => Promise<void>,
 ) => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-vault-root-' });
-  const host = new PortalVaultHost({ config: {}, maxReadBytes: 1024 * 1024, maxIndexBytes: 1024 * 1024 });
+  const root = await Deno.makeTempDir({ prefix: 'weave-workspace-file-root-' });
+  const host = new PortalWorkspaceFileHost({ config: {}, maxReadBytes: 1024 * 1024, maxIndexBytes: 1024 * 1024 });
 
   try {
     await callback({ root: await Deno.realPath(root), host });
@@ -85,8 +85,8 @@ const coppermindDocument = JSON.stringify({
   ui: { lastMode: 'page' },
 });
 
-Deno.test('PortalVaultHost reads, writes, and indexes .cpr documents as notes', async () =>
-  await withVaultHost(async ({ root, host }) => {
+Deno.test('PortalWorkspaceFileHost reads, writes, and indexes .cpr documents as notes', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     const target = { workspacePath: root };
     await Deno.writeTextFile(`${root}/Notebook.cpr`, coppermindDocument);
     await Deno.writeTextFile(`${root}/Legacy.md`, '# Legacy\n[[Notebook]]\n');
@@ -112,8 +112,8 @@ Deno.test('PortalVaultHost reads, writes, and indexes .cpr documents as notes', 
     assertEquals(index.backlinks['Notebook.cpr'], ['Legacy.md']);
   }));
 
-Deno.test('PortalVaultHost rejects non-text vault files while allowing .cpr text files', async () =>
-  await withVaultHost(async ({ root, host }) => {
+Deno.test('PortalWorkspaceFileHost rejects non-text workspace files while allowing .cpr text files', async () =>
+  await withWorkspaceFileHost(async ({ root, host }) => {
     const target = { workspacePath: root };
     await Deno.writeFile(`${root}/bin.dat`, new Uint8Array([0x66, 0x00, 0x6f]));
     await Deno.writeTextFile(`${root}/Notebook.cpr`, coppermindDocument);
@@ -122,6 +122,6 @@ Deno.test('PortalVaultHost rejects non-text vault files while allowing .cpr text
     await assertRejects(
       () => host.read({ target, path: 'bin.dat' }),
       Error,
-      'Only text vault files',
+      'Binary files cannot be opened in the workspace.',
     );
   }));

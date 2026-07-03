@@ -1,7 +1,7 @@
-import type { EditorTarget } from './editor';
+import type { WorkspaceFileTarget } from './workspace-file';
 
 export type LspSessionInput = {
-  target: EditorTarget;
+  target: WorkspaceFileTarget;
   path: string;
   languageId?: string;
   serverId?: string;

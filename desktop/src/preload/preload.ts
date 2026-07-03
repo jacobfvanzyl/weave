@@ -6,16 +6,17 @@ import type {
   WeaveDesktopBridge,
 } from '../shared/desktop-api';
 import type {
-  EditorFile,
-  EditorDiffPreviewResult,
-  EditorHashResult,
-  EditorListResult,
-  EditorOperationResult,
-  EditorTarget,
-  EditorWatchEventEnvelope,
-  EditorWatchStartResult,
-  EditorWriteResult,
-} from '../shared/editor';
+  WorkspaceFileFile,
+  WorkspaceFileDiffPreviewResult,
+  WorkspaceFileHashResult,
+  WorkspaceFileIndexResult,
+  WorkspaceFileListResult,
+  WorkspaceFileOperationResult,
+  WorkspaceFileTarget,
+  WorkspaceFileWatchEventEnvelope,
+  WorkspaceFileWatchStartResult,
+  WorkspaceFileWriteResult,
+} from '../shared/workspace-file';
 import type {
   TerminalHostEvent,
   TerminalStartInput,
@@ -72,36 +73,42 @@ const bridge: WeaveDesktopBridge = {
     ipcRenderer.on('terminal:event', wrappedListener);
     return () => ipcRenderer.removeListener('terminal:event', wrappedListener);
   },
-  editorList: (target: EditorTarget, path?: string) =>
-    unwrapIpcResult<EditorListResult>(ipcRenderer.invoke('editor:list', { target, path })),
-  editorRead: (target: EditorTarget, path: string) =>
-    unwrapIpcResult<EditorFile>(ipcRenderer.invoke('editor:read', { target, path })),
-  editorHash: (target: EditorTarget, path: string) =>
-    unwrapIpcResult<EditorHashResult>(ipcRenderer.invoke('editor:hash', { target, path })),
-  editorDiffPreview: (target: EditorTarget, path: string, diff: string) =>
-    unwrapIpcResult<EditorDiffPreviewResult>(ipcRenderer.invoke('editor:diff-preview', { target, path, diff })),
-  editorWrite: (target: EditorTarget, path: string, content: string, version?: string) =>
-    unwrapIpcResult<EditorWriteResult>(ipcRenderer.invoke('editor:write', { target, path, content, version })),
-  editorMkdir: (target: EditorTarget, path: string) =>
-    unwrapIpcResult<EditorOperationResult>(ipcRenderer.invoke('editor:mkdir', { target, path })),
-  editorMove: (target: EditorTarget, fromPath: string, toPath: string, overwrite?: boolean) =>
-    unwrapIpcResult<EditorOperationResult>(ipcRenderer.invoke('editor:move', { target, fromPath, toPath, overwrite })),
-  editorDelete: (target: EditorTarget, path: string, recursive?: boolean) =>
-    unwrapIpcResult<EditorOperationResult>(ipcRenderer.invoke('editor:delete', { target, path, recursive })),
-  editorWatchStart: (target: EditorTarget, paths: string[]) =>
-    ipcRenderer.invoke('editor:watch-start', { target, paths }) as Promise<EditorWatchStartResult>,
-  editorWatchUpdate: (subscriptionId: string, paths: string[]) =>
-    ipcRenderer.invoke('editor:watch-update', { subscriptionId, paths }) as Promise<EditorWatchStartResult>,
-  editorWatchStop: (subscriptionId: string) =>
-    ipcRenderer.invoke('editor:watch-stop', { subscriptionId }) as Promise<void>,
-  onEditorWatchEvent: listener => {
-    const wrappedListener = (_event: Electron.IpcRendererEvent, watchEvent: EditorWatchEventEnvelope) => {
+  workspaceFileList: (target: WorkspaceFileTarget, path?: string) =>
+    unwrapIpcResult<WorkspaceFileListResult>(ipcRenderer.invoke('workspace-file:list', { target, path })),
+  workspaceFileRead: (target: WorkspaceFileTarget, path: string) =>
+    unwrapIpcResult<WorkspaceFileFile>(ipcRenderer.invoke('workspace-file:read', { target, path })),
+  workspaceFileHash: (target: WorkspaceFileTarget, path: string) =>
+    unwrapIpcResult<WorkspaceFileHashResult>(ipcRenderer.invoke('workspace-file:hash', { target, path })),
+  workspaceFileDiffPreview: (target: WorkspaceFileTarget, path: string, diff: string) =>
+    unwrapIpcResult<WorkspaceFileDiffPreviewResult>(ipcRenderer.invoke('workspace-file:diff-preview', { target, path, diff })),
+  workspaceFileWrite: (target: WorkspaceFileTarget, path: string, content: string, version?: string) =>
+    unwrapIpcResult<WorkspaceFileWriteResult>(ipcRenderer.invoke('workspace-file:write', { target, path, content, version })),
+  workspaceFileMkdir: (target: WorkspaceFileTarget, path: string) =>
+    unwrapIpcResult<WorkspaceFileOperationResult>(ipcRenderer.invoke('workspace-file:mkdir', { target, path })),
+  workspaceFileMove: (target: WorkspaceFileTarget, fromPath: string, toPath: string, overwrite?: boolean) =>
+    unwrapIpcResult<WorkspaceFileOperationResult>(ipcRenderer.invoke('workspace-file:move', { target, fromPath, toPath, overwrite })),
+  workspaceFileDelete: (target: WorkspaceFileTarget, path: string, recursive?: boolean) =>
+    unwrapIpcResult<WorkspaceFileOperationResult>(ipcRenderer.invoke('workspace-file:delete', { target, path, recursive })),
+  workspaceFileIndex: (target: WorkspaceFileTarget, path?: string) =>
+    unwrapIpcResult<WorkspaceFileIndexResult>(ipcRenderer.invoke('workspace-file:index', { target, path })),
+  workspaceFileUpload: (target: WorkspaceFileTarget, path: string, base64Content: string, contentType?: string) =>
+    unwrapIpcResult<WorkspaceFileOperationResult>(
+      ipcRenderer.invoke('workspace-file:upload', { target, path, base64Content, contentType }),
+    ),
+  workspaceFileWatchStart: (target: WorkspaceFileTarget, paths: string[]) =>
+    ipcRenderer.invoke('workspace-file:watch-start', { target, paths }) as Promise<WorkspaceFileWatchStartResult>,
+  workspaceFileWatchUpdate: (subscriptionId: string, paths: string[]) =>
+    ipcRenderer.invoke('workspace-file:watch-update', { subscriptionId, paths }) as Promise<WorkspaceFileWatchStartResult>,
+  workspaceFileWatchStop: (subscriptionId: string) =>
+    ipcRenderer.invoke('workspace-file:watch-stop', { subscriptionId }) as Promise<void>,
+  onWorkspaceFileWatchEvent: listener => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, watchEvent: WorkspaceFileWatchEventEnvelope) => {
       listener(watchEvent);
     };
-    ipcRenderer.on('editor:watch-event', wrappedListener);
-    return () => ipcRenderer.removeListener('editor:watch-event', wrappedListener);
+    ipcRenderer.on('workspace-file:watch-event', wrappedListener);
+    return () => ipcRenderer.removeListener('workspace-file:watch-event', wrappedListener);
   },
-  lspCreateSession: (target: EditorTarget, path: string, languageId?: string, serverId?: string) =>
+  lspCreateSession: (target: WorkspaceFileTarget, path: string, languageId?: string, serverId?: string) =>
     ipcRenderer.invoke('lsp:create-session', { target, path, languageId, serverId }),
 };
 

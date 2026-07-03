@@ -1,4 +1,4 @@
-import type { EditorTarget } from '../shared/editor';
+import type { WorkspaceFileTarget } from '../shared/workspace-file';
 import type { LspSessionInput, LspSessionResult } from '../shared/language-intelligence';
 import type { PortalSupervisor } from './portal-terminal-client';
 
@@ -11,7 +11,7 @@ type LspResolvedTarget = {
 
 type PortalLspClientOptions = {
   supervisor: PortalSupervisor;
-  resolveWorkspace: (target: EditorTarget) => Promise<LspResolvedTarget>;
+  resolveWorkspace: (target: WorkspaceFileTarget) => Promise<LspResolvedTarget>;
 };
 
 const parseResponse = async <T>(response: Response): Promise<T> => {
@@ -42,7 +42,7 @@ const toWsUrl = (httpUrl: string, token: string) => {
 
 export class PortalLspClient {
   private readonly supervisor: PortalSupervisor;
-  private readonly resolveWorkspace: (target: EditorTarget) => Promise<LspResolvedTarget>;
+  private readonly resolveWorkspace: (target: WorkspaceFileTarget) => Promise<LspResolvedTarget>;
 
   constructor(options: PortalLspClientOptions) {
     this.supervisor = options.supervisor;
@@ -73,7 +73,7 @@ export class PortalLspClient {
     };
   }
 
-  private async resolveTarget(target: EditorTarget): Promise<EditorTarget> {
+  private async resolveTarget(target: WorkspaceFileTarget): Promise<WorkspaceFileTarget> {
     const resolved = await this.resolveWorkspace(target);
     return {
       projectId: target.projectId,

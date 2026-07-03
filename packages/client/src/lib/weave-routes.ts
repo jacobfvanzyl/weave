@@ -53,8 +53,6 @@ export const weaveRoutePaths = {
     workspaceRemovalPreview: (projectId: string, workspaceId: string) =>
       `/code/projects/${encodePath(projectId)}/workspaces/${encodePath(workspaceId)}/removal-preview`,
     resolveWorkspace: () => '/code/workspaces/resolve',
-    editor: (action: string) => `/code/editor/${encodePath(action)}`,
-    editorWatchToken: () => '/code/editor/watch-token',
     lspSession: () => '/code/lsp/session',
     terminalToken: () => '/code/terminals/token',
   },
@@ -64,7 +62,10 @@ export const weaveRoutePaths = {
     projectProfile: (projectId: string) => `/notes/projects/${encodePath(projectId)}/profile`,
     reorderProjects: () => '/notes/projects/reorder',
     projectThreads: (projectId: string) => `/notes/projects/${encodePath(projectId)}/threads`,
-    vault: (action: string) => `/notes/vault/${encodePath(action)}`,
+  },
+  workspaceFiles: {
+    action: (action: string) => `/workspace-files/${encodePath(action === 'diffPreview' ? 'diff-preview' : action)}`,
+    watchToken: () => '/workspace-files/watch-token',
   },
   compat: {
     projects: () => '/projects',
@@ -135,8 +136,6 @@ export const weaveRoutes = {
     workspaceRemovalPreview: (projectId: string, workspaceId: string) =>
       url(weaveRoutePaths.code.workspaceRemovalPreview(projectId, workspaceId)),
     resolveWorkspace: () => url(weaveRoutePaths.code.resolveWorkspace()),
-    editor: (action: string) => url(weaveRoutePaths.code.editor(action)),
-    editorWatchToken: () => url(weaveRoutePaths.code.editorWatchToken()),
     lspSession: () => url(weaveRoutePaths.code.lspSession()),
     terminalToken: () => url(weaveRoutePaths.code.terminalToken()),
   },
@@ -146,7 +145,10 @@ export const weaveRoutes = {
     projectProfile: (projectId: string) => url(weaveRoutePaths.notes.projectProfile(projectId)),
     reorderProjects: () => url(weaveRoutePaths.notes.reorderProjects()),
     projectThreads: (projectId: string) => url(weaveRoutePaths.notes.projectThreads(projectId)),
-    vault: (action: string) => url(weaveRoutePaths.notes.vault(action)),
+  },
+  workspaceFiles: {
+    action: (action: string) => url(weaveRoutePaths.workspaceFiles.action(action)),
+    watchToken: () => url(weaveRoutePaths.workspaceFiles.watchToken()),
   },
   compat: {
     projects: () => url(weaveRoutePaths.compat.projects()),

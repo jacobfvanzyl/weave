@@ -91,7 +91,7 @@ export const isProjectThread = (thread: { id: string; metadata?: unknown }) => {
 };
 
 export const getNotesProject = async (memory: any, resourceId: string, projectId: string) => {
-  const persisted = await productProjectRepository.get(resourceId, projectId, 'notes');
+  const persisted = await productProjectRepository.get(resourceId, projectId);
   if (persisted) return persisted as NotesProject;
 
   const thread = await memory.getThreadById({ threadId: projectThreadId(projectId) }).catch(() => undefined);
@@ -175,12 +175,12 @@ export const resolveNotesVaultForProject = (
   dependencies: NotesVaultResolverDependencies = {},
 ): ResolvedNotesVault => {
   if (!project || project.userId !== resourceId) throw new Error('Project was not found.');
-  if (project.projectKind !== 'notes') throw new Error('Vault tools are only available for Notes Projects.');
+  if (project.projectKind !== 'notes') throw new Error('Notes file operations are only available for Notes Projects.');
 
   const workspace = target.workspaceId
     ? project.workspaces.find(item => item.id === target.workspaceId)
     : project.workspaces[0];
-  if (!workspace) throw new Error('Vault workspace was not found.');
+  if (!workspace) throw new Error('Notes workspace was not found.');
 
   const deps = { ...defaultDependencies(), ...dependencies };
   const storage = normalizeStorageForProject(project, workspace, target);

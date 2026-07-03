@@ -1,11 +1,11 @@
 import {
-  assertPortalPathWithinRoot,
-  joinPortalEditorPath,
-  parseEditorPath,
-  type PortalEditorConfig,
-  type PortalEditorTarget,
-  resolvePortalEditorWorkspaceRoot,
-} from './editor.ts';
+  assertPortalWorkspaceFilePathWithinRoot,
+  joinPortalWorkspaceFilePath,
+  parseWorkspaceFilePath,
+  type PortalWorkspaceFileConfig,
+  type PortalWorkspaceFileTarget,
+  resolvePortalWorkspaceFileRoot,
+} from './workspace-files.ts';
 import { detectLanguagePackLspId } from '../../packages/client/src/lib/language-packs/core.ts';
 
 export type LspLanguageId =
@@ -22,7 +22,7 @@ export type LspLanguageId =
   | 'graphql'
   | string;
 
-export type PortalLspTarget = PortalEditorTarget;
+export type PortalLspTarget = PortalWorkspaceFileTarget;
 
 export type PortalLspSessionInput = {
   target?: PortalLspTarget;
@@ -389,7 +389,7 @@ const stripJsonComments = (input: string) => {
 
 const readProjectConfig = async (rootPath: string) => {
   for (const name of ['.weave/language-servers.jsonc', '.weave/language-servers.json']) {
-    const configPath = joinPortalEditorPath(rootPath, name);
+    const configPath = joinPortalWorkspaceFilePath(rootPath, name);
     const text = await Deno.readTextFile(configPath).catch((error) => {
       if (error instanceof Deno.errors.NotFound) return undefined;
       throw error;
@@ -445,7 +445,7 @@ const findRootPath = async (workspaceRoot: string, documentPath: string, markers
   let current = dirname(documentPath);
   while (true) {
     for (const marker of markers) {
-      if (await fileExists(joinPortalEditorPath(current, marker))) return { rootPath: current, marker };
+      if (await fileExists(joinPortalWorkspaceFilePath(current, marker))) return { rootPath: current, marker };
     }
     if (current === workspaceRoot || current === '/' || !current.startsWith(`${workspaceRoot}/`)) {
       return { rootPath: workspaceRoot, marker: undefined };
@@ -463,17 +463,17 @@ const getPathEntries = () => (Deno.env.get('PATH') ?? '').split(':').filter(Bool
 
 const resolveExecutable = async (workspaceRoot: string, command: string) => {
   if (isExplicitCommand(command)) {
-    const candidate = command.startsWith('/') ? command : joinPortalEditorPath(workspaceRoot, command);
+    const candidate = command.startsWith('/') ? command : joinPortalWorkspaceFilePath(workspaceRoot, command);
     const stat = await statMaybe(candidate);
     return stat?.isFile ? candidate : undefined;
   }
 
-  const localBin = joinPortalEditorPath(workspaceRoot, `node_modules/.bin/${command}`);
+  const localBin = joinPortalWorkspaceFilePath(workspaceRoot, `node_modules/.bin/${command}`);
   const localStat = await statMaybe(localBin);
   if (localStat?.isFile) return localBin;
 
   for (const entry of getPathEntries()) {
-    const candidate = joinPortalEditorPath(entry, command);
+    const candidate = joinPortalWorkspaceFilePath(entry, command);
     const stat = await statMaybe(candidate);
     if (stat?.isFile) return candidate;
   }
@@ -1078,7 +1078,7 @@ class LspRuntime {
 
   private async resolveConfigFile() {
     for (const name of this.adapter.configFiles ?? []) {
-      const path = joinPortalEditorPath(this.rootPath, name);
+      const path = joinPortalWorkspaceFilePath(this.rootPath, name);
       if (await fileExists(path)) return path;
     }
     return undefined;
@@ -1133,11 +1133,11 @@ class LspRuntime {
 }
 
 export type PortalLspHostOptions = {
-  config: PortalEditorConfig;
+  config: PortalWorkspaceFileConfig;
 };
 
 export class PortalLspHost {
-  private readonly config: PortalEditorConfig;
+  private readonly config: PortalWorkspaceFileConfig;
   private readonly sessions = new Map<string, NormalizedSession>();
   private readonly runtimes = new Map<RuntimeKey, LspRuntime>();
   private readonly clientSessions = new Map<string, Set<string>>();
@@ -1386,8 +1386,8 @@ export class PortalLspHost {
   private async resolveSession(input: PortalLspSessionInput): Promise<NormalizedSession> {
     const record = flattenSessionInput(input);
     const sessionId = optionalString(record.sessionId) ?? `lsp_${crypto.randomUUID().replace(/-/g, '')}`;
-    const workspaceRoot = await resolvePortalEditorWorkspaceRoot(this.config, record);
-    const relativePath = parseEditorPath(record.path);
+    const workspaceRoot = await resolvePortalWorkspaceFileRoot(this.config, record);
+    const relativePath = parseWorkspaceFilePath(record.path);
     if (!relativePath) {
       return {
         sessionId,
@@ -1397,8 +1397,8 @@ export class PortalLspHost {
         error: 'path is required.',
       };
     }
-    const documentPath = joinPortalEditorPath(workspaceRoot, relativePath);
-    assertPortalPathWithinRoot(workspaceRoot, documentPath);
+    const documentPath = joinPortalWorkspaceFilePath(workspaceRoot, relativePath);
+    assertPortalWorkspaceFilePathWithinRoot(workspaceRoot, documentPath);
     const languageId = optionalString(record.languageId) ?? detectLspLanguageId(relativePath);
     if (!languageId) {
       return {
@@ -1575,7 +1575,7 @@ const normalizeWorkspaceEdit = (rootPath: string, workspaceEdit: unknown) => {
   const addEdits = (uri: string, rawEdits: unknown) => {
     if (!Array.isArray(rawEdits)) return;
     const path = fileUriToPath(uri);
-    assertPortalPathWithinRoot(rootPath, path, 'LSP edit escapes the workspace root.');
+    assertPortalWorkspaceFilePathWithinRoot(rootPath, path, 'LSP edit escapes the workspace root.');
     const relativePath = path === rootPath ? '' : path.slice(rootPath.length + 1);
     for (const edit of rawEdits) {
       if (!isRecord(edit) || !isRecord(edit.range) || typeof edit.newText !== 'string') continue;

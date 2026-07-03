@@ -228,7 +228,7 @@ const validateAdHocPath = async (resourceId: string, portalId: string, workspace
   assertPortalForUser(portalId, resourceId);
   const result = await requestPortalTool({
     portalId,
-    tool: 'portal.fs.stat',
+    tool: 'portal.fs.pathStat',
     args: { path: workspacePath },
     timeoutMs: 10_000,
   }) as { ok?: boolean; error?: string; path?: string; isDirectory?: boolean };
@@ -453,13 +453,13 @@ const createNotesProject = async (_c: any, resourceId: string, baseProject: Proj
   const result = (isRootedPath(vaultPath)
     ? await requestPortalTool({
         portalId: portalId!,
-        tool: 'portal.fs.stat',
+        tool: 'portal.fs.pathStat',
         args: { rootId, path: vaultPath },
         timeoutMs: 10_000,
       }) as { ok?: boolean; error?: string; path?: string; isDirectory?: boolean }
     : await requestPortalTool({
         portalId: portalId!,
-        tool: 'portal.fs.list',
+        tool: 'portal.fs.browse',
         args: { rootId, path: vaultPath },
         timeoutMs: 10_000,
       })) as { ok?: boolean; error?: string; path?: string; realPath?: string; isDirectory?: boolean };

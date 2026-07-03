@@ -141,6 +141,7 @@ describe('dynamic profile resolver', () => {
       'read',
       'writePlanTool',
       'writeProposalTool',
+      'writeProposalPatchTool',
       'updateProposalTool',
     ]);
 

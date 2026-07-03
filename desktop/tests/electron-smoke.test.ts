@@ -164,7 +164,7 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         return;
       }
 
-      if (request.url === '/notes/vault/index' && request.method === 'POST') {
+      if (request.url === '/workspace-files/index' && request.method === 'POST') {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({
           path: '',

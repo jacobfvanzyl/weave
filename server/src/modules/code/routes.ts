@@ -1,7 +1,6 @@
 import { mountRoute } from '../../server/routes';
 import { registerAgentContribution } from '../../agent/contributions';
 import type { ServerModule } from '../types';
-import { editorRoutes } from './routes/editor';
 import { lspRoutes } from './routes/lsp';
 import { projectRoutes } from './routes/projects';
 import { terminalRoutes } from './routes/terminals';
@@ -47,7 +46,6 @@ export const codeModule: ServerModule = {
   id: 'code',
   registerRoutes: app => {
     for (const route of projectRoutes) mountRoute(app, route);
-    for (const route of editorRoutes) mountRoute(app, route);
     for (const route of lspRoutes) mountRoute(app, route);
     for (const route of terminalRoutes) mountRoute(app, route);
   },

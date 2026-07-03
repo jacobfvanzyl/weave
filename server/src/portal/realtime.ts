@@ -12,11 +12,11 @@ import {
   handleLspPortalMessage,
 } from './lsp-relay';
 import {
-  connectEditorWatchRelayClient,
-  disconnectEditorWatchRelayClient,
-  forwardEditorWatchClientMessage,
-  handleEditorWatchPortalMessage,
-} from './editor-watch-relay';
+  connectWorkspaceFileWatchRelayClient,
+  disconnectWorkspaceFileWatchRelayClient,
+  forwardWorkspaceFileWatchClientMessage,
+  handleWorkspaceFileWatchPortalMessage,
+} from './workspace-file-watch-relay';
 import {
   connectWindowRelayClient,
   disconnectWindowRelayClient,
@@ -190,34 +190,34 @@ const connectLspClient = (ws: RealtimeSocket, url: URL) => {
   ws.addEventListener('error', () => disconnectLspRelayClient(connected.clientId));
 };
 
-const connectEditorWatchClient = (ws: RealtimeSocket, url: URL) => {
-  const connected = connectEditorWatchRelayClient({
+const connectWorkspaceFileWatchClient = (ws: RealtimeSocket, url: URL) => {
+  const connected = connectWorkspaceFileWatchRelayClient({
     token: url.searchParams.get('token') ?? '',
     ws,
   });
 
   if (!connected) {
-    closeUnauthorized(ws, 'invalid editor watch token');
+    closeUnauthorized(ws, 'invalid workspace file watch token');
     return;
   }
 
   ws.send(JSON.stringify({
-    type: 'editor.watch.accepted',
+    type: 'workspace-file.watch.accepted',
     clientId: connected.clientId,
     portalId: connected.token.portalId,
   }));
   onMessage(ws, message => {
     try {
-      forwardEditorWatchClientMessage(connected.clientId, message);
+      forwardWorkspaceFileWatchClientMessage(connected.clientId, message);
     } catch (error) {
       ws.send(JSON.stringify({
-        type: 'editor.watch.error',
+        type: 'workspace-file.watch.error',
         error: error instanceof Error ? error.message : String(error),
       }));
     }
   });
-  ws.addEventListener('close', () => disconnectEditorWatchRelayClient(connected.clientId));
-  ws.addEventListener('error', () => disconnectEditorWatchRelayClient(connected.clientId));
+  ws.addEventListener('close', () => disconnectWorkspaceFileWatchRelayClient(connected.clientId));
+  ws.addEventListener('error', () => disconnectWorkspaceFileWatchRelayClient(connected.clientId));
 };
 
 const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraLike) => {
@@ -236,7 +236,7 @@ const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraL
   onMessage(ws, message => {
     if (handleTerminalPortalMessage(message)) return;
     if (handleLspPortalMessage(message)) return;
-    if (handleEditorWatchPortalMessage(message)) return;
+    if (handleWorkspaceFileWatchPortalMessage(message)) return;
     if (handleWindowPortalMessage(message)) return;
     if (handlePortalMessage(message)) return;
 
@@ -271,7 +271,7 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
       url.pathname !== '/terminals/connect' &&
       url.pathname !== '/windows/connect' &&
       url.pathname !== '/lsp/connect' &&
-      url.pathname !== '/editor-watch/connect'
+      url.pathname !== '/workspace-files/watch/connect'
     ) {
       return new Response(JSON.stringify({ error: 'not found' }), {
         status: 404,
@@ -292,7 +292,7 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
       if (url.pathname === '/terminals/connect') return connectTerminalClient(ws, url);
       if (url.pathname === '/windows/connect') return connectWindowClient(ws, url);
       if (url.pathname === '/lsp/connect') return connectLspClient(ws, url);
-      if (url.pathname === '/editor-watch/connect') return connectEditorWatchClient(ws, url);
+      if (url.pathname === '/workspace-files/watch/connect') return connectWorkspaceFileWatchClient(ws, url);
       void connectPortalDaemon(ws, url, mastra);
     });
     return response;

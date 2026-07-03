@@ -2,26 +2,28 @@ import { app, BrowserWindow, ipcMain, nativeTheme, safeStorage, session, shell }
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { DesktopConnectionInput, DesktopConnectionTestResult } from '../shared/desktop-api';
-import type { EditorTarget } from '../shared/editor';
+import type { WorkspaceFileTarget } from '../shared/workspace-file';
 import type { TerminalStartInput, TerminalTargetInput } from '../shared/terminal';
 import { getServerOrigin, isHttpUrl, normalizeMastraUrl, parseDesktopConnectionInput } from '../shared/connection';
 import { ConnectionSettingsStore } from './settings-store';
 import {
-  parseEditorDeleteInput,
-  parseEditorDiffPreviewInput,
-  parseEditorHashInput,
-  parseEditorListInput,
-  parseEditorMkdirInput,
-  parseEditorMoveInput,
-  parseEditorReadInput,
-  parseEditorWatchPaths,
-  parseEditorWatchStartInput,
-  parseEditorWatchStopInput,
-  parseEditorWatchSubscriptionId,
-  parseEditorWriteInput,
+  parseWorkspaceFileDeleteInput,
+  parseWorkspaceFileDiffPreviewInput,
+  parseWorkspaceFileHashInput,
+  parseWorkspaceFileIndexInput,
+  parseWorkspaceFileListInput,
+  parseWorkspaceFileMkdirInput,
+  parseWorkspaceFileMoveInput,
+  parseWorkspaceFileReadInput,
+  parseWorkspaceFileUploadInput,
+  parseWorkspaceFileWatchPaths,
+  parseWorkspaceFileWatchStartInput,
+  parseWorkspaceFileWatchStopInput,
+  parseWorkspaceFileWatchSubscriptionId,
+  parseWorkspaceFileWriteInput,
   parseLspSessionInput,
-} from './editor-input';
-import { PortalEditorClient } from './portal-editor-client';
+} from './workspace-file-input';
+import { PortalWorkspaceFileClient } from './portal-workspace-file-client';
 import { PortalLspClient } from './portal-lsp-client';
 import {
   parseTerminalInputData,
@@ -36,7 +38,7 @@ import { startDesktopPerfSampler } from './perf';
 let settingsStore: ConnectionSettingsStore | undefined;
 let portalSupervisor: PortalSupervisor | undefined;
 let portalTerminalClient: PortalTerminalClient | undefined;
-let portalEditorClient: PortalEditorClient | undefined;
+let portalWorkspaceFileClient: PortalWorkspaceFileClient | undefined;
 let portalLspClient: PortalLspClient | undefined;
 let desktopPerfSampler: ReturnType<typeof startDesktopPerfSampler> | undefined;
 
@@ -149,7 +151,7 @@ type WorkspaceListing = {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
 
-const resolveGitWorkspace = async (input: EditorTarget, featureName: string) => {
+const resolveGitWorkspace = async (input: WorkspaceFileTarget, featureName: string) => {
   const store = getSettingsStore();
   const settings = store.getSettings();
   const authToken = store.getAuthToken();
@@ -204,7 +206,7 @@ const resolveTerminalTarget = async (input: TerminalTargetInput) =>
     ? await resolveGeneralTerminal(input)
     : await resolveTerminalWorkspace(input);
 
-const resolveEditorWorkspace = (target: EditorTarget) => resolveGitWorkspace(target, 'editor');
+const resolveWorkspaceFileWorkspace = (target: WorkspaceFileTarget) => resolveGitWorkspace(target, 'workspace-file');
 
 const getPortalTerminalClient = () => {
   if (!settingsStore) throw new Error('Connection settings store is not initialized.');
@@ -219,7 +221,7 @@ const getPortalTerminalClient = () => {
   return portalTerminalClient;
 };
 
-const getPortalEditorClient = () => {
+const getPortalWorkspaceFileClient = () => {
   if (!settingsStore) throw new Error('Connection settings store is not initialized.');
   if (!portalSupervisor) {
     portalSupervisor = new PortalSupervisor({
@@ -227,14 +229,14 @@ const getPortalEditorClient = () => {
       homePath: app.getPath('home'),
     });
   }
-  if (!portalEditorClient) {
-    portalEditorClient = new PortalEditorClient({
+  if (!portalWorkspaceFileClient) {
+    portalWorkspaceFileClient = new PortalWorkspaceFileClient({
       supervisor: portalSupervisor,
-      resolveWorkspace: resolveEditorWorkspace,
+      resolveWorkspace: resolveWorkspaceFileWorkspace,
     });
   }
 
-  return portalEditorClient;
+  return portalWorkspaceFileClient;
 };
 
 const getPortalLspClient = () => {
@@ -248,7 +250,7 @@ const getPortalLspClient = () => {
   if (!portalLspClient) {
     portalLspClient = new PortalLspClient({
       supervisor: portalSupervisor,
-      resolveWorkspace: resolveEditorWorkspace,
+      resolveWorkspace: resolveWorkspaceFileWorkspace,
     });
   }
 
@@ -300,42 +302,48 @@ const registerIpcHandlers = () => {
   ipcMain.handle('terminal:detach', (event, terminalId: unknown) =>
     getPortalTerminalClient().detach(parseTerminalId(terminalId), event.sender),
   );
-  ipcMain.handle('editor:list', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalEditorClient().list(parseEditorListInput(input)),
+  ipcMain.handle('workspace-file:list', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().list(parseWorkspaceFileListInput(input)),
   ));
-  ipcMain.handle('editor:read', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalEditorClient().read(parseEditorReadInput(input)),
+  ipcMain.handle('workspace-file:read', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().read(parseWorkspaceFileReadInput(input)),
   ));
-  ipcMain.handle('editor:hash', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalEditorClient().hash(parseEditorHashInput(input)),
+  ipcMain.handle('workspace-file:hash', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().hash(parseWorkspaceFileHashInput(input)),
   ));
-  ipcMain.handle('editor:diff-preview', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalEditorClient().diffPreview(parseEditorDiffPreviewInput(input)),
+  ipcMain.handle('workspace-file:diff-preview', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().diffPreview(parseWorkspaceFileDiffPreviewInput(input)),
   ));
-  ipcMain.handle('editor:write', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalEditorClient().write(parseEditorWriteInput(input)),
+  ipcMain.handle('workspace-file:write', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().write(parseWorkspaceFileWriteInput(input)),
   ));
-  ipcMain.handle('editor:mkdir', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalEditorClient().mkdir(parseEditorMkdirInput(input)),
+  ipcMain.handle('workspace-file:mkdir', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().mkdir(parseWorkspaceFileMkdirInput(input)),
   ));
-  ipcMain.handle('editor:move', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalEditorClient().move(parseEditorMoveInput(input)),
+  ipcMain.handle('workspace-file:move', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().move(parseWorkspaceFileMoveInput(input)),
   ));
-  ipcMain.handle('editor:delete', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalEditorClient().delete(parseEditorDeleteInput(input)),
+  ipcMain.handle('workspace-file:delete', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().delete(parseWorkspaceFileDeleteInput(input)),
   ));
-  ipcMain.handle('editor:watch-start', (event, input: unknown) =>
-    getPortalEditorClient().watchStart(parseEditorWatchStartInput(input), event.sender),
+  ipcMain.handle('workspace-file:index', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().index(parseWorkspaceFileIndexInput(input)),
+  ));
+  ipcMain.handle('workspace-file:upload', (_event, input: unknown) => handleIpcResult(() =>
+    getPortalWorkspaceFileClient().upload(parseWorkspaceFileUploadInput(input)),
+  ));
+  ipcMain.handle('workspace-file:watch-start', (event, input: unknown) =>
+    getPortalWorkspaceFileClient().watchStart(parseWorkspaceFileWatchStartInput(input), event.sender),
   );
-  ipcMain.handle('editor:watch-update', (_event, input: unknown) => {
+  ipcMain.handle('workspace-file:watch-update', (_event, input: unknown) => {
     const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
-    return getPortalEditorClient().watchUpdate(
-      parseEditorWatchSubscriptionId(record.subscriptionId),
-      parseEditorWatchPaths(record.paths),
+    return getPortalWorkspaceFileClient().watchUpdate(
+      parseWorkspaceFileWatchSubscriptionId(record.subscriptionId),
+      parseWorkspaceFileWatchPaths(record.paths),
     );
   });
-  ipcMain.handle('editor:watch-stop', (_event, input: unknown) =>
-    getPortalEditorClient().watchStop(parseEditorWatchStopInput(input)),
+  ipcMain.handle('workspace-file:watch-stop', (_event, input: unknown) =>
+    getPortalWorkspaceFileClient().watchStop(parseWorkspaceFileWatchStopInput(input)),
   );
   ipcMain.handle('lsp:create-session', (_event, input: unknown) =>
     getPortalLspClient().createSession(parseLspSessionInput(input)),
@@ -379,7 +387,7 @@ const createWindow = () => {
   const webContentsId = mainWindow.webContents.id;
   mainWindow.webContents.on('destroyed', () => {
     portalTerminalClient?.detachWebContents(webContentsId);
-    portalEditorClient?.detachWebContents(webContentsId);
+    portalWorkspaceFileClient?.detachWebContents(webContentsId);
   });
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
@@ -405,7 +413,7 @@ app.whenReady().then(() => {
       portalTerminalClient: portalTerminalClient?.getPerfSnapshot(),
       portalClients: {
         terminal: Boolean(portalTerminalClient),
-        editor: Boolean(portalEditorClient),
+        'workspace-file': Boolean(portalWorkspaceFileClient),
         lsp: Boolean(portalLspClient),
       },
     }),

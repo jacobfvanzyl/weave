@@ -39,11 +39,10 @@ import {
   isEditorPathOpenable,
   resolveEditorDocumentKind,
 } from '../../lib/editor-document-kind';
-import { createEditorBackend } from '../../lib/editor-backend';
+import { createWorkspaceFileBackend, type WorkspaceFileAttachment, type WorkspaceFileIndexResult, type WorkspaceFileNote } from '../../lib/workspace-file-backend';
 import type { EditorEntry, EditorMode, EditorTarget, EditorWatchSubscription, OpenBuffer } from '../../lib/editor-types';
 import { defaultEditorExplorerVisible, getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
 import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
-import { createVaultBackend, type VaultAttachment, type VaultIndexResult, type VaultNote, type VaultTarget } from '../../lib/vault-backend';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -94,8 +93,8 @@ type TreeNode = {
   type: 'directory' | 'file' | 'other';
   children: TreeNode[];
   entry?: EditorEntry;
-  note?: VaultNote;
-  attachment?: VaultAttachment;
+  note?: WorkspaceFileNote;
+  attachment?: WorkspaceFileAttachment;
   mediaType?: string;
   size?: number;
   mtimeMs?: number;
@@ -329,7 +328,7 @@ const buildCodeTree = (directories: Record<string, EditorEntry[]>, rootName: str
   return sortTree(root);
 };
 
-const buildNotesTree = (index: VaultIndexResult | undefined, rootName: string) => {
+const buildNotesTree = (index: WorkspaceFileIndexResult | undefined, rootName: string) => {
   const root = createRootNode(rootName);
   for (const note of index?.notes ?? []) {
     if (isIgnoredExplorerPath(note.path)) continue;
@@ -515,8 +514,7 @@ export const UnifiedEditorPanel = ({
   onBackToProposalPreview,
   target,
 }: UnifiedEditorPanelProps) => {
-  const codeBackend = useMemo(() => createEditorBackend(), []);
-  const vaultBackend = useMemo(() => createVaultBackend(), []);
+  const workspaceFileBackend = useMemo(() => createWorkspaceFileBackend({ preferDesktopBridge: mode === 'code' }), [mode]);
   const editorTarget = useMemo<EditorTarget>(() => ({
     projectId: target.projectId,
     workspaceId: target.workspaceId,
@@ -525,7 +523,6 @@ export const UnifiedEditorPanel = ({
     repoPath: target.repoPath,
     workspacePath: target.workspacePath,
   }), [target.portalId, target.projectId, target.repoPath, target.rootId, target.workspaceId, target.workspacePath]);
-  const vaultTarget = editorTarget as VaultTarget;
   const editorTabTargetKey = useMemo(() => (
     getEditorTabTargetKey(mode, target.projectId, target.workspaceId)
   ), [mode, target.projectId, target.workspaceId]);
@@ -562,7 +559,7 @@ export const UnifiedEditorPanel = ({
   const [query, setQuery] = useState('');
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(['']));
   const [codeDirectories, setCodeDirectories] = useState<Record<string, EditorEntry[]>>({});
-  const [vaultIndex, setVaultIndex] = useState<VaultIndexResult>();
+  const [vaultIndex, setVaultIndex] = useState<WorkspaceFileIndexResult>();
   const [selectedNode, setSelectedNode] = useState<TreeNode>();
   const [buffersByTabId, setBuffersByTabId] = useState<Record<string, EditorBuffer | undefined>>({});
   const [failedBufferTabIds, setFailedBufferTabIds] = useState<Set<string>>(() => new Set());
@@ -898,32 +895,32 @@ export const UnifiedEditorPanel = ({
     setIsExplorerLoading(true);
     setError(undefined);
     try {
-      setVaultIndex(await vaultBackend.index(vaultTarget));
+      setVaultIndex(await workspaceFileBackend.index(editorTarget));
     } catch (loadError) {
       setError(toErrorMessage(loadError));
     } finally {
       setIsExplorerLoading(false);
     }
-  }, [vaultBackend, vaultTarget]);
+  }, [workspaceFileBackend, editorTarget]);
 
   const loadCodeDirectory = useCallback(async (path: string) => {
     setIsExplorerLoading(true);
     setError(undefined);
     try {
-      const result = await codeBackend.list(editorTarget, path);
+      const result = await workspaceFileBackend.list(editorTarget, path);
       setCodeDirectories(current => ({ ...current, [result.path]: result.entries }));
     } catch (loadError) {
       setError(toErrorMessage(loadError));
     } finally {
       setIsExplorerLoading(false);
     }
-  }, [codeBackend, editorTarget]);
+  }, [workspaceFileBackend, editorTarget]);
 
   const refreshCodeDirectories = useCallback(async (paths: string[]) => {
     const uniquePaths = [...new Set(paths.length ? paths : [''])];
     const results = await Promise.all(uniquePaths.map(async path => {
       try {
-        return { ok: true as const, result: await codeBackend.list(editorTarget, path) };
+        return { ok: true as const, result: await workspaceFileBackend.list(editorTarget, path) };
       } catch (refreshError) {
         return { ok: false as const, path, error: refreshError };
       }
@@ -963,14 +960,14 @@ export const UnifiedEditorPanel = ({
         return failedPaths.some(path => current.path === path || current.path.startsWith(`${path}/`)) ? undefined : current;
       });
     }
-  }, [codeBackend, editorTarget]);
+  }, [workspaceFileBackend, editorTarget]);
 
   const refreshExplorer = useCallback(async () => {
     setIsExplorerLoading(true);
     setError(undefined);
     try {
       if (mode === 'notes') {
-        setVaultIndex(await vaultBackend.index(vaultTarget));
+        setVaultIndex(await workspaceFileBackend.index(editorTarget));
         return;
       }
 
@@ -980,7 +977,7 @@ export const UnifiedEditorPanel = ({
     } finally {
       setIsExplorerLoading(false);
     }
-  }, [expandedPaths, mode, refreshCodeDirectories, vaultBackend, vaultTarget]);
+  }, [expandedPaths, mode, refreshCodeDirectories, workspaceFileBackend, editorTarget]);
 
   const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean; preview?: boolean } = {}) => {
     if (!isEditorPathOpenable(mode, path)) return false;
@@ -1013,9 +1010,7 @@ export const UnifiedEditorPanel = ({
     setIsFileLoading(true);
     setError(undefined);
     try {
-      const file = mode === 'code'
-        ? await codeBackend.read(editorTarget, path)
-        : await vaultBackend.read(vaultTarget, path);
+      const file = await workspaceFileBackend.read(editorTarget, path);
       const mediaType = getEditorDocumentMediaType(getDocumentKind(mode, file.path));
       const loadedBuffer = createLoadedBuffer(file, mediaType);
       const loadedTab = file.path === tab.path
@@ -1049,15 +1044,15 @@ export const UnifiedEditorPanel = ({
     clearEditorTabStates,
     closePersistedEditorTab,
     closePreviewEditorTab,
-    codeBackend,
+    workspaceFileBackend,
     editorTabTargetKey,
     editorTabs,
     editorTarget,
     mode,
     openPersistedEditorTab,
     setActiveEditorTab,
-    vaultBackend,
-    vaultTarget,
+    workspaceFileBackend,
+    editorTarget,
   ]);
 
   useEffect(() => () => {
@@ -1110,9 +1105,9 @@ export const UnifiedEditorPanel = ({
   }, [loadCodeDirectory, mode, refreshVaultIndex]);
 
   useEffect(() => {
-    if (mode !== 'code' || !codeBackend.watch) return undefined;
+    if (mode !== 'code' || !workspaceFileBackend.watch) return undefined;
     let cancelled = false;
-    void codeBackend.watch(editorTarget, Array.from(expandedPathsRef.current), event => {
+    void workspaceFileBackend.watch(editorTarget, Array.from(expandedPathsRef.current), event => {
       const expanded = expandedPathsRef.current;
       const refreshPaths = event.rescan
         ? Array.from(expanded)
@@ -1139,7 +1134,7 @@ export const UnifiedEditorPanel = ({
       editorWatchSubscriptionRef.current?.close();
       editorWatchSubscriptionRef.current = undefined;
     };
-  }, [codeBackend, editorTarget, mode]);
+  }, [workspaceFileBackend, editorTarget, mode]);
 
   useEffect(() => {
     if (mode !== 'code') return;
@@ -1266,9 +1261,7 @@ export const UnifiedEditorPanel = ({
     setIsSaving(true);
     setError(undefined);
     try {
-      const result = mode === 'code'
-        ? await codeBackend.write(editorTarget, openBuffer.path, openBuffer.value, openBuffer.version)
-        : await vaultBackend.write(vaultTarget, openBuffer.path, openBuffer.value, openBuffer.version);
+      const result = await workspaceFileBackend.write(editorTarget, openBuffer.path, openBuffer.value, openBuffer.version);
       const nextBuffer: EditorBuffer = {
         ...openBuffer,
         path: result.path,
@@ -1292,16 +1285,14 @@ export const UnifiedEditorPanel = ({
     } finally {
       setIsSaving(false);
     }
-  }, [activeEditorTab, codeBackend, editorTabTargetKey, editorTarget, isDirty, mode, openBuffer, refreshExplorer, renamePersistedEditorTab, vaultBackend, vaultTarget]);
+  }, [activeEditorTab, workspaceFileBackend, editorTabTargetKey, editorTarget, isDirty, openBuffer, refreshExplorer, renamePersistedEditorTab]);
 
   const handleReload = useCallback(async () => {
     if (!openBuffer || !activeEditorTab || !confirmDiscardBuffer(openBuffer, openBuffer.path)) return;
     setIsFileLoading(true);
     setError(undefined);
     try {
-      const file = mode === 'code'
-        ? await codeBackend.read(editorTarget, openBuffer.path)
-        : await vaultBackend.read(vaultTarget, openBuffer.path);
+      const file = await workspaceFileBackend.read(editorTarget, openBuffer.path);
       const mediaType = getEditorDocumentMediaType(getDocumentKind(mode, file.path));
       const nextBuffer = createLoadedBuffer(file, mediaType);
       const nextTabId = getEditorTabId(editorTabTargetKey, file.path);
@@ -1317,7 +1308,7 @@ export const UnifiedEditorPanel = ({
     } finally {
       setIsFileLoading(false);
     }
-  }, [activeEditorTab, codeBackend, confirmDiscardBuffer, editorTabTargetKey, editorTarget, mode, openBuffer, renamePersistedEditorTab, vaultBackend, vaultTarget]);
+  }, [activeEditorTab, workspaceFileBackend, confirmDiscardBuffer, editorTabTargetKey, editorTarget, mode, openBuffer, renamePersistedEditorTab]);
 
   const cancelRename = useCallback(() => {
     renameCancelRef.current = true;
@@ -1351,8 +1342,7 @@ export const UnifiedEditorPanel = ({
     try {
       const sourceTab = editorTabs.find(tab => tab.path === sourcePath);
       const sourceBuffer = sourceTab ? buffersByTabId[sourceTab.id] : undefined;
-      if (mode === 'code') await codeBackend.move(editorTarget, sourcePath, targetPath);
-      else await vaultBackend.move(vaultTarget, sourcePath, targetPath);
+      await workspaceFileBackend.move(editorTarget, sourcePath, targetPath);
 
       setSelectedNode(undefined);
       if (sourceTab) {
@@ -1375,9 +1365,7 @@ export const UnifiedEditorPanel = ({
               return next;
             });
           } else {
-            const file = mode === 'code'
-              ? await codeBackend.read(editorTarget, targetPath)
-              : await vaultBackend.read(vaultTarget, targetPath);
+            const file = await workspaceFileBackend.read(editorTarget, targetPath);
             setBuffersByTabId(current => {
               const next = {
                 ...current,
@@ -1396,9 +1384,7 @@ export const UnifiedEditorPanel = ({
           });
         }
       } else if (openBuffer?.path === sourcePath && isEditorPathOpenable(mode, targetPath)) {
-          const file = mode === 'code'
-            ? await codeBackend.read(editorTarget, targetPath)
-            : await vaultBackend.read(vaultTarget, targetPath);
+          const file = await workspaceFileBackend.read(editorTarget, targetPath);
           const tab = openPersistedEditorTab(editorTabTargetKey, file.path);
           setBuffersByTabId(current => ({
             ...current,
@@ -1418,7 +1404,7 @@ export const UnifiedEditorPanel = ({
   }, [
     buffersByTabId,
     closePersistedEditorTab,
-    codeBackend,
+    workspaceFileBackend,
     editorTabTargetKey,
     editorTabs,
     editorTarget,
@@ -1428,8 +1414,6 @@ export const UnifiedEditorPanel = ({
     refreshExplorer,
     renamePersistedEditorTab,
     renameState,
-    vaultBackend,
-    vaultTarget,
   ]);
 
   const openCreatePathDialog = useCallback((kind: CreatePathKind) => {
@@ -1446,9 +1430,7 @@ export const UnifiedEditorPanel = ({
       : '';
     setError(undefined);
     try {
-      const result = mode === 'code'
-        ? await codeBackend.write(editorTarget, path, nextContent)
-        : await vaultBackend.write(vaultTarget, path, nextContent);
+      const result = await workspaceFileBackend.write(editorTarget, path, nextContent);
       const previewTabIdsToClose = editorTabs
         .filter(tab => tab.isPreview && tab.path !== result.path)
         .map(tab => tab.id);
@@ -1473,7 +1455,7 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(createError));
       return false;
     }
-  }, [clearEditorTabStates, closeExplorerSlideOver, codeBackend, editorTabTargetKey, editorTabs, editorTarget, mode, openPersistedEditorTab, refreshExplorer, vaultBackend, vaultTarget]);
+  }, [clearEditorTabStates, closeExplorerSlideOver, workspaceFileBackend, editorTabTargetKey, editorTabs, editorTarget, mode, openPersistedEditorTab, refreshExplorer]);
 
   const createDrawing = useCallback(async (rawPath: string) => {
     const path = normalizeRelativePath(rawPath);
@@ -1483,7 +1465,7 @@ export const UnifiedEditorPanel = ({
     const drawingContent = createEmptyExcalidrawFile();
     setError(undefined);
     try {
-      const result = await vaultBackend.write(vaultTarget, drawingPath, drawingContent);
+      const result = await workspaceFileBackend.write(editorTarget, drawingPath, drawingContent);
       const previewTabIdsToClose = editorTabs
         .filter(tab => tab.isPreview && tab.path !== result.path)
         .map(tab => tab.id);
@@ -1508,7 +1490,7 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(createError));
       return false;
     }
-  }, [clearEditorTabStates, closeExplorerSlideOver, editorTabTargetKey, editorTabs, openPersistedEditorTab, refreshExplorer, vaultBackend, vaultTarget]);
+  }, [clearEditorTabStates, closeExplorerSlideOver, editorTabTargetKey, editorTabs, openPersistedEditorTab, refreshExplorer, workspaceFileBackend, editorTarget]);
 
   const getSelectedCreateDirectory = useCallback(() => {
     if (!selectedNode) return '';
@@ -1533,8 +1515,7 @@ export const UnifiedEditorPanel = ({
     if (!path) return false;
     setError(undefined);
     try {
-      if (mode === 'code') await codeBackend.mkdir(editorTarget, path);
-      else await vaultBackend.mkdir(vaultTarget, path);
+      await workspaceFileBackend.mkdir(editorTarget, path);
       setExpandedPaths(current => new Set([...current, getParentPath(path)]));
       await refreshExplorer();
       return true;
@@ -1542,7 +1523,7 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(folderError));
       return false;
     }
-  }, [codeBackend, editorTarget, mode, refreshExplorer, vaultBackend, vaultTarget]);
+  }, [workspaceFileBackend, editorTarget, refreshExplorer]);
 
   const submitCreatePathDialog = useCallback(async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
@@ -1568,8 +1549,7 @@ export const UnifiedEditorPanel = ({
     if (hasDirtyAffectedTab && !window.confirm(`Discard unsaved changes in ${affectedTabs.length === 1 ? affectedTabs[0].path : 'deleted files'}?`)) return;
     setError(undefined);
     try {
-      if (mode === 'code') await codeBackend.delete(editorTarget, sourcePath, isDirectory);
-      else await vaultBackend.delete(vaultTarget, sourcePath, isDirectory);
+      await workspaceFileBackend.delete(editorTarget, sourcePath, isDirectory);
       setSelectedNode(undefined);
       if (affectedTabs.length > 0) {
         const affectedTabIds = new Set(affectedTabs.map(tab => tab.id));
@@ -1590,7 +1570,7 @@ export const UnifiedEditorPanel = ({
     activePath,
     buffersByTabId,
     clearPendingFileOpen,
-    codeBackend,
+    workspaceFileBackend,
     editorTabTargetKey,
     editorTabs,
     editorTarget,
@@ -1599,8 +1579,6 @@ export const UnifiedEditorPanel = ({
     selectedNode?.path,
     selectedNode?.type,
     setPersistedEditorTabs,
-    vaultBackend,
-    vaultTarget,
   ]);
 
   const uploadAttachment = useCallback(async (file: globalThis.File | undefined) => {
@@ -1613,7 +1591,7 @@ export const UnifiedEditorPanel = ({
       const base64Content = result.includes(',') ? result.split(',').pop() ?? '' : result;
       setError(undefined);
       try {
-        await vaultBackend.upload(vaultTarget, path, base64Content, file.type || undefined);
+        await workspaceFileBackend.upload(editorTarget, path, base64Content, file.type || undefined);
         await refreshExplorer();
       } catch (uploadError) {
         setError(toErrorMessage(uploadError));
@@ -1622,7 +1600,7 @@ export const UnifiedEditorPanel = ({
       }
     };
     reader.readAsDataURL(file);
-  }, [mode, refreshExplorer, vaultBackend, vaultTarget]);
+  }, [mode, refreshExplorer, workspaceFileBackend, editorTarget]);
 
   const openWikiLink = useCallback((targetPath: string) => {
     const normalized = /\.(md|markdown)$/i.test(targetPath) ? targetPath : `${targetPath}.md`;
@@ -2025,9 +2003,9 @@ export const UnifiedEditorPanel = ({
   const createPathDialogDescription = createPathDialog?.kind === 'folder'
     ? 'Enter a folder path relative to the current root.'
     : createPathDialog?.kind === 'drawing'
-      ? 'Enter a drawing path relative to the vault root.'
+      ? 'Enter a drawing path relative to the workspace root.'
       : mode === 'notes'
-        ? 'Enter a note path relative to the vault root.'
+        ? 'Enter a note path relative to the workspace root.'
         : 'Enter a file path relative to the workspace root.';
   const createPathDialogPlaceholder = createPathDialog?.kind === 'folder'
     ? 'Folder path'

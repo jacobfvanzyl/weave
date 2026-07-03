@@ -8,7 +8,7 @@ import type {
   NotesVaultBackend,
   ResolvedNotesVaultBinding,
 } from '../../server/src/modules/notes/storage/types';
-import { __vaultRoutesTest } from '../../server/src/modules/notes/routes/vault';
+import { __workspaceFileRoutesTest } from '../../server/src/modules/workspace-files/routes';
 import { __portalToolsTest } from '../../server/src/agent/mastra/tools/portal-tools';
 import {
   createNotesWorkspaceTarget,
@@ -167,13 +167,13 @@ describe('notes vault storage resolver', () => {
 
   it('rejects non-notes projects, wrong resources, missing workspaces, offline Portals, and unsupported backends', () => {
     expect(() => resolveNotesVaultForProject(notesProject({ projectKind: 'git' }), 'user-1', {}, resolverDeps()))
-      .toThrow('Vault tools are only available for Notes Projects');
+      .toThrow('Notes file operations are only available for Notes Projects');
 
     expect(() => resolveNotesVaultForProject(notesProject({ userId: 'user-2' }), 'user-1', {}, resolverDeps()))
       .toThrow('Project was not found');
 
     expect(() => resolveNotesVaultForProject(notesProject({ workspaces: [] }), 'user-1', {}, resolverDeps()))
-      .toThrow('Vault workspace was not found');
+      .toThrow('Notes workspace was not found');
 
     expect(() => resolveNotesVaultForProject(notesProject(), 'user-1', {}, {
       ...resolverDeps(),
@@ -186,16 +186,15 @@ describe('notes vault storage resolver', () => {
   });
 });
 
-describe('vault routes and tools use notes storage backends', () => {
-  it('routes /vault/read through the resolved backend and preserves HTTP response shape', async () => {
+describe('workspace file routes and tools use notes storage backends', () => {
+  it('routes /workspace-files/read through the resolved backend and preserves HTTP response shape', async () => {
     const backend = createBackend();
     const { c } = routeContext({ target: { projectId: 'project-1' }, path: 'note.md' }, notesProject());
 
-    const response = await __vaultRoutesTest.handleVaultRoute(
+    const response = await __workspaceFileRoutesTest.handleWorkspaceFileRoute(
       c,
       'read',
-      body => ({ path: String(body.path) }),
-      undefined,
+      0,
       resolverDeps(backend),
     );
 
@@ -203,15 +202,14 @@ describe('vault routes and tools use notes storage backends', () => {
     expect(response).toEqual({ payload: { path: 'note.md', content: 'Hello', version: 'v1' }, status: 200 });
   });
 
-  it('routes /vault/write through the resolved backend and strips ok from route responses', async () => {
+  it('routes /workspace-files/write through the resolved backend and strips ok from route responses', async () => {
     const backend = createBackend();
     const { c } = routeContext({ target: { projectId: 'project-1' }, path: 'note.md', content: 'Next' }, notesProject());
 
-    const response = await __vaultRoutesTest.handleVaultRoute(
+    const response = await __workspaceFileRoutesTest.handleWorkspaceFileRoute(
       c,
       'write',
-      body => ({ path: String(body.path), content: String(body.content) }),
-      undefined,
+      0,
       resolverDeps(backend),
     );
 
@@ -223,9 +221,9 @@ describe('vault routes and tools use notes storage backends', () => {
     expect(response).toEqual({ payload: { path: 'note.md', version: 'v2' }, status: 200 });
   });
 
-  it('routes agent vault tools through the same notes storage resolver', async () => {
+  it('routes agent file tools through the same notes storage resolver', async () => {
     const backend = createBackend();
-    const result = await __portalToolsTest.routeNotesVaultTool(
+    const result = await __portalToolsTest.routeNotesFileTool(
       'read',
       { path: 'note.md' },
       toolContext(notesProject()),

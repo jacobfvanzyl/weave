@@ -38,7 +38,7 @@ const cleanPortalResult = (result: unknown) => {
   return body;
 };
 
-const requestPortalVaultTool = async (
+const requestPortalWorkspaceFileTool = async (
   requestPortal: PortalToolRequester,
   binding: ResolvedNotesVaultBinding,
   action: 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload',
@@ -53,8 +53,8 @@ const requestPortalVaultTool = async (
     rootId: storage.rootId,
     repoPath: storage.vaultPath,
     workspacePath: storage.workspacePath,
-    tool: `portal.vault.${action}`,
-    args,
+    tool: `portal.fs.${action}`,
+    args: action === 'write' || action === 'move' ? { ...(isRecord(args) ? args : {}), createParents: true } : args,
     timeoutMs: options?.timeoutMs,
   }));
 };
@@ -64,19 +64,19 @@ export const createPortalNotesVaultBackend = (
 ): NotesVaultBackend => ({
   kind: 'portal',
   index: async (binding, input, options) =>
-    requestPortalVaultTool(requestPortal, binding, 'index', input, options) as Promise<any>,
+    requestPortalWorkspaceFileTool(requestPortal, binding, 'index', input, options) as Promise<any>,
   read: async (binding, input, options) =>
-    requestPortalVaultTool(requestPortal, binding, 'read', input, options) as Promise<any>,
+    requestPortalWorkspaceFileTool(requestPortal, binding, 'read', input, options) as Promise<any>,
   write: async (binding, input, options) =>
-    requestPortalVaultTool(requestPortal, binding, 'write', input, options) as Promise<any>,
+    requestPortalWorkspaceFileTool(requestPortal, binding, 'write', input, options) as Promise<any>,
   mkdir: async (binding, input, options) =>
-    requestPortalVaultTool(requestPortal, binding, 'mkdir', input, options) as Promise<any>,
+    requestPortalWorkspaceFileTool(requestPortal, binding, 'mkdir', input, options) as Promise<any>,
   move: async (binding, input, options) =>
-    requestPortalVaultTool(requestPortal, binding, 'move', input, options) as Promise<any>,
+    requestPortalWorkspaceFileTool(requestPortal, binding, 'move', input, options) as Promise<any>,
   delete: async (binding, input, options) =>
-    requestPortalVaultTool(requestPortal, binding, 'delete', input, options) as Promise<any>,
+    requestPortalWorkspaceFileTool(requestPortal, binding, 'delete', input, options) as Promise<any>,
   upload: async (binding, input, options) =>
-    requestPortalVaultTool(requestPortal, binding, 'upload', input, options) as Promise<any>,
+    requestPortalWorkspaceFileTool(requestPortal, binding, 'upload', input, options) as Promise<any>,
 });
 
 export const portalNotesVaultBackend = createPortalNotesVaultBackend();

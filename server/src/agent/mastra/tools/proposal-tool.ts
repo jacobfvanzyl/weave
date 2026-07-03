@@ -217,7 +217,7 @@ const readPortalFile = async (path: string, context: any) => {
 };
 
 const readPortalFileHash = async (path: string, context: any) => {
-  const result = await routePortalTool('portal.editor.hash', { path }, context);
+  const result = await routePortalTool('portal.fs.hash', { path }, context);
   const record = isRecord(result) ? result : {};
   if (record.ok === false) return { ok: false as const, error: portalError(result, `Unable to hash ${path}`) };
   if (typeof record.contentHash !== 'string') return { ok: false as const, error: `Portal hash returned no contentHash for ${path}` };
@@ -229,7 +229,7 @@ const readPortalFileHash = async (path: string, context: any) => {
 };
 
 const previewPortalDiff = async (path: string, diff: string, context: any) => {
-  const result = await routePortalTool('portal.editor.diffPreview', { path, diff }, context);
+  const result = await routePortalTool('portal.fs.diffPreview', { path, diff }, context);
   const record = isRecord(result) ? result : {};
   if (record.ok === false) return { ok: false as const, error: portalError(result, `Unable to preview diff for ${path}`) };
   if (

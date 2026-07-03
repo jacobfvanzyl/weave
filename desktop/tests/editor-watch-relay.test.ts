@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  connectEditorWatchRelayClient,
-  disconnectEditorWatchRelayClient,
-  forwardEditorWatchClientMessage,
-  handleEditorWatchPortalMessage,
-  issueEditorWatchToken,
-} from '../../server/src/portal/editor-watch-relay';
+  connectWorkspaceFileWatchRelayClient,
+  disconnectWorkspaceFileWatchRelayClient,
+  forwardWorkspaceFileWatchClientMessage,
+  handleWorkspaceFileWatchPortalMessage,
+  issueWorkspaceFileWatchToken,
+} from '../../server/src/portal/workspace-file-watch-relay';
 import { connectPortal, disconnectPortal } from '../../server/src/portal/registry';
 
 const connectedPortalIds: string[] = [];
@@ -15,7 +15,7 @@ const connectTestPortal = (portalId: string, sent: unknown[]) => {
   connectPortal({
     portalId,
     userId: 'user-1',
-    capabilities: ['portal.editor.watch'],
+    capabilities: ['portal.fs.watch'],
     mounts: [],
     roots: [],
     ws: {
@@ -25,7 +25,7 @@ const connectTestPortal = (portalId: string, sent: unknown[]) => {
   });
 };
 
-describe('editor watch relay', () => {
+describe('workspace file watch relay', () => {
   afterEach(() => {
     connectedPortalIds.splice(0).forEach(portalId => disconnectPortal(portalId));
   });
@@ -34,7 +34,7 @@ describe('editor watch relay', () => {
     const portalMessages: unknown[] = [];
     const clientMessages: unknown[] = [];
     connectTestPortal('portal-1', portalMessages);
-    const token = issueEditorWatchToken({
+    const token = issueWorkspaceFileWatchToken({
       resourceId: 'user-1',
       portalId: 'portal-1',
       projectId: 'project-1',
@@ -43,7 +43,7 @@ describe('editor watch relay', () => {
       repoPath: 'repo',
       workspacePath: '/workspace',
     });
-    const connected = connectEditorWatchRelayClient({
+    const connected = connectWorkspaceFileWatchRelayClient({
       token,
       ws: {
         send: data => clientMessages.push(JSON.parse(data)),
@@ -51,8 +51,8 @@ describe('editor watch relay', () => {
       },
     });
 
-    expect(connected?.clientId).toMatch(/^relay-editor-watch:/);
-    expect(connectEditorWatchRelayClient({
+    expect(connected?.clientId).toMatch(/^relay-workspace-file-watch:/);
+    expect(connectWorkspaceFileWatchRelayClient({
       token,
       ws: {
         send: () => undefined,
@@ -60,14 +60,14 @@ describe('editor watch relay', () => {
       },
     })).toBeUndefined();
 
-    forwardEditorWatchClientMessage(connected!.clientId, {
+    forwardWorkspaceFileWatchClientMessage(connected!.clientId, {
       type: 'watch.start',
       requestId: 'start-1',
       target: { workspacePath: '/evil' },
       paths: ['src'],
     });
     expect(portalMessages.at(-1)).toEqual({
-      type: 'editor.watch.client',
+      type: 'workspace-file.watch.client',
       clientId: connected!.clientId,
       message: {
         type: 'watch.start',
@@ -85,27 +85,26 @@ describe('editor watch relay', () => {
     });
 
     expect(() =>
-      forwardEditorWatchClientMessage(connected!.clientId, {
+      forwardWorkspaceFileWatchClientMessage(connected!.clientId, {
         type: 'watch.update',
         paths: ['../outside'],
       })
     ).toThrow('escape');
 
-    expect(handleEditorWatchPortalMessage({
-      type: 'editor.watch.event',
+    expect(handleWorkspaceFileWatchPortalMessage({
+      type: 'workspace-file.watch.event',
       clientId: connected!.clientId,
-      event: { type: 'editor.watch.ready', requestId: 'start-1', paths: ['src'] },
+      event: { type: 'workspace-file.watch.ready', requestId: 'start-1', paths: ['src'] },
     })).toBe(true);
     expect(clientMessages).toEqual([
-      { type: 'editor.watch.ready', requestId: 'start-1', paths: ['src'] },
+      { type: 'workspace-file.watch.ready', requestId: 'start-1', paths: ['src'] },
     ]);
 
-    disconnectEditorWatchRelayClient(connected!.clientId);
+    disconnectWorkspaceFileWatchRelayClient(connected!.clientId);
     expect(portalMessages.at(-1)).toEqual({
-      type: 'editor.watch.client',
+      type: 'workspace-file.watch.client',
       clientId: connected!.clientId,
       message: { type: 'watch.stop' },
     });
   });
 });
-

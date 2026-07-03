@@ -1,7 +1,10 @@
-import { isEditorWatchClientEnvelope, PortalEditorHost, type PortalEditorTarget } from './editor.ts';
 import { isLspClientEnvelope, PortalLspHost } from './lsp.ts';
-import { PortalVaultHost } from './vault.ts';
 import { isTerminalClientEnvelope, PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
+import {
+  isWorkspaceFileWatchClientEnvelope,
+  PortalWorkspaceFileHost,
+  type PortalWorkspaceFileTarget,
+} from './workspace-files.ts';
 import {
   isWindowClientEnvelope,
   isWindowHostAvailable,
@@ -96,8 +99,8 @@ const defaultName = 'Mage Portal';
 const version = '0.1.0';
 const requiredControlCapabilities = [
   'terminal',
-  'editor',
-  'editor.watch',
+  'workspace-files',
+  'workspace-files.watch',
   'lsp',
   'terminal.tmux-source-of-truth',
   'terminal.tmux-control-mode',
@@ -1037,7 +1040,7 @@ const bashTool = async (config: ResolvedPortalConfig, request: Record<string, un
   }
 };
 
-const editorTargetFromRequest = (request: Record<string, unknown>): PortalEditorTarget => ({
+const workspaceFileTargetFromRequest = (request: Record<string, unknown>): PortalWorkspaceFileTarget => ({
   projectId: typeof request.projectId === 'string' ? request.projectId : undefined,
   workspaceId: typeof request.workspaceId === 'string' ? request.workspaceId : undefined,
   rootId: typeof request.rootId === 'string' ? request.rootId : undefined,
@@ -1045,16 +1048,15 @@ const editorTargetFromRequest = (request: Record<string, unknown>): PortalEditor
   workspacePath: typeof request.workspacePath === 'string' ? request.workspacePath : undefined,
 });
 
-const editorInputFromToolCall = (request: Record<string, unknown>) => {
+const workspaceFileInputFromToolCall = (request: Record<string, unknown>) => {
   const args = isRecord(request.args) ? request.args : {};
-  return { target: editorTargetFromRequest(request), ...args };
+  return { target: workspaceFileTargetFromRequest(request), ...args };
 };
 
 const handleToolCall = async (
   config: ResolvedPortalConfig,
-  editorHost: PortalEditorHost,
+  workspaceFileHost: PortalWorkspaceFileHost,
   lspHost: PortalLspHost,
-  vaultHost: PortalVaultHost,
   windowHost: PortalWindowHost,
   ws: WebSocket,
   request: Record<string, unknown>,
@@ -1071,40 +1073,30 @@ const handleToolCall = async (
       ? await editFileTool(config, request)
       : request.tool === 'bash'
       ? await bashTool(config, request)
-      : request.tool === 'portal.editor.list'
-      ? await editorHost.list(editorInputFromToolCall(request))
-    : request.tool === 'portal.editor.read'
-      ? await editorHost.read(editorInputFromToolCall(request) as Parameters<PortalEditorHost['read']>[0])
-    : request.tool === 'portal.editor.hash'
-      ? await editorHost.hash(editorInputFromToolCall(request) as Parameters<PortalEditorHost['hash']>[0])
-    : request.tool === 'portal.editor.diffPreview'
-      ? await editorHost.diffPreview(editorInputFromToolCall(request) as Parameters<PortalEditorHost['diffPreview']>[0])
-    : request.tool === 'portal.editor.write'
-      ? await editorHost.write(editorInputFromToolCall(request) as Parameters<PortalEditorHost['write']>[0])
-      : request.tool === 'portal.editor.mkdir'
-      ? await editorHost.mkdir(editorInputFromToolCall(request) as Parameters<PortalEditorHost['mkdir']>[0])
-      : request.tool === 'portal.editor.move'
-      ? await editorHost.move(editorInputFromToolCall(request) as Parameters<PortalEditorHost['move']>[0])
-      : request.tool === 'portal.editor.delete'
-      ? await editorHost.delete(editorInputFromToolCall(request) as Parameters<PortalEditorHost['delete']>[0])
+      : request.tool === 'portal.fs.list'
+      ? await workspaceFileHost.list(workspaceFileInputFromToolCall(request))
+      : request.tool === 'portal.fs.read'
+      ? await workspaceFileHost.read(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['read']>[0])
+      : request.tool === 'portal.fs.hash'
+      ? await workspaceFileHost.hash(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['hash']>[0])
+      : request.tool === 'portal.fs.diffPreview'
+      ? await workspaceFileHost.diffPreview(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['diffPreview']>[0])
+      : request.tool === 'portal.fs.write'
+      ? await workspaceFileHost.write(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['write']>[0])
+      : request.tool === 'portal.fs.mkdir'
+      ? await workspaceFileHost.mkdir(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['mkdir']>[0])
+      : request.tool === 'portal.fs.move'
+      ? await workspaceFileHost.move(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['move']>[0])
+      : request.tool === 'portal.fs.delete'
+      ? await workspaceFileHost.delete(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['delete']>[0])
+      : request.tool === 'portal.fs.index'
+      ? await workspaceFileHost.index(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['index']>[0])
+      : request.tool === 'portal.fs.upload'
+      ? await workspaceFileHost.upload(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['upload']>[0])
       : request.tool === 'portal.lsp.session'
-      ? await lspHost.createSession(editorInputFromToolCall(request) as Parameters<PortalLspHost['createSession']>[0])
+      ? await lspHost.createSession(workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['createSession']>[0])
       : request.tool === 'portal.lsp.query'
-      ? await lspHost.query(editorInputFromToolCall(request) as Parameters<PortalLspHost['query']>[0])
-      : request.tool === 'portal.vault.index'
-      ? await vaultHost.index(editorInputFromToolCall(request) as Parameters<PortalVaultHost['index']>[0])
-      : request.tool === 'portal.vault.read'
-      ? await vaultHost.read(editorInputFromToolCall(request) as Parameters<PortalVaultHost['read']>[0])
-      : request.tool === 'portal.vault.write'
-      ? await vaultHost.write(editorInputFromToolCall(request) as Parameters<PortalVaultHost['write']>[0])
-      : request.tool === 'portal.vault.mkdir'
-      ? await vaultHost.mkdir(editorInputFromToolCall(request) as Parameters<PortalVaultHost['mkdir']>[0])
-      : request.tool === 'portal.vault.move'
-      ? await vaultHost.move(editorInputFromToolCall(request) as Parameters<PortalVaultHost['move']>[0])
-      : request.tool === 'portal.vault.delete'
-      ? await vaultHost.delete(editorInputFromToolCall(request) as Parameters<PortalVaultHost['delete']>[0])
-      : request.tool === 'portal.vault.upload'
-      ? await vaultHost.upload(editorInputFromToolCall(request) as Parameters<PortalVaultHost['upload']>[0])
+      ? await lspHost.query(workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['query']>[0])
       : request.tool === 'portal.window.list'
       ? await windowHost.list()
       : request.tool === 'portal.applications.list'
@@ -1113,9 +1105,9 @@ const handleToolCall = async (
       ? await windowHost.openApplication({
         applicationId: isRecord(request.args) ? optionalString(request.args.applicationId) : undefined,
       })
-      : request.tool === 'portal.fs.list'
+      : request.tool === 'portal.fs.browse'
       ? await listRootTool(config, request)
-      : request.tool === 'portal.fs.stat'
+      : request.tool === 'portal.fs.pathStat'
       ? await pathStatTool(config, request)
       : request.tool === 'portal.git.inspect'
       ? await inspectGitTool(config, request)
@@ -1169,27 +1161,22 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'edit',
     'bash',
     'terminal',
-    'portal.editor.list',
-    'portal.editor.read',
-    'portal.editor.hash',
-    'portal.editor.diffPreview',
-    'portal.editor.write',
-    'portal.editor.mkdir',
-    'portal.editor.move',
-    'portal.editor.delete',
-    'portal.editor.watch',
+    'portal.fs.list',
+    'portal.fs.read',
+    'portal.fs.hash',
+    'portal.fs.diffPreview',
+    'portal.fs.write',
+    'portal.fs.mkdir',
+    'portal.fs.move',
+    'portal.fs.delete',
+    'portal.fs.watch',
     'portal.lsp',
     'portal.lsp.session',
     'portal.lsp.query',
-    'portal.vault.index',
-    'portal.vault.read',
-    'portal.vault.write',
-    'portal.vault.mkdir',
-    'portal.vault.move',
-    'portal.vault.delete',
-    'portal.vault.upload',
-    'portal.fs.list',
-    'portal.fs.stat',
+    'portal.fs.index',
+    'portal.fs.upload',
+    'portal.fs.browse',
+    'portal.fs.pathStat',
     'portal.git.inspect',
     'portal.agentInstructions.read',
     'portal.context.discover',
@@ -1228,9 +1215,8 @@ const shutdownRuntime = async (runtime: PortalRuntimeFile | undefined) => {
 const connectOnce = (
   config: ResolvedPortalConfig,
   terminalHost: PortalTerminalHost,
-  editorHost: PortalEditorHost,
+  workspaceFileHost: PortalWorkspaceFileHost,
   lspHost: PortalLspHost,
-  vaultHost: PortalVaultHost,
   windowHost: PortalWindowHost,
   onSocket?: (ws: WebSocket) => void,
 ) =>
@@ -1287,9 +1273,9 @@ const connectOnce = (
         return;
       }
 
-      if (isEditorWatchClientEnvelope(message)) {
-        void editorHost.handleClientMessage(message.clientId, message.message, (watchEvent) => {
-          ws.send(JSON.stringify({ type: 'editor.watch.event', clientId: message.clientId, event: watchEvent }));
+      if (isWorkspaceFileWatchClientEnvelope(message)) {
+        void workspaceFileHost.handleClientMessage(message.clientId, message.message, (watchEvent) => {
+          ws.send(JSON.stringify({ type: 'workspace-file.watch.event', clientId: message.clientId, event: watchEvent }));
         });
         return;
       }
@@ -1309,7 +1295,7 @@ const connectOnce = (
       }
 
       if (message.type === 'tool.call') {
-        void handleToolCall(config, editorHost, lspHost, vaultHost, windowHost, ws, message);
+        void handleToolCall(config, workspaceFileHost, lspHost, windowHost, ws, message);
       }
     };
 
@@ -1324,7 +1310,7 @@ const connectOnce = (
     ws.onclose = (event) => {
       cleanup();
       terminalHost.detachClientsByPrefix('relay:');
-      editorHost.detachClientsByPrefix('relay-editor-watch:');
+      workspaceFileHost.detachClientsByPrefix('relay-workspace-file-watch:');
       windowHost.detachClientsByPrefix('window:');
       lspHost.detachClientsByPrefix('relay-lsp:');
       console.log(`Socket closed: ${event.code} ${event.reason}`.trim());
@@ -1371,9 +1357,8 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   }
 
   const terminalHost = new PortalTerminalHost({ config });
-  const editorHost = new PortalEditorHost({ config });
+  const workspaceFileHost = new PortalWorkspaceFileHost({ config });
   const lspHost = new PortalLspHost({ config });
-  const vaultHost = new PortalVaultHost({ config });
   const windowHost = new PortalWindowHost({ config });
   const controlToken = noControl ? undefined : stringFlag(flags, 'control-token') ?? crypto.randomUUID();
   const controlPort = noControl ? undefined : numberFlag(flags, 'control-port') ?? 0;
@@ -1417,7 +1402,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
       if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
       perfSampler.stop();
       terminalHost.dispose();
-      editorHost.dispose();
+      workspaceFileHost.dispose();
       await lspHost.dispose();
       windowHost.dispose();
       activeSocket?.close();
@@ -1441,9 +1426,8 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   if (controlToken && controlPort !== undefined) {
     controlServer = startTerminalControlServer({
       host: terminalHost,
-      editor: editorHost,
+      workspaceFiles: workspaceFileHost,
       lsp: lspHost,
-      vault: vaultHost,
       hostname: controlHost,
       port: controlPort,
       token: controlToken,
@@ -1496,7 +1480,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
 
   while (!stopping) {
     try {
-      await connectOnce(config, terminalHost, editorHost, lspHost, vaultHost, windowHost, (ws) => {
+      await connectOnce(config, terminalHost, workspaceFileHost, lspHost, windowHost, (ws) => {
         activeSocket = ws;
       });
       retryMs = 1_000;

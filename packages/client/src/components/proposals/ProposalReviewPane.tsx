@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Check, ChevronDown, Code2, FileText, Filter, Loader2, Maximize2, MessageSquareWarning, Minimize2, Search, X } from 'lucide-react';
-import { createEditorBackend } from '../../lib/editor-backend';
+import { createWorkspaceFileBackend } from '../../lib/workspace-file-backend';
 import type { EditorTarget } from '../../lib/editor-types';
 import {
   formatProposalCompletenessIssue,
@@ -250,7 +250,7 @@ export const ProposalReviewPane = ({
   onExpandedChange,
   onOpenSource,
 }: ProposalReviewPaneProps) => {
-  const codeBackend = useMemo(() => createEditorBackend(), []);
+  const codeBackend = useMemo(() => createWorkspaceFileBackend({ preferDesktopBridge: true }), []);
   const setThreadProposal = useChatStore(state => state.setThreadProposal);
   const observedProposalHash = useChatStore(state => state.threadProposals[threadId]?.contentHash);
   const enqueueProposalImplementationRequest = useChatStore(state => state.enqueueProposalImplementationRequest);
