@@ -770,13 +770,25 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     });
   }
 
-  private _dispatchFocus() {
+  private _dispatchFocus(options: { heightMode?: CoppermindInkHeightMode; scrollToTop?: boolean } = {}) {
     this.focus({ preventScroll: true });
     this.dispatchEvent(new CustomEvent('coppermind-ink-cell-focus', {
       bubbles: true,
       composed: true,
-      detail: { blockId: this.model.id },
+      detail: {
+        blockId: this.model.id,
+        heightMode: options.heightMode ?? this._getHeightMode(),
+        scrollToTop: options.scrollToTop ?? false,
+      },
     }));
+  }
+
+  private _dispatchSelectFocus() {
+    const heightMode = this._getHeightMode();
+    this._dispatchFocus({
+      heightMode,
+      scrollToTop: heightMode === 'full',
+    });
   }
 
   private _isPageModeInkCellActive() {
@@ -1042,11 +1054,14 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       ? 'clamped'
       : 'full';
 
-    this._dispatchFocus();
     this.doc.updateBlock(this.model, {
       height: getCoppermindInkCellHeight(strokes, heightMode),
       heightMode,
       inkVersion: 1,
+    });
+    this._dispatchFocus({
+      heightMode,
+      scrollToTop: heightMode === 'full',
     });
     this._scheduleRender();
   };
@@ -1183,7 +1198,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
         && event.button === 0
       );
       if (isPageModeMouseSelect && !wasActive) {
-        this._dispatchFocus();
+        this._dispatchSelectFocus();
       } else if (event.pointerType === 'touch' && !wasActive) {
         this._armSelectOnlyStylusTouch();
       }
@@ -1206,7 +1221,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       this._stopInputEvent(event);
       if (!wasActive) {
         this._armSelectOnlyStylusTouch();
-        this._dispatchFocus();
+        this._dispatchSelectFocus();
       }
       this._debugInput('pointerdown-defer-stylus-touch', {
         ...pointerDebugFields(event),
@@ -1231,7 +1246,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     const wasActive = this._isPageModeInkCellActive();
     this._stopInputEvent(event);
     if (!wasActive) {
-      this._dispatchFocus();
+      this._dispatchSelectFocus();
       this._debugInput('pointerdown-skip-inactive', pointerDebugFields(event));
       return;
     }
@@ -1383,7 +1398,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     const wasActive = this._isPageModeInkCellActive();
     this._stopInputEvent(event);
     if (!wasActive) {
-      this._dispatchFocus();
+      this._dispatchSelectFocus();
       this._debugInput('touchstart-skip-inactive', touchDebugFields(touch));
       return;
     }

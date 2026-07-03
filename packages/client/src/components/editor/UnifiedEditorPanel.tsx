@@ -542,6 +542,7 @@ export const UnifiedEditorPanel = ({
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const explorerSlideOverCloseTimeoutRef = useRef<number | undefined>(undefined);
+  const coppermindCellsSidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
   const fileOpenClickTimeoutRef = useRef<number | undefined>(undefined);
   const renameCommitInFlightRef = useRef(false);
   const renameCancelRef = useRef(false);
@@ -569,6 +570,7 @@ export const UnifiedEditorPanel = ({
   const [isSaving, setIsSaving] = useState(false);
   const [isExplorerSlideOverOpen, setIsExplorerSlideOverOpen] = useState(false);
   const [isCoppermindCellsSidebarOpen, setIsCoppermindCellsSidebarOpen] = useState(true);
+  const [isCoppermindCellsSidebarPreviewOpen, setIsCoppermindCellsSidebarPreviewOpen] = useState(false);
   const [vimMode, setVimMode] = useState<VimMode>('normal');
   const [createPathDialog, setCreatePathDialog] = useState<CreatePathDialogState>();
   const [renameState, setRenameState] = useState<RenameState>();
@@ -602,9 +604,11 @@ export const UnifiedEditorPanel = ({
   const activeDocumentKind = getDocumentKind(mode, openBuffer?.path);
   const isCodeMirrorOpen = Boolean(openBuffer && (activeDocumentKind === 'code' || activeDocumentKind === 'markdown'));
   const isCoppermindOpen = Boolean(openBuffer && activeDocumentKind === 'coppermind');
+  const isCoppermindCellsSidebarVisible = isCoppermindCellsSidebarOpen || isCoppermindCellsSidebarPreviewOpen;
+  const canUseCoppermindCellsSidebarPreview = isCoppermindOpen && !isCoppermindCellsSidebarOpen;
   const coppermindCellsToggleLabel = isCoppermindCellsSidebarOpen
     ? 'Collapse cells sidebar'
-    : 'Expand cells sidebar';
+    : isCoppermindCellsSidebarPreviewOpen ? 'Keep cells sidebar open' : 'Expand cells sidebar';
 
   const tree = useMemo(() => (
     mode === 'code'
@@ -720,6 +724,12 @@ export const UnifiedEditorPanel = ({
     explorerSlideOverCloseTimeoutRef.current = undefined;
   }, []);
 
+  const clearCoppermindCellsSidebarPreviewCloseTimeout = useCallback(() => {
+    if (coppermindCellsSidebarPreviewCloseTimeoutRef.current === undefined) return;
+    window.clearTimeout(coppermindCellsSidebarPreviewCloseTimeoutRef.current);
+    coppermindCellsSidebarPreviewCloseTimeoutRef.current = undefined;
+  }, []);
+
   const closeExplorerSlideOver = useCallback(() => {
     clearExplorerSlideOverCloseTimeout();
     explorerWindowEdgeHoldRef.current = false;
@@ -753,6 +763,27 @@ export const UnifiedEditorPanel = ({
     setExplorerVisible(editorTabTargetKey, !isExplorerVisible);
     setIsExplorerSlideOverOpen(false);
   }, [clearExplorerSlideOverCloseTimeout, editorTabTargetKey, isExplorerVisible, setExplorerVisible]);
+
+  const openCoppermindCellsSidebarPreview = useCallback(() => {
+    if (!canUseCoppermindCellsSidebarPreview) return;
+    clearCoppermindCellsSidebarPreviewCloseTimeout();
+    setIsCoppermindCellsSidebarPreviewOpen(true);
+  }, [canUseCoppermindCellsSidebarPreview, clearCoppermindCellsSidebarPreviewCloseTimeout]);
+
+  const scheduleCoppermindCellsSidebarPreviewClose = useCallback(() => {
+    if (!canUseCoppermindCellsSidebarPreview) return;
+    clearCoppermindCellsSidebarPreviewCloseTimeout();
+    coppermindCellsSidebarPreviewCloseTimeoutRef.current = window.setTimeout(() => {
+      coppermindCellsSidebarPreviewCloseTimeoutRef.current = undefined;
+      setIsCoppermindCellsSidebarPreviewOpen(false);
+    }, explorerSlideOverCloseDelayMs);
+  }, [canUseCoppermindCellsSidebarPreview, clearCoppermindCellsSidebarPreviewCloseTimeout]);
+
+  const toggleCoppermindCellsSidebar = useCallback(() => {
+    clearCoppermindCellsSidebarPreviewCloseTimeout();
+    setIsCoppermindCellsSidebarPreviewOpen(false);
+    setIsCoppermindCellsSidebarOpen(current => !current);
+  }, [clearCoppermindCellsSidebarPreviewCloseTimeout]);
 
   const holdExplorerSlideOverForWindowEdgeExit = useCallback(() => {
     if (!canUseExplorerSlideOver) return;
@@ -1142,6 +1173,17 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(watchError));
     });
   }, [expandedPaths, mode]);
+
+  useEffect(() => {
+    if (!canUseCoppermindCellsSidebarPreview) {
+      clearCoppermindCellsSidebarPreviewCloseTimeout();
+      setIsCoppermindCellsSidebarPreviewOpen(false);
+    }
+
+    return () => {
+      clearCoppermindCellsSidebarPreviewCloseTimeout();
+    };
+  }, [canUseCoppermindCellsSidebarPreview, clearCoppermindCellsSidebarPreviewCloseTimeout]);
 
   useEffect(() => {
     if (focusRequest === 0) return undefined;
@@ -1796,7 +1838,9 @@ export const UnifiedEditorPanel = ({
       return (
         <CoppermindDocumentEditor
           focusRequest={bufferFocusRequest}
-          isCellsSidebarOpen={isCoppermindCellsSidebarOpen}
+          isCellsSidebarOpen={isCoppermindCellsSidebarVisible}
+          onCellsSidebarMouseEnter={openCoppermindCellsSidebarPreview}
+          onCellsSidebarMouseLeave={scheduleCoppermindCellsSidebarPreviewClose}
           value={openBuffer.value}
           onChange={setActiveBufferValue}
         />
@@ -1895,6 +1939,12 @@ export const UnifiedEditorPanel = ({
     ? {
         onMouseEnter: openExplorerSlideOver,
         onMouseLeave: handleExplorerHoverMouseLeave,
+      }
+    : {};
+  const coppermindCellsToggleHoverHandlers = canUseCoppermindCellsSidebarPreview
+    ? {
+        onMouseEnter: openCoppermindCellsSidebarPreview,
+        onMouseLeave: scheduleCoppermindCellsSidebarPreviewClose,
       }
     : {};
 
@@ -2104,13 +2154,14 @@ export const UnifiedEditorPanel = ({
           <div className="flex h-full min-w-0 flex-1 items-center gap-2 px-3">
             {isCoppermindOpen ? (
               <Button
-                className={isCoppermindCellsSidebarOpen ? 'bg-accent' : undefined}
+                className={isCoppermindCellsSidebarVisible ? 'bg-accent' : undefined}
                 size="icon-xs"
                 variant="ghost"
                 aria-label={coppermindCellsToggleLabel}
                 title={coppermindCellsToggleLabel}
-                data-active={isCoppermindCellsSidebarOpen ? 'true' : 'false'}
-                onClick={() => setIsCoppermindCellsSidebarOpen(current => !current)}
+                data-active={isCoppermindCellsSidebarVisible ? 'true' : 'false'}
+                onClick={toggleCoppermindCellsSidebar}
+                {...coppermindCellsToggleHoverHandlers}
               >
                 {isCoppermindCellsSidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
               </Button>

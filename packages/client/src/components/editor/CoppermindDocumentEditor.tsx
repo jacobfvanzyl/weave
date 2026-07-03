@@ -103,6 +103,8 @@ import { Button } from '../ui/button';
 export type CoppermindDocumentEditorProps = {
   focusRequest?: number;
   isCellsSidebarOpen?: boolean;
+  onCellsSidebarMouseEnter?: () => void;
+  onCellsSidebarMouseLeave?: () => void;
   value: string;
   onChange: (value: string) => void;
 };
@@ -416,8 +418,8 @@ const coppermindBlockSuiteStyles = `
     display: block;
     position: relative;
     box-sizing: border-box;
-    width: var(--coppermind-cell-width);
-    max-width: var(--coppermind-cell-width);
+    width: min(var(--coppermind-cell-width), 100%);
+    max-width: 100%;
     overflow: visible;
     margin: 0 auto;
     padding: ${coppermindPageCellPaddingPx}px;
@@ -451,12 +453,17 @@ const coppermindBlockSuiteStyles = `
 
   [data-weave-editor-coppermind] page-editor affine-note[data-coppermind-active-section="true"] {
     border-color: rgba(124, 58, 237, 0.48);
+    border-radius: 8px;
     box-shadow: none;
   }
 
   :root[data-theme="mocha"] [data-weave-editor-coppermind] page-editor affine-note[data-coppermind-active-section="true"] {
     border-color: color-mix(in oklab, var(--ctp-mauve) 58%, transparent);
     box-shadow: none;
+  }
+
+  [data-weave-editor-coppermind] page-editor affine-note[data-coppermind-active-section="true"] :is(.affine-note-mask, .note-background) {
+    border-radius: 8px !important;
   }
 
   [data-weave-editor-coppermind] page-editor affine-note:has(coppermind-ink-cell) {
@@ -499,13 +506,16 @@ const coppermindBlockSuiteStyles = `
 
   [data-weave-editor-coppermind] page-editor .affine-page-root-block-container {
     display: block;
+    box-sizing: border-box;
+    width: 100%;
     height: auto;
     min-height: 100%;
     position: relative;
     overflow: visible;
     padding-block: var(--coppermind-page-cell-gap, 24px);
     padding-bottom: calc(var(--coppermind-page-cell-gap, 24px) + ${coppermindPageEndScrollPaddingPx}px);
-    --affine-editor-side-padding: 24px;
+    padding-inline: 0 !important;
+    --affine-editor-side-padding: 0px;
   }
 
   [data-weave-editor-coppermind] affine-drag-handle-widget {
@@ -1118,10 +1128,12 @@ const CoppermindCanvasMenu = ({
 const CoppermindCanvasToolbar = ({
   controller,
   editPropsStore,
+  isCellsSidebarOpen,
   state,
 }: {
   controller?: CoppermindCanvasToolController;
   editPropsStore?: EditPropsStore;
+  isCellsSidebarOpen: boolean;
   state?: CoppermindCanvasToolState;
 }) => {
   const [openMenu, setOpenMenu] = useState<CoppermindCanvasMenuId | undefined>(undefined);
@@ -1213,7 +1225,12 @@ const CoppermindCanvasToolbar = ({
   const pointerLabel = state?.activeTool === 'pan' ? 'Hand' : 'Select';
 
   return (
-    <div className="pointer-events-none absolute bottom-5 left-5 z-20 flex">
+    <div
+      className={cn(
+        'pointer-events-none absolute bottom-5 z-20 flex transition-[left] duration-150 ease-out',
+        isCellsSidebarOpen ? 'left-[17.25rem]' : 'left-5',
+      )}
+    >
       <div className="pointer-events-auto relative">
         <div
           data-coppermind-canvas-toolbar="true"
@@ -1271,6 +1288,7 @@ const CoppermindCanvasViewportToolbar = ({
   api,
   editPunchInEnabled,
   inkStackAction,
+  isCellsSidebarOpen,
   onArrangeAsPage,
   onToggleEditPunchIn,
   zoom,
@@ -1282,6 +1300,7 @@ const CoppermindCanvasViewportToolbar = ({
     label: string;
     onClick: () => void;
   };
+  isCellsSidebarOpen: boolean;
   onArrangeAsPage: () => void;
   onToggleEditPunchIn: () => void;
   zoom?: number;
@@ -1316,7 +1335,12 @@ const CoppermindCanvasViewportToolbar = ({
   );
 
   return (
-    <div className="pointer-events-none absolute left-4 top-4 z-30">
+    <div
+      className={cn(
+        'pointer-events-none absolute top-4 z-30 transition-[left] duration-150 ease-out',
+        isCellsSidebarOpen ? 'left-[17rem]' : 'left-4',
+      )}
+    >
       <div
         className="pointer-events-auto inline-flex flex-col gap-1 rounded-lg border border-border bg-card/95 p-1 shadow-xl backdrop-blur"
         onClick={event => event.stopPropagation()}
@@ -1385,12 +1409,14 @@ const CoppermindCanvasViewportToolbar = ({
 
 const BlockSuiteEditorMount = ({
   doc,
+  isCellsSidebarOpen,
   mode,
   onCanvasApiChange,
   onCanvasViewportChange,
   onCanvasSelectionChange,
 }: {
   doc: Doc;
+  isCellsSidebarOpen: boolean;
   mode: CoppermindEditorMode;
   onCanvasApiChange?: (api: CoppermindCanvasApi | undefined) => void;
   onCanvasViewportChange?: (state: CoppermindCanvasViewportState | undefined) => void;
@@ -1765,6 +1791,7 @@ const BlockSuiteEditorMount = ({
         <CoppermindCanvasToolbar
           controller={canvasToolController}
           editPropsStore={canvasEditPropsStore}
+          isCellsSidebarOpen={isCellsSidebarOpen}
           state={canvasToolState}
         />
       ) : null}
@@ -1870,6 +1897,8 @@ const CoppermindSectionOutline = ({
   onAddInkSection,
   onDeleteSection,
   onDragSection,
+  onMouseEnter,
+  onMouseLeave,
   onPlaceSection,
   onReorderSection,
   onSelectSection,
@@ -1883,6 +1912,8 @@ const CoppermindSectionOutline = ({
   onAddInkSection?: () => void;
   onDeleteSection: (section: CoppermindBlockSuiteSection) => void;
   onDragSection?: (section: CoppermindBlockSuiteSection, event: DragEvent<HTMLElement>) => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
   onPlaceSection?: (section: CoppermindBlockSuiteSection) => void;
   onReorderSection: (activeId: string, overId: string) => void;
   onSelectSection: (sectionId: string) => void;
@@ -1920,6 +1951,8 @@ const CoppermindSectionOutline = ({
     <aside
       className="absolute bottom-0 left-0 top-0 z-20 flex w-64 max-w-full flex-col overflow-hidden border-r border-border bg-card text-foreground"
       data-coppermind-cells-sidebar
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
         <div className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">
@@ -2137,6 +2170,8 @@ const CoppermindModeToggle = ({
 export const CoppermindDocumentEditor = ({
   focusRequest = 0,
   isCellsSidebarOpen = true,
+  onCellsSidebarMouseEnter,
+  onCellsSidebarMouseLeave,
   value,
   onChange,
 }: CoppermindDocumentEditorProps) => {
@@ -2760,10 +2795,10 @@ export const CoppermindDocumentEditor = ({
       const target = event.target instanceof Element ? event.target : null;
       return target?.closest<HTMLElement>('affine-note')?.dataset.blockId;
     };
-    const keepInkInputSectionActive = (sectionId: string) => {
+    const keepInkInputSectionActive = (sectionId: string, shouldScroll = false) => {
       pageInkInputSectionIdRef.current = sectionId;
       setActiveSectionId(current => (current === sectionId ? current : sectionId));
-      markActiveSection(sectionId);
+      markActiveSection(sectionId, shouldScroll);
     };
     const scheduleUpdate = () => {
       if (animationFrame !== undefined) return;
@@ -2792,9 +2827,16 @@ export const CoppermindDocumentEditor = ({
 
       const sectionId = getSectionIdFromEvent(event);
       if (!sectionId) return;
+      const shouldScrollToTop = (
+        event instanceof CustomEvent
+        && event.detail
+        && typeof event.detail === 'object'
+        && 'scrollToTop' in event.detail
+        && event.detail.scrollToTop === true
+      );
       root.ownerDocument.getSelection()?.removeAllRanges();
-      keepInkInputSectionActive(sectionId);
-      window.requestAnimationFrame(() => keepInkInputSectionActive(sectionId));
+      keepInkInputSectionActive(sectionId, shouldScrollToTop);
+      window.requestAnimationFrame(() => keepInkInputSectionActive(sectionId, shouldScrollToTop));
     };
     const ownerDocument = root.ownerDocument;
 
@@ -2853,6 +2895,8 @@ export const CoppermindDocumentEditor = ({
                 onAddInkSection={mode === 'page' ? addInkSection : addInkSectionToCanvas}
                 onDeleteSection={deleteSection}
                 onDragSection={mode === 'edgeless' ? dragSectionFromSidebar : undefined}
+                onMouseEnter={onCellsSidebarMouseEnter}
+                onMouseLeave={onCellsSidebarMouseLeave}
                 onPlaceSection={mode === 'edgeless' ? placeSectionInNextCanvasSlot : undefined}
                 onReorderSection={reorderSection}
                 onSelectSection={selectSection}
@@ -2871,6 +2915,7 @@ export const CoppermindDocumentEditor = ({
               <BlockSuiteEditorMount
                 key={`${loadedState.runtime.doc.id}:${mode}`}
                 doc={loadedState.runtime.doc}
+                isCellsSidebarOpen={isCellsSidebarOpen}
                 mode={mode}
                 onCanvasApiChange={mode === 'edgeless' ? handleCanvasApiChange : undefined}
                 onCanvasViewportChange={mode === 'edgeless' ? handleCanvasViewportChange : undefined}
@@ -2881,6 +2926,7 @@ export const CoppermindDocumentEditor = ({
                   api={canvasApi}
                   editPunchInEnabled={canvasEditPunchInEnabled}
                   inkStackAction={activeInkStackAction}
+                  isCellsSidebarOpen={isCellsSidebarOpen}
                   zoom={canvasViewport?.zoom}
                   onArrangeAsPage={arrangeCellsAsPage}
                   onToggleEditPunchIn={toggleCanvasEditPunchIn}
