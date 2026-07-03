@@ -31,6 +31,7 @@ import {
 } from '../../packages/client/src/lib/coppermind-document';
 import {
   coppermindInkCellFlavour,
+  getCoppermindInkClampedHeight,
   getCoppermindInkContentHeight,
   normalizeCoppermindInkBackground,
   type CoppermindInkBackground,
@@ -40,6 +41,7 @@ import {
   coppermindA4PageHeightPx,
   coppermindCanvasDefaultCellHeightPx,
   coppermindInkCellMinHeightPx,
+  coppermindInkClampReservePx,
   coppermindInkContentPaddingPx,
 } from '../../packages/client/src/lib/coppermind-layout';
 
@@ -278,11 +280,15 @@ describe('Coppermind .cpr document structure', () => {
           { t: 16, x: 120, y: 32, pressure: 0.72 },
         ],
       };
-      const expectedStrokeHeight = 900 + coppermindInkContentPaddingPx;
+      const expectedStrokeContentHeight = 900 + coppermindInkContentPaddingPx;
+      const expectedStrokeHeight = expectedStrokeContentHeight + coppermindInkClampReservePx;
 
       expect(getCoppermindInkContentHeight([])).toBe(coppermindInkCellMinHeightPx);
       expect(getCoppermindInkContentHeight([shortStroke])).toBe(coppermindInkCellMinHeightPx);
-      expect(getCoppermindInkContentHeight([stroke])).toBe(expectedStrokeHeight);
+      expect(getCoppermindInkContentHeight([stroke])).toBe(expectedStrokeContentHeight);
+      expect(getCoppermindInkClampedHeight([])).toBe(coppermindInkCellMinHeightPx);
+      expect(getCoppermindInkClampedHeight([shortStroke])).toBe(coppermindInkCellMinHeightPx);
+      expect(getCoppermindInkClampedHeight([stroke])).toBe(expectedStrokeHeight);
       expect(normalizeCoppermindInkBackground(undefined)).toBe('college');
       expect(normalizeCoppermindInkBackground('irish')).toBe('irish');
       expect(normalizeCoppermindInkBackground('invalid')).toBe('college');

@@ -14,6 +14,7 @@ import {
   coppermindCellWidthPx,
   coppermindInkAutoExpandDistancePx,
   coppermindInkCellMinHeightPx,
+  coppermindInkClampReservePx,
   coppermindInkContentPaddingPx,
 } from './coppermind-layout';
 
@@ -193,13 +194,24 @@ export const getCoppermindInkContentHeight = (strokes: CoppermindInkStroke[]) =>
   );
 };
 
+export const getCoppermindInkClampedHeight = (strokes: CoppermindInkStroke[]) => {
+  const maxY = getCoppermindInkMaxY(strokes);
+
+  if (maxY <= 0) return coppermindInkCellMinHeightPx;
+  return clamp(
+    Math.ceil(maxY + coppermindInkContentPaddingPx + coppermindInkClampReservePx),
+    coppermindInkCellMinHeightPx,
+    coppermindA4PageHeightPx,
+  );
+};
+
 export const getCoppermindInkCellHeight = (
   strokes: CoppermindInkStroke[],
   heightMode: CoppermindInkHeightMode = 'clamped',
 ) => (
   normalizeCoppermindInkHeightMode(heightMode) === 'full'
     ? coppermindA4PageHeightPx
-    : getCoppermindInkContentHeight(strokes)
+    : getCoppermindInkClampedHeight(strokes)
 );
 
 export const CoppermindInkCellSchema = defineBlockSchema({
@@ -888,7 +900,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
       coppermindInkCellMinHeightPx,
       coppermindA4PageHeightPx,
     );
-    if (maxY < currentHeight - coppermindInkAutoExpandDistancePx) {
+    if (maxY <= currentHeight - coppermindInkAutoExpandDistancePx) {
       return Math.max(contentHeight, currentHeight);
     }
 
@@ -903,7 +915,7 @@ export class CoppermindInkCellComponent extends BlockComponent<CoppermindInkCell
     if (this._getHeightMode() === 'full' || !this._draftStroke) return;
 
     const currentHeight = this._getCurrentRenderedHeight();
-    if (this._getVisibleStrokeMaxY() >= currentHeight - coppermindInkAutoExpandDistancePx) {
+    if (this._getVisibleStrokeMaxY() > currentHeight - coppermindInkAutoExpandDistancePx) {
       this._scheduleRender();
     }
   }
