@@ -16,6 +16,7 @@ import type {
   NotesVaultDeleteInput,
   NotesVaultIndexInput,
   NotesVaultMkdirInput,
+  NotesStorageMetadata,
   NotesVaultMoveInput,
   NotesVaultReadInput,
   NotesVaultUploadInput,
@@ -61,6 +62,7 @@ type WorkspaceFileProject = Project | {
   portalRootId?: string;
   repoPath?: string;
   vaultPath?: string;
+  notesStorage?: NotesStorageMetadata;
   workspaces: LegacyWorkspace[];
 };
 
@@ -102,6 +104,7 @@ const toLegacyProject = (thread: any): WorkspaceFileProject => {
     portalRootId: metadata.portalRootId,
     repoPath: metadata.repoPath,
     vaultPath: metadata.vaultPath,
+    notesStorage: metadata.notesStorage,
     workspaces: Array.isArray(metadata.workspaces) ? metadata.workspaces : [],
   };
 };
@@ -267,6 +270,28 @@ const portalArgs = (action: WorkspaceFileAction, body: Record<string, unknown>) 
 const portalToolForAction = (action: WorkspaceFileAction) =>
   action === 'diffPreview' ? 'portal.fs.diffPreview' : `portal.fs.${action}`;
 
+const createNotesWorkspaceFileWatchTarget = (
+  project: WorkspaceFileProject,
+  resourceId: string,
+  body: Record<string, unknown>,
+  deps: WorkspaceFileRouteDeps = {},
+) => {
+  const notesTarget = parseNotesVaultTarget(body);
+  const { binding } = resolveNotesVaultForProject(project as NotesProject, resourceId, notesTarget, deps);
+  if (binding.storage.kind !== 'portal' || typeof binding.storage.portalId !== 'string' || !binding.storage.portalId) {
+    throw new Error('Workspace file watching is only available for Portal-backed Notes Projects.');
+  }
+
+  return {
+    portalId: binding.storage.portalId,
+    projectId: binding.projectId,
+    workspaceId: binding.workspaceId,
+    rootId: binding.storage.rootId,
+    repoPath: binding.storage.vaultPath,
+    workspacePath: binding.storage.workspacePath,
+  };
+};
+
 const handleWorkspaceFileRoute = async (
   c: any,
   action: WorkspaceFileAction,
@@ -303,6 +328,33 @@ const handleWorkspaceFileRoute = async (
       timeoutMs,
     });
     return c.json(cleanPortalResult(result));
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+};
+
+const handleWorkspaceFileWatchTokenRoute = async (
+  c: any,
+  deps: WorkspaceFileRouteDeps = {},
+) => {
+  try {
+    const resourceId = getResourceId(c);
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+    const target = parseTarget(body);
+    const memory = await getMemory(c);
+    if (!target.projectId) throw new Error('Project is required for workspace file watching.');
+    const project = await getProject(memory, resourceId, target.projectId);
+    if (!project) throw new Error('Project was not found.');
+
+    const resolvedTarget = project.projectKind === 'notes'
+      ? createNotesWorkspaceFileWatchTarget(project, resourceId, body, deps)
+      : resolveGitWorkspaceFileTarget(resourceId, target, project, 'portal.fs.watch');
+    const token = issueWorkspaceFileWatchToken({ resourceId, ...resolvedTarget });
+    return c.json({
+      token,
+      portalId: resolvedTarget.portalId,
+      wsUrl: getWorkspaceFileWatchWsUrl(c),
+    });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -364,30 +416,13 @@ export const workspaceFileRoutes = [
   }),
   defineRoute('/workspace-files/watch-token', {
     method: 'POST',
-    handler: async c => {
-      try {
-        const resourceId = getResourceId(c);
-        const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
-        const target = parseTarget(body);
-        const memory = await getMemory(c);
-        if (!target.projectId) throw new Error('Project is required for workspace file watching.');
-        const project = await getProject(memory, resourceId, target.projectId);
-        const resolvedTarget = resolveGitWorkspaceFileTarget(resourceId, target, project, 'portal.fs.watch');
-        const token = issueWorkspaceFileWatchToken({ resourceId, ...resolvedTarget });
-        return c.json({
-          token,
-          portalId: resolvedTarget.portalId,
-          wsUrl: getWorkspaceFileWatchWsUrl(c),
-        });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
+    handler: handleWorkspaceFileWatchTokenRoute,
   }),
 ];
 
 export const __workspaceFileRoutesTest = {
   cleanPortalResult,
+  handleWorkspaceFileWatchTokenRoute,
   handleWorkspaceFileRoute,
   parseTarget,
 };

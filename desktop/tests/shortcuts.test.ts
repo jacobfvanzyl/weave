@@ -56,9 +56,10 @@ const contextFor = (event: KeyboardEvent, now = 1_000) =>
 
 describe('shortcut matching', () => {
   it('resolves Mod to Command on Apple-like platforms and Control elsewhere', () => {
-    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', metaKey: true, shiftKey: true }), 'mac')).toBe(true);
-    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', ctrlKey: true, shiftKey: true }), 'windows')).toBe(true);
-    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', ctrlKey: true, shiftKey: true }), 'mac')).toBe(false);
+    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', metaKey: true }), 'mac')).toBe(true);
+    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', ctrlKey: true }), 'windows')).toBe(true);
+    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', ctrlKey: true }), 'mac')).toBe(false);
+    expect(doesShortcutHotkeyMatch(shortcutLeaderHotkey, makeKeyEvent({ key: 'k', metaKey: true, shiftKey: true }), 'mac')).toBe(false);
   });
 
   it('normalizes KeyboardEvent.key without using deprecated keyCode', () => {
@@ -81,7 +82,7 @@ describe('shortcut matching', () => {
 
   it('allows explicitly intended leader shortcuts inside text-heavy surfaces', () => {
     const target = makeTarget({ surface: 'chat', text: true });
-    const event = makeKeyEvent({ key: 'k', metaKey: true, shiftKey: true, target });
+    const event = makeKeyEvent({ key: 'k', metaKey: true, target });
     const binding = findHotkeyShortcutBinding(defaultShortcutBindings, event, contextFor(event));
 
     expect(binding?.commandId).toBe('shortcuts.open');
@@ -124,10 +125,10 @@ describe('shortcut matching', () => {
   it('formats shortcuts through TanStack display helpers', () => {
     const macDisplay = formatShortcutForDisplay(shortcutLeaderHotkey, 'mac');
 
-    expect(formatShortcutForDisplay(shortcutLeaderHotkey, 'windows')).toBe('Ctrl+Shift+K');
+    expect(formatShortcutForDisplay(shortcutLeaderHotkey, 'windows')).toBe('Ctrl+K');
     expect(macDisplay).toContain('K');
     expect(macDisplay.includes('Mod')).toBe(false);
-    expect(formatShortcutSequenceForDisplay([shortcutLeaderHotkey, ';'], 'windows')).toBe('Ctrl+Shift+K ;');
+    expect(formatShortcutSequenceForDisplay([shortcutLeaderHotkey, ';'], 'windows')).toBe('Ctrl+K ;');
   });
 
   it('flags high-risk direct hotkeys while leaving the default profile clean', () => {

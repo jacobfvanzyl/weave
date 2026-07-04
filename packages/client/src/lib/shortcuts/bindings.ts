@@ -1,6 +1,6 @@
 import type { ShortcutBinding, ShortcutHotkey } from './types';
 
-export const shortcutLeaderHotkey = 'Mod+Shift+K' satisfies ShortcutHotkey;
+export const shortcutLeaderHotkey = 'Mod+K' satisfies ShortcutHotkey;
 
 const leaderSequence = (tail: ShortcutHotkey) => [shortcutLeaderHotkey, tail] as const;
 

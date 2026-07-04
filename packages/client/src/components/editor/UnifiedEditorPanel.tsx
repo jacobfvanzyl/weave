@@ -31,6 +31,16 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import {
+  applyCoppermindAutosaveResult,
+  coppermindAutosaveDebounceMs,
+  createCoppermindAutosaveSnapshot,
+  doesCoppermindWatchEventTouchPath,
+  getCoppermindAutosaveWatchDirectories,
+  isCoppermindAutosaveStaleVersionError,
+  shouldAutosaveCoppermindBuffer,
+  type CoppermindAutosaveSnapshot,
+} from '../../lib/coppermind-autosave';
 import { createEmptyCoppermindDocumentContent, normalizeCoppermindDocumentPath } from '../../lib/coppermind-document';
 import {
   getDefaultDocumentExtension,
@@ -40,7 +50,7 @@ import {
   resolveEditorDocumentKind,
 } from '../../lib/editor-document-kind';
 import { createWorkspaceFileBackend, type WorkspaceFileAttachment, type WorkspaceFileIndexResult, type WorkspaceFileNote } from '../../lib/workspace-file-backend';
-import type { EditorEntry, EditorMode, EditorTarget, EditorWatchSubscription, OpenBuffer } from '../../lib/editor-types';
+import type { EditorEntry, EditorMode, EditorTarget, EditorWatchSubscription, EditorWriteResult, OpenBuffer } from '../../lib/editor-types';
 import { defaultEditorExplorerVisible, getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
 import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
@@ -85,6 +95,21 @@ type RenameState = {
 
 type EditorBuffer = OpenBuffer & {
   value: string;
+};
+
+type CoppermindAutosaveRuntimeState = {
+  inFlight: boolean;
+  latestSnapshot?: CoppermindAutosaveSnapshot;
+  paused: boolean;
+  timer?: number;
+};
+
+type CoppermindAutosaveStatus = 'pending' | 'saving' | 'paused' | 'error';
+
+type SaveBufferSnapshotInput = {
+  buffer: EditorBuffer;
+  snapshot: CoppermindAutosaveSnapshot;
+  tabId: string;
 };
 
 type TreeNode = {
@@ -562,12 +587,17 @@ export const UnifiedEditorPanel = ({
   const explorerWindowEdgeHoldRef = useRef(false);
   const expandedPathsRef = useRef<Set<string>>(new Set(['']));
   const editorWatchSubscriptionRef = useRef<EditorWatchSubscription | undefined>(undefined);
+  const coppermindAutosaveStatesRef = useRef(new Map<string, CoppermindAutosaveRuntimeState>());
+  const coppermindAutosaveWatchSubscriptionRef = useRef<EditorWatchSubscription | undefined>(undefined);
+  const coppermindAutosaveRecentWritesRef = useRef(new Map<string, { content: string; expiresAt: number; version: string }>());
   const refreshCodeDirectoriesRef = useRef<(paths: string[]) => Promise<void>>(async () => undefined);
   const pendingRevealRef = useRef<{ requestId: number; path: string; line: number } | undefined>(
     undefined,
   );
   const handledFollowRequestIdRef = useRef<number | undefined>(undefined);
   const editorBodyRef = useRef<HTMLDivElement | null>(null);
+  const buffersByTabIdRef = useRef<Record<string, EditorBuffer | undefined>>({});
+  const editorTabsRef = useRef<EditorTab[]>([]);
   const [activeTab, setActiveTab] = useState<ExplorerTab>('explorer');
   const [query, setQuery] = useState('');
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(['']));
@@ -580,6 +610,7 @@ export const UnifiedEditorPanel = ({
   const [isExplorerLoading, setIsExplorerLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [coppermindAutosaveStatusByTabId, setCoppermindAutosaveStatusByTabId] = useState<Record<string, CoppermindAutosaveStatus | undefined>>({});
   const [isExplorerSlideOverOpen, setIsExplorerSlideOverOpen] = useState(false);
   const [isCoppermindCellsSidebarOpen, setIsCoppermindCellsSidebarOpen] = useState(true);
   const [isCoppermindCellsSidebarPreviewOpen, setIsCoppermindCellsSidebarPreviewOpen] = useState(false);
@@ -605,7 +636,17 @@ export const UnifiedEditorPanel = ({
   const isExplorerActive = isExplorerOverlayVisible;
   const hasBreadcrumb = Boolean(breadcrumb);
   const modeIndicator = editorModeIndicatorStyles[vimMode];
-  const statusLabel = isSaving ? 'saving' : isFileLoading ? 'loading' : undefined;
+  const activeCoppermindAutosaveStatus = activeEditorTab ? coppermindAutosaveStatusByTabId[activeEditorTab.id] : undefined;
+  const isActiveSaveInProgress = isSaving || activeCoppermindAutosaveStatus === 'saving';
+  const statusLabel = isActiveSaveInProgress
+    ? 'saving'
+    : activeCoppermindAutosaveStatus === 'pending'
+    ? 'save pending'
+    : activeCoppermindAutosaveStatus === 'paused'
+    ? 'save paused'
+    : activeCoppermindAutosaveStatus === 'error'
+    ? 'save error'
+    : isFileLoading ? 'loading' : undefined;
   const activeNote = activePath
     ? vaultIndex?.notes.find(note => note.path === activePath)
     : selectedNode?.note;
@@ -634,10 +675,61 @@ export const UnifiedEditorPanel = ({
     label: getEditorDocumentLabel(note.path, mode),
     detail: note.title && note.title !== getEditorDocumentLabel(note.path, mode) ? `${note.path} · ${note.title}` : note.path,
   })), [mode, vaultIndex?.notes]);
+  const coppermindAutosaveWatchDirectories = useMemo(() => (
+    mode === 'notes'
+      ? getCoppermindAutosaveWatchDirectories(
+        Object.values(buffersByTabId)
+          .filter((buffer): buffer is EditorBuffer => Boolean(buffer))
+          .map(buffer => buffer.path),
+      )
+      : []
+  ), [buffersByTabId, mode]);
+  const coppermindAutosaveWatchDirectoryKey = JSON.stringify(coppermindAutosaveWatchDirectories);
   const editorTabSensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 5 } }),
   );
+
+  const setCoppermindAutosaveStatus = useCallback((tabId: string, status: CoppermindAutosaveStatus | undefined) => {
+    setCoppermindAutosaveStatusByTabId(current => {
+      if (current[tabId] === status) return current;
+      const next = { ...current };
+      if (status) next[tabId] = status;
+      else delete next[tabId];
+      return next;
+    });
+  }, []);
+
+  const getCoppermindAutosaveState = useCallback((tabId: string) => {
+    let state = coppermindAutosaveStatesRef.current.get(tabId);
+    if (!state) {
+      state = { inFlight: false, paused: false };
+      coppermindAutosaveStatesRef.current.set(tabId, state);
+    }
+    return state;
+  }, []);
+
+  const clearCoppermindAutosaveTimer = useCallback((tabId: string) => {
+    const state = coppermindAutosaveStatesRef.current.get(tabId);
+    if (!state || state.timer === undefined) return;
+    window.clearTimeout(state.timer);
+    state.timer = undefined;
+  }, []);
+
+  const clearCoppermindAutosaveState = useCallback((tabId: string) => {
+    clearCoppermindAutosaveTimer(tabId);
+    coppermindAutosaveStatesRef.current.delete(tabId);
+    setCoppermindAutosaveStatus(tabId, undefined);
+  }, [clearCoppermindAutosaveTimer, setCoppermindAutosaveStatus]);
+
+  const pauseCoppermindAutosaveForConflict = useCallback((tabId: string, message: string) => {
+    const state = getCoppermindAutosaveState(tabId);
+    clearCoppermindAutosaveTimer(tabId);
+    state.latestSnapshot = undefined;
+    state.paused = true;
+    setCoppermindAutosaveStatus(tabId, 'paused');
+    setError(message);
+  }, [clearCoppermindAutosaveTimer, getCoppermindAutosaveState, setCoppermindAutosaveStatus]);
 
   const confirmDiscardBuffer = useCallback((buffer: EditorBuffer | undefined, label = 'this file') => (
     !getBufferDirty(buffer) || window.confirm(`Discard unsaved changes to ${label}?`)
@@ -658,6 +750,7 @@ export const UnifiedEditorPanel = ({
   }, []);
 
   const clearEditorTabState = useCallback((tabId: string) => {
+    clearCoppermindAutosaveState(tabId);
     setBuffersByTabId(current => {
       if (!current[tabId]) return current;
       const next = { ...current };
@@ -670,11 +763,12 @@ export const UnifiedEditorPanel = ({
       next.delete(tabId);
       return next;
     });
-  }, []);
+  }, [clearCoppermindAutosaveState]);
 
   const clearEditorTabStates = useCallback((tabIds: string[]) => {
     if (tabIds.length === 0) return;
     const tabIdSet = new Set(tabIds);
+    for (const tabId of tabIdSet) clearCoppermindAutosaveState(tabId);
     setBuffersByTabId(current => {
       let didChange = false;
       const next = { ...current };
@@ -694,7 +788,7 @@ export const UnifiedEditorPanel = ({
       }
       return didChange ? next : current;
     });
-  }, []);
+  }, [clearCoppermindAutosaveState]);
 
   const closePreviewEditorTab = useCallback((tab: EditorTab | undefined) => {
     if (!tab?.isPreview) return;
@@ -1091,6 +1185,59 @@ export const UnifiedEditorPanel = ({
     }
   }, [expandedPaths, mode, refreshCodeDirectories, workspaceFileBackend, editorTarget]);
 
+  const applySavedBufferSnapshot = useCallback((
+    tabId: string,
+    snapshot: CoppermindAutosaveSnapshot,
+    result: EditorWriteResult,
+  ) => {
+    const nextTabId = getEditorTabId(editorTabTargetKey, result.path);
+    if (result.path !== snapshot.path) renamePersistedEditorTab(editorTabTargetKey, snapshot.path, result.path);
+    setBuffersByTabId(current => {
+      const currentBuffer = current[tabId];
+      if (!currentBuffer) return current;
+      const nextBuffer = applyCoppermindAutosaveResult(currentBuffer, snapshot, result);
+      const next = { ...current, [nextTabId]: nextBuffer };
+      if (nextTabId !== tabId) delete next[tabId];
+      return next;
+    });
+    if (nextTabId !== tabId) {
+      const state = coppermindAutosaveStatesRef.current.get(tabId);
+      if (state) {
+        coppermindAutosaveStatesRef.current.delete(tabId);
+        coppermindAutosaveStatesRef.current.set(nextTabId, state);
+      }
+      setCoppermindAutosaveStatusByTabId(current => {
+        if (!current[tabId]) return current;
+        const next = { ...current, [nextTabId]: current[tabId] };
+        delete next[tabId];
+        return next;
+      });
+    }
+    return nextTabId;
+  }, [editorTabTargetKey, renamePersistedEditorTab]);
+
+  const saveBufferSnapshot = useCallback(async ({
+    buffer,
+    snapshot,
+    tabId,
+  }: SaveBufferSnapshotInput) => {
+    const result = await workspaceFileBackend.write(editorTarget, snapshot.path, snapshot.value, snapshot.version);
+    const nextTabId = applySavedBufferSnapshot(tabId, snapshot, result);
+    const isSavedCoppermind = getDocumentKind('notes', result.path) === 'coppermind';
+    if (isSavedCoppermind) {
+      coppermindAutosaveRecentWritesRef.current.set(result.path, {
+        content: snapshot.value,
+        expiresAt: Date.now() + 5000,
+        version: result.version,
+      });
+    }
+    if (buffer.mediaType === 'coppermind' || isSavedCoppermind) {
+      setCoppermindAutosaveStatus(nextTabId, undefined);
+    }
+    await refreshExplorer();
+    return nextTabId;
+  }, [applySavedBufferSnapshot, editorTarget, refreshExplorer, setCoppermindAutosaveStatus, workspaceFileBackend]);
+
   const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean; preview?: boolean } = {}) => {
     if (!isEditorPathOpenable(mode, path)) return false;
 
@@ -1167,14 +1314,69 @@ export const UnifiedEditorPanel = ({
     editorTarget,
   ]);
 
+  const runCoppermindAutosave = useCallback(async (tabId: string) => {
+    const state = coppermindAutosaveStatesRef.current.get(tabId);
+    if (!state || state.inFlight || state.paused || !state.latestSnapshot) return;
+    const snapshot = state.latestSnapshot;
+    const buffer = buffersByTabIdRef.current[tabId];
+    if (!buffer || !shouldAutosaveCoppermindBuffer(buffer)) {
+      clearCoppermindAutosaveState(tabId);
+      return;
+    }
+
+    if (state.timer !== undefined) {
+      window.clearTimeout(state.timer);
+      state.timer = undefined;
+    }
+    state.inFlight = true;
+    setCoppermindAutosaveStatus(tabId, 'saving');
+    try {
+      await saveBufferSnapshot({ buffer, snapshot, tabId });
+    } catch (autosaveError) {
+      if (isCoppermindAutosaveStaleVersionError(autosaveError)) {
+        pauseCoppermindAutosaveForConflict(
+          tabId,
+          `Autosave paused for ${buffer.path}: the file changed on disk. Reload before saving.`,
+        );
+        return;
+      }
+      state.paused = true;
+      setCoppermindAutosaveStatus(tabId, 'error');
+      setError(toErrorMessage(autosaveError));
+    } finally {
+      const nextState = coppermindAutosaveStatesRef.current.get(tabId);
+      if (nextState) {
+        nextState.inFlight = false;
+        if (nextState.latestSnapshot === snapshot) nextState.latestSnapshot = undefined;
+      }
+    }
+  }, [
+    clearCoppermindAutosaveState,
+    pauseCoppermindAutosaveForConflict,
+    saveBufferSnapshot,
+    setCoppermindAutosaveStatus,
+  ]);
+
   useEffect(() => () => {
     if (typeof window === 'undefined') return;
     if (fileOpenClickTimeoutRef.current !== undefined) window.clearTimeout(fileOpenClickTimeoutRef.current);
+    for (const state of coppermindAutosaveStatesRef.current.values()) {
+      if (state.timer !== undefined) window.clearTimeout(state.timer);
+    }
+    coppermindAutosaveStatesRef.current.clear();
   }, []);
 
   useEffect(() => {
     expandedPathsRef.current = expandedPaths;
   }, [expandedPaths]);
+
+  useEffect(() => {
+    buffersByTabIdRef.current = buffersByTabId;
+  }, [buffersByTabId]);
+
+  useEffect(() => {
+    editorTabsRef.current = editorTabs;
+  }, [editorTabs]);
 
   useEffect(() => {
     refreshCodeDirectoriesRef.current = async paths => {
@@ -1189,12 +1391,16 @@ export const UnifiedEditorPanel = ({
     setCodeDirectories({});
     setVaultIndex(undefined);
     setSelectedNode(undefined);
+    for (const tabId of Array.from(coppermindAutosaveStatesRef.current.keys())) {
+      clearCoppermindAutosaveState(tabId);
+    }
+    coppermindAutosaveRecentWritesRef.current.clear();
     setBuffersByTabId({});
     setFailedBufferTabIds(new Set());
     setError(undefined);
     setVimMode('normal');
     setBufferFocusRequest(0);
-  }, [clearPendingFileOpen, mode, target.projectId, target.workspaceId]);
+  }, [clearCoppermindAutosaveState, clearPendingFileOpen, mode, target.projectId, target.workspaceId]);
 
   useEffect(() => {
     if (activeEditorTabId || editorTabs.length === 0) return;
@@ -1254,6 +1460,149 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(watchError));
     });
   }, [expandedPaths, mode]);
+
+  useEffect(() => {
+    const watchDirectories = JSON.parse(coppermindAutosaveWatchDirectoryKey) as string[];
+    if (mode !== 'notes' || !workspaceFileBackend.watch || watchDirectories.length === 0) return undefined;
+
+    let cancelled = false;
+    const reloadCleanCoppermindBuffer = async (tabId: string, buffer: EditorBuffer) => {
+      try {
+        const file = await workspaceFileBackend.read(editorTarget, buffer.path);
+        if (cancelled) return;
+        const mediaType = getEditorDocumentMediaType(getDocumentKind(mode, file.path));
+        const nextBuffer = createLoadedBuffer(file, mediaType);
+        const nextTabId = getEditorTabId(editorTabTargetKey, file.path);
+        if (file.path !== buffer.path) renamePersistedEditorTab(editorTabTargetKey, buffer.path, file.path);
+        setBuffersByTabId(current => {
+          const currentBuffer = current[tabId];
+          if (!currentBuffer || currentBuffer.path !== buffer.path || getBufferDirty(currentBuffer)) return current;
+          if (
+            currentBuffer.content === nextBuffer.content
+            && currentBuffer.value === nextBuffer.value
+            && currentBuffer.version === nextBuffer.version
+          ) return current;
+          const next = { ...current, [nextTabId]: nextBuffer };
+          if (nextTabId !== tabId) delete next[tabId];
+          return next;
+        });
+      } catch (reloadError) {
+        if (!cancelled) setError(toErrorMessage(reloadError));
+      }
+    };
+
+    const verifyDirtyCoppermindWatchEvent = async (tabId: string, buffer: EditorBuffer) => {
+      const recentWrite = coppermindAutosaveRecentWritesRef.current.get(buffer.path);
+      if (!recentWrite || recentWrite.expiresAt <= Date.now()) {
+        pauseCoppermindAutosaveForConflict(
+          tabId,
+          `Autosave paused for ${buffer.path}: the file changed on disk while local edits were unsaved.`,
+        );
+        return;
+      }
+
+      try {
+        const file = await workspaceFileBackend.read(editorTarget, buffer.path);
+        if (cancelled) return;
+        if (file.version === recentWrite.version || file.content === recentWrite.content) return;
+        const currentBuffer = buffersByTabIdRef.current[tabId];
+        if (!currentBuffer || currentBuffer.path !== buffer.path || !getBufferDirty(currentBuffer)) return;
+        pauseCoppermindAutosaveForConflict(
+          tabId,
+          `Autosave paused for ${buffer.path}: the file changed on disk while local edits were unsaved.`,
+        );
+      } catch (reloadError) {
+        if (!cancelled) setError(toErrorMessage(reloadError));
+      }
+    };
+
+    void workspaceFileBackend.watch(editorTarget, watchDirectories, event => {
+      const now = Date.now();
+      for (const [path, recentWrite] of coppermindAutosaveRecentWritesRef.current.entries()) {
+        if (recentWrite.expiresAt <= now) coppermindAutosaveRecentWritesRef.current.delete(path);
+      }
+
+      const tabs = editorTabsRef.current;
+      const buffers = buffersByTabIdRef.current;
+      for (const tab of tabs) {
+        const buffer = buffers[tab.id];
+        if (!buffer || !doesCoppermindWatchEventTouchPath(event, buffer.path)) continue;
+        if (coppermindAutosaveStatesRef.current.get(tab.id)?.inFlight) continue;
+        if (getBufferDirty(buffer)) {
+          void verifyDirtyCoppermindWatchEvent(tab.id, buffer);
+          continue;
+        }
+        void reloadCleanCoppermindBuffer(tab.id, buffer);
+      }
+    }).then(subscription => {
+      if (cancelled) {
+        subscription.close();
+        return;
+      }
+      coppermindAutosaveWatchSubscriptionRef.current = subscription;
+    }).catch(watchError => {
+      if (!cancelled) setError(toErrorMessage(watchError));
+    });
+
+    return () => {
+      cancelled = true;
+      coppermindAutosaveWatchSubscriptionRef.current?.close();
+      coppermindAutosaveWatchSubscriptionRef.current = undefined;
+    };
+  }, [
+    coppermindAutosaveWatchDirectoryKey,
+    editorTabTargetKey,
+    editorTarget,
+    mode,
+    pauseCoppermindAutosaveForConflict,
+    renamePersistedEditorTab,
+    workspaceFileBackend,
+  ]);
+
+  useEffect(() => {
+    if (mode !== 'notes') return;
+
+    const openTabIds = new Set(editorTabs.map(tab => tab.id));
+    for (const tabId of Array.from(coppermindAutosaveStatesRef.current.keys())) {
+      if (!openTabIds.has(tabId)) clearCoppermindAutosaveState(tabId);
+    }
+
+    for (const [tabId, buffer] of Object.entries(buffersByTabId)) {
+      const state = coppermindAutosaveStatesRef.current.get(tabId);
+      if (!buffer) {
+        if (state && !state.inFlight) clearCoppermindAutosaveState(tabId);
+        continue;
+      }
+      if (!shouldAutosaveCoppermindBuffer(buffer, state?.paused)) {
+        if (state && !state.inFlight && (!state.paused || !getBufferDirty(buffer))) {
+          clearCoppermindAutosaveState(tabId);
+        }
+        continue;
+      }
+      const nextState = getCoppermindAutosaveState(tabId);
+      if (nextState.inFlight || nextState.paused) continue;
+      const snapshot = createCoppermindAutosaveSnapshot(buffer);
+      const isSameSnapshot = nextState.latestSnapshot
+        && nextState.latestSnapshot.path === snapshot.path
+        && nextState.latestSnapshot.value === snapshot.value
+        && nextState.latestSnapshot.version === snapshot.version;
+      if (isSameSnapshot && nextState.timer !== undefined) continue;
+      if (nextState.timer !== undefined) window.clearTimeout(nextState.timer);
+      nextState.latestSnapshot = snapshot;
+      setCoppermindAutosaveStatus(tabId, 'pending');
+      nextState.timer = window.setTimeout(() => {
+        void runCoppermindAutosave(tabId);
+      }, coppermindAutosaveDebounceMs);
+    }
+  }, [
+    buffersByTabId,
+    clearCoppermindAutosaveState,
+    editorTabs,
+    getCoppermindAutosaveState,
+    mode,
+    runCoppermindAutosave,
+    setCoppermindAutosaveStatus,
+  ]);
 
   useEffect(() => {
     if (!canUseCoppermindCellsSidebarPreview) {
@@ -1381,34 +1730,35 @@ export const UnifiedEditorPanel = ({
 
   const handleSave = useCallback(async () => {
     if (!openBuffer || !activeEditorTab || !isDirty) return;
+    const snapshot = createCoppermindAutosaveSnapshot(openBuffer);
+    const autosaveState = coppermindAutosaveStatesRef.current.get(activeEditorTab.id);
+    if (autosaveState) autosaveState.paused = false;
+    clearCoppermindAutosaveTimer(activeEditorTab.id);
+    setCoppermindAutosaveStatus(activeEditorTab.id, undefined);
     setIsSaving(true);
     setError(undefined);
     try {
-      const result = await workspaceFileBackend.write(editorTarget, openBuffer.path, openBuffer.value, openBuffer.version);
-      const nextBuffer: EditorBuffer = {
-        ...openBuffer,
-        path: result.path,
-        content: openBuffer.value,
-        value: openBuffer.value,
-        version: result.version,
-        size: result.size,
-        mtimeMs: result.mtimeMs,
-        dirty: false,
-      };
-      const nextTabId = getEditorTabId(editorTabTargetKey, result.path);
-      if (result.path !== openBuffer.path) renamePersistedEditorTab(editorTabTargetKey, openBuffer.path, result.path);
-      setBuffersByTabId(current => {
-        const next = { ...current, [nextTabId]: nextBuffer };
-        if (nextTabId !== activeEditorTab.id) delete next[activeEditorTab.id];
-        return next;
-      });
-      await refreshExplorer();
+      await saveBufferSnapshot({ buffer: openBuffer, snapshot, tabId: activeEditorTab.id });
     } catch (saveError) {
       setError(toErrorMessage(saveError));
+      if (openBuffer.mediaType === 'coppermind' && isCoppermindAutosaveStaleVersionError(saveError)) {
+        pauseCoppermindAutosaveForConflict(
+          activeEditorTab.id,
+          `Autosave paused for ${openBuffer.path}: the file changed on disk. Reload before saving.`,
+        );
+      }
     } finally {
       setIsSaving(false);
     }
-  }, [activeEditorTab, workspaceFileBackend, editorTabTargetKey, editorTarget, isDirty, openBuffer, refreshExplorer, renamePersistedEditorTab]);
+  }, [
+    activeEditorTab,
+    clearCoppermindAutosaveTimer,
+    isDirty,
+    openBuffer,
+    pauseCoppermindAutosaveForConflict,
+    saveBufferSnapshot,
+    setCoppermindAutosaveStatus,
+  ]);
 
   const handleReload = useCallback(async () => {
     if (!openBuffer || !activeEditorTab || !confirmDiscardBuffer(openBuffer, openBuffer.path)) return;
@@ -1425,13 +1775,14 @@ export const UnifiedEditorPanel = ({
         if (nextTabId !== activeEditorTab.id) delete next[activeEditorTab.id];
         return next;
       });
+      clearCoppermindAutosaveState(activeEditorTab.id);
       setBufferFocusRequest(request => request + 1);
     } catch (reloadError) {
       setError(toErrorMessage(reloadError));
     } finally {
       setIsFileLoading(false);
     }
-  }, [activeEditorTab, workspaceFileBackend, confirmDiscardBuffer, editorTabTargetKey, editorTarget, mode, openBuffer, renamePersistedEditorTab]);
+  }, [activeEditorTab, clearCoppermindAutosaveState, workspaceFileBackend, confirmDiscardBuffer, editorTabTargetKey, editorTarget, mode, openBuffer, renamePersistedEditorTab]);
 
   const cancelRename = useCallback(() => {
     renameCancelRef.current = true;
@@ -2180,7 +2531,7 @@ export const UnifiedEditorPanel = ({
           ) : null}
           <div className="flex shrink-0 items-center gap-1 pr-3">
             {statusLabel ? <span className="self-center shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span> : null}
-            <Button size="icon-xs" variant="ghost" aria-label="Save buffer" title="Save buffer" disabled={!openBuffer || !isDirty || isSaving} onClick={() => void handleSave()}>
+            <Button size="icon-xs" variant="ghost" aria-label="Save buffer" title="Save buffer" disabled={!openBuffer || !isDirty || isActiveSaveInProgress} onClick={() => void handleSave()}>
               <Save size={14} />
             </Button>
             <Button size="icon-xs" variant="ghost" aria-label="Reload buffer" title="Reload buffer" disabled={!openBuffer || isFileLoading} onClick={handleReload}>

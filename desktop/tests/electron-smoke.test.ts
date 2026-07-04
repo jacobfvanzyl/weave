@@ -450,7 +450,7 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await showSidebarButton.click();
     await page.getByRole('button', { name: 'Hide sidebar' }).waitFor({ timeout: 5_000 });
 
-    const shortcut = process.platform === 'darwin' ? 'Meta+Shift+K' : 'Control+Shift+K';
+    const shortcut = process.platform === 'darwin' ? 'Meta+K' : 'Control+K';
     const composer = page.locator('[data-weave-active-thread="true"] textarea');
     await composer.waitFor({ state: 'visible', timeout: 5_000 });
     await playwrightExpect(composer).toBeEnabled({ timeout: 5_000 });

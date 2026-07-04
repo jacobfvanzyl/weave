@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   resolveNotesVault,
   resolveNotesVaultForProject,
@@ -10,6 +10,8 @@ import type {
 } from '../../server/src/modules/notes/storage/types';
 import { __workspaceFileRoutesTest } from '../../server/src/modules/workspace-files/routes';
 import { __portalToolsTest } from '../../server/src/agent/mastra/tools/portal-tools';
+import { connectPortal, disconnectPortal } from '../../server/src/portal/registry';
+import { connectWorkspaceFileWatchRelayClient } from '../../server/src/portal/workspace-file-watch-relay';
 import {
   createNotesWorkspaceTarget,
   isNotesTargetAvailable,
@@ -17,6 +19,11 @@ import {
 import type { Project, Workspace } from '../../packages/client/src/lib/chat-state-api';
 
 const now = '2026-06-22T10:00:00.000Z';
+const connectedPortalIds: string[] = [];
+
+afterEach(() => {
+  connectedPortalIds.splice(0).forEach(portalId => disconnectPortal(portalId));
+});
 
 const notesWorkspace = {
   id: 'workspace-1',
@@ -99,7 +106,7 @@ const routeContext = (body: Record<string, unknown>, project: NotesProject, reso
       if (key === 'mastra') return { getAgent: async () => ({ getMemory: async () => memory }) };
       return undefined;
     }),
-    req: { json: async () => body },
+    req: { json: async () => body, url: 'http://127.0.0.1/workspace-files/watch-token' },
     json: vi.fn((payload: unknown, status?: number) => ({ payload, status: status ?? 200 })),
   };
   return { c, memory };
@@ -219,6 +226,53 @@ describe('workspace file routes and tools use notes storage backends', () => {
       undefined,
     );
     expect(response).toEqual({ payload: { path: 'note.md', version: 'v2' }, status: 200 });
+  });
+
+  it('issues workspace file watch tokens for Portal-backed notes projects', async () => {
+    const project = notesProject({
+      notesStorage: {
+        kind: 'portal',
+        portalId: 'portal-1',
+        rootId: 'root-1',
+        vaultPath: '/vault',
+        workspacePath: '/vault',
+      },
+    });
+    const { c } = routeContext({ target: { projectId: 'project-1', workspaceId: 'workspace-1' } }, project);
+
+    const response = await __workspaceFileRoutesTest.handleWorkspaceFileWatchTokenRoute(
+      c,
+      resolverDeps(),
+    );
+    const payload = response.payload as { token: string; portalId: string; wsUrl: string };
+
+    expect(response.status).toBe(200);
+    expect(payload.portalId).toBe('portal-1');
+    expect(payload.token).toMatch(/^workspace_file_watch_/);
+    expect(payload.wsUrl).toBe('ws://127.0.0.1:4112/workspace-files/watch/connect');
+
+    connectedPortalIds.push('portal-1');
+    connectPortal({
+      portalId: 'portal-1',
+      userId: 'user-1',
+      capabilities: ['portal.fs.watch'],
+      mounts: [],
+      roots: [],
+      ws: { send: () => undefined, close: () => undefined },
+    });
+    const connected = connectWorkspaceFileWatchRelayClient({
+      token: payload.token,
+      ws: { send: () => undefined, close: () => undefined },
+    });
+
+    expect(connected?.token).toMatchObject({
+      portalId: 'portal-1',
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      rootId: 'root-1',
+      repoPath: '/vault',
+      workspacePath: '/vault',
+    });
   });
 
   it('routes agent file tools through the same notes storage resolver', async () => {
