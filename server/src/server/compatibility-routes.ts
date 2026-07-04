@@ -1,6 +1,5 @@
 import { chatgptAuthRoutes } from '../agent/routes/chatgpt-auth';
 import { modelRoutes } from '../agent/routes/models';
-import { profileRoutes } from '../agent/routes/profiles';
 import { promptRoutes } from '../agent/routes/prompts';
 import { chatRoutes } from '../modules/chat/routes/chat';
 import { chatStateRoutes } from '../modules/chat/routes/chat-state';
@@ -45,7 +44,6 @@ export const registerCompatibilityRoutes = (app: WeaveApp) => {
   aliasRoutes(app, chatRoutes, chatRunAlias);
   aliasRoutes(app, projectRoutes, codeProjectAlias);
   aliasRoutes(app, terminalRoutes, path => replacePrefix(path, '/code/terminals', '/terminals'));
-  aliasRoutes(app, profileRoutes, path => replacePrefix(path, '/agent/profiles', '/profiles'));
   aliasRoutes(app, promptRoutes, path => replacePrefix(path, '/agent/prompts', '/prompts'));
   aliasRoutes(app, modelRoutes, path => replacePrefix(path, '/agent/models', '/models'));
   aliasRoutes(app, chatgptAuthRoutes, path => replacePrefix(path, '/agent/chatgpt', '/chatgpt'));

@@ -18,7 +18,6 @@ export const weaveRoutePaths = {
   chat: {
     projects: () => '/chat/projects',
     project: (projectId: string) => `/chat/projects/${encodePath(projectId)}`,
-    projectProfile: (projectId: string) => `/chat/projects/${encodePath(projectId)}/profile`,
     reorderProjects: () => '/chat/projects/reorder',
     projectThreads: (projectId: string) => `/chat/projects/${encodePath(projectId)}/threads`,
     threads: () => '/chat/threads',
@@ -35,7 +34,6 @@ export const weaveRoutePaths = {
   code: {
     projects: () => '/code/projects',
     project: (projectId: string) => `/code/projects/${encodePath(projectId)}`,
-    projectProfile: (projectId: string) => `/code/projects/${encodePath(projectId)}/profile`,
     reorderProjects: () => '/code/projects/reorder',
     projectBranches: (projectId: string) => `/code/projects/${encodePath(projectId)}/branches`,
     projectThreads: (projectId: string) => `/code/projects/${encodePath(projectId)}/threads`,
@@ -59,7 +57,6 @@ export const weaveRoutePaths = {
   notes: {
     projects: () => '/notes/projects',
     project: (projectId: string) => `/notes/projects/${encodePath(projectId)}`,
-    projectProfile: (projectId: string) => `/notes/projects/${encodePath(projectId)}/profile`,
     reorderProjects: () => '/notes/projects/reorder',
     projectThreads: (projectId: string) => `/notes/projects/${encodePath(projectId)}/threads`,
     jupyterStatus: () => '/notes/jupyter/status',
@@ -79,13 +76,10 @@ export const weaveRoutePaths = {
   compat: {
     projects: () => '/projects',
     project: (projectId: string) => `/projects/${encodePath(projectId)}`,
-    projectProfile: (projectId: string) => `/projects/${encodePath(projectId)}/profile`,
     reorderProjects: () => '/projects/reorder',
   },
   agent: {
     models: () => '/agent/models',
-    profiles: (query?: QueryInput) => appendQuery('/agent/profiles', query),
-    resolvedProfile: (query?: QueryInput) => appendQuery('/agent/profiles/resolved', query),
     prompts: (query?: QueryInput) => appendQuery('/agent/prompts', query),
     promptExpand: (name: string, query?: QueryInput) => appendQuery(`/agent/prompts/${encodePath(name)}/expand`, query),
     chatgptAuthStatus: () => '/agent/chatgpt/auth-status',
@@ -110,7 +104,6 @@ export const weaveRoutes = {
   chat: {
     projects: () => url(weaveRoutePaths.chat.projects()),
     project: (projectId: string) => url(weaveRoutePaths.chat.project(projectId)),
-    projectProfile: (projectId: string) => url(weaveRoutePaths.chat.projectProfile(projectId)),
     reorderProjects: () => url(weaveRoutePaths.chat.reorderProjects()),
     projectThreads: (projectId: string) => url(weaveRoutePaths.chat.projectThreads(projectId)),
     threads: () => url(weaveRoutePaths.chat.threads()),
@@ -127,7 +120,6 @@ export const weaveRoutes = {
   code: {
     projects: () => url(weaveRoutePaths.code.projects()),
     project: (projectId: string) => url(weaveRoutePaths.code.project(projectId)),
-    projectProfile: (projectId: string) => url(weaveRoutePaths.code.projectProfile(projectId)),
     reorderProjects: () => url(weaveRoutePaths.code.reorderProjects()),
     projectBranches: (projectId: string) => url(weaveRoutePaths.code.projectBranches(projectId)),
     projectThreads: (projectId: string) => url(weaveRoutePaths.code.projectThreads(projectId)),
@@ -151,7 +143,6 @@ export const weaveRoutes = {
   notes: {
     projects: () => url(weaveRoutePaths.notes.projects()),
     project: (projectId: string) => url(weaveRoutePaths.notes.project(projectId)),
-    projectProfile: (projectId: string) => url(weaveRoutePaths.notes.projectProfile(projectId)),
     reorderProjects: () => url(weaveRoutePaths.notes.reorderProjects()),
     projectThreads: (projectId: string) => url(weaveRoutePaths.notes.projectThreads(projectId)),
     jupyterStatus: () => url(weaveRoutePaths.notes.jupyterStatus()),
@@ -171,13 +162,10 @@ export const weaveRoutes = {
   compat: {
     projects: () => url(weaveRoutePaths.compat.projects()),
     project: (projectId: string) => url(weaveRoutePaths.compat.project(projectId)),
-    projectProfile: (projectId: string) => url(weaveRoutePaths.compat.projectProfile(projectId)),
     reorderProjects: () => url(weaveRoutePaths.compat.reorderProjects()),
   },
   agent: {
     models: () => url(weaveRoutePaths.agent.models()),
-    profiles: (query?: QueryInput) => url(weaveRoutePaths.agent.profiles(query)),
-    resolvedProfile: (query?: QueryInput) => url(weaveRoutePaths.agent.resolvedProfile(query)),
     prompts: (query?: QueryInput) => url(weaveRoutePaths.agent.prompts(query)),
     promptExpand: (name: string, query?: QueryInput) => url(weaveRoutePaths.agent.promptExpand(name, query)),
     chatgptAuthStatus: () => url(weaveRoutePaths.agent.chatgptAuthStatus()),

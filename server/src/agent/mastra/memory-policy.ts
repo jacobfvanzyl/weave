@@ -97,17 +97,17 @@ const workspaceFilter = (metadata: MemoryRecord | undefined) => {
 };
 
 export const resolveMemoryPolicy = ({
-  profileMemory,
+  agentMemory,
   threadMetadata,
   capabilities = getMemoryCapabilities(),
   tokenLimit = getContextTokenLimit(),
 }: {
-  profileMemory?: MemoryRecord;
+  agentMemory?: MemoryRecord;
   threadMetadata?: MemoryRecord;
   capabilities?: MemoryCapabilities;
   tokenLimit?: number;
 }): ResolvedMemoryPolicy => {
-  const base = isRecord(profileMemory) ? { ...profileMemory } : {};
+  const base = isRecord(agentMemory) ? { ...agentMemory } : {};
   const semanticValue = Object.hasOwn(base, 'semanticRecall') ? base.semanticRecall : true;
   delete base.semanticRecall;
   delete base.observationalMemory;
@@ -119,7 +119,7 @@ export const resolveMemoryPolicy = ({
     configured: capabilities.semanticRecall,
     requested: semanticRequested,
     aliasScope,
-    reason: semanticRequested ? 'semantic recall env is not configured' : 'semantic recall disabled by profile',
+    reason: semanticRequested ? 'semantic recall env is not configured' : 'semantic recall disabled by agent config',
   };
 
   if (semanticRequested && capabilities.semanticRecall) {

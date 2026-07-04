@@ -3,7 +3,6 @@ import {
   deleteProject,
   listProductProjects,
   reorderProjects,
-  setProjectProfile,
   type CreateProjectInput,
 } from './chat-state-api';
 
@@ -15,6 +14,3 @@ export const createCodeProject = (input: CreateProjectInput) =>
 export const deleteCodeProject = (projectId: string) => deleteProject(projectId, 'git');
 
 export const reorderCodeProjects = (projectIds: string[]) => reorderProjects(projectIds, 'code');
-
-export const setCodeProjectProfile = (projectId: string, profileId: string | null) =>
-  setProjectProfile(projectId, profileId, 'git');

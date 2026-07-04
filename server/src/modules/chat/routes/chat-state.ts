@@ -7,7 +7,7 @@ import {
   getThreadContextUsageSnapshot,
   isCompactToolHistoryTextPart,
   resolveMemoryPolicy,
-  resolveProfileContext,
+  resolveAgentContext,
 } from '../../../agent/runtime';
 import { getThreadRunSubmittedUserMessages, getThreadRunUiMessages } from './chat';
 import { isHiddenThread } from './thread-visibility';
@@ -416,13 +416,12 @@ export const chatStateRoutes = [
         const title = body?.title ?? '...';
         const projectId = typeof body?.projectId === 'string' ? body.projectId : undefined;
         const workspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
-        const profileId = typeof body?.profileId === 'string' && body.profileId.trim() ? body.profileId.trim() : undefined;
 
         const memory = await getMemory(c);
         const sortOrder = await getTopSortOrder(memory, resourceId, { projectId, workspaceId });
         const metadata = projectId
-          ? { mode: 'project', projectId, workspaceId, sortOrder, ...(profileId ? { profileId } : {}) }
-          : { mode: 'plain', sortOrder, ...(profileId ? { profileId } : {}) };
+          ? { mode: 'project', projectId, workspaceId, sortOrder }
+          : { mode: 'plain', sortOrder };
         const thread = await memory.createThread({
           resourceId,
           threadId,
@@ -508,10 +507,10 @@ export const chatStateRoutes = [
         const threadId = c.req.param('threadId');
         const mastra = getMastra(c);
         const memory = await getMemory(c);
-        const resolvedProfile = await resolveProfileContext({ mastra, resourceId, threadId });
+        const resolvedContext = await resolveAgentContext({ mastra, resourceId, threadId });
         const memoryPolicy = resolveMemoryPolicy({
-          profileMemory: resolvedProfile.profile.memory,
-          threadMetadata: resolvedProfile.threadMetadata,
+          agentMemory: resolvedContext.config.memory,
+          threadMetadata: resolvedContext.threadMetadata,
         });
         const recalled = await memory.recall({
           ...contextUsageRecallOptions(threadId, resourceId, memoryPolicy.options),
@@ -593,8 +592,7 @@ export const chatStateRoutes = [
         const body = await c.req.json();
         const title = typeof body?.title === 'string' ? body.title.trim() : '';
         const hasArchived = typeof body?.archived === 'boolean';
-        const hasProfileId = body?.profileId === null || typeof body?.profileId === 'string';
-        if (!title && !hasArchived && !hasProfileId) return c.json({ error: 'title, archived, or profileId is required' }, 400);
+        if (!title && !hasArchived) return c.json({ error: 'title or archived is required' }, 400);
 
         const memory = await getMemory(c);
         const thread = await memory.getThreadById({ threadId });
@@ -602,11 +600,6 @@ export const chatStateRoutes = [
 
         const metadata = { ...((thread.metadata ?? {}) as Record<string, unknown>) };
         if (hasArchived) metadata.archived = body.archived;
-        if (hasProfileId) {
-          const profileId = typeof body.profileId === 'string' ? body.profileId.trim() : '';
-          if (profileId) metadata.profileId = profileId;
-          else delete metadata.profileId;
-        }
         const updatedThread = await memory.updateThread({
           id: threadId,
           title: title || thread.title,

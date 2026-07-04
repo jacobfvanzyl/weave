@@ -9,7 +9,13 @@ import { getContextTokenLimit, getMemoryCapabilities } from '../memory-policy';
 import { RuntimeContextProcessor } from '../runtime-context-processor';
 import { storageAuthToken, storageUrl } from '../storage-config';
 import { baseWorkspace } from '../workspace';
-import { builtinDefaultProfile, getProfileContext } from '../profiles/resolver';
+import {
+  getAgentContext,
+  hasPortalWorkspaceBinding,
+  hasWorkspaceBinding,
+  isPortalBackedNotesContext,
+  singletonAgentConfig,
+} from '../context/resolver';
 import { mageHandTools } from './mage-hand-tools';
 import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from '../../model-capabilities';
 
@@ -46,15 +52,15 @@ const createSharedMemory = () => {
 
 const sharedMemory = createSharedMemory();
 
-const resolveProfile = (requestContext: any) => getProfileContext(requestContext)?.profile ?? builtinDefaultProfile;
+const resolveAgentConfig = (requestContext: any) => getAgentContext(requestContext)?.config ?? singletonAgentConfig;
 
-const resolveProfileModel = (requestContext: any) => resolveProfile(requestContext).model ?? builtinDefaultProfile.model!;
+const resolveAgentModel = (requestContext: any) => resolveAgentConfig(requestContext).model;
 
 const resolveOpenAIProviderOptions = (requestContext: any) => {
-  const profile = resolveProfile(requestContext);
-  const model = resolveProfileModel(requestContext);
-  const reasoningEffort = normalizeOpenAIReasoningEffort(profile.reasoningEffort, model, { fallbackToDefault: true });
-  const serviceTier = normalizeOpenAIServiceTier(profile.serviceTier, model);
+  const config = resolveAgentConfig(requestContext);
+  const model = resolveAgentModel(requestContext);
+  const reasoningEffort = normalizeOpenAIReasoningEffort(config.reasoningEffort, model, { fallbackToDefault: true });
+  const serviceTier = normalizeOpenAIServiceTier(config.serviceTier, model);
 
   return reasoningEffort || serviceTier
     ? {
@@ -66,17 +72,77 @@ const resolveOpenAIProviderOptions = (requestContext: any) => {
     : undefined;
 };
 
-const gitOnlyToolKeys = new Set(['writePlanTool', 'updatePlanTool', 'writeProposalTool', 'writeProposalPatchTool', 'updateProposalTool']);
+const baseToolKeys = new Set(['renameThreadTool', 'webSearch', 'webExtract']);
 
-const isToolAvailableForContext = (key: string, requestContext: any) =>
-  !gitOnlyToolKeys.has(key) || getProfileContext(requestContext)?.projectKind === 'git';
+const portalWorkspaceToolKeys = new Set(['read', 'write', 'edit', 'bash']);
+
+const editorWorkspaceToolKeys = new Set(['editor_context']);
+
+const gitWorkspaceToolKeys = new Set([
+  'writePlanTool',
+  'updatePlanTool',
+  'writeProposalTool',
+  'writeProposalPatchTool',
+  'updateProposalTool',
+  'git_status',
+  'git_diff',
+  'git_log',
+  'git_show',
+  'git_branch',
+  'git_switch',
+  'git_worktree',
+  'code_intel_capabilities',
+  'code_diagnostics',
+  'code_hover',
+  'code_definition',
+  'code_references',
+  'code_symbols',
+  'workspace_symbols',
+  'code_actions',
+  'code_action_preview',
+  'rename_preview',
+  'format_preview',
+]);
+
+const notesWorkspaceToolKeys = new Set([
+  'file_index',
+  'file_read',
+  'file_write',
+  'file_mkdir',
+  'file_move',
+  'file_delete',
+  'file_upload',
+]);
+
+const toolKeysForContext = (requestContext: any) => {
+  const agentContext = getAgentContext(requestContext);
+  const keys = new Set(baseToolKeys);
+
+  if (hasWorkspaceBinding(agentContext)) {
+    for (const key of editorWorkspaceToolKeys) keys.add(key);
+  }
+
+  if (hasPortalWorkspaceBinding(agentContext) && agentContext?.projectKind !== 'notes') {
+    for (const key of portalWorkspaceToolKeys) keys.add(key);
+  }
+
+  if (agentContext?.projectKind === 'git' && hasPortalWorkspaceBinding(agentContext)) {
+    for (const key of gitWorkspaceToolKeys) keys.add(key);
+  }
+
+  if (agentContext?.projectKind === 'notes') {
+    for (const key of notesWorkspaceToolKeys) keys.add(key);
+    if (isPortalBackedNotesContext(agentContext) && hasPortalWorkspaceBinding(agentContext)) {
+      for (const key of portalWorkspaceToolKeys) keys.add(key);
+    }
+  }
+
+  return keys;
+};
 
 const resolveTools = ({ requestContext }: { requestContext: any }) => {
-  const profile = resolveProfile(requestContext);
-  const allowed = new Set(profile.tools);
-  const entries = Object.entries(mageHandTools).filter(([key]) => isToolAvailableForContext(key, requestContext));
-  if (allowed.has('*') || allowed.has('all')) return Object.fromEntries(entries);
-  return Object.fromEntries(entries.filter(([key]) => allowed.has(key)));
+  const allowed = toolKeysForContext(requestContext);
+  return Object.fromEntries(Object.entries(mageHandTools).filter(([key]) => allowed.has(key)));
 };
 
 export const mageHandAgent = new Agent({
@@ -86,11 +152,11 @@ export const mageHandAgent = new Agent({
     const providerOptions = resolveOpenAIProviderOptions(requestContext);
     return {
       role: 'system' as const,
-      content: resolveProfile(requestContext).instructions,
+      content: resolveAgentConfig(requestContext).instructions,
       ...(providerOptions ? { providerOptions } : {}),
     };
   },
-  model: ({ requestContext }) => resolveProfileModel(requestContext),
+  model: ({ requestContext }) => resolveAgentModel(requestContext),
   workspace: baseWorkspace,
   tools: resolveTools,
   inputProcessors: [
@@ -104,3 +170,7 @@ export const mageHandAgent = new Agent({
   ],
   memory: sharedMemory,
 });
+
+export const __mageHandAgentTest = {
+  toolKeysForContext,
+};

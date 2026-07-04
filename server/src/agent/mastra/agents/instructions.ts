@@ -1,5 +1,5 @@
 import type { SystemMessage } from '@mastra/core/llm';
-import type { ResolvedSkillSummary } from '../profiles/skill-source';
+import type { ResolvedSkillSummary } from '../context/skill-source';
 
 export type ProjectAgentInstructions = {
   path: string;

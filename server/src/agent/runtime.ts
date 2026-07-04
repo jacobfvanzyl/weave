@@ -7,6 +7,6 @@ export {
   type ThreadContextUsageSnapshot,
 } from './mastra/context-usage';
 export { resolveMemoryPolicy } from './mastra/memory-policy';
-export { putProfileContext, resolveProfileContext } from './mastra/profiles/resolver';
-export { listResolvedProfileSkillSummaries } from './mastra/profiles/skill-source';
+export { putAgentContext, resolveAgentContext, singletonAgentConfig } from './mastra/context/resolver';
+export { listResolvedContextSkillSummaries } from './mastra/context/skill-source';
 export { putChatRuntimeContext } from './mastra/runtime-context-processor';

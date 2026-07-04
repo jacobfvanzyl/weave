@@ -24,12 +24,12 @@ describe('chat system instructions', () => {
     const system = buildChatSystemMessages({
       includeGitInstructions: true,
       agentFiles: [{ path: 'AGENTS.md', content: 'Repository rules' }],
-      callerSystem: 'Profile instructions',
+      callerSystem: 'Agent instructions',
     });
     const text = String(system);
 
     expect(text).toContain('Repository rules');
-    expect(text).toContain('Profile instructions');
+    expect(text).toContain('Agent instructions');
     expect(text).toContain('Guided approval gate');
     expect(text).toContain('do not move from discussion/planning into source-file implementation until a proposal artifact exists');
     expect(text).toContain('treat that as approval to create the proposal, not approval to edit source files');
@@ -51,7 +51,7 @@ describe('chat system instructions', () => {
     const processor = new RuntimeContextProcessor({ now, timeZone: 'Africa/Johannesburg' });
     const result = processor.processLLMRequest({
       prompt: [
-        { role: 'system', content: 'Profile instructions' },
+        { role: 'system', content: 'Agent instructions' },
         { role: 'system', content: 'Skill search instructions' },
         { role: 'user', content: [{ type: 'text', text: 'What time is it?' }] },
       ],
@@ -59,7 +59,7 @@ describe('chat system instructions', () => {
     const prompt = result?.prompt as any[];
 
     expect(prompt.map(message => message.role)).toEqual(['system', 'system', 'system', 'user']);
-    expect(prompt[0].content).toBe('Profile instructions');
+    expect(prompt[0].content).toBe('Agent instructions');
     expect(prompt[1].content).toBe('Skill search instructions');
     expect(prompt[2].content).toBe(runtimeContext);
     expect(prompt[3].content).toEqual([{ type: 'text', text: 'What time is it?' }]);
@@ -80,7 +80,7 @@ describe('chat system instructions', () => {
     const system = buildChatSystemMessages({
       includeGitInstructions: false,
       skillSummaries: skills,
-      callerSystem: 'Profile instructions',
+      callerSystem: 'Agent instructions',
     });
     const text = String(system);
 
@@ -93,7 +93,7 @@ describe('chat system instructions', () => {
     expect(text).toContain('- 1 more skill(s) are available. Use search_skills to find them.');
     expect(text.includes('skill-30')).toBe(false);
     expect(text.includes('FULL SKILL BODY SHOULD NOT BE INCLUDED')).toBe(false);
-    expect(text).toContain('Profile instructions');
+    expect(text).toContain('Agent instructions');
   });
 
   it('omits available-skill guidance when there are no skills', () => {

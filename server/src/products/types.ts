@@ -49,7 +49,6 @@ export type Project = {
   gitRemote?: string;
   defaultBranch?: string;
   rootPathHint?: string;
-  defaultProfileId?: string;
   sortOrder?: number;
   agentInstructions?: {
     path: string;

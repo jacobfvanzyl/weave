@@ -28,12 +28,12 @@ const runGit = async (cwd: string, args: string[]) => {
   if (!result.success) throw new Error(`git ${args.join(' ')} failed`);
 };
 
-Deno.test('Portal discovery reads ~/.config/weave profiles, prompts, skills, MCP, and config', async () => {
+Deno.test('Portal discovery reads ~/.config/weave prompts, skills, MCP, and config without profiles', async () => {
   const previousHome = Deno.env.get('HOME');
   const home = await Deno.makeTempDir({ prefix: 'weave-global-context-' });
   try {
     Deno.env.set('HOME', home);
-    await write(`${home}/.config/weave/weave.config.json`, '{"defaultProfileId":"default"}');
+    await write(`${home}/.config/weave/weave.config.json`, '{"context":"default"}');
     await write(`${home}/.config/weave/mcp.json`, '{"servers":{}}');
     await write(`${home}/.config/weave/profiles/default.md`, '# Default\n');
     await write(`${home}/.config/weave/prompts/ship.md`, '# Ship\n');
@@ -45,7 +45,6 @@ Deno.test('Portal discovery reads ~/.config/weave profiles, prompts, skills, MCP
     assertEquals(result.files.map((file) => `${file.kind}:${file.path}`).sort(), [
       'config:.config/weave/weave.config.json',
       'mcp:.config/weave/mcp.json',
-      'profile:.config/weave/profiles/default.md',
       'prompt:.config/weave/prompts/ship.md',
       'skill:.config/weave/skills/release/SKILL.md',
     ]);

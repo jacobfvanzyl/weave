@@ -2,9 +2,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname as pathDirname, join, relative } from 'node:path';
 import { LocalSkillSource, type SkillSource, type SkillSourceEntry, type SkillSourceStat } from '@mastra/core/workspace';
 import { parseFrontmatter } from '../prompt-templates/frontmatter';
-import type { ResolvedProfileContext, WeaveContextFile } from './resolver';
+import type { ResolvedAgentContext, WeaveContextFile } from './resolver';
 
-const virtualSkillRoot = '__weave_profile_skills__';
+const virtualSkillRoot = '__weave_context_skills__';
 
 type VirtualSkillFile = {
   path: string;
@@ -24,14 +24,14 @@ type RegisteredSkill = ResolvedSkillSummary & {
   workspacePath: string;
 };
 
-type RegisteredProfileSkills = {
+type RegisteredContextSkills = {
   id: string;
   roots: string[];
   skillsByName: Map<string, RegisteredSkill>;
   files: Map<string, VirtualSkillFile>;
 };
 
-const registries = new Map<string, RegisteredProfileSkills>();
+const registries = new Map<string, RegisteredContextSkills>();
 
 const trimSlashes = (value: string) => value.replace(/^\/+|\/+$/g, '');
 const basename = (value: string) => trimSlashes(value).split('/').filter(Boolean).pop() ?? '';
@@ -114,7 +114,7 @@ const createRegistryId = () => `${Date.now().toString(36)}_${crypto.randomUUID()
 const normalizeSkillPath = (path: string) => trimSlashes(path);
 
 const addVirtualSkill = (
-  registry: RegisteredProfileSkills,
+  registry: RegisteredContextSkills,
   root: string,
   file: WeaveContextFile,
   source: 'global' | 'project',
@@ -142,7 +142,7 @@ const addVirtualSkill = (
 };
 
 const addSnapshotSkills = (
-  registry: RegisteredProfileSkills,
+  registry: RegisteredContextSkills,
   root: string,
   files: WeaveContextFile[] | undefined,
   source: 'global' | 'project',
@@ -161,19 +161,19 @@ const mergeSkillRecords = (...layers: RegisteredSkill[][]) => {
   return byName;
 };
 
-const combinedSkillsByName = (registry: RegisteredProfileSkills) =>
+const combinedSkillsByName = (registry: RegisteredContextSkills) =>
   mergeSkillRecords([...scanSourceSkills().values()], [...registry.skillsByName.values()]);
 
-export const __profileSkillSourceTest = {
+export const __contextSkillSourceTest = {
   combinedSkillsByName,
   mergeSkillRecords,
   skillNameFromContent,
 };
 
-const createResolvedProfileSkillRegistry = (resolved: ResolvedProfileContext) => {
+const createResolvedContextSkillRegistry = (resolved: ResolvedAgentContext) => {
   const registryId = createRegistryId();
   const root = `${virtualSkillRoot}/${registryId}`;
-  const registry: RegisteredProfileSkills = {
+  const registry: RegisteredContextSkills = {
     id: registryId,
     roots: [],
     skillsByName: new Map(),
@@ -186,19 +186,19 @@ const createResolvedProfileSkillRegistry = (resolved: ResolvedProfileContext) =>
   return registry;
 };
 
-export const registerResolvedProfileSkills = (resolved: ResolvedProfileContext) => {
-  const registry = createResolvedProfileSkillRegistry(resolved);
+export const registerResolvedContextSkills = (resolved: ResolvedAgentContext) => {
+  const registry = createResolvedContextSkillRegistry(resolved);
 
   registries.set(registry.id, registry);
   return [...combinedSkillsByName(registry).values()].map(skill => skill.workspacePath);
 };
 
-export const listResolvedProfileSkillSummaries = (resolved: ResolvedProfileContext): ResolvedSkillSummary[] => {
-  const registry = createResolvedProfileSkillRegistry(resolved);
+export const listResolvedContextSkillSummaries = (resolved: ResolvedAgentContext): ResolvedSkillSummary[] => {
+  const registry = createResolvedContextSkillRegistry(resolved);
   return [...combinedSkillsByName(registry).values()].map(({ workspacePath: _workspacePath, ...summary }) => summary);
 };
 
-export class ProfileSkillSource implements SkillSource {
+export class ContextSkillSource implements SkillSource {
   constructor(private readonly localSkillSource: LocalSkillSource) {}
 
   private getVirtualFile(path: string) {
@@ -279,10 +279,5 @@ export class ProfileSkillSource implements SkillSource {
   async readdir(path: string) {
     if (isVirtualPath(path)) return this.getVirtualChildren(path);
     return this.localSkillSource.readdir(path);
-  }
-
-  async realpath(path: string) {
-    if (isVirtualPath(path)) return normalizeSkillPath(path);
-    return this.localSkillSource.realpath(path);
   }
 }

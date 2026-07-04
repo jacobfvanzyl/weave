@@ -20,7 +20,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Brain, Check, ChevronRight, Clipboard, Crosshair, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
+import { Check, ChevronRight, Clipboard, Crosshair, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
 import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, sendThreadSteeringMessage, type ContextUsage } from '../../lib/chat-state-api';
 import { cn } from '../../lib/cn';
@@ -35,8 +35,7 @@ import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
 import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, type ModelOption } from '../../lib/models';
-import { listProfiles, type DynamicProfileSummary, type ProfileResolutionContext } from '../../lib/profiles-api';
-import { expandPrompt, listPrompts, type PromptSummary } from '../../lib/prompts-api';
+import { expandPrompt, listPrompts, type PromptResolutionContext, type PromptSummary } from '../../lib/prompts-api';
 import { shouldShowProposalReview } from '../../lib/proposal-review-state';
 import { useChatStore, type ChatThread, type ReasoningEffort, type ServiceTier } from '../../stores/chat-store';
 import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
@@ -45,7 +44,6 @@ import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
 import { CommandPanel } from '../ui/command';
 import { Menu, MenuGroupLabel, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubPopup, MenuSubTrigger, MenuTrigger } from '../ui/menu';
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../ui/select';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../ui/tooltip';
 import { CodeBlock, shouldDeferCodeFenceHighlight } from './CodeBlock';
 import {
@@ -117,21 +115,10 @@ const useSecondTicker = (enabled: boolean) => {
   return nowMs;
 };
 
-const fallbackProfile: DynamicProfileSummary = {
-  id: 'builtin-default',
-  name: 'Default',
-  source: 'builtin',
-  tools: [],
-  skills: [],
-  prompts: [],
-  mcp: [],
-};
-
-const profileContextForThread = (threadId: string | null, thread: ChatThread | undefined): ProfileResolutionContext => ({
+const promptContextForThread = (threadId: string | null, thread: ChatThread | undefined): PromptResolutionContext => ({
   threadId: threadId ?? undefined,
   projectId: thread?.projectId,
   workspaceId: thread?.workspaceId,
-  profileId: thread?.profileId,
 });
 
 const readFileAsDataUrl = (file: File) =>
@@ -1186,73 +1173,6 @@ const ThreadMessage = () => (
   </MessagePrimitive.Root>
 );
 
-const ProfilePicker = () => {
-  const threadId = useContext(ThreadIdContext);
-  const isRunning = useThread(state => state.isRunning);
-  const thread = useChatStore(state => state.threads.find(item => item.id === threadId));
-  const setDraftThreadProfile = useChatStore(state => state.setDraftThreadProfile);
-  const isDraft = thread?.draft === true;
-  const context = useMemo(
-    () => profileContextForThread(threadId, thread),
-    [threadId, thread?.draft, thread?.profileId, thread?.projectId, thread?.workspaceId],
-  );
-  const { data, isError, isLoading } = useQuery({
-    queryKey: ['profiles', context.threadId ?? null, context.projectId ?? null, context.workspaceId ?? null, context.profileId ?? null],
-    queryFn: () => listProfiles(context),
-    enabled: Boolean(threadId),
-    staleTime: 1000 * 60,
-  });
-  const profiles = data?.profiles?.length ? data.profiles : [fallbackProfile];
-  const resolvedProfile = data?.resolved.profile ?? fallbackProfile;
-  const loadedActiveProfileId = data && isDraft && thread?.profileId ? thread.profileId : resolvedProfile.id;
-  const loadedActiveProfile = profiles.find(profile => profile.id === loadedActiveProfileId) ?? resolvedProfile;
-  const activeProfileId = profiles.some(profile => profile.id === loadedActiveProfileId)
-    ? loadedActiveProfileId
-    : loadedActiveProfile.id;
-  const activeProfile = profiles.find(profile => profile.id === activeProfileId) ?? loadedActiveProfile;
-  const profileOptions = profiles.some(profile => profile.id === activeProfile.id)
-    ? profiles
-    : [activeProfile, ...profiles];
-  const disabled = !isDraft || isRunning || isLoading || isError || profileOptions.length === 0;
-  const title = isError
-    ? 'Profile unavailable'
-    : isDraft
-      ? 'Profile'
-      : `Profile locked: ${activeProfile.name}`;
-
-  return (
-    <div className="profile-picker min-w-0 shrink-0">
-      <Select
-        value={activeProfileId}
-        onValueChange={value => {
-          if (threadId && isDraft) setDraftThreadProfile(threadId, value);
-        }}
-        disabled={disabled}
-      >
-        <SelectTrigger
-          aria-label="Profile"
-          title={title}
-          className="h-9 w-9 justify-center border-transparent bg-transparent px-0 text-muted-foreground shadow-none before:hidden hover:bg-muted hover:text-foreground disabled:opacity-60 sm:w-auto sm:max-w-44 sm:justify-start sm:px-2"
-          variant="ghost"
-        >
-          <Brain size={16} className="shrink-0 sm:mr-1" />
-          <SelectValue className="hidden min-w-0 text-left sm:block">{activeProfile.name}</SelectValue>
-        </SelectTrigger>
-        <SelectPopup align="start" className="max-h-72">
-          {profileOptions.map(profile => (
-            <SelectItem key={profile.id} value={profile.id}>
-              <span className="flex min-w-0 flex-col">
-                <span className="truncate">{profile.name}</span>
-                <span className="truncate text-xs text-muted-foreground">{profile.description ?? profile.id}</span>
-              </span>
-            </SelectItem>
-          ))}
-        </SelectPopup>
-      </Select>
-    </div>
-  );
-};
-
 type ReasoningOption = { value: ReasoningEffort; label: string; detail?: string };
 
 const defaultFallbackReasoningOption: ReasoningOption = { value: 'medium', label: 'Medium', detail: 'Balanced reasoning' };
@@ -1710,11 +1630,11 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   const [activeIndex, setActiveIndex] = useState(0);
   const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
   const promptContext = useMemo(
-    () => profileContextForThread(threadId, thread),
-    [threadId, thread?.draft, thread?.profileId, thread?.projectId, thread?.workspaceId],
+    () => promptContextForThread(threadId, thread),
+    [threadId, thread?.projectId, thread?.workspaceId],
   );
   const { data: prompts = [] } = useQuery({
-    queryKey: ['prompts', promptContext.threadId ?? null, promptContext.projectId ?? null, promptContext.workspaceId ?? null, promptContext.profileId ?? null],
+    queryKey: ['prompts', promptContext.threadId ?? null, promptContext.projectId ?? null, promptContext.workspaceId ?? null],
     queryFn: () => listPrompts(promptContext),
     staleTime: 1000 * 60,
   });
@@ -1917,7 +1837,6 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
             </ComposerPrimitive.AddAttachment>
           )}
           <ModelSettingsPicker />
-          <ProfilePicker />
           <FollowWritesToggle canFollowWrites={canFollowWrites} />
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -2261,7 +2180,7 @@ const AssistantChatRuntime = ({
           const slashCommand = parseSlashCommand(lastUserText);
           const threadTitle = firstUserText?.slice(0, 64);
           const threadBeforePersist = useChatStore.getState().threads.find(thread => thread.id === threadId);
-          const promptContext = profileContextForThread(threadId, threadBeforePersist);
+          const promptContext = promptContextForThread(threadId, threadBeforePersist);
           markComposerDraftAwaitingServerAck(threadId, lastUserText);
           await useChatStore.getState().ensureThreadPersisted(threadId, threadTitle);
           useChatStore.getState().touchThread(threadId, threadTitle, true);

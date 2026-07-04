@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { listAgentContributions } from '../../server/src/agent';
 import { chatgptAuthRoutes } from '../../server/src/agent/routes/chatgpt-auth';
 import { modelRoutes } from '../../server/src/agent/routes/models';
-import { profileRoutes } from '../../server/src/agent/routes/profiles';
 import { promptRoutes } from '../../server/src/agent/routes/prompts';
 import { serverModules } from '../../server/src/modules';
 import { chatRoutes } from '../../server/src/modules/chat/routes/chat';
@@ -19,7 +18,7 @@ const paths = (routes: Array<{ path: string }>) => routes.map(route => route.pat
 
 describe('backend route ownership', () => {
   it('keeps Agent and Portal out of product module registration', () => {
-    expect(serverModules.map(module => module.id)).toEqual(['chat', 'code', 'editor-context', 'notes', 'workspace-files', 'attachments']);
+    expect(serverModules.map(module => module.id)).toEqual(['chat', 'code', 'editor-context', 'notes', 'notifications', 'workspace-files', 'attachments']);
   });
 
   it('registers canonical route prefixes at their owning boundaries', () => {
@@ -42,7 +41,6 @@ describe('backend route ownership', () => {
     ]);
     expect(paths(chatStateRoutes).every(path => path === '/owner/me' || path.startsWith('/chat/threads'))).toBe(true);
     expect(paths(chatRoutes).every(path => path.startsWith('/chat/runs'))).toBe(true);
-    expect(paths(profileRoutes).every(path => path.startsWith('/agent/profiles'))).toBe(true);
     expect(paths(promptRoutes).every(path => path.startsWith('/agent/prompts'))).toBe(true);
     expect(paths(modelRoutes).every(path => path.startsWith('/agent/models'))).toBe(true);
     expect(paths(chatgptAuthRoutes).every(path => path.startsWith('/agent/chatgpt'))).toBe(true);
@@ -67,7 +65,7 @@ describe('backend route ownership', () => {
     const contributions = listAgentContributions();
     expect(contributions.map(contribution => contribution.moduleId).sort()).toEqual(['chat', 'code', 'notes']);
     expect(contributions.find(contribution => contribution.moduleId === 'code')?.tools?.map(tool => tool.id))
-      .toEqual(expect.arrayContaining(['read', 'bash', 'git_status', 'code_diagnostics', 'rename_preview', 'format_preview']));
+      .toEqual(expect.arrayContaining(['read', 'bash', 'git_status', 'git_branch', 'git_worktree', 'code_diagnostics', 'rename_preview', 'format_preview']));
     expect(contributions.find(contribution => contribution.moduleId === 'notes')?.tools?.map(tool => tool.id))
       .toEqual(expect.arrayContaining(['file_index', 'file_read', 'file_write']));
   });

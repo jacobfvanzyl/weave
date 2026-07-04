@@ -125,7 +125,6 @@ const toProject = (thread: any): Project => {
     gitRemote: metadata.gitRemote,
     defaultBranch: metadata.defaultBranch,
     rootPathHint: metadata.rootPathHint,
-    defaultProfileId: metadata.defaultProfileId,
     sortOrder: typeof metadata.sortOrder === 'number' ? metadata.sortOrder : undefined,
     agentInstructions: metadata.agentInstructions,
     hidden: metadata.hidden === true,
@@ -635,32 +634,6 @@ export const projectRoutes = [
       }
     },
   }),
-  defineRoute('/code/projects/:projectId/profile', {
-    method: 'PATCH',
-    handler: async c => {
-      try {
-        const resourceId = getResourceId(c);
-        const projectId = c.req.param('projectId');
-        const body = await c.req.json();
-        const hasProfileId = body?.profileId === null || typeof body?.profileId === 'string';
-        if (!hasProfileId) return c.json({ error: 'profileId is required' }, 400);
-
-        const memory = await getMemory(c);
-        const project = assertProjectProduct(c, await getProject(memory, resourceId, projectId));
-        if (!project) return c.json({ error: 'project not found' }, 404);
-
-        const profileId = optionalString(body.profileId);
-        const nextProject = {
-          ...project,
-          ...(profileId ? { defaultProfileId: profileId } : { defaultProfileId: undefined }),
-          updatedAt: nowIso(),
-        };
-        return c.json({ project: await saveProject(memory, resourceId, nextProject) });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
   defineRoute('/code/projects/:projectId/branches', {
     method: 'GET',
     handler: async c => {
@@ -1131,7 +1104,6 @@ export const projectRoutes = [
         const body = await c.req.json();
         const threadId = typeof body?.threadId === 'string' ? body.threadId : createId('thread');
         const title = typeof body?.title === 'string' ? body.title : '...';
-        const profileId = optionalString(body?.profileId);
         const memory = await getMemory(c);
         const project = await getProject(memory, resourceId, projectId);
         if (!project) return c.json({ error: 'project not found' }, 404);
@@ -1158,10 +1130,9 @@ export const projectRoutes = [
               projectId,
               workspaceId: workspace.id,
               sortOrder,
-              ...(profileId ? { profileId } : {}),
               ...(isAdHoc ? { adHoc: true, portalId: workspace.portalId, workspacePath: workspace.path } : {}),
             }
-          : { mode: 'project', projectId, sortOrder, ...(profileId ? { profileId } : {}) };
+          : { mode: 'project', projectId, sortOrder };
         const thread = await memory.createThread({
           resourceId,
           threadId,
@@ -1183,7 +1154,6 @@ const productProjectRoutePaths = new Set([
   '/code/projects',
   '/code/projects/reorder',
   '/code/projects/:projectId',
-  '/code/projects/:projectId/profile',
   '/code/projects/:projectId/threads',
 ]);
 

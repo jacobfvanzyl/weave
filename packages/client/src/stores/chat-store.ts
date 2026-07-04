@@ -28,7 +28,6 @@ export type ChatThread = {
   sortOrder?: number;
   projectId?: string;
   workspaceId?: string;
-  profileId?: string;
   archived?: boolean;
   adHoc?: boolean;
   workspacePath?: string;
@@ -156,7 +155,6 @@ type ChatState = {
   consumeProposalImplementationRequest: (threadId: string, requestId: string) => void;
   setGuidedTaskExpanded: (threadId: string, expanded: boolean) => void;
   setToolActivityCollapsed: (groupId: string, collapsed: boolean) => void;
-  setDraftThreadProfile: (threadId: string, profileId: string | null) => void;
   setServerThreads: (threads: ChatThread[], projects?: ThreadOpenabilityProject[]) => void;
   newThread: (projectId?: string, workspaceId?: string) => Promise<void>;
   ensureThreadPersisted: (threadId: string, title?: string) => Promise<void>;
@@ -378,14 +376,6 @@ export const useChatStore = create<ChatState>()(
         set(state => ({
           toolActivityCollapsed: { ...state.toolActivityCollapsed, [groupId]: collapsed },
         })),
-      setDraftThreadProfile: (threadId, profileId) =>
-        set(state => ({
-          threads: state.threads.map(thread =>
-            thread.id === threadId && thread.draft === true
-              ? { ...thread, profileId: profileId?.trim() || undefined }
-              : thread,
-          ),
-        })),
       setServerThreads: (threads, projects = []) =>
         set(state => {
           const surface = useWorkspaceSurfaceStore.getState();
@@ -474,8 +464,8 @@ export const useChatStore = create<ChatState>()(
         }));
 
         const serverThread = existing?.projectId
-          ? (await createProjectThread(existing.projectId, threadId, existing.workspaceId, threadTitle, existing.profileId)).thread
-          : await createServerThread(threadId, undefined, undefined, threadTitle, existing?.profileId);
+          ? (await createProjectThread(existing.projectId, threadId, existing.workspaceId, threadTitle)).thread
+          : await createServerThread(threadId, undefined, undefined, threadTitle);
 
         set(state => ({
           threads: state.threads.map(thread =>

@@ -13,7 +13,7 @@ const chatProjectPath = (path: string) =>
 registerAgentContribution({
   moduleId: 'chat',
   runtimeContextProviders: [
-    { id: 'chat.thread', description: 'Thread metadata, selected profile, model, and run context.' },
+    { id: 'chat.thread', description: 'Thread metadata, model, and run context.' },
   ],
   memoryPolicyHints: [
     { id: 'chat.context-window', description: 'Context-window and compaction policy for chat runs.' },

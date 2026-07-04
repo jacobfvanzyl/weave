@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { expandArguments } from './arguments';
 import { parseFrontmatter } from './frontmatter';
 import type { PromptSummary, PromptTemplate } from './types';
-import { resolveProfileContext, type ResolvedProfileContext, type WeaveContextFile } from '../profiles/resolver';
+import { resolveAgentContext, type ResolvedAgentContext, type WeaveContextFile } from '../context/resolver';
 
 const promptNamePattern = /^[a-zA-Z0-9_-]+$/;
 const promptDirs = [
@@ -20,8 +20,7 @@ export type PromptResolutionContext = {
   threadId?: unknown;
   projectId?: unknown;
   workspaceId?: unknown;
-  profileId?: unknown;
-  resolvedProfile?: ResolvedProfileContext;
+  resolvedContext?: ResolvedAgentContext;
 };
 
 const builtinPrompts: PromptTemplate[] = [
@@ -113,16 +112,15 @@ const promptFromContextFile = (file: WeaveContextFile, source: 'global' | 'proje
   };
 };
 
-const getResolvedProfile = async (context?: PromptResolutionContext) => {
-  if (context?.resolvedProfile) return context.resolvedProfile;
+const getResolvedContext = async (context?: PromptResolutionContext) => {
+  if (context?.resolvedContext) return context.resolvedContext;
   if (!context?.mastra || !context.resourceId) return undefined;
-  return resolveProfileContext({
+  return resolveAgentContext({
     mastra: context.mastra,
     resourceId: context.resourceId,
     threadId: context.threadId,
     projectId: context.projectId,
     workspaceId: context.workspaceId,
-    profileId: context.profileId,
   });
 };
 
@@ -145,7 +143,7 @@ const listAppPromptTemplates = async (): Promise<PromptTemplate[]> => {
 
 export const listPromptTemplates = async (context?: PromptResolutionContext): Promise<PromptTemplate[]> => {
   const appPrompts = await listAppPromptTemplates();
-  const resolved = await getResolvedProfile(context);
+  const resolved = await getResolvedContext(context);
   if (!resolved) return appPrompts;
 
   const promptsByName = new Map<string, PromptTemplate>(appPrompts.map(prompt => [prompt.name, prompt]));

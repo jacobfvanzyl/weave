@@ -40,7 +40,7 @@ const countImageParts = (prompt: any[]) => prompt.reduce((total, message) => {
 describe('memory policy resolution', () => {
   it('strips semantic recall when embedding env is unavailable', () => {
     const policy = resolveMemoryPolicy({
-      profileMemory: {
+      agentMemory: {
         lastMessages: 20,
         semanticRecall: { scope: 'workspace', topK: 8 },
       },
@@ -58,7 +58,7 @@ describe('memory policy resolution', () => {
 
   it('builds workspace-scoped semantic recall with project and workspace filters', () => {
     const policy = resolveMemoryPolicy({
-      profileMemory: {
+      agentMemory: {
         lastMessages: 20,
         semanticRecall: { scope: 'workspace', topK: 6, messageRange: { before: 2, after: 3 } },
       },
@@ -86,7 +86,7 @@ describe('memory policy resolution', () => {
 
   it('falls workspace semantic recall back to thread scope without workspace metadata', () => {
     const policy = resolveMemoryPolicy({
-      profileMemory: { semanticRecall: true },
+      agentMemory: { semanticRecall: true },
       threadMetadata: {},
       capabilities: semanticCapabilities,
     });
@@ -100,7 +100,7 @@ describe('memory policy resolution', () => {
 
   it('adds observational memory only when fully configured', () => {
     const policy = resolveMemoryPolicy({
-      profileMemory: { lastMessages: 10 },
+      agentMemory: { lastMessages: 10 },
       capabilities: {
         semanticRecall: false,
         observationalMemory: true,

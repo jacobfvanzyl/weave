@@ -153,7 +153,6 @@ export type Project = {
   gitRemote?: string;
   defaultBranch?: string;
   rootPathHint?: string;
-  defaultProfileId?: string;
   sortOrder?: number;
   workspaces: Workspace[];
   createdAt: string;
@@ -293,7 +292,6 @@ const toChatThread = (thread: ServerThread): ChatThread => ({
   projectId: typeof thread.metadata?.projectId === 'string' ? thread.metadata.projectId : undefined,
   workspaceId: typeof thread.metadata?.workspaceId === 'string' ? thread.metadata.workspaceId : undefined,
   archived: thread.metadata?.archived === true,
-  profileId: typeof thread.metadata?.profileId === 'string' ? thread.metadata.profileId : undefined,
   adHoc: thread.metadata?.adHoc === true,
   workspacePath: typeof thread.metadata?.workspacePath === 'string' ? thread.metadata.workspacePath : undefined,
   removedWorkspace: toRemovedWorkspace(thread.metadata?.removedWorkspace),
@@ -355,24 +353,12 @@ export const listServerThreads = async () => {
   return result.threads.map(toChatThread);
 };
 
-export const createServerThread = async (threadId: string, projectId?: string, workspaceId?: string, title = '...', profileId?: string) => {
+export const createServerThread = async (threadId: string, projectId?: string, workspaceId?: string, title = '...') => {
   const result = await parseJson<{ thread: ServerThread }>(
     await fetch(weaveRoutes.chat.threads(), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title, projectId, workspaceId, profileId }),
-    }),
-  );
-
-  return toChatThread(result.thread);
-};
-
-export const setServerThreadProfile = async (threadId: string, profileId: string | null) => {
-  const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(weaveRoutes.chat.thread(threadId), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ profileId }),
+      body: JSON.stringify({ threadId, title, projectId, workspaceId }),
     }),
   );
 
@@ -575,24 +561,6 @@ export const deleteProject = async (projectId: string, projectKind?: Project['pr
   );
 };
 
-export const setProjectProfile = async (
-  projectId: string,
-  profileId: string | null,
-  projectKind?: Project['projectKind'],
-) => {
-  const result = await parseJson<{ project: Project }>(
-    await fetch(projectKind
-      ? productProjectRoutes(productForProjectKind(projectKind)).projectProfile(projectId)
-      : weaveRoutes.compat.projectProfile(projectId), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ profileId }),
-    }),
-  );
-
-  return result.project;
-};
-
 export const reorderProjects = async (projectIds: string[], product: ProductId = 'code') => {
   const routes = productProjectRoutes(product);
   const result = await parseJson<{ projects: Project[] }>(
@@ -732,7 +700,6 @@ export const createProjectThread = async (
   threadId: string,
   workspaceId?: string,
   title = '...',
-  profileId?: string,
   projectKind?: Project['projectKind'],
 ) => {
   const routes = productProjectRoutes(projectKind ? productForProjectKind(projectKind) : 'code');
@@ -740,7 +707,7 @@ export const createProjectThread = async (
     await fetch(routes.projectThreads(projectId), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title, workspaceId, profileId }),
+      body: JSON.stringify({ threadId, title, workspaceId }),
     }),
   );
 

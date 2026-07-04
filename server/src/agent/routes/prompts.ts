@@ -28,7 +28,6 @@ const promptContext = (c: any, values: Record<string, unknown> = {}) => {
     threadId: values.threadId ?? optionalQueryString(c, 'threadId'),
     projectId: values.projectId ?? optionalQueryString(c, 'projectId'),
     workspaceId: values.workspaceId ?? optionalQueryString(c, 'workspaceId'),
-    profileId: values.profileId ?? optionalQueryString(c, 'profileId'),
   };
 };
 
@@ -47,7 +46,6 @@ export const promptRoutes = [
         threadId: optionalBodyString(body, 'threadId'),
         projectId: optionalBodyString(body, 'projectId'),
         workspaceId: optionalBodyString(body, 'workspaceId'),
-        profileId: optionalBodyString(body, 'profileId'),
       });
 
       if (args.length > maxArgumentsLength) {

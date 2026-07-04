@@ -3,11 +3,6 @@ export type AgentToolContribution = {
   description?: string;
 };
 
-export type AgentProfileContribution = {
-  id: string;
-  description?: string;
-};
-
 export type AgentPromptContribution = {
   id: string;
   description?: string;
@@ -31,7 +26,6 @@ export type AgentMemoryPolicyHintContribution = {
 export type AgentContribution = {
   moduleId: string;
   tools?: AgentToolContribution[];
-  profiles?: AgentProfileContribution[];
   prompts?: AgentPromptContribution[];
   sources?: AgentSourceProviderContribution[];
   runtimeContextProviders?: AgentRuntimeContextProviderContribution[];

@@ -5,11 +5,11 @@ import { defineRoute } from '../../../server/routes';
 import { attachmentIdFromReference, attachmentModelUrl, attachmentStorage, parseBase64DataUrl, type AttachmentStorage, type StoredAttachmentMetadata } from '../../attachments/storage';
 import {
   buildChatSystemMessages,
-  listResolvedProfileSkillSummaries,
+  listResolvedContextSkillSummaries,
   putChatRuntimeContext,
-  putProfileContext,
+  putAgentContext,
   resolveMemoryPolicy,
-  resolveProfileContext,
+  resolveAgentContext,
   subscribeThreadContextUsage,
   type ThreadContextUsageSnapshot,
 } from '../../../agent/runtime';
@@ -1551,26 +1551,26 @@ export const chatRoutes = [
       params.messages = sanitizeSubmittedMessagesForMastra(await normalizeMessageImageAttachments(submittedMessagesForMemory(params.messages, threadId), {
         threadId: typeof threadId === 'string' ? threadId : undefined,
       }));
-      const resolvedProfile = resourceId
-        ? await resolveProfileContext({ mastra, resourceId, threadId })
+      const resolvedContext = resourceId
+        ? await resolveAgentContext({ mastra, resourceId, threadId })
         : undefined;
-      if (resolvedProfile) putProfileContext(requestContext, resolvedProfile);
-      const memoryPolicy = resolvedProfile
+      if (resolvedContext) putAgentContext(requestContext, resolvedContext);
+      const memoryPolicy = resolvedContext
         ? resolveMemoryPolicy({
-            profileMemory: resolvedProfile.profile.memory,
-            threadMetadata: resolvedProfile.threadMetadata,
+            agentMemory: resolvedContext.config.memory,
+            threadMetadata: resolvedContext.threadMetadata,
           })
         : undefined;
-      const isProjectWorkspace = Boolean(resolvedProfile?.threadMetadata?.mode === 'project' && resolvedProfile.threadMetadata.workspaceId);
-      const isGitProject = resolvedProfile?.projectKind === 'git';
-      const isNotesProject = resolvedProfile?.projectKind === 'notes';
+      const isProjectWorkspace = Boolean(resolvedContext?.threadMetadata?.mode === 'project' && resolvedContext.threadMetadata.workspaceId);
+      const isGitProject = resolvedContext?.projectKind === 'git';
+      const isNotesProject = resolvedContext?.projectKind === 'notes';
       markGitWorkspaceContext(requestContext, isProjectWorkspace);
       markGitProjectContext(requestContext, isGitProject);
       const system = buildChatSystemMessages({
         includeGitInstructions: isGitProject,
         includeNotesInstructions: isNotesProject,
-        agentFiles: resolvedProfile?.agentFiles,
-        skillSummaries: resolvedProfile ? listResolvedProfileSkillSummaries(resolvedProfile) : undefined,
+        agentFiles: resolvedContext?.agentFiles,
+        skillSummaries: resolvedContext ? listResolvedContextSkillSummaries(resolvedContext) : undefined,
         callerSystem: params.system as Parameters<typeof buildChatSystemMessages>[0]['callerSystem'],
       });
 
@@ -1579,16 +1579,15 @@ export const chatRoutes = [
       const requestHasReasoningEffort = hasOwn(params, 'reasoningEffort');
       const requestHasServiceTier = hasOwn(params, 'serviceTier');
       const reasoningEffort = normalizeOpenAIReasoningEffort(
-        requestHasReasoningEffort ? params?.reasoningEffort : resolvedProfile?.profile.reasoningEffort,
+        requestHasReasoningEffort ? params?.reasoningEffort : resolvedContext?.config.reasoningEffort,
         providerModel,
         { fallbackToDefault: true },
       );
       const serviceTier = requestHasServiceTier
         ? normalizeOpenAIServiceTier(params?.serviceTier, providerModel)
-        : normalizeOpenAIServiceTier(resolvedProfile?.profile.serviceTier, providerModel);
+        : normalizeOpenAIServiceTier(resolvedContext?.config.serviceTier, providerModel);
       console.info('[chat] stream request', {
         agentId,
-        profileId: resolvedProfile?.profile.id,
         selectedModel: params?.model,
         routedModel,
         reasoningEffort: reasoningEffort ?? 'default',

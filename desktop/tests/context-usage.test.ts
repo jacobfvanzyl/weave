@@ -107,7 +107,7 @@ describe('context usage tracking', () => {
     unsubscribe();
   });
 
-  it('uses profile memory config for estimated context recall', () => {
+  it('uses agent memory config for estimated context recall', () => {
     const options = __chatStateContextUsageTest.contextUsageRecallOptions('thread-1', 'resource-1', {
       lastMessages: 10,
     });

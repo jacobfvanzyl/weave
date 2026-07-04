@@ -199,7 +199,7 @@ const workspaceSlug = (value: string) => {
 
 type WeaveContextScope = 'global' | 'project';
 
-type WeaveContextFileKind = 'config' | 'mcp' | 'profile' | 'prompt' | 'skill' | 'agents';
+type WeaveContextFileKind = 'config' | 'mcp' | 'prompt' | 'skill' | 'agents';
 
 type WeaveContextFile = {
   kind: WeaveContextFileKind;
@@ -424,7 +424,7 @@ const collectTextFiles = async (
 const collectWeaveDirectory = async (
   dir: string,
   contextPrefix: string,
-  options: { includeProfiles: boolean; includeConfig: boolean },
+  options: { includeConfig: boolean },
 ) => {
   const files: WeaveContextFile[] = [];
 
@@ -439,15 +439,6 @@ const collectWeaveDirectory = async (
 
   const mcp = await readWeaveContextFile(`${dir}/mcp.json`, `${contextPrefix}/mcp.json`, 'mcp');
   if (mcp) files.push(mcp);
-
-  if (options.includeProfiles) {
-    files.push(
-      ...await collectTextFiles(`${dir}/profiles`, `${contextPrefix}/profiles`, 'profile', {
-        extensions: ['.md'],
-        maxDepth: 0,
-      }),
-    );
-  }
 
   files.push(
     ...await collectTextFiles(`${dir}/prompts`, `${contextPrefix}/prompts`, 'prompt', {
@@ -608,7 +599,7 @@ const collectProjectWeaveDirectories = async (gitRoot: string, workspaceRoot: st
   for (const dir of chain) {
     const weaveDir = `${dir}/.weave`;
     const prefix = relativePath(root, weaveDir) || '.weave';
-    files.push(...await collectWeaveDirectory(weaveDir, prefix, { includeProfiles: false, includeConfig: false }));
+    files.push(...await collectWeaveDirectory(weaveDir, prefix, { includeConfig: false }));
   }
 
   return files;
@@ -618,7 +609,7 @@ export const discoverGlobalWeaveContext = async () => {
   const home = Deno.env.get('HOME');
   if (!home) return { basePath: undefined, files: [] as WeaveContextFile[] };
   const basePath = normalizePath(`${home}/.config/weave`);
-  const files = await collectWeaveDirectory(basePath, '.config/weave', { includeProfiles: true, includeConfig: true });
+  const files = await collectWeaveDirectory(basePath, '.config/weave', { includeConfig: true });
   return { basePath, files };
 };
 
