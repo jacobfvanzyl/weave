@@ -73,6 +73,9 @@ export const weaveRoutePaths = {
   editorContext: {
     clientToken: () => '/editor-context/client-token',
   },
+  notifications: {
+    events: (query?: QueryInput) => appendQuery('/notifications/events', query),
+  },
   compat: {
     projects: () => '/projects',
     project: (projectId: string) => `/projects/${encodePath(projectId)}`,
@@ -161,6 +164,9 @@ export const weaveRoutes = {
   },
   editorContext: {
     clientToken: () => url(weaveRoutePaths.editorContext.clientToken()),
+  },
+  notifications: {
+    events: (query?: QueryInput) => url(weaveRoutePaths.notifications.events(query)),
   },
   compat: {
     projects: () => url(weaveRoutePaths.compat.projects()),

@@ -7,15 +7,18 @@
   "main": ".vite/build/main.js",
   "scripts": {
     "dev": "electron-forge start",
+    "dev:signed": "node scripts/prepare-signed-electron-dev.mjs && ELECTRON_OVERRIDE_DIST_PATH=.electron-signed-dev electron-forge start",
     "dev:flare": "npm run dev",
     "dev:coppermind": "npm run dev",
     "start": "electron-forge start",
     "perf": "WEAVE_PERF_LOG=1 WEAVE_PERF_DIR=../.weave-perf electron-forge start --inspect-electron --enable-logging",
     "prepackage": "npm run --prefix .. portal:build",
     "package": "electron-forge package",
+    "package:signed": "WEAVE_DESKTOP_CODESIGN=1 npm run package",
     "package:flare": "npm run package",
     "package:coppermind": "npm run package",
     "make": "electron-forge make",
+    "make:signed": "WEAVE_DESKTOP_CODESIGN=1 npm run make",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:smoke": "WEAVE_ELECTRON_SMOKE=1 vitest run tests/electron-smoke.test.ts"

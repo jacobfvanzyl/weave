@@ -51,6 +51,16 @@ describe('chat store', () => {
     expect(useChatStore.getState().followWrites).toBe(true);
   });
 
+  it('records active thread completion so notification policy can decide foreground suppression', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const { useWorkspaceSurfaceStore } = await import('../../packages/client/src/stores/workspace-surface-store');
+
+    useWorkspaceSurfaceStore.getState().selectThread('thread-1');
+    useChatStore.getState().markThreadCompleted('thread-1');
+
+    expect(useChatStore.getState().completedThreadIds).toEqual(['thread-1']);
+  });
+
   it('migrates persisted chat settings with follow writes defaulting off', async () => {
     const { useChatStore } = await loadFreshChatStore(storage => {
       storage.setItem('weave-chat', JSON.stringify({

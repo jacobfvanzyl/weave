@@ -10,7 +10,7 @@
     "server:perf": "deno task --config server/deno.json perf",
     "server:perf:inspect": "deno task --config server/deno.json perf:inspect",
     "desktop:install": "npm --prefix desktop ci",
-    "desktop:dev": "npm --prefix desktop run dev",
+    "desktop:dev": "npm --prefix desktop run dev:signed",
     "desktop:dev:flare": "npm --prefix desktop run dev:flare",
     "desktop:dev:coppermind": "npm --prefix desktop run dev:coppermind",
     "desktop:perf": "npm --prefix desktop run perf",

@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
 const appName = 'Weave';
 const appBundleId = 'com.veezee.weave';
+const shouldSignMacBuild = process.platform === 'darwin' && process.env.WEAVE_DESKTOP_CODESIGN === '1';
+const macCodeSignIdentity = process.env.WEAVE_DESKTOP_CODESIGN_IDENTITY?.trim();
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -19,6 +21,11 @@ const config: ForgeConfig = {
     extraResource: [path.join(workspaceRoot, 'portal/dist/portal')],
     icon: 'assets/icon',
     name: appName,
+    ...(shouldSignMacBuild ? {
+      osxSign: {
+        ...(macCodeSignIdentity ? { identity: macCodeSignIdentity } : {}),
+      },
+    } : {}),
   },
   rebuildConfig: {},
   makers: [

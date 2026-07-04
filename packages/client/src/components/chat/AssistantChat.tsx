@@ -1998,7 +1998,7 @@ const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
   useEffect(() => {
     setThreadRunning(threadId, isRunning);
 
-    if (wasRunning.current && !isRunning && activeThreadId !== threadId) {
+    if (wasRunning.current && !isRunning) {
       markThreadCompleted(threadId);
     }
 
@@ -2217,6 +2217,7 @@ const AssistantChatRuntime = ({
   const serviceTier = useChatStore(state => state.serviceTier);
   const pendingProposalImplementationRequest = useChatStore(state => state.pendingProposalImplementationRequests[threadId]);
   const consumeProposalImplementationRequest = useChatStore(state => state.consumeProposalImplementationRequest);
+  const markThreadCompleted = useChatStore(state => state.markThreadCompleted);
   const chatApi = getChatUrl();
   const resumeRunIdRef = useRef<string | undefined>(undefined);
   const sendingProposalImplementationRequestRef = useRef<string | undefined>(undefined);
@@ -2302,6 +2303,7 @@ const AssistantChatRuntime = ({
       applyContextUsageStreamPayload(queryClient, resourceId, threadId, payload);
     },
     onFinish: async () => {
+      markThreadCompleted(threadId);
       await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
       await queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] });
       await queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] });

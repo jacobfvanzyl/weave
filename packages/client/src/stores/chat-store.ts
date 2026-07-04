@@ -610,10 +610,9 @@ export const useChatStore = create<ChatState>()(
         })),
       markThreadCompleted: threadId =>
         set(state => ({
-          completedThreadIds:
-            useWorkspaceSurfaceStore.getState().threadId === threadId || state.completedThreadIds.includes(threadId)
-              ? state.completedThreadIds
-              : [...state.completedThreadIds, threadId],
+          completedThreadIds: state.completedThreadIds.includes(threadId)
+            ? state.completedThreadIds
+            : [...state.completedThreadIds, threadId],
         })),
       clearThreadCompleted: threadId =>
         set(state => ({

@@ -6,6 +6,11 @@ import type {
   WeaveDesktopBridge,
 } from '../shared/desktop-api';
 import type {
+  NativeNotificationAction,
+  NativeNotificationShowResult,
+  WeaveNotificationEvent,
+} from '@weave/client/lib/notifications/types';
+import type {
   WorkspaceFileFile,
   WorkspaceFileDiffPreviewResult,
   WorkspaceFileHashResult,
@@ -110,6 +115,21 @@ const bridge: WeaveDesktopBridge = {
   },
   lspCreateSession: (target: WorkspaceFileTarget, path: string, languageId?: string, serverId?: string) =>
     ipcRenderer.invoke('lsp:create-session', { target, path, languageId, serverId }),
+  nativeNotificationsGetPermissionState: () =>
+    ipcRenderer.invoke('native-notifications:get-permission-state'),
+  nativeNotificationsRequestPermission: () =>
+    ipcRenderer.invoke('native-notifications:request-permission'),
+  nativeNotificationsShow: (event: WeaveNotificationEvent) =>
+    ipcRenderer.invoke('native-notifications:show', event) as Promise<NativeNotificationShowResult>,
+  nativeNotificationsClear: (id?: string) =>
+    ipcRenderer.invoke('native-notifications:clear', id) as Promise<void>,
+  onNativeNotificationAction: listener => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, action: NativeNotificationAction) => {
+      listener(action);
+    };
+    ipcRenderer.on('native-notification:action', wrappedListener);
+    return () => ipcRenderer.removeListener('native-notification:action', wrappedListener);
+  },
 };
 
 contextBridge.exposeInMainWorld('weaveDesktop', bridge);

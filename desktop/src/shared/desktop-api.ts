@@ -18,6 +18,12 @@ import type {
   WorkspaceFileWriteResult,
 } from './workspace-file';
 import type { LspSessionResult } from './language-intelligence';
+import type {
+  NativeNotificationAction,
+  NativeNotificationShowResult,
+  NotificationPermissionState,
+  WeaveNotificationEvent,
+} from '@weave/client/lib/notifications/types';
 
 export type DesktopConnectionSettings = {
   mastraUrl: string;
@@ -68,4 +74,9 @@ export type WeaveDesktopBridge = {
   workspaceFileWatchStop: (subscriptionId: string) => Promise<void>;
   onWorkspaceFileWatchEvent: (listener: (event: WorkspaceFileWatchEventEnvelope) => void) => () => void;
   lspCreateSession: (target: WorkspaceFileTarget, path: string, languageId?: string, serverId?: string) => Promise<LspSessionResult>;
+  nativeNotificationsGetPermissionState: () => Promise<NotificationPermissionState>;
+  nativeNotificationsRequestPermission: () => Promise<NotificationPermissionState>;
+  nativeNotificationsShow: (event: WeaveNotificationEvent) => Promise<NativeNotificationShowResult>;
+  nativeNotificationsClear: (id?: string) => Promise<void>;
+  onNativeNotificationAction: (listener: (action: NativeNotificationAction) => void) => () => void;
 };

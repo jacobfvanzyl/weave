@@ -16,6 +16,9 @@ const config: CapacitorConfig = {
       overlaysWebView: true,
       style: 'default',
     },
+    LocalNotifications: {
+      presentationOptions: ['banner', 'list', 'sound'],
+    },
   },
 };
 

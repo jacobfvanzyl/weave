@@ -6,6 +6,7 @@ import { Animation, StatusBar, Style } from '@capacitor/status-bar';
 import { MobileConnectionApp } from '@weave/client/app/mobile-connection';
 import { Providers } from '@weave/client/app/providers';
 import { getClientAppDefinition } from '@weave/client/lib/client-app';
+import { configureMobileNotifications } from './notifications';
 import './styles.css';
 
 const configureNativeShell = async () => {
@@ -25,6 +26,7 @@ const configureNativeShell = async () => {
   ]);
 };
 
+configureMobileNotifications();
 void configureNativeShell();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

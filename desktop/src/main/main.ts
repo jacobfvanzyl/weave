@@ -34,6 +34,13 @@ import {
 } from './terminal-input';
 import { PortalSupervisor, PortalTerminalClient } from './portal-terminal-client';
 import { startDesktopPerfSampler } from './perf';
+import {
+  clearNativeNotifications,
+  getNativeNotificationPermissionState,
+  parseNativeNotificationEvent,
+  requestNativeNotificationPermission,
+  showNativeNotification,
+} from './native-notifications';
 
 let settingsStore: ConnectionSettingsStore | undefined;
 let portalSupervisor: PortalSupervisor | undefined;
@@ -55,6 +62,7 @@ const handleIpcResult = async <T>(operation: () => T | Promise<T>) => {
   }
 };
 const appName = 'Weave';
+const appBundleId = 'com.veezee.weave';
 const appUserDataPath = process.env.WEAVE_DESKTOP_USER_DATA || path.join(app.getPath('appData'), appName);
 const sharedConnectionUserDataPath = process.env.WEAVE_DESKTOP_CONNECTION_USER_DATA
   || process.env.WEAVE_DESKTOP_USER_DATA
@@ -65,6 +73,7 @@ process.title = appName;
 app.setName(appName);
 app.setAboutPanelOptions({ applicationName: appName });
 app.setPath('userData', appUserDataPath);
+if (process.platform === 'win32') app.setAppUserModelId(appBundleId);
 
 const getSettingsStore = () => {
   if (!settingsStore) {
@@ -347,6 +356,14 @@ const registerIpcHandlers = () => {
   );
   ipcMain.handle('lsp:create-session', (_event, input: unknown) =>
     getPortalLspClient().createSession(parseLspSessionInput(input)),
+  );
+  ipcMain.handle('native-notifications:get-permission-state', () => getNativeNotificationPermissionState());
+  ipcMain.handle('native-notifications:request-permission', () => requestNativeNotificationPermission());
+  ipcMain.handle('native-notifications:show', (_event, input: unknown) =>
+    showNativeNotification(parseNativeNotificationEvent(input)),
+  );
+  ipcMain.handle('native-notifications:clear', (_event, id: unknown) =>
+    clearNativeNotifications(typeof id === 'string' ? id : undefined),
   );
 };
 

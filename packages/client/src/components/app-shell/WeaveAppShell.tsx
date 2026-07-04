@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Code2, MessageSquare, MonitorUp, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
+import { Bell, Code2, MessageSquare, MonitorUp, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
 import {
   getClientAppDefinition,
@@ -15,6 +15,7 @@ import { projectBelongsToProduct, productForProjectKind, type ProductId } from '
 import { shouldShowProposalReview } from '../../lib/proposal-review-state';
 import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { workspaceRefKey } from '../../lib/thread-eligibility';
+import { sendTestNotification } from '../../lib/notifications/test-notification';
 import { useChatStore, type ChatThread } from '../../stores/chat-store';
 import { useAppShellStore } from '../../stores/app-shell-store';
 import { useProductStore } from '../../stores/product-store';
@@ -34,6 +35,7 @@ import { TerminalPaneHost } from '../terminal/TerminalPaneHost';
 import type { TerminalPanelTab, TerminalPanelTabsChange, TerminalPanelTarget } from '../terminal/TerminalPanel';
 import type { TerminalTargetInput, TerminalTransport, TerminalWindowRecord } from '../../lib/terminal-types';
 import { WindowStreamOverlayHost } from '../window-stream/WindowStreamOverlayHost';
+import { NotificationHost } from '../notifications/NotificationHost';
 import { shouldCloseUnavailableTerminalPane } from './terminal-pane-availability';
 import { ContextBreadcrumb } from '../workspace/ContextBreadcrumb';
 import { WorkspaceMainContent } from '../workspace/WorkspaceMainContent';
@@ -840,6 +842,9 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
         onMouseLeave: scheduleSidebarPreviewClose,
       }
     : {};
+  const handleTestNotification = useCallback(() => {
+    void sendTestNotification();
+  }, []);
   const renderSidebarToggleButton = () => (
     <Button
       size="icon"
@@ -849,6 +854,17 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       {...sidebarToggleHoverHandlers}
     >
       <PanelLeft size={18} />
+    </Button>
+  );
+  const renderTestNotificationButton = () => (
+    <Button
+      size="icon"
+      variant="ghost"
+      aria-label="Send test notification"
+      title="Send test notification"
+      onClick={handleTestNotification}
+    >
+      <Bell size={18} />
     </Button>
   );
   const renderGeneralTerminalButton = () => generalTerminalTarget ? (
@@ -1026,6 +1042,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const headerLeftActions = shouldRenderHeaderLeftActions ? (
     <>
       {showHeaderSidebarToggle ? renderSidebarToggleButton() : null}
+      {showHeaderSidebarToggle ? renderTestNotificationButton() : null}
       {renderGeneralTerminalButton()}
       {renderWindowStreamButton()}
     </>
@@ -1125,6 +1142,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
         threadId={activeThreadId}
         workspaceId={activeWorkspace?.id}
       />
+      <NotificationHost />
       <AppSidebarHost
         closeOnPinnedSelect={isPortraitViewport}
         clientApp={clientApp}
@@ -1146,6 +1164,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
           {...floatingLeftActionHoverHandlers}
         >
           {showHeaderSidebarToggle || showPinnedSidebarToggle ? renderSidebarToggleButton() : null}
+          {showHeaderSidebarToggle || showPinnedSidebarToggle ? renderTestNotificationButton() : null}
           {renderGeneralTerminalButton()}
           {renderWindowStreamButton()}
         </div>
