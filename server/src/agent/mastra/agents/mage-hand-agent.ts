@@ -1,13 +1,17 @@
 import { Agent } from '@mastra/core/agent';
 import { ModelRouterEmbeddingModel } from '@mastra/core/llm';
-import { SkillSearchProcessor } from '@mastra/core/processors';
+import { SkillSearchProcessor, ToolCallFilter } from '@mastra/core/processors';
 import { LibSQLVector } from '@mastra/libsql';
 import { Memory } from '@mastra/memory';
-import { CompactToolHistoryProcessor, getToolHistoryFullCalls } from '../compact-tool-history-processor';
 import { CurrentTurnImageProcessor } from '../current-turn-image-processor';
-import { getContextTokenLimit, getMemoryCapabilities } from '../memory-policy';
+import {
+  getMemoryCapabilities,
+  resolveObservationalMemoryConfig,
+  type SemanticRecallEmbeddingConfig,
+} from '../memory-policy';
 import { RuntimeContextProcessor } from '../runtime-context-processor';
 import { storageAuthToken, storageUrl } from '../storage-config';
+import { getToolHistoryFullSteps } from '../tool-call-filter-policy';
 import { baseWorkspace } from '../workspace';
 import {
   getAgentContext,
@@ -19,33 +23,39 @@ import {
 import { mageHandTools } from './mage-hand-tools';
 import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from '../../model-capabilities';
 
+const createSemanticRecallEmbedder = (config: SemanticRecallEmbeddingConfig) => {
+  if (config.kind === 'model-router') {
+    return new ModelRouterEmbeddingModel(config.model);
+  }
+
+  return new ModelRouterEmbeddingModel({
+    providerId: config.providerId,
+    modelId: config.modelId,
+    url: config.url,
+    apiKey: config.apiKey ?? '',
+  });
+};
+
 const createSharedMemory = () => {
-  const embeddingModel = process.env.WEAVE_MEMORY_EMBEDDING_MODEL?.trim();
   const capabilities = getMemoryCapabilities();
+  const embeddingConfig = capabilities.semanticRecall ? capabilities.semanticRecallEmbeddingConfig : undefined;
+  const observationalMemory = resolveObservationalMemoryConfig(capabilities);
 
   return new Memory({
-    ...(embeddingModel
+    ...(embeddingConfig
       ? {
-          vector: new LibSQLVector({
-            id: 'weave-memory-vector',
-            url: storageUrl,
-            authToken: storageAuthToken,
-          }),
-          embedder: new ModelRouterEmbeddingModel(embeddingModel),
-        }
+        vector: new LibSQLVector({
+          id: 'weave-memory-vector',
+          url: storageUrl,
+          authToken: storageAuthToken,
+        }),
+        embedder: createSemanticRecallEmbedder(embeddingConfig),
+      }
       : {}),
-    ...(capabilities.observationalMemory && capabilities.observationalMemoryModel
+    ...(observationalMemory
       ? {
-          options: {
-            observationalMemory: {
-              model: capabilities.observationalMemoryModel,
-              scope: 'thread' as const,
-              activateAfterIdle: '5m',
-              activateOnProviderChange: true,
-              temporalMarkers: true,
-            },
-          },
-        }
+        options: { observationalMemory },
+      }
       : {}),
   });
 };
@@ -64,11 +74,11 @@ const resolveOpenAIProviderOptions = (requestContext: any) => {
 
   return reasoningEffort || serviceTier
     ? {
-        openai: {
-          ...(reasoningEffort ? { reasoningEffort } : {}),
-          ...(serviceTier ? { serviceTier } : {}),
-        },
-      }
+      openai: {
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
+      },
+    }
     : undefined;
 };
 
@@ -161,7 +171,7 @@ export const mageHandAgent = new Agent({
   tools: resolveTools,
   inputProcessors: [
     new CurrentTurnImageProcessor(),
-    new CompactToolHistoryProcessor({ preserveToolCalls: getToolHistoryFullCalls(), tokenLimit: getContextTokenLimit() }),
+    new ToolCallFilter({ filterAfterToolSteps: getToolHistoryFullSteps(), preserveModelOutput: true }),
     new SkillSearchProcessor({
       workspace: baseWorkspace,
       search: { topK: 8, minScore: 0.1 },
@@ -172,5 +182,6 @@ export const mageHandAgent = new Agent({
 });
 
 export const __mageHandAgentTest = {
+  createSemanticRecallEmbedder,
   toolKeysForContext,
 };

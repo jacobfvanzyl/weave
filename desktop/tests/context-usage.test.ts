@@ -54,7 +54,7 @@ describe('context usage tracking', () => {
       totalTokens: 4_800,
     });
 
-    const unsubscribe = subscribeThreadContextUsage('thread-context-usage-live', 'resource-1', snapshot => {
+    const unsubscribe = subscribeThreadContextUsage('thread-context-usage-live', 'resource-1', (snapshot) => {
       snapshots.push(snapshot);
     });
 
@@ -92,7 +92,7 @@ describe('context usage tracking', () => {
 
   it('does not notify subscribers for provider snapshots without input tokens', () => {
     const snapshots: unknown[] = [];
-    const unsubscribe = subscribeThreadContextUsage('thread-context-usage-invalid', 'resource-1', snapshot => {
+    const unsubscribe = subscribeThreadContextUsage('thread-context-usage-invalid', 'resource-1', (snapshot) => {
       snapshots.push(snapshot);
     });
 
@@ -107,17 +107,56 @@ describe('context usage tracking', () => {
     unsubscribe();
   });
 
-  it('uses agent memory config for estimated context recall', () => {
-    const options = __chatStateContextUsageTest.contextUsageRecallOptions('thread-1', 'resource-1', {
-      lastMessages: 10,
-    });
+  it('keeps memory config on fallback context recall without forcing pagination', () => {
+    const memoryConfig = {
+      observationalMemory: {
+        model: 'openai/gpt-5-mini',
+        scope: 'thread',
+      },
+    };
+    const options = __chatStateContextUsageTest.contextUsageRecallOptions('thread-1', 'resource-1', memoryConfig);
 
     expect(options).toEqual({
       threadId: 'thread-1',
       resourceId: 'resource-1',
-      threadConfig: { lastMessages: 10 },
+      threadConfig: memoryConfig,
     });
     expect('perPage' in options).toBe(false);
     expect('orderBy' in options).toBe(false);
+  });
+
+  it('estimates context usage from Mastra assembled context when available', async () => {
+    const memoryConfig = {
+      observationalMemory: {
+        model: 'openai/gpt-5-mini',
+        scope: 'thread',
+      },
+    };
+    const memory = {
+      estimateTokens: (text: string) => text.length,
+      getContext: async (args: unknown) => {
+        expect(args).toEqual({
+          threadId: 'thread-1',
+          resourceId: 'resource-1',
+          memoryConfig,
+        });
+        return {
+          systemMessage: 'observed context',
+          messages: [
+            {
+              content: {
+                parts: [{ type: 'text', text: 'current message' }],
+              },
+            },
+          ],
+        };
+      },
+    };
+
+    await expect(__chatStateContextUsageTest.estimateMemoryContextTokens(memory, {
+      threadId: 'thread-1',
+      resourceId: 'resource-1',
+      memoryConfig,
+    })).resolves.toBe('observed context'.length + 'current message'.length);
   });
 });

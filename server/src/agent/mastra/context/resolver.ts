@@ -63,14 +63,15 @@ const projectSnapshotRefreshMs = 30_000;
 export const agentContextRequestContextKey = 'weave.agentContext';
 export const contextSkillPathsRequestContextKey = 'weave.contextSkillPaths';
 
-export const singletonBaseInstructions = readFileSync(new URL('./base-instructions.md', import.meta.url), 'utf8').trim();
+export const singletonBaseInstructions = readFileSync(new URL('./base-instructions.md', import.meta.url), 'utf8')
+  .trim();
 
 export const singletonAgentConfig: AgentRuntimeConfig = {
   instructions: singletonBaseInstructions,
   model: process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.5',
   reasoningEffort: 'high',
   serviceTier: undefined,
-  memory: { lastMessages: 20 },
+  memory: {},
 };
 
 const globalSnapshots = new Map<string, WeaveContextSnapshot>();
@@ -80,7 +81,7 @@ const nowIso = () => new Date().toISOString();
 
 const hashText = async (value: string) => {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(bytes)).slice(0, 12).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(bytes)).slice(0, 12).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 const getMemory = async (mastra: any) => {
@@ -139,18 +140,17 @@ const discoverPortalContext = async (
     workspacePath: optionalString(result.workspacePath),
     files: Array.isArray(result.files)
       ? result.files.filter((file): file is WeaveContextFile => {
-          const kind =
-            file?.kind === 'config' ||
-            file?.kind === 'mcp' ||
-            file?.kind === 'prompt' ||
-            file?.kind === 'skill' ||
-            file?.kind === 'agents';
-          return kind &&
-            typeof file.content === 'string' &&
-            typeof file.path === 'string' &&
-            (file.size === undefined || typeof file.size === 'number') &&
-            (file.updatedAt === undefined || typeof file.updatedAt === 'string');
-        })
+        const kind = file?.kind === 'config' ||
+          file?.kind === 'mcp' ||
+          file?.kind === 'prompt' ||
+          file?.kind === 'skill' ||
+          file?.kind === 'agents';
+        return kind &&
+          typeof file.content === 'string' &&
+          typeof file.path === 'string' &&
+          (file.size === undefined || typeof file.size === 'number') &&
+          (file.updatedAt === undefined || typeof file.updatedAt === 'string');
+      })
       : [],
     checkedAt: nowIso(),
   } satisfies WeaveContextSnapshot;
@@ -162,7 +162,7 @@ const loadGlobalSnapshot = async (memory: any, resourceId: string) => {
 
   const primaryPortalId = await getPrimaryPortalId(memory, resourceId);
   const portals = listPortalConnections(resourceId);
-  const portal = primaryPortalId ? portals.find(item => item.portalId === primaryPortalId) : portals[0];
+  const portal = primaryPortalId ? portals.find((item) => item.portalId === primaryPortalId) : portals[0];
   if (!portal) return cached;
 
   try {
@@ -229,9 +229,13 @@ const getProjectContext = async (
     return { thread, threadMetadata, agentFiles: [] };
   }
 
-  let project = await productProjectRepository.get(resourceId, threadMetadata.projectId) as Record<string, any> | undefined;
+  let project = await productProjectRepository.get(resourceId, threadMetadata.projectId) as
+    | Record<string, any>
+    | undefined;
   if (!project) {
-    const projectThread = await memory.getThreadById({ threadId: projectThreadId(threadMetadata.projectId) }).catch(() => undefined);
+    const projectThread = await memory.getThreadById({ threadId: projectThreadId(threadMetadata.projectId) }).catch(
+      () => undefined,
+    );
     const projectMetadata = projectThread?.metadata as Record<string, any> | undefined;
     if (!projectThread || projectThread.resourceId !== resourceId || projectMetadata?.kind !== 'project') {
       return { thread, threadMetadata, agentFiles: [] };
@@ -253,7 +257,7 @@ const getProjectContext = async (
     projectKind: project.projectKind === 'git' || project.projectKind === 'notes' ? project.projectKind : 'general',
     portalId,
     projectSnapshot,
-    agentFiles: projectSnapshot?.files.filter(file => file.kind === 'agents') ?? [],
+    agentFiles: projectSnapshot?.files.filter((file) => file.kind === 'agents') ?? [],
   };
 };
 

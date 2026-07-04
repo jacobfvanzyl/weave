@@ -19,7 +19,8 @@ let agentContextRequestContextKey: string;
 let singletonAgentConfig: any;
 
 beforeAll(async () => {
-  const promptRegistryPath = new URL('../../server/src/agent/mastra/prompt-templates/registry.ts', import.meta.url).href;
+  const promptRegistryPath =
+    new URL('../../server/src/agent/mastra/prompt-templates/registry.ts', import.meta.url).href;
   const resolverPath = new URL('../../server/src/agent/mastra/context/resolver.ts', import.meta.url).href;
   const skillSourcePath = new URL('../../server/src/agent/mastra/context/skill-source.ts', import.meta.url).href;
   const mageHandAgentPath = new URL('../../server/src/agent/mastra/agents/mage-hand-agent.ts', import.meta.url).href;
@@ -60,17 +61,24 @@ describe('singleton agent context', () => {
     expect(singletonAgentConfig.model).toBe(process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.5');
     expect(singletonAgentConfig.reasoningEffort).toBe('high');
     expect(singletonAgentConfig.serviceTier).toBeUndefined();
-    expect(singletonAgentConfig.memory).toEqual({ lastMessages: 20 });
+    expect(singletonAgentConfig.memory).toEqual({});
     expect(singletonAgentConfig.instructions).toBe(
-      readFileSync(new URL('../../server/src/agent/mastra/context/base-instructions.md', import.meta.url), 'utf8').trim(),
+      readFileSync(new URL('../../server/src/agent/mastra/context/base-instructions.md', import.meta.url), 'utf8')
+        .trim(),
     );
     expect(singletonAgentConfig.instructions).toContain('research and repository work');
     expect(singletonAgentConfig.instructions).toContain('Inspect relevant files before changing code');
     expect(singletonAgentConfig.instructions).toContain('State assumptions when they affect correctness.');
-    expect(singletonAgentConfig.instructions).toContain('Prefer completing the user\'s request over explaining process.');
-    expect(singletonAgentConfig.instructions).toContain('If a tool fails, report the failure and give the next best path.');
+    expect(singletonAgentConfig.instructions).toContain(
+      "Prefer completing the user's request over explaining process.",
+    );
+    expect(singletonAgentConfig.instructions).toContain(
+      'If a tool fails, report the failure and give the next best path.',
+    );
     expect(singletonAgentConfig.instructions).toContain('Cite URLs when web tools are used.');
-    expect(singletonAgentConfig.instructions).toContain('Keep progress visible during longer work. Send brief user-visible status updates between tool batches, before making file edits, and periodically during long-running implementation or verification turns. These updates should state what you are doing or what you just learned, then continue working without waiting for the user unless they asked you to pause.');
+    expect(singletonAgentConfig.instructions).toContain(
+      'Keep progress visible during longer work. Send brief user-visible status updates between tool batches, before making file edits, and periodically during long-running implementation or verification turns. These updates should state what you are doing or what you just learned, then continue working without waiting for the user unless they asked you to pause.',
+    );
   });
 
   it('detects workspace and Portal-backed notes bindings from runtime context', () => {
@@ -133,7 +141,9 @@ describe('context tool policy', () => {
       workspace: { id: 'workspace-1' },
       portalId: 'portal-1',
     })));
-    expect([...remoteNotesKeys]).toEqual(expect.arrayContaining(['file_index', 'file_read', 'file_write', 'editor_context']));
+    expect([...remoteNotesKeys]).toEqual(
+      expect.arrayContaining(['file_index', 'file_read', 'file_write', 'editor_context']),
+    );
     expect(remoteNotesKeys.has('bash')).toBe(false);
     expect(remoteNotesKeys.has('git_status')).toBe(false);
 
@@ -172,19 +182,23 @@ describe('context prompt resolution', () => {
   });
 
   it('merges app, global, and project prompts with project precedence without profile filtering', async () => {
-    const summaries = await listPromptSummaries({ resolvedContext: context }) as Array<{ name: string; source: string; description: string }>;
-    expect(summaries.map(prompt => prompt.name)).toEqual(['plan', 'review', 'ship', 'summarize']);
-    expect(summaries.find(prompt => prompt.name === 'ship')).toEqual(expect.objectContaining({
+    const summaries = await listPromptSummaries({ resolvedContext: context }) as Array<
+      { name: string; source: string; description: string }
+    >;
+    expect(summaries.map((prompt) => prompt.name)).toEqual(['plan', 'review', 'ship', 'summarize']);
+    expect(summaries.find((prompt) => prompt.name === 'ship')).toEqual(expect.objectContaining({
       description: 'Project ship',
       source: 'project',
     }));
-    expect(summaries.find(prompt => prompt.name === 'review')).toEqual(expect.objectContaining({
+    expect(summaries.find((prompt) => prompt.name === 'review')).toEqual(expect.objectContaining({
       description: 'Project review $ARGUMENTS',
       source: 'project',
     }));
 
     await expect(expandPromptTemplate('ship', 'now', { resolvedContext: context })).resolves.toBe('Project ship now');
-    await expect(expandPromptTemplate('review', 'now', { resolvedContext: context })).resolves.toBe('Project review now');
+    await expect(expandPromptTemplate('review', 'now', { resolvedContext: context })).resolves.toBe(
+      'Project review now',
+    );
   });
 });
 
@@ -219,11 +233,26 @@ describe('context skill resolution', () => {
   it('activates all discovered skills without profile allow-lists', () => {
     const summaries = listResolvedContextSkillSummaries(context);
     expect(summaries).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'global-only', source: 'global', path: '.config/weave/skills/global-only/SKILL.md', description: 'Global only' }),
-      expect.objectContaining({ name: 'shared', source: 'project', path: '.weave/skills/shared/SKILL.md', description: 'Project shared' }),
-      expect.objectContaining({ name: 'project-only', source: 'project', path: '.weave/skills/project-only/SKILL.md', description: 'Project only' }),
+      expect.objectContaining({
+        name: 'global-only',
+        source: 'global',
+        path: '.config/weave/skills/global-only/SKILL.md',
+        description: 'Global only',
+      }),
+      expect.objectContaining({
+        name: 'shared',
+        source: 'project',
+        path: '.weave/skills/shared/SKILL.md',
+        description: 'Project shared',
+      }),
+      expect.objectContaining({
+        name: 'project-only',
+        source: 'project',
+        path: '.weave/skills/project-only/SKILL.md',
+        description: 'Project only',
+      }),
     ]));
-    expect(summaries.some(skill => skill.name === 'shared' && skill.source === 'global')).toBe(false);
+    expect(summaries.some((skill) => skill.name === 'shared' && skill.source === 'global')).toBe(false);
 
     const paths = registerResolvedContextSkills(context);
     expect(paths).toEqual(expect.arrayContaining([
@@ -231,14 +260,32 @@ describe('context skill resolution', () => {
       expect.stringMatching(/\/project\/shared$/),
       expect.stringMatching(/\/project\/project-only$/),
     ]));
-    expect(paths.filter(path => path.endsWith('/shared'))).toHaveLength(1);
+    expect(paths.filter((path) => path.endsWith('/shared'))).toHaveLength(1);
   });
 
   it('merges duplicate skill names with project over global over source precedence', () => {
     const byName = __contextSkillSourceTest.mergeSkillRecords(
-      [{ name: 'shared', source: 'source', path: 'skills/shared/SKILL.md', workspacePath: 'skills/shared', description: 'Source shared' }],
-      [{ name: 'shared', source: 'global', path: '.config/weave/skills/shared/SKILL.md', workspacePath: '__global/shared', description: 'Global shared' }],
-      [{ name: 'shared', source: 'project', path: '.weave/skills/shared/SKILL.md', workspacePath: '__project/shared', description: 'Project shared' }],
+      [{
+        name: 'shared',
+        source: 'source',
+        path: 'skills/shared/SKILL.md',
+        workspacePath: 'skills/shared',
+        description: 'Source shared',
+      }],
+      [{
+        name: 'shared',
+        source: 'global',
+        path: '.config/weave/skills/shared/SKILL.md',
+        workspacePath: '__global/shared',
+        description: 'Global shared',
+      }],
+      [{
+        name: 'shared',
+        source: 'project',
+        path: '.weave/skills/shared/SKILL.md',
+        workspacePath: '__project/shared',
+        description: 'Project shared',
+      }],
     );
 
     expect(byName.get('shared')).toEqual(expect.objectContaining({

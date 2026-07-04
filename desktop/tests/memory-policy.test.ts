@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ToolCallFilter } from '@mastra/core/processors';
 import {
   CompactToolHistoryProcessor,
   compactToolHistoryPrompt,
@@ -7,11 +8,22 @@ import {
   limitCompactToolHistoryPrompt,
 } from '../../server/src/agent/mastra/compact-tool-history-processor';
 import { CurrentTurnImageProcessor } from '../../server/src/agent/mastra/current-turn-image-processor';
-import { resolveMemoryPolicy } from '../../server/src/agent/mastra/memory-policy';
+import {
+  getMemoryCapabilities,
+  getSemanticRecallEmbeddingConfig,
+  getSemanticRecallEmbeddingModel,
+  resolveMemoryPolicy,
+  resolveObservationalMemoryConfig,
+} from '../../server/src/agent/mastra/memory-policy';
+import { getToolHistoryFullSteps } from '../../server/src/agent/mastra/tool-call-filter-policy';
 import { __chatRouteMemoryTest } from '../../server/src/modules/chat/routes/chat';
 import { __chatStateContextUsageTest } from '../../server/src/modules/chat/routes/chat-state';
 import { getCodeToolModelOutputMaxChars } from '../../server/src/agent/mastra/tools/model-output';
-import { portalBashModelOutput, portalEditModelOutput, portalReadModelOutput } from '../../server/src/agent/mastra/tools/portal-tools';
+import {
+  portalBashModelOutput,
+  portalEditModelOutput,
+  portalReadModelOutput,
+} from '../../server/src/agent/mastra/tools/portal-tools';
 
 const noMemoryCapabilities = {
   semanticRecall: false,
@@ -28,14 +40,15 @@ const modelOutputBody = (output: string) => {
   return bodyStart === -1 ? '' : output.slice(bodyStart + 2);
 };
 
-const countImageParts = (prompt: any[]) => prompt.reduce((total, message) => {
-  const parts = Array.isArray(message.content) ? message.content : [];
-  return total + parts.filter((part: any) => (
-    part?.type === 'image' ||
-    part?.type === 'input_image' ||
-    (part?.type === 'file' && typeof part.mediaType === 'string' && part.mediaType.startsWith('image/'))
-  )).length;
-}, 0);
+const countImageParts = (prompt: any[]) =>
+  prompt.reduce((total, message) => {
+    const parts = Array.isArray(message.content) ? message.content : [];
+    return total + parts.filter((part: any) => (
+      part?.type === 'image' ||
+      part?.type === 'input_image' ||
+      (part?.type === 'file' && typeof part.mediaType === 'string' && part.mediaType.startsWith('image/'))
+    )).length;
+  }, 0);
 
 describe('memory policy resolution', () => {
   it('strips semantic recall when embedding env is unavailable', () => {
@@ -48,20 +61,21 @@ describe('memory policy resolution', () => {
       capabilities: noMemoryCapabilities,
     });
 
-    expect(policy.options).toEqual({ lastMessages: 20 });
+    expect(policy.options).toEqual({});
     expect(policy.status.semanticRecall).toMatchObject({
       enabled: false,
       configured: false,
       requested: true,
     });
+    expect(policy.status.observationalMemory).toMatchObject({
+      enabled: false,
+      reason: 'observational memory disabled by env',
+    });
   });
 
   it('builds workspace-scoped semantic recall with project and workspace filters', () => {
     const policy = resolveMemoryPolicy({
-      agentMemory: {
-        lastMessages: 20,
-        semanticRecall: { scope: 'workspace', topK: 6, messageRange: { before: 2, after: 3 } },
-      },
+      agentMemory: { semanticRecall: { scope: 'workspace', topK: 6, messageRange: { before: 2, after: 3 } } },
       threadMetadata: { projectId: 'project-1', workspaceId: 'workspace-1' },
       capabilities: semanticCapabilities,
     });
@@ -98,7 +112,7 @@ describe('memory policy resolution', () => {
     });
   });
 
-  it('adds observational memory only when fully configured', () => {
+  it('adds observational memory when enabled and strips lastMessages', () => {
     const policy = resolveMemoryPolicy({
       agentMemory: { lastMessages: 10 },
       capabilities: {
@@ -117,6 +131,190 @@ describe('memory policy resolution', () => {
       configured: true,
     });
   });
+
+  it('enables observational memory by default with model fallback and env opt-out', () => {
+    expect(getMemoryCapabilities({} as NodeJS.ProcessEnv)).toEqual({
+      semanticRecall: true,
+      semanticRecallEmbeddingModel: 'ollama/nomic-embed-text',
+      semanticRecallEmbeddingConfig: {
+        kind: 'openai-compatible',
+        model: 'ollama/nomic-embed-text',
+        providerId: 'ollama',
+        modelId: 'nomic-embed-text',
+        url: 'http://127.0.0.1:11434/v1',
+        apiKey: 'ollama',
+      },
+      observationalMemory: true,
+      observationalMemoryModel: 'chatgpt/codex/gpt-5.4-mini',
+    });
+    expect(
+      getMemoryCapabilities({
+        WEAVE_DEFAULT_MODEL: 'openai/gpt-5.4',
+      } as NodeJS.ProcessEnv).observationalMemoryModel,
+    ).toBe('chatgpt/codex/gpt-5.4-mini');
+    expect(
+      getMemoryCapabilities({
+        WEAVE_DEFAULT_MODEL: 'openai/gpt-5.4',
+        WEAVE_OBSERVATIONAL_MEMORY_MODEL: 'openai/gpt-5-mini',
+      } as NodeJS.ProcessEnv).observationalMemoryModel,
+    ).toBe('openai/gpt-5-mini');
+    expect(getMemoryCapabilities({
+      WEAVE_OBSERVATIONAL_MEMORY: 'false',
+      WEAVE_OBSERVATIONAL_MEMORY_MODEL: 'openai/gpt-5-mini',
+    } as NodeJS.ProcessEnv)).toEqual({
+      semanticRecall: true,
+      semanticRecallEmbeddingModel: 'ollama/nomic-embed-text',
+      semanticRecallEmbeddingConfig: {
+        kind: 'openai-compatible',
+        model: 'ollama/nomic-embed-text',
+        providerId: 'ollama',
+        modelId: 'nomic-embed-text',
+        url: 'http://127.0.0.1:11434/v1',
+        apiKey: 'ollama',
+      },
+      observationalMemory: false,
+    });
+    expect(resolveObservationalMemoryConfig({
+      semanticRecall: false,
+      observationalMemory: true,
+      observationalMemoryModel: 'chatgpt/codex/gpt-5.4-mini',
+    })).toEqual({
+      model: 'chatgpt/codex/gpt-5.4-mini',
+      scope: 'thread',
+      activateAfterIdle: '5m',
+      activateOnProviderChange: true,
+      temporalMarkers: true,
+      observation: {
+        providerOptions: {
+          openai: {
+            reasoningEffort: 'medium',
+          },
+        },
+      },
+      reflection: {
+        providerOptions: {
+          openai: {
+            reasoningEffort: 'medium',
+          },
+        },
+      },
+    });
+    expect(
+      resolveObservationalMemoryConfig({
+        semanticRecall: false,
+        observationalMemory: true,
+        observationalMemoryModel: 'openai/gpt-5.4-mini',
+      })?.observation,
+    ).toEqual({
+      providerOptions: {
+        openai: {
+          reasoningEffort: 'medium',
+        },
+      },
+    });
+    expect(
+      resolveObservationalMemoryConfig({
+        semanticRecall: false,
+        observationalMemory: true,
+        observationalMemoryModel: 'openai/gpt-5.5',
+      })?.observation,
+    ).toEqual({
+      providerOptions: {
+        openai: {
+          reasoningEffort: 'medium',
+        },
+      },
+    });
+    expect(resolveObservationalMemoryConfig({
+      semanticRecall: false,
+      observationalMemory: true,
+      observationalMemoryModel: 'openai/gpt-5-mini',
+    })).toEqual({
+      model: 'openai/gpt-5-mini',
+      scope: 'thread',
+      activateAfterIdle: '5m',
+      activateOnProviderChange: true,
+      temporalMarkers: true,
+    });
+  });
+
+  it('defaults semantic recall to local Ollama embeddings', () => {
+    expect(getSemanticRecallEmbeddingModel({} as NodeJS.ProcessEnv)).toBe('ollama/nomic-embed-text');
+
+    expect(getSemanticRecallEmbeddingConfig({} as NodeJS.ProcessEnv)).toEqual({
+      kind: 'openai-compatible',
+      model: 'ollama/nomic-embed-text',
+      providerId: 'ollama',
+      modelId: 'nomic-embed-text',
+      url: 'http://127.0.0.1:11434/v1',
+      apiKey: 'ollama',
+    });
+
+    expect(getSemanticRecallEmbeddingConfig({
+      WEAVE_OLLAMA_PORT: '11555',
+    } as NodeJS.ProcessEnv)).toMatchObject({
+      url: 'http://127.0.0.1:11555/v1',
+    });
+
+    expect(getSemanticRecallEmbeddingConfig({
+      WEAVE_MEMORY_EMBEDDING_BASE_URL: 'http://localhost:11434',
+    } as NodeJS.ProcessEnv)).toMatchObject({
+      url: 'http://localhost:11434/v1',
+    });
+
+    expect(getMemoryCapabilities({} as NodeJS.ProcessEnv)).toMatchObject({
+      semanticRecall: true,
+      semanticRecallEmbeddingModel: 'ollama/nomic-embed-text',
+    });
+  });
+
+  it('allows semantic recall embedding override and env opt-out', () => {
+    expect(getMemoryCapabilities({
+      WEAVE_MEMORY_EMBEDDING_MODEL: 'openai/text-embedding-3-large',
+    } as NodeJS.ProcessEnv)).toMatchObject({
+      semanticRecall: false,
+      semanticRecallEmbeddingModel: 'openai/text-embedding-3-large',
+      semanticRecallUnavailableReason: 'semantic recall provider key missing: set OPENAI_API_KEY',
+    });
+
+    expect(getMemoryCapabilities({
+      OPENAI_API_KEY: 'test-key',
+      WEAVE_MEMORY_EMBEDDING_MODEL: 'openai/text-embedding-3-large',
+    } as NodeJS.ProcessEnv)).toMatchObject({
+      semanticRecall: true,
+      semanticRecallEmbeddingModel: 'openai/text-embedding-3-large',
+    });
+
+    expect(getMemoryCapabilities({
+      WEAVE_MEMORY_EMBEDDING_MODEL: 'local/nomic-embed-text',
+    } as NodeJS.ProcessEnv)).toMatchObject({
+      semanticRecall: false,
+      semanticRecallUnavailableReason:
+        'semantic recall provider unsupported: set WEAVE_MEMORY_EMBEDDING_BASE_URL or use a supported provider/model',
+    });
+
+    expect(getMemoryCapabilities({
+      WEAVE_MEMORY_EMBEDDING_MODEL: 'local/nomic-embed-text',
+      WEAVE_MEMORY_EMBEDDING_BASE_URL: 'http://localhost:8080/v1',
+    } as NodeJS.ProcessEnv)).toMatchObject({
+      semanticRecall: true,
+      semanticRecallEmbeddingConfig: {
+        kind: 'openai-compatible',
+        providerId: 'local',
+        modelId: 'nomic-embed-text',
+        url: 'http://localhost:8080/v1',
+      },
+    });
+
+    expect(getMemoryCapabilities({
+      OPENAI_API_KEY: 'test-key',
+      WEAVE_SEMANTIC_RECALL: 'false',
+      WEAVE_MEMORY_EMBEDDING_MODEL: 'openai/text-embedding-3-large',
+    } as NodeJS.ProcessEnv)).toMatchObject({
+      semanticRecall: false,
+      semanticRecallUnavailableReason: 'semantic recall disabled by env',
+    });
+  });
 });
 
 describe('tool model output compaction', () => {
@@ -125,7 +323,8 @@ describe('tool model output compaction', () => {
     expect(getCodeToolModelOutputMaxChars({
       WEAVE_CODE_TOOL_MODEL_OUTPUT_MAX_CHARS: '4096',
     } as NodeJS.ProcessEnv)).toBe(4096);
-    expect(getCodeToolModelOutputMaxChars({ WEAVE_CODE_TOOL_MODEL_OUTPUT_MAX_CHARS: 'nope' } as NodeJS.ProcessEnv)).toBe(12_000);
+    expect(getCodeToolModelOutputMaxChars({ WEAVE_CODE_TOOL_MODEL_OUTPUT_MAX_CHARS: 'nope' } as NodeJS.ProcessEnv))
+      .toBe(12_000);
   });
 
   it('keeps code read output up to the code-tool cap before truncating', () => {
@@ -280,13 +479,74 @@ describe('tool model output compaction', () => {
     expect(getToolHistoryFullCalls({ WEAVE_TOOL_HISTORY_FULL_CALLS: 'nope' } as NodeJS.ProcessEnv)).toBe(16);
   });
 
+  it('resolves Mastra tool-call filtering step retention from defaults and env', () => {
+    expect(getToolHistoryFullSteps({} as NodeJS.ProcessEnv)).toBe(16);
+    expect(getToolHistoryFullSteps({ WEAVE_TOOL_HISTORY_FULL_STEPS: '6' } as NodeJS.ProcessEnv)).toBe(6);
+    expect(getToolHistoryFullSteps({ WEAVE_TOOL_HISTORY_FULL_CALLS: '8' } as NodeJS.ProcessEnv)).toBe(8);
+    expect(getToolHistoryFullSteps({
+      WEAVE_TOOL_HISTORY_FULL_STEPS: 'nope',
+      WEAVE_TOOL_HISTORY_FULL_CALLS: 'also-nope',
+    } as NodeJS.ProcessEnv)).toBe(16);
+  });
+
+  it('uses Mastra ToolCallFilter to preserve compact model output while filtering raw tool invocations', async () => {
+    const messages = [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: {
+          format: 2,
+          parts: [
+            {
+              type: 'tool-invocation',
+              toolInvocation: {
+                state: 'result',
+                toolName: 'read',
+                toolCallId: 'call-read',
+                args: { path: 'large.ts' },
+                result: { ok: true, path: 'large.ts', content: 'raw content that should not remain' },
+              },
+              providerMetadata: {
+                mastra: {
+                  modelOutput: {
+                    type: 'text',
+                    value: 'read\npath: large.ts\ncontentChars: 4096\ncontentHash: abc123',
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    ];
+    const filter = new ToolCallFilter({
+      filterAfterToolSteps: getToolHistoryFullSteps({} as NodeJS.ProcessEnv),
+      preserveModelOutput: true,
+    });
+    const result = await filter.processInput({
+      messageList: { get: { all: { db: () => messages } } },
+      abort: (reason?: unknown) => {
+        throw new Error(String(reason));
+      },
+    } as any) as any[];
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content.parts).toEqual([
+      {
+        type: 'text',
+        text: 'read result:\nread\npath: large.ts\ncontentChars: 4096\ncontentHash: abc123',
+      },
+    ]);
+    expect(JSON.stringify(result).includes('raw content that should not remain')).toBe(false);
+  });
+
   it('preserves the latest 16 individual tool call ids, including parallel calls', () => {
     const parallelIds = [1, 2, 3];
     const laterIds = Array.from({ length: 15 }, (_, index) => index + 4);
     const prompt = [
       {
         role: 'assistant',
-        content: parallelIds.map(index => ({
+        content: parallelIds.map((index) => ({
           type: 'tool-call',
           toolCallId: `call-${index}`,
           toolName: 'read',
@@ -295,14 +555,14 @@ describe('tool model output compaction', () => {
       },
       {
         role: 'tool',
-        content: parallelIds.map(index => ({
+        content: parallelIds.map((index) => ({
           type: 'tool-result',
           toolCallId: `call-${index}`,
           toolName: 'read',
           output: { type: 'text', value: `raw call-${index}` },
         })),
       },
-      ...laterIds.flatMap(index => [
+      ...laterIds.flatMap((index) => [
         {
           role: 'assistant',
           content: [{
@@ -328,15 +588,22 @@ describe('tool model output compaction', () => {
       preserveToolCalls: getToolHistoryFullCalls({} as NodeJS.ProcessEnv),
     }) as any[];
     const toolResultParts = compacted
-      .filter(message => message.role === 'tool')
-      .flatMap(message => message.content);
+      .filter((message) => message.role === 'tool')
+      .flatMap((message) => message.content);
     const fullResultIds = toolResultParts
-      .filter(part => !part.output.value.startsWith('Compact tool result summary'))
-      .map(part => part.toolCallId);
+      .filter((part) => !part.output.value.startsWith('Compact tool result summary'))
+      .map((part) => part.toolCallId);
 
-    expect(toolResultParts.find(part => part.toolCallId === 'call-1')?.output.value).toContain('Compact tool result summary');
-    expect(toolResultParts.find(part => part.toolCallId === 'call-2')?.output.value).toContain('Compact tool result summary');
-    expect(toolResultParts.find(part => part.toolCallId === 'call-3')?.output).toEqual({ type: 'text', value: 'raw call-3' });
+    expect(toolResultParts.find((part) => part.toolCallId === 'call-1')?.output.value).toContain(
+      'Compact tool result summary',
+    );
+    expect(toolResultParts.find((part) => part.toolCallId === 'call-2')?.output.value).toContain(
+      'Compact tool result summary',
+    );
+    expect(toolResultParts.find((part) => part.toolCallId === 'call-3')?.output).toEqual({
+      type: 'text',
+      value: 'raw call-3',
+    });
     expect(fullResultIds).toEqual(Array.from({ length: 16 }, (_, index) => `call-${index + 3}`));
   });
 
@@ -591,7 +858,7 @@ describe('tool model output compaction', () => {
       },
       { role: 'user', content: [{ type: 'text', text: 'current question' }] },
     ]);
-    expect(limited.some(message => JSON.stringify(message).includes('call-old'))).toBe(false);
+    expect(limited.some((message) => JSON.stringify(message).includes('call-old'))).toBe(false);
   });
 
   it('removes already-leaked compact summary text from outbound prompts', () => {
@@ -841,7 +1108,10 @@ describe('current-turn image prompt shaping', () => {
     const prompt = [
       { role: 'user', content: [imagePart] },
       { role: 'assistant', content: [{ type: 'text', text: 'Earlier reply' }] },
-      { role: 'user', content: [{ type: 'text', text: 'Look at this' }, { ...imagePart, data: 'data:image/png;base64,bmV3' }] },
+      {
+        role: 'user',
+        content: [{ type: 'text', text: 'Look at this' }, { ...imagePart, data: 'data:image/png;base64,bmV3' }],
+      },
     ];
 
     const result = processor.processLLMRequest({ prompt, stepNumber: 0 } as any) as any;
@@ -873,7 +1143,10 @@ describe('current-turn image prompt shaping', () => {
     const processor = new CurrentTurnImageProcessor();
     const prompt = [
       { role: 'user', content: [{ type: 'text', text: 'Earlier text' }, pdfPart, imagePart] },
-      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'read', input: { path: 'a.ts' } }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'read', input: { path: 'a.ts' } }],
+      },
       { role: 'user', content: [{ type: 'text', text: 'Current text' }] },
     ];
 

@@ -6,8 +6,8 @@ import {
   getAuthUserFromHeader,
   getThreadContextUsageSnapshot,
   isCompactToolHistoryTextPart,
-  resolveMemoryPolicy,
   resolveAgentContext,
+  resolveMemoryPolicy,
 } from '../../../agent/runtime';
 import { getThreadRunSubmittedUserMessages, getThreadRunUiMessages } from './chat';
 import { isHiddenThread } from './thread-visibility';
@@ -21,9 +21,14 @@ type MastraThread = {
   metadata?: unknown;
 };
 
-const timestampString = (value: unknown) => typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
+const timestampString = (value: unknown) =>
+  typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
 
-const getTopSortOrder = async (memory: any, resourceId: string, scope: { projectId?: string; workspaceId?: string }) => {
+const getTopSortOrder = async (
+  memory: any,
+  resourceId: string,
+  scope: { projectId?: string; workspaceId?: string },
+) => {
   const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   const orders = result.threads
     .filter((thread: any) => !isHiddenThread(thread))
@@ -47,7 +52,10 @@ const getToolName = (part: Record<string, unknown>) => {
   const invocation = getToolInvocation(part);
   if (typeof invocation?.toolName === 'string') return invocation.toolName;
   if (typeof part.toolName === 'string') return part.toolName;
-  if (typeof part.type === 'string' && part.type.startsWith('tool-') && !['tool-call', 'tool-invocation', 'tool-result'].includes(part.type)) {
+  if (
+    typeof part.type === 'string' && part.type.startsWith('tool-') &&
+    !['tool-call', 'tool-invocation', 'tool-result'].includes(part.type)
+  ) {
     return part.type.slice('tool-'.length);
   }
   return 'tool';
@@ -80,7 +88,12 @@ const absoluteAttachmentUrl = (url: string, origin: string) => {
   return `${origin}${url}`;
 };
 
-const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: string, messageId: string, partIndex: number) => {
+const toUiPart = (
+  part: MastraDBMessage['content']['parts'][number],
+  origin: string,
+  messageId: string,
+  partIndex: number,
+) => {
   if (isCompactToolHistoryTextPart(part)) return null;
 
   if (part.type === 'text' && typeof (part as { text?: unknown }).text === 'string') {
@@ -99,8 +112,8 @@ const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: str
     const mediaType = typeof record.mediaType === 'string'
       ? record.mediaType
       : typeof record.mimeType === 'string'
-        ? record.mimeType
-        : undefined;
+      ? record.mimeType
+      : undefined;
 
     if (url && mediaType?.startsWith('image/')) {
       return {
@@ -118,7 +131,7 @@ const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: str
     const record = part as Record<string, unknown>;
     const details = Array.isArray(record.details) ? record.details : [];
     const text = details
-      .map(detail => typeof detail === 'object' && detail !== null ? (detail as { text?: unknown }).text : undefined)
+      .map((detail) => typeof detail === 'object' && detail !== null ? (detail as { text?: unknown }).text : undefined)
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
       .join('\n\n')
       .trim();
@@ -129,8 +142,7 @@ const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: str
   }
 
   const record = part as Record<string, unknown>;
-  const hasToolData =
-    record.type === 'tool-call' ||
+  const hasToolData = record.type === 'tool-call' ||
     (typeof part.type === 'string' && part.type.startsWith('tool-')) ||
     typeof record.toolCallId === 'string' ||
     typeof record.toolName === 'string';
@@ -143,12 +155,11 @@ const toUiPart = (part: MastraDBMessage['content']['parts'][number], origin: str
 
   return {
     type: `tool-${toolName}`,
-    toolCallId:
-      typeof getToolInvocation(record)?.toolCallId === 'string'
-        ? getToolInvocation(record)!.toolCallId as string
-        : typeof record.toolCallId === 'string'
-          ? record.toolCallId
-          : `${messageId}-${partIndex}-${toolName}`,
+    toolCallId: typeof getToolInvocation(record)?.toolCallId === 'string'
+      ? getToolInvocation(record)!.toolCallId as string
+      : typeof record.toolCallId === 'string'
+      ? record.toolCallId
+      : `${messageId}-${partIndex}-${toolName}`,
     state: result === undefined ? 'input-available' : isError ? 'output-error' : 'output-available',
     input: getToolArgs(record),
     output: result,
@@ -180,16 +191,20 @@ type UiChatMessage = {
   metadata?: unknown;
 };
 
-const getPendingMessageText = (message: UiChatMessage) => message.parts
-  .map(part => part.type === 'text' && typeof part.text === 'string' ? part.text : '')
-  .join('')
-  .trim();
+const getPendingMessageText = (message: UiChatMessage) =>
+  message.parts
+    .map((part) => part.type === 'text' && typeof part.text === 'string' ? part.text : '')
+    .join('')
+    .trim();
 
-const getPendingAttachmentSignature = (message: UiChatMessage) => message.parts
-  .filter(part => part.type === 'file')
-  .map(part => `${typeof part.url === 'string' ? part.url : ''}:${typeof part.mediaType === 'string' ? part.mediaType : ''}`)
-  .sort()
-  .join('|');
+const getPendingAttachmentSignature = (message: UiChatMessage) =>
+  message.parts
+    .filter((part) => part.type === 'file')
+    .map((part) =>
+      `${typeof part.url === 'string' ? part.url : ''}:${typeof part.mediaType === 'string' ? part.mediaType : ''}`
+    )
+    .sort()
+    .join('|');
 
 const getPendingMessageSignature = (message: UiChatMessage) =>
   `${message.role}:${getPendingMessageText(message)}:${getPendingAttachmentSignature(message)}`;
@@ -197,7 +212,7 @@ const getPendingMessageSignature = (message: UiChatMessage) =>
 const mergePendingSubmittedMessages = (messages: UiChatMessage[], pendingMessages: UiChatMessage[]) => {
   if (pendingMessages.length === 0) return messages;
 
-  const existingIds = new Set(messages.map(message => message.id));
+  const existingIds = new Set(messages.map((message) => message.id));
   const existingSignatures = new Set(messages.map(getPendingMessageSignature));
   const merged = [...messages];
 
@@ -219,21 +234,23 @@ const toPendingSubmittedMessage = (message: unknown, origin: string, index: numb
   const record = message as Record<string, unknown>;
   if (record.role !== 'user') return null;
 
-  const messageId = typeof record.id === 'string' && record.id.trim()
-    ? record.id
-    : `pending-user-${index}`;
+  const messageId = typeof record.id === 'string' && record.id.trim() ? record.id : `pending-user-${index}`;
   const metadata = record.metadata as Record<string, unknown> | undefined;
   const originalText = typeof metadata?.slashCommandOriginalText === 'string'
     ? metadata.slashCommandOriginalText
     : undefined;
   const attachments = Array.isArray(record.experimental_attachments)
-    ? record.experimental_attachments.map(attachment => toUiAttachmentPart(attachment, origin)).filter(part => part !== null)
+    ? record.experimental_attachments.map((attachment) => toUiAttachmentPart(attachment, origin)).filter((part) =>
+      part !== null
+    )
     : [];
   const parts = Array.isArray(record.parts)
-    ? record.parts.map((part, partIndex) => toUiPart(part as MastraDBMessage['content']['parts'][number], origin, messageId, partIndex)).filter(part => part !== null)
+    ? record.parts.map((part, partIndex) =>
+      toUiPart(part as MastraDBMessage['content']['parts'][number], origin, messageId, partIndex)
+    ).filter((part) => part !== null)
     : typeof record.content === 'string'
-      ? [{ type: 'text', text: record.content }]
-      : [];
+    ? [{ type: 'text', text: record.content }]
+    : [];
 
   return {
     id: messageId,
@@ -249,15 +266,20 @@ const toUiMessage = (message: MastraDBMessage, origin: string) => {
     ? metadata.slashCommandOriginalText
     : undefined;
   const attachments = Array.isArray(message.content.experimental_attachments)
-    ? message.content.experimental_attachments.map(attachment => toUiAttachmentPart(attachment, origin)).filter(part => part !== null)
+    ? message.content.experimental_attachments.map((attachment) => toUiAttachmentPart(attachment, origin)).filter(
+      (part) => part !== null,
+    )
     : [];
 
   return {
     id: message.id,
     role: message.role,
-    parts: originalText
-      ? [{ type: 'text', text: originalText }, ...attachments]
-      : [...message.content.parts.map((part, index) => toUiPart(part, origin, message.id, index)).filter(part => part !== null), ...attachments],
+    parts: originalText ? [{ type: 'text', text: originalText }, ...attachments] : [
+      ...message.content.parts.map((part, index) => toUiPart(part, origin, message.id, index)).filter((part) =>
+        part !== null
+      ),
+      ...attachments,
+    ],
     status: message.role === 'assistant' ? { type: 'complete' } : undefined,
     metadata: message.content.metadata,
   } satisfies UiChatMessage;
@@ -282,22 +304,56 @@ const getRenameTitle = (message: MastraDBMessage) => {
   return '';
 };
 
-const messageTextForTokenEstimate = (message: MastraDBMessage) => message.content.parts
-  .map(part => {
-    const record = part as Record<string, unknown>;
-    if (typeof record.text === 'string') return record.text;
-    if (typeof record.result === 'string') return record.result;
-    if (record.result !== undefined) return JSON.stringify(record.result);
-    if (record.output !== undefined) return typeof record.output === 'string' ? record.output : JSON.stringify(record.output);
-    return JSON.stringify(record);
-  })
-  .filter(Boolean)
-  .join('\n');
+const messageTextForTokenEstimate = (message: MastraDBMessage) =>
+  message.content.parts
+    .map((part) => {
+      const record = part as Record<string, unknown>;
+      if (typeof record.text === 'string') return record.text;
+      if (typeof record.result === 'string') return record.result;
+      if (record.result !== undefined) return JSON.stringify(record.result);
+      if (record.output !== undefined) {
+        return typeof record.output === 'string' ? record.output : JSON.stringify(record.output);
+      }
+      return JSON.stringify(record);
+    })
+    .filter(Boolean)
+    .join('\n');
 
-const estimateContextTokens = (memory: any, messages: MastraDBMessage[]) => messages.reduce((total, message) => {
-  const text = messageTextForTokenEstimate(message);
-  return total + (typeof memory.estimateTokens === 'function' ? memory.estimateTokens(text) : Math.ceil(text.length / 4));
-}, 0);
+const estimateTextTokens = (memory: any, text: string) =>
+  typeof memory.estimateTokens === 'function' ? memory.estimateTokens(text) : Math.ceil(text.length / 4);
+
+const estimateContextTokens = (memory: any, messages: MastraDBMessage[], systemMessage?: string) =>
+  messages.reduce((total, message) => {
+    const text = messageTextForTokenEstimate(message);
+    return total + estimateTextTokens(memory, text);
+  }, systemMessage ? estimateTextTokens(memory, systemMessage) : 0);
+
+const estimateMemoryContextTokens = async (
+  memory: any,
+  args: {
+    threadId: string;
+    resourceId: string;
+    memoryConfig: unknown;
+  },
+) => {
+  if (typeof memory.getContext === 'function') {
+    const context = await memory.getContext({
+      threadId: args.threadId,
+      resourceId: args.resourceId,
+      ...(isRecord(args.memoryConfig) ? { memoryConfig: args.memoryConfig } : {}),
+    });
+    return estimateContextTokens(
+      memory,
+      Array.isArray(context?.messages) ? context.messages : [],
+      context?.systemMessage,
+    );
+  }
+
+  const recalled = await memory.recall({
+    ...contextUsageRecallOptions(args.threadId, args.resourceId, args.memoryConfig),
+  });
+  return estimateContextTokens(memory, recalled.messages);
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -354,7 +410,7 @@ const errorResponse = (c: any, error: unknown) => {
 export const chatStateRoutes = [
   defineRoute('/owner/me', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const user = getAuthUserFromHeader(c.req.header('Authorization'));
         if (!user) return c.json({ error: 'Unauthorized' }, 401);
@@ -367,7 +423,7 @@ export const chatStateRoutes = [
   }),
   defineRoute('/chat/threads', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
 
@@ -395,8 +451,12 @@ export const chatStateRoutes = [
         );
 
         const sortedThreads = threads.sort((a, b) => {
-          const aOrder = typeof (a.metadata as Record<string, unknown> | undefined)?.sortOrder === 'number' ? (a.metadata as Record<string, number>).sortOrder : Number.MAX_SAFE_INTEGER;
-          const bOrder = typeof (b.metadata as Record<string, unknown> | undefined)?.sortOrder === 'number' ? (b.metadata as Record<string, number>).sortOrder : Number.MAX_SAFE_INTEGER;
+          const aOrder = typeof (a.metadata as Record<string, unknown> | undefined)?.sortOrder === 'number'
+            ? (a.metadata as Record<string, number>).sortOrder
+            : Number.MAX_SAFE_INTEGER;
+          const bOrder = typeof (b.metadata as Record<string, unknown> | undefined)?.sortOrder === 'number'
+            ? (b.metadata as Record<string, number>).sortOrder
+            : Number.MAX_SAFE_INTEGER;
           return aOrder - bOrder || timestampString(b.updatedAt).localeCompare(timestampString(a.updatedAt));
         });
 
@@ -408,7 +468,7 @@ export const chatStateRoutes = [
   }),
   defineRoute('/chat/threads', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const body = await c.req.json();
         const resourceId = getResourceId(c);
@@ -438,11 +498,13 @@ export const chatStateRoutes = [
   }),
   defineRoute('/chat/threads/reorder', {
     method: 'PATCH',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const body = await c.req.json();
-        const threadIds = Array.isArray(body?.threadIds) ? body.threadIds.filter((id: unknown) => typeof id === 'string') : [];
+        const threadIds = Array.isArray(body?.threadIds)
+          ? body.threadIds.filter((id: unknown) => typeof id === 'string')
+          : [];
         const scope = body?.scope as Record<string, unknown> | undefined;
         const scopeProjectId = typeof scope?.projectId === 'string' ? scope.projectId : undefined;
         const scopeWorkspaceId = typeof scope?.workspaceId === 'string' ? scope.workspaceId : undefined;
@@ -454,8 +516,12 @@ export const chatStateRoutes = [
         const scopedThreads = visibleThreads.filter((thread: MastraThread) => {
           const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
           if (metadata.archived === true) return false;
-          if (plain) return metadata.adHoc === true || (metadata.mode !== 'project' && typeof metadata.projectId !== 'string');
-          if (scopeWorkspaceId) return metadata.projectId === scopeProjectId && metadata.workspaceId === scopeWorkspaceId;
+          if (plain) {
+            return metadata.adHoc === true || (metadata.mode !== 'project' && typeof metadata.projectId !== 'string');
+          }
+          if (scopeWorkspaceId) {
+            return metadata.projectId === scopeProjectId && metadata.workspaceId === scopeWorkspaceId;
+          }
           if (scopeProjectId) return metadata.projectId === scopeProjectId && typeof metadata.workspaceId !== 'string';
           return false;
         });
@@ -478,7 +544,7 @@ export const chatStateRoutes = [
   }),
   defineRoute('/chat/threads/:threadId/raw-messages', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
@@ -501,7 +567,7 @@ export const chatStateRoutes = [
   }),
   defineRoute('/chat/threads/:threadId/context-usage', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
@@ -512,19 +578,20 @@ export const chatStateRoutes = [
           agentMemory: resolvedContext.config.memory,
           threadMetadata: resolvedContext.threadMetadata,
         });
-        const recalled = await memory.recall({
-          ...contextUsageRecallOptions(threadId, resourceId, memoryPolicy.options),
-        });
         const queryContextWindow = Number(c.req.query('contextWindow'));
         const snapshot = getThreadContextUsageSnapshot(threadId, resourceId);
         const contextWindow = Number.isFinite(queryContextWindow) && queryContextWindow > 0
           ? queryContextWindow
           : typeof snapshot?.maxTokens === 'number'
-            ? snapshot.maxTokens
-            : typeof memory.MAX_CONTEXT_TOKENS === 'number'
-            ? memory.MAX_CONTEXT_TOKENS
-            : undefined;
-        const tokens = snapshot?.usedTokens ?? estimateContextTokens(memory, recalled.messages);
+          ? snapshot.maxTokens
+          : typeof memory.MAX_CONTEXT_TOKENS === 'number'
+          ? memory.MAX_CONTEXT_TOKENS
+          : undefined;
+        const tokens = snapshot?.usedTokens ?? await estimateMemoryContextTokens(memory, {
+          threadId,
+          resourceId,
+          memoryConfig: memoryPolicy.options,
+        });
         return c.json({
           tokens,
           contextWindow,
@@ -547,7 +614,7 @@ export const chatStateRoutes = [
   }),
   defineRoute('/chat/threads/:threadId/messages', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
@@ -566,8 +633,7 @@ export const chatStateRoutes = [
           .map((message, index) => toPendingSubmittedMessage(message, origin, index))
           .filter((message): message is UiChatMessage => message !== null);
         const pendingRunMessages = getThreadRunUiMessages(resourceId, threadId);
-        const shouldAppendRunMessages =
-          pendingRunMessages.length > 0 &&
+        const shouldAppendRunMessages = pendingRunMessages.length > 0 &&
           (pendingMessages.length > 0 || persistedMessages[persistedMessages.length - 1]?.role !== 'assistant');
 
         return c.json({
@@ -585,7 +651,7 @@ export const chatStateRoutes = [
   }),
   defineRoute('/chat/threads/:threadId', {
     method: 'PATCH',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
@@ -614,7 +680,7 @@ export const chatStateRoutes = [
   }),
   defineRoute('/chat/threads/:threadId', {
     method: 'DELETE',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
@@ -635,6 +701,7 @@ export const chatStateRoutes = [
 export const __chatStateContextUsageTest = {
   contextUsageRecallOptions,
   estimateContextTokens,
+  estimateMemoryContextTokens,
   toUiMessage,
   toPendingSubmittedMessage,
   mergePendingSubmittedMessages,
