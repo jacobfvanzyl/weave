@@ -16,20 +16,20 @@ import {
 import "@atomic-editor/editor/styles.css";
 import { syntaxHighlighting } from "@codemirror/language";
 import { Compartment, type Extension } from "@codemirror/state";
-import {
-  EditorView,
-  gutter,
-  GutterMarker,
-  gutters,
-  keymap,
-  type ViewUpdate,
-} from "@codemirror/view";
+import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import { languageServerExtensions, LSPClient } from "@codemirror/lsp-client";
-import { getCM, vim } from "@replit/codemirror-vim";
 import type { EditorTarget } from "../../lib/editor-types";
-import type { LiveEditorCodeMirrorSnapshot, LiveEditorTextRange } from "../../stores/live-editor-context-store";
+import type {
+  LiveEditorCodeMirrorSnapshot,
+  LiveEditorTextRange,
+} from "../../stores/live-editor-context-store";
 import { getCodeMirrorLanguageExtensions } from "../../lib/codemirror-languages";
-import { registerWeaveVimCommenting } from "../../lib/codemirror-vim-commenting";
+import {
+  createWeaveVimExtension,
+  observeWeaveVimMode,
+  relativeLineNumbers,
+  type VimMode,
+} from "../../lib/codemirror-editor-extensions";
 import {
   editorBasicSetup,
   editorTheme,
@@ -42,16 +42,7 @@ import {
 } from "../../lib/language-intelligence";
 
 export { editorCanvasBackgroundColor } from "../../lib/codemirror-theme";
-
-export type VimMode =
-  | "normal"
-  | "insert"
-  | "visual"
-  | "visualLine"
-  | "visualBlock"
-  | "replace"
-  | "command"
-  | "terminal";
+export type { VimMode } from "../../lib/codemirror-editor-extensions";
 
 type CodeMirrorEditorProps = {
   editorMode?: "code" | "notes";
@@ -71,80 +62,6 @@ export type CodeMirrorEditorHandle = {
   focus: () => void;
   getSnapshot: () => LiveEditorCodeMirrorSnapshot | undefined;
   revealLine: (line: number, options?: { focus?: boolean }) => void;
-};
-
-type VimModeChangeEvent = {
-  mode?: string;
-  subMode?: string;
-};
-
-class RelativeLineNumberMarker extends GutterMarker {
-  constructor(public readonly label: string) {
-    super();
-  }
-
-  eq(other: GutterMarker) {
-    return other instanceof RelativeLineNumberMarker &&
-      other.label === this.label;
-  }
-
-  toDOM() {
-    return document.createTextNode(this.label);
-  }
-}
-
-const getLineNumberSpacer = (lineCount: number) => {
-  let last = 9;
-  while (last < lineCount) last = last * 10 + 9;
-  return String(last);
-};
-
-const relativeLineNumbers: Extension = [
-  gutters(),
-  gutter({
-    class: "cm-lineNumbers cm-relativeLineNumbers",
-    renderEmptyElements: false,
-    lineMarker: (view, line) => {
-      const lineNumber = view.state.doc.lineAt(line.from).number;
-      const cursorLineNumber =
-        view.state.doc.lineAt(view.state.selection.main.head).number;
-      const label = lineNumber === cursorLineNumber
-        ? String(lineNumber)
-        : String(Math.abs(lineNumber - cursorLineNumber));
-      return new RelativeLineNumberMarker(label);
-    },
-    lineMarkerChange: (update) =>
-      update.docChanged || update.selectionSet || update.viewportChanged,
-    initialSpacer: (view) =>
-      new RelativeLineNumberMarker(getLineNumberSpacer(view.state.doc.lines)),
-    updateSpacer: (spacer, update) => {
-      const nextLabel = getLineNumberSpacer(update.view.state.doc.lines);
-      return spacer instanceof RelativeLineNumberMarker &&
-          spacer.label === nextLabel
-        ? spacer
-        : new RelativeLineNumberMarker(nextLabel);
-    },
-  }),
-];
-
-const toVimMode = (event: VimModeChangeEvent = {}): VimMode => {
-  switch (event.mode) {
-    case "insert":
-      return "insert";
-    case "visual":
-      if (event.subMode === "linewise") return "visualLine";
-      if (event.subMode === "blockwise") return "visualBlock";
-      return "visual";
-    case "replace":
-      return "replace";
-    case "command":
-      return "command";
-    case "terminal":
-      return "terminal";
-    case "normal":
-    default:
-      return "normal";
-  }
 };
 
 const textRangePreviewMaxChars = 8_000;
@@ -320,8 +237,6 @@ export const CodeMirrorEditor = forwardRef<
     const container = containerRef.current;
     if (!container) return undefined;
 
-    registerWeaveVimCommenting();
-
     const saveKeymap = keymap.of([{
       key: "Mod-s",
       run: () => {
@@ -339,7 +254,7 @@ export const CodeMirrorEditor = forwardRef<
       doc: value,
       parent: container,
       extensions: [
-        vim({ status: false }),
+        createWeaveVimExtension(),
         relativeLineNumbers,
         editorBasicSetup,
         editorTheme,
@@ -355,7 +270,6 @@ export const CodeMirrorEditor = forwardRef<
     });
 
     viewRef.current = view;
-    onVimModeChangeRef.current?.("normal");
 
     const gutter = view.dom.querySelector<HTMLElement>(".cm-gutters");
     const reportGutterWidth = () => {
@@ -375,16 +289,15 @@ export const CodeMirrorEditor = forwardRef<
       : undefined;
     if (gutter) resizeObserver?.observe(gutter);
 
-    const cm = getCM(view);
-    const handleVimModeChange = (event: VimModeChangeEvent) => {
-      onVimModeChangeRef.current?.(toVimMode(event));
-    };
-    cm?.on("vim-mode-change", handleVimModeChange);
+    const stopObservingVimMode = observeWeaveVimMode(
+      view,
+      (mode) => onVimModeChangeRef.current?.(mode),
+    );
 
     return () => {
       window.cancelAnimationFrame(animationFrame);
       resizeObserver?.disconnect();
-      cm?.off("vim-mode-change", handleVimModeChange);
+      stopObservingVimMode();
       view.destroy();
       if (viewRef.current === view) viewRef.current = null;
     };

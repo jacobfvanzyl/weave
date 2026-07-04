@@ -19,7 +19,7 @@ const paths = (routes: Array<{ path: string }>) => routes.map(route => route.pat
 
 describe('backend route ownership', () => {
   it('keeps Agent and Portal out of product module registration', () => {
-    expect(serverModules.map(module => module.id)).toEqual(['chat', 'code', 'notes', 'workspace-files', 'attachments']);
+    expect(serverModules.map(module => module.id)).toEqual(['chat', 'code', 'editor-context', 'notes', 'workspace-files', 'attachments']);
   });
 
   it('registers canonical route prefixes at their owning boundaries', () => {

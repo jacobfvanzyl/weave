@@ -62,6 +62,9 @@ export const weaveRoutePaths = {
     projectProfile: (projectId: string) => `/notes/projects/${encodePath(projectId)}/profile`,
     reorderProjects: () => '/notes/projects/reorder',
     projectThreads: (projectId: string) => `/notes/projects/${encodePath(projectId)}/threads`,
+    jupyterStatus: () => '/notes/jupyter/status',
+    jupyterKernelspecs: () => '/notes/jupyter/kernelspecs',
+    jupyterSession: () => '/notes/jupyter/session',
   },
   workspaceFiles: {
     action: (action: string) => `/workspace-files/${encodePath(action === 'diffPreview' ? 'diff-preview' : action)}`,
@@ -148,6 +151,9 @@ export const weaveRoutes = {
     projectProfile: (projectId: string) => url(weaveRoutePaths.notes.projectProfile(projectId)),
     reorderProjects: () => url(weaveRoutePaths.notes.reorderProjects()),
     projectThreads: (projectId: string) => url(weaveRoutePaths.notes.projectThreads(projectId)),
+    jupyterStatus: () => url(weaveRoutePaths.notes.jupyterStatus()),
+    jupyterKernelspecs: () => url(weaveRoutePaths.notes.jupyterKernelspecs()),
+    jupyterSession: () => url(weaveRoutePaths.notes.jupyterSession()),
   },
   workspaceFiles: {
     action: (action: string) => url(weaveRoutePaths.workspaceFiles.action(action)),

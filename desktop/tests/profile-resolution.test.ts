@@ -143,6 +143,7 @@ describe('dynamic profile resolver', () => {
       'writeProposalTool',
       'writeProposalPatchTool',
       'updateProposalTool',
+      'editor_context',
     ]);
 
     expect(__profileResolverTest.expandProfileToolsForProjectKind([
@@ -159,6 +160,7 @@ describe('dynamic profile resolver', () => {
     ], 'git')).toEqual([
       'renameThreadTool',
       'read',
+      'editor_context',
     ]);
   });
 });

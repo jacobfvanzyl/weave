@@ -37,7 +37,7 @@ export type LiveEditorCoppermindSection = {
   childCount: number;
   empty: boolean;
   id: string;
-  kind: 'blocks' | 'ink';
+  kind: 'blocks' | 'ink' | 'code';
   placement: LiveEditorCoppermindSectionPlacement;
   preview?: string;
   previewTruncated?: boolean;

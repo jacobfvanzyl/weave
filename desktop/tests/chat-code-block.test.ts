@@ -31,6 +31,8 @@ describe("chat code block highlighting", () => {
     ["language-html", "snippet.html"],
     ["language-md", "snippet.md"],
     ["language-dart", "snippet.dart"],
+    ["language-py", "snippet.py"],
+    ["language-python", "snippet.py"],
     ["language-yaml", "snippet.yaml"],
     ["language-yml", "snippet.yml"],
   ])("maps %s to an existing CodeMirror language path", (className, path) => {
@@ -51,7 +53,6 @@ describe("chat code block highlighting", () => {
     "font-mono",
     "language-text",
     "language-bash",
-    "language-python",
     "language-rust",
   ])("leaves unsupported or inline code unhighlighted for %s", (className) => {
     expect(getCodeMirrorFencePath(className)).toBeUndefined();

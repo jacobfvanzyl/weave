@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Text, type Doc, type DocSnapshot } from '@blocksuite/store';
 import {
+  addCoppermindBlockSuiteCodeSection,
   coppermindBlockSuitePackageVersion,
   coppermindCanvasCellGapPx,
   coppermindCellWidthPx,
@@ -12,6 +13,7 @@ import {
   deleteCoppermindBlockSuiteSection,
   disposeCoppermindBlockSuiteRuntime,
   exportCoppermindBlockSuiteSnapshot,
+  getCoppermindCodeCellBlock,
   getCoppermindBlockSuiteSections,
   importCoppermindBlockSuiteRuntime,
   placeCoppermindBlockSuiteSection,
@@ -20,6 +22,9 @@ import {
   setCoppermindInkCellStackState,
   unplaceCoppermindBlockSuiteSection,
 } from '../../packages/client/src/lib/coppermind-blocksuite';
+import {
+  coppermindCodeCellFlavour,
+} from '../../packages/client/src/lib/coppermind-code-cell';
 import {
   createEmptyCoppermindDocument,
   createEmptyCoppermindDocumentContent,
@@ -44,6 +49,9 @@ import {
   coppermindInkClampReservePx,
   coppermindInkContentPaddingPx,
 } from '../../packages/client/src/lib/coppermind-layout';
+import {
+  serializeCoppermindCodeCellOutputs,
+} from '../../packages/client/src/lib/jupyter-output';
 
 type SnapshotBlock = DocSnapshot['blocks'];
 
@@ -106,6 +114,14 @@ const setInkBackground = (doc: Doc, sectionId: string, background: CoppermindInk
   const inkCell = section?.children.find(child => child.flavour === coppermindInkCellFlavour);
   if (!inkCell) throw new Error(`expected section ${sectionId} to have an ink cell`);
   doc.updateBlock(inkCell, { background });
+};
+
+const setCodeCell = (doc: Doc, sectionId: string, source: string) => {
+  const section = doc.getBlockById(sectionId);
+  const codeCell = section?.children.find(child => child.flavour === coppermindCodeCellFlavour);
+  if (!codeCell) throw new Error(`expected section ${sectionId} to have a code cell`);
+  doc.updateBlock(codeCell, { text: new Text(source) });
+  return codeCell;
 };
 
 const legacyDocument = (): LegacyCoppermindDocument => ({
@@ -246,6 +262,74 @@ describe('Coppermind .cpr document structure', () => {
 
       expect(deleteCoppermindBlockSuiteSection(runtime.doc, secondSectionId)).toBe(true);
       expect(getCoppermindBlockSuiteSections(runtime.doc)).toHaveLength(1);
+    } finally {
+      disposeCoppermindBlockSuiteRuntime(runtime);
+    }
+  });
+
+  it('stores code cells with Python metadata and persisted outputs in BlockSuite snapshots', async () => {
+    const runtime = createCoppermindBlockSuiteRuntime({
+      docId: 'doc:notebook',
+      now: new Date('2026-06-30T10:00:00.000Z'),
+      paragraphTexts: ['First section'],
+      title: 'Notebook',
+    });
+
+    try {
+      const codeSectionId = addCoppermindBlockSuiteCodeSection(runtime.doc);
+      const codeCell = setCodeCell(runtime.doc, codeSectionId, 'print("hello")');
+      const outputsData = serializeCoppermindCodeCellOutputs([
+        {
+          outputId: 'out:1',
+          output_type: 'stream',
+          name: 'stdout',
+          text: 'hello\n',
+        },
+      ]);
+      runtime.doc.updateBlock(codeCell, {
+        executionCount: 1,
+        lastExecutionStatus: 'ok',
+        outputsData,
+      });
+
+      expect(getCoppermindBlockSuiteSections(runtime.doc)).toMatchObject([
+        { kind: 'blocks', title: 'First section' },
+        {
+          id: codeSectionId,
+          isEmpty: false,
+          kind: 'code',
+          title: 'print("hello")',
+        },
+      ]);
+
+      const snapshot = exportCoppermindBlockSuiteSnapshot(runtime);
+      const snapshotCodeCell = findSnapshotBlock(snapshot.blocks, coppermindCodeCellFlavour);
+      expect(snapshotCodeCell?.props.codeVersion).toBe(1);
+      expect(snapshotCodeCell?.props.executionCount).toBe(1);
+      expect(snapshotCodeCell?.props.language).toBe('python');
+      expect(snapshotCodeCell?.props.lastExecutionStatus).toBe('ok');
+      expect(snapshotCodeCell?.props.outputsData).toBe(outputsData);
+      expect(getSnapshotText(snapshotCodeCell?.props.text)).toBe('print("hello")');
+
+      const importedRuntime = await importCoppermindBlockSuiteRuntime(snapshot);
+      try {
+        const importedSections = getCoppermindBlockSuiteSections(importedRuntime.doc);
+        expect(importedSections[1]).toMatchObject({
+          isEmpty: false,
+          kind: 'code',
+          title: 'print("hello")',
+        });
+        const importedCodeCell = getCoppermindCodeCellBlock(
+          importedRuntime.doc,
+          findSnapshotBlock(exportCoppermindBlockSuiteSnapshot(importedRuntime).blocks, coppermindCodeCellFlavour)?.id ?? '',
+        );
+        expect(importedCodeCell?.language).toBe('python');
+        expect(importedCodeCell?.executionCount).toBe(1);
+        expect(importedCodeCell?.lastExecutionStatus).toBe('ok');
+        expect(importedCodeCell?.outputsData).toBe(outputsData);
+      } finally {
+        disposeCoppermindBlockSuiteRuntime(importedRuntime);
+      }
     } finally {
       disposeCoppermindBlockSuiteRuntime(runtime);
     }

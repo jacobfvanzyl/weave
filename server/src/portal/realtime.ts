@@ -20,6 +20,12 @@ import {
   handleLspPortalMessage,
 } from './lsp-relay';
 import {
+  connectJupyterRelayClient,
+  disconnectJupyterRelayClient,
+  forwardJupyterClientMessage,
+  handleJupyterPortalMessage,
+} from './jupyter-relay';
+import {
   connectWorkspaceFileWatchRelayClient,
   disconnectWorkspaceFileWatchRelayClient,
   forwardWorkspaceFileWatchClientMessage,
@@ -198,6 +204,42 @@ const connectLspClient = (ws: RealtimeSocket, url: URL) => {
   ws.addEventListener('error', () => disconnectLspRelayClient(connected.clientId));
 };
 
+const connectJupyterClient = (ws: RealtimeSocket, url: URL) => {
+  const connected = connectJupyterRelayClient({
+    token: url.searchParams.get('token') ?? '',
+    ws,
+  });
+
+  if (!connected) {
+    closeUnauthorized(ws, 'invalid Jupyter session token');
+    return;
+  }
+
+  ws.send(JSON.stringify({
+    type: 'jupyter.accepted',
+    clientId: connected.clientId,
+    sessionId: connected.token.sessionId,
+    portalId: connected.token.portalId,
+  }));
+  onMessage(ws, message => {
+    try {
+      forwardJupyterClientMessage(connected.clientId, message);
+    } catch (error) {
+      ws.send(JSON.stringify({
+        type: 'jupyter.event',
+        clientId: connected.clientId,
+        event: {
+          type: 'error',
+          sessionId: connected.token.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  });
+  ws.addEventListener('close', () => disconnectJupyterRelayClient(connected.clientId));
+  ws.addEventListener('error', () => disconnectJupyterRelayClient(connected.clientId));
+};
+
 const connectWorkspaceFileWatchClient = (ws: RealtimeSocket, url: URL) => {
   const connected = connectWorkspaceFileWatchRelayClient({
     token: url.searchParams.get('token') ?? '',
@@ -244,6 +286,7 @@ const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraL
   onMessage(ws, message => {
     if (handleTerminalPortalMessage(message)) return;
     if (handleLspPortalMessage(message)) return;
+    if (handleJupyterPortalMessage(message)) return;
     if (handleWorkspaceFileWatchPortalMessage(message)) return;
     if (handleWindowPortalMessage(message)) return;
     if (handlePortalMessage(message)) return;
@@ -308,6 +351,7 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
       url.pathname !== '/terminals/connect' &&
       url.pathname !== '/windows/connect' &&
       url.pathname !== '/lsp/connect' &&
+      url.pathname !== '/jupyter/connect' &&
       url.pathname !== '/workspace-files/watch/connect' &&
       url.pathname !== '/clients/connect'
     ) {
@@ -330,6 +374,7 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
       if (url.pathname === '/terminals/connect') return connectTerminalClient(ws, url);
       if (url.pathname === '/windows/connect') return connectWindowClient(ws, url);
       if (url.pathname === '/lsp/connect') return connectLspClient(ws, url);
+      if (url.pathname === '/jupyter/connect') return connectJupyterClient(ws, url);
       if (url.pathname === '/workspace-files/watch/connect') return connectWorkspaceFileWatchClient(ws, url);
       if (url.pathname === '/clients/connect') return connectClientToolHostSocket(ws, url);
       void connectPortalDaemon(ws, url, mastra);

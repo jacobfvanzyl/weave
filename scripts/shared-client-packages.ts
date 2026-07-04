@@ -18,6 +18,7 @@ export const sharedClientPackages = [
   '@codemirror/lang-javascript',
   '@codemirror/lang-json',
   '@codemirror/lang-markdown',
+  '@codemirror/lang-python',
   '@codemirror/lang-yaml',
   '@codemirror/language',
   '@codemirror/lsp-client',

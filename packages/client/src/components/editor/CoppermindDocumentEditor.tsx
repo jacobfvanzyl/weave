@@ -1,46 +1,55 @@
 import {
-  DndContext,
-  MouseSensor,
-  TouchSensor,
   closestCenter,
-  useSensor,
-  useSensors,
+  DndContext,
   type DragEndEvent,
   type DraggableAttributes,
   type DraggableSyntheticListeners,
-} from '@dnd-kit/core';
-import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
-import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  restrictToParentElement,
+  restrictToVerticalAxis,
+} from "@dnd-kit/modifiers";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   ColorScheme,
-  EditPropsStore,
   EdgelessEditorBlockSpecs,
+  EditPropsStore,
   LineColor,
   LineWidth,
   OverrideThemeExtension,
   PageEditorBlockSpecs,
   ShapeFillColor,
-  ShapeType,
   type ShapeName,
-} from '@blocksuite/blocks';
-import { effects as registerBlockSuiteBlockEffects } from '@blocksuite/blocks/effects';
-import { EdgelessEditor, PageEditor } from '@blocksuite/presets';
-import { effects as registerBlockSuitePresetEffects } from '@blocksuite/presets/effects';
-import type { Doc } from '@blocksuite/store';
-import type { Signal } from '@preact/signals-core';
-import '@toeverything/theme/style.css';
+  ShapeType,
+} from "@blocksuite/blocks";
+import { effects as registerBlockSuiteBlockEffects } from "@blocksuite/blocks/effects";
+import { EdgelessEditor, PageEditor } from "@blocksuite/presets";
+import { effects as registerBlockSuitePresetEffects } from "@blocksuite/presets/effects";
+import type { Doc } from "@blocksuite/store";
+import type { Signal } from "@preact/signals-core";
+import "@toeverything/theme/style.css";
 import {
   ChevronRight,
   Circle,
+  Code2,
   Diamond,
   Eraser,
   Focus,
   GitBranch,
-  Group,
   GripVertical,
+  Group,
   Hand,
   Layers,
+  type LucideIcon,
   Maximize2,
   Minus,
   MousePointer2,
@@ -52,12 +61,24 @@ import {
   Trash2,
   Triangle,
   Ungroup,
-  type LucideIcon,
-} from 'lucide-react';
-import { forwardRef, type DragEvent, type ReactNode, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+} from "lucide-react";
+import {
+  type DragEvent,
+  forwardRef,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import {
   addCoppermindBlockSuiteBlocksSection,
+  addCoppermindBlockSuiteCodeSection,
   addCoppermindBlockSuiteInkSection,
+  type CoppermindBlockSuiteRuntime,
+  type CoppermindBlockSuiteSection,
+  type CoppermindBlockSuiteSectionXYWH,
   coppermindCanvasCellGapPx,
   coppermindCellWidthPx,
   createCoppermindNextCanvasCellXYWH,
@@ -66,46 +87,66 @@ import {
   disposeCoppermindBlockSuiteRuntime,
   exportCoppermindBlockSuiteSnapshot,
   getCoppermindBlockSuiteSections,
+  getCoppermindCodeCellBlock,
   importCoppermindBlockSuiteRuntime,
   placeCoppermindBlockSuiteSection,
   reorderCoppermindBlockSuiteSection,
   setCoppermindInkCellStackState,
   unplaceCoppermindBlockSuiteSection,
-  type CoppermindBlockSuiteSection,
-  type CoppermindBlockSuiteRuntime,
-  type CoppermindBlockSuiteSectionXYWH,
-} from '../../lib/coppermind-blocksuite';
+} from "../../lib/coppermind-blocksuite";
 import {
+  CoppermindCodeCellBlockSpec,
+  coppermindCodeCellElementName,
+  coppermindCodeCellFlavour,
+  type CoppermindCodeCellLastExecutionStatus,
+  type CoppermindCodeCellRunDetail,
+  registerCoppermindCodeCellElements,
+} from "../../lib/coppermind-code-cell";
+import {
+  type CoppermindDocMode,
+  type CoppermindDocument,
   isCoppermindDocumentV2,
   isLegacyCoppermindDocument,
   migrateCoppermindDocumentToV2,
   parseCoppermindDocument,
   serializeCoppermindDocument,
   withCoppermindDocumentSnapshot,
-  type CoppermindDocMode,
-  type CoppermindDocument,
-} from '../../lib/coppermind-document';
+} from "../../lib/coppermind-document";
+import {
+  type CoppermindJupyterEvent,
+  type CoppermindJupyterSessionResult,
+  createCoppermindJupyterSession,
+  createCoppermindJupyterSocket,
+} from "../../lib/coppermind-jupyter";
 import {
   CoppermindInkCellBlockSpec,
-  coppermindInkCellFlavour,
   coppermindInkCellElementName,
+  coppermindInkCellFlavour,
   registerCoppermindInkCellElements,
-} from '../../lib/coppermind-ink-cell';
+} from "../../lib/coppermind-ink-cell";
 import {
   coppermindBlockCellContentMinHeightPx,
   coppermindInkCellMinHeightPx,
-  coppermindPageEndScrollPaddingPx,
   coppermindPageCellPaddingPx,
-} from '../../lib/coppermind-layout';
-import { cn } from '../../lib/cn';
-import type { LiveEditorCoppermindSnapshot } from '../../stores/live-editor-context-store';
-import { Button } from '../ui/button';
+  coppermindPageEndScrollPaddingPx,
+} from "../../lib/coppermind-layout";
+import { cn } from "../../lib/cn";
+import type { EditorTarget } from "../../lib/editor-types";
+import {
+  appendJupyterOutput,
+  type CoppermindCodeCellOutput,
+  serializeCoppermindCodeCellOutputs,
+} from "../../lib/jupyter-output";
+import type { LiveEditorCoppermindSnapshot } from "../../stores/live-editor-context-store";
+import { Button } from "../ui/button";
 
 export type CoppermindDocumentEditorProps = {
   focusRequest?: number;
   isCellsSidebarOpen?: boolean;
   onCellsSidebarMouseEnter?: () => void;
   onCellsSidebarMouseLeave?: () => void;
+  path?: string;
+  target?: EditorTarget;
   value: string;
   onChange: (value: string) => void;
 };
@@ -116,8 +157,14 @@ export type CoppermindDocumentEditorHandle = {
 
 type CoppermindEditorMode = CoppermindDocMode;
 
-type CoppermindCanvasToolId = 'default' | 'pan' | 'connector' | 'brush' | 'eraser' | 'shape';
-type CoppermindCanvasMenuId = 'brush' | 'shape';
+type CoppermindCanvasToolId =
+  | "default"
+  | "pan"
+  | "connector"
+  | "brush"
+  | "eraser"
+  | "shape";
+type CoppermindCanvasMenuId = "brush" | "shape";
 
 type CoppermindCanvasToolController = {
   currentToolOption$: {
@@ -148,7 +195,10 @@ type CoppermindCanvasApi = {
   fitToScreen: () => void;
   focusSectionForEditing: (xywh: CoppermindBlockSuiteSectionXYWH) => void;
   getViewportSnapshot: () => CoppermindCanvasViewportSnapshot | undefined;
-  getModelPointFromClientPoint: (clientX: number, clientY: number) => CoppermindCanvasPoint | undefined;
+  getModelPointFromClientPoint: (
+    clientX: number,
+    clientY: number,
+  ) => CoppermindCanvasPoint | undefined;
   locateSection: (
     sectionId: string,
     xywh: CoppermindBlockSuiteSectionXYWH,
@@ -181,7 +231,11 @@ type CoppermindCanvasViewport = {
   smoothZoom?: (zoom: number) => void;
   top?: number;
   zoom: number;
-  setViewport: (zoom: number, center: [number, number], smooth?: boolean) => void;
+  setViewport: (
+    zoom: number,
+    center: [number, number],
+    smooth?: boolean,
+  ) => void;
   setZoom?: (zoom: number) => void;
   toModelCoord?: (viewX: number, viewY: number) => [number, number];
   toModelCoordFromClientCoord?: (point: [number, number]) => [number, number];
@@ -245,18 +299,35 @@ type CoppermindCanvasEditViewportSession = {
 };
 
 type LoadedCoppermindState =
-  | { status: 'loading' }
-  | { status: 'invalid'; message: string }
+  | { status: "loading" }
+  | { status: "invalid"; message: string }
   | {
-    status: 'ready';
+    status: "ready";
     document: CoppermindDocument;
     migratedFromLegacy: boolean;
     runtime: CoppermindBlockSuiteRuntime;
   };
 
+type CoppermindJupyterSocket = ReturnType<typeof createCoppermindJupyterSocket>;
+
+type CoppermindJupyterConnection = {
+  path: string;
+  session: CoppermindJupyterSessionResult;
+  socket: CoppermindJupyterSocket;
+  targetKey: string;
+};
+
+type CoppermindPendingCodeExecution = {
+  clearBeforeNextOutput: boolean;
+  executionCount: number | null;
+  outputs: CoppermindCodeCellOutput[];
+  requestId: string;
+  status: CoppermindCodeCellLastExecutionStatus;
+};
+
 const modeOptions: Array<{ id: CoppermindEditorMode; label: string }> = [
-  { id: 'page', label: 'Page' },
-  { id: 'edgeless', label: 'Canvas' },
+  { id: "page", label: "Page" },
+  { id: "edgeless", label: "Canvas" },
 ];
 
 const canvasLineWidths = [
@@ -306,11 +377,15 @@ const canvasShapeTools: Array<{
   label: string;
   shapeName: ShapeName;
 }> = [
-  { icon: Square, label: 'Square', shapeName: ShapeType.Rect },
-  { icon: Circle, label: 'Ellipse', shapeName: ShapeType.Ellipse },
-  { icon: Diamond, label: 'Diamond', shapeName: ShapeType.Diamond },
-  { icon: Triangle, label: 'Triangle', shapeName: ShapeType.Triangle },
-  { icon: SquareRoundCorner, label: 'Rounded rectangle', shapeName: 'roundedRect' },
+  { icon: Square, label: "Square", shapeName: ShapeType.Rect },
+  { icon: Circle, label: "Ellipse", shapeName: ShapeType.Ellipse },
+  { icon: Diamond, label: "Diamond", shapeName: ShapeType.Diamond },
+  { icon: Triangle, label: "Triangle", shapeName: ShapeType.Triangle },
+  {
+    icon: SquareRoundCorner,
+    label: "Rounded rectangle",
+    shapeName: "roundedRect",
+  },
 ];
 
 const darkBlockSuiteThemeSignal = {
@@ -327,12 +402,14 @@ const coppermindBlockSuiteDarkThemeExtension = OverrideThemeExtension({
 const coppermindPageEditorBlockSpecs = [
   ...PageEditorBlockSpecs,
   CoppermindInkCellBlockSpec,
+  CoppermindCodeCellBlockSpec,
   coppermindBlockSuiteDarkThemeExtension,
 ].flat();
 
 const coppermindEdgelessEditorBlockSpecs = [
   ...EdgelessEditorBlockSpecs,
   CoppermindInkCellBlockSpec,
+  CoppermindCodeCellBlockSpec,
   coppermindBlockSuiteDarkThemeExtension,
 ].flat();
 
@@ -476,8 +553,19 @@ const coppermindBlockSuiteStyles = `
     overflow: hidden;
   }
 
+  [data-weave-editor-coppermind] page-editor affine-note:has(coppermind-code-cell) {
+    padding: 0;
+    overflow: hidden;
+  }
+
   [data-weave-editor-coppermind] page-editor affine-note:has(coppermind-ink-cell) .affine-note-block-container {
     line-height: 0;
+    min-height: 0;
+    padding: 0 !important;
+  }
+
+  [data-weave-editor-coppermind] page-editor affine-note:has(coppermind-code-cell) .affine-note-block-container {
+    line-height: normal;
     min-height: 0;
     padding: 0 !important;
   }
@@ -487,6 +575,14 @@ const coppermindBlockSuiteStyles = `
     line-height: normal;
     min-height: ${coppermindInkCellMinHeightPx}px;
     overflow: hidden;
+  }
+
+  [data-weave-editor-coppermind] :is(page-editor, edgeless-editor) coppermind-code-cell {
+    display: block;
+    line-height: normal;
+    min-height: 0;
+    overflow: hidden;
+    width: 100%;
   }
 
   [data-weave-editor-coppermind] page-editor coppermind-ink-cell {
@@ -579,68 +675,84 @@ const getElementFromNode = (node: Node | null) => (
   node instanceof Element ? node : node?.parentElement ?? null
 );
 
-const getClosestSectionElement = (element: Element | null, root: HTMLElement) => {
-  const note = element?.closest<HTMLElement>('affine-note');
+const getClosestSectionElement = (
+  element: Element | null,
+  root: HTMLElement,
+) => {
+  const note = element?.closest<HTMLElement>("affine-note");
   return note && root.contains(note) ? note : undefined;
 };
 
 const getBlockElementId = (element: CoppermindBlockElement | undefined) => (
-  element?.dataset.blockId
-    ?? element?.getAttribute('data-block-id')
-    ?? element?.model?.id
+  element?.dataset.blockId ??
+    element?.getAttribute("data-block-id") ??
+    element?.model?.id
 );
 
 let blockSuiteElementsRegistered = false;
 
 const registerBlockSuiteElements = () => {
-  if (typeof customElements === 'undefined' || blockSuiteElementsRegistered) return;
+  if (typeof customElements === "undefined" || blockSuiteElementsRegistered) {
+    return;
+  }
 
   if (
-    !customElements.get('affine-page-root')
-    || !customElements.get('affine-paragraph')
-    || !customElements.get('affine-drag-handle-widget')
+    !customElements.get("affine-page-root") ||
+    !customElements.get("affine-paragraph") ||
+    !customElements.get("affine-drag-handle-widget")
   ) {
     registerBlockSuiteBlockEffects();
   }
 
-  if (!customElements.get('page-editor') || !customElements.get('edgeless-editor')) {
+  if (
+    !customElements.get("page-editor") || !customElements.get("edgeless-editor")
+  ) {
     registerBlockSuitePresetEffects();
   }
 
   registerCoppermindInkCellElements();
+  registerCoppermindCodeCellElements();
   blockSuiteElementsRegistered = true;
 };
 
 const normalizeMode = (mode: unknown): CoppermindEditorMode => (
-  mode === 'edgeless' ? 'edgeless' : 'page'
+  mode === "edgeless" ? "edgeless" : "page"
 );
 
 const getErrorMessage = (error: unknown) => (
-  error instanceof Error ? error.message : 'Unable to open this Coppermind document.'
+  error instanceof Error
+    ? error.message
+    : "Unable to open this Coppermind document."
 );
 
-const normalizeCanvasToolId = (toolType: string | undefined): CoppermindCanvasToolId | undefined => {
+const normalizeCanvasToolId = (
+  toolType: string | undefined,
+): CoppermindCanvasToolId | undefined => {
   switch (toolType) {
-    case 'default':
-    case 'pan':
-    case 'connector':
-    case 'brush':
-    case 'eraser':
-    case 'shape':
+    case "default":
+    case "pan":
+    case "connector":
+    case "brush":
+    case "eraser":
+    case "shape":
       return toolType;
     default:
       return undefined;
   }
 };
 
-const isTransparentColor = (color: string) => color.toLowerCase().endsWith('transparent');
+const isTransparentColor = (color: string) =>
+  color.toLowerCase().endsWith("transparent");
 
 const shapeStrokeFromFill = (fillColor: string) => {
-  const strokeColor = fillColor.replace('--affine-palette-shape-', '--affine-palette-line-');
+  const strokeColor = fillColor.replace(
+    "--affine-palette-shape-",
+    "--affine-palette-line-",
+  );
   return isTransparentColor(strokeColor) ? LineColor.Grey : strokeColor;
 };
 
-const coppermindSectionDragDataType = 'application/x-coppermind-section-id';
+const coppermindSectionDragDataType = "application/x-coppermind-section-id";
 
 const isSectionDragEvent = (event: DragEvent<HTMLElement>) => (
   Array.from(event.dataTransfer.types).includes(coppermindSectionDragDataType)
@@ -652,7 +764,7 @@ type CoppermindInkStackGroup = {
 };
 
 const isStackableInkSection = (section: CoppermindBlockSuiteSection) => (
-  section.kind === 'ink' && section.stackState !== 'unstacked'
+  section.kind === "ink" && section.stackState !== "unstacked"
 );
 
 const getInkRuns = (sections: CoppermindBlockSuiteSection[]) => {
@@ -670,7 +782,7 @@ const getInkRuns = (sections: CoppermindBlockSuiteSection[]) => {
   };
 
   for (const section of sections) {
-    if (section.kind === 'ink') {
+    if (section.kind === "ink") {
       current.push(section);
     } else {
       flush();
@@ -686,7 +798,9 @@ const findInkRunForSection = (
   sectionId: string | undefined,
 ) => (
   sectionId
-    ? getInkRuns(sections).find(group => group.sections.some(section => section.id === sectionId))
+    ? getInkRuns(sections).find((group) =>
+      group.sections.some((section) => section.id === sectionId)
+    )
     : undefined
 );
 
@@ -708,16 +822,18 @@ const getStackedInkRunXYWH = (
   anchorSection: CoppermindBlockSuiteSection,
 ) => {
   const anchorPlacement = anchorSection.placement;
-  if (anchorPlacement.state !== 'placed') return [];
+  if (anchorPlacement.state !== "placed") return [];
 
-  const anchorIndex = group.sections.findIndex(section => section.id === anchorSection.id);
+  const anchorIndex = group.sections.findIndex((section) =>
+    section.id === anchorSection.id
+  );
   const x = anchorPlacement.xywh[0];
   let y = anchorPlacement.xywh[1];
   for (let index = 0; index < anchorIndex; index += 1) {
     y -= group.sections[index].height + coppermindCanvasCellGapPx;
   }
 
-  return group.sections.map(section => {
+  return group.sections.map((section) => {
     const xywh: CoppermindBlockSuiteSectionXYWH = [
       x,
       y,
@@ -739,14 +855,21 @@ const syncInkStackPlacements = (
   for (const group of getInkRuns(sections)) {
     if (!group.stacked) continue;
 
-    const anchorSection = (
-      group.sections.find(section => section.id === anchorSectionId && section.placement.state === 'placed')
-      ?? group.sections.find(section => section.placement.state === 'placed')
-    );
+    const anchorSection = group.sections.find((section) =>
+      section.id === anchorSectionId && section.placement.state === "placed"
+    ) ??
+      group.sections.find((section) =>
+        section.placement.state === "placed"
+      );
     if (!anchorSection) continue;
 
-    for (const { section, xywh } of getStackedInkRunXYWH(group, anchorSection)) {
-      if (section.placement.state === 'placed' && sameXYWH(section.placement.xywh, xywh)) continue;
+    for (
+      const { section, xywh } of getStackedInkRunXYWH(group, anchorSection)
+    ) {
+      if (
+        section.placement.state === "placed" &&
+        sameXYWH(section.placement.xywh, xywh)
+      ) continue;
       placeCoppermindBlockSuiteSection(doc, section.id, xywh);
       changed = true;
     }
@@ -761,7 +884,9 @@ const getEdgelessRootBlock = (
 ): CoppermindEdgelessRootBlock | undefined => {
   const rootId = doc.root?.id;
   if (!rootId) return undefined;
-  return editor.std?.view.getBlock(rootId) as CoppermindEdgelessRootBlock | undefined;
+  return editor.std?.view.getBlock(rootId) as
+    | CoppermindEdgelessRootBlock
+    | undefined;
 };
 
 const getCanvasToolController = (
@@ -777,22 +902,29 @@ const createCanvasApi = (
   doc: Doc,
 ): CoppermindCanvasApi | undefined => {
   const getRootBlock = () => getEdgelessRootBlock(editor, doc);
-  const getViewport = () => getRootBlock()?.gfx?.viewport ?? getRootBlock()?.service?.viewport;
+  const getViewport = () =>
+    getRootBlock()?.gfx?.viewport ?? getRootBlock()?.service?.viewport;
   const getService = () => getRootBlock()?.service;
-  const getSelection = () => getRootBlock()?.gfx?.selection ?? getRootBlock()?.service?.selection;
+  const getSelection = () =>
+    getRootBlock()?.gfx?.selection ?? getRootBlock()?.service?.selection;
   const clearSelection = () => {
     const selection = getSelection();
     selection?.clear?.();
     selection?.clearLast?.();
   };
   const clampZoom = (zoom: number, viewport: CoppermindCanvasViewport) => (
-    Math.min(viewport.ZOOM_MAX ?? canvasZoomMax, Math.max(viewport.ZOOM_MIN ?? canvasZoomMin, zoom))
+    Math.min(
+      viewport.ZOOM_MAX ?? canvasZoomMax,
+      Math.max(viewport.ZOOM_MIN ?? canvasZoomMin, zoom),
+    )
   );
   const getCenter = (viewport: CoppermindCanvasViewport): [number, number] => [
     viewport.centerX ?? viewport.center?.x ?? 0,
     viewport.centerY ?? viewport.center?.y ?? 0,
   ];
-  const getViewportSnapshot = (): CoppermindCanvasViewportSnapshot | undefined => {
+  const getViewportSnapshot = ():
+    | CoppermindCanvasViewportSnapshot
+    | undefined => {
     const currentViewport = getViewport();
     if (!currentViewport) return undefined;
 
@@ -812,13 +944,15 @@ const createCanvasApi = (
     currentViewport.setViewport(nextZoom, getCenter(currentViewport), true);
   };
   const focusSectionTextStart = (sectionId: string) => {
-    const section = doc.getBlockById(sectionId) as CoppermindBlockSuiteNoteModel | null;
-    const firstTextChild = section?.children?.find(child => child.text);
+    const section = doc.getBlockById(sectionId) as
+      | CoppermindBlockSuiteNoteModel
+      | null;
+    const firstTextChild = section?.children?.find((child) => child.text);
     const selection = editor.std?.selection;
     if (!firstTextChild || !selection) return;
 
-    selection.setGroup('note', [
-      selection.create('text', {
+    selection.setGroup("note", [
+      selection.create("text", {
         from: {
           blockId: firstTextChild.id,
           index: 0,
@@ -841,24 +975,39 @@ const createCanvasApi = (
       if (!currentViewport) return;
 
       const viewportWidth = currentViewport.width ?? 0;
-      const availableWidth = Math.max(1, viewportWidth - canvasFitPageWidthPaddingPx);
-      const nextZoom = clampZoom(availableWidth / coppermindCellWidthPx, currentViewport);
+      const availableWidth = Math.max(
+        1,
+        viewportWidth - canvasFitPageWidthPaddingPx,
+      );
+      const nextZoom = clampZoom(
+        availableWidth / coppermindCellWidthPx,
+        currentViewport,
+      );
       const [, centerY] = getCenter(currentViewport);
       currentViewport.setViewport(nextZoom, [0, centerY], true);
     },
     fitToScreen: () => {
       getService()?.zoomToFit?.();
     },
-    focusSectionForEditing: xywh => {
+    focusSectionForEditing: (xywh) => {
       const currentViewport = getViewport();
       if (!currentViewport) return;
 
       const [x, y, width, height] = xywh;
       const viewportWidth = currentViewport.width ?? 0;
       const viewportHeight = currentViewport.height ?? 0;
-      const availableWidth = Math.max(1, viewportWidth - canvasFitPageWidthPaddingPx);
-      const nextZoom = clampZoom(availableWidth / Math.max(1, width), currentViewport);
-      const availableHeight = Math.max(1, viewportHeight - canvasEditViewportVerticalPaddingPx);
+      const availableWidth = Math.max(
+        1,
+        viewportWidth - canvasFitPageWidthPaddingPx,
+      );
+      const nextZoom = clampZoom(
+        availableWidth / Math.max(1, width),
+        currentViewport,
+      );
+      const availableHeight = Math.max(
+        1,
+        viewportHeight - canvasEditViewportVerticalPaddingPx,
+      );
       const nextCenterY = height * nextZoom > availableHeight
         ? y + (viewportHeight / 2 - canvasEditViewportTopPaddingPx) / nextZoom
         : y + height / 2;
@@ -899,7 +1048,10 @@ const createCanvasApi = (
       }
 
       window.requestAnimationFrame(() => {
-        getSelection()?.set({ elements: [sectionId], editing: options?.editing ?? false });
+        getSelection()?.set({
+          elements: [sectionId],
+          editing: options?.editing ?? false,
+        });
         if (options?.editing) {
           window.requestAnimationFrame(() => focusSectionTextStart(sectionId));
         }
@@ -908,12 +1060,12 @@ const createCanvasApi = (
     resetZoom: () => {
       smoothZoom(1);
     },
-    restoreViewport: snapshot => {
+    restoreViewport: (snapshot) => {
       const currentViewport = getViewport();
       if (!currentViewport) return;
       currentViewport.setViewport(snapshot.zoom, snapshot.center, true);
     },
-    selectSections: sectionIds => {
+    selectSections: (sectionIds) => {
       window.requestAnimationFrame(() => {
         getSelection()?.set({ elements: sectionIds, editing: false });
       });
@@ -945,7 +1097,7 @@ const getCanvasToolState = (
 ): CoppermindCanvasToolState => {
   const props = editPropsStore.lastProps$.value;
   const currentTool = controller.currentToolOption$.value;
-  const shapeName = currentTool.type === 'shape'
+  const shapeName = currentTool.type === "shape"
     ? currentTool.shapeName ?? ShapeType.Rect
     : ShapeType.Rect;
   const shapeProps = props[`shape:${shapeName}`];
@@ -964,33 +1116,33 @@ const getCanvasToolBindings = (
   editPropsStore: EditPropsStore | undefined,
 ) => ({
   selectBrush: () => {
-    controller?.setTool('brush');
+    controller?.setTool("brush");
   },
   selectConnector: () => {
     if (!controller || !editPropsStore) return;
     const mode = editPropsStore.lastProps$.value.connector.mode;
-    controller.setTool('connector', { mode });
+    controller.setTool("connector", { mode });
   },
   selectEraser: () => {
-    controller?.setTool('eraser');
+    controller?.setTool("eraser");
   },
   selectPointer: (activeTool?: CoppermindCanvasToolId) => {
     if (!controller) return;
-    if (activeTool === 'default') {
-      controller.setTool('pan', { panning: false });
+    if (activeTool === "default") {
+      controller.setTool("pan", { panning: false });
       return;
     }
-    controller?.setTool('default');
+    controller?.setTool("default");
   },
   selectShape: (shapeName?: ShapeName) => {
     if (!controller) return;
     const nextShape = shapeName ?? ShapeType.Rect;
-    controller.setTool('shape', { shapeName: nextShape });
+    controller.setTool("shape", { shapeName: nextShape });
   },
   updateBrush: (props: { color?: string; lineWidth?: LineWidth }) => {
     if (!controller || !editPropsStore) return;
-    editPropsStore.recordLastProps('brush', props);
-    controller.setTool('brush');
+    editPropsStore.recordLastProps("brush", props);
+    controller.setTool("brush");
   },
   updateShapeFill: (shapeName: ShapeName, fillColor: string) => {
     if (!controller || !editPropsStore) return;
@@ -999,7 +1151,7 @@ const getCanvasToolBindings = (
       fillColor,
       strokeColor: shapeStrokeFromFill(fillColor),
     });
-    controller.setTool('shape', { shapeName });
+    controller.setTool("shape", { shapeName });
   },
 });
 
@@ -1019,14 +1171,14 @@ const ColorSwatch = ({
     aria-label={title}
     title={title}
     className={cn(
-      'grid h-6 w-6 place-items-center rounded border border-transparent hover:border-primary/50',
-      active && 'border-primary bg-primary/15',
+      "grid h-6 w-6 place-items-center rounded border border-transparent hover:border-primary/50",
+      active && "border-primary bg-primary/15",
     )}
     onClick={onClick}
   >
     <span
       className="h-4 w-4 rounded-full border border-border"
-      style={{ background: color.startsWith('--') ? `var(${color})` : color }}
+      style={{ background: color.startsWith("--") ? `var(${color})` : color }}
     />
   </button>
 );
@@ -1045,12 +1197,15 @@ const LineWidthButton = ({
     aria-label={`${width}px line width`}
     title={`${width}px`}
     className={cn(
-      'grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground',
-      active && 'bg-primary/20 text-primary',
+      "grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
+      active && "bg-primary/20 text-primary",
     )}
     onClick={onClick}
   >
-    <span className="rounded-full bg-current" style={{ height: width, width: width }} />
+    <span
+      className="rounded-full bg-current"
+      style={{ height: width, width: width }}
+    />
   </button>
 );
 
@@ -1063,11 +1218,11 @@ const CoppermindCanvasMenu = ({
   menu: CoppermindCanvasMenuId;
   state: CoppermindCanvasToolState;
 }) => {
-  if (menu === 'brush') {
+  if (menu === "brush") {
     return (
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1">
-          {canvasLineWidths.map(width => (
+          {canvasLineWidths.map((width) => (
             <LineWidthButton
               key={width}
               active={state.brushLineWidth === width}
@@ -1078,12 +1233,12 @@ const CoppermindCanvasMenu = ({
         </div>
         <div className="h-5 w-px bg-border" />
         <div className="flex items-center gap-1">
-          {canvasLineColors.map(color => (
+          {canvasLineColors.map((color) => (
             <ColorSwatch
               key={color}
               active={state.brushColor === color}
               color={color}
-              title={color.replace('--affine-palette-line-', '')}
+              title={color.replace("--affine-palette-line-", "")}
               onClick={() => bindings.updateBrush({ color })}
             />
           ))}
@@ -1095,7 +1250,7 @@ const CoppermindCanvasMenu = ({
   return (
     <div className="flex items-center gap-3">
       <div className="flex items-center gap-1">
-        {canvasShapeTools.map(item => {
+        {canvasShapeTools.map((item) => {
           const Icon = item.icon;
           return (
             <button
@@ -1104,8 +1259,9 @@ const CoppermindCanvasMenu = ({
               aria-label={item.label}
               title={item.label}
               className={cn(
-                'grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground',
-                state.shapeName === item.shapeName && 'bg-primary/20 text-primary',
+                "grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
+                state.shapeName === item.shapeName &&
+                  "bg-primary/20 text-primary",
               )}
               onClick={() => bindings.selectShape(item.shapeName)}
             >
@@ -1116,12 +1272,12 @@ const CoppermindCanvasMenu = ({
       </div>
       <div className="h-5 w-px bg-border" />
       <div className="flex items-center gap-1">
-        {canvasShapeFillColors.map(color => (
+        {canvasShapeFillColors.map((color) => (
           <ColorSwatch
             key={color}
             active={state.shapeFillColor === color}
             color={color}
-            title={color.replace('--affine-palette-shape-', '')}
+            title={color.replace("--affine-palette-shape-", "")}
             onClick={() => bindings.updateShapeFill(state.shapeName, color)}
           />
         ))}
@@ -1141,7 +1297,9 @@ const CoppermindCanvasToolbar = ({
   isCellsSidebarOpen: boolean;
   state?: CoppermindCanvasToolState;
 }) => {
-  const [openMenu, setOpenMenu] = useState<CoppermindCanvasMenuId | undefined>(undefined);
+  const [openMenu, setOpenMenu] = useState<CoppermindCanvasMenuId | undefined>(
+    undefined,
+  );
   const bindings = getCanvasToolBindings(controller, editPropsStore);
   const disabled = !controller || !editPropsStore || !state;
 
@@ -1153,22 +1311,22 @@ const CoppermindCanvasToolbar = ({
     if (disabled || !controller) return undefined;
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== "Escape") return;
       setOpenMenu(undefined);
-      controller.setTool('default');
+      controller.setTool("default");
       const activeElement = document.activeElement;
       if (
-        activeElement instanceof HTMLElement
-        && activeElement.closest('[data-coppermind-canvas-toolbar="true"]')
+        activeElement instanceof HTMLElement &&
+        activeElement.closest('[data-coppermind-canvas-toolbar="true"]')
       ) {
         activeElement.blur();
       }
     };
 
-    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [controller, disabled]);
 
@@ -1195,15 +1353,17 @@ const CoppermindCanvasToolbar = ({
         title={label}
         disabled={disabled}
         className={cn(
-          'rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45',
+          "rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45",
           menu
-            ? 'grid h-9 w-[2.875rem] grid-cols-[1.125rem_auto] items-center justify-start gap-0.5 px-1.5 [&>svg:first-child]:justify-self-center'
-            : 'grid h-9 w-9 place-items-center p-0',
-          (isActive || isMenuOpen) && 'bg-primary/20 text-primary shadow-sm',
+            ? "grid h-9 w-[2.875rem] grid-cols-[1.125rem_auto] items-center justify-start gap-0.5 px-1.5 [&>svg:first-child]:justify-self-center"
+            : "grid h-9 w-9 place-items-center p-0",
+          (isActive || isMenuOpen) && "bg-primary/20 text-primary shadow-sm",
         )}
         onClick={() => {
           onClick();
-          setOpenMenu(current => (menu ? (current === menu ? undefined : menu) : undefined));
+          setOpenMenu((
+            current,
+          ) => (menu ? (current === menu ? undefined : menu) : undefined));
         }}
       >
         <Icon size={18} strokeWidth={2} />
@@ -1216,24 +1376,31 @@ const CoppermindCanvasToolbar = ({
     return (
       <div className="relative">
         {button}
-        {isMenuOpen && state ? (
-          <div className="absolute left-full top-1/2 z-30 ml-2 max-w-[calc(100vw-7rem)] -translate-y-1/2 overflow-x-auto rounded-lg border border-border bg-card/95 p-2 shadow-xl backdrop-blur">
-            <CoppermindCanvasMenu bindings={bindings} menu={menu} state={state} />
-          </div>
-        ) : null}
+        {isMenuOpen && state
+          ? (
+            <div className="absolute left-full top-1/2 z-30 ml-2 max-w-[calc(100vw-7rem)] -translate-y-1/2 overflow-x-auto rounded-lg border border-border bg-card/95 p-2 shadow-xl backdrop-blur">
+              <CoppermindCanvasMenu
+                bindings={bindings}
+                menu={menu}
+                state={state}
+              />
+            </div>
+          )
+          : null}
       </div>
     );
   };
 
-  const pointerActive = state?.activeTool === 'default' || state?.activeTool === 'pan';
-  const PointerIcon = state?.activeTool === 'pan' ? Hand : MousePointer2;
-  const pointerLabel = state?.activeTool === 'pan' ? 'Hand' : 'Select';
+  const pointerActive = state?.activeTool === "default" ||
+    state?.activeTool === "pan";
+  const PointerIcon = state?.activeTool === "pan" ? Hand : MousePointer2;
+  const pointerLabel = state?.activeTool === "pan" ? "Hand" : "Select";
 
   return (
     <div
       className={cn(
-        'pointer-events-none absolute bottom-5 z-20 flex transition-[left] duration-150 ease-out',
-        isCellsSidebarOpen ? 'left-[17.25rem]' : 'left-5',
+        "pointer-events-none absolute bottom-5 z-20 flex transition-[left] duration-150 ease-out",
+        isCellsSidebarOpen ? "left-[17.25rem]" : "left-5",
       )}
     >
       <div className="pointer-events-auto relative">
@@ -1247,8 +1414,8 @@ const CoppermindCanvasToolbar = ({
             title={pointerLabel}
             disabled={disabled}
             className={cn(
-              'grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45',
-              pointerActive && 'bg-primary/20 text-primary shadow-sm',
+              "grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45",
+              pointerActive && "bg-primary/20 text-primary shadow-sm",
             )}
             onClick={() => {
               bindings.selectPointer(state?.activeTool);
@@ -1259,28 +1426,28 @@ const CoppermindCanvasToolbar = ({
           </button>
           {toolButton({
             icon: Pencil,
-            id: 'brush',
-            label: 'Pen',
-            menu: 'brush',
+            id: "brush",
+            label: "Pen",
+            menu: "brush",
             onClick: bindings.selectBrush,
           })}
           {toolButton({
             icon: Eraser,
-            id: 'eraser',
-            label: 'Eraser',
+            id: "eraser",
+            label: "Eraser",
             onClick: bindings.selectEraser,
           })}
           {toolButton({
             icon: Square,
-            id: 'shape',
-            label: 'Shape',
-            menu: 'shape',
+            id: "shape",
+            label: "Shape",
+            menu: "shape",
             onClick: () => bindings.selectShape(state?.shapeName),
           })}
           {toolButton({
             icon: GitBranch,
-            id: 'connector',
-            label: 'Connector',
+            id: "connector",
+            label: "Connector",
             onClick: bindings.selectConnector,
           })}
         </div>
@@ -1330,8 +1497,9 @@ const CoppermindCanvasViewportToolbar = ({
       aria-pressed={active}
       disabled={disabled}
       className={cn(
-        'grid h-8 w-full place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45',
-        active && 'bg-primary/20 text-primary shadow-sm hover:bg-primary/25 hover:text-primary',
+        "grid h-8 w-full place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45",
+        active &&
+          "bg-primary/20 text-primary shadow-sm hover:bg-primary/25 hover:text-primary",
       )}
       onClick={onClick}
     >
@@ -1342,38 +1510,47 @@ const CoppermindCanvasViewportToolbar = ({
   return (
     <div
       className={cn(
-        'pointer-events-none absolute top-4 z-30 transition-[left] duration-150 ease-out',
-        isCellsSidebarOpen ? 'left-[17rem]' : 'left-4',
+        "pointer-events-none absolute top-4 z-30 transition-[left] duration-150 ease-out",
+        isCellsSidebarOpen ? "left-[17rem]" : "left-4",
       )}
     >
       <div
         className="pointer-events-auto inline-flex flex-col gap-1 rounded-lg border border-border bg-card/95 p-1 shadow-xl backdrop-blur"
-        onClick={event => event.stopPropagation()}
-        onDoubleClick={event => event.stopPropagation()}
-        onPointerDown={event => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
       >
-        <div className={cn('grid gap-1', inkStackAction ? 'w-48 grid-cols-4' : 'w-36 grid-cols-3')}>
+        <div
+          className={cn(
+            "grid gap-1",
+            inkStackAction ? "w-48 grid-cols-4" : "w-36 grid-cols-3",
+          )}
+        >
           {viewportButton({
             icon: Maximize2,
-            label: 'Fit to screen',
+            label: "Fit to screen",
             onClick: () => api?.fitToScreen(),
           })}
           {viewportButton({
             icon: Rows3,
-            label: 'Arrange as page',
+            label: "Arrange as page",
             onClick: onArrangeAsPage,
           })}
           {viewportButton({
             active: editPunchInEnabled,
             icon: Focus,
-            label: editPunchInEnabled ? 'Disable edit punch-in' : 'Enable edit punch-in',
+            label: editPunchInEnabled
+              ? "Disable edit punch-in"
+              : "Enable edit punch-in",
             onClick: onToggleEditPunchIn,
           })}
-          {inkStackAction ? viewportButton({
-            icon: inkStackAction.icon,
-            label: inkStackAction.label,
-            onClick: inkStackAction.onClick,
-          }) : null}
+          {inkStackAction
+            ? viewportButton({
+              icon: inkStackAction.icon,
+              label: inkStackAction.label,
+              onClick: inkStackAction.onClick,
+            })
+            : null}
         </div>
         <div className="grid w-36 grid-cols-3 gap-1 border-t border-border pt-1">
           <button
@@ -1424,20 +1601,28 @@ const BlockSuiteEditorMount = ({
   isCellsSidebarOpen: boolean;
   mode: CoppermindEditorMode;
   onCanvasApiChange?: (api: CoppermindCanvasApi | undefined) => void;
-  onCanvasViewportChange?: (state: CoppermindCanvasViewportState | undefined) => void;
+  onCanvasViewportChange?: (
+    state: CoppermindCanvasViewportState | undefined,
+  ) => void;
   onCanvasSelectionChange?: (state: CoppermindCanvasSelectionState) => void;
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
-  const [canvasEditPropsStore, setCanvasEditPropsStore] = useState<EditPropsStore>();
-  const [canvasToolController, setCanvasToolController] = useState<CoppermindCanvasToolController>();
-  const [canvasToolState, setCanvasToolState] = useState<CoppermindCanvasToolState>();
+  const [canvasEditPropsStore, setCanvasEditPropsStore] = useState<
+    EditPropsStore
+  >();
+  const [canvasToolController, setCanvasToolController] = useState<
+    CoppermindCanvasToolController
+  >();
+  const [canvasToolState, setCanvasToolState] = useState<
+    CoppermindCanvasToolState
+  >();
 
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
 
     registerBlockSuiteElements();
-    const editor = mode === 'page' ? new PageEditor() : new EdgelessEditor();
+    const editor = mode === "page" ? new PageEditor() : new EdgelessEditor();
     let disposed = false;
     let resolveFrame: number | undefined;
     let syncFrame: number | undefined;
@@ -1452,14 +1637,16 @@ const BlockSuiteEditorMount = ({
     let canvasCellEditingStateSyncFrame: number | undefined;
     let canvasCellEditingStateObserver: MutationObserver | undefined;
     let suppressCanvasCellTextInput = false;
-    let setCanvasSelectionEditing: ((noteId: string, editing: boolean) => void) | undefined;
+    let setCanvasSelectionEditing:
+      | ((noteId: string, editing: boolean) => void)
+      | undefined;
     let resolveAttempts = 0;
 
     editor.doc = doc;
-    editor.specs = mode === 'page'
+    editor.specs = mode === "page"
       ? coppermindPageEditorBlockSpecs
       : coppermindEdgelessEditorBlockSpecs;
-    editor.className = 'block h-full min-h-0 w-full';
+    editor.className = "block h-full min-h-0 w-full";
     mount.replaceChildren(editor);
 
     const clearMiddleButtonPanSoon = () => {
@@ -1498,19 +1685,29 @@ const BlockSuiteEditorMount = ({
       }
     };
     const clearCanvasCellNativeLayerText = () => {
-      for (const layer of mount.querySelectorAll<HTMLElement>('.affine-note-mask, .note-background')) {
+      for (
+        const layer of mount.querySelectorAll<HTMLElement>(
+          ".affine-note-mask, .note-background",
+        )
+      ) {
         clearNativeLayerText(layer);
       }
     };
     const syncCanvasCellEditingState = () => {
       clearCanvasCellNativeLayerText();
       const editableIds = new Set(
-        lastCanvasSelectionState.editing ? lastCanvasSelectionState.selectedIds : [],
+        lastCanvasSelectionState.editing
+          ? lastCanvasSelectionState.selectedIds
+          : [],
       );
-      for (const note of mount.querySelectorAll<CoppermindBlockElement>('affine-edgeless-note')) {
+      for (
+        const note of mount.querySelectorAll<CoppermindBlockElement>(
+          "affine-edgeless-note",
+        )
+      ) {
         const noteId = getBlockElementId(note);
         if (noteId && editableIds.has(noteId)) {
-          note.dataset.coppermindCanvasEditing = 'true';
+          note.dataset.coppermindCanvasEditing = "true";
         } else {
           delete note.dataset.coppermindCanvasEditing;
         }
@@ -1534,32 +1731,38 @@ const BlockSuiteEditorMount = ({
         getElementFromNode(selection.focusNode),
       ];
 
-      return elements.filter((element): element is Element => Boolean(element && mount.contains(element)));
+      return elements.filter((element): element is Element =>
+        Boolean(element && mount.contains(element))
+      );
     };
 
     const getNativeSelectionNote = () => {
       for (const element of getNativeSelectionElements()) {
-        const note = element.closest<HTMLElement>('affine-edgeless-note');
+        const note = element.closest<HTMLElement>("affine-edgeless-note");
         if (note && mount.contains(note)) return note;
       }
       return undefined;
     };
 
     const isNativeSelectionInBlockText = () => (
-      getNativeSelectionElements().some(element => (
-        Boolean(element.closest('rich-text, .inline-editor'))
+      getNativeSelectionElements().some((element) => (
+        Boolean(element.closest("rich-text, .inline-editor"))
       ))
     );
 
     const isCanvasCellNativeLayerInput = () => (
-      suppressCanvasCellTextInput
-      || (Boolean(getNativeSelectionNote()) && !isNativeSelectionInBlockText())
+      suppressCanvasCellTextInput ||
+      (Boolean(getNativeSelectionNote()) && !isNativeSelectionInBlockText())
     );
 
     const clearNativeSelectionNoteLayerText = () => {
       const note = getNativeSelectionNote();
       if (!note) return;
-      for (const layer of note.querySelectorAll<HTMLElement>('.affine-note-mask, .note-background')) {
+      for (
+        const layer of note.querySelectorAll<HTMLElement>(
+          ".affine-note-mask, .note-background",
+        )
+      ) {
         clearNativeLayerText(layer);
       }
     };
@@ -1578,41 +1781,52 @@ const BlockSuiteEditorMount = ({
     };
     const suppressCanvasCellNativeLayerKeydown = (event: KeyboardEvent) => {
       if (
-        event.metaKey
-        || event.ctrlKey
-        || event.altKey
-        || (
-          event.key.length !== 1
-          && !['Backspace', 'Delete', 'Enter'].includes(event.key)
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        (
+          event.key.length !== 1 &&
+          !["Backspace", "Delete", "Enter"].includes(event.key)
         )
       ) {
         return;
       }
       suppressCanvasCellNativeLayerInput(event);
     };
-    const getCanvasCellFromPointerEvent = (event: PointerEvent | MouseEvent) => {
+    const getCanvasCellFromPointerEvent = (
+      event: PointerEvent | MouseEvent,
+    ) => {
       const path = event.composedPath();
       for (const target of path) {
         if (target instanceof HTMLElement) {
-          const note = target.closest<HTMLElement>('affine-edgeless-note');
+          const note = target.closest<HTMLElement>("affine-edgeless-note");
           if (note && mount.contains(note)) return note;
         }
       }
 
-      const target = mount.ownerDocument.elementFromPoint(event.clientX, event.clientY);
-      return target?.closest<HTMLElement>('affine-edgeless-note') ?? undefined;
+      const target = mount.ownerDocument.elementFromPoint(
+        event.clientX,
+        event.clientY,
+      );
+      return target?.closest<HTMLElement>("affine-edgeless-note") ?? undefined;
     };
-    const isPointInCanvasCellBlockText = (note: HTMLElement, clientX: number, clientY: number) => (
-      [...note.querySelectorAll<HTMLElement>('rich-text, .inline-editor')].some(element => {
+    const isPointInCanvasCellBlockText = (
+      note: HTMLElement,
+      clientX: number,
+      clientY: number,
+    ) => (
+      [...note.querySelectorAll<HTMLElement>(
+        `rich-text, .inline-editor, ${coppermindCodeCellElementName}`,
+      )].some((element) => {
         const rect = element.getBoundingClientRect();
         if (rect.width <= 0 || rect.height <= 0) return false;
 
         const hitSlop = 4;
         return (
-          clientX >= rect.left - hitSlop
-          && clientX <= rect.right + hitSlop
-          && clientY >= rect.top - hitSlop
-          && clientY <= rect.bottom + hitSlop
+          clientX >= rect.left - hitSlop &&
+          clientX <= rect.right + hitSlop &&
+          clientY >= rect.top - hitSlop &&
+          clientY <= rect.bottom + hitSlop
         );
       })
     );
@@ -1639,30 +1853,56 @@ const BlockSuiteEditorMount = ({
         return;
       }
 
-      suppressCanvasCellTextInput = !isPointInCanvasCellBlockText(note, event.clientX, event.clientY);
+      suppressCanvasCellTextInput = !isPointInCanvasCellBlockText(
+        note,
+        event.clientX,
+        event.clientY,
+      );
       if (suppressCanvasCellTextInput) {
         clearCanvasCellTextSelectionSoon(note);
       }
     };
 
-    if (mode === 'edgeless' && editor instanceof EdgelessEditor) {
-      canvasCellEditingStateObserver = new MutationObserver(scheduleCanvasCellEditingStateSync);
+    if (mode === "edgeless" && editor instanceof EdgelessEditor) {
+      canvasCellEditingStateObserver = new MutationObserver(
+        scheduleCanvasCellEditingStateSync,
+      );
       canvasCellEditingStateObserver.observe(mount, {
         characterData: true,
         childList: true,
         subtree: true,
       });
-      mount.addEventListener('pointerdown', handleMiddleButtonPointerDown, true);
-      mount.addEventListener('pointerdown', handleCanvasCellTextPointer, true);
-      mount.addEventListener('click', handleCanvasCellTextPointer, true);
-      mount.addEventListener('dblclick', handleCanvasCellTextPointer, true);
-      mount.ownerDocument.addEventListener('beforeinput', suppressCanvasCellNativeLayerInput, true);
-      mount.ownerDocument.addEventListener('compositionstart', suppressCanvasCellNativeLayerInput, true);
-      mount.ownerDocument.addEventListener('paste', suppressCanvasCellNativeLayerInput, true);
-      mount.ownerDocument.addEventListener('keydown', suppressCanvasCellNativeLayerKeydown, true);
-      window.addEventListener('pointerup', handleMiddleButtonPointerEnd, true);
-      window.addEventListener('pointercancel', clearMiddleButtonPan, true);
-      window.addEventListener('blur', clearMiddleButtonPan);
+      mount.addEventListener(
+        "pointerdown",
+        handleMiddleButtonPointerDown,
+        true,
+      );
+      mount.addEventListener("pointerdown", handleCanvasCellTextPointer, true);
+      mount.addEventListener("click", handleCanvasCellTextPointer, true);
+      mount.addEventListener("dblclick", handleCanvasCellTextPointer, true);
+      mount.ownerDocument.addEventListener(
+        "beforeinput",
+        suppressCanvasCellNativeLayerInput,
+        true,
+      );
+      mount.ownerDocument.addEventListener(
+        "compositionstart",
+        suppressCanvasCellNativeLayerInput,
+        true,
+      );
+      mount.ownerDocument.addEventListener(
+        "paste",
+        suppressCanvasCellNativeLayerInput,
+        true,
+      );
+      mount.ownerDocument.addEventListener(
+        "keydown",
+        suppressCanvasCellNativeLayerKeydown,
+        true,
+      );
+      window.addEventListener("pointerup", handleMiddleButtonPointerEnd, true);
+      window.addEventListener("pointercancel", clearMiddleButtonPan, true);
+      window.addEventListener("blur", clearMiddleButtonPan);
 
       const resolveCanvasController = () => {
         if (disposed || !(editor instanceof EdgelessEditor)) return;
@@ -1672,7 +1912,9 @@ const BlockSuiteEditorMount = ({
         if (!controller || !editPropsStore) {
           if (resolveAttempts < 8) {
             resolveAttempts += 1;
-            resolveFrame = window.requestAnimationFrame(resolveCanvasController);
+            resolveFrame = window.requestAnimationFrame(
+              resolveCanvasController,
+            );
           }
           return;
         }
@@ -1680,33 +1922,40 @@ const BlockSuiteEditorMount = ({
         setCanvasToolController(controller);
         setCanvasEditPropsStore(editPropsStore);
         onCanvasApiChange?.(createCanvasApi(editor, doc));
-        const viewport = getEdgelessRootBlock(editor, doc)?.gfx?.viewport
-          ?? getEdgelessRootBlock(editor, doc)?.service?.viewport;
+        const viewport = getEdgelessRootBlock(editor, doc)?.gfx?.viewport ??
+          getEdgelessRootBlock(editor, doc)?.service?.viewport;
         const emitCanvasViewport = () => {
-          onCanvasViewportChange?.(viewport ? { zoom: viewport.zoom } : undefined);
+          onCanvasViewportChange?.(
+            viewport ? { zoom: viewport.zoom } : undefined,
+          );
         };
         emitCanvasViewport();
         viewportSubscription?.dispose();
-        viewportSubscription = viewport?.viewportUpdated?.on(emitCanvasViewport);
-        const selection = getEdgelessRootBlock(editor, doc)?.gfx?.selection
-          ?? getEdgelessRootBlock(editor, doc)?.service?.selection;
+        viewportSubscription = viewport?.viewportUpdated?.on(
+          emitCanvasViewport,
+        );
+        const selection = getEdgelessRootBlock(editor, doc)?.gfx?.selection ??
+          getEdgelessRootBlock(editor, doc)?.service?.selection;
         setCanvasSelectionEditing = (noteId, editing) => {
           selection?.set({ elements: [noteId], editing });
         };
         const emitCanvasSelection = () => {
           const selectedIds = selection?.selectedIds ?? [];
-          const editing = selection?.editing
-            ?? selection?.surfaceSelections?.some(item => item.editing)
-            ?? false;
-          const activeTool = normalizeCanvasToolId(controller.currentToolOption$.value.type);
-          const isPanningSelectionGap = (
-            (activeTool === 'pan' || isMiddleButtonPanning)
-            && selectedIds.length === 0
-            && lastCanvasSelectionState.selectedIds.length > 0
+          const editing = selection?.editing ??
+            selection?.surfaceSelections?.some((item) => item.editing) ??
+            false;
+          const activeTool = normalizeCanvasToolId(
+            controller.currentToolOption$.value.type,
           );
+          const isPanningSelectionGap =
+            (activeTool === "pan" || isMiddleButtonPanning) &&
+            selectedIds.length === 0 &&
+            lastCanvasSelectionState.selectedIds.length > 0;
 
           if (isPanningSelectionGap) {
-            const preservedSelectedIds = [...lastCanvasSelectionState.selectedIds];
+            const preservedSelectedIds = [
+              ...lastCanvasSelectionState.selectedIds,
+            ];
             lastCanvasSelectionState = {
               editing: false,
               selectedIds: preservedSelectedIds,
@@ -1715,12 +1964,17 @@ const BlockSuiteEditorMount = ({
             window.requestAnimationFrame(() => {
               if (
                 (
-                  normalizeCanvasToolId(controller.currentToolOption$.value.type) === 'pan'
-                  || isMiddleButtonPanning
-                )
-                && (selection?.selectedIds ?? []).length === 0
+                  normalizeCanvasToolId(
+                      controller.currentToolOption$.value.type,
+                    ) === "pan" ||
+                  isMiddleButtonPanning
+                ) &&
+                (selection?.selectedIds ?? []).length === 0
               ) {
-                selection?.set({ elements: preservedSelectedIds, editing: false });
+                selection?.set({
+                  elements: preservedSelectedIds,
+                  editing: false,
+                });
               }
             });
             onCanvasSelectionChange?.(lastCanvasSelectionState);
@@ -1736,7 +1990,9 @@ const BlockSuiteEditorMount = ({
         };
         emitCanvasSelection();
         selectionSubscription?.dispose();
-        selectionSubscription = selection?.slots?.updated?.on(emitCanvasSelection);
+        selectionSubscription = selection?.slots?.updated?.on(
+          emitCanvasSelection,
+        );
 
         const syncToolState = () => {
           if (disposed) return;
@@ -1764,42 +2020,80 @@ const BlockSuiteEditorMount = ({
       viewportSubscription?.dispose();
       if (resolveFrame !== undefined) window.cancelAnimationFrame(resolveFrame);
       if (syncFrame !== undefined) window.cancelAnimationFrame(syncFrame);
-      if (middleButtonPanClearHandle !== undefined) window.clearTimeout(middleButtonPanClearHandle);
+      if (middleButtonPanClearHandle !== undefined) {
+        window.clearTimeout(middleButtonPanClearHandle);
+      }
       if (canvasCellEditingStateSyncFrame !== undefined) {
         window.cancelAnimationFrame(canvasCellEditingStateSyncFrame);
       }
       canvasCellEditingStateObserver?.disconnect();
       setCanvasSelectionEditing = undefined;
-      mount.removeEventListener('pointerdown', handleMiddleButtonPointerDown, true);
-      mount.removeEventListener('pointerdown', handleCanvasCellTextPointer, true);
-      mount.removeEventListener('click', handleCanvasCellTextPointer, true);
-      mount.removeEventListener('dblclick', handleCanvasCellTextPointer, true);
-      mount.ownerDocument.removeEventListener('beforeinput', suppressCanvasCellNativeLayerInput, true);
-      mount.ownerDocument.removeEventListener('compositionstart', suppressCanvasCellNativeLayerInput, true);
-      mount.ownerDocument.removeEventListener('paste', suppressCanvasCellNativeLayerInput, true);
-      mount.ownerDocument.removeEventListener('keydown', suppressCanvasCellNativeLayerKeydown, true);
-      window.removeEventListener('pointerup', handleMiddleButtonPointerEnd, true);
-      window.removeEventListener('pointercancel', clearMiddleButtonPan, true);
-      window.removeEventListener('blur', clearMiddleButtonPan);
+      mount.removeEventListener(
+        "pointerdown",
+        handleMiddleButtonPointerDown,
+        true,
+      );
+      mount.removeEventListener(
+        "pointerdown",
+        handleCanvasCellTextPointer,
+        true,
+      );
+      mount.removeEventListener("click", handleCanvasCellTextPointer, true);
+      mount.removeEventListener("dblclick", handleCanvasCellTextPointer, true);
+      mount.ownerDocument.removeEventListener(
+        "beforeinput",
+        suppressCanvasCellNativeLayerInput,
+        true,
+      );
+      mount.ownerDocument.removeEventListener(
+        "compositionstart",
+        suppressCanvasCellNativeLayerInput,
+        true,
+      );
+      mount.ownerDocument.removeEventListener(
+        "paste",
+        suppressCanvasCellNativeLayerInput,
+        true,
+      );
+      mount.ownerDocument.removeEventListener(
+        "keydown",
+        suppressCanvasCellNativeLayerKeydown,
+        true,
+      );
+      window.removeEventListener(
+        "pointerup",
+        handleMiddleButtonPointerEnd,
+        true,
+      );
+      window.removeEventListener("pointercancel", clearMiddleButtonPan, true);
+      window.removeEventListener("blur", clearMiddleButtonPan);
       setCanvasToolController(undefined);
       setCanvasEditPropsStore(undefined);
       setCanvasToolState(undefined);
       editor.remove();
       mount.replaceChildren();
     };
-  }, [doc, mode, onCanvasApiChange, onCanvasSelectionChange, onCanvasViewportChange]);
+  }, [
+    doc,
+    mode,
+    onCanvasApiChange,
+    onCanvasSelectionChange,
+    onCanvasViewportChange,
+  ]);
 
   return (
     <div className="relative h-full min-h-0 w-full">
       <div ref={mountRef} className="h-full min-h-0 w-full" />
-      {mode === 'edgeless' ? (
-        <CoppermindCanvasToolbar
-          controller={canvasToolController}
-          editPropsStore={canvasEditPropsStore}
-          isCellsSidebarOpen={isCellsSidebarOpen}
-          state={canvasToolState}
-        />
-      ) : null}
+      {mode === "edgeless"
+        ? (
+          <CoppermindCanvasToolbar
+            controller={canvasToolController}
+            editPropsStore={canvasEditPropsStore}
+            isCellsSidebarOpen={isCellsSidebarOpen}
+            state={canvasToolState}
+          />
+        )
+        : null}
     </div>
   );
 };
@@ -1825,7 +2119,7 @@ const InvalidCoppermindFallback = ({
         className="min-h-[28rem] w-full resize-none rounded border border-border bg-card p-3 font-mono text-xs text-foreground outline-none focus:border-primary"
         spellCheck={false}
         value={value}
-        onChange={event => onChange(event.currentTarget.value)}
+        onChange={(event) => onChange(event.currentTarget.value)}
       />
     </div>
   );
@@ -1842,7 +2136,9 @@ const CoppermindSectionSortableList = ({
 }) => {
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 5 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 120, tolerance: 5 },
+    }),
   );
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -1877,12 +2173,20 @@ const CoppermindSortableSectionItem = ({
   }) => ReactNode;
   id: string;
 }) => {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
 
   return (
     <div
       ref={setNodeRef}
-      className={cn('relative', isDragging && 'z-20 opacity-90 shadow-lg')}
+      className={cn("relative", isDragging && "z-20 opacity-90 shadow-lg")}
       style={{ transform: CSS.Transform.toString(transform), transition }}
     >
       {children({
@@ -1899,6 +2203,7 @@ const CoppermindSectionOutline = ({
   canPlaceSections = true,
   mode,
   onAddBlocksSection,
+  onAddCodeSection,
   onAddInkSection,
   onDeleteSection,
   onDragSection,
@@ -1914,9 +2219,13 @@ const CoppermindSectionOutline = ({
   canPlaceSections?: boolean;
   mode: CoppermindEditorMode;
   onAddBlocksSection?: () => void;
+  onAddCodeSection?: () => void;
   onAddInkSection?: () => void;
   onDeleteSection: (section: CoppermindBlockSuiteSection) => void;
-  onDragSection?: (section: CoppermindBlockSuiteSection, event: DragEvent<HTMLElement>) => void;
+  onDragSection?: (
+    section: CoppermindBlockSuiteSection,
+    event: DragEvent<HTMLElement>,
+  ) => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
   onPlaceSection?: (section: CoppermindBlockSuiteSection) => void;
@@ -1927,28 +2236,30 @@ const CoppermindSectionOutline = ({
 }) => {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
-  const isCanvasMode = mode === 'edgeless';
+  const isCanvasMode = mode === "edgeless";
   const canAddSection = !isCanvasMode || canPlaceSections;
-  const canShowAddMenu = Boolean(onAddBlocksSection || onAddInkSection);
-  const sectionIds = sections.map(section => section.id);
+  const canShowAddMenu = Boolean(
+    onAddBlocksSection || onAddCodeSection || onAddInkSection,
+  );
+  const sectionIds = sections.map((section) => section.id);
 
   useEffect(() => {
     if (!addMenuOpen) return undefined;
 
     const handlePointerDown = (event: PointerEvent) => {
       if (
-        addMenuRef.current
-        && event.target instanceof Node
-        && addMenuRef.current.contains(event.target)
+        addMenuRef.current &&
+        event.target instanceof Node &&
+        addMenuRef.current.contains(event.target)
       ) {
         return;
       }
       setAddMenuOpen(false);
     };
 
-    window.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener("pointerdown", handlePointerDown, true);
     return () => {
-      window.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener("pointerdown", handlePointerDown, true);
     };
   }, [addMenuOpen]);
 
@@ -1963,186 +2274,227 @@ const CoppermindSectionOutline = ({
         <div className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">
           Cells
         </div>
-        {canShowAddMenu ? (
-          <div ref={addMenuRef} className="relative">
-            <Button
-              aria-label="Add cell"
-              size="icon-xs"
-              variant="ghost"
-              className="text-muted-foreground hover:text-foreground"
-              disabled={!canAddSection}
-              title={canAddSection ? 'Add cell' : 'Canvas is still loading'}
-              onClick={() => setAddMenuOpen(current => !current)}
-            >
-              <Plus size={14} />
-            </Button>
-            {addMenuOpen ? (
-              <div className="absolute right-0 top-full z-30 mt-1 w-40 rounded-md border border-border bg-card p-1 text-xs shadow-xl">
-                <button
-                  type="button"
-                  disabled={!canAddSection || !onAddBlocksSection}
-                  className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
-                  onClick={() => {
-                    setAddMenuOpen(false);
-                    onAddBlocksSection?.();
-                  }}
-                >
-                  <Rows3 size={14} />
-                  Blocks Cell
-                </button>
-                <button
-                  type="button"
-                  disabled={!canAddSection || !onAddInkSection}
-                  className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
-                  onClick={() => {
-                    setAddMenuOpen(false);
-                    onAddInkSection?.();
-                  }}
-                >
-                  <Pencil size={14} />
-                  Ink Cell
-                </button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+        {canShowAddMenu
+          ? (
+            <div ref={addMenuRef} className="relative">
+              <Button
+                aria-label="Add cell"
+                size="icon-xs"
+                variant="ghost"
+                className="text-muted-foreground hover:text-foreground"
+                disabled={!canAddSection}
+                title={canAddSection ? "Add cell" : "Canvas is still loading"}
+                onClick={() => setAddMenuOpen((current) => !current)}
+              >
+                <Plus size={14} />
+              </Button>
+              {addMenuOpen
+                ? (
+                  <div className="absolute right-0 top-full z-30 mt-1 w-40 rounded-md border border-border bg-card p-1 text-xs shadow-xl">
+                    <button
+                      type="button"
+                      disabled={!canAddSection || !onAddBlocksSection}
+                      className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        onAddBlocksSection?.();
+                      }}
+                    >
+                      <Rows3 size={14} />
+                      Blocks Cell
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canAddSection || !onAddInkSection}
+                      className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        onAddInkSection?.();
+                      }}
+                    >
+                      <Pencil size={14} />
+                      Ink Cell
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canAddSection || !onAddCodeSection}
+                      className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        onAddCodeSection?.();
+                      }}
+                    >
+                      <Code2 size={14} />
+                      Code Cell
+                    </button>
+                  </div>
+                )
+                : null}
+            </div>
+          )
+          : null}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        {sections.length ? (
-          <CoppermindSectionSortableList items={sectionIds} onReorder={onReorderSection}>
-            <div className="grid gap-1">
-              {sections.map((section, index) => {
-                const isPlaced = section.placement.state === 'placed';
-                const stackedGroup = findStackedInkRunForSection(sections, section.id);
-                const RowIcon = section.kind === 'ink'
-                  ? (stackedGroup ? Layers : Pencil)
-                  : Rows3;
-                const canDrag = isCanvasMode && !isPlaced && canPlaceSections;
-                const isSelectable = !isCanvasMode || isPlaced;
-                const hasHoverFill = !isCanvasMode || isPlaced;
-                const isActive = Boolean(
-                  isSelectable
-                  && (
-                    activeSectionId === section.id
-                    || stackedGroup?.sections.some(item => item.id === activeSectionId)
-                  ),
-                );
+        {sections.length
+          ? (
+            <CoppermindSectionSortableList
+              items={sectionIds}
+              onReorder={onReorderSection}
+            >
+              <div className="grid gap-1">
+                {sections.map((section, index) => {
+                  const isPlaced = section.placement.state === "placed";
+                  const stackedGroup = findStackedInkRunForSection(
+                    sections,
+                    section.id,
+                  );
+                  const RowIcon = section.kind === "ink"
+                    ? (stackedGroup ? Layers : Pencil)
+                    : section.kind === "code"
+                    ? Code2
+                    : Rows3;
+                  const canDrag = isCanvasMode && !isPlaced && canPlaceSections;
+                  const isSelectable = !isCanvasMode || isPlaced;
+                  const hasHoverFill = !isCanvasMode || isPlaced;
+                  const isActive = Boolean(
+                    isSelectable &&
+                      (
+                        activeSectionId === section.id ||
+                        stackedGroup?.sections.some((item) =>
+                          item.id === activeSectionId
+                        )
+                      ),
+                  );
 
-                return (
-                  <CoppermindSortableSectionItem key={section.id} id={section.id}>
-                    {({ attributes, listeners, ref }) => (
-                      <div
-                        className={cn(
-                          'group flex min-h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground',
-                          !isActive && 'hover:border-border',
-                          hasHoverFill && 'hover:bg-accent/70',
-                          isCanvasMode && isPlaced && 'bg-muted/70 text-foreground hover:bg-muted',
-                          isActive && 'border-primary/45 bg-accent text-foreground shadow-sm hover:border-primary/45',
-                          canDrag && 'cursor-grab active:cursor-grabbing',
-                        )}
-                        draggable={canDrag}
-                        title={
-                          isCanvasMode
-                            ? isPlaced
-                              ? 'Double-click to remove cell from canvas'
-                              : canPlaceSections
-                                ? 'Double-click to place cell on canvas'
-                                : undefined
-                            : undefined
-                        }
-                        onDoubleClick={() => {
-                          if (!isCanvasMode) return;
-                          if (isPlaced) {
-                            onUnplaceSection?.(section);
-                            return;
-                          }
-                          if (canPlaceSections) {
-                            onPlaceSection?.(section);
-                          }
-                        }}
-                        onDragStart={event => {
-                          const startedOnReorderHandle = event.target instanceof Element
-                            && Boolean(event.target.closest('[data-coppermind-section-reorder-handle="true"]'));
-                          if (!canDrag || startedOnReorderHandle) {
-                            event.preventDefault();
-                            return;
-                          }
-                          onDragSection?.(section, event);
-                        }}
-                      >
-                        <Button
-                          ref={ref}
-                          aria-label={`Reorder ${section.title}`}
-                          title="Drag to reorder cell"
-                          size="icon-xs"
-                          variant="ghost"
-                          className="cursor-grab touch-none select-none text-muted-foreground/60 hover:text-foreground active:cursor-grabbing"
-                          data-coppermind-section-reorder-handle="true"
-                          draggable={false}
-                          style={{ touchAction: 'none' }}
-                          onClick={event => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                          }}
-                          onDoubleClick={event => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                          }}
-                          onDragStart={event => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                          }}
-                          {...attributes}
-                          {...listeners}
-                        >
-                          <GripVertical size={13} />
-                        </Button>
-                        <button
-                          type="button"
-                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                          onClick={() => {
-                            if (!isSelectable) return;
-                            onSelectSection(section.id);
-                          }}
-                        >
-                          <span className="w-5 shrink-0 text-[11px] tabular-nums text-muted-foreground/75">
-                            {index + 1}
-                          </span>
-                          <RowIcon
-                            aria-hidden
-                            className="shrink-0 text-muted-foreground/75"
-                            size={13}
-                            strokeWidth={2}
-                          />
-                          <span className="min-w-0 flex-1 truncate">{section.title}</span>
-                        </button>
-                        <Button
-                          aria-label={`Delete ${section.title}`}
-                          title="Delete cell"
-                          size="icon-xs"
-                          variant="ghost"
+                  return (
+                    <CoppermindSortableSectionItem
+                      key={section.id}
+                      id={section.id}
+                    >
+                      {({ attributes, listeners, ref }) => (
+                        <div
                           className={cn(
-                            'text-muted-foreground hover:text-destructive',
-                            !isCanvasMode && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                            "group flex min-h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground",
+                            !isActive && "hover:border-border",
+                            hasHoverFill && "hover:bg-accent/70",
+                            isCanvasMode && isPlaced &&
+                              "bg-muted/70 text-foreground hover:bg-muted",
+                            isActive &&
+                              "border-primary/45 bg-accent text-foreground shadow-sm hover:border-primary/45",
+                            canDrag && "cursor-grab active:cursor-grabbing",
                           )}
-                          onClick={event => {
-                            event.stopPropagation();
-                            onDeleteSection(section);
+                          draggable={canDrag}
+                          title={isCanvasMode
+                            ? isPlaced
+                              ? "Double-click to remove cell from canvas"
+                              : canPlaceSections
+                              ? "Double-click to place cell on canvas"
+                              : undefined
+                            : undefined}
+                          onDoubleClick={() => {
+                            if (!isCanvasMode) return;
+                            if (isPlaced) {
+                              onUnplaceSection?.(section);
+                              return;
+                            }
+                            if (canPlaceSections) {
+                              onPlaceSection?.(section);
+                            }
                           }}
-                          onDoubleClick={event => event.stopPropagation()}
+                          onDragStart={(event) => {
+                            const startedOnReorderHandle =
+                              event.target instanceof Element &&
+                              Boolean(
+                                event.target.closest(
+                                  '[data-coppermind-section-reorder-handle="true"]',
+                                ),
+                              );
+                            if (!canDrag || startedOnReorderHandle) {
+                              event.preventDefault();
+                              return;
+                            }
+                            onDragSection?.(section, event);
+                          }}
                         >
-                          <Trash2 size={13} />
-                        </Button>
-                      </div>
-                    )}
-                  </CoppermindSortableSectionItem>
-                );
-              })}
+                          <Button
+                            ref={ref}
+                            aria-label={`Reorder ${section.title}`}
+                            title="Drag to reorder cell"
+                            size="icon-xs"
+                            variant="ghost"
+                            className="cursor-grab touch-none select-none text-muted-foreground/60 hover:text-foreground active:cursor-grabbing"
+                            data-coppermind-section-reorder-handle="true"
+                            draggable={false}
+                            style={{ touchAction: "none" }}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }}
+                            onDoubleClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }}
+                            onDragStart={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }}
+                            {...attributes}
+                            {...listeners}
+                          >
+                            <GripVertical size={13} />
+                          </Button>
+                          <button
+                            type="button"
+                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                            onClick={() => {
+                              if (!isSelectable) return;
+                              onSelectSection(section.id);
+                            }}
+                          >
+                            <span className="w-5 shrink-0 text-[11px] tabular-nums text-muted-foreground/75">
+                              {index + 1}
+                            </span>
+                            <RowIcon
+                              aria-hidden
+                              className="shrink-0 text-muted-foreground/75"
+                              size={13}
+                              strokeWidth={2}
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {section.title}
+                            </span>
+                          </button>
+                          <Button
+                            aria-label={`Delete ${section.title}`}
+                            title="Delete cell"
+                            size="icon-xs"
+                            variant="ghost"
+                            className={cn(
+                              "text-muted-foreground hover:text-destructive",
+                              !isCanvasMode &&
+                                "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                            )}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onDeleteSection(section);
+                            }}
+                            onDoubleClick={(event) => event.stopPropagation()}
+                          >
+                            <Trash2 size={13} />
+                          </Button>
+                        </div>
+                      )}
+                    </CoppermindSortableSectionItem>
+                  );
+                })}
+              </div>
+            </CoppermindSectionSortableList>
+          )
+          : (
+            <div className="px-2 py-3 text-xs text-muted-foreground">
+              No cells
             </div>
-          </CoppermindSectionSortableList>
-        ) : (
-          <div className="px-2 py-3 text-xs text-muted-foreground">No cells</div>
-        )}
+          )}
       </div>
     </aside>
   );
@@ -2156,13 +2508,13 @@ const CoppermindModeToggle = ({
   onModeChange: (mode: CoppermindEditorMode) => void;
 }) => (
   <div className="absolute left-1/2 top-3 z-40 inline-flex -translate-x-1/2 rounded-md border border-border bg-card/95 p-0.5 shadow-lg backdrop-blur">
-    {modeOptions.map(item => (
+    {modeOptions.map((item) => (
       <button
         key={item.id}
         type="button"
         className={cn(
-          'h-7 rounded px-2.5 text-sm text-muted-foreground',
-          mode === item.id && 'bg-accent text-foreground',
+          "h-7 rounded px-2.5 text-sm text-muted-foreground",
+          mode === item.id && "bg-accent text-foreground",
         )}
         onClick={() => onModeChange(item.id)}
       >
@@ -2174,35 +2526,54 @@ const CoppermindModeToggle = ({
 
 const sectionPreviewMaxChars = 700;
 
-const compactPreviewText = (value: string) => value.replace(/\s+/g, ' ').trim();
+const compactPreviewText = (value: string) => value.replace(/\s+/g, " ").trim();
 const findSectionElement = (root: HTMLElement | null, sectionId: string) => (
-  Array.from(root?.querySelectorAll<HTMLElement>('[data-block-id]') ?? [])
-    .find(element => element.dataset.blockId === sectionId)
+  Array.from(root?.querySelectorAll<HTMLElement>("[data-block-id]") ?? [])
+    .find((element) => element.dataset.blockId === sectionId)
 );
 
-export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandle, CoppermindDocumentEditorProps>(({
+export const CoppermindDocumentEditor = forwardRef<
+  CoppermindDocumentEditorHandle,
+  CoppermindDocumentEditorProps
+>(({
   focusRequest = 0,
   isCellsSidebarOpen = true,
   onCellsSidebarMouseEnter,
   onCellsSidebarMouseLeave,
+  path,
+  target,
   value,
   onChange,
 }, ref) => {
-  const [mode, setMode] = useState<CoppermindEditorMode>('page');
-  const [loadedState, setLoadedState] = useState<LoadedCoppermindState>({ status: 'loading' });
-  const [activeSectionId, setActiveSectionId] = useState<string | undefined>(undefined);
-  const [canvasApi, setCanvasApi] = useState<CoppermindCanvasApi | undefined>(undefined);
-  const [canvasEditPunchInEnabled, setCanvasEditPunchInEnabled] = useState(true);
-  const [canvasViewport, setCanvasViewport] = useState<CoppermindCanvasViewportState | undefined>(undefined);
+  const [mode, setMode] = useState<CoppermindEditorMode>("page");
+  const [loadedState, setLoadedState] = useState<LoadedCoppermindState>({
+    status: "loading",
+  });
+  const [activeSectionId, setActiveSectionId] = useState<string | undefined>(
+    undefined,
+  );
+  const [canvasApi, setCanvasApi] = useState<CoppermindCanvasApi | undefined>(
+    undefined,
+  );
+  const [canvasEditPunchInEnabled, setCanvasEditPunchInEnabled] = useState(
+    true,
+  );
+  const [canvasViewport, setCanvasViewport] = useState<
+    CoppermindCanvasViewportState | undefined
+  >(undefined);
   const [sections, setSections] = useState<CoppermindBlockSuiteSection[]>([]);
   const onChangeRef = useRef(onChange);
   const loadedDocumentRef = useRef<CoppermindDocument | undefined>(undefined);
-  const loadedRuntimeRef = useRef<CoppermindBlockSuiteRuntime | undefined>(undefined);
+  const loadedRuntimeRef = useRef<CoppermindBlockSuiteRuntime | undefined>(
+    undefined,
+  );
   const lastSerializedRef = useRef<string | undefined>(undefined);
   const loadTokenRef = useRef(0);
-  const modeRef = useRef<CoppermindEditorMode>('page');
+  const modeRef = useRef<CoppermindEditorMode>("page");
   const canvasApiRef = useRef<CoppermindCanvasApi | undefined>(undefined);
-  const canvasEditViewportSessionRef = useRef<CoppermindCanvasEditViewportSession | undefined>(undefined);
+  const canvasEditViewportSessionRef = useRef<
+    CoppermindCanvasEditViewportSession | undefined
+  >(undefined);
   const canvasEditPunchInEnabledRef = useRef(true);
   const isSyncingInkStacksRef = useRef(false);
   const pageInkInputSectionIdRef = useRef<string | undefined>(undefined);
@@ -2211,20 +2582,32 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     selectedIds: [],
   });
   const sectionsRef = useRef<CoppermindBlockSuiteSection[]>([]);
+  const jupyterConnectionRef = useRef<CoppermindJupyterConnection | undefined>(
+    undefined,
+  );
+  const jupyterConnectionPromiseRef = useRef<
+    Promise<CoppermindJupyterSocket> | undefined
+  >(undefined);
+  const pendingCodeExecutionsRef = useRef(
+    new Map<string, CoppermindPendingCodeExecution>(),
+  );
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const jupyterTargetKey = JSON.stringify(target ?? null);
 
   useImperativeHandle(ref, () => ({
     getSnapshot: () => {
-      if (loadedState.status !== 'ready') return undefined;
+      if (loadedState.status !== "ready") return undefined;
       const root = shellRef.current;
       const viewport = canvasApiRef.current?.getViewportSnapshot();
       return {
         activeSectionId,
         canvasSelection: canvasSelectionStateRef.current,
         mode,
-        sections: sections.map(section => {
+        sections: sections.map((section) => {
           const sectionElement = findSectionElement(root, section.id);
-          const rawPreview = compactPreviewText(sectionElement?.innerText ?? '');
+          const rawPreview = compactPreviewText(
+            sectionElement?.innerText ?? "",
+          );
           const preview = rawPreview.length > sectionPreviewMaxChars
             ? rawPreview.slice(0, sectionPreviewMaxChars)
             : rawPreview;
@@ -2235,7 +2618,9 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
             kind: section.kind,
             placement: section.placement,
             ...(preview ? { preview } : {}),
-            ...(preview.length < rawPreview.length ? { previewTruncated: true } : {}),
+            ...(preview.length < rawPreview.length
+              ? { previewTruncated: true }
+              : {}),
             title: section.title,
           };
         }),
@@ -2245,11 +2630,17 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
             zoom: viewport.zoom,
           }
           : canvasViewport?.zoom
-            ? { zoom: canvasViewport.zoom }
-            : undefined,
+          ? { zoom: canvasViewport.zoom }
+          : undefined,
       };
     },
-  }), [activeSectionId, canvasViewport?.zoom, loadedState.status, mode, sections]);
+  }), [
+    activeSectionId,
+    canvasViewport?.zoom,
+    loadedState.status,
+    mode,
+    sections,
+  ]);
 
   const clearPageInkInputSection = useCallback(() => {
     pageInkInputSectionIdRef.current = undefined;
@@ -2258,6 +2649,13 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  useEffect(() => () => {
+    jupyterConnectionPromiseRef.current = undefined;
+    jupyterConnectionRef.current?.socket.close();
+    jupyterConnectionRef.current = undefined;
+    pendingCodeExecutionsRef.current.clear();
+  }, [jupyterTargetKey, path]);
 
   useEffect(() => {
     modeRef.current = mode;
@@ -2276,15 +2674,19 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
       now: new Date(),
       title: document.metadata.title,
     });
-    const nextDocument = withCoppermindDocumentSnapshot(document, nextSnapshot, {
-      lastMode: modeRef.current,
-      now: new Date(),
-    });
+    const nextDocument = withCoppermindDocumentSnapshot(
+      document,
+      nextSnapshot,
+      {
+        lastMode: modeRef.current,
+        now: new Date(),
+      },
+    );
     const nextValue = serializeCoppermindDocument(nextDocument);
 
     loadedDocumentRef.current = nextDocument;
-    setLoadedState(current => (
-      current.status === 'ready'
+    setLoadedState((current) => (
+      current.status === "ready"
         ? { ...current, document: nextDocument }
         : current
     ));
@@ -2294,63 +2696,82 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     onChangeRef.current(nextValue);
   }, []);
 
-  const refreshSections = useCallback((options: { anchorSectionId?: string } = {}) => {
-    const runtime = loadedRuntimeRef.current;
-    let nextSections = runtime ? getCoppermindBlockSuiteSections(runtime.doc) : [];
-    if (
-      runtime
-      && modeRef.current === 'edgeless'
-      && !isSyncingInkStacksRef.current
-    ) {
-      isSyncingInkStacksRef.current = true;
-      try {
-        if (syncInkStackPlacements(runtime.doc, nextSections, options.anchorSectionId)) {
-          nextSections = getCoppermindBlockSuiteSections(runtime.doc);
-        }
-      } finally {
-        isSyncingInkStacksRef.current = false;
-      }
-    }
-    sectionsRef.current = nextSections;
-    setSections(nextSections);
-    setActiveSectionId(current => {
-      const currentSection = nextSections.find(section => section.id === current);
+  const refreshSections = useCallback(
+    (options: { anchorSectionId?: string } = {}) => {
+      const runtime = loadedRuntimeRef.current;
+      let nextSections = runtime
+        ? getCoppermindBlockSuiteSections(runtime.doc)
+        : [];
       if (
-        currentSection
-        && (modeRef.current !== 'edgeless' || currentSection.placement.state === 'placed')
+        runtime &&
+        modeRef.current === "edgeless" &&
+        !isSyncingInkStacksRef.current
       ) {
-        return current;
+        isSyncingInkStacksRef.current = true;
+        try {
+          if (
+            syncInkStackPlacements(
+              runtime.doc,
+              nextSections,
+              options.anchorSectionId,
+            )
+          ) {
+            nextSections = getCoppermindBlockSuiteSections(runtime.doc);
+          }
+        } finally {
+          isSyncingInkStacksRef.current = false;
+        }
+      }
+      sectionsRef.current = nextSections;
+      setSections(nextSections);
+      setActiveSectionId((current) => {
+        const currentSection = nextSections.find((section) =>
+          section.id === current
+        );
+        if (
+          currentSection &&
+          (modeRef.current !== "edgeless" ||
+            currentSection.placement.state === "placed")
+        ) {
+          return current;
+        }
+
+        if (modeRef.current === "edgeless") {
+          return undefined;
+        }
+
+        return nextSections[0]?.id;
+      });
+    },
+    [],
+  );
+
+  const markActiveSection = useCallback(
+    (sectionId: string | undefined, shouldScroll = false) => {
+      const noteElements = Array.from(
+        shellRef.current?.querySelectorAll<HTMLElement>(
+          "page-editor affine-note",
+        ) ?? [],
+      );
+      let activeElement: HTMLElement | undefined;
+
+      for (const element of noteElements) {
+        const elementSectionId = element.dataset.blockId;
+        const isActive = Boolean(sectionId && elementSectionId === sectionId);
+        if (isActive) activeElement = element;
+        if (isActive) {
+          element.dataset.coppermindActiveSection = "true";
+        } else {
+          delete element.dataset.coppermindActiveSection;
+        }
       }
 
-      if (modeRef.current === 'edgeless') {
-        return undefined;
+      if (shouldScroll) {
+        activeElement?.scrollIntoView({ block: "start", behavior: "smooth" });
       }
-
-      return nextSections[0]?.id;
-    });
-  }, []);
-
-  const markActiveSection = useCallback((sectionId: string | undefined, shouldScroll = false) => {
-    const noteElements = Array.from(
-      shellRef.current?.querySelectorAll<HTMLElement>('page-editor affine-note') ?? [],
-    );
-    let activeElement: HTMLElement | undefined;
-
-    for (const element of noteElements) {
-      const elementSectionId = element.dataset.blockId;
-      const isActive = Boolean(sectionId && elementSectionId === sectionId);
-      if (isActive) activeElement = element;
-      if (isActive) {
-        element.dataset.coppermindActiveSection = 'true';
-      } else {
-        delete element.dataset.coppermindActiveSection;
-      }
-    }
-
-    if (shouldScroll) {
-      activeElement?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    }
-  }, []);
+    },
+    [],
+  );
 
   const updateActiveSectionFromCursor = useCallback(() => {
     const root = shellRef.current;
@@ -2361,30 +2782,45 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     const activeElement = ownerDocument.activeElement instanceof Element
       ? ownerDocument.activeElement
       : null;
-    const noteElement = getClosestSectionElement(getElementFromNode(selection?.anchorNode ?? null), root)
-      ?? getClosestSectionElement(getElementFromNode(selection?.focusNode ?? null), root)
-      ?? getClosestSectionElement(activeElement, root);
+    const noteElement = getClosestSectionElement(
+      getElementFromNode(selection?.anchorNode ?? null),
+      root,
+    ) ??
+      getClosestSectionElement(
+        getElementFromNode(selection?.focusNode ?? null),
+        root,
+      ) ??
+      getClosestSectionElement(activeElement, root);
     const sectionId = noteElement?.dataset.blockId;
 
     if (!sectionId) return;
-    setActiveSectionId(current => (current === sectionId ? current : sectionId));
+    setActiveSectionId(
+      (current) => (current === sectionId ? current : sectionId),
+    );
   }, []);
 
   const selectSection = useCallback((sectionId: string) => {
     clearPageInkInputSection();
-    if (mode === 'edgeless') {
-      const section = sections.find(item => item.id === sectionId);
+    if (mode === "edgeless") {
+      const section = sections.find((item) => item.id === sectionId);
       const stackedGroup = findStackedInkRunForSection(sections, sectionId);
-      const placedStackSections = stackedGroup?.sections.filter(item => item.placement.state === 'placed') ?? [];
-      const targetSection = placedStackSections.find(item => item.id === sectionId)
-        ?? placedStackSections[0]
-        ?? section;
-      if (targetSection?.placement.state === 'placed') {
+      const placedStackSections = stackedGroup?.sections.filter((item) =>
+        item.placement.state === "placed"
+      ) ?? [];
+      const targetSection = placedStackSections.find((item) =>
+        item.id === sectionId
+      ) ??
+        placedStackSections[0] ??
+        section;
+      if (targetSection?.placement.state === "placed") {
         const selectedIds = placedStackSections.length > 1
-          ? placedStackSections.map(item => item.id)
+          ? placedStackSections.map((item) => item.id)
           : [targetSection.id];
         setActiveSectionId(stackedGroup?.sections[0]?.id ?? targetSection.id);
-        canvasApi?.locateSection(targetSection.id, targetSection.placement.xywh);
+        canvasApi?.locateSection(
+          targetSection.id,
+          targetSection.placement.xywh,
+        );
         if (selectedIds.length > 1) {
           canvasApi?.selectSections(selectedIds);
         }
@@ -2396,13 +2832,15 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     window.requestAnimationFrame(() => markActiveSection(sectionId, true));
   }, [canvasApi, clearPageInkInputSection, markActiveSection, mode, sections]);
 
-  const addSection = useCallback((kind: 'blocks' | 'ink') => {
+  const addSection = useCallback((kind: "blocks" | "ink" | "code") => {
     const runtime = loadedRuntimeRef.current;
     if (!runtime) return;
     clearPageInkInputSection();
 
-    const sectionId = kind === 'ink'
+    const sectionId = kind === "ink"
       ? addCoppermindBlockSuiteInkSection(runtime.doc)
+      : kind === "code"
+      ? addCoppermindBlockSuiteCodeSection(runtime.doc)
       : addCoppermindBlockSuiteBlocksSection(runtime.doc);
     refreshSections({ anchorSectionId: sectionId });
     setActiveSectionId(sectionId);
@@ -2410,43 +2848,335 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
   }, [clearPageInkInputSection, markActiveSection, refreshSections]);
 
   const addBlocksSection = useCallback(() => {
-    addSection('blocks');
+    addSection("blocks");
   }, [addSection]);
 
   const addInkSection = useCallback(() => {
-    addSection('ink');
+    addSection("ink");
   }, [addSection]);
 
-  const addSectionToCanvas = useCallback((kind: 'blocks' | 'ink') => {
+  const addCodeSection = useCallback(() => {
+    addSection("code");
+  }, [addSection]);
+
+  const addSectionToCanvas = useCallback((kind: "blocks" | "ink" | "code") => {
     const runtime = loadedRuntimeRef.current;
     if (!runtime || !canvasApi) return;
     clearPageInkInputSection();
 
-    const xywh = createCoppermindNextCanvasCellXYWH(getCoppermindBlockSuiteSections(runtime.doc));
-    const sectionId = kind === 'ink'
+    const xywh = createCoppermindNextCanvasCellXYWH(
+      getCoppermindBlockSuiteSections(runtime.doc),
+    );
+    const sectionId = kind === "ink"
       ? addCoppermindBlockSuiteInkSection(runtime.doc)
+      : kind === "code"
+      ? addCoppermindBlockSuiteCodeSection(runtime.doc)
       : addCoppermindBlockSuiteBlocksSection(runtime.doc);
     placeCoppermindBlockSuiteSection(runtime.doc, sectionId, xywh);
     refreshSections({ anchorSectionId: sectionId });
     setActiveSectionId(sectionId);
-    window.requestAnimationFrame(() => canvasApi.locateSection(sectionId, xywh, { editing: true }));
+    window.requestAnimationFrame(() =>
+      canvasApi.locateSection(sectionId, xywh, { editing: true })
+    );
   }, [canvasApi, clearPageInkInputSection, refreshSections]);
 
   const addBlocksSectionToCanvas = useCallback(() => {
-    addSectionToCanvas('blocks');
+    addSectionToCanvas("blocks");
   }, [addSectionToCanvas]);
 
   const addInkSectionToCanvas = useCallback(() => {
-    addSectionToCanvas('ink');
+    addSectionToCanvas("ink");
   }, [addSectionToCanvas]);
+
+  const addCodeSectionToCanvas = useCallback(() => {
+    addSectionToCanvas("code");
+  }, [addSectionToCanvas]);
+
+  const dispatchCodeCellExecutionEvent = useCallback((
+    blockId: string,
+    event: CoppermindJupyterEvent,
+  ) => {
+    const root = shellRef.current;
+    const element = Array.from(
+      root?.querySelectorAll<HTMLElement>(coppermindCodeCellElementName) ?? [],
+    )
+      .find((item) =>
+        item.getAttribute("data-coppermind-code-cell-block-id") === blockId
+      );
+    element?.dispatchEvent(
+      new CustomEvent<CoppermindJupyterEvent>(
+        "coppermind-code-cell-execution-event",
+        {
+          detail: event,
+        },
+      ),
+    );
+  }, []);
+
+  const commitPendingCodeExecution = useCallback((
+    blockId: string,
+    pending: CoppermindPendingCodeExecution,
+    status: CoppermindCodeCellLastExecutionStatus,
+  ) => {
+    const runtime = loadedRuntimeRef.current;
+    if (!runtime) return;
+
+    const codeBlock = getCoppermindCodeCellBlock(runtime.doc, blockId);
+    if (!codeBlock) return;
+
+    runtime.doc.updateBlock(codeBlock, {
+      codeVersion: 1,
+      executionCount: pending.executionCount,
+      lastExecutionStatus: status,
+      outputsData: serializeCoppermindCodeCellOutputs(pending.outputs),
+    });
+    refreshSections();
+  }, [refreshSections]);
+
+  const handleCoppermindJupyterEvent = useCallback(
+    (event: CoppermindJupyterEvent) => {
+      if (!("cellId" in event)) return;
+      const blockId = event.cellId;
+      if (!blockId) return;
+
+      let pending = pendingCodeExecutionsRef.current.get(blockId);
+      if (!pending) {
+        pending = {
+          clearBeforeNextOutput: false,
+          executionCount: null,
+          outputs: [],
+          requestId: "requestId" in event
+            ? event.requestId ?? `jupyter:${crypto.randomUUID()}`
+            : `jupyter:${crypto.randomUUID()}`,
+          status: null,
+        };
+        pendingCodeExecutionsRef.current.set(blockId, pending);
+      }
+
+      if (event.type === "execution_input") {
+        pending.executionCount = event.executionCount;
+        pending.outputs = [];
+        pending.status = null;
+        pending.clearBeforeNextOutput = false;
+      } else if (event.type === "clear_output") {
+        if (event.wait) {
+          pending.clearBeforeNextOutput = true;
+        } else {
+          pending.outputs = [];
+          pending.clearBeforeNextOutput = false;
+        }
+      } else if (event.type === "output") {
+        pending.outputs = appendJupyterOutput(
+          pending.clearBeforeNextOutput ? [] : pending.outputs,
+          event.output,
+        );
+        pending.clearBeforeNextOutput = false;
+      } else if (event.type === "complete") {
+        pending.executionCount = event.executionCount ?? pending.executionCount;
+        pending.status = event.status;
+      } else if (event.type === "error") {
+        pending.outputs = appendJupyterOutput(pending.outputs, {
+          output_type: "error",
+          ename: "JupyterError",
+          evalue: event.error,
+          traceback: [],
+        });
+        pending.status = "error";
+        pending.clearBeforeNextOutput = false;
+      }
+
+      dispatchCodeCellExecutionEvent(blockId, event);
+
+      if (event.type === "complete") {
+        commitPendingCodeExecution(blockId, pending, event.status);
+        pendingCodeExecutionsRef.current.delete(blockId);
+      } else if (event.type === "error") {
+        commitPendingCodeExecution(blockId, pending, "error");
+        pendingCodeExecutionsRef.current.delete(blockId);
+      }
+    },
+    [commitPendingCodeExecution, dispatchCodeCellExecutionEvent],
+  );
+
+  const ensureJupyterSocket = useCallback(async () => {
+    if (!target || !path) {
+      throw new Error(
+        "Jupyter execution requires a Portal-backed Notes document path.",
+      );
+    }
+
+    const current = jupyterConnectionRef.current;
+    if (
+      current && current.path === path && current.targetKey === jupyterTargetKey
+    ) {
+      return current.socket;
+    }
+
+    if (jupyterConnectionPromiseRef.current) {
+      return await jupyterConnectionPromiseRef.current;
+    }
+
+    jupyterConnectionRef.current?.socket.close();
+    jupyterConnectionRef.current = undefined;
+
+    const connectionPromise = (async () => {
+      const session = await createCoppermindJupyterSession({
+        language: "python",
+        path,
+        target,
+      });
+      if (!session.available) {
+        throw new Error(
+          "Jupyter is not available in the connected Portal environment.",
+        );
+      }
+      const socket = createCoppermindJupyterSocket(
+        session,
+        handleCoppermindJupyterEvent,
+      );
+      const connection: CoppermindJupyterConnection = {
+        path,
+        session,
+        socket,
+        targetKey: jupyterTargetKey,
+      };
+      jupyterConnectionRef.current = connection;
+      await socket.ready;
+      return socket;
+    })();
+
+    jupyterConnectionPromiseRef.current = connectionPromise;
+    try {
+      return await connectionPromise;
+    } finally {
+      jupyterConnectionPromiseRef.current = undefined;
+    }
+  }, [handleCoppermindJupyterEvent, jupyterTargetKey, path, target]);
+
+  const advanceFromCodeCell = useCallback((blockId: string) => {
+    const runtime = loadedRuntimeRef.current;
+    if (!runtime) return;
+
+    const currentSections = sectionsRef.current;
+    const currentIndex = currentSections.findIndex((section) => {
+      const note = runtime.doc.getBlockById(section.id);
+      return Boolean(note?.children.some((child) => child.id === blockId));
+    });
+    if (currentIndex < 0) return;
+
+    const nextSection = currentSections[currentIndex + 1];
+    if (nextSection) {
+      selectSection(nextSection.id);
+      return;
+    }
+
+    if (modeRef.current === "edgeless" && canvasApiRef.current) {
+      const xywh = createCoppermindNextCanvasCellXYWH(
+        getCoppermindBlockSuiteSections(runtime.doc),
+      );
+      const sectionId = addCoppermindBlockSuiteCodeSection(runtime.doc);
+      placeCoppermindBlockSuiteSection(runtime.doc, sectionId, xywh);
+      refreshSections({ anchorSectionId: sectionId });
+      setActiveSectionId(sectionId);
+      window.requestAnimationFrame(() =>
+        canvasApiRef.current?.locateSection(sectionId, xywh, { editing: true })
+      );
+      return;
+    }
+
+    const sectionId = addCoppermindBlockSuiteCodeSection(runtime.doc);
+    refreshSections({ anchorSectionId: sectionId });
+    setActiveSectionId(sectionId);
+    window.requestAnimationFrame(() => markActiveSection(sectionId, true));
+  }, [markActiveSection, refreshSections, selectSection]);
+
+  const runCodeCell = useCallback(
+    async (detail: CoppermindCodeCellRunDetail) => {
+      const runtime = loadedRuntimeRef.current;
+      if (!runtime) return;
+
+      const codeBlock = getCoppermindCodeCellBlock(runtime.doc, detail.blockId);
+      if (!codeBlock) return;
+
+      const requestId = `cell:${detail.blockId}:${crypto.randomUUID()}`;
+      const source = codeBlock.text?.toString() ?? "";
+
+      try {
+        const socket = await ensureJupyterSocket();
+        const session = jupyterConnectionRef.current?.session;
+        if (!session) throw new Error("Jupyter session is not connected.");
+
+        pendingCodeExecutionsRef.current.set(detail.blockId, {
+          clearBeforeNextOutput: false,
+          executionCount: null,
+          outputs: [],
+          requestId,
+          status: null,
+        });
+        dispatchCodeCellExecutionEvent(detail.blockId, {
+          type: "clear_output",
+          sessionId: session.sessionId,
+          requestId,
+          cellId: detail.blockId,
+          wait: false,
+        });
+        dispatchCodeCellExecutionEvent(detail.blockId, {
+          type: "status",
+          sessionId: session.sessionId,
+          requestId,
+          cellId: detail.blockId,
+          executionState: "busy",
+        });
+
+        if (
+          !socket.execute({ requestId, cellId: detail.blockId, code: source })
+        ) {
+          throw new Error("Jupyter WebSocket is not open.");
+        }
+
+        if (detail.advance) advanceFromCodeCell(detail.blockId);
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : "Jupyter execution failed.";
+        const pending: CoppermindPendingCodeExecution = {
+          clearBeforeNextOutput: false,
+          executionCount: codeBlock.executionCount ?? null,
+          outputs: appendJupyterOutput([], {
+            output_type: "error",
+            ename: "JupyterError",
+            evalue: message,
+            traceback: [],
+          }),
+          requestId,
+          status: "error",
+        };
+        pendingCodeExecutionsRef.current.set(detail.blockId, pending);
+        dispatchCodeCellExecutionEvent(detail.blockId, {
+          type: "error",
+          requestId,
+          cellId: detail.blockId,
+          error: message,
+        });
+        commitPendingCodeExecution(detail.blockId, pending, "error");
+        pendingCodeExecutionsRef.current.delete(detail.blockId);
+      }
+    },
+    [
+      advanceFromCodeCell,
+      commitPendingCodeExecution,
+      dispatchCodeCellExecutionEvent,
+      ensureJupyterSocket,
+    ],
+  );
 
   const deleteSection = useCallback((section: CoppermindBlockSuiteSection) => {
     const runtime = loadedRuntimeRef.current;
     if (!runtime) return;
 
     if (
-      !section.isEmpty
-      && !window.confirm(`Delete "${section.title}" and all blocks inside it?`)
+      !section.isEmpty &&
+      !window.confirm(`Delete "${section.title}" and all blocks inside it?`)
     ) {
       return;
     }
@@ -2455,18 +3185,24 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     refreshSections();
   }, [refreshSections]);
 
-  const handleCanvasApiChange = useCallback((api: CoppermindCanvasApi | undefined) => {
-    canvasApiRef.current = api;
-    setCanvasApi(api);
-    if (!api) {
-      canvasEditViewportSessionRef.current = undefined;
-      canvasSelectionStateRef.current = { editing: false, selectedIds: [] };
-    }
-  }, []);
+  const handleCanvasApiChange = useCallback(
+    (api: CoppermindCanvasApi | undefined) => {
+      canvasApiRef.current = api;
+      setCanvasApi(api);
+      if (!api) {
+        canvasEditViewportSessionRef.current = undefined;
+        canvasSelectionStateRef.current = { editing: false, selectedIds: [] };
+      }
+    },
+    [],
+  );
 
-  const handleCanvasViewportChange = useCallback((state: CoppermindCanvasViewportState | undefined) => {
-    setCanvasViewport(state);
-  }, []);
+  const handleCanvasViewportChange = useCallback(
+    (state: CoppermindCanvasViewportState | undefined) => {
+      setCanvasViewport(state);
+    },
+    [],
+  );
 
   const punchInToEditingCanvasSelection = useCallback((
     selectedSection: CoppermindBlockSuiteSection,
@@ -2497,52 +3233,69 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     api.restoreViewport(editSession.viewport);
   }, []);
 
-  const handleCanvasSelectionChange = useCallback((selectionState: CoppermindCanvasSelectionState) => {
-    canvasSelectionStateRef.current = selectionState;
-    const selectedIdSet = new Set(selectionState.selectedIds);
-    const selectedStackGroup = getInkRuns(sectionsRef.current).find(group => (
-      group.stacked
-      && group.sections.some(section => (
-        section.placement.state === 'placed' && selectedIdSet.has(section.id)
-      ))
-    ));
-    if (selectedStackGroup) {
-      const placedStackIds = selectedStackGroup.sections.flatMap(section => (
-        section.placement.state === 'placed' ? [section.id] : []
-      ));
-      const selectionMatchesStack = (
-        placedStackIds.length === selectionState.selectedIds.length
-        && placedStackIds.every(id => selectedIdSet.has(id))
+  const handleCanvasSelectionChange = useCallback(
+    (selectionState: CoppermindCanvasSelectionState) => {
+      canvasSelectionStateRef.current = selectionState;
+      const selectedIdSet = new Set(selectionState.selectedIds);
+      const selectedStackGroup = getInkRuns(sectionsRef.current).find(
+        (group) => (
+          group.stacked &&
+          group.sections.some((section) => (
+            section.placement.state === "placed" &&
+            selectedIdSet.has(section.id)
+          ))
+        ),
       );
-      setActiveSectionId(selectedStackGroup.sections[0]?.id);
-      if (!selectionMatchesStack) {
-        canvasApiRef.current?.selectSections(placedStackIds);
-      }
-      restoreCanvasEditViewportSession();
-      return;
-    }
-
-    const selectedSection = sectionsRef.current.find(section => (
-      section.placement.state === 'placed' && selectedIdSet.has(section.id)
-    ));
-    const selectedPlacement = selectedSection?.placement;
-    setActiveSectionId(selectedSection?.id);
-    const api = canvasApiRef.current;
-    const editSession = canvasEditViewportSessionRef.current;
-
-    if (api && selectedSection && selectedPlacement?.state === 'placed' && selectionState.editing) {
-      if (!canvasEditPunchInEnabledRef.current) {
+      if (selectedStackGroup) {
+        const placedStackIds = selectedStackGroup.sections.flatMap(
+          (section) => (
+            section.placement.state === "placed" ? [section.id] : []
+          ),
+        );
+        const selectionMatchesStack =
+          placedStackIds.length === selectionState.selectedIds.length &&
+          placedStackIds.every((id) => selectedIdSet.has(id));
+        setActiveSectionId(selectedStackGroup.sections[0]?.id);
+        if (!selectionMatchesStack) {
+          canvasApiRef.current?.selectSections(placedStackIds);
+        }
         restoreCanvasEditViewportSession();
         return;
       }
-      punchInToEditingCanvasSelection(selectedSection, selectedPlacement.xywh);
-      return;
-    }
 
-    if (editSession && (!selectionState.editing || selectedSection?.id !== editSession.sectionId)) {
-      restoreCanvasEditViewportSession();
-    }
-  }, [punchInToEditingCanvasSelection, restoreCanvasEditViewportSession]);
+      const selectedSection = sectionsRef.current.find((section) => (
+        section.placement.state === "placed" && selectedIdSet.has(section.id)
+      ));
+      const selectedPlacement = selectedSection?.placement;
+      setActiveSectionId(selectedSection?.id);
+      const api = canvasApiRef.current;
+      const editSession = canvasEditViewportSessionRef.current;
+
+      if (
+        api && selectedSection && selectedPlacement?.state === "placed" &&
+        selectionState.editing
+      ) {
+        if (!canvasEditPunchInEnabledRef.current) {
+          restoreCanvasEditViewportSession();
+          return;
+        }
+        punchInToEditingCanvasSelection(
+          selectedSection,
+          selectedPlacement.xywh,
+        );
+        return;
+      }
+
+      if (
+        editSession &&
+        (!selectionState.editing ||
+          selectedSection?.id !== editSession.sectionId)
+      ) {
+        restoreCanvasEditViewportSession();
+      }
+    },
+    [punchInToEditingCanvasSelection, restoreCanvasEditViewportSession],
+  );
 
   const toggleCanvasEditPunchIn = useCallback(() => {
     const nextEnabled = !canvasEditPunchInEnabledRef.current;
@@ -2558,20 +3311,25 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     if (!selectionState.editing) return;
 
     const selectedIdSet = new Set(selectionState.selectedIds);
-    const selectedStackGroup = getInkRuns(sectionsRef.current).find(group => (
-      group.stacked
-      && group.sections.some(section => (
-        section.placement.state === 'placed' && selectedIdSet.has(section.id)
+    const selectedStackGroup = getInkRuns(sectionsRef.current).find((group) => (
+      group.stacked &&
+      group.sections.some((section) => (
+        section.placement.state === "placed" && selectedIdSet.has(section.id)
       ))
     ));
     if (selectedStackGroup) return;
 
-    const selectedSection = sectionsRef.current.find(section => (
-      section.placement.state === 'placed' && selectedIdSet.has(section.id)
+    const selectedSection = sectionsRef.current.find((section) => (
+      section.placement.state === "placed" && selectedIdSet.has(section.id)
     ));
-    if (!selectedSection || selectedSection.placement.state !== 'placed') return;
+    if (!selectedSection || selectedSection.placement.state !== "placed") {
+      return;
+    }
 
-    punchInToEditingCanvasSelection(selectedSection, selectedSection.placement.xywh);
+    punchInToEditingCanvasSelection(
+      selectedSection,
+      selectedSection.placement.xywh,
+    );
   }, [punchInToEditingCanvasSelection, restoreCanvasEditViewportSession]);
 
   const placeSectionWithXYWH = useCallback((
@@ -2581,17 +3339,27 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     const runtime = loadedRuntimeRef.current;
     if (!runtime) return;
 
-    const stackedGroup = findStackedInkRunForSection(sectionsRef.current, section.id);
-    if (!placeCoppermindBlockSuiteSection(runtime.doc, section.id, xywh)) return;
+    const stackedGroup = findStackedInkRunForSection(
+      sectionsRef.current,
+      section.id,
+    );
+    if (!placeCoppermindBlockSuiteSection(runtime.doc, section.id, xywh)) {
+      return;
+    }
     refreshSections({ anchorSectionId: section.id });
     setActiveSectionId(stackedGroup?.sections[0]?.id ?? section.id);
     window.requestAnimationFrame(() => {
-      const nextSection = sectionsRef.current.find(item => item.id === section.id);
-      const nextStack = findStackedInkRunForSection(sectionsRef.current, section.id);
-      const placedStackIds = nextStack?.sections.flatMap(item => (
-        item.placement.state === 'placed' ? [item.id] : []
+      const nextSection = sectionsRef.current.find((item) =>
+        item.id === section.id
+      );
+      const nextStack = findStackedInkRunForSection(
+        sectionsRef.current,
+        section.id,
+      );
+      const placedStackIds = nextStack?.sections.flatMap((item) => (
+        item.placement.state === "placed" ? [item.id] : []
       )) ?? [];
-      if (nextSection?.placement.state === 'placed') {
+      if (nextSection?.placement.state === "placed") {
         canvasApi?.locateSection(nextSection.id, nextSection.placement.xywh);
       }
       if (placedStackIds.length > 1) {
@@ -2600,25 +3368,38 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     });
   }, [canvasApi, refreshSections]);
 
-  const placeSectionInNextCanvasSlot = useCallback((section: CoppermindBlockSuiteSection) => {
-    placeSectionWithXYWH(section, createCoppermindNextCanvasCellXYWH(sections));
-  }, [placeSectionWithXYWH, sections]);
+  const placeSectionInNextCanvasSlot = useCallback(
+    (section: CoppermindBlockSuiteSection) => {
+      placeSectionWithXYWH(
+        section,
+        createCoppermindNextCanvasCellXYWH(sections),
+      );
+    },
+    [placeSectionWithXYWH, sections],
+  );
 
-  const unplaceSectionFromCanvas = useCallback((section: CoppermindBlockSuiteSection) => {
-    const runtime = loadedRuntimeRef.current;
-    if (!runtime) return;
+  const unplaceSectionFromCanvas = useCallback(
+    (section: CoppermindBlockSuiteSection) => {
+      const runtime = loadedRuntimeRef.current;
+      if (!runtime) return;
 
-    const stackedGroup = findStackedInkRunForSection(sectionsRef.current, section.id);
-    const sectionsToUnplace = stackedGroup?.sections ?? [section];
-    let changed = false;
-    for (const item of sectionsToUnplace) {
-      changed = unplaceCoppermindBlockSuiteSection(runtime.doc, item.id) || changed;
-    }
-    if (!changed) return;
-    canvasApi?.clearSelection();
-    refreshSections();
-    setActiveSectionId(undefined);
-  }, [canvasApi, refreshSections]);
+      const stackedGroup = findStackedInkRunForSection(
+        sectionsRef.current,
+        section.id,
+      );
+      const sectionsToUnplace = stackedGroup?.sections ?? [section];
+      let changed = false;
+      for (const item of sectionsToUnplace) {
+        changed = unplaceCoppermindBlockSuiteSection(runtime.doc, item.id) ||
+          changed;
+      }
+      if (!changed) return;
+      canvasApi?.clearSelection();
+      refreshSections();
+      setActiveSectionId(undefined);
+    },
+    [canvasApi, refreshSections],
+  );
 
   const arrangeCellsAsPage = useCallback(() => {
     const runtime = loadedRuntimeRef.current;
@@ -2629,7 +3410,7 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     let y = 0;
 
     for (const section of orderedSections) {
-      const height = section.placement.state === 'placed'
+      const height = section.placement.state === "placed"
         ? section.placement.xywh[3]
         : defaultHeight;
       placeCoppermindBlockSuiteSection(runtime.doc, section.id, [
@@ -2645,38 +3426,48 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     window.requestAnimationFrame(() => canvasApi?.fitToScreen());
   }, [canvasApi, refreshSections]);
 
-  const setActiveInkRunStackState = useCallback((stackState: 'auto' | 'unstacked') => {
-    const runtime = loadedRuntimeRef.current;
-    const group = findInkRunForSection(sectionsRef.current, activeSectionId);
-    if (!runtime || !group || group.sections.length < 2) return;
+  const setActiveInkRunStackState = useCallback(
+    (stackState: "auto" | "unstacked") => {
+      const runtime = loadedRuntimeRef.current;
+      const group = findInkRunForSection(sectionsRef.current, activeSectionId);
+      if (!runtime || !group || group.sections.length < 2) return;
 
-    let changed = false;
-    for (const section of group.sections) {
-      changed = setCoppermindInkCellStackState(runtime.doc, section.id, stackState) || changed;
-    }
-    if (!changed) return;
+      let changed = false;
+      for (const section of group.sections) {
+        changed =
+          setCoppermindInkCellStackState(runtime.doc, section.id, stackState) ||
+          changed;
+      }
+      if (!changed) return;
 
-    const anchorSectionId = group.sections[0]?.id;
-    refreshSections({ anchorSectionId });
+      const anchorSectionId = group.sections[0]?.id;
+      refreshSections({ anchorSectionId });
 
-    if (stackState === 'auto') {
-      window.requestAnimationFrame(() => {
-        const nextGroup = findStackedInkRunForSection(sectionsRef.current, anchorSectionId);
-        const placedIds = nextGroup?.sections.flatMap(section => (
-          section.placement.state === 'placed' ? [section.id] : []
-        )) ?? [];
-        if (placedIds.length > 1) {
-          canvasApi?.selectSections(placedIds);
-        }
-      });
-    }
-  }, [activeSectionId, canvasApi, refreshSections]);
+      if (stackState === "auto") {
+        window.requestAnimationFrame(() => {
+          const nextGroup = findStackedInkRunForSection(
+            sectionsRef.current,
+            anchorSectionId,
+          );
+          const placedIds = nextGroup?.sections.flatMap((section) => (
+            section.placement.state === "placed" ? [section.id] : []
+          )) ?? [];
+          if (placedIds.length > 1) {
+            canvasApi?.selectSections(placedIds);
+          }
+        });
+      }
+    },
+    [activeSectionId, canvasApi, refreshSections],
+  );
 
   const reorderSection = useCallback((activeId: string, overId: string) => {
     const runtime = loadedRuntimeRef.current;
     if (!runtime) return;
 
-    if (!reorderCoppermindBlockSuiteSection(runtime.doc, activeId, overId)) return;
+    if (!reorderCoppermindBlockSuiteSection(runtime.doc, activeId, overId)) {
+      return;
+    }
     refreshSections();
   }, [refreshSections]);
 
@@ -2684,29 +3475,38 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     section: CoppermindBlockSuiteSection,
     event: DragEvent<HTMLElement>,
   ) => {
-    if (section.placement.state !== 'unplaced') return;
-    event.dataTransfer.effectAllowed = 'copy';
+    if (section.placement.state !== "unplaced") return;
+    event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData(coppermindSectionDragDataType, section.id);
-    event.dataTransfer.setData('text/plain', section.title);
+    event.dataTransfer.setData("text/plain", section.title);
   }, []);
 
-  const handleCanvasDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-    if (!canvasApi || !isSectionDragEvent(event)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
-  }, [canvasApi]);
+  const handleCanvasDragOver = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      if (!canvasApi || !isSectionDragEvent(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    },
+    [canvasApi],
+  );
 
   const handleCanvasDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (!canvasApi || !isSectionDragEvent(event)) return;
     event.preventDefault();
 
     const sectionId = event.dataTransfer.getData(coppermindSectionDragDataType);
-    const section = sections.find(item => item.id === sectionId);
-    if (!section || section.placement.state !== 'unplaced') return;
+    const section = sections.find((item) => item.id === sectionId);
+    if (!section || section.placement.state !== "unplaced") return;
 
-    const point = canvasApi.getModelPointFromClientPoint(event.clientX, event.clientY);
+    const point = canvasApi.getModelPointFromClientPoint(
+      event.clientX,
+      event.clientY,
+    );
     if (!point) return;
-    placeSectionWithXYWH(section, createCoppermindSectionXYWHAtTopLeft(point.x, point.y));
+    placeSectionWithXYWH(
+      section,
+      createCoppermindSectionXYWHAtTopLeft(point.x, point.y),
+    );
   }, [canvasApi, placeSectionWithXYWH, sections]);
 
   useEffect(() => {
@@ -2724,8 +3524,8 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
 
     if (!parsed) {
       setLoadedState({
-        status: 'invalid',
-        message: 'This `.cpr` file is not valid Coppermind JSON.',
+        status: "invalid",
+        message: "This `.cpr` file is not valid Coppermind JSON.",
       });
       return;
     }
@@ -2733,22 +3533,23 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     const nextDocument = isLegacyCoppermindDocument(parsed)
       ? migrateCoppermindDocumentToV2(parsed)
       : isCoppermindDocumentV2(parsed)
-        ? parsed
-        : undefined;
+      ? parsed
+      : undefined;
 
     if (!nextDocument) {
       setLoadedState({
-        status: 'invalid',
-        message: 'This `.cpr` file uses an unsupported Coppermind document version.',
+        status: "invalid",
+        message:
+          "This `.cpr` file uses an unsupported Coppermind document version.",
       });
       return;
     }
 
     setMode(normalizeMode(nextDocument.ui.lastMode));
-    setLoadedState({ status: 'loading' });
+    setLoadedState({ status: "loading" });
 
     void importCoppermindBlockSuiteRuntime(nextDocument.blocksuite.snapshot)
-      .then(runtime => {
+      .then((runtime) => {
         if (loadTokenRef.current !== token) {
           disposeCoppermindBlockSuiteRuntime(runtime);
           return;
@@ -2757,7 +3558,7 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
         loadedRuntimeRef.current = runtime;
         loadedDocumentRef.current = nextDocument;
         setLoadedState({
-          status: 'ready',
+          status: "ready",
           document: nextDocument,
           migratedFromLegacy: parsed.version === 1,
           runtime,
@@ -2766,10 +3567,10 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
         setSections(nextSections);
         setActiveSectionId(nextSections[0]?.id);
       })
-      .catch(error => {
+      .catch((error) => {
         if (loadTokenRef.current !== token) return;
         setLoadedState({
-          status: 'invalid',
+          status: "invalid",
           message: getErrorMessage(error),
         });
       });
@@ -2785,34 +3586,36 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
   useEffect(() => {
     if (focusRequest === 0) return;
     const editor = shellRef.current?.querySelector<HTMLElement>(
-      mode === 'page' ? 'page-editor' : 'edgeless-editor',
+      mode === "page" ? "page-editor" : "edgeless-editor",
     );
-    const fallbackEditor = shellRef.current?.querySelector<HTMLTextAreaElement>('textarea');
+    const fallbackEditor = shellRef.current?.querySelector<HTMLTextAreaElement>(
+      "textarea",
+    );
     (editor ?? fallbackEditor)?.focus({ preventScroll: true });
   }, [focusRequest, mode]);
 
   useEffect(() => {
-    if (loadedState.status !== 'ready') return;
+    if (loadedState.status !== "ready") return;
     let debounceHandle: ReturnType<typeof setTimeout> | undefined;
-    const disposable = loadedState.runtime.doc.slots.blockUpdated.on(update => {
-      const isPageInkStrokeUpdate = (
-        modeRef.current === 'page'
-        && update.type === 'update'
-        && update.flavour === coppermindInkCellFlavour
-        && (
-          update.props.key === 'height'
-          || update.props.key === 'inkVersion'
-          || update.props.key === 'strokeData'
-        )
-      );
-      if (!isPageInkStrokeUpdate) {
-        refreshSections();
-      }
-      if (debounceHandle) clearTimeout(debounceHandle);
-      debounceHandle = setTimeout(() => {
-        emitCurrentDocument();
-      }, 300);
-    });
+    const disposable = loadedState.runtime.doc.slots.blockUpdated.on(
+      (update) => {
+        const isPageInkStrokeUpdate = modeRef.current === "page" &&
+          update.type === "update" &&
+          update.flavour === coppermindInkCellFlavour &&
+          (
+            update.props.key === "height" ||
+            update.props.key === "inkVersion" ||
+            update.props.key === "strokeData"
+          );
+        if (!isPageInkStrokeUpdate) {
+          refreshSections();
+        }
+        if (debounceHandle) clearTimeout(debounceHandle);
+        debounceHandle = setTimeout(() => {
+          emitCurrentDocument();
+        }, 300);
+      },
+    );
 
     return () => {
       if (debounceHandle) clearTimeout(debounceHandle);
@@ -2821,34 +3624,68 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
   }, [emitCurrentDocument, loadedState, refreshSections]);
 
   useEffect(() => {
-    if (loadedState.status !== 'ready') return;
+    if (loadedState.status !== "ready") return;
     if (loadedDocumentRef.current?.ui.lastMode === mode) return;
     emitCurrentDocument();
   }, [emitCurrentDocument, loadedState.status, mode]);
 
   useEffect(() => {
-    if (loadedState.status !== 'ready') return;
+    if (loadedState.status !== "ready") return;
     refreshSections();
   }, [loadedState.status, mode, refreshSections]);
 
   useEffect(() => {
-    if (mode !== 'page' || loadedState.status !== 'ready') return;
+    if (mode !== "page" || loadedState.status !== "ready") return;
     window.requestAnimationFrame(() => markActiveSection(activeSectionId));
   }, [activeSectionId, loadedState.status, markActiveSection, mode, sections]);
 
   useEffect(() => {
-    if (mode !== 'page' || loadedState.status !== 'ready') return;
+    if (loadedState.status !== "ready") return;
+    const root = shellRef.current;
+    if (!root) return;
+
+    const handleCodeCellRun = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return;
+      const detail = event.detail as
+        | Partial<CoppermindCodeCellRunDetail>
+        | undefined;
+      if (!detail || typeof detail.blockId !== "string") return;
+      event.preventDefault();
+      event.stopPropagation();
+      void runCodeCell({
+        advance: detail.advance === true,
+        blockId: detail.blockId,
+      });
+    };
+
+    root.addEventListener("coppermind-code-cell-run", handleCodeCellRun, true);
+    return () => {
+      root.removeEventListener(
+        "coppermind-code-cell-run",
+        handleCodeCellRun,
+        true,
+      );
+    };
+  }, [loadedState.status, runCodeCell]);
+
+  useEffect(() => {
+    if (mode !== "page" || loadedState.status !== "ready") return;
     const root = shellRef.current;
     if (!root) return;
 
     let animationFrame: number | undefined;
     const getSectionIdFromEvent = (event: Event) => {
       const target = event.target instanceof Element ? event.target : null;
-      return target?.closest<HTMLElement>('affine-note')?.dataset.blockId;
+      return target?.closest<HTMLElement>("affine-note")?.dataset.blockId;
     };
-    const keepInkInputSectionActive = (sectionId: string, shouldScroll = false) => {
+    const keepInkInputSectionActive = (
+      sectionId: string,
+      shouldScroll = false,
+    ) => {
       pageInkInputSectionIdRef.current = sectionId;
-      setActiveSectionId(current => (current === sectionId ? current : sectionId));
+      setActiveSectionId(
+        (current) => (current === sectionId ? current : sectionId),
+      );
       markActiveSection(sectionId, shouldScroll);
     };
     const scheduleUpdate = () => {
@@ -2857,7 +3694,9 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
         animationFrame = undefined;
         const inkInputSectionId = pageInkInputSectionIdRef.current;
         if (inkInputSectionId) {
-          setActiveSectionId(current => (current === inkInputSectionId ? current : inkInputSectionId));
+          setActiveSectionId((
+            current,
+          ) => (current === inkInputSectionId ? current : inkInputSectionId));
           markActiveSection(inkInputSectionId);
           return;
         }
@@ -2865,8 +3704,12 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
       });
     };
     const scheduleFromPageEvent = (event: Event) => {
-      if (!(event.target instanceof Element) || !event.target.closest('page-editor')) return;
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest("page-editor")
+      ) return;
       if (event.target.closest(coppermindInkCellElementName)) return;
+      if (event.target.closest(coppermindCodeCellElementName)) return;
       clearPageInkInputSection();
       scheduleUpdate();
     };
@@ -2878,51 +3721,93 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
 
       const sectionId = getSectionIdFromEvent(event);
       if (!sectionId) return;
-      const shouldScrollToTop = (
-        event instanceof CustomEvent
-        && event.detail
-        && typeof event.detail === 'object'
-        && 'scrollToTop' in event.detail
-        && event.detail.scrollToTop === true
-      );
+      const shouldScrollToTop = event instanceof CustomEvent &&
+        event.detail &&
+        typeof event.detail === "object" &&
+        "scrollToTop" in event.detail &&
+        event.detail.scrollToTop === true;
       root.ownerDocument.getSelection()?.removeAllRanges();
       keepInkInputSectionActive(sectionId, shouldScrollToTop);
-      window.requestAnimationFrame(() => keepInkInputSectionActive(sectionId, shouldScrollToTop));
+      window.requestAnimationFrame(() =>
+        keepInkInputSectionActive(sectionId, shouldScrollToTop)
+      );
+    };
+    const handleCodeCellFocus = (event: Event) => {
+      if (animationFrame !== undefined) {
+        window.cancelAnimationFrame(animationFrame);
+        animationFrame = undefined;
+      }
+
+      const sectionId = getSectionIdFromEvent(event);
+      if (!sectionId) return;
+      root.ownerDocument.getSelection()?.removeAllRanges();
+      clearPageInkInputSection();
+      setActiveSectionId(
+        (current) => (current === sectionId ? current : sectionId),
+      );
+      markActiveSection(sectionId);
     };
     const ownerDocument = root.ownerDocument;
 
-    ownerDocument.addEventListener('selectionchange', scheduleUpdate);
-    root.addEventListener('coppermind-ink-cell-focus', handleInkCellFocus, true);
-    root.addEventListener('click', scheduleFromPageEvent, true);
-    root.addEventListener('focusin', scheduleFromPageEvent, true);
-    root.addEventListener('input', scheduleFromPageEvent, true);
-    root.addEventListener('keyup', scheduleFromPageEvent, true);
-    root.addEventListener('pointerdown', scheduleFromPageEvent, true);
-    root.addEventListener('pointerup', scheduleFromPageEvent, true);
+    ownerDocument.addEventListener("selectionchange", scheduleUpdate);
+    root.addEventListener(
+      "coppermind-ink-cell-focus",
+      handleInkCellFocus,
+      true,
+    );
+    root.addEventListener(
+      "coppermind-code-cell-focus",
+      handleCodeCellFocus,
+      true,
+    );
+    root.addEventListener("click", scheduleFromPageEvent, true);
+    root.addEventListener("focusin", scheduleFromPageEvent, true);
+    root.addEventListener("input", scheduleFromPageEvent, true);
+    root.addEventListener("keyup", scheduleFromPageEvent, true);
+    root.addEventListener("pointerdown", scheduleFromPageEvent, true);
+    root.addEventListener("pointerup", scheduleFromPageEvent, true);
     scheduleUpdate();
 
     return () => {
-      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+      if (animationFrame !== undefined) {
+        window.cancelAnimationFrame(animationFrame);
+      }
       clearPageInkInputSection();
-      ownerDocument.removeEventListener('selectionchange', scheduleUpdate);
-      root.removeEventListener('coppermind-ink-cell-focus', handleInkCellFocus, true);
-      root.removeEventListener('click', scheduleFromPageEvent, true);
-      root.removeEventListener('focusin', scheduleFromPageEvent, true);
-      root.removeEventListener('input', scheduleFromPageEvent, true);
-      root.removeEventListener('keyup', scheduleFromPageEvent, true);
-      root.removeEventListener('pointerdown', scheduleFromPageEvent, true);
-      root.removeEventListener('pointerup', scheduleFromPageEvent, true);
+      ownerDocument.removeEventListener("selectionchange", scheduleUpdate);
+      root.removeEventListener(
+        "coppermind-ink-cell-focus",
+        handleInkCellFocus,
+        true,
+      );
+      root.removeEventListener(
+        "coppermind-code-cell-focus",
+        handleCodeCellFocus,
+        true,
+      );
+      root.removeEventListener("click", scheduleFromPageEvent, true);
+      root.removeEventListener("focusin", scheduleFromPageEvent, true);
+      root.removeEventListener("input", scheduleFromPageEvent, true);
+      root.removeEventListener("keyup", scheduleFromPageEvent, true);
+      root.removeEventListener("pointerdown", scheduleFromPageEvent, true);
+      root.removeEventListener("pointerup", scheduleFromPageEvent, true);
     };
-  }, [clearPageInkInputSection, loadedState.status, markActiveSection, mode, updateActiveSectionFromCursor]);
+  }, [
+    clearPageInkInputSection,
+    loadedState.status,
+    markActiveSection,
+    mode,
+    updateActiveSectionFromCursor,
+  ]);
 
-  const activeInkRun = mode === 'edgeless'
+  const activeInkRun = mode === "edgeless"
     ? findInkRunForSection(sections, activeSectionId)
     : undefined;
   const activeInkStackAction = activeInkRun && activeInkRun.sections.length > 1
     ? {
       icon: activeInkRun.stacked ? Ungroup : Group,
-      label: activeInkRun.stacked ? 'Unstack ink cells' : 'Restack ink cells',
-      onClick: () => setActiveInkRunStackState(activeInkRun.stacked ? 'unstacked' : 'auto'),
+      label: activeInkRun.stacked ? "Unstack ink cells" : "Restack ink cells",
+      onClick: () =>
+        setActiveInkRunStackState(activeInkRun.stacked ? "unstacked" : "auto"),
     }
     : undefined;
 
@@ -2934,71 +3819,100 @@ export const CoppermindDocumentEditor = forwardRef<CoppermindDocumentEditorHandl
     >
       <style>{coppermindBlockSuiteStyles}</style>
       <div className="min-h-0 flex-1 overflow-hidden bg-background">
-        {loadedState.status === 'ready' ? (
-          <div className="relative flex h-full min-h-0">
-            {isCellsSidebarOpen ? (
-              <CoppermindSectionOutline
-                activeSectionId={activeSectionId}
-                canPlaceSections={Boolean(canvasApi)}
-                mode={mode}
-                sections={sections}
-                onAddBlocksSection={mode === 'page' ? addBlocksSection : addBlocksSectionToCanvas}
-                onAddInkSection={mode === 'page' ? addInkSection : addInkSectionToCanvas}
-                onDeleteSection={deleteSection}
-                onDragSection={mode === 'edgeless' ? dragSectionFromSidebar : undefined}
-                onMouseEnter={onCellsSidebarMouseEnter}
-                onMouseLeave={onCellsSidebarMouseLeave}
-                onPlaceSection={mode === 'edgeless' ? placeSectionInNextCanvasSlot : undefined}
-                onReorderSection={reorderSection}
-                onSelectSection={selectSection}
-                onUnplaceSection={mode === 'edgeless' ? unplaceSectionFromCanvas : undefined}
-              />
-            ) : null}
-            <div
-              className={cn(
-                'relative min-h-0 flex-1',
-                mode === 'page' ? 'overflow-visible' : 'overflow-hidden',
-              )}
-              onDragOver={mode === 'edgeless' ? handleCanvasDragOver : undefined}
-              onDrop={mode === 'edgeless' ? handleCanvasDrop : undefined}
-            >
-              <CoppermindModeToggle mode={mode} onModeChange={setMode} />
-              <BlockSuiteEditorMount
-                key={`${loadedState.runtime.doc.id}:${mode}`}
-                doc={loadedState.runtime.doc}
-                isCellsSidebarOpen={isCellsSidebarOpen}
-                mode={mode}
-                onCanvasApiChange={mode === 'edgeless' ? handleCanvasApiChange : undefined}
-                onCanvasViewportChange={mode === 'edgeless' ? handleCanvasViewportChange : undefined}
-                onCanvasSelectionChange={mode === 'edgeless' ? handleCanvasSelectionChange : undefined}
-              />
-              {mode === 'edgeless' ? (
-                <CoppermindCanvasViewportToolbar
-                  api={canvasApi}
-                  editPunchInEnabled={canvasEditPunchInEnabled}
-                  inkStackAction={activeInkStackAction}
+        {loadedState.status === "ready"
+          ? (
+            <div className="relative flex h-full min-h-0">
+              {isCellsSidebarOpen
+                ? (
+                  <CoppermindSectionOutline
+                    activeSectionId={activeSectionId}
+                    canPlaceSections={Boolean(canvasApi)}
+                    mode={mode}
+                    sections={sections}
+                    onAddBlocksSection={mode === "page"
+                      ? addBlocksSection
+                      : addBlocksSectionToCanvas}
+                    onAddCodeSection={mode === "page"
+                      ? addCodeSection
+                      : addCodeSectionToCanvas}
+                    onAddInkSection={mode === "page"
+                      ? addInkSection
+                      : addInkSectionToCanvas}
+                    onDeleteSection={deleteSection}
+                    onDragSection={mode === "edgeless"
+                      ? dragSectionFromSidebar
+                      : undefined}
+                    onMouseEnter={onCellsSidebarMouseEnter}
+                    onMouseLeave={onCellsSidebarMouseLeave}
+                    onPlaceSection={mode === "edgeless"
+                      ? placeSectionInNextCanvasSlot
+                      : undefined}
+                    onReorderSection={reorderSection}
+                    onSelectSection={selectSection}
+                    onUnplaceSection={mode === "edgeless"
+                      ? unplaceSectionFromCanvas
+                      : undefined}
+                  />
+                )
+                : null}
+              <div
+                className={cn(
+                  "relative min-h-0 flex-1",
+                  mode === "page" ? "overflow-visible" : "overflow-hidden",
+                )}
+                onDragOver={mode === "edgeless"
+                  ? handleCanvasDragOver
+                  : undefined}
+                onDrop={mode === "edgeless" ? handleCanvasDrop : undefined}
+              >
+                <CoppermindModeToggle mode={mode} onModeChange={setMode} />
+                <BlockSuiteEditorMount
+                  key={`${loadedState.runtime.doc.id}:${mode}`}
+                  doc={loadedState.runtime.doc}
                   isCellsSidebarOpen={isCellsSidebarOpen}
-                  zoom={canvasViewport?.zoom}
-                  onArrangeAsPage={arrangeCellsAsPage}
-                  onToggleEditPunchIn={toggleCanvasEditPunchIn}
+                  mode={mode}
+                  onCanvasApiChange={mode === "edgeless"
+                    ? handleCanvasApiChange
+                    : undefined}
+                  onCanvasViewportChange={mode === "edgeless"
+                    ? handleCanvasViewportChange
+                    : undefined}
+                  onCanvasSelectionChange={mode === "edgeless"
+                    ? handleCanvasSelectionChange
+                    : undefined}
                 />
-              ) : null}
+                {mode === "edgeless"
+                  ? (
+                    <CoppermindCanvasViewportToolbar
+                      api={canvasApi}
+                      editPunchInEnabled={canvasEditPunchInEnabled}
+                      inkStackAction={activeInkStackAction}
+                      isCellsSidebarOpen={isCellsSidebarOpen}
+                      zoom={canvasViewport?.zoom}
+                      onArrangeAsPage={arrangeCellsAsPage}
+                      onToggleEditPunchIn={toggleCanvasEditPunchIn}
+                    />
+                  )
+                  : null}
+              </div>
             </div>
-          </div>
-        ) : loadedState.status === 'invalid' ? (
-          <InvalidCoppermindFallback
-            message={loadedState.message}
-            value={value}
-            onChange={onChange}
-          />
-        ) : (
-          <div className="grid h-full place-items-center text-xs text-muted-foreground">
-            Opening Coppermind document...
-          </div>
-        )}
+          )
+          : loadedState.status === "invalid"
+          ? (
+            <InvalidCoppermindFallback
+              message={loadedState.message}
+              value={value}
+              onChange={onChange}
+            />
+          )
+          : (
+            <div className="grid h-full place-items-center text-xs text-muted-foreground">
+              Opening Coppermind document...
+            </div>
+          )}
       </div>
     </div>
   );
 });
 
-CoppermindDocumentEditor.displayName = 'CoppermindDocumentEditor';
+CoppermindDocumentEditor.displayName = "CoppermindDocumentEditor";

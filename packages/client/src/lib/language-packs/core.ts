@@ -163,6 +163,16 @@ export const languagePacks: readonly LanguagePack[] = [
     },
   },
   {
+    id: "python",
+    label: "Python",
+    match: { extensions: ["py", "pyw"] },
+    comments: hashComments,
+    lsp: {
+      languageId: "python",
+      startInEditor: false,
+    },
+  },
+  {
     id: "graphql",
     label: "GraphQL",
     match: { extensions: ["graphql", "gql"] },

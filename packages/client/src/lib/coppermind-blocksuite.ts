@@ -3,6 +3,14 @@ import { AffineSchemas } from '@blocksuite/blocks/schemas';
 import { DocCollection, Job, Schema, Text, type BlockModel, type Doc, type DocSnapshot } from '@blocksuite/store';
 
 import {
+  CoppermindCodeCellSchema,
+  coppermindCodeCellFlavour,
+  getCoppermindCodeCellOutputCount,
+  getCoppermindCodeCellSource,
+  normalizeCoppermindCodeCellLastExecutionStatus,
+  type CoppermindCodeCellLastExecutionStatus,
+} from './coppermind-code-cell';
+import {
   CoppermindInkCellSchema,
   coppermindInkCellFlavour,
   getCoppermindInkCellHeight,
@@ -48,7 +56,7 @@ export type CoppermindBlockSuiteSection = {
   heightMode?: CoppermindInkHeightMode;
   id: string;
   isEmpty: boolean;
-  kind: 'blocks' | 'ink';
+  kind: 'blocks' | 'ink' | 'code';
   placement: CoppermindBlockSuiteSectionPlacement;
   stackState: CoppermindInkStackState;
   title: string;
@@ -62,11 +70,15 @@ export type CreateCoppermindBlockSuiteRuntimeOptions = {
 };
 
 const createCollection = () => {
-  const schema = new Schema().register([...AffineSchemas, CoppermindInkCellSchema]);
+  const schema = new Schema().register([...AffineSchemas, CoppermindInkCellSchema, CoppermindCodeCellSchema]);
   const noteSchema = schema.flavourSchemaMap.get('affine:note');
   const noteChildren = noteSchema?.model.children;
-  if (noteSchema && noteChildren && !noteChildren.includes(coppermindInkCellFlavour)) {
-    noteSchema.model.children = [...noteChildren, coppermindInkCellFlavour];
+  const customChildren = [coppermindInkCellFlavour, coppermindCodeCellFlavour];
+  if (noteSchema && noteChildren && customChildren.some(flavour => !noteChildren.includes(flavour))) {
+    noteSchema.model.children = [
+      ...noteChildren,
+      ...customChildren.filter(flavour => !noteChildren.includes(flavour)),
+    ];
   }
   const collection = new DocCollection({ schema });
   collection.meta.initialize();
@@ -83,9 +95,13 @@ type TextLike = {
 };
 
 type CoppermindBlockModel = BlockModel & {
+  executionCount?: number | null;
   displayMode?: string;
   height?: number;
   heightMode?: CoppermindInkHeightMode;
+  language?: string;
+  lastExecutionStatus?: CoppermindCodeCellLastExecutionStatus;
+  outputsData?: string;
   stackState?: CoppermindInkStackState;
   strokeData?: string;
   text?: TextLike;
@@ -112,11 +128,33 @@ const getInkCellChild = (note: BlockModel) => (
   note.children.find(child => child.flavour === coppermindInkCellFlavour)
 );
 
+const getCodeCellChild = (note: BlockModel) => (
+  note.children.find(child => child.flavour === coppermindCodeCellFlavour)
+);
+
 const isInkSection = (note: BlockModel) => Boolean(getInkCellChild(note));
+
+const isCodeSection = (note: BlockModel) => Boolean(getCodeCellChild(note));
 
 const getInkCellModel = (block: BlockModel | undefined) => (
   block ? asCoppermindBlockModel(block) : undefined
 );
+
+const getCodeCellModel = (block: BlockModel | undefined) => (
+  block ? asCoppermindBlockModel(block) : undefined
+);
+
+export const getCoppermindCodeCellBlockForSection = (doc: Doc, sectionId: string) => {
+  const section = doc.getBlockById(sectionId);
+  if (!section || section.flavour !== 'affine:note') return undefined;
+  return getCodeCellModel(getCodeCellChild(section));
+};
+
+export const getCoppermindCodeCellBlock = (doc: Doc, blockId: string) => {
+  const block = doc.getBlockById(blockId);
+  if (!block || block.flavour !== coppermindCodeCellFlavour) return undefined;
+  return getCodeCellModel(block);
+};
 
 const getInkSectionHeight = (note: BlockModel) => {
   const inkCell = getInkCellModel(getInkCellChild(note));
@@ -147,6 +185,14 @@ const blockHasAuthoredContent = (block: BlockModel): boolean => {
   if (block.flavour === coppermindInkCellFlavour) {
     return getCoppermindInkStrokeCount(asCoppermindBlockModel(block).strokeData) > 0;
   }
+  if (block.flavour === coppermindCodeCellFlavour) {
+    const model = asCoppermindBlockModel(block);
+    return Boolean(
+      getCoppermindCodeCellSource(model).trim()
+      || getCoppermindCodeCellOutputCount(model.outputsData) > 0
+      || normalizeCoppermindCodeCellLastExecutionStatus(model.lastExecutionStatus),
+    );
+  }
   if (getBlockText(block)) return true;
   if (block.flavour !== 'affine:paragraph' && block.flavour !== 'affine:list') return true;
   return block.children.some(blockHasAuthoredContent);
@@ -154,6 +200,14 @@ const blockHasAuthoredContent = (block: BlockModel): boolean => {
 
 const getSectionTitle = (note: BlockModel, index: number) => {
   if (isInkSection(note)) return `Ink Cell ${index + 1}`;
+  const codeCell = getCodeCellModel(getCodeCellChild(note));
+  if (codeCell) {
+    const sourceLine = getCoppermindCodeCellSource(codeCell)
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .find(Boolean);
+    return sourceLine ? sourceLine.slice(0, 48) : `Code Cell ${index + 1}`;
+  }
 
   const heading = note.children.find(child => {
     const model = asCoppermindBlockModel(child);
@@ -277,7 +331,7 @@ export const getCoppermindBlockSuiteSections = (doc: Doc): CoppermindBlockSuiteS
     heightMode: isInkSection(note) ? getInkHeightMode(note) : undefined,
     id: note.id,
     isEmpty: !note.children.some(blockHasAuthoredContent),
-    kind: isInkSection(note) ? 'ink' : 'blocks',
+    kind: isInkSection(note) ? 'ink' : isCodeSection(note) ? 'code' : 'blocks',
     placement: getSectionPlacement(note),
     stackState: getInkStackState(note),
     title: getSectionTitle(note, index),
@@ -324,6 +378,12 @@ export const addCoppermindBlockSuiteBlocksSection = (doc: Doc) => {
 export const addCoppermindBlockSuiteInkSection = (doc: Doc) => {
   const noteId = addCoppermindBlockSuiteSectionNote(doc);
   doc.addBlock(coppermindInkCellFlavour, {}, noteId);
+  return noteId;
+};
+
+export const addCoppermindBlockSuiteCodeSection = (doc: Doc) => {
+  const noteId = addCoppermindBlockSuiteSectionNote(doc);
+  doc.addBlock(coppermindCodeCellFlavour, {}, noteId);
   return noteId;
 };
 

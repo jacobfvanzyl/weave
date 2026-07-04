@@ -1923,6 +1923,8 @@ export const UnifiedEditorPanel = ({
           isCellsSidebarOpen={isCoppermindCellsSidebarVisible}
           onCellsSidebarMouseEnter={openCoppermindCellsSidebarPreview}
           onCellsSidebarMouseLeave={scheduleCoppermindCellsSidebarPreviewClose}
+          path={openBuffer.path}
+          target={editorTarget}
           value={openBuffer.value}
           onChange={setActiveBufferValue}
         />

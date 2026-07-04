@@ -2,6 +2,7 @@ import { mountRoute } from '../../server/routes';
 import { registerAgentContribution } from '../../agent/contributions';
 import type { ServerModule } from '../types';
 import { productProjectRoutes } from '../code/routes/projects';
+import { notesJupyterRoutes } from './jupyter-routes';
 
 const notesProjectPath = (path: string) =>
   path === '/code/projects' ? '/notes/projects'
@@ -31,5 +32,6 @@ export const notesModule: ServerModule = {
       const canonicalPath = notesProjectPath(route.path);
       if (canonicalPath) mountRoute(app, route, { canonicalPath });
     }
+    for (const route of notesJupyterRoutes) mountRoute(app, route);
   },
 };

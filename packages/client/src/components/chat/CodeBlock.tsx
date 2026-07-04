@@ -1,9 +1,6 @@
-import { syntaxHighlighting } from "@codemirror/language";
-import { EditorState, type Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
+import { createCodeMirrorSurface } from "../../lib/codemirror-surface";
 import { getCodeMirrorLanguageExtensions } from "../../lib/codemirror-languages";
-import { weaveHighlightStyle } from "../../lib/codemirror-theme";
 
 const codeFenceLanguagePaths: Record<string, string> = {
   cjs: "snippet.cjs",
@@ -24,6 +21,8 @@ const codeFenceLanguagePaths: Record<string, string> = {
   mdx: "snippet.mdx",
   mjs: "snippet.mjs",
   mts: "snippet.mts",
+  py: "snippet.py",
+  python: "snippet.py",
   sass: "snippet.sass",
   scss: "snippet.scss",
   svg: "snippet.svg",
@@ -102,54 +101,6 @@ export const shouldDeferCodeFenceHighlight = (
   deferHighlight: boolean,
 ) => deferHighlight && !isCompleteMarkdownCodeFence(source, position);
 
-const chatCodeBlockTheme = EditorView.theme({
-  "&": {
-    backgroundColor: "transparent",
-    color: "inherit",
-  },
-  "&.cm-focused": {
-    outline: "none",
-  },
-  ".cm-scroller": {
-    fontFamily: "var(--font-code)",
-    fontSize: "inherit",
-    lineHeight: "inherit",
-    overflow: "auto",
-  },
-  ".cm-content": {
-    caretColor: "transparent",
-    minHeight: "0",
-    padding: "0",
-  },
-  ".cm-line": {
-    padding: "0",
-  },
-  ".cm-cursor, .cm-dropCursor": {
-    display: "none",
-  },
-  ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
-    background: "var(--weave-editor-selection)",
-  },
-});
-
-const createReadOnlyExtensions = (
-  languageExtensions: Extension[],
-  highlight: boolean,
-) => [
-  EditorState.readOnly.of(true),
-  EditorView.editable.of(false),
-  EditorView.editorAttributes.of({
-    "data-weave-chat-code-block": "true",
-  }),
-  EditorView.contentAttributes.of({
-    "aria-label": "Code block",
-    tabindex: "-1",
-  }),
-  chatCodeBlockTheme,
-  ...(highlight ? [syntaxHighlighting(weaveHighlightStyle)] : []),
-  ...languageExtensions,
-];
-
 export const CodeBlock = ({
   children,
   className,
@@ -162,28 +113,33 @@ export const CodeBlock = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const code = String(children).replace(/\n$/, "");
   const fencePath = getCodeMirrorFencePath(className);
-  const languageExtensions = useMemo(
-    () =>
-      fencePath && !deferHighlight
-        ? getCodeMirrorLanguageExtensions(fencePath)
-        : [],
-    [deferHighlight, fencePath],
-  );
-  const shouldHighlight = !deferHighlight && languageExtensions.length > 0;
+  const shouldHighlight = canHighlightCodeFence(className, deferHighlight);
   const shouldRenderCodeMirror = Boolean(fencePath);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !shouldRenderCodeMirror) return undefined;
 
-    const view = new EditorView({
-      doc: code,
+    const surface = createCodeMirrorSurface({
+      value: code,
       parent: container,
-      extensions: createReadOnlyExtensions(languageExtensions, shouldHighlight),
+      path: fencePath,
+      readOnly: true,
+      theme: "inline",
+      basicSetup: false,
+      lineWrapping: false,
+      highlight: shouldHighlight,
+      attributes: {
+        "data-weave-chat-code-block": "true",
+      },
+      contentAttributes: {
+        "aria-label": "Code block",
+        tabindex: "-1",
+      },
     });
 
-    return () => view.destroy();
-  }, [code, languageExtensions, shouldHighlight, shouldRenderCodeMirror]);
+    return () => surface.destroy();
+  }, [code, fencePath, shouldHighlight, shouldRenderCodeMirror]);
 
   if (!shouldRenderCodeMirror) {
     return <code className={className}>{children}</code>;

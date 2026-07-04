@@ -1,4 +1,5 @@
 import { isLspClientEnvelope, PortalLspHost } from './lsp.ts';
+import { isJupyterClientEnvelope, PortalJupyterHost } from './jupyter.ts';
 import { isTerminalClientEnvelope, PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
 import {
   isWorkspaceFileWatchClientEnvelope,
@@ -1057,6 +1058,7 @@ const handleToolCall = async (
   config: ResolvedPortalConfig,
   workspaceFileHost: PortalWorkspaceFileHost,
   lspHost: PortalLspHost,
+  jupyterHost: PortalJupyterHost,
   windowHost: PortalWindowHost,
   ws: WebSocket,
   request: Record<string, unknown>,
@@ -1097,6 +1099,12 @@ const handleToolCall = async (
       ? await lspHost.createSession(workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['createSession']>[0])
       : request.tool === 'portal.lsp.query'
       ? await lspHost.query(workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['query']>[0])
+      : request.tool === 'portal.jupyter.status'
+      ? await jupyterHost.status(workspaceFileInputFromToolCall(request))
+      : request.tool === 'portal.jupyter.kernelspecs'
+      ? await jupyterHost.kernelspecs(workspaceFileInputFromToolCall(request))
+      : request.tool === 'portal.jupyter.session'
+      ? await jupyterHost.createSession(workspaceFileInputFromToolCall(request) as Parameters<PortalJupyterHost['createSession']>[0])
       : request.tool === 'portal.window.list'
       ? await windowHost.list()
       : request.tool === 'portal.applications.list'
@@ -1173,6 +1181,10 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'portal.lsp',
     'portal.lsp.session',
     'portal.lsp.query',
+    'portal.jupyter.status',
+    'portal.jupyter.kernelspecs',
+    'portal.jupyter.session',
+    'portal.jupyter.execute',
     'portal.fs.index',
     'portal.fs.upload',
     'portal.fs.browse',
@@ -1217,6 +1229,7 @@ const connectOnce = (
   terminalHost: PortalTerminalHost,
   workspaceFileHost: PortalWorkspaceFileHost,
   lspHost: PortalLspHost,
+  jupyterHost: PortalJupyterHost,
   windowHost: PortalWindowHost,
   onSocket?: (ws: WebSocket) => void,
 ) =>
@@ -1294,8 +1307,15 @@ const connectOnce = (
         return;
       }
 
+      if (isJupyterClientEnvelope(message)) {
+        void jupyterHost.handleClientMessage(message.clientId, message.message, (jupyterEvent) => {
+          ws.send(JSON.stringify({ type: 'jupyter.event', clientId: message.clientId, event: jupyterEvent }));
+        });
+        return;
+      }
+
       if (message.type === 'tool.call') {
-        void handleToolCall(config, workspaceFileHost, lspHost, windowHost, ws, message);
+        void handleToolCall(config, workspaceFileHost, lspHost, jupyterHost, windowHost, ws, message);
       }
     };
 
@@ -1313,6 +1333,7 @@ const connectOnce = (
       workspaceFileHost.detachClientsByPrefix('relay-workspace-file-watch:');
       windowHost.detachClientsByPrefix('window:');
       lspHost.detachClientsByPrefix('relay-lsp:');
+      jupyterHost.detachClientsByPrefix('relay-jupyter:');
       console.log(`Socket closed: ${event.code} ${event.reason}`.trim());
       logPortalPerfEvent('socket_close', {
         origin: url.origin,
@@ -1359,6 +1380,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   const terminalHost = new PortalTerminalHost({ config });
   const workspaceFileHost = new PortalWorkspaceFileHost({ config });
   const lspHost = new PortalLspHost({ config });
+  const jupyterHost = new PortalJupyterHost({ config });
   const windowHost = new PortalWindowHost({ config });
   const controlToken = noControl ? undefined : stringFlag(flags, 'control-token') ?? crypto.randomUUID();
   const controlPort = noControl ? undefined : numberFlag(flags, 'control-port') ?? 0;
@@ -1404,6 +1426,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
       terminalHost.dispose();
       workspaceFileHost.dispose();
       await lspHost.dispose();
+      await jupyterHost.dispose();
       windowHost.dispose();
       activeSocket?.close();
       if (controlServer) await controlServer.shutdown().catch(() => undefined);
@@ -1480,7 +1503,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
 
   while (!stopping) {
     try {
-      await connectOnce(config, terminalHost, workspaceFileHost, lspHost, windowHost, (ws) => {
+      await connectOnce(config, terminalHost, workspaceFileHost, lspHost, jupyterHost, windowHost, (ws) => {
         activeSocket = ws;
       });
       retryMs = 1_000;

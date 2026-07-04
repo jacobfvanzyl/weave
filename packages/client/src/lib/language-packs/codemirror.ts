@@ -4,6 +4,7 @@ import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { python } from "@codemirror/lang-python";
 import { yaml } from "@codemirror/lang-yaml";
 import { dart } from "../codemirror-dart";
 import {
@@ -127,6 +128,11 @@ const codeMirrorLanguagePacks = [
     id: "dart",
     syntaxProvider: "vendored-lezer",
     support: (_filePath, pack) => withPackCommentData(pack, [dart()]),
+  }),
+  defineCodeMirrorLanguagePack({
+    id: "python",
+    syntaxProvider: "codemirror-lezer",
+    support: (_filePath, pack) => withPackCommentData(pack, [python()]),
   }),
   defineCodeMirrorLanguagePack({
     id: "yaml",
