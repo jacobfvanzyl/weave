@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, Code2, MessageSquare, MonitorUp, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
+import { Bell, Code2, MessageSquare, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
 import {
   getClientAppDefinition,
@@ -34,7 +34,6 @@ import { GlobalTerminalOverlay } from '../terminal/GlobalTerminalOverlay';
 import { TerminalPaneHost } from '../terminal/TerminalPaneHost';
 import type { TerminalPanelTab, TerminalPanelTabsChange, TerminalPanelTarget } from '../terminal/TerminalPanel';
 import type { TerminalTargetInput, TerminalTransport, TerminalWindowRecord } from '../../lib/terminal-types';
-import { WindowStreamOverlayHost } from '../window-stream/WindowStreamOverlayHost';
 import { NotificationHost } from '../notifications/NotificationHost';
 import { shouldCloseUnavailableTerminalPane } from './terminal-pane-availability';
 import { ContextBreadcrumb } from '../workspace/ContextBreadcrumb';
@@ -156,7 +155,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     activeThreadId,
     hasChatPaneTarget: hasWorkspaceChatPaneTarget,
     hasThreadTitle,
-    onlinePortals,
     projects,
     projectsQuery,
   } = workspaceTargets;
@@ -193,14 +191,13 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const hasCodeSurfaceContext = isActiveSurfaceSupported && activeSurfaceProduct === 'code';
   const editorTarget = hasCodeSurfaceContext ? workspaceTargets.editorTarget : undefined;
   const notesTarget = isActiveSurfaceSupported && activeSurfaceProduct === 'notes' ? workspaceTargets.notesTarget : undefined;
-  const rawGeneralTerminalTarget = hasCodeSurfaceContext ? workspaceTargets.generalTerminalTarget : undefined;
+  const rawGeneralTerminalTarget = workspaceTargets.generalTerminalTarget;
   const generalTerminalTarget = useMemo(() => rawGeneralTerminalTarget ? ({
     ...rawGeneralTerminalTarget,
     title: `${clientApp.displayName} Terminal`,
   }) : undefined, [clientApp.displayName, rawGeneralTerminalTarget]);
   const terminalTarget = hasCodeSurfaceContext ? workspaceTargets.terminalTarget : undefined;
-  const hasWindowStreamPortal = hasCodeSurfaceContext && workspaceTargets.hasWindowStreamPortal;
-  const canShowWindowStream = hasWindowStreamPortal;
+  const showGlobalTerminalButton = true;
   const activeSurfaceKey = activeSurface.kind === 'thread'
     ? `thread:${activeSurface.threadId}`
     : `workspace:${activeSurface.projectId}:${activeSurface.workspaceId}`;
@@ -291,6 +288,10 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const setWindowStreamOpen = useAppShellStore(state => state.setWindowStreamOpen);
   const isWindowStreamActive = useAppShellStore(state => state.isWindowStreamActive);
   const setWindowStreamActive = useAppShellStore(state => state.setWindowStreamActive);
+  useEffect(() => {
+    if (isWindowStreamOpen) setWindowStreamOpen(false);
+    if (isWindowStreamActive) setWindowStreamActive(false);
+  }, [isWindowStreamActive, isWindowStreamOpen, setWindowStreamActive, setWindowStreamOpen]);
   const windowSurfaces = useShellLayout({
     editorTargetKey: sideEditorTargetKey,
     hasEditorTarget: hasEditorPaneTarget,
@@ -823,8 +824,8 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     workspaceTargets.portalsQuery.isFetched,
   ]);
   const isSidebarSurfaceVisible = isSidebarOpen || showSidebarPreview;
-  const hasFloatingLeftAction = showHeaderSidebarToggle || showPinnedSidebarToggle || Boolean(generalTerminalTarget) || canShowWindowStream;
-  const hasHeaderLeftAction = showHeaderSidebarToggle || Boolean(generalTerminalTarget) || canShowWindowStream;
+  const hasFloatingLeftAction = showHeaderSidebarToggle || showPinnedSidebarToggle || showGlobalTerminalButton;
+  const hasHeaderLeftAction = showHeaderSidebarToggle || showGlobalTerminalButton;
   const shouldRenderFloatingLeftActions = (isElectronWindow || isSidebarSurfaceVisible)
     && hasFloatingLeftAction;
   const shouldRenderHeaderLeftActions = !isElectronWindow
@@ -867,37 +868,29 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       <Bell size={18} />
     </Button>
   );
-  const renderGeneralTerminalButton = () => generalTerminalTarget ? (
-    <Button
-      className={[
-        isGeneralTerminalOpen ? 'bg-accent' : '',
-        isGeneralTerminalActive ? 'text-foreground' : '',
-      ].filter(Boolean).join(' ')}
-      size="icon"
-      variant="ghost"
-      aria-label={isGeneralTerminalOpen ? 'Hide general terminal' : 'Show general terminal'}
-      data-active={isGeneralTerminalOpen ? 'true' : 'false'}
-      onClick={handleGeneralTerminalToggle}
-    >
-      <TerminalSquare size={18} />
-      <TerminalTabCountBadge count={generalTerminalTabs.length} />
-    </Button>
-  ) : null;
-  const renderWindowStreamButton = () => canShowWindowStream ? (
-    <Button
-      className={[
-        isWindowStreamOpen ? 'bg-accent' : '',
-        isWindowStreamActive ? 'text-foreground' : '',
-      ].filter(Boolean).join(' ')}
-      size="icon"
-      variant="ghost"
-      aria-label={isWindowStreamOpen ? 'Hide window stream' : 'Show window stream'}
-      data-active={isWindowStreamOpen || isWindowStreamActive ? 'true' : 'false'}
-      onClick={() => setWindowStreamOpen(!isWindowStreamOpen)}
-    >
-      <MonitorUp size={18} />
-    </Button>
-  ) : null;
+  const renderGeneralTerminalButton = () => {
+    const isAvailable = Boolean(generalTerminalTarget);
+    const isOpen = isAvailable && isGeneralTerminalOpen;
+
+    return showGlobalTerminalButton ? (
+      <Button
+        className={[
+          isOpen ? 'bg-accent' : '',
+          isAvailable && isGeneralTerminalActive ? 'text-foreground' : '',
+        ].filter(Boolean).join(' ')}
+        size="icon"
+        variant="ghost"
+        aria-label={isOpen ? 'Hide general terminal' : 'Show general terminal'}
+        data-active={isOpen ? 'true' : 'false'}
+        disabled={!isAvailable}
+        onClick={handleGeneralTerminalToggle}
+        title={isAvailable ? undefined : 'Global terminal unavailable'}
+      >
+        <TerminalSquare size={18} />
+        <TerminalTabCountBadge count={generalTerminalTabs.length} />
+      </Button>
+    ) : null;
+  };
   const renderProductNavigation = () => {
     const products = getClientAppNavigationProducts(clientApp);
     if (products.length <= 1) return undefined;
@@ -1044,7 +1037,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       {showHeaderSidebarToggle ? renderSidebarToggleButton() : null}
       {showHeaderSidebarToggle ? renderTestNotificationButton() : null}
       {renderGeneralTerminalButton()}
-      {renderWindowStreamButton()}
     </>
   ) : undefined;
   const headerRightActions = (
@@ -1166,7 +1158,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
           {showHeaderSidebarToggle || showPinnedSidebarToggle ? renderSidebarToggleButton() : null}
           {showHeaderSidebarToggle || showPinnedSidebarToggle ? renderTestNotificationButton() : null}
           {renderGeneralTerminalButton()}
-          {renderWindowStreamButton()}
         </div>
       ) : null}
       <WorkspaceMainContent
@@ -1197,13 +1188,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
         tabs={generalTerminalTabs}
         target={generalTerminalTarget}
         transport={terminalTransport}
-      />
-      <WindowStreamOverlayHost
-        isActive={canShowWindowStream && isWindowStreamActive}
-        isOpen={canShowWindowStream && isWindowStreamOpen}
-        portals={onlinePortals}
-        onHide={() => setWindowStreamOpen(false)}
-        onSessionActiveChange={setWindowStreamActive}
       />
     </div>
     </ShortcutProvider>

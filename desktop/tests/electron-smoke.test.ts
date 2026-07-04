@@ -383,6 +383,7 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     const codeWorkspaceTitle = sidebar.getByRole('button', { name: /main/ }).first();
     const codeWorkspaceThread = sidebar.getByRole('button', { name: /^Code workspace thread$/ });
     const notesProjectThread = sidebar.getByRole('button', { name: /^Notes project thread$/ });
+    const windowStreamShell = page.locator('[data-weave-window-stream-shell]');
     const hasSelectedHighlight = (locator: Locator) => locator.evaluate(element => {
       if (element.classList.contains('bg-selected-thread')) return true;
       let current = element.parentElement;
@@ -398,9 +399,10 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
       await page.getByRole('button', { name: 'Show sidebar' }).first().click();
       await sidebar.waitFor({ timeout: 5_000 });
     };
-    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toBeVisible();
     await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toHaveCount(0);
     await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
+    await playwrightExpect(windowStreamShell).toHaveCount(0);
 
     await codeWorkspaceTitle.click({ force: true });
     await playwrightExpect(appBarBreadcrumb).toBeVisible({ timeout: 5_000 });
@@ -412,7 +414,8 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await generalTerminalToggle.waitFor({ timeout: 5_000 });
     await playwrightExpect(generalTerminalToggle.locator('[data-weave-terminal-count-badge]')).toHaveCount(0);
     await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toBeVisible();
-    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toBeVisible();
+    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
+    await playwrightExpect(windowStreamShell).toHaveCount(0);
 
     await codeWorkspaceThread.click({ force: true });
     await playwrightExpect(appHeader.getByRole('button', { name: 'Hide chat' })).toBeVisible();
@@ -431,7 +434,7 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await appHeader.getByRole('button', { name: 'Hide chat' }).click();
     expect(await hasSelectedHighlight(notesProjectThread)).toBe(false);
     expect(await hasSelectedHighlight(notesVaultTitle)).toBe(true);
-    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toBeVisible();
     await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toHaveCount(0);
     await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
     await playwrightExpect(appHeader.getByRole('button', { name: 'Hide notes' })).toBeVisible();
@@ -439,7 +442,7 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await sidebar.getByRole('button', { name: /^Loose thought$/ }).click({ force: true });
     await playwrightExpect(appBarBreadcrumb).toContainText('Loose thought');
     await playwrightExpect(page.locator('[data-weave-main-pane="chat"] [data-weave-context-breadcrumb]')).toHaveCount(0);
-    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toHaveCount(0);
+    await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toBeVisible();
     await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toHaveCount(0);
     await playwrightExpect(page.getByRole('button', { name: 'Hide notes' })).toHaveCount(0);
     await playwrightExpect(page.getByRole('button', { name: 'Show notes' })).toHaveCount(0);
