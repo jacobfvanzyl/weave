@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendJupyterOutput,
   type CoppermindCodeCellOutput,
+  extractJupyterMarkdownImage,
   getJupyterAnsiPlainText,
   getJupyterOutputRendererKind,
   parseCoppermindCodeCellOutputs,
@@ -200,5 +201,48 @@ describe("Jupyter output normalization", () => {
       "html",
       "text",
     ]);
+  });
+
+  it("recognizes standalone Markdown data-image outputs", () => {
+    const output = appendJupyterOutput([], {
+      output_type: "display_data",
+      data: {
+        "text/markdown":
+          "![Sample Visualization](data:image/png;base64,iVBORw0KGgo=)",
+      },
+    }, "out:markdown-image")[0];
+    if (!output || output.output_type !== "display_data") {
+      throw new Error("expected display_data output");
+    }
+
+    expect(getJupyterOutputRendererKind(output)).toBe("markdown");
+    expect(extractJupyterMarkdownImage(output.data["text/markdown"]))
+      .toEqual({
+        alt: "Sample Visualization",
+        src: "data:image/png;base64,iVBORw0KGgo=",
+      });
+
+    const parsed = parseCoppermindCodeCellOutputs(
+      serializeCoppermindCodeCellOutputs([output]),
+    );
+    const parsedOutput = parsed.outputs[0];
+    if (!parsedOutput || parsedOutput.output_type !== "display_data") {
+      throw new Error("expected parsed display_data output");
+    }
+    expect(
+      extractJupyterMarkdownImage(parsedOutput.data["text/markdown"]),
+    ).toEqual({
+      alt: "Sample Visualization",
+      src: "data:image/png;base64,iVBORw0KGgo=",
+    });
+  });
+
+  it("leaves unsupported Markdown outputs in fallback mode", () => {
+    expect(extractJupyterMarkdownImage("**bold** text")).toBeUndefined();
+    expect(
+      extractJupyterMarkdownImage(
+        "![Remote image](https://example.com/plot.png)",
+      ),
+    ).toBeUndefined();
   });
 });

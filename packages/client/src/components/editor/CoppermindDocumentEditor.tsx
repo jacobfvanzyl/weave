@@ -69,6 +69,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -130,6 +131,7 @@ import {
   coppermindPageCellPaddingPx,
   coppermindPageEndScrollPaddingPx,
 } from "../../lib/coppermind-layout";
+import { getClientAppStorageItem, setClientAppStorageItem } from "../../lib/client-app";
 import { cn } from "../../lib/cn";
 import type { EditorTarget } from "../../lib/editor-types";
 import {
@@ -2374,7 +2376,7 @@ const CoppermindSectionOutline = ({
                       {({ attributes, listeners, ref }) => (
                         <div
                           className={cn(
-                            "group flex min-h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground",
+                            "group mx-1 flex min-h-9 items-center gap-1 rounded-md border border-transparent px-1.5 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground",
                             !isActive && "hover:border-border",
                             hasHoverFill && "hover:bg-accent/70",
                             isCanvasMode && isPlaced &&
@@ -2422,7 +2424,7 @@ const CoppermindSectionOutline = ({
                             title="Drag to reorder cell"
                             size="icon-xs"
                             variant="ghost"
-                            className="cursor-grab touch-none select-none text-muted-foreground/60 hover:text-foreground active:cursor-grabbing"
+                            className="size-5 cursor-grab touch-none select-none text-muted-foreground/60 hover:text-foreground active:cursor-grabbing [&_svg]:mx-0"
                             data-coppermind-section-reorder-handle="true"
                             draggable={false}
                             style={{ touchAction: "none" }}
@@ -2445,13 +2447,13 @@ const CoppermindSectionOutline = ({
                           </Button>
                           <button
                             type="button"
-                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                            className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                             onClick={() => {
                               if (!isSelectable) return;
                               onSelectSection(section.id);
                             }}
                           >
-                            <span className="w-5 shrink-0 text-[11px] tabular-nums text-muted-foreground/75">
+                            <span className="w-4 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground/75">
                               {index + 1}
                             </span>
                             <RowIcon
@@ -2470,7 +2472,7 @@ const CoppermindSectionOutline = ({
                             size="icon-xs"
                             variant="ghost"
                             className={cn(
-                              "text-muted-foreground hover:text-destructive",
+                              "size-5 text-muted-foreground hover:text-destructive [&_svg]:mx-0",
                               !isCanvasMode &&
                                 "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
                             )}
@@ -2531,6 +2533,41 @@ const findSectionElement = (root: HTMLElement | null, sectionId: string) => (
   Array.from(root?.querySelectorAll<HTMLElement>("[data-block-id]") ?? [])
     .find((element) => element.dataset.blockId === sectionId)
 );
+
+const coppermindPageActiveSectionStorageKeyPrefix =
+  "weave.editor.coppermind-page-active-section.v1";
+
+const getCoppermindPageActiveSectionStorageKey = (
+  target: EditorTarget | undefined,
+  path: string | undefined,
+) => {
+  const normalizedPath = path?.trim();
+  if (!normalizedPath) return undefined;
+  return `${coppermindPageActiveSectionStorageKeyPrefix}:${
+    JSON.stringify({ path: normalizedPath, target: target ?? null })
+  }`;
+};
+
+const readCoppermindPageActiveSectionId = (storageKey: string | undefined) => {
+  if (!storageKey) return undefined;
+  try {
+    return getClientAppStorageItem(storageKey) ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const writeCoppermindPageActiveSectionId = (
+  storageKey: string | undefined,
+  sectionId: string,
+) => {
+  if (!storageKey) return;
+  try {
+    setClientAppStorageItem(storageKey, sectionId);
+  } catch {
+    // Storage persistence is best effort; in-memory selection still applies.
+  }
+};
 
 export const CoppermindDocumentEditor = forwardRef<
   CoppermindDocumentEditorHandle,
@@ -2593,6 +2630,10 @@ export const CoppermindDocumentEditor = forwardRef<
   );
   const shellRef = useRef<HTMLDivElement | null>(null);
   const jupyterTargetKey = JSON.stringify(target ?? null);
+  const pageActiveSectionStorageKey = useMemo(
+    () => getCoppermindPageActiveSectionStorageKey(target, path),
+    [path, target],
+  );
 
   useImperativeHandle(ref, () => ({
     getSnapshot: () => {
@@ -3545,7 +3586,8 @@ export const CoppermindDocumentEditor = forwardRef<
       return;
     }
 
-    setMode(normalizeMode(nextDocument.ui.lastMode));
+    const nextMode = normalizeMode(nextDocument.ui.lastMode);
+    setMode(nextMode);
     setLoadedState({ status: "loading" });
 
     void importCoppermindBlockSuiteRuntime(nextDocument.blocksuite.snapshot)
@@ -3564,8 +3606,18 @@ export const CoppermindDocumentEditor = forwardRef<
           runtime,
         });
         const nextSections = getCoppermindBlockSuiteSections(runtime.doc);
+        const persistedActiveSectionId = nextMode === "page"
+          ? readCoppermindPageActiveSectionId(pageActiveSectionStorageKey)
+          : undefined;
+        const nextActiveSectionId =
+          persistedActiveSectionId &&
+            nextSections.some((section) =>
+              section.id === persistedActiveSectionId
+            )
+            ? persistedActiveSectionId
+            : nextSections[0]?.id;
         setSections(nextSections);
-        setActiveSectionId(nextSections[0]?.id);
+        setActiveSectionId(nextActiveSectionId);
       })
       .catch((error) => {
         if (loadTokenRef.current !== token) return;
@@ -3574,7 +3626,7 @@ export const CoppermindDocumentEditor = forwardRef<
           message: getErrorMessage(error),
         });
       });
-  }, [value]);
+  }, [pageActiveSectionStorageKey, value]);
 
   useEffect(() => () => {
     loadTokenRef.current += 1;
@@ -3633,6 +3685,28 @@ export const CoppermindDocumentEditor = forwardRef<
     if (loadedState.status !== "ready") return;
     refreshSections();
   }, [loadedState.status, mode, refreshSections]);
+
+  useEffect(() => {
+    if (
+      loadedState.status !== "ready" ||
+      mode !== "page" ||
+      !activeSectionId ||
+      !sections.some((section) => section.id === activeSectionId)
+    ) {
+      return;
+    }
+
+    writeCoppermindPageActiveSectionId(
+      pageActiveSectionStorageKey,
+      activeSectionId,
+    );
+  }, [
+    activeSectionId,
+    loadedState.status,
+    mode,
+    pageActiveSectionStorageKey,
+    sections,
+  ]);
 
   useEffect(() => {
     if (mode !== "page" || loadedState.status !== "ready") return;

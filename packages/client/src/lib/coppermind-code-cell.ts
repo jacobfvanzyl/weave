@@ -12,6 +12,7 @@ import { createCodeMirrorSurface } from "./codemirror-surface";
 import {
   appendJupyterOutput,
   type CoppermindCodeCellOutput,
+  extractJupyterMarkdownImage,
   getJupyterOutputRendererKind,
   getMimeBundleText,
   getPreferredMimeType,
@@ -265,6 +266,15 @@ export class CoppermindCodeCellComponent
       --coppermind-code-cell-status-color: var(--info, var(--primary, #3b82f6));
     }
 
+    .coppermind-code-cell-status-badge:is(
+      [data-status="busy"],
+      [data-status="running"]
+    ) {
+      min-width: 18px;
+      padding: 0;
+      width: 18px;
+    }
+
     .coppermind-code-cell-status-badge[data-status="idle"] {
       --coppermind-code-cell-status-color: var(
         --muted-foreground,
@@ -284,6 +294,34 @@ export class CoppermindCodeCellComponent
       display: block;
       height: 7px;
       width: 7px;
+    }
+
+    .coppermind-code-cell-status-spinner {
+      animation: coppermind-code-cell-status-spin 0.8s linear infinite;
+      border: 2px solid
+        color-mix(
+          in srgb,
+          var(--coppermind-code-cell-status-color) 24%,
+          transparent
+        );
+      border-radius: 999px;
+      border-top-color: var(--coppermind-code-cell-status-color);
+      box-sizing: border-box;
+      display: block;
+      height: 12px;
+      width: 12px;
+    }
+
+    @keyframes coppermind-code-cell-status-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .coppermind-code-cell-status-spinner {
+        animation-duration: 1.6s;
+      }
     }
 
     .coppermind-code-cell-run {
@@ -697,6 +735,25 @@ export class CoppermindCodeCellComponent
       `;
     }
     if (kind === "markdown" && mimeType) {
+      const image = extractJupyterMarkdownImage(output.data[mimeType]);
+      if (image) {
+        return html`
+          <div
+            class="coppermind-code-cell-output-item"
+            data-output-kind="${kind}"
+          >
+            ${image.title
+              ? html`
+                <img
+                  alt="${image.alt}"
+                  src="${image.src}"
+                  title="${image.title}"
+                />
+              `
+              : html`<img alt="${image.alt}" src="${image.src}" />`}
+          </div>
+        `;
+      }
       return html`
         <div class="coppermind-code-cell-output-item" data-output-kind="${kind}">
           <pre>${normalizeTextData(output.data[mimeType])}</pre>
@@ -741,6 +798,7 @@ export class CoppermindCodeCellComponent
         : `[${executionCount}]`;
     const hasOutputs = this._currentOutputs.length > 0;
     const statusTone = getCoppermindCodeCellStatusTone(status);
+    const isRunningStatus = statusTone === "busy" || statusTone === "running";
     return html`
       <div
         class="coppermind-code-cell-frame"
@@ -769,7 +827,14 @@ export class CoppermindCodeCellComponent
                 title="${status}"
                 aria-label="Cell status: ${status}"
               >
-                <span class="coppermind-code-cell-status-dot"></span>
+                ${isRunningStatus
+                  ? html`
+                    <span
+                      class="coppermind-code-cell-status-spinner"
+                      aria-hidden="true"
+                    ></span>
+                  `
+                  : html`<span class="coppermind-code-cell-status-dot"></span>`}
               </span>
             `
             : null}

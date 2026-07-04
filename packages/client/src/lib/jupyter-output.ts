@@ -34,6 +34,12 @@ export type JupyterAnsiSegment = {
   text: string;
 };
 
+export type JupyterMarkdownImage = {
+  alt: string;
+  src: string;
+  title?: string;
+};
+
 export const emptyCoppermindCodeCellOutputs =
   (): CoppermindCodeCellOutputsPayload => ({
     outputs: [],
@@ -507,6 +513,33 @@ export const getMimeBundleText = (data: Record<string, unknown>) => {
   const text = data["text/plain"];
   if (Array.isArray(text)) return text.map((item) => String(item)).join("");
   return typeof text === "string" ? text : undefined;
+};
+
+const standaloneMarkdownImagePattern =
+  /^!\[((?:\\.|[^\]\\])*)\]\(\s*(<[^>\n]+>|[^\s)\n]+)(?:\s+(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|\(((?:\\.|[^)\\])*)\)))?\s*\)$/;
+
+const unescapeMarkdownInlineText = (value: string) =>
+  value.replace(/\\([\\[\]()`*_{}#+\-.!])/g, "$1");
+
+export const extractJupyterMarkdownImage = (
+  value: unknown,
+): JupyterMarkdownImage | undefined => {
+  const markdown = toText(value).trim();
+  const match = markdown.match(standaloneMarkdownImagePattern);
+  if (!match) return undefined;
+
+  const source = (match[2] ?? "").trim();
+  const src = source.startsWith("<") && source.endsWith(">")
+    ? source.slice(1, -1).trim()
+    : source;
+  if (!src.toLowerCase().startsWith("data:image/")) return undefined;
+
+  const title = match[3] ?? match[4] ?? match[5];
+  return {
+    alt: unescapeMarkdownInlineText(match[1] ?? ""),
+    src,
+    ...(title ? { title: unescapeMarkdownInlineText(title) } : {}),
+  };
 };
 
 export const getPreferredMimeType = (data: Record<string, unknown>) => {

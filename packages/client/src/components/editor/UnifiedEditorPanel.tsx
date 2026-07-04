@@ -49,6 +49,7 @@ import {
   isEditorPathOpenable,
   resolveEditorDocumentKind,
 } from '../../lib/editor-document-kind';
+import { getClientAppStorageItem, setClientAppStorageItem } from '../../lib/client-app';
 import { createWorkspaceFileBackend, type WorkspaceFileAttachment, type WorkspaceFileIndexResult, type WorkspaceFileNote } from '../../lib/workspace-file-backend';
 import type { EditorEntry, EditorMode, EditorTarget, EditorWatchSubscription, EditorWriteResult, OpenBuffer } from '../../lib/editor-types';
 import { defaultEditorExplorerVisible, getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
@@ -105,6 +106,24 @@ type CoppermindAutosaveRuntimeState = {
 };
 
 type CoppermindAutosaveStatus = 'pending' | 'saving' | 'paused' | 'error';
+
+const coppermindCellsSidebarStorageKey = 'weave.editor.coppermind-cells-sidebar-open.v1';
+
+const readCoppermindCellsSidebarOpen = () => {
+  try {
+    return getClientAppStorageItem(coppermindCellsSidebarStorageKey) !== 'false';
+  } catch {
+    return true;
+  }
+};
+
+const writeCoppermindCellsSidebarOpen = (open: boolean) => {
+  try {
+    setClientAppStorageItem(coppermindCellsSidebarStorageKey, open ? 'true' : 'false');
+  } catch {
+    // Storage persistence is best effort; the in-memory toggle still applies.
+  }
+};
 
 type SaveBufferSnapshotInput = {
   buffer: EditorBuffer;
@@ -612,7 +631,7 @@ export const UnifiedEditorPanel = ({
   const [isSaving, setIsSaving] = useState(false);
   const [coppermindAutosaveStatusByTabId, setCoppermindAutosaveStatusByTabId] = useState<Record<string, CoppermindAutosaveStatus | undefined>>({});
   const [isExplorerSlideOverOpen, setIsExplorerSlideOverOpen] = useState(false);
-  const [isCoppermindCellsSidebarOpen, setIsCoppermindCellsSidebarOpen] = useState(true);
+  const [isCoppermindCellsSidebarOpen, setIsCoppermindCellsSidebarOpen] = useState(readCoppermindCellsSidebarOpen);
   const [isCoppermindCellsSidebarPreviewOpen, setIsCoppermindCellsSidebarPreviewOpen] = useState(false);
   const [vimMode, setVimMode] = useState<VimMode>('normal');
   const [createPathDialog, setCreatePathDialog] = useState<CreatePathDialogState>();
@@ -957,7 +976,11 @@ export const UnifiedEditorPanel = ({
   const toggleCoppermindCellsSidebar = useCallback(() => {
     clearCoppermindCellsSidebarPreviewCloseTimeout();
     setIsCoppermindCellsSidebarPreviewOpen(false);
-    setIsCoppermindCellsSidebarOpen(current => !current);
+    setIsCoppermindCellsSidebarOpen(current => {
+      const next = !current;
+      writeCoppermindCellsSidebarOpen(next);
+      return next;
+    });
   }, [clearCoppermindCellsSidebarPreviewCloseTimeout]);
 
   const holdExplorerSlideOverForWindowEdgeExit = useCallback(() => {
