@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { productProjectRepository } from '../../../products/project-repository';
-import { listPortalConnections, requestPortalTool, resolvePortalForTarget } from '../../../portal/registry';
 import { portalRepository } from '../../../portal/store';
+import { portalToolScope, type PortalToolTarget } from '../../../services/providers/portal-provider';
+import { toolService } from '../../../services/tool-runtime';
+import { callerForOwner, ServiceError } from '../../../services/types';
 import { registerResolvedContextSkills } from './skill-source';
 
 export type WeaveContextFileKind = 'config' | 'mcp' | 'prompt' | 'skill' | 'agents';
@@ -114,17 +116,25 @@ const getPrimaryPortalId = async (memory: any, resourceId: string) => {
 };
 
 const discoverPortalContext = async (
-  portalId: string,
+  resourceId: string,
+  target: PortalToolTarget,
   scope: 'global' | 'project',
   args: Record<string, unknown> = {},
 ) => {
-  const result = await requestPortalTool({
-    portalId,
-    ...(typeof args.projectId === 'string' ? { projectId: args.projectId } : {}),
-    ...(typeof args.workspaceId === 'string' ? { workspaceId: args.workspaceId } : {}),
-    ...(typeof args.rootId === 'string' ? { rootId: args.rootId } : {}),
-    ...(typeof args.repoPath === 'string' ? { repoPath: args.repoPath } : {}),
-    ...(typeof args.workspacePath === 'string' ? { workspacePath: args.workspacePath } : {}),
+  const caller = callerForOwner(resourceId, 'agent');
+  const resolvedTarget = await toolService.resolvePortalTarget(caller, portalToolScope(target));
+  const requestTarget = {
+    ...target,
+    portalId: resolvedTarget.portalId,
+    projectId: optionalString(args.projectId) ?? target.projectId,
+    workspaceId: optionalString(args.workspaceId) ?? target.workspaceId,
+    rootId: optionalString(args.rootId) ?? target.rootId ?? resolvedTarget.rootId,
+    repoPath: optionalString(args.repoPath) ?? target.repoPath,
+    workspacePath: optionalString(args.workspacePath) ?? target.workspacePath,
+  };
+  const result = await toolService.requestPortal({
+    caller,
+    target: requestTarget,
     tool: 'portal.context.discover',
     args: { scope },
     timeoutMs: 10_000,
@@ -145,7 +155,7 @@ const discoverPortalContext = async (
   if (result.ok === false) throw new Error(result.error ?? 'Portal context discovery failed');
   return {
     scope,
-    portalId,
+    portalId: resolvedTarget.portalId,
     basePath: optionalString(result.basePath),
     workspacePath: optionalString(result.workspacePath),
     files: Array.isArray(result.files)
@@ -171,12 +181,8 @@ const loadGlobalSnapshot = async (memory: any, resourceId: string) => {
   if (!stale(cached, globalSnapshotRefreshMs)) return cached;
 
   const primaryPortalId = await getPrimaryPortalId(memory, resourceId);
-  const portals = listPortalConnections(resourceId);
-  const portal = primaryPortalId ? portals.find((item) => item.portalId === primaryPortalId) : portals[0];
-  if (!portal) return cached;
-
   try {
-    const snapshot = await discoverPortalContext(portal.portalId, 'global');
+    const snapshot = await discoverPortalContext(resourceId, { portalId: primaryPortalId }, 'global');
     globalSnapshots.set(resourceId, snapshot);
     return snapshot;
   } catch (error) {
@@ -185,20 +191,27 @@ const loadGlobalSnapshot = async (memory: any, resourceId: string) => {
   }
 };
 
-const resolveProjectPortalId = (
+const resolveProjectPortalId = async (
   resourceId: string,
   project: Record<string, any>,
   workspace: Record<string, any> | undefined,
 ) => {
   const portalId = optionalString(workspace?.portalId) ?? optionalString(project.portalId);
-  return resolvePortalForTarget({
-    userId: resourceId,
-    portalId,
-    projectId: optionalString(project.id),
-    rootId: optionalString(project.portalRootId),
-    repoPath: optionalString(project.repoPath),
-    workspacePath: optionalString(workspace?.path),
-  })?.portalId;
+  try {
+    return (await toolService.resolvePortalTarget(
+      callerForOwner(resourceId, 'agent'),
+      portalToolScope({
+        portalId,
+        projectId: optionalString(project.id),
+        rootId: optionalString(project.portalRootId),
+        repoPath: optionalString(project.repoPath),
+        workspacePath: optionalString(workspace?.path),
+      }),
+    )).portalId;
+  } catch (error) {
+    if (error instanceof ServiceError && error.code === 'provider_offline') return undefined;
+    throw error;
+  }
 };
 
 const loadProjectSnapshot = async (
@@ -214,7 +227,7 @@ const loadProjectSnapshot = async (
   if (!stale(cached, projectSnapshotRefreshMs)) return cached;
 
   try {
-    const snapshot = await discoverPortalContext(portalId, 'project', {
+    const snapshot = await discoverPortalContext(resourceId, { portalId }, 'project', {
       projectId: project.id,
       workspaceId: workspace?.id,
       rootId: project.portalRootId,
@@ -257,7 +270,7 @@ const getProjectContext = async (
   const workspace = Array.isArray(project.workspaces) && typeof threadMetadata.workspaceId === 'string'
     ? project.workspaces.find((item: any) => item?.id === threadMetadata.workspaceId)
     : undefined;
-  const portalId = resolveProjectPortalId(resourceId, project, workspace);
+  const portalId = await resolveProjectPortalId(resourceId, project, workspace);
   const projectSnapshot = await loadProjectSnapshot(resourceId, project, workspace, portalId);
   return {
     thread,

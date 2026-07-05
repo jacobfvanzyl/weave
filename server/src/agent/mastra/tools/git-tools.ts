@@ -29,7 +29,7 @@ const gitOutputSchema = z.object({
 const getGitTarget = async (context: any) => {
   const binding = await getThreadBinding(context);
   if (binding.projectKind !== 'git') throw new Error('Git tools are only available in Git Project Workspace threads.');
-  const portalId = resolvePortalForBinding(binding);
+  const portalId = await resolvePortalForBinding(binding);
   if (!portalId) throw new Error(offlineMessage);
   if (!binding.workspacePath) {
     throw new Error('This Workspace has no local path yet. Create it again or attach an existing location.');

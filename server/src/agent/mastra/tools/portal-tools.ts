@@ -1,8 +1,8 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { productProjectRepository } from '../../../products/project-repository';
-import { resolvePortalForTarget } from '../../../portal/registry';
-import { callerForOwner } from '../../../services/types';
+import { portalToolScope } from '../../../services/providers/portal-provider';
+import { callerForOwner, ServiceError } from '../../../services/types';
 import { toolService } from '../../../services/tool-runtime';
 import {
   type NotesVaultResolverDependencies,
@@ -83,7 +83,7 @@ export const getThreadBinding = async (context: any) => {
 
 export const routePortalTool = async (tool: string, args: unknown, context: any, timeoutMs?: number) => {
   const binding = await getThreadBinding(context);
-  const portalId = resolvePortalForBinding(binding);
+  const portalId = await resolvePortalForBinding(binding);
   if (!portalId) return { ok: false, error: offlineMessage };
 
   return toolService.requestPortal({
@@ -104,15 +104,23 @@ export const routePortalTool = async (tool: string, args: unknown, context: any,
   });
 };
 
-export const resolvePortalForBinding = (binding: Awaited<ReturnType<typeof getThreadBinding>>) =>
-  resolvePortalForTarget({
-    userId: binding.resourceId,
-    portalId: binding.portalId,
-    projectId: binding.projectId,
-    rootId: binding.rootId,
-    repoPath: binding.repoPath,
-    workspacePath: binding.workspacePath,
-  })?.portalId;
+export const resolvePortalForBinding = async (binding: Awaited<ReturnType<typeof getThreadBinding>>) => {
+  try {
+    return (await toolService.resolvePortalTarget(
+      callerForOwner(binding.resourceId, 'agent'),
+      portalToolScope({
+        portalId: binding.portalId,
+        projectId: binding.projectId,
+        rootId: binding.rootId,
+        repoPath: binding.repoPath,
+        workspacePath: binding.workspacePath,
+      }),
+    )).portalId;
+  } catch (error) {
+    if (error instanceof ServiceError && error.code === 'provider_offline') return undefined;
+    throw error;
+  }
+};
 
 type FileToolAction = 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload';
 

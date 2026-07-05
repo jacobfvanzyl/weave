@@ -82,6 +82,9 @@ export class PortalProvider {
       workspacePath: target.workspacePath,
     });
     if (!portal) throw new ServiceError('provider_offline', 'No online Portal is available for this scope.', 400);
+    if (target.portalId && portal.portalId !== target.portalId) {
+      throw new ServiceError('provider_offline', 'Requested Portal is offline or unavailable for this scope.', 400);
+    }
     if (portal.userId !== caller.ownerId) {
       throw new ServiceError('permission_denied', 'Portal is not available for this owner.', 403);
     }
