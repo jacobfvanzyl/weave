@@ -43,6 +43,13 @@ export const notesModule: ServerModule = {
       const canonicalPath = notesProjectPath(route.path);
       if (canonicalPath) mountRoute(app, route, { canonicalPath });
     }
-    for (const route of createNotesJupyterRoutes({ sessions: services.internal.sessions })) mountRoute(app, route);
+    for (
+      const route of createNotesJupyterRoutes({
+        sessions: services.internal.sessions,
+        tools: services.internal.tools,
+      })
+    ) {
+      mountRoute(app, route);
+    }
   },
 };

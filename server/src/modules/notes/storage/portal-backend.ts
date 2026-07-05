@@ -1,6 +1,6 @@
 import { requestPortalTool } from '../../../portal/registry';
 import type { ToolService } from '../../../services/tool-service';
-import { callerForOwner } from '../../../services/types';
+import { callerForOwner, type ServiceCaller } from '../../../services/types';
 import type {
   NotesStorageMetadata,
   NotesVaultBackend,
@@ -19,6 +19,12 @@ export type PortalToolRequester = (input: {
   args: unknown;
   timeoutMs?: number;
 }) => Promise<unknown>;
+
+export type ServicePortalNotesVaultBackendOptions = {
+  callerKind?: ServiceCaller['kind'];
+  correlation?: ServiceCaller['correlation'];
+  createCaller?: (binding: ResolvedNotesVaultBinding) => ServiceCaller;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -85,15 +91,18 @@ export const createPortalNotesVaultBackend = (
 
 const requestServicePortalWorkspaceFileTool = async (
   tools: ToolService,
+  serviceOptions: ServicePortalNotesVaultBackendOptions,
   binding: ResolvedNotesVaultBinding,
   action: 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload',
   args: unknown,
   options?: NotesVaultBackendOptions,
 ) => {
   const storage = assertPortalStorage(binding.storage);
+  const caller = serviceOptions.createCaller?.(binding) ??
+    callerForOwner(binding.resourceId, serviceOptions.callerKind ?? 'ui', serviceOptions.correlation);
   return cleanPortalResult(
     await tools.requestPortal({
-      caller: callerForOwner(binding.resourceId, 'ui'),
+      caller,
       target: {
         portalId: storage.portalId,
         projectId: binding.projectId,
@@ -109,22 +118,25 @@ const requestServicePortalWorkspaceFileTool = async (
   );
 };
 
-export const createServicePortalNotesVaultBackend = (tools: ToolService): NotesVaultBackend => ({
+export const createServicePortalNotesVaultBackend = (
+  tools: ToolService,
+  serviceOptions: ServicePortalNotesVaultBackendOptions = {},
+): NotesVaultBackend => ({
   kind: 'portal',
   index: async (binding, input, options) =>
-    requestServicePortalWorkspaceFileTool(tools, binding, 'index', input, options) as Promise<any>,
+    requestServicePortalWorkspaceFileTool(tools, serviceOptions, binding, 'index', input, options) as Promise<any>,
   read: async (binding, input, options) =>
-    requestServicePortalWorkspaceFileTool(tools, binding, 'read', input, options) as Promise<any>,
+    requestServicePortalWorkspaceFileTool(tools, serviceOptions, binding, 'read', input, options) as Promise<any>,
   write: async (binding, input, options) =>
-    requestServicePortalWorkspaceFileTool(tools, binding, 'write', input, options) as Promise<any>,
+    requestServicePortalWorkspaceFileTool(tools, serviceOptions, binding, 'write', input, options) as Promise<any>,
   mkdir: async (binding, input, options) =>
-    requestServicePortalWorkspaceFileTool(tools, binding, 'mkdir', input, options) as Promise<any>,
+    requestServicePortalWorkspaceFileTool(tools, serviceOptions, binding, 'mkdir', input, options) as Promise<any>,
   move: async (binding, input, options) =>
-    requestServicePortalWorkspaceFileTool(tools, binding, 'move', input, options) as Promise<any>,
+    requestServicePortalWorkspaceFileTool(tools, serviceOptions, binding, 'move', input, options) as Promise<any>,
   delete: async (binding, input, options) =>
-    requestServicePortalWorkspaceFileTool(tools, binding, 'delete', input, options) as Promise<any>,
+    requestServicePortalWorkspaceFileTool(tools, serviceOptions, binding, 'delete', input, options) as Promise<any>,
   upload: async (binding, input, options) =>
-    requestServicePortalWorkspaceFileTool(tools, binding, 'upload', input, options) as Promise<any>,
+    requestServicePortalWorkspaceFileTool(tools, serviceOptions, binding, 'upload', input, options) as Promise<any>,
 });
 
 export const portalNotesVaultBackend = createPortalNotesVaultBackend();

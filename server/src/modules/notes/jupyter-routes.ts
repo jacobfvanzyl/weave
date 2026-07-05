@@ -1,6 +1,7 @@
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { defineRoute } from '../../server/routes';
 import { getPortalConnection, requestPortalTool } from '../../portal/registry';
+import type { PortalConnection } from '../../portal/registry';
 import { issueJupyterSessionToken } from '../../portal/jupyter-relay';
 import { type NotesVaultResolverDependencies, parseNotesVaultTarget, resolveNotesVault } from './storage/resolver';
 import type { SessionService } from '../../services/session-service';
@@ -82,8 +83,11 @@ const resolvePortalNotesTarget = async (
     throw new Error('Jupyter execution is only available for Portal-backed Notes storage.');
   }
 
-  const portal = getPortalConnection(storage.portalId);
-  if (!portal || portal.userId !== resourceId) throw new Error('Portal is offline or unavailable.');
+  let portal: PortalConnection | undefined;
+  if (!deps.sessions) {
+    portal = getPortalConnection(storage.portalId);
+    if (!portal || portal.userId !== resourceId) throw new Error('Portal is offline or unavailable.');
+  }
 
   return {
     resourceId,
@@ -115,7 +119,10 @@ const handleNotesJupyterRoute = async (
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
     const { resourceId, portal, target } = await resolvePortalNotesTarget(c, body, deps);
     const tool = portalToolForAction(action);
-    requireCapability(portal, tool);
+    if (!deps.sessions) {
+      if (!portal) throw new Error('Portal is offline or unavailable.');
+      requireCapability(portal, tool);
+    }
 
     const path = optionalString(body.path);
     const kernelName = optionalString(body.kernelName);

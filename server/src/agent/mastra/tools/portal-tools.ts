@@ -4,6 +4,8 @@ import { productProjectRepository } from '../../../products/project-repository';
 import { portalToolScope } from '../../../services/providers/portal-provider';
 import { callerForOwner, ServiceError } from '../../../services/types';
 import { toolService } from '../../../services/tool-runtime';
+import { createServicePortalNotesVaultBackend } from '../../../modules/notes/storage/portal-backend';
+import { getNotesVaultBackend } from '../../../modules/notes/storage/registry';
 import {
   type NotesVaultResolverDependencies,
   resolveNotesVaultForThreadContext,
@@ -132,7 +134,24 @@ const routeNotesFileTool = async (
   deps: NotesVaultResolverDependencies = {},
 ) => {
   try {
-    const { backend, binding } = await resolveNotesVaultForThreadContext(context, deps);
+    const threadId = typeof context.agent?.threadId === 'string' ? context.agent.threadId : undefined;
+    const correlation = threadId ? { threadId } : undefined;
+    const defaultTools = deps.tools ?? (deps.getBackend ? undefined : toolService);
+    const serviceDeps: NotesVaultResolverDependencies = {
+      callerKind: 'agent',
+      correlation,
+      ...(defaultTools
+        ? {
+          tools: defaultTools,
+          getBackend: (kind: string) =>
+            kind === 'portal'
+              ? createServicePortalNotesVaultBackend(defaultTools, { callerKind: 'agent', correlation })
+              : getNotesVaultBackend(kind),
+        }
+        : {}),
+      ...deps,
+    };
+    const { backend, binding } = await resolveNotesVaultForThreadContext(context, serviceDeps);
     return await backend[action](binding, args as never, timeoutMs ? { timeoutMs } : undefined);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };

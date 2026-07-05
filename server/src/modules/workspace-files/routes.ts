@@ -12,7 +12,7 @@ import {
   type NotesVaultResolverDependencies,
   optionalString,
   parseNotesVaultTarget,
-  resolveNotesVaultForProject,
+  resolveNotesVaultForProjectAsync,
 } from '../notes/storage/resolver';
 import type {
   NotesProject,
@@ -293,14 +293,14 @@ const portalArgs = (action: WorkspaceFileAction, body: Record<string, unknown>) 
 const portalToolForAction = (action: WorkspaceFileAction) =>
   action === 'diffPreview' ? 'portal.fs.diffPreview' : `portal.fs.${action}`;
 
-const createNotesWorkspaceFileWatchTarget = (
+const createNotesWorkspaceFileWatchTarget = async (
   project: WorkspaceFileProject,
   resourceId: string,
   body: Record<string, unknown>,
   deps: WorkspaceFileRouteDeps = {},
 ) => {
   const notesTarget = parseNotesVaultTarget(body);
-  const { binding } = resolveNotesVaultForProject(project as NotesProject, resourceId, notesTarget, deps);
+  const { binding } = await resolveNotesVaultForProjectAsync(project as NotesProject, resourceId, notesTarget, deps);
   if (binding.storage.kind !== 'portal' || typeof binding.storage.portalId !== 'string' || !binding.storage.portalId) {
     throw new Error('Workspace file watching is only available for Portal-backed Notes Projects.');
   }
@@ -336,7 +336,12 @@ const handleWorkspaceFileRoute = async (
       }
       const notesAction = action as 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload';
       const notesTarget = parseNotesVaultTarget(body);
-      const { backend, binding } = resolveNotesVaultForProject(project as NotesProject, resourceId, notesTarget, deps);
+      const { backend, binding } = await resolveNotesVaultForProjectAsync(
+        project as NotesProject,
+        resourceId,
+        notesTarget,
+        deps,
+      );
       const result = await invokeNotesBackend(
         backend,
         binding,
@@ -399,7 +404,7 @@ const handleWorkspaceFileWatchTokenRoute = async (
     if (!project) throw new Error('Project was not found.');
 
     const resolvedTarget = project.projectKind === 'notes'
-      ? createNotesWorkspaceFileWatchTarget(project, resourceId, body, deps)
+      ? await createNotesWorkspaceFileWatchTarget(project, resourceId, body, deps)
       : resolveGitWorkspaceFileTarget(
         resourceId,
         target,
