@@ -1,4 +1,4 @@
-import { createClient, type Client, type InStatement } from '@libsql/client';
+import { type Client, createClient, type InStatement } from '@libsql/client';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -6,24 +6,25 @@ import { pathToFileURL } from 'node:url';
 const serverRoot = process.cwd();
 const defaultDataDir = join(serverRoot, '.data');
 
-export const weaveDataDir = process.env.WEAVE_DATA_DIR
-  ?? process.env.MASTRA_LOCAL_DATA_DIR
-  ?? defaultDataDir;
+export const weaveDataDir = process.env.WEAVE_DATA_DIR ??
+  process.env.MASTRA_LOCAL_DATA_DIR ??
+  defaultDataDir;
 
 mkdirSync(weaveDataDir, { recursive: true });
 
-export const weaveDbUrl = process.env.WEAVE_METADATA_DATABASE_URL
-  ?? pathToFileURL(join(weaveDataDir, 'weave.db')).href;
+export const weaveDbUrl = process.env.WEAVE_METADATA_DATABASE_URL ??
+  pathToFileURL(join(weaveDataDir, 'weave.db')).href;
 
 export const weaveDbAuthToken = process.env.WEAVE_METADATA_AUTH_TOKEN;
 
 let client: Client | undefined;
 let initPromise: Promise<Client> | undefined;
 
-const createWeaveDbClient = () => createClient({
-  url: weaveDbUrl,
-  authToken: weaveDbAuthToken,
-});
+const createWeaveDbClient = () =>
+  createClient({
+    url: weaveDbUrl,
+    authToken: weaveDbAuthToken,
+  });
 
 const migrations: InStatement[] = [
   `CREATE TABLE IF NOT EXISTS weave_migrations (
@@ -46,6 +47,18 @@ const migrations: InStatement[] = [
     ON weave_product_projects(owner_id, product, updated_at)`,
   `CREATE INDEX IF NOT EXISTS weave_product_projects_owner_project_idx
     ON weave_product_projects(owner_id, project_id)`,
+  `CREATE TABLE IF NOT EXISTS weave_service_bindings (
+    owner_id TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
+    provider_kind TEXT NOT NULL,
+    scope_kind TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (owner_id, binding_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS weave_service_bindings_owner_provider_idx
+    ON weave_service_bindings(owner_id, provider_kind, updated_at)`,
 ];
 
 export const getWeaveDb = async () => {

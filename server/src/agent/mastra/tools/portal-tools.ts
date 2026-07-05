@@ -1,14 +1,17 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { productProjectRepository } from '../../../products/project-repository';
-import { requestPortalTool, resolvePortalForTarget } from '../../../portal/registry';
+import { resolvePortalForTarget } from '../../../portal/registry';
+import { callerForOwner } from '../../../services/types';
+import { toolService } from '../../../services/tool-runtime';
 import {
-  resolveNotesVaultForThreadContext,
   type NotesVaultResolverDependencies,
+  resolveNotesVaultForThreadContext,
 } from '../../../modules/notes/storage/resolver';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars, hashText } from './model-output';
 
-export const offlineMessage = 'This thread is not bound to an active Workspace. Connect a Portal or choose a Project with an online Portal to use local tools.';
+export const offlineMessage =
+  'This thread is not bound to an active Workspace. Connect a Portal or choose a Project with an online Portal to use local tools.';
 
 const projectThreadId = (projectId: string) => `__project__${projectId}`;
 
@@ -20,17 +23,25 @@ export const getThreadBinding = async (context: any) => {
   const agent = await context.mastra?.getAgent('mageHandAgent');
   const memory = await agent?.getMemory();
   const thread = await memory?.getThreadById({ threadId });
-  const resourceId = typeof contextResourceId === 'string' && contextResourceId ? contextResourceId : thread?.resourceId;
+  const resourceId = typeof contextResourceId === 'string' && contextResourceId
+    ? contextResourceId
+    : thread?.resourceId;
   const metadata = thread?.metadata as Record<string, unknown> | undefined;
 
   if (!thread || !resourceId || thread.resourceId !== resourceId) throw new Error(offlineMessage);
-  if (metadata?.mode !== 'project' || typeof metadata.projectId !== 'string' || typeof metadata.workspaceId !== 'string') {
+  if (
+    metadata?.mode !== 'project' || typeof metadata.projectId !== 'string' || typeof metadata.workspaceId !== 'string'
+  ) {
     throw new Error(offlineMessage);
   }
 
-  let projectMetadata = await productProjectRepository.get(resourceId, metadata.projectId) as Record<string, any> | undefined;
+  let projectMetadata = await productProjectRepository.get(resourceId, metadata.projectId) as
+    | Record<string, any>
+    | undefined;
   if (!projectMetadata) {
-    const projectThread = await memory?.getThreadById({ threadId: projectThreadId(metadata.projectId) }).catch(() => undefined);
+    const projectThread = await memory?.getThreadById({ threadId: projectThreadId(metadata.projectId) }).catch(() =>
+      undefined
+    );
     const legacyMetadata = projectThread?.metadata as Record<string, any> | undefined;
     if (legacyMetadata?.kind === 'project') {
       projectMetadata = legacyMetadata;
@@ -43,8 +54,8 @@ export const getThreadBinding = async (context: any) => {
   const portalId = typeof workspace?.portalId === 'string'
     ? workspace.portalId
     : typeof projectMetadata?.portalId === 'string'
-      ? projectMetadata.portalId
-      : undefined;
+    ? projectMetadata.portalId
+    : undefined;
 
   const rootId = typeof projectMetadata?.portalRootId === 'string' ? projectMetadata.portalRootId : undefined;
   const repoPath = typeof projectMetadata?.repoPath === 'string' ? projectMetadata.repoPath : undefined;
@@ -58,7 +69,16 @@ export const getThreadBinding = async (context: any) => {
     ? projectMetadata.projectKind
     : 'general';
 
-  return { resourceId, projectId: metadata.projectId, workspaceId: metadata.workspaceId, projectKind, portalId, rootId, repoPath, workspacePath };
+  return {
+    resourceId,
+    projectId: metadata.projectId,
+    workspaceId: metadata.workspaceId,
+    projectKind,
+    portalId,
+    rootId,
+    repoPath,
+    workspacePath,
+  };
 };
 
 export const routePortalTool = async (tool: string, args: unknown, context: any, timeoutMs?: number) => {
@@ -66,13 +86,18 @@ export const routePortalTool = async (tool: string, args: unknown, context: any,
   const portalId = resolvePortalForBinding(binding);
   if (!portalId) return { ok: false, error: offlineMessage };
 
-  return requestPortalTool({
-    portalId,
-    projectId: binding.projectId,
-    workspaceId: binding.workspaceId,
-    rootId: binding.rootId,
-    repoPath: binding.repoPath,
-    workspacePath: binding.workspacePath,
+  return toolService.requestPortal({
+    caller: callerForOwner(binding.resourceId, 'agent', {
+      threadId: typeof context.agent?.threadId === 'string' ? context.agent.threadId : undefined,
+    }),
+    target: {
+      portalId,
+      projectId: binding.projectId,
+      workspaceId: binding.workspaceId,
+      rootId: binding.rootId,
+      repoPath: binding.repoPath,
+      workspacePath: binding.workspacePath,
+    },
     tool,
     args,
     timeoutMs,
@@ -134,14 +159,15 @@ type PortalBashOutput = PortalBaseOutput & {
   exitCode?: number;
 };
 
-const withPortalMetadata = <T extends PortalBaseOutput>(result: unknown, metadata: Omit<Partial<T>, 'ok' | 'error'>): T => {
+const withPortalMetadata = <T extends PortalBaseOutput>(
+  result: unknown,
+  metadata: Omit<Partial<T>, 'ok' | 'error'>,
+): T => {
   const record = result && typeof result === 'object' && !Array.isArray(result)
     ? result as Record<string, unknown>
     : {};
   const ok = typeof record.ok === 'boolean' ? record.ok : false;
-  const error = typeof record.error === 'string'
-    ? record.error
-    : ok ? undefined : 'Portal returned an invalid result';
+  const error = typeof record.error === 'string' ? record.error : ok ? undefined : 'Portal returned an invalid result';
 
   return {
     ...record,
@@ -151,14 +177,19 @@ const withPortalMetadata = <T extends PortalBaseOutput>(result: unknown, metadat
   } as T;
 };
 
-const withFileMetadata = <T extends PortalBaseOutput>(result: unknown, metadata?: Omit<Partial<T>, 'ok' | 'error'>): T => {
+const withFileMetadata = <T extends PortalBaseOutput>(
+  result: unknown,
+  metadata?: Omit<Partial<T>, 'ok' | 'error'>,
+): T => {
   const record = result && typeof result === 'object' && !Array.isArray(result)
     ? result as Record<string, unknown>
     : {};
   const ok = record.ok !== false;
   const error = typeof record.error === 'string'
     ? record.error
-    : ok ? undefined : 'Portal returned an invalid file result';
+    : ok
+    ? undefined
+    : 'Portal returned an invalid file result';
 
   return {
     ...record,
@@ -197,7 +228,7 @@ const summarizeEditDiff = (diff: unknown): EditDiffSummary => {
   const summaryLines: string[] = [];
   let omittedLines = 0;
 
-  diffLines.forEach(line => {
+  diffLines.forEach((line) => {
     if (line.startsWith('@@ ') || isDiffChangeLine(line)) {
       if (summaryLines.length < editDiffSummaryMaxLines) {
         summaryLines.push(line);
@@ -214,7 +245,9 @@ const summarizeEditDiff = (diff: unknown): EditDiffSummary => {
     ? [
       'diff summary (hunk headers and changed lines only):',
       ...summaryLines,
-      ...(omittedLines ? [`... ${omittedLines} diff lines omitted. Use read or git_diff for surrounding context.`] : []),
+      ...(omittedLines
+        ? [`... ${omittedLines} diff lines omitted. Use read or git_diff for surrounding context.`]
+        : []),
     ].join('\n')
     : undefined;
 
@@ -313,7 +346,7 @@ const payloadErrorPreview = (value: unknown) => {
   if (typeof value !== 'string' || !value.trim()) return undefined;
   return value
     .split(/\r?\n/)
-    .filter(line => /error|failed|exception|traceback|denied|not found|invalid/i.test(line))
+    .filter((line) => /error|failed|exception|traceback|denied|not found|invalid/i.test(line))
     .slice(0, 8)
     .join('\n')
     .slice(0, payloadTextPreviewChars) || undefined;
@@ -388,11 +421,15 @@ const fileIndexModelOutput = (output: unknown, maxChars = getCodeToolModelOutput
   const result = output && typeof output === 'object' ? output as Record<string, any> : {};
   const notes = Array.isArray(result.notes) ? result.notes : [];
   const attachments = Array.isArray(result.attachments) ? result.attachments : [];
-  const backlinks = result.backlinks && typeof result.backlinks === 'object' ? result.backlinks as Record<string, string[]> : {};
+  const backlinks = result.backlinks && typeof result.backlinks === 'object'
+    ? result.backlinks as Record<string, string[]>
+    : {};
   const body = notes.slice(0, 80).map((note: any) => {
     const noteBacklinks = Array.isArray(backlinks[note.path]) ? backlinks[note.path].length : 0;
     const tags = Array.isArray(note.tags) && note.tags.length ? ` tags=${note.tags.join(',')}` : '';
-    return `- ${note.path}${note.title ? ` (${note.title})` : ''}${tags} links=${Array.isArray(note.links) ? note.links.length : 0} backlinks=${noteBacklinks}`;
+    return `- ${note.path}${note.title ? ` (${note.title})` : ''}${tags} links=${
+      Array.isArray(note.links) ? note.links.length : 0
+    } backlinks=${noteBacklinks}`;
   }).join('\n');
 
   return formatToolModelOutput(
@@ -436,7 +473,8 @@ const fileOperationModelOutput = (name: string, output: unknown) => {
 
 export const portalReadTool = createTool({
   id: 'read',
-  description: 'Read the contents of a file from the current Workspace through a connected Portal. Text output is truncated to 2000 lines or 50KB. Use offset/limit for large files. When you need the full file, continue with offset until complete.',
+  description:
+    'Read the contents of a file from the current Workspace through a connected Portal. Text output is truncated to 2000 lines or 50KB. Use offset/limit for large files. When you need the full file, continue with offset until complete.',
   inputSchema: z.object({
     path: z.string().describe('Path to the file to read, relative to the Workspace root'),
     offset: z.number().optional().describe('Line number to start reading from, 1-indexed'),
@@ -448,18 +486,20 @@ export const portalReadTool = createTool({
     offset: z.number().optional(),
     limit: z.number().optional(),
   }),
-  execute: async (input, context): Promise<PortalReadOutput> => withPortalMetadata<PortalReadOutput>(await routePortalTool('read', input, context), {
-    path: input.path,
-    ...(input.offset !== undefined ? { offset: input.offset } : {}),
-    ...(input.limit !== undefined ? { limit: input.limit } : {}),
-  }),
+  execute: async (input, context): Promise<PortalReadOutput> =>
+    withPortalMetadata<PortalReadOutput>(await routePortalTool('read', input, context), {
+      path: input.path,
+      ...(input.offset !== undefined ? { offset: input.offset } : {}),
+      ...(input.limit !== undefined ? { limit: input.limit } : {}),
+    }),
   transform: portalReadPayloadTransform,
   toModelOutput: portalReadModelOutput,
 });
 
 export const portalWriteTool = createTool({
   id: 'write',
-  description: 'Write content to a file in the current Workspace through a connected Portal. Creates the file if it does not exist, overwrites if it does. Automatically creates parent directories.',
+  description:
+    'Write content to a file in the current Workspace through a connected Portal. Creates the file if it does not exist, overwrites if it does. Automatically creates parent directories.',
   inputSchema: z.object({
     path: z.string().describe('Path to write, relative to the Workspace root'),
     content: z.string().describe('Full file content'),
@@ -472,13 +512,18 @@ export const portalWriteTool = createTool({
 
 export const portalEditTool = createTool({
   id: 'edit',
-  description: 'Edit a single file in the current Workspace using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. Each edit is matched against the original file, not incrementally. If two changes affect nearby or overlapping lines, merge them into one edit.',
+  description:
+    'Edit a single file in the current Workspace using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. Each edit is matched against the original file, not incrementally. If two changes affect nearby or overlapping lines, merge them into one edit.',
   inputSchema: z.object({
     path: z.string().describe('Path to edit, relative to the Workspace root'),
-    edits: z.array(z.object({
-      oldText: z.string().describe('Exact text for one targeted replacement. Must be unique in the original file and non-overlapping with other edits.'),
-      newText: z.string().describe('Replacement text for this targeted edit.'),
-    }).strict()).min(1),
+    edits: z.array(
+      z.object({
+        oldText: z.string().describe(
+          'Exact text for one targeted replacement. Must be unique in the original file and non-overlapping with other edits.',
+        ),
+        newText: z.string().describe('Replacement text for this targeted edit.'),
+      }).strict(),
+    ).min(1),
   }),
   outputSchema: z.object({
     ...portalBaseOutputSchema,
@@ -492,7 +537,8 @@ export const portalEditTool = createTool({
 
 export const portalBashTool = createTool({
   id: 'bash',
-  description: 'Run a bash command in the current Workspace through a connected Portal. Prefer `fd`, `rg`, and `ls` for file discovery/search.',
+  description:
+    'Run a bash command in the current Workspace through a connected Portal. Prefer `fd`, `rg`, and `ls` for file discovery/search.',
   inputSchema: z.object({
     command: z.string().describe('Bash command to execute'),
     timeout: z.number().optional().describe('Timeout in seconds'),
@@ -503,17 +549,19 @@ export const portalBashTool = createTool({
     stderr: z.string().optional(),
     exitCode: z.number().optional(),
   }),
-  execute: async (input, context): Promise<PortalBashOutput> => withPortalMetadata<PortalBashOutput>(
-    await routePortalTool('bash', input, context, input.timeout ? input.timeout * 1000 + 1000 : undefined),
-    { command: input.command },
-  ),
+  execute: async (input, context): Promise<PortalBashOutput> =>
+    withPortalMetadata<PortalBashOutput>(
+      await routePortalTool('bash', input, context, input.timeout ? input.timeout * 1000 + 1000 : undefined),
+      { command: input.command },
+    ),
   transform: portalBashPayloadTransform,
   toModelOutput: portalBashModelOutput,
 });
 
 export const fileIndexTool = createTool({
   id: 'file_index',
-  description: 'Index the current Notes Project workspace. Returns Markdown and .cpr note metadata, wiki links, embeds, tags, attachments, and backlinks.',
+  description:
+    'Index the current Notes Project workspace. Returns Markdown and .cpr note metadata, wiki links, embeds, tags, attachments, and backlinks.',
   inputSchema: z.object({
     path: z.string().optional().describe('Optional folder path relative to the workspace root'),
   }),
@@ -524,13 +572,15 @@ export const fileIndexTool = createTool({
     attachments: z.array(z.any()).optional(),
     backlinks: z.record(z.string(), z.array(z.string())).optional(),
   }),
-  execute: async (input, context): Promise<PortalBaseOutput> => withFileMetadata(await routeNotesFileTool('index', input, context, 30_000), {}),
+  execute: async (input, context): Promise<PortalBaseOutput> =>
+    withFileMetadata(await routeNotesFileTool('index', input, context, 30_000), {}),
   toModelOutput: fileIndexModelOutput,
 });
 
 export const fileReadTool = createTool({
   id: 'file_read',
-  description: 'Read a Markdown, .cpr, Canvas JSON, JSON, or Excalidraw text file from the current Notes Project workspace.',
+  description:
+    'Read a Markdown, .cpr, Canvas JSON, JSON, or Excalidraw text file from the current Notes Project workspace.',
   inputSchema: z.object({
     path: z.string().describe('Path to read, relative to the workspace root'),
   }),
@@ -546,7 +596,8 @@ export const fileReadTool = createTool({
 
 export const fileWriteTool = createTool({
   id: 'file_write',
-  description: 'Write a Markdown, .cpr, Canvas JSON, JSON, or Excalidraw text file in the current Notes Project workspace. Creates parent folders as needed.',
+  description:
+    'Write a Markdown, .cpr, Canvas JSON, JSON, or Excalidraw text file in the current Notes Project workspace. Creates parent folders as needed.',
   inputSchema: z.object({
     path: z.string().describe('Path to write, relative to the workspace root'),
     content: z.string().describe('Full file content'),
@@ -555,7 +606,7 @@ export const fileWriteTool = createTool({
   outputSchema: z.object({ ...portalBaseOutputSchema, version: z.string().optional() }),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('write', input, context), { path: input.path }),
-  toModelOutput: output => fileOperationModelOutput('file_write', output),
+  toModelOutput: (output) => fileOperationModelOutput('file_write', output),
 });
 
 export const fileMkdirTool = createTool({
@@ -567,7 +618,7 @@ export const fileMkdirTool = createTool({
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('mkdir', input, context), { path: input.path }),
-  toModelOutput: output => fileOperationModelOutput('file_mkdir', output),
+  toModelOutput: (output) => fileOperationModelOutput('file_mkdir', output),
 });
 
 export const fileMoveTool = createTool({
@@ -581,7 +632,7 @@ export const fileMoveTool = createTool({
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('move', input, context), { path: input.toPath }),
-  toModelOutput: output => fileOperationModelOutput('file_move', output),
+  toModelOutput: (output) => fileOperationModelOutput('file_move', output),
 });
 
 export const fileDeleteTool = createTool({
@@ -594,7 +645,7 @@ export const fileDeleteTool = createTool({
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('delete', input, context), { path: input.path }),
-  toModelOutput: output => fileOperationModelOutput('file_delete', output),
+  toModelOutput: (output) => fileOperationModelOutput('file_delete', output),
 });
 
 export const fileUploadTool = createTool({
@@ -608,7 +659,7 @@ export const fileUploadTool = createTool({
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('upload', input, context), { path: input.path }),
-  toModelOutput: output => fileOperationModelOutput('file_upload', output),
+  toModelOutput: (output) => fileOperationModelOutput('file_upload', output),
 });
 
 export const __portalToolsTest = {
