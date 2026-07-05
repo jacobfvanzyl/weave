@@ -2,11 +2,13 @@ import type { OwnerAuthConfig } from '../owner/auth';
 import type { WeaveApp } from '../server/types';
 import type { AgentCore } from '../agent';
 import type { PortalCore } from '../portal/types';
+import type { InternalServices } from '../services';
 
 export type ModuleServices = {
   auth: OwnerAuthConfig;
   agent: AgentCore;
   portal: PortalCore;
+  internal: InternalServices;
 };
 
 export type ServerModule = {

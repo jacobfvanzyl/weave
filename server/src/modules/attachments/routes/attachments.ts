@@ -1,14 +1,19 @@
 import { defineRoute } from '../../../server/routes';
+import type { ResourceService } from '../../../services/resource-service';
+import { callerForOwner } from '../../../services/types';
 import { attachmentStorage } from '../storage';
 
-export const attachmentRoutes = [
+export const createAttachmentRoutes = (resources?: ResourceService) => [
   defineRoute('/attachments/:attachmentId', {
     method: 'GET',
-    handler: async c => {
-      if (!c.get('owner')) return c.text('Unauthorized', 401);
+    handler: async (c) => {
+      const owner = c.get('owner');
+      if (!owner) return c.text('Unauthorized', 401);
 
       const attachmentId = c.req.param('attachmentId');
-      const attachment = await attachmentStorage.get(attachmentId);
+      const attachment = resources
+        ? await resources.getAttachment(callerForOwner(owner.id, 'ui'), attachmentId)
+        : await attachmentStorage.get(attachmentId);
 
       if (!attachment) return c.text('Not Found', 404);
 
@@ -28,3 +33,5 @@ export const attachmentRoutes = [
     },
   }),
 ];
+
+export const attachmentRoutes = createAttachmentRoutes();

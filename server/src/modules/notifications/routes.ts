@@ -1,5 +1,7 @@
 import { getOwner } from '../../owner/auth';
 import { defineRoute } from '../../server/routes';
+import type { EventService } from '../../services/event-service';
+import { callerForOwner } from '../../services/types';
 import type { StoredNotificationEvent } from './types';
 import { observeServerNotifications, publishServerNotification } from './service';
 
@@ -18,8 +20,7 @@ const encodeSseEvent = (event: StoredNotificationEvent) =>
 
 const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
-const limitString = (value: string, maxLength: number) =>
-  value.length > maxLength ? value.slice(0, maxLength) : value;
+const limitString = (value: string, maxLength: number) => value.length > maxLength ? value.slice(0, maxLength) : value;
 
 const parseTestNotificationBody = (body: unknown) => {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
@@ -81,31 +82,39 @@ const toNotificationSseResponse = (stream: ReadableStream<StoredNotificationEven
   });
 };
 
-export const notificationRoutes = [
+export const createNotificationRoutes = (events?: EventService) => [
   defineRoute('/notifications/events', {
     method: 'GET',
     handler: (c) => {
-      const resourceId = getOwner(c).id;
+      const owner = getOwner(c);
       const afterSequence = parseSequence(c.req.query('after') ?? c.req.header('Last-Event-ID'));
-      return toNotificationSseResponse(observeServerNotifications(resourceId, afterSequence));
+      return toNotificationSseResponse(
+        events?.observeNotifications({ ownerId: owner.id }, afterSequence) ??
+          observeServerNotifications(owner.id, afterSequence),
+      );
     },
   }),
   defineRoute('/notifications/test', {
     method: 'POST',
     handler: async (c) => {
-      const resourceId = getOwner(c).id;
+      const owner = getOwner(c);
       const body = await c.req.json().catch(() => undefined);
       const input = parseTestNotificationBody(body);
       if ('error' in input) return c.json({ error: input.error }, 400);
 
-      const stored = publishServerNotification(resourceId, {
+      const notificationInput = {
         kind: 'notification.test',
         title: input.title,
         ...(input.body ? { body: input.body } : {}),
         priority: 'normal',
-      });
+      } as const;
+      const stored = events
+        ? await events.publishNotification(callerForOwner(owner.id, 'ui'), notificationInput)
+        : publishServerNotification(owner.id, notificationInput);
 
       return c.json({ ok: true, sequence: stored.sequence, event: stored.event });
     },
   }),
 ];
+
+export const notificationRoutes = createNotificationRoutes();

@@ -2,23 +2,29 @@ import { defineRoute } from '../../../server/routes';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { productProjectRepository } from '../../../products/project-repository';
 import type { ProductId, Project, Workspace } from '../../../products/types';
-import { collectWorkspaceGitStatesForProject, gitFieldsFromWorktree, stripProjectGitState, workspaceStateFromGitFields } from '../projects/git-state';
-import { getPortalConnection, listPortalConnections, requestPortalTool } from '../../../portal/registry';
+import {
+  collectWorkspaceGitStatesForProject,
+  gitFieldsFromWorktree,
+  stripProjectGitState,
+  workspaceStateFromGitFields,
+} from '../projects/git-state';
+import { getPortalConnection, listPortalConnections } from '../../../portal/registry';
+import { callerForOwner, internalServices } from '../../../services';
 import { sanitizeNotesStorageMetadata } from '../../notes/storage/resolver';
 import type { NotesStorageMetadata } from '../../notes/storage/types';
 import {
+  type BranchCleanup,
   createProjectWorktree,
   fetchWorkspaceUpstream,
   inspectProjectGit,
   inspectWorkspaceBranchCleanup,
   listProjectBranches,
   listProjectWorktrees,
+  PortalToolFailure,
   pullWorkspaceUpstream,
   removeWorkspaceWorktree,
   switchWorkspaceBranch,
   validateProjectWorktree,
-  PortalToolFailure,
-  type BranchCleanup,
 } from '../git/service';
 import { hasActiveThreadRun } from '../../chat/service';
 
@@ -42,6 +48,8 @@ const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 const nowIso = () => new Date().toISOString();
 const projectThreadId = (projectId: string) => `${projectThreadPrefix}${projectId}`;
 const portalThreadId = (portalId: string) => `${portalThreadPrefix}${portalId}`;
+const portalRequesterForOwner = (resourceId: string) =>
+  internalServices.tools.portalToolRequester(callerForOwner(resourceId, 'ui'));
 
 const getMemory = async (c: any) => {
   const mastra = c.get('mastra');
@@ -61,7 +69,8 @@ const cleanName = (value: unknown) => (typeof value === 'string' ? value.trim().
 const optionalString = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
 const normalizeBranch = (value: unknown) => optionalString(value)?.replace(/^refs\/heads\//, '');
 const normalizePath = (value: unknown) => optionalString(value)?.replace(/\/+$/, '') || undefined;
-const timestampString = (value: unknown) => typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
+const timestampString = (value: unknown) =>
+  typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
 const getTopThreadSortOrder = async (memory: any, resourceId: string, projectId: string, workspaceId?: string) => {
   const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   const orders = result.threads
@@ -105,7 +114,9 @@ const assertProjectProduct = (c: any, project: Project | undefined) => {
   const product = productForRequestPath(c);
   if (!project || !product) return project;
   const expectedKind = productProjectKinds[product];
-  return project.projectKind === expectedKind || (project.systemKind === 'adHoc' && product === 'code') ? project : undefined;
+  return project.projectKind === expectedKind || (project.systemKind === 'adHoc' && product === 'code')
+    ? project
+    : undefined;
 };
 
 const toProject = (thread: any): Project => {
@@ -183,13 +194,15 @@ const assertGitProjectReady = (project: Project, resourceId: string) => {
   if (!project.portalRootId || !project.repoPath) throw new Error('git project is missing Portal repo binding');
 };
 
-const isPrimaryWorkspace = (workspace: Workspace) => workspace.locked === true || workspace.workspaceKind === 'primary' || workspace.source === 'primary';
+const isPrimaryWorkspace = (workspace: Workspace) =>
+  workspace.locked === true || workspace.workspaceKind === 'primary' || workspace.source === 'primary';
 
 const normalizeRemote = (value: unknown) => optionalString(value)?.replace(/\.git$/, '').toLowerCase();
 const normalizeWorkspacePath = (workspace: Pick<Workspace, 'path'>) => normalizePath(workspace.path)?.toLowerCase();
 const assertUniqueWorkspace = (project: Project, candidate: Pick<Workspace, 'path'>, ignoreId?: string) => {
   const candidatePath = normalizeWorkspacePath(candidate);
-  const duplicatePath = candidatePath && project.workspaces.some(item => item.id !== ignoreId && normalizeWorkspacePath(item) === candidatePath);
+  const duplicatePath = candidatePath &&
+    project.workspaces.some((item) => item.id !== ignoreId && normalizeWorkspacePath(item) === candidatePath);
   if (duplicatePath) throw new Error('workspace path is already attached to this Project');
 };
 
@@ -199,10 +212,11 @@ const portalToolError = (result: { ok?: boolean; error?: unknown }) => {
 
 const hashText = async (value: string) => {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(bytes)).slice(0, 12).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(bytes)).slice(0, 12).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
-const portalSettingsThreadId = async (resourceId: string) => `${portalSettingsThreadPrefix}${await hashText(resourceId)}`;
+const portalSettingsThreadId = async (resourceId: string) =>
+  `${portalSettingsThreadPrefix}${await hashText(resourceId)}`;
 
 const getPrimaryPortalId = async (memory: any, resourceId: string) => {
   const threadId = await portalSettingsThreadId(resourceId);
@@ -225,7 +239,7 @@ const isRootedPath = (path: string) => path.startsWith('/') || path === '~' || p
 
 const validateAdHocPath = async (resourceId: string, portalId: string, workspacePath: string) => {
   assertPortalForUser(portalId, resourceId);
-  const result = await requestPortalTool({
+  const result = await portalRequesterForOwner(resourceId)({
     portalId,
     tool: 'portal.fs.pathStat',
     args: { path: workspacePath },
@@ -233,7 +247,9 @@ const validateAdHocPath = async (resourceId: string, portalId: string, workspace
   }) as { ok?: boolean; error?: string; path?: string; isDirectory?: boolean };
   portalToolError(result);
   const realPath = normalizePath(result.path);
-  if (!realPath || result.isDirectory !== true) throw new Error('Ad-hoc path must be an existing directory reachable by Portal');
+  if (!realPath || result.isDirectory !== true) {
+    throw new Error('Ad-hoc path must be an existing directory reachable by Portal');
+  }
   return realPath;
 };
 
@@ -254,7 +270,7 @@ const ensureAdHocWorkspace = async (memory: any, resourceId: string, portalId: s
     createdAt: at,
     updatedAt: at,
   };
-  const workspace = project.workspaces.find(item => item.id === workspaceId);
+  const workspace = project.workspaces.find((item) => item.id === workspaceId);
   if (workspace) return { project, workspace };
 
   const nextWorkspace: Workspace = {
@@ -273,7 +289,13 @@ const ensureAdHocWorkspace = async (memory: any, resourceId: string, portalId: s
     createdAt: at,
     updatedAt: at,
   };
-  const nextProject = { ...project, hidden: true, systemKind: 'adHoc' as const, workspaces: [...project.workspaces, nextWorkspace], updatedAt: at };
+  const nextProject = {
+    ...project,
+    hidden: true,
+    systemKind: 'adHoc' as const,
+    workspaces: [...project.workspaces, nextWorkspace],
+    updatedAt: at,
+  };
   await saveProject(memory, resourceId, nextProject);
   return { project: nextProject, workspace: nextWorkspace };
 };
@@ -317,9 +339,9 @@ const getThreadsForWorkspace = async (memory: any, resourceId: string, projectId
   const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   return result.threads.filter((thread: any) => {
     const metadata = thread.metadata as Record<string, unknown> | undefined;
-    return metadata?.mode === 'project'
-      && metadata.projectId === projectId
-      && metadata.workspaceId === workspaceId;
+    return metadata?.mode === 'project' &&
+      metadata.projectId === projectId &&
+      metadata.workspaceId === workspaceId;
   });
 };
 
@@ -329,7 +351,7 @@ const threadIsArchived = (thread: any) => {
 };
 
 const workspaceRemovalThreadCounts = (threads: any[]) => ({
-  activeThreadCount: threads.filter(thread => !threadIsArchived(thread)).length,
+  activeThreadCount: threads.filter((thread) => !threadIsArchived(thread)).length,
   archivedThreadCount: threads.filter(threadIsArchived).length,
 });
 
@@ -351,7 +373,7 @@ const archiveRemovedWorkspaceThreads = async (
   threads: any[],
   removedWorkspace: RemovedWorkspaceSnapshot,
 ) => {
-  await Promise.all(threads.map(thread => {
+  await Promise.all(threads.map((thread) => {
     const metadata = { ...((thread.metadata ?? {}) as Record<string, unknown>) };
     delete metadata.workspaceId;
     metadata.archived = true;
@@ -371,7 +393,12 @@ const dirtyWorktreeResponse = (c: any, error: unknown) => {
   return undefined;
 };
 
-const createGitProject = async (c: any, resourceId: string, baseProject: Project, body: Record<string, unknown>): Promise<Project> => {
+const createGitProject = async (
+  c: any,
+  resourceId: string,
+  baseProject: Project,
+  body: Record<string, unknown>,
+): Promise<Project> => {
   const portalId = optionalString(body?.portalId);
   const rootId = optionalString(body?.rootId);
   const repoPath = optionalString(body?.repoPath);
@@ -379,7 +406,7 @@ const createGitProject = async (c: any, resourceId: string, baseProject: Project
   if (!rootId) throw new Error('rootId is required for git projects');
   if (!repoPath) throw new Error('repoPath is required for git projects');
 
-  const git = await inspectProjectGit(portalId!, rootId, repoPath, requestPortalTool);
+  const git = await inspectProjectGit(portalId!, rootId, repoPath, portalRequesterForOwner(resourceId));
   const defaultBranch = normalizeBranch(git.defaultBranch) ?? normalizeBranch(git.currentBranch) ?? 'main';
   const repoRoot = normalizePath(git.root);
   const at = baseProject.createdAt;
@@ -405,14 +432,15 @@ const createGitProject = async (c: any, resourceId: string, baseProject: Project
     repoPath,
     gitRemote: optionalString(git.remote),
     defaultBranch,
-    agentInstructions: typeof git.agentsMd === 'object' && git.agentsMd && typeof (git.agentsMd as any).content === 'string'
-      ? {
+    agentInstructions:
+      typeof git.agentsMd === 'object' && git.agentsMd && typeof (git.agentsMd as any).content === 'string'
+        ? {
           path: optionalString((git.agentsMd as any).path) ?? 'AGENTS.md',
           content: String((git.agentsMd as any).content).slice(0, 32_000),
           size: typeof (git.agentsMd as any).size === 'number' ? (git.agentsMd as any).size : undefined,
           updatedAt: optionalString((git.agentsMd as any).updatedAt),
         }
-      : undefined,
+        : undefined,
     workspaces: [primaryWorkspace],
   };
 };
@@ -430,7 +458,12 @@ const createVirtualNotesWorkspace = (baseProject: Project, name: string): Worksp
   updatedAt: baseProject.createdAt,
 });
 
-const createNotesProject = async (_c: any, resourceId: string, baseProject: Project, body: Record<string, unknown>): Promise<Project> => {
+const createNotesProject = async (
+  _c: any,
+  resourceId: string,
+  baseProject: Project,
+  body: Record<string, unknown>,
+): Promise<Project> => {
   const requestedStorage = sanitizeNotesStorageMetadata(body?.notesStorage);
   if (requestedStorage && requestedStorage.kind !== 'portal') {
     return {
@@ -442,29 +475,31 @@ const createNotesProject = async (_c: any, resourceId: string, baseProject: Proj
 
   const portalId = optionalString(body?.portalId) ?? requestedStorage?.portalId;
   const rootId = optionalString(body?.rootId) ?? requestedStorage?.rootId;
-  const vaultPath = optionalString(body?.vaultPath ?? body?.repoPath)
-    ?? requestedStorage?.vaultPath
-    ?? requestedStorage?.workspacePath
-    ?? '';
+  const vaultPath = optionalString(body?.vaultPath ?? body?.repoPath) ??
+    requestedStorage?.vaultPath ??
+    requestedStorage?.workspacePath ??
+    '';
   assertPortalForUser(portalId, resourceId);
   if (!rootId) throw new Error('rootId is required for notes projects');
 
   const result = (isRootedPath(vaultPath)
-    ? await requestPortalTool({
-        portalId: portalId!,
-        tool: 'portal.fs.pathStat',
-        args: { rootId, path: vaultPath },
-        timeoutMs: 10_000,
-      }) as { ok?: boolean; error?: string; path?: string; isDirectory?: boolean }
-    : await requestPortalTool({
-        portalId: portalId!,
-        tool: 'portal.fs.browse',
-        args: { rootId, path: vaultPath },
-        timeoutMs: 10_000,
-      })) as { ok?: boolean; error?: string; path?: string; realPath?: string; isDirectory?: boolean };
+    ? await portalRequesterForOwner(resourceId)({
+      portalId: portalId!,
+      tool: 'portal.fs.pathStat',
+      args: { rootId, path: vaultPath },
+      timeoutMs: 10_000,
+    }) as { ok?: boolean; error?: string; path?: string; isDirectory?: boolean }
+    : await portalRequesterForOwner(resourceId)({
+      portalId: portalId!,
+      tool: 'portal.fs.browse',
+      args: { rootId, path: vaultPath },
+      timeoutMs: 10_000,
+    })) as { ok?: boolean; error?: string; path?: string; realPath?: string; isDirectory?: boolean };
   portalToolError(result);
   const realPath = normalizePath(isRootedPath(vaultPath) ? result.path : result.realPath);
-  if (!realPath || result.isDirectory === false) throw new Error('Selected vault folder could not be resolved. Restart Portal and select the folder again.');
+  if (!realPath || result.isDirectory === false) {
+    throw new Error('Selected vault folder could not be resolved. Restart Portal and select the folder again.');
+  }
   const at = baseProject.createdAt;
   const primaryWorkspace: Workspace = {
     id: createId('workspace'),
@@ -500,7 +535,7 @@ const createNotesProject = async (_c: any, resourceId: string, baseProject: Proj
 export const projectRoutes = [
   defineRoute('/code/projects', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const memory = await getMemory(c);
@@ -514,7 +549,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/workspaces/git-state', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const memory = await getMemory(c);
@@ -522,7 +557,13 @@ export const projectRoutes = [
         const projects: Project[] = (await getAllProjects(memory, resourceId))
           .filter((project: Project) => project.projectKind === 'git' && isVisibleUserProject(project));
         const states = (await Promise.all(projects.map((project: Project) =>
-          collectWorkspaceGitStatesForProject(project, resourceId, checkedAt, requestPortalTool, getPortalConnection),
+          collectWorkspaceGitStatesForProject(
+            project,
+            resourceId,
+            checkedAt,
+            portalRequesterForOwner(resourceId),
+            getPortalConnection,
+          )
         ))).flat();
         return c.json({ states });
       } catch (error) {
@@ -532,7 +573,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const body = await c.req.json();
@@ -567,11 +608,13 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/reorder', {
     method: 'PATCH',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const body = await c.req.json();
-        const projectIds = Array.isArray(body?.projectIds) ? body.projectIds.filter((id: unknown) => typeof id === 'string') : [];
+        const projectIds = Array.isArray(body?.projectIds)
+          ? body.projectIds.filter((id: unknown) => typeof id === 'string')
+          : [];
         const memory = await getMemory(c);
         await migrateLegacyProjectsForOwner(memory, resourceId);
         const product = productForRequestPath(c);
@@ -581,11 +624,15 @@ export const projectRoutes = [
         }
 
         const projects = await productProjectRepository.list(resourceId);
-        const byId = new Map(projects.map(project => [project.id, project]));
-        if (projectIds.length !== byId.size || projectIds.some((id: string) => !byId.has(id))) return c.json({ error: 'projectIds must include all visible projects for this user' }, 400);
-        await Promise.all(projectIds.map((projectId: string, index: number) =>
-          saveProject(memory, resourceId, { ...byId.get(projectId)!, sortOrder: index, updatedAt: nowIso() })
-        ));
+        const byId = new Map(projects.map((project) => [project.id, project]));
+        if (projectIds.length !== byId.size || projectIds.some((id: string) => !byId.has(id))) {
+          return c.json({ error: 'projectIds must include all visible projects for this user' }, 400);
+        }
+        await Promise.all(
+          projectIds.map((projectId: string, index: number) =>
+            saveProject(memory, resourceId, { ...byId.get(projectId)!, sortOrder: index, updatedAt: nowIso() })
+          ),
+        );
         return c.json({ projects });
       } catch (error) {
         return errorResponse(c, error);
@@ -594,7 +641,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId', {
     method: 'DELETE',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -611,7 +658,7 @@ export const projectRoutes = [
         await Promise.all([
           productProjectRepository.delete(resourceId, projectId),
           memory.deleteThread(projectThreadId(projectId)),
-          ...projectThreads.map(thread => memory.deleteThread(thread.id)),
+          ...projectThreads.map((thread) => memory.deleteThread(thread.id)),
         ]);
 
         return c.json({ ok: true });
@@ -622,7 +669,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const memory = await getMemory(c);
@@ -636,7 +683,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/branches', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -647,7 +694,7 @@ export const projectRoutes = [
 
         const branches = await listProjectBranches(project, resourceId, {
           getPortal: getPortalConnection,
-          requestPortal: requestPortalTool,
+          requestPortal: portalRequesterForOwner(resourceId),
         });
         return c.json({ branches });
       } catch (error) {
@@ -657,7 +704,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/workspaces/resolve', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const body = await c.req.json();
@@ -670,9 +717,15 @@ export const projectRoutes = [
         const allowAdHoc = body?.allowAdHoc === true;
         const portalId = optionalString(body?.portalId);
         const projects: Project[] = (await getAllProjects(memory, resourceId))
-          .filter((project: Project) => project.projectKind === 'git' && !project.hidden && project.systemKind !== 'adHoc');
-        const exact = projects.flatMap((project: Project) => project.workspaces.map((workspace: Workspace) => ({ project, workspace })))
-          .find((item: { project: Project; workspace: Workspace }) => normalizeWorkspacePath(item.workspace) === workspacePath.toLowerCase());
+          .filter((project: Project) =>
+            project.projectKind === 'git' && !project.hidden && project.systemKind !== 'adHoc'
+          );
+        const exact = projects.flatMap((project: Project) =>
+          project.workspaces.map((workspace: Workspace) => ({ project, workspace }))
+        )
+          .find((item: { project: Project; workspace: Workspace }) =>
+            normalizeWorkspacePath(item.workspace) === workspacePath.toLowerCase()
+          );
 
         let resolvedProject = exact?.project;
         let resolvedWorkspace = exact?.workspace;
@@ -687,11 +740,13 @@ export const projectRoutes = [
             try {
               validation = await validateProjectWorktree(project, resourceId, workspacePath, {
                 getPortal: getPortalConnection,
-                requestPortal: requestPortalTool,
+                requestPortal: portalRequesterForOwner(resourceId),
               });
               const validatedPath = normalizePath(validation.path) ?? workspacePath;
               resolvedProject = project;
-              resolvedWorkspace = project.workspaces.find((item: Workspace) => normalizeWorkspacePath(item) === validatedPath.toLowerCase());
+              resolvedWorkspace = project.workspaces.find((item: Workspace) =>
+                normalizeWorkspacePath(item) === validatedPath.toLowerCase()
+              );
 
               if (!resolvedWorkspace) {
                 assertUniqueWorkspace(project, { path: validatedPath });
@@ -717,7 +772,9 @@ export const projectRoutes = [
               }
               break;
             } catch (error) {
-              if (error instanceof Error && /portal is offline|portal is offline or unavailable/i.test(error.message)) offline = true;
+              if (error instanceof Error && /portal is offline|portal is offline or unavailable/i.test(error.message)) {
+                offline = true;
+              }
             }
           }
         }
@@ -725,14 +782,26 @@ export const projectRoutes = [
         if (!resolvedProject || !resolvedWorkspace) {
           if (allowAdHoc && portalId) {
             const adHoc = await ensureAdHocWorkspace(memory, resourceId, portalId, workspacePath);
-            return c.json({ resolved: true, adHoc: true, offline: false, project: adHoc.project, workspace: adHoc.workspace });
+            return c.json({
+              resolved: true,
+              adHoc: true,
+              offline: false,
+              project: adHoc.project,
+              workspace: adHoc.workspace,
+            });
           }
-          const remoteMatches = remote ? projects.filter((project: Project) => normalizeRemote(project.gitRemote) === remote) : [];
+          const remoteMatches = remote
+            ? projects.filter((project: Project) => normalizeRemote(project.gitRemote) === remote)
+            : [];
           return c.json({
             resolved: false,
             offline,
             needsConfirmation: remoteMatches.length > 0,
-            candidates: remoteMatches.map((project: Project) => ({ projectId: project.id, name: project.name, gitRemote: project.gitRemote })),
+            candidates: remoteMatches.map((project: Project) => ({
+              projectId: project.id,
+              name: project.name,
+              gitRemote: project.gitRemote,
+            })),
           });
         }
 
@@ -748,7 +817,15 @@ export const projectRoutes = [
           });
         }
 
-        return c.json({ resolved: true, offline, adopted, project: resolvedProject, workspace: resolvedWorkspace, thread, validation });
+        return c.json({
+          resolved: true,
+          offline,
+          adopted,
+          project: resolvedProject,
+          workspace: resolvedWorkspace,
+          thread,
+          validation,
+        });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -756,7 +833,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/workspaces/discover', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -767,12 +844,12 @@ export const projectRoutes = [
 
         const discovered = await listProjectWorktrees(project, resourceId, {
           getPortal: getPortalConnection,
-          requestPortal: requestPortalTool,
+          requestPortal: portalRequesterForOwner(resourceId),
         });
-        const worktrees = discovered.map(worktree => {
+        const worktrees = discovered.map((worktree) => {
           const path = normalizePath(worktree.path);
           const branch = normalizeBranch(worktree.branch);
-          const workspace = project.workspaces.find(item => normalizePath(item.path) === path);
+          const workspace = project.workspaces.find((item) => normalizePath(item.path) === path);
           return { ...worktree, path, branch, adopted: Boolean(workspace), workspaceId: workspace?.id };
         });
         return c.json({ worktrees });
@@ -783,7 +860,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/workspaces', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -793,7 +870,9 @@ export const projectRoutes = [
         const mode = body?.mode === 'existingBranch' || body?.mode === 'detached' ? body.mode : 'newBranch';
         const branch = normalizeBranch(body?.branch);
         const base = normalizeBranch(body?.base);
-        if (mode !== 'detached' && !branch) return c.json({ error: 'branch is required for branch-backed workspaces' }, 400);
+        if (mode !== 'detached' && !branch) {
+          return c.json({ error: 'branch is required for branch-backed workspaces' }, 400);
+        }
 
         const memory = await getMemory(c);
         const project = await getProject(memory, resourceId, projectId);
@@ -808,7 +887,7 @@ export const projectRoutes = [
           path: optionalString(body?.path),
         }, {
           getPortal: getPortalConnection,
-          requestPortal: requestPortalTool,
+          requestPortal: portalRequesterForOwner(resourceId),
         });
         const path = normalizePath(worktree.path);
         if (!path) throw new Error('Portal did not return a workspace path');
@@ -839,7 +918,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/workspaces/adopt', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -854,7 +933,7 @@ export const projectRoutes = [
 
         const worktree = await validateProjectWorktree(project, resourceId, path, {
           getPortal: getPortalConnection,
-          requestPortal: requestPortalTool,
+          requestPortal: portalRequesterForOwner(resourceId),
         });
         const normalizedPath = normalizePath(worktree.path);
         if (!normalizedPath) throw new Error('validated worktree did not return a path');
@@ -886,7 +965,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/workspaces/:workspaceId', {
     method: 'PATCH',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -897,7 +976,7 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
-        const workspace = project.workspaces.find(item => item.id === workspaceId);
+        const workspace = project.workspaces.find((item) => item.id === workspaceId);
         if (!workspace) return c.json({ error: 'workspace not found' }, 404);
         const at = nowIso();
         const branch = normalizeBranch(body?.branch);
@@ -911,13 +990,13 @@ export const projectRoutes = [
             base: normalizeBranch(body?.base),
           }, {
             getPortal: getPortalConnection,
-            requestPortal: requestPortalTool,
+            requestPortal: portalRequesterForOwner(resourceId),
           });
         }
 
         const nextProject = {
           ...project,
-          workspaces: project.workspaces.map(item => item.id === workspaceId ? nextWorkspace : item),
+          workspaces: project.workspaces.map((item) => item.id === workspaceId ? nextWorkspace : item),
           updatedAt: at,
         };
         return c.json({ project: await saveProject(memory, resourceId, nextProject), workspace: nextWorkspace });
@@ -928,7 +1007,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/workspaces/:workspaceId/git/fetch', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -938,11 +1017,11 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
-        const workspace = project.workspaces.find(item => item.id === workspaceId);
+        const workspace = project.workspaces.find((item) => item.id === workspaceId);
         if (!workspace) return c.json({ error: 'workspace not found' }, 404);
         const status = await fetchWorkspaceUpstream(project, workspace, resourceId, {
           getPortal: getPortalConnection,
-          requestPortal: requestPortalTool,
+          requestPortal: portalRequesterForOwner(resourceId),
         });
         return c.json({ state: workspaceStateFromGitFields(project.id, workspace, status, nowIso()) });
       } catch (error) {
@@ -952,7 +1031,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/workspaces/:workspaceId/git/pull', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -962,11 +1041,11 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
-        const workspace = project.workspaces.find(item => item.id === workspaceId);
+        const workspace = project.workspaces.find((item) => item.id === workspaceId);
         if (!workspace) return c.json({ error: 'workspace not found' }, 404);
         const status = await pullWorkspaceUpstream(project, workspace, resourceId, {
           getPortal: getPortalConnection,
-          requestPortal: requestPortalTool,
+          requestPortal: portalRequesterForOwner(resourceId),
         });
         return c.json({ state: workspaceStateFromGitFields(project.id, workspace, status, nowIso()) });
       } catch (error) {
@@ -976,7 +1055,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/workspaces/:workspaceId/removal-preview', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -986,7 +1065,7 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
-        const workspace = project.workspaces.find(item => item.id === workspaceId);
+        const workspace = project.workspaces.find((item) => item.id === workspaceId);
         if (!workspace) return c.json({ error: 'workspace not found' }, 404);
         if (isPrimaryWorkspace(workspace)) return c.json({ error: 'primary workspace cannot be removed' }, 400);
 
@@ -996,7 +1075,7 @@ export const projectRoutes = [
           defaultBranch: project.defaultBranch,
         }, {
           getPortal: getPortalConnection,
-          requestPortal: requestPortalTool,
+          requestPortal: portalRequesterForOwner(resourceId),
         });
         return c.json({ workspace, ...workspaceRemovalThreadCounts(workspaceThreads), branchCleanup });
       } catch (error) {
@@ -1006,7 +1085,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/workspaces/:workspaceId', {
     method: 'DELETE',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -1019,16 +1098,22 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
-        const workspace = project.workspaces.find(item => item.id === workspaceId);
+        const workspace = project.workspaces.find((item) => item.id === workspaceId);
         if (!workspace) return c.json({ error: 'workspace not found' }, 404);
         if (isPrimaryWorkspace(workspace)) return c.json({ error: 'primary workspace cannot be removed' }, 400);
         const workspaceThreads = await getThreadsForWorkspace(memory, resourceId, projectId, workspaceId);
         const runningThreads = workspaceThreads.filter((thread: any) => hasActiveThreadRun(resourceId, thread.id));
         if (runningThreads.length > 0) {
-          return c.json({ code: 'workspace-thread-running', error: 'workspace has running threads; stop them before removing the workspace' }, 409);
+          return c.json({
+            code: 'workspace-thread-running',
+            error: 'workspace has running threads; stop them before removing the workspace',
+          }, 409);
         }
 
-        let branchCleanup: BranchCleanup = { requested: deleteLocalBranch, status: deleteLocalBranch ? 'not_applicable' : 'not_requested' };
+        let branchCleanup: BranchCleanup = {
+          requested: deleteLocalBranch,
+          status: deleteLocalBranch ? 'not_applicable' : 'not_requested',
+        };
         if (mode === 'remove') {
           try {
             const result = await removeWorkspaceWorktree(project, workspace, resourceId, {
@@ -1038,7 +1123,7 @@ export const projectRoutes = [
               defaultBranch: project.defaultBranch,
             }, {
               getPortal: getPortalConnection,
-              requestPortal: requestPortalTool,
+              requestPortal: portalRequesterForOwner(resourceId),
             });
             branchCleanup = result.branchCleanup;
           } catch (error) {
@@ -1052,7 +1137,11 @@ export const projectRoutes = [
         const removedWorkspace = removedWorkspaceSnapshot(workspace, removedAt, branchCleanup);
         await archiveRemovedWorkspaceThreads(memory, workspaceThreads, removedWorkspace);
 
-        const nextProject = { ...project, workspaces: project.workspaces.filter(item => item.id !== workspaceId), updatedAt: removedAt };
+        const nextProject = {
+          ...project,
+          workspaces: project.workspaces.filter((item) => item.id !== workspaceId),
+          updatedAt: removedAt,
+        };
         return c.json({
           project: await saveProject(memory, resourceId, nextProject),
           workspace,
@@ -1069,16 +1158,18 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/workspaces/reorder', {
     method: 'PATCH',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
         const body = await c.req.json();
-        const workspaceIds: string[] = Array.isArray(body?.workspaceIds) ? body.workspaceIds.filter((id: unknown): id is string => typeof id === 'string') : [];
+        const workspaceIds: string[] = Array.isArray(body?.workspaceIds)
+          ? body.workspaceIds.filter((id: unknown): id is string => typeof id === 'string')
+          : [];
         const memory = await getMemory(c);
         const project = await getProject(memory, resourceId, projectId);
         if (!project) return c.json({ error: 'project not found' }, 404);
-        const existingIds = new Set(project.workspaces.map(workspace => workspace.id));
+        const existingIds = new Set(project.workspaces.map((workspace) => workspace.id));
         if (workspaceIds.length !== existingIds.size || workspaceIds.some((id: string) => !existingIds.has(id))) {
           return c.json({ error: 'workspaceIds must include all workspaces for this project' }, 400);
         }
@@ -1086,7 +1177,10 @@ export const projectRoutes = [
         const order = new Map<string, number>(workspaceIds.map((id: string, index: number) => [id, index]));
         const nextProject: Project = {
           ...project,
-          workspaces: project.workspaces.map(workspace => ({ ...workspace, sortOrder: order.get(workspace.id) ?? workspace.sortOrder })),
+          workspaces: project.workspaces.map((workspace) => ({
+            ...workspace,
+            sortOrder: order.get(workspace.id) ?? workspace.sortOrder,
+          })),
           updatedAt: nowIso(),
         };
         return c.json({ project: await saveProject(memory, resourceId, nextProject) });
@@ -1097,7 +1191,7 @@ export const projectRoutes = [
   }),
   defineRoute('/code/projects/:projectId/threads', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const projectId = c.req.param('projectId');
@@ -1115,23 +1209,29 @@ export const projectRoutes = [
           ? project.workspaces[0]?.id
           : undefined;
         const workspace = requestedWorkspaceId
-          ? project.workspaces.find(item => item.id === requestedWorkspaceId)
+          ? project.workspaces.find((item) => item.id === requestedWorkspaceId)
           : undefined;
         if (requestedWorkspaceId && !workspace) return c.json({ error: 'workspace not found' }, 404);
         const isAdHoc = project.systemKind === 'adHoc' && workspace?.systemKind === 'adHoc';
-        if (project.projectKind === 'general' && requestedWorkspaceId && !isAdHoc) return c.json({ error: 'general projects cannot have workspace threads' }, 400);
-        if (project.projectKind === 'git' && !workspace) return c.json({ error: 'git project threads must belong to a workspace' }, 400);
-        if (project.projectKind === 'notes' && !workspace) return c.json({ error: 'notes project threads must belong to the vault workspace' }, 400);
+        if (project.projectKind === 'general' && requestedWorkspaceId && !isAdHoc) {
+          return c.json({ error: 'general projects cannot have workspace threads' }, 400);
+        }
+        if (project.projectKind === 'git' && !workspace) {
+          return c.json({ error: 'git project threads must belong to a workspace' }, 400);
+        }
+        if (project.projectKind === 'notes' && !workspace) {
+          return c.json({ error: 'notes project threads must belong to the vault workspace' }, 400);
+        }
 
         const sortOrder = await getTopThreadSortOrder(memory, resourceId, projectId, workspace?.id);
         const metadata = workspace
           ? {
-              mode: 'project',
-              projectId,
-              workspaceId: workspace.id,
-              sortOrder,
-              ...(isAdHoc ? { adHoc: true, portalId: workspace.portalId, workspacePath: workspace.path } : {}),
-            }
+            mode: 'project',
+            projectId,
+            workspaceId: workspace.id,
+            sortOrder,
+            ...(isAdHoc ? { adHoc: true, portalId: workspace.portalId, workspacePath: workspace.path } : {}),
+          }
           : { mode: 'project', projectId, sortOrder };
         const thread = await memory.createThread({
           resourceId,
@@ -1157,4 +1257,4 @@ const productProjectRoutePaths = new Set([
   '/code/projects/:projectId/threads',
 ]);
 
-export const productProjectRoutes = projectRoutes.filter(route => productProjectRoutePaths.has(route.path));
+export const productProjectRoutes = projectRoutes.filter((route) => productProjectRoutePaths.has(route.path));

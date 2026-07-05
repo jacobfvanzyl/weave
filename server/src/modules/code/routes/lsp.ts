@@ -3,6 +3,9 @@ import { productProjectRepository } from '../../../products/project-repository';
 import { issueLspSessionToken } from '../../../portal/lsp-relay';
 import { requestPortalTool, resolvePortalForTarget } from '../../../portal/registry';
 import { defineRoute } from '../../../server/routes';
+import type { SessionService } from '../../../services/session-service';
+import { portalToolScope } from '../../../services/providers/portal-provider';
+import { callerForOwner } from '../../../services/types';
 
 const agentId = 'mageHandAgent';
 const projectThreadPrefix = '__project__';
@@ -75,9 +78,7 @@ const getProject = async (memory: any, resourceId: string, projectId: string) =>
 const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
 const parseTarget = (body: Record<string, unknown>): LspTarget => {
-  const target = body.target && typeof body.target === 'object'
-    ? body.target as Record<string, unknown>
-    : body;
+  const target = body.target && typeof body.target === 'object' ? body.target as Record<string, unknown> : body;
   return {
     projectId: optionalString(target.projectId),
     workspaceId: optionalString(target.workspaceId),
@@ -90,14 +91,16 @@ const parseTarget = (body: Record<string, unknown>): LspTarget => {
 
 const resolveLspTarget = async (c: any, resourceId: string, body: Record<string, unknown>) => {
   const target = parseTarget(body);
-  if (!target.projectId || !target.workspaceId) throw new Error('Project and Workspace are required for language intelligence.');
+  if (!target.projectId || !target.workspaceId) {
+    throw new Error('Project and Workspace are required for language intelligence.');
+  }
 
   const memory = await getMemory(c);
   const project = await getProject(memory, resourceId, target.projectId);
   if (!project) throw new Error('Project was not found.');
   if (project.projectKind !== 'git') throw new Error('Language intelligence is only available for Git Projects.');
 
-  const workspace = project.workspaces.find(item => item.id === target.workspaceId);
+  const workspace = project.workspaces.find((item) => item.id === target.workspaceId);
   if (!workspace) throw new Error('Workspace was not found.');
   const portal = resolvePortalForTarget({
     userId: resourceId,
@@ -124,7 +127,9 @@ const resolveLspTarget = async (c: any, resourceId: string, body: Record<string,
 
 const cleanPortalResult = (result: unknown) => {
   const record = result && typeof result === 'object' ? result as Record<string, unknown> : {};
-  if (record.ok === false) throw new Error(typeof record.error === 'string' ? record.error : 'Portal LSP request failed.');
+  if (record.ok === false) {
+    throw new Error(typeof record.error === 'string' ? record.error : 'Portal LSP request failed.');
+  }
   const { id: _id, type: _type, ...body } = record;
   return body;
 };
@@ -144,14 +149,22 @@ const getPortalWsUrl = (c: any) => {
 
 const errorResponse = (c: any, error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  const status = /not found/i.test(message) ? 404 : /Portal|language intelligence|Project|Workspace/.test(message) ? 400 : 500;
+  const status = /not found/i.test(message)
+    ? 404
+    : /Portal|language intelligence|Project|Workspace/.test(message)
+    ? 400
+    : 500;
   return c.json({ error: message }, status);
 };
 
-export const lspRoutes = [
+type LspRouteDeps = {
+  sessions?: SessionService;
+};
+
+export const createLspRoutes = (deps: LspRouteDeps = {}) => [
   defineRoute('/code/lsp/session', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
@@ -160,30 +173,45 @@ export const lspRoutes = [
         const target = await resolveLspTarget(c, resourceId, body);
         const languageId = optionalString(body.languageId);
         const requestedServerId = optionalString(body.serverId);
-        const result = cleanPortalResult(await requestPortalTool({
-          ...target,
-          tool: 'portal.lsp.session',
-          args: {
+        const session = deps.sessions
+          ? await deps.sessions.startLspSession({
+            caller: callerForOwner(resourceId, 'ui'),
+            scope: portalToolScope(target),
             path,
             languageId,
             serverId: requestedServerId,
-          },
-          timeoutMs: 10_000,
-        })) as Record<string, any>;
-        const sessionId = optionalString(result.sessionId);
-        if (!sessionId) throw new Error('Portal LSP session response did not include a sessionId.');
-        const token = issueLspSessionToken({
-          resourceId,
-          ...target,
-          sessionId,
-          path,
-          languageId: optionalString(result.languageId) ?? languageId,
-          serverId: optionalString(result.serverId) ?? requestedServerId,
-        });
+            timeoutMs: 10_000,
+          })
+          : (() => undefined)();
+        const result = session ? session : cleanPortalResult(
+          await requestPortalTool({
+            ...target,
+            tool: 'portal.lsp.session',
+            args: {
+              path,
+              languageId,
+              serverId: requestedServerId,
+            },
+            timeoutMs: 10_000,
+          }),
+        ) as Record<string, any>;
+        const token = session?.token ?? (() => {
+          const sessionId = optionalString(result.sessionId);
+          if (!sessionId) throw new Error('Portal LSP session response did not include a sessionId.');
+          return issueLspSessionToken({
+            resourceId,
+            ...target,
+            sessionId,
+            path,
+            languageId: optionalString(result.languageId) ?? languageId,
+            serverId: optionalString(result.serverId) ?? requestedServerId,
+          });
+        })();
+        const { target: _serviceTarget, token: _serviceToken, ...responseResult } = result as Record<string, any>;
         return c.json({
-          ...result,
+          ...responseResult,
           token,
-          portalId: target.portalId,
+          portalId: session?.target.portalId ?? target.portalId,
           wsUrl: getPortalWsUrl(c),
         });
       } catch (error) {
@@ -192,3 +220,5 @@ export const lspRoutes = [
     },
   }),
 ];
+
+export const lspRoutes = createLspRoutes();

@@ -3,11 +3,16 @@ import { defineRoute } from '../../server/routes';
 import { getPortalConnection, requestPortalTool } from '../../portal/registry';
 import { issueJupyterSessionToken } from '../../portal/jupyter-relay';
 import { type NotesVaultResolverDependencies, parseNotesVaultTarget, resolveNotesVault } from './storage/resolver';
+import type { SessionService } from '../../services/session-service';
+import { portalToolScope } from '../../services/providers/portal-provider';
+import { callerForOwner } from '../../services/types';
 
 const agentId = 'mageHandAgent';
 const jupyterPreparationTimeoutMs = 120_000;
 
-type NotesJupyterRouteDeps = NotesVaultResolverDependencies;
+type NotesJupyterRouteDeps = NotesVaultResolverDependencies & {
+  sessions?: SessionService;
+};
 
 type NotesJupyterAction = 'status' | 'kernelspecs' | 'session';
 
@@ -114,7 +119,18 @@ const handleNotesJupyterRoute = async (
 
     const path = optionalString(body.path);
     const kernelName = optionalString(body.kernelName);
-    const result = cleanPortalResult(
+    const sessionResult = deps.sessions
+      ? await deps.sessions.handleJupyter({
+        caller: callerForOwner(resourceId, 'ui'),
+        scope: portalToolScope(target),
+        action,
+        path,
+        kernelName,
+        language: optionalString(body.language),
+        timeoutMs,
+      })
+      : undefined;
+    const result = sessionResult ? sessionResult : cleanPortalResult(
       await requestPortalTool({
         ...target,
         tool,
@@ -127,24 +143,27 @@ const handleNotesJupyterRoute = async (
       }),
     ) as Record<string, any>;
 
-    if (action !== 'session') return c.json(result);
+    const { target: _serviceTarget, token: serviceToken, ...responseResult } = result as Record<string, any>;
+    if (action !== 'session') return c.json(responseResult);
 
-    const sessionId = optionalString(result.sessionId);
-    if (!sessionId) throw new Error('Portal Jupyter session response did not include a sessionId.');
     if (!path) throw new Error('path is required.');
 
-    const token = issueJupyterSessionToken({
-      resourceId,
-      ...target,
-      sessionId,
-      path,
-      kernelName: optionalString(result.kernelName) ?? kernelName,
-    });
+    const token = serviceToken ?? (() => {
+      const sessionId = optionalString(result.sessionId);
+      if (!sessionId) throw new Error('Portal Jupyter session response did not include a sessionId.');
+      return issueJupyterSessionToken({
+        resourceId,
+        ...target,
+        sessionId,
+        path,
+        kernelName: optionalString(result.kernelName) ?? kernelName,
+      });
+    })();
 
     return c.json({
-      ...result,
+      ...responseResult,
       token,
-      portalId: target.portalId,
+      portalId: sessionResult?.target.portalId ?? target.portalId,
       wsUrl: getNotesJupyterWsUrl(c),
     });
   } catch (error) {
@@ -152,20 +171,22 @@ const handleNotesJupyterRoute = async (
   }
 };
 
-export const notesJupyterRoutes = [
+export const createNotesJupyterRoutes = (deps: NotesJupyterRouteDeps = {}) => [
   defineRoute('/notes/jupyter/status', {
     method: 'POST',
-    handler: async (c) => handleNotesJupyterRoute(c, 'status'),
+    handler: async (c) => handleNotesJupyterRoute(c, 'status', 10_000, deps),
   }),
   defineRoute('/notes/jupyter/kernelspecs', {
     method: 'POST',
-    handler: async (c) => handleNotesJupyterRoute(c, 'kernelspecs', jupyterPreparationTimeoutMs),
+    handler: async (c) => handleNotesJupyterRoute(c, 'kernelspecs', jupyterPreparationTimeoutMs, deps),
   }),
   defineRoute('/notes/jupyter/session', {
     method: 'POST',
-    handler: async (c) => handleNotesJupyterRoute(c, 'session', jupyterPreparationTimeoutMs),
+    handler: async (c) => handleNotesJupyterRoute(c, 'session', jupyterPreparationTimeoutMs, deps),
   }),
 ];
+
+export const notesJupyterRoutes = createNotesJupyterRoutes();
 
 export const __notesJupyterRoutesTest = {
   handleNotesJupyterRoute,

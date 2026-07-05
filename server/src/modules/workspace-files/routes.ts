@@ -4,19 +4,23 @@ import { productProjectRepository } from '../../products/project-repository';
 import type { Project } from '../../products/types';
 import { issueWorkspaceFileWatchToken } from '../../portal/workspace-file-watch-relay';
 import { requestPortalTool, resolvePortalForTarget } from '../../portal/registry';
+import type { SessionService } from '../../services/session-service';
+import type { ToolService } from '../../services/tool-service';
+import { portalToolScope } from '../../services/providers/portal-provider';
+import { callerForOwner } from '../../services/types';
 import {
+  type NotesVaultResolverDependencies,
   optionalString,
   parseNotesVaultTarget,
   resolveNotesVaultForProject,
-  type NotesVaultResolverDependencies,
 } from '../notes/storage/resolver';
 import type {
   NotesProject,
+  NotesStorageMetadata,
   NotesVaultBackend,
   NotesVaultDeleteInput,
   NotesVaultIndexInput,
   NotesVaultMkdirInput,
-  NotesStorageMetadata,
   NotesVaultMoveInput,
   NotesVaultReadInput,
   NotesVaultUploadInput,
@@ -66,7 +70,10 @@ type WorkspaceFileProject = Project | {
   workspaces: LegacyWorkspace[];
 };
 
-type WorkspaceFileRouteDeps = NotesVaultResolverDependencies;
+type WorkspaceFileRouteDeps = NotesVaultResolverDependencies & {
+  tools?: ToolService;
+  sessions?: SessionService;
+};
 
 type NotesActionInput = {
   index: NotesVaultIndexInput;
@@ -121,9 +128,7 @@ const getProject = async (memory: any, resourceId: string, projectId: string) =>
 };
 
 const parseTarget = (body: Record<string, unknown>): WorkspaceFileTarget => {
-  const target = body.target && typeof body.target === 'object'
-    ? body.target as Record<string, unknown>
-    : body;
+  const target = body.target && typeof body.target === 'object' ? body.target as Record<string, unknown> : body;
   return {
     projectId: optionalString(target.projectId),
     workspaceId: optionalString(target.workspaceId),
@@ -140,11 +145,15 @@ const resolveGitWorkspaceFileTarget = (
   project: WorkspaceFileProject | undefined,
   requiredCapability?: string,
 ) => {
-  if (!target.projectId || !target.workspaceId) throw new Error('Project and Workspace are required for workspace files.');
+  if (!target.projectId || !target.workspaceId) {
+    throw new Error('Project and Workspace are required for workspace files.');
+  }
   if (!project || project.userId !== resourceId) throw new Error('Project was not found.');
-  if (project.projectKind !== 'git') throw new Error('This workspace file operation is only available for Git Projects.');
+  if (project.projectKind !== 'git') {
+    throw new Error('This workspace file operation is only available for Git Projects.');
+  }
 
-  const workspace = project.workspaces.find(item => item.id === target.workspaceId);
+  const workspace = project.workspaces.find((item) => item.id === target.workspaceId);
   if (!workspace) throw new Error('Workspace was not found.');
   const portal = resolvePortalForTarget({
     userId: resourceId,
@@ -171,7 +180,9 @@ const resolveGitWorkspaceFileTarget = (
 
 const cleanPortalResult = (result: unknown) => {
   const record = result && typeof result === 'object' ? result as Record<string, unknown> : {};
-  if (record.ok === false) throw new Error(typeof record.error === 'string' ? record.error : 'Portal workspace file request failed.');
+  if (record.ok === false) {
+    throw new Error(typeof record.error === 'string' ? record.error : 'Portal workspace file request failed.');
+  }
   const { id: _id, type: _type, ...body } = record;
   return body;
 };
@@ -190,7 +201,11 @@ const cleanNotesResult = (
 
 const errorResponse = (c: any, error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  const status = /not found/i.test(message) ? 404 : /Portal|workspace|Project|Workspace|backend|Git|Notes/.test(message) ? 400 : 500;
+  const status = /not found/i.test(message)
+    ? 404
+    : /Portal|workspace|Project|Workspace|backend|Git|Notes/.test(message)
+    ? 400
+    : 500;
   return c.json({ error: message }, status);
 };
 
@@ -314,19 +329,33 @@ const handleWorkspaceFileRoute = async (
       const notesAction = action as 'index' | 'read' | 'write' | 'mkdir' | 'move' | 'delete' | 'upload';
       const notesTarget = parseNotesVaultTarget(body);
       const { backend, binding } = resolveNotesVaultForProject(project as NotesProject, resourceId, notesTarget, deps);
-      const result = await invokeNotesBackend(backend, binding, notesAction, notesActionInput(notesAction, body), timeoutMs);
+      const result = await invokeNotesBackend(
+        backend,
+        binding,
+        notesAction,
+        notesActionInput(notesAction, body),
+        timeoutMs,
+      );
       return c.json(cleanNotesResult(result, notesAction));
     }
 
     if (action === 'index') throw new Error('Workspace file indexing is only available for Notes Projects.');
     const requiredCapability = action === 'hash' || action === 'diffPreview' ? portalToolForAction(action) : undefined;
     const resolvedTarget = resolveGitWorkspaceFileTarget(resourceId, target, project, requiredCapability);
-    const result = await requestPortalTool({
-      ...resolvedTarget,
-      tool: portalToolForAction(action),
-      args: portalArgs(action, body),
-      timeoutMs,
-    });
+    const result = deps.tools
+      ? await deps.tools.requestPortal({
+        caller: callerForOwner(resourceId, 'ui'),
+        target: resolvedTarget,
+        tool: portalToolForAction(action),
+        args: portalArgs(action, body),
+        timeoutMs,
+      })
+      : await requestPortalTool({
+        ...resolvedTarget,
+        tool: portalToolForAction(action),
+        args: portalArgs(action, body),
+        timeoutMs,
+      });
     return c.json(cleanPortalResult(result));
   } catch (error) {
     return errorResponse(c, error);
@@ -349,10 +378,18 @@ const handleWorkspaceFileWatchTokenRoute = async (
     const resolvedTarget = project.projectKind === 'notes'
       ? createNotesWorkspaceFileWatchTarget(project, resourceId, body, deps)
       : resolveGitWorkspaceFileTarget(resourceId, target, project, 'portal.fs.watch');
-    const token = issueWorkspaceFileWatchToken({ resourceId, ...resolvedTarget });
+    const session = deps.sessions
+      ? await deps.sessions.issueWorkspaceFileWatchToken({
+        caller: callerForOwner(resourceId, 'ui'),
+        scope: portalToolScope(resolvedTarget),
+      })
+      : {
+        token: issueWorkspaceFileWatchToken({ resourceId, ...resolvedTarget }),
+        target: resolvedTarget,
+      };
     return c.json({
-      token,
-      portalId: resolvedTarget.portalId,
+      token: session.token,
+      portalId: session.target.portalId,
       wsUrl: getWorkspaceFileWatchWsUrl(c),
     });
   } catch (error) {
@@ -373,52 +410,54 @@ const getWorkspaceFileWatchWsUrl = (c: any) => {
   return url.toString();
 };
 
-export const workspaceFileRoutes = [
+export const createWorkspaceFileRoutes = (deps: WorkspaceFileRouteDeps = {}) => [
   defineRoute('/workspace-files/list', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'list'),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'list', 10_000, deps),
   }),
   defineRoute('/workspace-files/read', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'read'),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'read', 10_000, deps),
   }),
   defineRoute('/workspace-files/write', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'write'),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'write', 10_000, deps),
   }),
   defineRoute('/workspace-files/mkdir', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'mkdir'),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'mkdir', 10_000, deps),
   }),
   defineRoute('/workspace-files/move', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'move'),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'move', 10_000, deps),
   }),
   defineRoute('/workspace-files/delete', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'delete'),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'delete', 10_000, deps),
   }),
   defineRoute('/workspace-files/upload', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'upload'),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'upload', 10_000, deps),
   }),
   defineRoute('/workspace-files/index', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'index', 30_000),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'index', 30_000, deps),
   }),
   defineRoute('/workspace-files/hash', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'hash'),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'hash', 10_000, deps),
   }),
   defineRoute('/workspace-files/diff-preview', {
     method: 'POST',
-    handler: async c => handleWorkspaceFileRoute(c, 'diffPreview'),
+    handler: async (c) => handleWorkspaceFileRoute(c, 'diffPreview', 10_000, deps),
   }),
   defineRoute('/workspace-files/watch-token', {
     method: 'POST',
-    handler: handleWorkspaceFileWatchTokenRoute,
+    handler: (c) => handleWorkspaceFileWatchTokenRoute(c, deps),
   }),
 ];
+
+export const workspaceFileRoutes = createWorkspaceFileRoutes();
 
 export const __workspaceFileRoutesTest = {
   cleanPortalResult,

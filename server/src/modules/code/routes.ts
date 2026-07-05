@@ -1,9 +1,9 @@
 import { mountRoute } from '../../server/routes';
 import { registerAgentContribution } from '../../agent/contributions';
 import type { ServerModule } from '../types';
-import { lspRoutes } from './routes/lsp';
+import { createLspRoutes } from './routes/lsp';
 import { projectRoutes } from './routes/projects';
-import { terminalRoutes } from './routes/terminals';
+import { createTerminalRoutes } from './routes/terminals';
 
 registerAgentContribution({
   moduleId: 'code',
@@ -19,7 +19,10 @@ registerAgentContribution({
     { id: 'git_branch', description: 'List and manage Git branches for the current Code workspace.' },
     { id: 'git_switch', description: 'Switch branches for the current Code workspace.' },
     { id: 'git_worktree', description: 'List, create, switch, and remove worktrees for the current Code project.' },
-    { id: 'code_intel_capabilities', description: 'Inspect configured and runtime language-server capabilities for a Code workspace file.' },
+    {
+      id: 'code_intel_capabilities',
+      description: 'Inspect configured and runtime language-server capabilities for a Code workspace file.',
+    },
     { id: 'code_diagnostics', description: 'Read LSP diagnostics for a Code workspace file.' },
     { id: 'code_hover', description: 'Read LSP hover information at a file position.' },
     { id: 'code_definition', description: 'Find LSP definitions at a file position.' },
@@ -34,7 +37,10 @@ registerAgentContribution({
     { id: 'write_plan', description: 'Write a plan artifact for the current Code workspace.' },
     { id: 'write_proposal', description: 'Write a proposed change artifact for the current Code workspace.' },
     { id: 'write_proposal_patch', description: 'Write a proposed patch artifact for the current Code workspace.' },
-    { id: 'update_proposal', description: 'Update proposed change approval and review state for the current Code workspace.' },
+    {
+      id: 'update_proposal',
+      description: 'Update proposed change approval and review state for the current Code workspace.',
+    },
   ],
   sources: [
     { id: 'code.workspace.context', description: 'Workspace AGENTS.md and .weave context discovered through Portal.' },
@@ -43,9 +49,9 @@ registerAgentContribution({
 
 export const codeModule: ServerModule = {
   id: 'code',
-  registerRoutes: app => {
+  registerRoutes: (app, services) => {
     for (const route of projectRoutes) mountRoute(app, route);
-    for (const route of lspRoutes) mountRoute(app, route);
-    for (const route of terminalRoutes) mountRoute(app, route);
+    for (const route of createLspRoutes({ sessions: services.internal.sessions })) mountRoute(app, route);
+    for (const route of createTerminalRoutes({ sessions: services.internal.sessions })) mountRoute(app, route);
   },
 };

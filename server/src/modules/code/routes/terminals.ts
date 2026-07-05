@@ -3,6 +3,9 @@ import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { productProjectRepository } from '../../../products/project-repository';
 import { listPortalConnections, resolvePortalForTarget } from '../../../portal/registry';
 import { issueTerminalToken, type TerminalSessionKind } from '../../../portal/terminal-relay';
+import type { SessionService } from '../../../services/session-service';
+import { portalToolScope } from '../../../services/providers/portal-provider';
+import { callerForOwner } from '../../../services/types';
 
 const agentId = 'mageHandAgent';
 const projectThreadPrefix = '__project__';
@@ -92,8 +95,9 @@ const resolveTerminalTarget = async (c: any, resourceId: string, body: Record<st
     const requestedPortalId = optionalString(body.portalId);
     const requestedRootId = optionalString(body.rootId);
     const portal = requestedPortalId
-      ? listPortalConnections(resourceId).find(connection =>
-        connection.status === 'online' && connection.portalId === requestedPortalId)
+      ? listPortalConnections(resourceId).find((connection) =>
+        connection.status === 'online' && connection.portalId === requestedPortalId
+      )
       : resolvePortalForTarget({
         userId: resourceId,
         rootId: requestedRootId,
@@ -116,7 +120,7 @@ const resolveTerminalTarget = async (c: any, resourceId: string, body: Record<st
   if (!project) throw new Error('Project was not found.');
   if (project.projectKind !== 'git') throw new Error('Terminal is only available for Git Projects.');
 
-  const workspace = project.workspaces.find(item => item.id === workspaceId);
+  const workspace = project.workspaces.find((item) => item.id === workspaceId);
   if (!workspace) throw new Error('Workspace was not found.');
   const portal = resolvePortalForTarget({
     userId: resourceId,
@@ -145,18 +149,31 @@ const errorResponse = (c: any, error: unknown) => {
   return c.json({ error: message }, status);
 };
 
-export const terminalRoutes = [
+type TerminalRouteDeps = {
+  sessions?: SessionService;
+};
+
+export const createTerminalRoutes = (deps: TerminalRouteDeps = {}) => [
   defineRoute('/code/terminals/token', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
         const target = await resolveTerminalTarget(c, resourceId, body);
-        const token = issueTerminalToken({ resourceId, ...target });
+        const session = deps.sessions
+          ? await deps.sessions.issueTerminalToken({
+            caller: callerForOwner(resourceId, 'ui'),
+            kind: target.kind,
+            scope: portalToolScope(target),
+          })
+          : {
+            token: issueTerminalToken({ resourceId, ...target }),
+            target,
+          };
         return c.json({
-          token,
-          portalId: target.portalId,
+          token: session.token,
+          portalId: session.target.portalId,
           wsUrl: getPortalWsUrl(c),
         });
       } catch (error) {
@@ -165,3 +182,5 @@ export const terminalRoutes = [
     },
   }),
 ];
+
+export const terminalRoutes = createTerminalRoutes();
