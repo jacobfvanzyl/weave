@@ -138,3 +138,32 @@ Deno.test('workflow run route starts owner-scoped runs', async () => {
   });
   assertEquals(json.run.runId, 'run-1');
 });
+
+Deno.test('workflow run cancel route delegates owner-scoped cancellation', async () => {
+  let cancelled: { ownerId?: string; runId?: string } = {};
+  const service = {
+    cancelRun: (ownerId: string, runId: string) => {
+      cancelled = { ownerId, runId };
+      return Promise.resolve(
+        {
+          ...runRecord(ownerId),
+          runId,
+          status: 'cancelled',
+          error: { message: 'Workflow run was cancelled.' },
+        } satisfies WorkflowRunRecord,
+      );
+    },
+  } as unknown as WorkflowControlService;
+  const app = createTestApp(service);
+
+  const response = await app.request('/workflow-runs/run-1/cancel', {
+    method: 'POST',
+    headers: { authorization: 'Bearer test-token' },
+  });
+  const json = await response.json();
+
+  assertEquals(response.status, 200);
+  assertEquals(cancelled, { ownerId: 'owner-1', runId: 'run-1' });
+  assertEquals(json.run.status, 'cancelled');
+  assertEquals(json.run.error, { message: 'Workflow run was cancelled.' });
+});

@@ -149,6 +149,18 @@ export const createWorkflowRoutes = (service: WorkflowControlService = workflowC
       return c.json({ run: workflowRunResponse(run) });
     },
   }),
+  defineRoute('/workflow-runs/:runId/cancel', {
+    method: 'POST',
+    handler: async (c) => {
+      const owner = getOwner(c);
+      try {
+        const run = await service.cancelRun(owner.id, c.req.param('runId'));
+        return c.json({ run: workflowRunResponse(run) });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
 ];
 
 export const workflowRoutes = createWorkflowRoutes();

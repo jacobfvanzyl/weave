@@ -143,6 +143,7 @@ export interface WorkflowRepository {
   ): Promise<WorkflowRunRecord | undefined>;
   completeRun(ownerId: string, runId: string, output: JsonValue): Promise<WorkflowRunRecord | undefined>;
   failRun(ownerId: string, runId: string, error: JsonValue): Promise<WorkflowRunRecord | undefined>;
+  cancelRun(ownerId: string, runId: string, error?: JsonValue): Promise<WorkflowRunRecord | undefined>;
   getRun(ownerId: string, runId: string): Promise<WorkflowRunRecord | undefined>;
   listRuns(ownerId: string, options?: ListWorkflowRunsOptions): Promise<WorkflowRunRecord[]>;
 }
@@ -282,6 +283,11 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     return this.finishRun(ownerId, runId, 'failed', undefined, error);
   }
 
+  cancelRun(ownerId: string, runId: string, error: JsonValue = { message: 'Workflow run was cancelled.' }) {
+    if (!isJsonValue(error)) throw new Error('Workflow run cancellation error must be JSON-safe.');
+    return this.finishRun(ownerId, runId, 'cancelled', undefined, error);
+  }
+
   async getRun(ownerId: string, runId: string) {
     const db = await this.getClient();
     const result = await db.execute({
@@ -324,7 +330,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
   private async finishRun(
     ownerId: string,
     runId: string,
-    status: Extract<WorkflowRunStatus, 'completed' | 'failed'>,
+    status: Extract<WorkflowRunStatus, 'completed' | 'failed' | 'cancelled'>,
     output: JsonValue | undefined,
     error: JsonValue | undefined,
   ) {
@@ -333,7 +339,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     await db.execute({
       sql: `UPDATE weave_workflow_runs
         SET status = ?, output = ?, error = ?, finished_at = ?, updated_at = ?
-        WHERE owner_id = ? AND run_id = ?`,
+        WHERE owner_id = ? AND run_id = ? AND status = 'running'`,
       args: [
         status,
         output === undefined ? null : JSON.stringify(output),

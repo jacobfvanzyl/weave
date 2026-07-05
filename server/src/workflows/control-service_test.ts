@@ -118,14 +118,14 @@ const createFakeClient = () => {
       if (sql.includes('UPDATE weave_workflow_runs') && sql.includes('SET status = ?')) {
         const [status, output, error, finishedAt, updatedAt, ownerId, runId] = args;
         const row = runs.get(`${ownerId}:${runId}`);
-        if (row) {
+        if (row && row.status === 'running') {
           row.status = status;
           row.output = output;
           row.error = error;
           row.finished_at = finishedAt;
           row.updated_at = updatedAt;
         }
-        return { rows: [], rowsAffected: row ? 1 : 0 };
+        return { rows: [], rowsAffected: row?.status === status ? 1 : 0 };
       }
 
       if (sql.includes('FROM weave_workflow_runs') && sql.includes('run_id = ?')) {
@@ -217,4 +217,79 @@ Deno.test('WorkflowControlService marks runs failed when execution rejects', asy
   const failed = await service.getRun('owner-1', 'run-1');
   assertEquals(failed?.status, 'failed');
   assertEquals((failed?.error as { message?: string })?.message, 'executor failed');
+});
+
+Deno.test('WorkflowControlService reconciles DBOS-backed running runs on read', async () => {
+  const client = createFakeClient();
+  const repository = new LibsqlWorkflowRepository(() => Promise.resolve(client as never));
+  const executor: WorkflowRunExecutor = {
+    start(): Promise<WorkflowExecutionStart> {
+      return Promise.resolve({
+        backend: 'dbos',
+        externalRunId: 'dbos-run-1',
+        result: new Promise(() => undefined),
+      });
+    },
+    getStatus: () => Promise.resolve({ status: 'completed', output: { ok: true } }),
+  };
+  const service = new WorkflowControlService(repository, executor, createEventService());
+  await service.saveDefinition('owner-1', definition());
+  await service.startRun({ ownerId: 'owner-1', workflowId: 'workflow-1', runId: 'run-1' });
+
+  const reconciled = await service.getRun('owner-1', 'run-1');
+  assertEquals(reconciled?.status, 'completed');
+  assertEquals(reconciled?.output, { ok: true });
+});
+
+Deno.test('WorkflowControlService cancels running runs and ignores late direct completion', async () => {
+  const client = createFakeClient();
+  const repository = new LibsqlWorkflowRepository(() => Promise.resolve(client as never));
+  const deferred = createDeferred<JsonValue>();
+  const executor: WorkflowRunExecutor = {
+    start(): Promise<WorkflowExecutionStart> {
+      return Promise.resolve({
+        backend: 'direct',
+        result: deferred.promise,
+      });
+    },
+  };
+  const service = new WorkflowControlService(repository, executor, createEventService());
+  await service.saveDefinition('owner-1', definition());
+  await service.startRun({ ownerId: 'owner-1', workflowId: 'workflow-1', runId: 'run-1' });
+
+  const cancelled = await service.cancelRun('owner-1', 'run-1');
+  assertEquals(cancelled.status, 'cancelled');
+
+  deferred.resolve('late output');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const stillCancelled = await service.getRun('owner-1', 'run-1');
+  assertEquals(stillCancelled?.status, 'cancelled');
+  assertEquals(stillCancelled?.output, undefined);
+});
+
+Deno.test('WorkflowControlService uses executor cancellation status for DBOS-backed runs', async () => {
+  const client = createFakeClient();
+  const repository = new LibsqlWorkflowRepository(() => Promise.resolve(client as never));
+  let cancelledRunId: string | undefined;
+  const executor: WorkflowRunExecutor = {
+    start(): Promise<WorkflowExecutionStart> {
+      return Promise.resolve({
+        backend: 'dbos',
+        externalRunId: 'dbos-run-1',
+        result: new Promise(() => undefined),
+      });
+    },
+    cancel: (run) => {
+      cancelledRunId = run.externalRunId;
+      return Promise.resolve({ status: 'cancelled', error: { message: 'cancelled in DBOS' } });
+    },
+  };
+  const service = new WorkflowControlService(repository, executor, createEventService());
+  await service.saveDefinition('owner-1', definition());
+  await service.startRun({ ownerId: 'owner-1', workflowId: 'workflow-1', runId: 'run-1' });
+
+  const cancelled = await service.cancelRun('owner-1', 'run-1');
+  assertEquals(cancelledRunId, 'dbos-run-1');
+  assertEquals(cancelled.status, 'cancelled');
+  assertEquals(cancelled.error, { message: 'cancelled in DBOS' });
 });

@@ -1,5 +1,7 @@
 import {
+  cancelDbosWorkflowExecution,
   type DbosAdapter,
+  getDbosWorkflowStatus,
   maybeLaunchDbosWorkflowRuntime,
   resetDbosWorkflowRuntimeForTests,
   weaveDbosWorkflowName,
@@ -114,6 +116,51 @@ Deno.test('maybeLaunchDbosWorkflowRuntime configures, registers, and launches in
   });
   assertEquals(output, 'done:prompt');
   assertEquals(calls.at(-1), 'step:state:agent:agent');
+});
+
+Deno.test('DBOS status and cancel helpers use the launched adapter when enabled', async () => {
+  resetDbosWorkflowRuntimeForTests();
+  const calls: string[] = [];
+  const adapter: DbosAdapter = {
+    setConfig: () => undefined,
+    registerWorkflow: (fn) => fn,
+    runStep: async (operation) => await operation(),
+    getWorkflowStatus: (workflowID) => {
+      calls.push(`status:${workflowID}`);
+      return Promise.resolve({
+        workflowID,
+        status: 'SUCCESS',
+        output: { ok: true },
+      });
+    },
+    cancelWorkflow: (workflowID, options) => {
+      calls.push(`cancel:${workflowID}:${options?.cancelChildren === true}`);
+      return Promise.resolve();
+    },
+    launch: () => Promise.resolve(),
+  };
+
+  const status = await getDbosWorkflowStatus('workflow-run-1', {
+    env: {
+      WEAVE_DBOS_ENABLED: '1',
+      DBOS_SYSTEM_DATABASE_URL: 'postgres://user:pass@localhost:5432/dbos',
+    },
+    adapter,
+    runtime: fakeRuntime(),
+  });
+  const cancelled = await cancelDbosWorkflowExecution('workflow-run-1', {
+    env: {
+      WEAVE_DBOS_ENABLED: '1',
+      DBOS_SYSTEM_DATABASE_URL: 'postgres://user:pass@localhost:5432/dbos',
+    },
+    adapter,
+    runtime: fakeRuntime(),
+  });
+
+  assertEquals(status?.status, 'SUCCESS');
+  assertEquals(status?.output, { ok: true });
+  assertEquals(cancelled, true);
+  assertEquals(calls, ['status:workflow-run-1', 'cancel:workflow-run-1:true']);
 });
 
 Deno.test('DBOS integration smoke runs only when explicitly configured', async () => {

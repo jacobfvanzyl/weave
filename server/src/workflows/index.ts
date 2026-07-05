@@ -1,5 +1,12 @@
 export { createWorkflowServiceRuntime, DefaultWorkflowServiceRuntime, workflowServiceRuntime } from './service-runtime';
-export { maybeLaunchDbosWorkflowRuntime, registerWeaveDbosWorkflow, weaveDbosWorkflowName } from './dbos-runtime';
+export {
+  cancelDbosWorkflowExecution,
+  getDbosWorkflowStatus,
+  maybeLaunchDbosWorkflowRuntime,
+  registerWeaveDbosWorkflow,
+  startDbosWorkflowExecution,
+  weaveDbosWorkflowName,
+} from './dbos-runtime';
 export { createWorkflowControlService, WorkflowControlError, workflowControlService } from './control-service';
 export { executeWorkflowDefinition, WorkflowExecutionError } from './runner';
 export { validateWorkflowDefinition, WorkflowDefinitionError } from './definition';
@@ -13,12 +20,14 @@ export type {
   DbosWorkflowHandle,
   DbosWorkflowRuntimeLaunchResult,
   DbosWorkflowRuntimeOptions,
+  DbosWorkflowStatus,
   WeaveDbosWorkflow,
 } from './dbos-runtime';
 export type {
   WorkflowControlErrorCode,
   WorkflowControlServiceDeps,
   WorkflowExecutionStart,
+  WorkflowExecutionStatus,
   WorkflowRunExecutor,
 } from './control-service';
 export type {

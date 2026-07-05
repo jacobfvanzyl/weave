@@ -30,6 +30,16 @@ export type DbosWorkflowHandle = {
   getResult(): Promise<JsonValue>;
 };
 
+export type DbosWorkflowStatus = {
+  workflowID: string;
+  status: string;
+  output?: unknown;
+  error?: unknown;
+  createdAt?: number;
+  updatedAt?: number;
+  completedAt?: number;
+};
+
 export type DbosAdapter = {
   setConfig(config: DbosRuntimeConfig): void;
   registerWorkflow(fn: WeaveDbosWorkflow, config: DbosWorkflowConfig): WeaveDbosWorkflow;
@@ -38,6 +48,8 @@ export type DbosAdapter = {
     workflow: WeaveDbosWorkflow,
     config: DbosStartWorkflowConfig,
   ): (input: WorkflowRunInput) => Promise<DbosWorkflowHandle>;
+  getWorkflowStatus?(workflowID: string): Promise<DbosWorkflowStatus | null>;
+  cancelWorkflow?(workflowID: string, options?: { cancelChildren?: boolean }): Promise<void>;
   launch(): Promise<void>;
 };
 
@@ -124,6 +136,25 @@ export const startDbosWorkflowExecution = async (
     workflowID: handle.workflowID,
     result: handle.getResult(),
   };
+};
+
+export const getDbosWorkflowStatus = async (
+  workflowID: string,
+  options: DbosWorkflowRuntimeOptions = {},
+) => {
+  const launch = await maybeLaunchDbosWorkflowRuntime(options);
+  if (!launch.enabled || !launch.adapter.getWorkflowStatus) return undefined;
+  return launch.adapter.getWorkflowStatus(workflowID);
+};
+
+export const cancelDbosWorkflowExecution = async (
+  workflowID: string,
+  options: DbosWorkflowRuntimeOptions = {},
+) => {
+  const launch = await maybeLaunchDbosWorkflowRuntime(options);
+  if (!launch.enabled || !launch.adapter.cancelWorkflow) return false;
+  await launch.adapter.cancelWorkflow(workflowID, { cancelChildren: true });
+  return true;
 };
 
 const loadDefaultDbosAdapter = async (): Promise<DbosAdapter> => {

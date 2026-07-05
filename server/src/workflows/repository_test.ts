@@ -111,14 +111,14 @@ const createFakeClient = () => {
       if (sql.includes('UPDATE weave_workflow_runs') && sql.includes('SET status = ?')) {
         const [status, output, error, finishedAt, updatedAt, ownerId, runId] = args;
         const row = runs.get(`${ownerId}:${runId}`);
-        if (row) {
+        if (row && row.status === 'running') {
           row.status = status;
           row.output = output;
           row.error = error;
           row.finished_at = finishedAt;
           row.updated_at = updatedAt;
         }
-        return { rows: [], rowsAffected: row ? 1 : 0 };
+        return { rows: [], rowsAffected: row?.status === status ? 1 : 0 };
       }
 
       if (sql.includes('FROM weave_workflow_runs') && sql.includes('run_id = ?')) {
@@ -187,4 +187,22 @@ Deno.test('LibsqlWorkflowRepository stores and updates workflow run records', as
   assertEquals((await repository.listRuns('owner-1', { workflowId: 'workflow-1' })).map((item) => item.runId), [
     'run-1',
   ]);
+});
+
+Deno.test('LibsqlWorkflowRepository marks running workflow runs cancelled without overwriting terminal runs', async () => {
+  const client = createFakeClient();
+  const repository = new LibsqlWorkflowRepository(() => Promise.resolve(client as never));
+  await repository.createRun({
+    ownerId: 'owner-1',
+    runId: 'run-1',
+    definition: definition(),
+    input: null,
+  });
+
+  const cancelled = await repository.cancelRun('owner-1', 'run-1');
+  assertEquals(cancelled?.status, 'cancelled');
+  assertEquals(cancelled?.error, { message: 'Workflow run was cancelled.' });
+
+  await repository.completeRun('owner-1', 'run-1', 'late output');
+  assertEquals((await repository.getRun('owner-1', 'run-1'))?.status, 'cancelled');
 });

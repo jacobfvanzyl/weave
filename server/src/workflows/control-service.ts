@@ -1,7 +1,7 @@
 import { callerForOwner, isJsonValue, type JsonValue } from '../services/types';
 import type { EventService } from '../services/event-service';
 import { eventService as defaultEventService } from '../services/event-service';
-import { startDbosWorkflowExecution } from './dbos-runtime';
+import { cancelDbosWorkflowExecution, getDbosWorkflowStatus, startDbosWorkflowExecution } from './dbos-runtime';
 import { validateWorkflowDefinition, type WorkflowDefinition, type WorkflowRunInput } from './definition';
 import { executeWorkflowDefinition } from './runner';
 import {
@@ -32,8 +32,16 @@ export type WorkflowExecutionStart = {
   result: Promise<JsonValue>;
 };
 
+export type WorkflowExecutionStatus =
+  | { status: 'running' }
+  | { status: 'completed'; output: JsonValue }
+  | { status: 'failed'; error: JsonValue }
+  | { status: 'cancelled'; error?: JsonValue };
+
 export interface WorkflowRunExecutor {
   start(input: WorkflowRunInput): Promise<WorkflowExecutionStart>;
+  getStatus?(run: WorkflowRunRecord): Promise<WorkflowExecutionStatus | undefined>;
+  cancel?(run: WorkflowRunRecord): Promise<WorkflowExecutionStatus | undefined>;
 }
 
 export type WorkflowControlServiceDeps = {
@@ -56,6 +64,22 @@ export class DefaultWorkflowRunExecutor implements WorkflowRunExecutor {
     return {
       backend: 'direct',
       result: executeWorkflowDefinition(input),
+    };
+  }
+
+  async getStatus(run: WorkflowRunRecord): Promise<WorkflowExecutionStatus | undefined> {
+    if (run.backend !== 'dbos' || !run.externalRunId) return undefined;
+    const status = await getDbosWorkflowStatus(run.externalRunId);
+    return status ? dbosStatusToWorkflowExecutionStatus(status.status, status.output, status.error) : undefined;
+  }
+
+  async cancel(run: WorkflowRunRecord): Promise<WorkflowExecutionStatus | undefined> {
+    if (run.backend !== 'dbos' || !run.externalRunId) return undefined;
+    await cancelDbosWorkflowExecution(run.externalRunId);
+    const status = await this.getStatus(run);
+    return status?.status === 'completed' || status?.status === 'failed' ? status : {
+      status: 'cancelled',
+      error: { message: 'Workflow run was cancelled.' },
     };
   }
 }
@@ -86,12 +110,14 @@ export class WorkflowControlService {
     return this.repository.deleteDefinition(ownerId, workflowId);
   }
 
-  getRun(ownerId: string, runId: string) {
-    return this.repository.getRun(ownerId, runId);
+  async getRun(ownerId: string, runId: string) {
+    const run = await this.repository.getRun(ownerId, runId);
+    return run ? await this.reconcileRun(run) : undefined;
   }
 
-  listRuns(ownerId: string, options?: { workflowId?: string; limit?: number }) {
-    return this.repository.listRuns(ownerId, options);
+  async listRuns(ownerId: string, options?: { workflowId?: string; limit?: number }) {
+    const runs = await this.repository.listRuns(ownerId, options);
+    return Promise.all(runs.map((run) => this.reconcileRun(run)));
   }
 
   async startRun(input: {
@@ -147,16 +173,62 @@ export class WorkflowControlService {
     }
   }
 
+  async cancelRun(ownerId: string, runId: string) {
+    const run = await this.repository.getRun(ownerId, runId);
+    if (!run) throw new WorkflowControlError('not_found', 'Workflow run was not found.', 404);
+    if (run.status !== 'running') return run;
+
+    const executionStatus = await this.executor.cancel?.(run);
+    const cancelled = await this.applyExecutionStatus(
+      run,
+      executionStatus ?? {
+        status: 'cancelled',
+        error: { message: 'Workflow run was cancelled.' },
+      },
+    );
+    if (cancelled.status === 'cancelled') {
+      await this.publishRunEvent(ownerId, runId, 'workflow.run.cancelled', {
+        workflowId: run.workflowId,
+        externalRunId: run.externalRunId ?? null,
+      });
+    }
+    return cancelled;
+  }
+
+  async reconcileRun(run: WorkflowRunRecord) {
+    if (run.status !== 'running') return run;
+    const executionStatus = await this.executor.getStatus?.(run);
+    return this.applyExecutionStatus(run, executionStatus);
+  }
+
   private async settleRun(ownerId: string, runId: string, resultPromise: Promise<JsonValue>) {
     try {
       const output = await resultPromise;
+      const current = await this.repository.getRun(ownerId, runId);
+      if (!current || current.status !== 'running') return;
       await this.repository.completeRun(ownerId, runId, output);
       await this.publishRunEvent(ownerId, runId, 'workflow.run.completed', output);
     } catch (error) {
+      const current = await this.repository.getRun(ownerId, runId);
+      if (!current || current.status !== 'running') return;
       const failure = errorToJson(error);
       await this.repository.failRun(ownerId, runId, failure);
       await this.publishRunEvent(ownerId, runId, 'workflow.run.failed', failure);
     }
+  }
+
+  private async applyExecutionStatus(
+    run: WorkflowRunRecord,
+    executionStatus: WorkflowExecutionStatus | undefined,
+  ): Promise<WorkflowRunRecord> {
+    if (!executionStatus || executionStatus.status === 'running') return run;
+    if (executionStatus.status === 'completed') {
+      return await this.repository.completeRun(run.ownerId, run.runId, executionStatus.output) ?? run;
+    }
+    if (executionStatus.status === 'failed') {
+      return await this.repository.failRun(run.ownerId, run.runId, executionStatus.error) ?? run;
+    }
+    return await this.repository.cancelRun(run.ownerId, run.runId, executionStatus.error) ?? run;
   }
 
   private publishRunEvent(ownerId: string, runId: string, type: string, data: JsonValue) {
@@ -216,4 +288,36 @@ const errorToJson = (error: unknown): JsonValue => {
     return { name: error.name, message: error.message };
   }
   return { message: String(error) };
+};
+
+const unknownToJson = (value: unknown): JsonValue => {
+  if (value === undefined) return null;
+  if (value instanceof Error) return errorToJson(value);
+  if (isJsonValue(value)) return value;
+  try {
+    const serialized = JSON.stringify(value);
+    if (!serialized) return null;
+    const parsed = JSON.parse(serialized);
+    return isJsonValue(parsed) ? parsed : { message: String(value) };
+  } catch {
+    return { message: String(value) };
+  }
+};
+
+const dbosStatusToWorkflowExecutionStatus = (
+  status: string,
+  output: unknown,
+  error: unknown,
+): WorkflowExecutionStatus => {
+  if (status === 'SUCCESS') return { status: 'completed', output: unknownToJson(output) };
+  if (status === 'ERROR' || status === 'MAX_RECOVERY_ATTEMPTS_EXCEEDED') {
+    return {
+      status: 'failed',
+      error: unknownToJson(error ?? { message: `DBOS workflow ended with status ${status}.` }),
+    };
+  }
+  if (status === 'CANCELLED') {
+    return { status: 'cancelled', error: unknownToJson(error ?? { message: 'DBOS workflow was cancelled.' }) };
+  }
+  return { status: 'running' };
 };
