@@ -4,6 +4,7 @@ import type { Mastra } from '@mastra/core/mastra';
 import { listAgentContributions } from './contributions';
 import { getThreadContextUsageSnapshot } from './mastra/context-usage';
 import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from './model-capabilities';
+import { getModelConfig, type ModelConfig } from './model-options';
 import { buildChatSystemMessages } from './mastra/agents/instructions';
 import { mastra as defaultMastra } from './mastra/index';
 import { expandPromptTemplate, listPromptSummaries } from './mastra/prompt-templates/registry';
@@ -24,6 +25,7 @@ import {
   buildRunTimingMetadata,
   toThreadRunSnapshot,
 } from './run-coordinator';
+import { type EventService, eventService as defaultEventService } from '../services/event-service';
 import { type JsonValue, type ServiceCaller, ServiceError } from '../services/types';
 
 export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'failed';
@@ -47,9 +49,35 @@ export type AgentRunRequest = {
 
 export type AgentRunSnapshot = {
   runId: string;
+  agentId: string;
   status: AgentRunStatus;
   createdAt: string;
   updatedAt: string;
+  completedAt?: string;
+  result?: JsonValue;
+  error?: string;
+};
+
+export type AgentRunEvent =
+  | { type: 'start'; run: AgentRunSnapshot }
+  | { type: 'finish'; run: AgentRunSnapshot; result: JsonValue }
+  | { type: 'error'; run: AgentRunSnapshot; error: string }
+  | { type: 'abort'; run: AgentRunSnapshot; reason: string };
+
+type GenericAgentRun = {
+  runId: string;
+  agentId: string;
+  ownerId: string;
+  status: AgentRunStatus;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  result?: JsonValue;
+  error?: string;
+  controller: AbortController;
+  events: AgentRunEvent[];
+  listeners: Set<(event: AgentRunEvent | { type: 'close' }) => void>;
+  cleanupTimer?: ReturnType<typeof setTimeout>;
 };
 
 export type PromptContextInput = Omit<AgentContextInput, 'mastra' | 'resourceId'> & {
@@ -144,9 +172,11 @@ export type UpdateChatThreadRequest = ChatThreadMessagesRequest & {
 
 type ChatStreamHandler = typeof handleChatStream;
 type AgentContextResolver = (input: AgentContextInput) => Promise<ResolvedAgentContext>;
+const genericRunCleanupDelayMs = 5 * 60 * 1000;
 
 export interface AgentService {
   listCapabilities(): Promise<Record<string, unknown>>;
+  listModels(): Promise<ModelConfig>;
   listPromptTemplates(context: PromptContextInput): Promise<unknown>;
   expandPrompt(name: string, args: string, context: PromptContextInput): Promise<string | undefined>;
   resolveContext(context: PromptContextInput): Promise<ResolvedAgentContext>;
@@ -177,27 +207,35 @@ export interface AgentService {
 }
 
 export class MastraAgentService implements AgentService {
+  private readonly genericRuns = new Map<string, GenericAgentRun>();
+
   constructor(
     private readonly mastra: Mastra = defaultMastra,
     private readonly runCoordinator: AgentRunCoordinator = new AgentRunCoordinator(),
     private readonly chatStreamHandler: ChatStreamHandler = handleChatStream,
     private readonly contextResolver: AgentContextResolver = resolveAgentContext,
+    private readonly events: EventService = defaultEventService,
   ) {}
 
   async listCapabilities() {
     return {
-      agents: ['mageHandAgent'],
+      agents: [{ id: 'mage-hand' }],
+      models: await this.listModels(),
       prompts: await listPromptSummaries({ mastra: this.mastra }),
       contributions: listAgentContributions(),
       runLifecycle: {
-        startRun: false,
-        streamRun: false,
-        cancelRun: false,
+        startRun: true,
+        streamRun: true,
+        cancelRun: true,
         sendSignal: false,
         runPrompt: true,
         chatRuns: true,
       },
     };
+  }
+
+  listModels() {
+    return getModelConfig();
   }
 
   async listPromptTemplates(context: PromptContextInput) {
@@ -216,23 +254,40 @@ export class MastraAgentService implements AgentService {
     putAgentContext(requestContext, resolved);
   }
 
-  async startRun(_input: AgentRunRequest): Promise<AgentRunSnapshot> {
-    throw new ServiceError('not_implemented', 'AgentService.startRun is not implemented yet.', 501);
+  async startRun(input: AgentRunRequest): Promise<AgentRunSnapshot> {
+    const agentIds = resolveAgentIds(input.agentId);
+    const agent = await this.getAgentOrThrow(agentIds.mastraAgentId, agentIds.agentId);
+    const run = this.createGenericRun(input, agentIds.agentId);
+    this.emitGenericRunEvent(run, { type: 'start', run: genericRunSnapshot(run) });
+    this.executeGenericRun(run, input, agent);
+    return genericRunSnapshot(run);
   }
 
-  streamRun(_runId: string): ReadableStream<unknown> {
-    const run = this.runCoordinator.getRunById(_runId);
+  streamRun(runId: string): ReadableStream<unknown> {
+    const genericRun = this.genericRuns.get(runId);
+    if (genericRun) return this.observeGenericRun(genericRun);
+
+    const run = this.runCoordinator.getRunById(runId);
     if (!run) throw new ServiceError('operation_failed', 'Agent run was not found.', 404);
     return this.runCoordinator.observeRun(run);
   }
 
-  async getRun(_runId: string) {
-    const run = this.runCoordinator.getRunById(_runId);
+  async getRun(runId: string) {
+    const genericRun = this.genericRuns.get(runId);
+    if (genericRun) return genericRunSnapshot(genericRun);
+
+    const run = this.runCoordinator.getRunById(runId);
     return run ? toGenericRunSnapshot(run) : undefined;
   }
 
-  async cancelRun(_runId: string) {
-    const run = this.runCoordinator.getRunById(_runId);
+  async cancelRun(runId: string) {
+    const genericRun = this.genericRuns.get(runId);
+    if (genericRun) {
+      this.cancelGenericRun(genericRun);
+      return genericRunSnapshot(genericRun);
+    }
+
+    const run = this.runCoordinator.getRunById(runId);
     if (!run) return undefined;
     this.runCoordinator.cancelRun(run);
     return toGenericRunSnapshot(run);
@@ -593,17 +648,64 @@ export class MastraAgentService implements AgentService {
   }
 
   async runPrompt(input: AgentRunRequest): Promise<JsonValue> {
-    const agent = await this.mastra.getAgent(input.agentId ?? 'mageHandAgent');
-    if (!agent) {
-      throw new ServiceError('operation_failed', `Agent was not found: ${input.agentId ?? 'mageHandAgent'}`, 404);
-    }
+    const agentIds = resolveAgentIds(input.agentId);
+    const agent = await this.getAgentOrThrow(agentIds.mastraAgentId, agentIds.agentId);
+    return this.generatePrompt(input, agent);
+  }
 
+  private async getAgentOrThrow(agentId: string, displayId = agentId): Promise<any> {
+    const agent = await this.mastra.getAgent(agentId);
+    if (!agent) throw new ServiceError('operation_failed', `Agent was not found: ${displayId}`, 404);
+    return agent;
+  }
+
+  private createGenericRun(input: AgentRunRequest, agentId: string): GenericAgentRun {
+    const now = new Date().toISOString();
+    const run: GenericAgentRun = {
+      runId: crypto.randomUUID(),
+      agentId,
+      ownerId: input.caller.ownerId,
+      status: 'running',
+      createdAt: now,
+      updatedAt: now,
+      controller: new AbortController(),
+      events: [],
+      listeners: new Set(),
+    };
+    this.genericRuns.set(run.runId, run);
+    return run;
+  }
+
+  private executeGenericRun(run: GenericAgentRun, input: AgentRunRequest, agent: any) {
+    void (async () => {
+      try {
+        const result = await this.generatePrompt(input, agent, run.controller.signal, run.runId);
+        if (run.status === 'cancelled') return;
+        this.settleGenericRun(run, 'completed', { result });
+      } catch (error) {
+        if (run.status === 'cancelled' || run.controller.signal.aborted) {
+          this.settleGenericRun(run, 'cancelled');
+          return;
+        }
+        this.settleGenericRun(run, 'failed', { error });
+      }
+    })();
+  }
+
+  private async generatePrompt(
+    input: AgentRunRequest,
+    agent: any,
+    abortSignal?: AbortSignal,
+    runId?: string,
+  ): Promise<JsonValue> {
     const messages = agentMessagesFromInput(input.input);
     const memory = agentMemoryFromRunRequest(input);
     const output = await agent.generate(messages as never, {
       ...(input.model ? { model: input.model } : {}),
       ...(input.maxSteps ? { maxSteps: input.maxSteps } : { maxSteps: 1000 }),
       ...(memory ? { memory } : {}),
+      ...(abortSignal ? { abortSignal } : {}),
+      ...(runId ? { runId } : {}),
     } as never);
 
     return toJsonValue({
@@ -616,6 +718,99 @@ export class MastraAgentService implements AgentService {
       traceId: stringValue((output as any).traceId),
       spanId: stringValue((output as any).spanId),
     });
+  }
+
+  private cancelGenericRun(run: GenericAgentRun) {
+    if (run.status !== 'running' && run.status !== 'queued') return;
+    run.controller.abort('cancelled');
+    this.settleGenericRun(run, 'cancelled');
+  }
+
+  private settleGenericRun(
+    run: GenericAgentRun,
+    status: Exclude<AgentRunStatus, 'queued' | 'running'>,
+    options: { result?: JsonValue; error?: unknown } = {},
+  ) {
+    if (run.status !== 'running' && run.status !== 'queued') return;
+
+    run.status = status;
+    run.updatedAt = new Date().toISOString();
+    run.completedAt = run.updatedAt;
+    if (options.result !== undefined) run.result = options.result;
+    if (options.error !== undefined) {
+      run.error = options.error instanceof Error ? options.error.message : String(options.error);
+    }
+
+    if (status === 'completed') {
+      const result = run.result ?? null;
+      this.emitGenericRunEvent(run, { type: 'finish', run: genericRunSnapshot(run), result });
+    } else if (status === 'cancelled') {
+      this.emitGenericRunEvent(run, { type: 'abort', run: genericRunSnapshot(run), reason: 'cancelled' });
+    } else {
+      this.emitGenericRunEvent(run, {
+        type: 'error',
+        run: genericRunSnapshot(run),
+        error: run.error ?? 'Agent run failed.',
+      });
+    }
+
+    for (const listener of run.listeners) listener({ type: 'close' });
+    run.listeners.clear();
+    this.scheduleGenericRunCleanup(run);
+  }
+
+  private emitGenericRunEvent(run: GenericAgentRun, event: AgentRunEvent) {
+    run.events.push(event);
+    run.updatedAt = new Date().toISOString();
+    for (const listener of run.listeners) listener(event);
+    void this.events.publishRunEvent(
+      { kind: 'agent', ownerId: run.ownerId, correlation: { agentRunId: run.runId } },
+      {
+        runKind: 'agent',
+        runId: run.runId,
+        type: event.type,
+        data: toJsonValue({
+          run: event.run as unknown as JsonValue,
+          ...(event.type === 'finish' ? { result: event.result } : {}),
+          ...(event.type === 'error' ? { error: event.error } : {}),
+          ...(event.type === 'abort' ? { reason: event.reason } : {}),
+        }),
+      },
+    ).catch(() => undefined);
+  }
+
+  private observeGenericRun(run: GenericAgentRun) {
+    let listener: ((event: AgentRunEvent | { type: 'close' }) => void) | undefined;
+    return new ReadableStream<AgentRunEvent>({
+      start(controller) {
+        for (const event of run.events) controller.enqueue(event);
+
+        if (run.status !== 'running' && run.status !== 'queued') {
+          controller.close();
+          return;
+        }
+
+        listener = (event) => {
+          if (event.type === 'close') {
+            if (listener) run.listeners.delete(listener);
+            controller.close();
+            return;
+          }
+          controller.enqueue(event);
+        };
+        run.listeners.add(listener);
+      },
+      cancel() {
+        if (listener) run.listeners.delete(listener);
+      },
+    });
+  }
+
+  private scheduleGenericRunCleanup(run: GenericAgentRun) {
+    if (run.cleanupTimer) clearTimeout(run.cleanupTimer);
+    run.cleanupTimer = setTimeout(() => {
+      if (this.genericRuns.get(run.runId) === run) this.genericRuns.delete(run.runId);
+    }, genericRunCleanupDelayMs);
   }
 
   private promptContext(context: PromptContextInput): any {
@@ -867,9 +1062,29 @@ const buildProviderOptions = (
 
 const toGenericRunSnapshot = (run: AgentThreadRun): AgentRunSnapshot => ({
   runId: run.runId,
+  agentId: 'mage-hand',
   status: run.status === 'error' ? 'failed' : run.status === 'cancelling' ? 'running' : run.status,
   createdAt: run.startedAt,
   updatedAt: run.updatedAt,
+  ...(run.error ? { error: run.error } : {}),
+});
+
+const resolveAgentIds = (agentId: string | undefined) => {
+  if (!agentId || agentId === 'mage-hand' || agentId === 'mageHandAgent') {
+    return { agentId: 'mage-hand', mastraAgentId: 'mageHandAgent' };
+  }
+  return { agentId, mastraAgentId: agentId };
+};
+
+const genericRunSnapshot = (run: GenericAgentRun): AgentRunSnapshot => ({
+  runId: run.runId,
+  agentId: run.agentId,
+  status: run.status,
+  createdAt: run.createdAt,
+  updatedAt: run.updatedAt,
+  ...(run.completedAt ? { completedAt: run.completedAt } : {}),
+  ...(run.result !== undefined ? { result: run.result } : {}),
+  ...(run.error ? { error: run.error } : {}),
 });
 
 const agentMessagesFromInput = (input: JsonValue) => {

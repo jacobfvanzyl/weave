@@ -1,6 +1,7 @@
 import { MastraAgentService } from './service.ts';
 import { AgentRunCoordinator } from './run-coordinator.ts';
 import type { ResolvedAgentContext } from './mastra/context/resolver.ts';
+import { __modelOptionsTest } from './model-options.ts';
 
 const assert: (condition: unknown, message: string) => asserts condition = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -227,6 +228,172 @@ Deno.test('MastraAgentService.sendChatMessage preserves active delivery and idle
     runId: 'mastra-run-1',
     messageId: 'signal-1',
   });
+});
+
+Deno.test('MastraAgentService.runPrompt invokes Mastra without chat thread semantics', async () => {
+  let capturedAgentId: unknown;
+  let capturedMessages: unknown;
+  let capturedOptions: unknown;
+  const service = new MastraAgentService(
+    {
+      getAgent: async (agentId: unknown) => {
+        capturedAgentId = agentId;
+        return {
+          generate: async (messages: unknown, options: unknown) => {
+            capturedMessages = messages;
+            capturedOptions = options;
+            return {
+              runId: 'mastra-run-1',
+              text: 'Prompt result',
+              finishReason: 'stop',
+              usage: { totalTokens: 12 },
+            };
+          },
+        };
+      },
+    } as any,
+    createCoordinator(),
+    async () => streamOf() as any,
+    async () => resolvedContext(),
+  );
+
+  const result = await service.runPrompt({
+    caller: { kind: 'workflow', ownerId: 'owner-1', correlation: { workflowRunId: 'workflow-run-1' } },
+    input: { prompt: 'Summarize this' },
+    model: 'openai/gpt-5.5',
+    maxSteps: 3,
+    memory: { scope: 'workflow', workflowRunId: 'workflow-run-1' },
+  });
+
+  assertEquals(capturedAgentId, 'mageHandAgent');
+  assertEquals(capturedMessages, 'Summarize this');
+  assertEquals(capturedOptions, {
+    model: 'openai/gpt-5.5',
+    maxSteps: 3,
+    memory: { thread: '__workflow__workflow-run-1', resource: 'owner-1' },
+  });
+  assertEquals(result, {
+    finishReason: 'stop',
+    runId: 'mastra-run-1',
+    text: 'Prompt result',
+    usage: { totalTokens: 12 },
+  });
+});
+
+Deno.test('MastraAgentService.startRun tracks product-neutral lifecycle and stream replay', async () => {
+  let resolveGenerate: (value: unknown) => void = () => undefined;
+  const service = new MastraAgentService(
+    {
+      getAgent: async () => ({
+        generate: (_messages: unknown, _options: unknown) =>
+          new Promise((resolve) => {
+            resolveGenerate = resolve;
+          }),
+      }),
+    } as any,
+    createCoordinator(),
+    async () => streamOf() as any,
+    async () => resolvedContext(),
+  );
+
+  const snapshot = await service.startRun({
+    caller: { kind: 'workflow', ownerId: 'owner-1', correlation: { workflowRunId: 'workflow-run-1' } },
+    input: 'Run this prompt',
+    memory: { scope: 'none' },
+  });
+  assertEquals(snapshot.status, 'running');
+  assertEquals(snapshot.agentId, 'mage-hand');
+
+  const reader = service.streamRun(snapshot.runId).getReader();
+  const start = await reader.read();
+  assertEquals((start.value as any)?.type, 'start');
+
+  resolveGenerate({ runId: 'mastra-run-2', text: 'Done', finishReason: 'stop' });
+  const finish = await reader.read();
+  const closed = await reader.read();
+  await reader.cancel();
+
+  assertEquals((finish.value as any)?.type, 'finish');
+  assertEquals((finish.value as any)?.result, { finishReason: 'stop', runId: 'mastra-run-2', text: 'Done' });
+  assertEquals(closed.done, true);
+  const completed = await service.getRun(snapshot.runId);
+  assertEquals(completed?.status, 'completed');
+  assertEquals(completed?.result, { finishReason: 'stop', runId: 'mastra-run-2', text: 'Done' });
+});
+
+Deno.test('MastraAgentService.cancelRun aborts product-neutral runs', async () => {
+  let capturedSignal: AbortSignal | undefined;
+  const service = new MastraAgentService(
+    {
+      getAgent: async () => ({
+        generate: (_messages: unknown, options: { abortSignal?: AbortSignal }) => {
+          capturedSignal = options.abortSignal;
+          return new Promise((_resolve, reject) => {
+            options.abortSignal?.addEventListener('abort', () => reject(new Error('aborted')));
+          });
+        },
+      }),
+    } as any,
+    createCoordinator(),
+    async () => streamOf() as any,
+    async () => resolvedContext(),
+  );
+
+  const snapshot = await service.startRun({
+    caller: { kind: 'workflow', ownerId: 'owner-1', correlation: { workflowRunId: 'workflow-run-1' } },
+    input: 'Run this prompt',
+    memory: { scope: 'none' },
+  });
+  assert(capturedSignal, 'expected generate abort signal');
+
+  const cancelled = await service.cancelRun(snapshot.runId);
+  assertEquals(cancelled?.status, 'cancelled');
+  assertEquals(capturedSignal?.aborted, true);
+  assertEquals((await service.getRun(snapshot.runId))?.status, 'cancelled');
+});
+
+Deno.test('MastraAgentService.listModels exposes the shared model config contract', async () => {
+  __modelOptionsTest.clearCache();
+  const originalFetch = globalThis.fetch;
+  const originalDefault = Deno.env.get('WEAVE_DEFAULT_MODEL');
+  const originalOptions = Deno.env.get('WEAVE_MODEL_OPTIONS');
+  globalThis.fetch = (() => Promise.reject(new Error('offline'))) as typeof fetch;
+  Deno.env.set('WEAVE_DEFAULT_MODEL', 'openai/gpt-5.4');
+  Deno.env.set('WEAVE_MODEL_OPTIONS', JSON.stringify([{ id: 'openai/gpt-5.4', label: 'GPT Custom' }]));
+  const service = new MastraAgentService({} as any, createCoordinator(), async () => streamOf() as any);
+
+  try {
+    assertEquals(await service.listModels(), {
+      defaultModel: 'openai/gpt-5.4',
+      options: [{
+        id: 'openai/gpt-5.4',
+        label: 'GPT Custom',
+        providerId: 'openai',
+        providerLogoUrl: 'https://models.dev/logos/openai.svg',
+        providerName: 'OpenAI',
+        supportedReasoningEfforts: [
+          { effort: 'low', label: 'Low', description: 'Fast responses with lighter reasoning' },
+          {
+            effort: 'medium',
+            label: 'Medium',
+            description: 'Balances speed and reasoning depth for everyday tasks',
+          },
+          { effort: 'high', label: 'High', description: 'Greater reasoning depth for complex problems' },
+          { effort: 'xhigh', label: 'Extra High', description: 'Extra high reasoning depth for complex problems' },
+        ],
+        defaultReasoningEffort: 'medium',
+        serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' }],
+        defaultServiceTier: null,
+      }],
+    });
+  } finally {
+    __modelOptionsTest.clearCache();
+    globalThis.fetch = originalFetch;
+    if (originalDefault === undefined) Deno.env.delete('WEAVE_DEFAULT_MODEL');
+    else Deno.env.set('WEAVE_DEFAULT_MODEL', originalDefault);
+    if (originalOptions === undefined) Deno.env.delete('WEAVE_MODEL_OPTIONS');
+    else Deno.env.set('WEAVE_MODEL_OPTIONS', originalOptions);
+  }
 });
 
 Deno.test('MastraAgentService chat thread state methods keep memory access behind service', async () => {

@@ -21,4 +21,5 @@ export const agentCore: AgentCore = {
 
 export { type AgentContribution, agentService, listAgentContributions, mastra, registerAgentContribution };
 export { contextUsageRecallOptions, estimateContextTokens, estimateMemoryContextTokens } from './service';
-export type { AgentService };
+export type { AgentRunEvent, AgentRunRequest, AgentRunSnapshot, AgentRunStatus, AgentService } from './service';
+export type { ModelConfig, ModelOption } from './model-options';
