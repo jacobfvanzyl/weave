@@ -19,6 +19,7 @@
     "@libsql/client": "npm:@libsql/client@0.17.4",
     "@ai-sdk/provider-v5": "npm:@ai-sdk/provider@2.0.1",
     "@ai-sdk/provider-utils-v5": "npm:@ai-sdk/provider-utils@3.0.23",
+    "@dbos-inc/dbos-sdk": "npm:@dbos-inc/dbos-sdk@4.23.6",
     "exa-js": "npm:exa-js@2.13.0",
     "hono": "npm:hono@4.12.18",
     "yaml": "npm:yaml@2.9.0",

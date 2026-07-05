@@ -17,6 +17,7 @@
     "@ai-sdk/openai": "3.0.63",
     "@ai-sdk/provider": "2.0.1",
     "@ai-sdk/provider-utils": "3.0.23",
+    "@dbos-inc/dbos-sdk": "4.23.6",
     "@mastra/ai-sdk": "1.4.5",
     "@mastra/core": "1.42.0",
     "@mastra/libsql": "1.13.0",

@@ -10,6 +10,7 @@ import type { ServerVariables } from './server/types';
 import { startServerPerfSampler } from './server/perf';
 import { getChatPerfSnapshot } from './modules/chat/routes/chat';
 import { internalServices } from './services';
+import { maybeLaunchDbosWorkflowRuntime } from './workflows';
 
 const port = Number(process.env.PORT ?? process.env.WEAVE_SERVER_PORT ?? 4111);
 const auth = loadOwnerAuthConfig();
@@ -75,6 +76,8 @@ registerCompatibilityRoutes(app, { sessions: internalServices.sessions });
 startServerPerfSampler({
   sample: () => ({ chat: getChatPerfSnapshot() }),
 });
+
+await maybeLaunchDbosWorkflowRuntime();
 
 Deno.serve({ port }, app.fetch);
 
