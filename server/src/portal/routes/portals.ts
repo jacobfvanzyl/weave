@@ -2,15 +2,13 @@ import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { defineRoute } from '../../server/routes';
 import { productProjectRepository } from '../../products/project-repository';
 import { getPortalConnection, listPortalConnections, requestPortalTool } from '../registry';
+import { portalRepository } from '../store';
 
 const agentId = 'mageHandAgent';
 const projectThreadPrefix = '__project__';
-const portalThreadPrefix = '__portal__';
 const portalSettingsThreadPrefix = '__portal_settings__';
 
 const createId = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
-const nowIso = () => new Date().toISOString();
-const portalThreadId = (portalId: string) => `${portalThreadPrefix}${portalId}`;
 const optionalString = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
 
 const getMemory = async (c: any) => {
@@ -29,10 +27,11 @@ const getResourceId = (c: any) => {
 
 const hashText = async (value: string) => {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(bytes)).slice(0, 12).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(bytes)).slice(0, 12).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
-const portalSettingsThreadId = async (resourceId: string) => `${portalSettingsThreadPrefix}${await hashText(resourceId)}`;
+const portalSettingsThreadId = async (resourceId: string) =>
+  `${portalSettingsThreadPrefix}${await hashText(resourceId)}`;
 
 const getPrimaryPortalId = async (memory: any, resourceId: string) => {
   const threadId = await portalSettingsThreadId(resourceId);
@@ -41,13 +40,13 @@ const getPrimaryPortalId = async (memory: any, resourceId: string) => {
   return optionalString(metadata?.primaryPortalId);
 };
 
-const setPrimaryPortalId = async (memory: any, resourceId: string, portalId: string) => {
-  const threadId = await portalSettingsThreadId(resourceId);
-  const title = 'Portal Settings';
-  const metadata = { kind: 'portal-settings', primaryPortalId: portalId, updatedAt: nowIso() };
-  const existing = await memory.getThreadById({ threadId }).catch(() => undefined);
-  if (existing) return memory.updateThread({ id: threadId, title, metadata });
-  return memory.createThread({ resourceId, threadId, title, metadata, saveThread: true });
+const getStoredPrimaryPortalId = async (memory: any, resourceId: string) => {
+  const stored = await portalRepository.getPrimaryPortalId(resourceId);
+  if (stored) return stored;
+
+  const legacy = await getPrimaryPortalId(memory, resourceId);
+  if (legacy) await portalRepository.setPrimaryPortalId(resourceId, legacy).catch(() => undefined);
+  return legacy;
 };
 
 const isProjectThread = (thread: { id: string; metadata?: unknown }) => {
@@ -89,16 +88,7 @@ const getProjectPortalIds = async (memory: any, resourceId: string) => {
 const resolvePortalTokenId = async (memory: any, resourceId: string) => {
   const projectPortalIds = await getProjectPortalIds(memory, resourceId);
   if (projectPortalIds.length > 0) return projectPortalIds[0];
-  return await getPrimaryPortalId(memory, resourceId) ?? createId('portal');
-};
-
-const savePortalToken = async (memory: any, resourceId: string, portalId: string, token: string) => {
-  const threadId = portalThreadId(portalId);
-  const title = `Portal ${portalId.slice(-6)}`;
-  const metadata = { kind: 'portal-token', portalId, token, status: 'issued', createdAt: nowIso() };
-  const existing = await memory.getThreadById({ threadId }).catch(() => undefined);
-  if (existing) return memory.updateThread({ id: threadId, title, metadata });
-  return memory.createThread({ resourceId, threadId, title, metadata, saveThread: true });
+  return await getStoredPrimaryPortalId(memory, resourceId) ?? createId('portal');
 };
 
 const assertPortalForUser = (portalId: string | undefined, resourceId: string) => {
@@ -117,7 +107,7 @@ const errorResponse = (c: any, error: unknown) => {
 export const portalRoutes = [
   defineRoute('/portal/:portalId/browse', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const portalId = c.req.param('portalId');
@@ -138,14 +128,16 @@ export const portalRoutes = [
   }),
   defineRoute('/portal', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const memory = await getMemory(c);
-        const primaryPortalId = await getPrimaryPortalId(memory, resourceId);
+        const primaryPortalId = await getStoredPrimaryPortalId(memory, resourceId);
         const portals = listPortalConnections(resourceId);
         const effectivePrimaryPortalId = primaryPortalId ?? portals[0]?.portalId;
-        return c.json({ portals: portals.map(portal => ({ ...portal, primary: portal.portalId === effectivePrimaryPortalId })) });
+        return c.json({
+          portals: portals.map((portal) => ({ ...portal, primary: portal.portalId === effectivePrimaryPortalId })),
+        });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -153,14 +145,16 @@ export const portalRoutes = [
   }),
   defineRoute('/portal/:portalId/primary', {
     method: 'PATCH',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const portalId = c.req.param('portalId');
         assertPortalForUser(portalId, resourceId);
-        const memory = await getMemory(c);
-        await setPrimaryPortalId(memory, resourceId, portalId);
-        const portals = listPortalConnections(resourceId).map(portal => ({ ...portal, primary: portal.portalId === portalId }));
+        await portalRepository.setPrimaryPortalId(resourceId, portalId);
+        const portals = listPortalConnections(resourceId).map((portal) => ({
+          ...portal,
+          primary: portal.portalId === portalId,
+        }));
         return c.json({ ok: true, primaryPortalId: portalId, portals });
       } catch (error) {
         return errorResponse(c, error);
@@ -169,14 +163,14 @@ export const portalRoutes = [
   }),
   defineRoute('/portal/token', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const memory = await getMemory(c);
         const portalId = await resolvePortalTokenId(memory, resourceId);
         const token = `mhb_${crypto.randomUUID().replace(/-/g, '')}`;
-        await savePortalToken(memory, resourceId, portalId, token);
-        await setPrimaryPortalId(memory, resourceId, portalId);
+        await portalRepository.saveToken({ ownerId: resourceId, portalId, token });
+        await portalRepository.setPrimaryPortalId(resourceId, portalId);
         return c.json({ portalId, token });
       } catch (error) {
         return errorResponse(c, error);

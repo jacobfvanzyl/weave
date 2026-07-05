@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { productProjectRepository } from '../../../products/project-repository';
 import { listPortalConnections, requestPortalTool, resolvePortalForTarget } from '../../../portal/registry';
+import { portalRepository } from '../../../portal/store';
 import { registerResolvedContextSkills } from './skill-source';
 
 export type WeaveContextFileKind = 'config' | 'mcp' | 'prompt' | 'skill' | 'agents';
@@ -96,11 +97,20 @@ const stale = (snapshot: WeaveContextSnapshot | undefined, refreshMs: number) =>
 
 const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
-const getPrimaryPortalId = async (memory: any, resourceId: string) => {
+const getLegacyPrimaryPortalId = async (memory: any, resourceId: string) => {
   const threadId = `${portalSettingsThreadIdPrefix}${await hashText(resourceId)}`;
   const thread = await memory.getThreadById({ threadId }).catch(() => undefined);
   const metadata = thread?.metadata as Record<string, unknown> | undefined;
   return optionalString(metadata?.primaryPortalId);
+};
+
+const getPrimaryPortalId = async (memory: any, resourceId: string) => {
+  const stored = await portalRepository.getPrimaryPortalId(resourceId);
+  if (stored) return stored;
+
+  const legacy = await getLegacyPrimaryPortalId(memory, resourceId);
+  if (legacy) await portalRepository.setPrimaryPortalId(resourceId, legacy).catch(() => undefined);
+  return legacy;
 };
 
 const discoverPortalContext = async (

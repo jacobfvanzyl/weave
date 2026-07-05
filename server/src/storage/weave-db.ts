@@ -59,6 +59,23 @@ const migrations: InStatement[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS weave_service_bindings_owner_provider_idx
     ON weave_service_bindings(owner_id, provider_kind, updated_at)`,
+  `CREATE TABLE IF NOT EXISTS weave_portal_settings (
+    owner_id TEXT PRIMARY KEY,
+    primary_portal_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS weave_portal_tokens (
+    owner_id TEXT NOT NULL,
+    portal_id TEXT NOT NULL,
+    token TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (owner_id, portal_id)
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS weave_portal_tokens_token_idx
+    ON weave_portal_tokens(token)`,
 ];
 
 export const getWeaveDb = async () => {

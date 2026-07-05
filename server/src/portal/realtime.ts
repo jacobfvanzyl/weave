@@ -37,6 +37,7 @@ import {
   forwardWindowClientMessage,
   handleWindowPortalMessage,
 } from './window-relay';
+import { portalRepository } from './store';
 
 const agentId = 'mageHandAgent';
 const portalThreadPrefix = '__portal__';
@@ -44,8 +45,13 @@ const portalThreadId = (portalId: string) => `${portalThreadPrefix}${portalId}`;
 const defaultPort = 4112;
 
 type MastraLike = {
-  getAgent: (agentId: string) => Promise<{ getMemory: () => Promise<any> | any }> | { getMemory: () => Promise<any> | any };
-  getLogger?: () => { info?: (message: string, details?: unknown) => void; warn?: (message: string, details?: unknown) => void };
+  getAgent: (
+    agentId: string,
+  ) => Promise<{ getMemory: () => Promise<any> | any }> | { getMemory: () => Promise<any> | any };
+  getLogger?: () => {
+    info?: (message: string, details?: unknown) => void;
+    warn?: (message: string, details?: unknown) => void;
+  };
 };
 
 type RealtimeSocket = {
@@ -59,7 +65,10 @@ type PortalHttpServer = {
 };
 
 type PortalWebSocketRuntime = {
-  serve: (options: { port: number; onListen: () => void }, handler: (request: Request) => Response | Promise<Response>) => PortalHttpServer;
+  serve: (
+    options: { port: number; onListen: () => void },
+    handler: (request: Request) => Response | Promise<Response>,
+  ) => PortalHttpServer;
   upgradeWebSocket: (request: Request) => { socket: WebSocket; response: Response };
 };
 
@@ -74,6 +83,9 @@ const denoRuntime = () => {
 const validatePortalToken = async (mastra: MastraLike, portalId: string, token: string) => {
   if (!portalId || !token) return undefined;
 
+  const stored = await portalRepository.findToken(portalId, token);
+  if (stored) return stored.ownerId;
+
   const agent = await mastra.getAgent(agentId);
   const memory = await agent?.getMemory();
   const thread = await memory?.getThreadById({ threadId: portalThreadId(portalId) }).catch(() => undefined);
@@ -81,7 +93,9 @@ const validatePortalToken = async (mastra: MastraLike, portalId: string, token: 
   if (metadata?.kind !== 'portal-token') return undefined;
   if (metadata?.portalId !== portalId) return undefined;
   if (metadata?.token !== token) return undefined;
-  return typeof thread.resourceId === 'string' && thread.resourceId ? thread.resourceId : undefined;
+  const ownerId = typeof thread.resourceId === 'string' && thread.resourceId ? thread.resourceId : undefined;
+  if (ownerId) await portalRepository.saveToken({ ownerId, portalId, token }).catch(() => undefined);
+  return ownerId;
 };
 
 const safeParse = (data: unknown) => {
@@ -95,7 +109,7 @@ const safeParse = (data: unknown) => {
   }
 };
 
-const stringArray = (value: unknown) => (Array.isArray(value) ? value.filter(item => typeof item === 'string') : []);
+const stringArray = (value: unknown) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string') : []);
 
 const closeUnauthorized = (ws: RealtimeSocket, message: string) => {
   ws.send(JSON.stringify({ type: 'portal.rejected', error: message }));
@@ -103,7 +117,7 @@ const closeUnauthorized = (ws: RealtimeSocket, message: string) => {
 };
 
 const onMessage = (ws: RealtimeSocket, handler: (message: Record<string, unknown>) => void) => {
-  ws.addEventListener('message', event => {
+  ws.addEventListener('message', (event) => {
     const message = safeParse(event.data);
     if (message) handler(message);
   });
@@ -121,7 +135,7 @@ const connectTerminalClient = (ws: RealtimeSocket, url: URL) => {
   }
 
   ws.send(JSON.stringify({ type: 'terminal.accepted', clientId: connected.clientId }));
-  onMessage(ws, message => {
+  onMessage(ws, (message) => {
     try {
       forwardTerminalClientMessage(connected.clientId, message, connected.token);
     } catch (error) {
@@ -153,7 +167,7 @@ const connectWindowClient = (ws: RealtimeSocket, url: URL) => {
     sessionId: connected.token.sessionId,
     portalId: connected.token.portalId,
   }));
-  onMessage(ws, message => {
+  onMessage(ws, (message) => {
     try {
       forwardWindowClientMessage(connected.clientId, message);
     } catch (error) {
@@ -185,7 +199,7 @@ const connectLspClient = (ws: RealtimeSocket, url: URL) => {
     sessionId: connected.token.sessionId,
     portalId: connected.token.portalId,
   }));
-  onMessage(ws, message => {
+  onMessage(ws, (message) => {
     try {
       forwardLspClientMessage(connected.clientId, message);
     } catch (error) {
@@ -221,7 +235,7 @@ const connectJupyterClient = (ws: RealtimeSocket, url: URL) => {
     sessionId: connected.token.sessionId,
     portalId: connected.token.portalId,
   }));
-  onMessage(ws, message => {
+  onMessage(ws, (message) => {
     try {
       forwardJupyterClientMessage(connected.clientId, message);
     } catch (error) {
@@ -256,7 +270,7 @@ const connectWorkspaceFileWatchClient = (ws: RealtimeSocket, url: URL) => {
     clientId: connected.clientId,
     portalId: connected.token.portalId,
   }));
-  onMessage(ws, message => {
+  onMessage(ws, (message) => {
     try {
       forwardWorkspaceFileWatchClientMessage(connected.clientId, message);
     } catch (error) {
@@ -283,7 +297,7 @@ const connectPortalDaemon = async (ws: RealtimeSocket, url: URL, mastra: MastraL
   const connection = connectPortal({ portalId, userId, ws });
   ws.send(JSON.stringify({ type: 'portal.accepted', portalId, connectedAt: connection.connectedAt }));
 
-  onMessage(ws, message => {
+  onMessage(ws, (message) => {
     if (handleTerminalPortalMessage(message)) return;
     if (handleLspPortalMessage(message)) return;
     if (handleJupyterPortalMessage(message)) return;
@@ -323,7 +337,7 @@ const connectClientToolHostSocket = (ws: RealtimeSocket, url: URL) => {
   const connection = connectClientToolHost({ clientId, userId: record.resourceId, ws });
   ws.send(JSON.stringify({ type: 'client.accepted', clientId, connectedAt: connection.connectedAt }));
 
-  onMessage(ws, message => {
+  onMessage(ws, (message) => {
     if (handleClientToolMessage(message)) return;
 
     if (message.type === 'client.hello' || message.type === 'client.update') {
