@@ -1,6 +1,6 @@
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { defineRoute } from '../../server/routes';
-import { expandPromptTemplate, listPromptSummaries } from '../mastra/prompt-templates/registry';
+import { agentService } from '../service';
 
 const maxArgumentsLength = 20_000;
 
@@ -23,7 +23,6 @@ const optionalBodyString = (body: any, name: string) => {
 const promptContext = (c: any, values: Record<string, unknown> = {}) => {
   const resourceId = c.get('requestContext')?.get(MASTRA_RESOURCE_ID_KEY);
   return {
-    mastra: c.get('mastra'),
     resourceId: typeof resourceId === 'string' ? resourceId : undefined,
     threadId: values.threadId ?? optionalQueryString(c, 'threadId'),
     projectId: values.projectId ?? optionalQueryString(c, 'projectId'),
@@ -34,11 +33,11 @@ const promptContext = (c: any, values: Record<string, unknown> = {}) => {
 export const promptRoutes = [
   defineRoute('/agent/prompts', {
     method: 'GET',
-    handler: async c => jsonResponse({ prompts: await listPromptSummaries(promptContext(c)) }),
+    handler: async (c) => jsonResponse({ prompts: await agentService.listPromptTemplates(promptContext(c)) }),
   }),
   defineRoute('/agent/prompts/:name/expand', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       const name = c.req.param('name');
       const body = await c.req.json().catch(() => ({}));
       const args = typeof body.arguments === 'string' ? body.arguments : '';
@@ -52,7 +51,7 @@ export const promptRoutes = [
         return jsonResponse({ error: 'Prompt arguments too long' }, 413);
       }
 
-      const text = await expandPromptTemplate(name, args, context);
+      const text = await agentService.expandPrompt(name, args, context);
       if (text === undefined) return jsonResponse({ error: 'Prompt not found' }, 404);
 
       return jsonResponse({ name, text });
