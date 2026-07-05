@@ -1,9 +1,8 @@
 import { getOwner } from '../../owner/auth';
 import { defineRoute } from '../../server/routes';
-import type { EventService } from '../../services/event-service';
+import { type EventService, eventService as defaultEventService } from '../../services/event-service';
 import { callerForOwner } from '../../services/types';
 import type { StoredNotificationEvent } from './types';
-import { observeServerNotifications, publishServerNotification } from './service';
 
 const sseKeepAliveIntervalMs = 15_000;
 const maxTestNotificationTitleLength = 160;
@@ -82,16 +81,13 @@ const toNotificationSseResponse = (stream: ReadableStream<StoredNotificationEven
   });
 };
 
-export const createNotificationRoutes = (events?: EventService) => [
+export const createNotificationRoutes = (events: EventService = defaultEventService) => [
   defineRoute('/notifications/events', {
     method: 'GET',
     handler: (c) => {
       const owner = getOwner(c);
       const afterSequence = parseSequence(c.req.query('after') ?? c.req.header('Last-Event-ID'));
-      return toNotificationSseResponse(
-        events?.observeNotifications({ ownerId: owner.id }, afterSequence) ??
-          observeServerNotifications(owner.id, afterSequence),
-      );
+      return toNotificationSseResponse(events.observeNotifications({ ownerId: owner.id }, afterSequence));
     },
   }),
   defineRoute('/notifications/test', {
@@ -108,9 +104,7 @@ export const createNotificationRoutes = (events?: EventService) => [
         ...(input.body ? { body: input.body } : {}),
         priority: 'normal',
       } as const;
-      const stored = events
-        ? await events.publishNotification(callerForOwner(owner.id, 'ui'), notificationInput)
-        : publishServerNotification(owner.id, notificationInput);
+      const stored = await events.publishNotification(callerForOwner(owner.id, 'ui'), notificationInput);
 
       return c.json({ ok: true, sequence: stored.sequence, event: stored.event });
     },

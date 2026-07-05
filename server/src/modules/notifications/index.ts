@@ -10,5 +10,4 @@ export const notificationsModule: ServerModule = {
   },
 };
 
-export { publishServerNotification } from './service';
 export type { ServerNotificationInput, WeaveNotificationEvent } from './types';

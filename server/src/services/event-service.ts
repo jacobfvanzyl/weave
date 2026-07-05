@@ -13,6 +13,27 @@ export type ServiceEvent = {
   sequence: number;
 };
 
+export type ServiceRunEventKind = 'agent' | 'workflow';
+
+export type PublishServiceEventInput = {
+  stream: string;
+  type: string;
+  data: JsonValue;
+};
+
+export type PublishRunEventInput = {
+  runKind: ServiceRunEventKind;
+  runId: string;
+  type: string;
+  data: JsonValue;
+};
+
+export type PublishAuditEventInput = {
+  scope?: string;
+  type: string;
+  data: JsonValue;
+};
+
 type EventStreamState = {
   nextSequence: number;
   buffer: ServiceEvent[];
@@ -25,10 +46,23 @@ export interface EventService {
     caller: Pick<ServiceCaller, 'ownerId'>,
     afterSequence?: number,
   ): ReadableStream<StoredNotificationEvent>;
-  publishEvent(caller: ServiceCaller, input: { stream: string; type: string; data: JsonValue }): Promise<ServiceEvent>;
+  publishEvent(caller: ServiceCaller, input: PublishServiceEventInput): Promise<ServiceEvent>;
   observeEvents(
     caller: Pick<ServiceCaller, 'ownerId'>,
     stream: string,
+    afterSequence?: number,
+  ): ReadableStream<ServiceEvent>;
+  publishRunEvent(caller: ServiceCaller, input: PublishRunEventInput): Promise<ServiceEvent>;
+  observeRunEvents(
+    caller: Pick<ServiceCaller, 'ownerId'>,
+    runKind: ServiceRunEventKind,
+    runId: string,
+    afterSequence?: number,
+  ): ReadableStream<ServiceEvent>;
+  publishAuditEvent(caller: ServiceCaller, input: PublishAuditEventInput): Promise<ServiceEvent>;
+  observeAuditEvents(
+    caller: Pick<ServiceCaller, 'ownerId'>,
+    scope?: string,
     afterSequence?: number,
   ): ReadableStream<ServiceEvent>;
 }
@@ -37,6 +71,17 @@ const maxBufferedEventsPerStream = 250;
 const streams = new Map<string, EventStreamState>();
 
 const streamKey = (ownerId: string, stream: string) => `${ownerId}:${stream}`;
+
+export const serviceRunEventStream = (runKind: ServiceRunEventKind, runId: string) => {
+  const id = optionalString(runId);
+  if (!id) throw new ServiceError('invalid_scope', 'Run id is required.', 400);
+  return `${runKind}-run:${id}`;
+};
+
+export const serviceAuditEventStream = (scope?: string) => {
+  const normalizedScope = optionalString(scope) ?? 'global';
+  return `audit:${normalizedScope}`;
+};
 
 const getStreamState = (ownerId: string, stream: string) => {
   const key = streamKey(ownerId, stream);
@@ -57,7 +102,7 @@ export class DefaultEventService implements EventService {
     return observeServerNotifications(caller.ownerId, afterSequence);
   }
 
-  async publishEvent(caller: ServiceCaller, input: { stream: string; type: string; data: JsonValue }) {
+  async publishEvent(caller: ServiceCaller, input: PublishServiceEventInput) {
     const stream = optionalString(input.stream);
     const type = optionalString(input.type);
     if (!stream) throw new ServiceError('invalid_scope', 'Event stream is required.', 400);
@@ -103,4 +148,39 @@ export class DefaultEventService implements EventService {
       },
     });
   }
+
+  publishRunEvent(caller: ServiceCaller, input: PublishRunEventInput) {
+    return this.publishEvent(caller, {
+      stream: serviceRunEventStream(input.runKind, input.runId),
+      type: input.type,
+      data: input.data,
+    });
+  }
+
+  observeRunEvents(
+    caller: Pick<ServiceCaller, 'ownerId'>,
+    runKind: ServiceRunEventKind,
+    runId: string,
+    afterSequence = 0,
+  ) {
+    return this.observeEvents(caller, serviceRunEventStream(runKind, runId), afterSequence);
+  }
+
+  publishAuditEvent(caller: ServiceCaller, input: PublishAuditEventInput) {
+    return this.publishEvent(caller, {
+      stream: serviceAuditEventStream(input.scope),
+      type: input.type,
+      data: input.data,
+    });
+  }
+
+  observeAuditEvents(caller: Pick<ServiceCaller, 'ownerId'>, scope?: string, afterSequence = 0) {
+    return this.observeEvents(caller, serviceAuditEventStream(scope), afterSequence);
+  }
 }
+
+export const eventService = new DefaultEventService();
+
+export const clearEventServiceForTests = () => {
+  streams.clear();
+};
