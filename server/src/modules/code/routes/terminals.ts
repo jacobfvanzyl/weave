@@ -4,7 +4,7 @@ import { productProjectRepository } from '../../../products/project-repository';
 import { listPortalConnections, resolvePortalForTarget } from '../../../portal/registry';
 import { issueTerminalToken, type TerminalSessionKind } from '../../../portal/terminal-relay';
 import type { SessionService } from '../../../services/session-service';
-import { portalToolScope } from '../../../services/providers/portal-provider';
+import { portalToolScope, type PortalToolTarget } from '../../../services/providers/portal-provider';
 import { callerForOwner } from '../../../services/types';
 
 const agentId = 'mageHandAgent';
@@ -88,12 +88,30 @@ const portalRootId = (portal: { roots?: unknown[] }) => {
   return typeof (firstRoot as any)?.id === 'string' ? (firstRoot as any).id : 'default';
 };
 
-const resolveTerminalTarget = async (c: any, resourceId: string, body: Record<string, unknown>) => {
+type TerminalTarget = PortalToolTarget & {
+  kind: TerminalSessionKind;
+};
+
+const resolveTerminalTarget = async (
+  c: any,
+  resourceId: string,
+  body: Record<string, unknown>,
+  useServiceResolution = false,
+): Promise<TerminalTarget> => {
   const kind: TerminalSessionKind = body.kind === 'workspace' ? 'workspace' : 'general';
 
   if (kind === 'general') {
     const requestedPortalId = optionalString(body.portalId);
     const requestedRootId = optionalString(body.rootId);
+    const workspacePath = optionalString(body.workspacePath) ?? optionalString(body.cwd);
+    if (useServiceResolution) {
+      return {
+        kind,
+        portalId: requestedPortalId,
+        rootId: requestedRootId,
+        workspacePath,
+      };
+    }
     const portal = requestedPortalId
       ? listPortalConnections(resourceId).find((connection) =>
         connection.status === 'online' && connection.portalId === requestedPortalId
@@ -101,7 +119,7 @@ const resolveTerminalTarget = async (c: any, resourceId: string, body: Record<st
       : resolvePortalForTarget({
         userId: resourceId,
         rootId: requestedRootId,
-        workspacePath: optionalString(body.workspacePath) ?? optionalString(body.cwd),
+        workspacePath,
       });
     if (!portal) throw new Error('No online Portal is available for this terminal.');
     return {
@@ -122,24 +140,30 @@ const resolveTerminalTarget = async (c: any, resourceId: string, body: Record<st
 
   const workspace = project.workspaces.find((item) => item.id === workspaceId);
   if (!workspace) throw new Error('Workspace was not found.');
-  const portal = resolvePortalForTarget({
-    userId: resourceId,
-    portalId: workspace.portalId ?? project.portalId,
-    projectId,
-    rootId: project.portalRootId,
-    repoPath: project.repoPath,
-    workspacePath: workspace.path,
-  });
-  if (!portal) throw new Error('No online Portal is available for this terminal.');
-
-  return {
+  const target = {
     kind,
-    portalId: portal.portalId,
+    portalId: workspace.portalId ?? project.portalId,
     projectId,
     workspaceId,
     rootId: project.portalRootId,
     repoPath: project.repoPath,
     workspacePath: workspace.path,
+  };
+  if (useServiceResolution) return target;
+
+  const portal = resolvePortalForTarget({
+    userId: resourceId,
+    portalId: target.portalId,
+    projectId: target.projectId,
+    rootId: target.rootId,
+    repoPath: target.repoPath,
+    workspacePath: target.workspacePath,
+  });
+  if (!portal) throw new Error('No online Portal is available for this terminal.');
+
+  return {
+    ...target,
+    portalId: portal.portalId,
   };
 };
 
@@ -147,6 +171,11 @@ const errorResponse = (c: any, error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   const status = /not found/i.test(message) ? 404 : /Portal|terminal|Project|Workspace/.test(message) ? 400 : 500;
   return c.json({ error: message }, status);
+};
+
+const requireResolvedPortalTarget = (target: TerminalTarget) => {
+  if (!target.portalId) throw new Error('No online Portal is available for this terminal.');
+  return target as TerminalTarget & { portalId: string };
 };
 
 type TerminalRouteDeps = {
@@ -160,7 +189,7 @@ export const createTerminalRoutes = (deps: TerminalRouteDeps = {}) => [
       try {
         const resourceId = getResourceId(c);
         const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
-        const target = await resolveTerminalTarget(c, resourceId, body);
+        const target = await resolveTerminalTarget(c, resourceId, body, Boolean(deps.sessions));
         const session = deps.sessions
           ? await deps.sessions.issueTerminalToken({
             caller: callerForOwner(resourceId, 'ui'),
@@ -168,8 +197,8 @@ export const createTerminalRoutes = (deps: TerminalRouteDeps = {}) => [
             scope: portalToolScope(target),
           })
           : {
-            token: issueTerminalToken({ resourceId, ...target }),
-            target,
+            token: issueTerminalToken({ resourceId, ...requireResolvedPortalTarget(target) }),
+            target: requireResolvedPortalTarget(target),
           };
         return c.json({
           token: session.token,

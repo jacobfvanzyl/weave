@@ -4,7 +4,7 @@ import { issueLspSessionToken } from '../../../portal/lsp-relay';
 import { requestPortalTool, resolvePortalForTarget } from '../../../portal/registry';
 import { defineRoute } from '../../../server/routes';
 import type { SessionService } from '../../../services/session-service';
-import { portalToolScope } from '../../../services/providers/portal-provider';
+import { portalToolScope, type PortalToolTarget } from '../../../services/providers/portal-provider';
 import { callerForOwner } from '../../../services/types';
 
 const agentId = 'mageHandAgent';
@@ -26,13 +26,9 @@ type Project = {
   workspaces: Workspace[];
 };
 
-type LspTarget = {
+type LspTarget = PortalToolTarget & {
   projectId?: string;
   workspaceId?: string;
-  portalId?: string;
-  rootId?: string;
-  repoPath?: string;
-  workspacePath?: string;
 };
 
 const projectThreadId = (projectId: string) => `${projectThreadPrefix}${projectId}`;
@@ -89,7 +85,12 @@ const parseTarget = (body: Record<string, unknown>): LspTarget => {
   };
 };
 
-const resolveLspTarget = async (c: any, resourceId: string, body: Record<string, unknown>) => {
+const resolveLspTarget = async (
+  c: any,
+  resourceId: string,
+  body: Record<string, unknown>,
+  useServiceResolution = false,
+) => {
   const target = parseTarget(body);
   if (!target.projectId || !target.workspaceId) {
     throw new Error('Project and Workspace are required for language intelligence.');
@@ -102,13 +103,23 @@ const resolveLspTarget = async (c: any, resourceId: string, body: Record<string,
 
   const workspace = project.workspaces.find((item) => item.id === target.workspaceId);
   if (!workspace) throw new Error('Workspace was not found.');
-  const portal = resolvePortalForTarget({
-    userId: resourceId,
+  const serviceTarget = {
     portalId: target.portalId ?? workspace.portalId ?? project.portalId,
     projectId: target.projectId,
+    workspaceId: target.workspaceId,
     rootId: project.portalRootId ?? target.rootId,
     repoPath: project.repoPath ?? target.repoPath,
     workspacePath: workspace.path ?? target.workspacePath,
+  };
+  if (useServiceResolution) return serviceTarget;
+
+  const portal = resolvePortalForTarget({
+    userId: resourceId,
+    portalId: serviceTarget.portalId,
+    projectId: serviceTarget.projectId,
+    rootId: serviceTarget.rootId,
+    repoPath: serviceTarget.repoPath,
+    workspacePath: serviceTarget.workspacePath,
   });
   if (!portal) throw new Error('No online Portal is available for language intelligence.');
   if (!portal.capabilities.includes('portal.lsp') || !portal.capabilities.includes('portal.lsp.session')) {
@@ -116,12 +127,8 @@ const resolveLspTarget = async (c: any, resourceId: string, body: Record<string,
   }
 
   return {
+    ...serviceTarget,
     portalId: portal.portalId,
-    projectId: target.projectId,
-    workspaceId: target.workspaceId,
-    rootId: project.portalRootId ?? target.rootId,
-    repoPath: project.repoPath ?? target.repoPath,
-    workspacePath: workspace.path ?? target.workspacePath,
   };
 };
 
@@ -132,6 +139,11 @@ const cleanPortalResult = (result: unknown) => {
   }
   const { id: _id, type: _type, ...body } = record;
   return body;
+};
+
+const requireResolvedPortalTarget = (target: LspTarget) => {
+  if (!target.portalId) throw new Error('No online Portal is available for language intelligence.');
+  return target as LspTarget & { portalId: string };
 };
 
 const getPortalWsUrl = (c: any) => {
@@ -170,7 +182,7 @@ export const createLspRoutes = (deps: LspRouteDeps = {}) => [
         const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
         const path = optionalString(body.path);
         if (!path) throw new Error('path is required.');
-        const target = await resolveLspTarget(c, resourceId, body);
+        const target = await resolveLspTarget(c, resourceId, body, Boolean(deps.sessions));
         const languageId = optionalString(body.languageId);
         const requestedServerId = optionalString(body.serverId);
         const session = deps.sessions
@@ -185,7 +197,7 @@ export const createLspRoutes = (deps: LspRouteDeps = {}) => [
           : (() => undefined)();
         const result = session ? session : cleanPortalResult(
           await requestPortalTool({
-            ...target,
+            ...requireResolvedPortalTarget(target),
             tool: 'portal.lsp.session',
             args: {
               path,
@@ -200,7 +212,7 @@ export const createLspRoutes = (deps: LspRouteDeps = {}) => [
           if (!sessionId) throw new Error('Portal LSP session response did not include a sessionId.');
           return issueLspSessionToken({
             resourceId,
-            ...target,
+            ...requireResolvedPortalTarget(target),
             sessionId,
             path,
             languageId: optionalString(result.languageId) ?? languageId,

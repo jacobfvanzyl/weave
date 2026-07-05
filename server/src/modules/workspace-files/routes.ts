@@ -6,7 +6,7 @@ import { issueWorkspaceFileWatchToken } from '../../portal/workspace-file-watch-
 import { requestPortalTool, resolvePortalForTarget } from '../../portal/registry';
 import type { SessionService } from '../../services/session-service';
 import type { ToolService } from '../../services/tool-service';
-import { portalToolScope } from '../../services/providers/portal-provider';
+import { portalToolScope, type PortalToolTarget } from '../../services/providers/portal-provider';
 import { callerForOwner } from '../../services/types';
 import {
   type NotesVaultResolverDependencies,
@@ -43,13 +43,9 @@ type WorkspaceFileAction =
   | 'hash'
   | 'diffPreview';
 
-type WorkspaceFileTarget = {
+type WorkspaceFileTarget = PortalToolTarget & {
   projectId?: string;
   workspaceId?: string;
-  portalId?: string;
-  rootId?: string;
-  repoPath?: string;
-  workspacePath?: string;
 };
 
 type LegacyWorkspace = {
@@ -144,6 +140,7 @@ const resolveGitWorkspaceFileTarget = (
   target: WorkspaceFileTarget,
   project: WorkspaceFileProject | undefined,
   requiredCapability?: string,
+  useServiceResolution = false,
 ) => {
   if (!target.projectId || !target.workspaceId) {
     throw new Error('Project and Workspace are required for workspace files.');
@@ -155,13 +152,23 @@ const resolveGitWorkspaceFileTarget = (
 
   const workspace = project.workspaces.find((item) => item.id === target.workspaceId);
   if (!workspace) throw new Error('Workspace was not found.');
-  const portal = resolvePortalForTarget({
-    userId: resourceId,
+  const serviceTarget = {
     portalId: target.portalId ?? workspace.portalId ?? project.portalId,
     projectId: target.projectId,
+    workspaceId: target.workspaceId,
     rootId: project.portalRootId ?? target.rootId,
     repoPath: project.repoPath ?? target.repoPath,
     workspacePath: workspace.path ?? target.workspacePath,
+  };
+  if (useServiceResolution) return serviceTarget;
+
+  const portal = resolvePortalForTarget({
+    userId: resourceId,
+    portalId: serviceTarget.portalId,
+    projectId: serviceTarget.projectId,
+    rootId: serviceTarget.rootId,
+    repoPath: serviceTarget.repoPath,
+    workspacePath: serviceTarget.workspacePath,
   });
   if (!portal) throw new Error('No online Portal is available for this workspace.');
   if (requiredCapability && !portal.capabilities.includes(requiredCapability)) {
@@ -169,12 +176,8 @@ const resolveGitWorkspaceFileTarget = (
   }
 
   return {
+    ...serviceTarget,
     portalId: portal.portalId,
-    projectId: target.projectId,
-    workspaceId: target.workspaceId,
-    rootId: project.portalRootId ?? target.rootId,
-    repoPath: project.repoPath ?? target.repoPath,
-    workspacePath: workspace.path ?? target.workspacePath,
   };
 };
 
@@ -185,6 +188,11 @@ const cleanPortalResult = (result: unknown) => {
   }
   const { id: _id, type: _type, ...body } = record;
   return body;
+};
+
+const requireResolvedPortalTarget = (target: WorkspaceFileTarget) => {
+  if (!target.portalId) throw new Error('No online Portal is available for this workspace.');
+  return target as WorkspaceFileTarget & { portalId: string };
 };
 
 const cleanNotesResult = (
@@ -341,17 +349,32 @@ const handleWorkspaceFileRoute = async (
 
     if (action === 'index') throw new Error('Workspace file indexing is only available for Notes Projects.');
     const requiredCapability = action === 'hash' || action === 'diffPreview' ? portalToolForAction(action) : undefined;
-    const resolvedTarget = resolveGitWorkspaceFileTarget(resourceId, target, project, requiredCapability);
+    const resolvedTarget = resolveGitWorkspaceFileTarget(
+      resourceId,
+      target,
+      project,
+      requiredCapability,
+      Boolean(deps.tools),
+    );
+    const caller = callerForOwner(resourceId, 'ui');
+    if (deps.tools && requiredCapability) {
+      const serviceTarget = await deps.tools.resolvePortalTarget(caller, portalToolScope(resolvedTarget));
+      if (!serviceTarget.portal.capabilities.includes(requiredCapability)) {
+        throw new Error('The connected Portal does not support this workspace file operation yet.');
+      }
+      resolvedTarget.portalId = serviceTarget.portalId;
+      resolvedTarget.rootId = resolvedTarget.rootId ?? serviceTarget.rootId;
+    }
     const result = deps.tools
       ? await deps.tools.requestPortal({
-        caller: callerForOwner(resourceId, 'ui'),
+        caller,
         target: resolvedTarget,
         tool: portalToolForAction(action),
         args: portalArgs(action, body),
         timeoutMs,
       })
       : await requestPortalTool({
-        ...resolvedTarget,
+        ...requireResolvedPortalTarget(resolvedTarget),
         tool: portalToolForAction(action),
         args: portalArgs(action, body),
         timeoutMs,
@@ -377,15 +400,21 @@ const handleWorkspaceFileWatchTokenRoute = async (
 
     const resolvedTarget = project.projectKind === 'notes'
       ? createNotesWorkspaceFileWatchTarget(project, resourceId, body, deps)
-      : resolveGitWorkspaceFileTarget(resourceId, target, project, 'portal.fs.watch');
+      : resolveGitWorkspaceFileTarget(
+        resourceId,
+        target,
+        project,
+        'portal.fs.watch',
+        Boolean(deps.sessions),
+      );
     const session = deps.sessions
       ? await deps.sessions.issueWorkspaceFileWatchToken({
         caller: callerForOwner(resourceId, 'ui'),
         scope: portalToolScope(resolvedTarget),
       })
       : {
-        token: issueWorkspaceFileWatchToken({ resourceId, ...resolvedTarget }),
-        target: resolvedTarget,
+        token: issueWorkspaceFileWatchToken({ resourceId, ...requireResolvedPortalTarget(resolvedTarget) }),
+        target: requireResolvedPortalTarget(resolvedTarget),
       };
     return c.json({
       token: session.token,
