@@ -144,3 +144,24 @@ Deno.test('ToolService denies ungranted operations before provider invocation', 
   );
   assertEquals(invoked, false);
 });
+
+Deno.test('ToolService returns denied audit for ungranted invokeResult calls', async () => {
+  let invoked = false;
+  const tools = createToolService(() => {
+    invoked = true;
+    return { ok: true };
+  });
+
+  const result = await tools.invokeResult({
+    caller: callerForOwner('owner-1', 'workflow'),
+    toolId: 'portal.fs.write',
+    scope: serviceLocatorScope('portal-target', { portalId: 'portal-1' }),
+    input: { path: 'README.md', content: 'changed' },
+    grants: [{ service: 'tool', operation: 'portal.fs.read' }],
+  });
+
+  assertEquals(invoked, false);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.code, 'permission_denied');
+  assertEquals(result.audit?.map((event) => event.status), ['denied']);
+});

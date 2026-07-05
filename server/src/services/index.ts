@@ -47,21 +47,34 @@ export type { ResourceService } from './resource-service';
 export type { SessionService } from './session-service';
 export type { ToolService } from './tool-service';
 export type {
+  ServiceBinding,
+  ServiceBindingRepository,
+  ServiceProviderKind,
+  UpsertServiceBindingInput,
+} from './bindings';
+export { isServiceProviderKind, LibsqlServiceBindingRepository } from './bindings';
+export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
   ServiceAuditEvent,
   ServiceCaller,
   ServiceGrant,
+  ServiceGrantRequest,
   ServiceScope,
   ServiceScopeRef,
 } from './types';
 export {
   callerForOwner,
+  isJsonValue,
+  requireServiceGrant,
   serviceBindingScope,
   ServiceError,
+  serviceGrantAllows,
+  serviceGrantDeniedError,
   serviceLocatorScope,
   serviceResourceScope,
+  serviceScopeEquals,
   serviceScopeNone,
 } from './types';
 export { portalToolScope, type PortalToolTarget, type ResolvedPortalToolTarget } from './providers/portal-provider';

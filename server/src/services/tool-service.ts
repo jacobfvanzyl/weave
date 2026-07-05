@@ -3,7 +3,7 @@ import type { PortalToolTarget, ResolvedPortalToolTarget } from './providers/por
 import { PortalProvider, portalToolScope } from './providers/portal-provider';
 import { StubProvider } from './providers/stub-providers';
 import type { ServiceCaller, ServiceGrant, ServiceResult, ServiceScope } from './types';
-import { serviceAudit, ServiceError, serviceErrorResult, serviceOk } from './types';
+import { requireServiceGrant, serviceAudit, ServiceError, serviceErrorResult, serviceOk } from './types';
 
 export type ToolInvocation = {
   caller: ServiceCaller;
@@ -25,6 +25,7 @@ export interface ToolService {
     tool: string;
     args: unknown;
     timeoutMs?: number;
+    grants?: ServiceGrant[];
   }): Promise<unknown>;
   portalToolRequester(caller: ServiceCaller, target?: PortalToolTarget): (input: {
     portalId: string;
@@ -60,11 +61,6 @@ const providerForInvocation = (toolId: string, scope: ServiceScope): ServiceProv
   return providerForTool(toolId);
 };
 
-const grantAllows = (grant: ServiceGrant, invocation: ToolInvocation) =>
-  grant.service === 'tool' &&
-  (!grant.operation || grant.operation === invocation.toolId) &&
-  (!grant.scope || JSON.stringify(grant.scope) === JSON.stringify(invocation.scope));
-
 export class DefaultToolService implements ToolService {
   constructor(
     private readonly bindings: ServiceBindingRepository,
@@ -80,19 +76,19 @@ export class DefaultToolService implements ToolService {
   }
 
   async invokeResult<T = unknown>(input: ToolInvocation): Promise<ServiceResult<T>> {
-    const audit = [serviceAudit({
-      service: 'tool',
-      operation: input.toolId,
-      caller: input.caller,
-      scope: input.scope,
-      provider: providerForInvocation(input.toolId, input.scope),
-      status: 'allowed',
-    })];
+    const audit = [];
 
     try {
-      if (input.grants && !input.grants.some((grant) => grantAllows(grant, input))) {
-        throw new ServiceError('permission_denied', `Tool ${input.toolId} is not granted for this scope.`, 403);
-      }
+      requireServiceGrant(input.grants, { service: 'tool', operation: input.toolId, scope: input.scope });
+
+      audit.push(serviceAudit({
+        service: 'tool',
+        operation: input.toolId,
+        caller: input.caller,
+        scope: input.scope,
+        provider: providerForInvocation(input.toolId, input.scope),
+        status: 'allowed',
+      }));
 
       const { providerKind, scope } = await this.resolveProviderScope(input.caller, input.scope, input.toolId);
       const provider = this.providers[providerKind];
@@ -120,7 +116,7 @@ export class DefaultToolService implements ToolService {
         caller: input.caller,
         scope: input.scope,
         provider: providerForInvocation(input.toolId, input.scope),
-        status: 'error',
+        status: error instanceof ServiceError && error.code === 'permission_denied' ? 'denied' : 'error',
         message: error instanceof Error ? error.message : String(error),
       }));
       return serviceErrorResult(error, audit);
@@ -142,6 +138,7 @@ export class DefaultToolService implements ToolService {
     tool: string;
     args: unknown;
     timeoutMs?: number;
+    grants?: ServiceGrant[];
   }) {
     return this.invoke({
       caller: input.caller,
@@ -149,6 +146,7 @@ export class DefaultToolService implements ToolService {
       scope: input.scope ?? portalToolScope(input.target ?? {}),
       input: input.args,
       timeoutMs: input.timeoutMs,
+      grants: input.grants,
     });
   }
 

@@ -31,6 +31,12 @@ export type ServiceGrant = {
   scope?: ServiceScope;
 };
 
+export type ServiceGrantRequest = {
+  service: ServiceOperationKind;
+  operation: string;
+  scope: ServiceScope;
+};
+
 export type ServiceAuditEvent = {
   id: string;
   service: ServiceOperationKind;
@@ -119,6 +125,79 @@ export const isJsonObject = (value: JsonValue | unknown): value is JsonObject =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
 export const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+const isJsonValueInternal = (value: unknown, seen: WeakSet<object>): value is JsonValue => {
+  if (value === null) return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'string' || typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.every((item) => isJsonValueInternal(item, seen));
+  if (typeof value !== 'object') return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  return Object.values(value as Record<string, unknown>).every((item) => isJsonValueInternal(item, seen));
+};
+
+export const isJsonValue = (value: unknown): value is JsonValue => isJsonValueInternal(value, new WeakSet());
+
+const jsonValueEquals = (left: JsonValue | unknown, right: JsonValue | unknown): boolean => {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return false;
+    if (left.length !== right.length) return false;
+    return left.every((item, index) => jsonValueEquals(item, right[index]));
+  }
+  if (isJsonObject(left) || isJsonObject(right)) {
+    if (!isJsonObject(left) || !isJsonObject(right)) return false;
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    if (!jsonValueEquals(leftKeys, rightKeys)) return false;
+    return leftKeys.every((key) => jsonValueEquals(left[key], right[key]));
+  }
+  return false;
+};
+
+export const serviceScopeEquals = (left: ServiceScope, right: ServiceScope): boolean => {
+  if (left.ref.kind !== right.ref.kind) return false;
+  if (left.ref.kind === 'none') return true;
+  if (left.ref.kind === 'binding' && right.ref.kind === 'binding') {
+    return left.ref.bindingId === right.ref.bindingId;
+  }
+  if (left.ref.kind === 'resource' && right.ref.kind === 'resource') {
+    return left.ref.resourceType === right.ref.resourceType && left.ref.resourceId === right.ref.resourceId;
+  }
+  if (left.ref.kind === 'locator' && right.ref.kind === 'locator') {
+    return left.ref.locatorType === right.ref.locatorType && jsonValueEquals(left.ref.value, right.ref.value);
+  }
+  return false;
+};
+
+export const serviceGrantAllows = (grant: ServiceGrant, request: ServiceGrantRequest) =>
+  grant.service === request.service &&
+  (!grant.operation || grant.operation === request.operation) &&
+  (!grant.scope || serviceScopeEquals(grant.scope, request.scope));
+
+export const serviceGrantDeniedError = (request: ServiceGrantRequest) =>
+  new ServiceError(
+    'permission_denied',
+    `${request.service} operation ${request.operation} is not granted for this scope.`,
+    403,
+    {
+      service: request.service,
+      operation: request.operation,
+      scope: request.scope as unknown as JsonValue,
+    },
+  );
+
+export const requireServiceGrant = (
+  grants: ServiceGrant[] | undefined,
+  request: ServiceGrantRequest,
+) => {
+  if (!grants) return;
+  if (grants.some((grant) => serviceGrantAllows(grant, request))) return;
+  throw serviceGrantDeniedError(request);
+};
 
 export const callerForOwner = (
   ownerId: string,

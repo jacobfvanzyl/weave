@@ -4,18 +4,20 @@ import { issueTerminalToken, type TerminalSessionKind } from '../portal/terminal
 import { issueWorkspaceFileWatchToken } from '../portal/workspace-file-watch-relay';
 import type { ResolvedPortalToolTarget } from './providers/portal-provider';
 import type { ToolService } from './tool-service';
-import type { ServiceCaller, ServiceScope } from './types';
-import { optionalString, ServiceError } from './types';
+import type { ServiceCaller, ServiceGrant, ServiceScope } from './types';
+import { optionalString, requireServiceGrant, ServiceError } from './types';
 
 export type TerminalSessionInput = {
   caller: ServiceCaller;
   scope: ServiceScope;
+  grants?: ServiceGrant[];
   kind: TerminalSessionKind;
 };
 
 export type LspSessionInput = {
   caller: ServiceCaller;
   scope: ServiceScope;
+  grants?: ServiceGrant[];
   path: string;
   languageId?: string;
   serverId?: string;
@@ -25,6 +27,7 @@ export type LspSessionInput = {
 export type JupyterSessionInput = {
   caller: ServiceCaller;
   scope: ServiceScope;
+  grants?: ServiceGrant[];
   action: 'status' | 'kernelspecs' | 'session';
   path?: string;
   kernelName?: string;
@@ -35,6 +38,7 @@ export type JupyterSessionInput = {
 export type WorkspaceFileWatchSessionInput = {
   caller: ServiceCaller;
   scope: ServiceScope;
+  grants?: ServiceGrant[];
 };
 
 export interface SessionService {
@@ -69,6 +73,11 @@ export class DefaultSessionService implements SessionService {
   constructor(private readonly tools: ToolService) {}
 
   async issueTerminalToken(input: TerminalSessionInput) {
+    requireServiceGrant(input.grants, {
+      service: 'session',
+      operation: 'portal.terminal.issue',
+      scope: input.scope,
+    });
     const target = await this.tools.resolvePortalTarget(input.caller, input.scope);
     const token = issueTerminalToken({
       resourceId: input.caller.ownerId,
@@ -85,6 +94,11 @@ export class DefaultSessionService implements SessionService {
 
   async startLspSession(input: LspSessionInput) {
     if (!input.path) throw new ServiceError('operation_failed', 'path is required.', 400);
+    requireServiceGrant(input.grants, {
+      service: 'session',
+      operation: 'portal.lsp.session',
+      scope: input.scope,
+    });
     const target = await this.tools.resolvePortalTarget(input.caller, input.scope);
     requireCapability(target, 'portal.lsp', 'The connected Portal does not support language intelligence yet.');
     requireCapability(target, 'portal.lsp.session', 'The connected Portal does not support language intelligence yet.');
@@ -125,8 +139,13 @@ export class DefaultSessionService implements SessionService {
   }
 
   async handleJupyter(input: JupyterSessionInput) {
-    const target = await this.tools.resolvePortalTarget(input.caller, input.scope);
     const tool = input.action === 'kernelspecs' ? 'portal.jupyter.kernelspecs' : `portal.jupyter.${input.action}`;
+    requireServiceGrant(input.grants, {
+      service: 'session',
+      operation: tool,
+      scope: input.scope,
+    });
+    const target = await this.tools.resolvePortalTarget(input.caller, input.scope);
     requireCapability(target, tool, 'The connected Portal does not support Jupyter execution yet.');
 
     const result = cleanPortalEnvelope(
@@ -167,6 +186,11 @@ export class DefaultSessionService implements SessionService {
   }
 
   async issueWorkspaceFileWatchToken(input: WorkspaceFileWatchSessionInput) {
+    requireServiceGrant(input.grants, {
+      service: 'session',
+      operation: 'portal.fs.watch',
+      scope: input.scope,
+    });
     const target = await this.tools.resolvePortalTarget(input.caller, input.scope);
     requireCapability(target, 'portal.fs.watch', 'The connected Portal does not support workspace file watching yet.');
     const token = issueWorkspaceFileWatchToken({
