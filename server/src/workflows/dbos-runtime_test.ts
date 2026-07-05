@@ -97,6 +97,7 @@ Deno.test('maybeLaunchDbosWorkflowRuntime configures, registers, and launches in
     },
     adapter,
     runtime: fakeRuntime(),
+    createRunnerEventHandler: () => undefined,
   });
 
   assertEquals(result.enabled, true);
@@ -147,6 +148,7 @@ Deno.test('DBOS status and cancel helpers use the launched adapter when enabled'
     },
     adapter,
     runtime: fakeRuntime(),
+    createRunnerEventHandler: () => undefined,
   });
   const cancelled = await cancelDbosWorkflowExecution('workflow-run-1', {
     env: {
@@ -155,6 +157,7 @@ Deno.test('DBOS status and cancel helpers use the launched adapter when enabled'
     },
     adapter,
     runtime: fakeRuntime(),
+    createRunnerEventHandler: () => undefined,
   });
 
   assertEquals(status?.status, 'SUCCESS');

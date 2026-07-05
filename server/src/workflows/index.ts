@@ -8,6 +8,7 @@ export {
   weaveDbosWorkflowName,
 } from './dbos-runtime';
 export { createWorkflowControlService, WorkflowControlError, workflowControlService } from './control-service';
+export { createWorkflowRunnerEventRecorder, recordWorkflowRunEvent, workflowRunEventId } from './events';
 export { executeWorkflowDefinition, WorkflowExecutionError } from './runner';
 export { validateWorkflowDefinition, WorkflowDefinitionError } from './definition';
 export { LibsqlWorkflowRepository, workflowRepository } from './repository';
@@ -30,6 +31,7 @@ export type {
   WorkflowExecutionStatus,
   WorkflowRunExecutor,
 } from './control-service';
+export type { WorkflowRunEventRecorderDeps } from './events';
 export type {
   WorkflowAgentState,
   WorkflowConditionCase,
@@ -43,13 +45,22 @@ export type {
   WorkflowToolState,
   WorkflowTransitionMap,
 } from './definition';
-export type { WorkflowExecutionContext, WorkflowRunnerOptions, WorkflowStepRunner } from './runner';
 export type {
+  WorkflowExecutionContext,
+  WorkflowRunnerEvent,
+  WorkflowRunnerEventHandler,
+  WorkflowRunnerOptions,
+  WorkflowStepRunner,
+} from './runner';
+export type {
+  AppendWorkflowRunEventInput,
   CreateWorkflowRunRecordInput,
+  ListWorkflowRunEventsOptions,
   ListWorkflowRunsOptions,
   StoredWorkflowDefinition,
   WorkflowRepository,
   WorkflowRunBackend,
+  WorkflowRunEventRecord,
   WorkflowRunRecord,
   WorkflowRunStatus,
 } from './repository';

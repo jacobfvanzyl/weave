@@ -16,9 +16,18 @@ import {
 
 export type WorkflowStepRunner = <T>(name: string, operation: () => Promise<T>) => Promise<T>;
 
+export type WorkflowRunnerEvent = {
+  eventId: string;
+  type: string;
+  data: JsonValue;
+};
+
+export type WorkflowRunnerEventHandler = (event: WorkflowRunnerEvent) => Promise<void> | void;
+
 export type WorkflowRunnerOptions = {
   runtime?: WorkflowServiceRuntime;
   runStep?: WorkflowStepRunner;
+  onEvent?: WorkflowRunnerEventHandler;
   maxTransitions?: number;
 };
 
@@ -46,6 +55,7 @@ export const executeWorkflowDefinition = async (
 
   const runtime = options.runtime ?? workflowServiceRuntime;
   const runStep = options.runStep ?? directStepRunner;
+  const onEvent = options.onEvent;
   const context: WorkflowExecutionContext = {
     ownerId: input.ownerId,
     workflowRunId: input.workflowRunId,
@@ -58,14 +68,58 @@ export const executeWorkflowDefinition = async (
   let stateId = input.definition.initialStateId;
   let transitions = 0;
 
+  await emitRunnerEvent(input.workflowRunId, onEvent, 'execution.started', 'workflow.execution.started', {
+    workflowId: input.definition.id,
+    workflowVersion: input.definition.version,
+  });
+
   while (transitions < (options.maxTransitions ?? defaultMaxTransitions)) {
     transitions += 1;
     const state = input.definition.states[stateId];
     if (!state) throw new WorkflowExecutionError(`Workflow state was not found: ${stateId}`);
 
-    if (state.type === 'end') return resolveJsonValue(input.definition, context, state.result ?? null);
+    await emitRunnerEvent(
+      input.workflowRunId,
+      onEvent,
+      `${transitions}:state.entered`,
+      'workflow.state.entered',
+      {
+        transition: transitions,
+        stateId,
+        stateType: state.type,
+      },
+    );
+
+    if (state.type === 'end') {
+      const output = resolveJsonValue(input.definition, context, state.result ?? null);
+      await emitRunnerEvent(
+        input.workflowRunId,
+        onEvent,
+        `${transitions}:execution.completed`,
+        'workflow.execution.completed',
+        {
+          transition: transitions,
+          stateId,
+          output,
+        },
+      );
+      return output;
+    }
     if (state.type === 'condition') {
-      stateId = evaluateConditionState(input.definition, context, stateId, state);
+      const evaluation = evaluateConditionState(input.definition, context, stateId, state);
+      await emitRunnerEvent(
+        input.workflowRunId,
+        onEvent,
+        `${transitions}:condition.evaluated`,
+        'workflow.condition.evaluated',
+        {
+          transition: transitions,
+          stateId,
+          matchedCaseIndex: evaluation.matchedCaseIndex ?? null,
+          nextStateId: evaluation.nextStateId,
+        },
+      );
+      stateId = evaluation.nextStateId;
       continue;
     }
 
@@ -75,11 +129,37 @@ export const executeWorkflowDefinition = async (
     );
     if (result.ok) {
       context.outputs[stateId] = result.value;
+      await emitRunnerEvent(
+        input.workflowRunId,
+        onEvent,
+        `${transitions}:state.succeeded`,
+        'workflow.state.succeeded',
+        {
+          transition: transitions,
+          stateId,
+          stateType: state.type,
+          output: result.value,
+          nextStateId: state.on.success!,
+        },
+      );
       stateId = state.on.success!;
       continue;
     }
 
     context.outputs[stateId] = { ok: false, error: result.error };
+    await emitRunnerEvent(
+      input.workflowRunId,
+      onEvent,
+      `${transitions}:state.failed`,
+      'workflow.state.failed',
+      {
+        transition: transitions,
+        stateId,
+        stateType: state.type,
+        error: result.error,
+        nextStateId: state.on.failure ?? null,
+      },
+    );
     if (state.on.failure) {
       stateId = state.on.failure;
       continue;
@@ -93,6 +173,21 @@ export const executeWorkflowDefinition = async (
 };
 
 const directStepRunner: WorkflowStepRunner = (_name, operation) => operation();
+
+const emitRunnerEvent = async (
+  workflowRunId: string,
+  onEvent: WorkflowRunnerEventHandler | undefined,
+  eventKey: string,
+  type: string,
+  data: JsonValue,
+) => {
+  if (!onEvent) return;
+  await onEvent({
+    eventId: `runner:${workflowRunId}:${eventKey}`,
+    type,
+    data,
+  });
+};
 
 const executeServiceState = async (
   definition: WorkflowDefinition,
@@ -186,12 +281,14 @@ const evaluateConditionState = (
   stateId: string,
   state: Extract<WorkflowState, { type: 'condition' }>,
 ) => {
-  for (const conditionCase of state.cases) {
+  for (const [index, conditionCase] of state.cases.entries()) {
     const value = resolveReference(definition, context, conditionCase.ref);
-    if (jsonEquals(value, conditionCase.equals)) return conditionCase.to;
+    if (jsonEquals(value, conditionCase.equals)) {
+      return { nextStateId: conditionCase.to, matchedCaseIndex: index };
+    }
   }
   if (!state.default) throw new WorkflowDefinitionError(`State ${stateId} condition default is required.`);
-  return state.default;
+  return { nextStateId: state.default };
 };
 
 export const resolveJsonValue = (

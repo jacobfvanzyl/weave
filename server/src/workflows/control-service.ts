@@ -1,14 +1,16 @@
-import { callerForOwner, isJsonValue, type JsonValue } from '../services/types';
+import { isJsonValue, type JsonValue } from '../services/types';
 import type { EventService } from '../services/event-service';
 import { eventService as defaultEventService } from '../services/event-service';
 import { cancelDbosWorkflowExecution, getDbosWorkflowStatus, startDbosWorkflowExecution } from './dbos-runtime';
 import { validateWorkflowDefinition, type WorkflowDefinition, type WorkflowRunInput } from './definition';
-import { executeWorkflowDefinition } from './runner';
+import { createWorkflowRunnerEventRecorder, recordWorkflowRunEvent, workflowRunEventId } from './events';
+import { executeWorkflowDefinition, type WorkflowRunnerEventHandler } from './runner';
 import {
   type StoredWorkflowDefinition,
   type WorkflowRepository,
   workflowRepository,
   type WorkflowRunBackend,
+  type WorkflowRunEventRecord,
   type WorkflowRunRecord,
 } from './repository';
 
@@ -39,7 +41,7 @@ export type WorkflowExecutionStatus =
   | { status: 'cancelled'; error?: JsonValue };
 
 export interface WorkflowRunExecutor {
-  start(input: WorkflowRunInput): Promise<WorkflowExecutionStart>;
+  start(input: WorkflowRunInput, hooks?: { onEvent?: WorkflowRunnerEventHandler }): Promise<WorkflowExecutionStart>;
   getStatus?(run: WorkflowRunRecord): Promise<WorkflowExecutionStatus | undefined>;
   cancel?(run: WorkflowRunRecord): Promise<WorkflowExecutionStatus | undefined>;
 }
@@ -51,7 +53,10 @@ export type WorkflowControlServiceDeps = {
 };
 
 export class DefaultWorkflowRunExecutor implements WorkflowRunExecutor {
-  async start(input: WorkflowRunInput): Promise<WorkflowExecutionStart> {
+  async start(
+    input: WorkflowRunInput,
+    hooks: { onEvent?: WorkflowRunnerEventHandler } = {},
+  ): Promise<WorkflowExecutionStart> {
     const dbos = await startDbosWorkflowExecution(input);
     if (dbos) {
       return {
@@ -63,7 +68,11 @@ export class DefaultWorkflowRunExecutor implements WorkflowRunExecutor {
 
     return {
       backend: 'direct',
-      result: executeWorkflowDefinition(input),
+      result: new Promise<JsonValue>((resolve, reject) => {
+        setTimeout(() => {
+          executeWorkflowDefinition(input, { onEvent: hooks.onEvent }).then(resolve, reject);
+        }, 0);
+      }),
     };
   }
 
@@ -120,6 +129,12 @@ export class WorkflowControlService {
     return Promise.all(runs.map((run) => this.reconcileRun(run)));
   }
 
+  async listRunEvents(ownerId: string, runId: string, options?: { afterSequence?: number; limit?: number }) {
+    const run = await this.getRun(ownerId, runId);
+    if (!run) throw new WorkflowControlError('not_found', 'Workflow run was not found.', 404);
+    return this.repository.listRunEvents(ownerId, runId, options);
+  }
+
   async startRun(input: {
     ownerId: string;
     workflowId: string;
@@ -147,12 +162,18 @@ export class WorkflowControlService {
     });
 
     try {
-      const execution = await this.executor.start({
+      const executionInput: WorkflowRunInput = {
         ownerId: input.ownerId,
         workflowRunId: run.runId,
         requestId: input.requestId,
         definition: storedDefinition.definition,
         input: runInput,
+      };
+      const execution = await this.executor.start(executionInput, {
+        onEvent: createWorkflowRunnerEventRecorder(executionInput, {
+          repository: this.repository,
+          events: this.events,
+        }),
       });
       const startedRun = await this.repository.updateRunStarted(input.ownerId, run.runId, {
         backend: execution.backend,
@@ -186,12 +207,6 @@ export class WorkflowControlService {
         error: { message: 'Workflow run was cancelled.' },
       },
     );
-    if (cancelled.status === 'cancelled') {
-      await this.publishRunEvent(ownerId, runId, 'workflow.run.cancelled', {
-        workflowId: run.workflowId,
-        externalRunId: run.externalRunId ?? null,
-      });
-    }
     return cancelled;
   }
 
@@ -206,14 +221,12 @@ export class WorkflowControlService {
       const output = await resultPromise;
       const current = await this.repository.getRun(ownerId, runId);
       if (!current || current.status !== 'running') return;
-      await this.repository.completeRun(ownerId, runId, output);
-      await this.publishRunEvent(ownerId, runId, 'workflow.run.completed', output);
+      await this.applyExecutionStatus(current, { status: 'completed', output });
     } catch (error) {
       const current = await this.repository.getRun(ownerId, runId);
       if (!current || current.status !== 'running') return;
       const failure = errorToJson(error);
-      await this.repository.failRun(ownerId, runId, failure);
-      await this.publishRunEvent(ownerId, runId, 'workflow.run.failed', failure);
+      await this.applyExecutionStatus(current, { status: 'failed', error: failure });
     }
   }
 
@@ -223,20 +236,34 @@ export class WorkflowControlService {
   ): Promise<WorkflowRunRecord> {
     if (!executionStatus || executionStatus.status === 'running') return run;
     if (executionStatus.status === 'completed') {
-      return await this.repository.completeRun(run.ownerId, run.runId, executionStatus.output) ?? run;
+      const completed = await this.repository.completeRun(run.ownerId, run.runId, executionStatus.output) ?? run;
+      await this.publishRunEvent(run.ownerId, run.runId, 'workflow.run.completed', executionStatus.output);
+      return completed;
     }
     if (executionStatus.status === 'failed') {
-      return await this.repository.failRun(run.ownerId, run.runId, executionStatus.error) ?? run;
+      const failed = await this.repository.failRun(run.ownerId, run.runId, executionStatus.error) ?? run;
+      await this.publishRunEvent(run.ownerId, run.runId, 'workflow.run.failed', executionStatus.error);
+      return failed;
     }
-    return await this.repository.cancelRun(run.ownerId, run.runId, executionStatus.error) ?? run;
+    const cancelled = await this.repository.cancelRun(run.ownerId, run.runId, executionStatus.error) ?? run;
+    await this.publishRunEvent(run.ownerId, run.runId, 'workflow.run.cancelled', {
+      workflowId: run.workflowId,
+      externalRunId: run.externalRunId ?? null,
+      ...(executionStatus.error === undefined ? {} : { error: executionStatus.error }),
+    });
+    return cancelled;
   }
 
   private publishRunEvent(ownerId: string, runId: string, type: string, data: JsonValue) {
-    return this.events.publishRunEvent(callerForOwner(ownerId, 'system'), {
-      runKind: 'workflow',
+    return recordWorkflowRunEvent({
+      ownerId,
       runId,
+      eventId: workflowRunEventId(runId, type),
       type,
       data,
+    }, {
+      repository: this.repository,
+      events: this.events,
     }).catch(() => undefined);
   }
 }
@@ -272,6 +299,16 @@ export const workflowRunResponse = (run: WorkflowRunRecord) => ({
   updatedAt: run.updatedAt,
   startedAt: run.startedAt,
   finishedAt: run.finishedAt,
+});
+
+export const workflowRunEventResponse = (event: WorkflowRunEventRecord) => ({
+  ownerId: event.ownerId,
+  runId: event.runId,
+  eventId: event.eventId,
+  sequence: event.sequence,
+  type: event.type,
+  data: event.data,
+  createdAt: event.createdAt,
 });
 
 const errorToJson = (error: unknown): JsonValue => {

@@ -4,7 +4,11 @@ import { mountRoute } from '../../server/routes.ts';
 import type { ServerVariables, WeaveApp } from '../../server/types.ts';
 import type { WorkflowControlService } from '../../workflows/control-service.ts';
 import type { WorkflowDefinition } from '../../workflows/definition.ts';
-import type { StoredWorkflowDefinition, WorkflowRunRecord } from '../../workflows/repository.ts';
+import type {
+  StoredWorkflowDefinition,
+  WorkflowRunEventRecord,
+  WorkflowRunRecord,
+} from '../../workflows/repository.ts';
 import { createWorkflowRoutes } from './routes.ts';
 
 const assertEquals = (actual: unknown, expected: unknown, message?: string) => {
@@ -47,6 +51,17 @@ const runRecord = (ownerId = 'owner-1'): WorkflowRunRecord => ({
   createdAt: '2026-07-05T00:00:00.000Z',
   updatedAt: '2026-07-05T00:00:00.000Z',
   startedAt: '2026-07-05T00:00:00.000Z',
+});
+
+const runEventRecord = (overrides: Partial<WorkflowRunEventRecord> = {}): WorkflowRunEventRecord => ({
+  ownerId: 'owner-1',
+  runId: 'run-1',
+  eventId: 'event-1',
+  sequence: 1,
+  type: 'workflow.run.started',
+  data: { backend: 'direct' },
+  createdAt: '2026-07-05T00:00:00.000Z',
+  ...overrides,
 });
 
 const createTestApp = (service: WorkflowControlService) => {
@@ -166,4 +181,35 @@ Deno.test('workflow run cancel route delegates owner-scoped cancellation', async
   assertEquals(cancelled, { ownerId: 'owner-1', runId: 'run-1' });
   assertEquals(json.run.status, 'cancelled');
   assertEquals(json.run.error, { message: 'Workflow run was cancelled.' });
+});
+
+Deno.test('workflow run events route replays owner-scoped events', async () => {
+  let replayInput: { ownerId?: string; runId?: string; afterSequence?: number; limit?: number } = {};
+  const service = {
+    listRunEvents: (ownerId: string, runId: string, options?: { afterSequence?: number; limit?: number }) => {
+      replayInput = { ownerId, runId, ...options };
+      return Promise.resolve([
+        runEventRecord(),
+        runEventRecord({
+          eventId: 'event-2',
+          sequence: 2,
+          type: 'workflow.run.completed',
+          data: 'done',
+        }),
+      ]);
+    },
+  } as unknown as WorkflowControlService;
+  const app = createTestApp(service);
+
+  const response = await app.request('/workflow-runs/run-1/events?afterSequence=1&limit=10', {
+    headers: { authorization: 'Bearer test-token' },
+  });
+  const json = await response.json();
+
+  assertEquals(response.status, 200);
+  assertEquals(replayInput, { ownerId: 'owner-1', runId: 'run-1', afterSequence: 1, limit: 10 });
+  assertEquals(json.events.map((event: { type: string }) => event.type), [
+    'workflow.run.started',
+    'workflow.run.completed',
+  ]);
 });

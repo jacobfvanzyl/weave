@@ -35,6 +35,16 @@ export type WorkflowRunRecord = {
   finishedAt?: string;
 };
 
+export type WorkflowRunEventRecord = {
+  ownerId: string;
+  runId: string;
+  eventId: string;
+  sequence: number;
+  type: string;
+  data: JsonValue;
+  createdAt: string;
+};
+
 export type CreateWorkflowRunRecordInput = {
   ownerId: string;
   runId?: string;
@@ -45,6 +55,19 @@ export type CreateWorkflowRunRecordInput = {
 
 export type ListWorkflowRunsOptions = {
   workflowId?: string;
+  limit?: number;
+};
+
+export type AppendWorkflowRunEventInput = {
+  ownerId: string;
+  runId: string;
+  eventId?: string;
+  type: string;
+  data: JsonValue;
+};
+
+export type ListWorkflowRunEventsOptions = {
+  afterSequence?: number;
   limit?: number;
 };
 
@@ -112,6 +135,16 @@ const parseRunRow = (row: Record<string, unknown>): WorkflowRunRecord => {
   };
 };
 
+const parseRunEventRow = (row: Record<string, unknown>): WorkflowRunEventRecord => ({
+  ownerId: String(row.owner_id),
+  runId: String(row.run_id),
+  eventId: String(row.event_id),
+  sequence: Number(row.sequence),
+  type: String(row.type),
+  data: parseJsonColumn(row.data, 'Workflow run event data'),
+  createdAt: String(row.created_at),
+});
+
 const requireOwnerId = (ownerId: string) => {
   const normalized = optionalString(ownerId);
   if (!normalized) throw new Error('ownerId is required.');
@@ -127,6 +160,18 @@ const requireWorkflowId = (workflowId: string) => {
 const requireRunId = (runId: string) => {
   const normalized = optionalString(runId);
   if (!normalized) throw new Error('runId is required.');
+  return normalized;
+};
+
+const requireEventId = (eventId: string) => {
+  const normalized = optionalString(eventId);
+  if (!normalized) throw new Error('eventId is required.');
+  return normalized;
+};
+
+const requireEventType = (type: string) => {
+  const normalized = optionalString(type);
+  if (!normalized) throw new Error('Workflow run event type is required.');
   return normalized;
 };
 
@@ -146,6 +191,12 @@ export interface WorkflowRepository {
   cancelRun(ownerId: string, runId: string, error?: JsonValue): Promise<WorkflowRunRecord | undefined>;
   getRun(ownerId: string, runId: string): Promise<WorkflowRunRecord | undefined>;
   listRuns(ownerId: string, options?: ListWorkflowRunsOptions): Promise<WorkflowRunRecord[]>;
+  appendRunEvent(input: AppendWorkflowRunEventInput): Promise<WorkflowRunEventRecord>;
+  listRunEvents(
+    ownerId: string,
+    runId: string,
+    options?: ListWorkflowRunEventsOptions,
+  ): Promise<WorkflowRunEventRecord[]>;
 }
 
 export class LibsqlWorkflowRepository implements WorkflowRepository {
@@ -327,6 +378,53 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     return result.rows.map((row) => parseRunRow(row as Record<string, unknown>));
   }
 
+  async appendRunEvent(input: AppendWorkflowRunEventInput) {
+    const ownerId = requireOwnerId(input.ownerId);
+    const runId = requireRunId(input.runId);
+    const eventId = requireEventId(input.eventId ?? `wevt_${crypto.randomUUID().replace(/-/g, '')}`);
+    const type = requireEventType(input.type);
+    if (!isJsonValue(input.data)) throw new Error('Workflow run event data must be JSON-safe.');
+
+    const at = new Date().toISOString();
+    const db = await this.getClient();
+    await db.execute({
+      sql: `INSERT INTO weave_workflow_run_events (
+          owner_id, run_id, event_id, sequence, type, data, created_at
+        ) VALUES (
+          ?, ?, ?,
+          COALESCE((
+            SELECT MAX(sequence) + 1 FROM weave_workflow_run_events WHERE owner_id = ? AND run_id = ?
+          ), 1),
+          ?, ?, ?
+        )
+        ON CONFLICT(owner_id, run_id, event_id) DO NOTHING`,
+      args: [ownerId, runId, eventId, ownerId, runId, type, JSON.stringify(input.data), at],
+    });
+
+    const event = await this.getRunEventById(ownerId, runId, eventId);
+    if (!event) throw new Error('Workflow run event was not saved.');
+    return event;
+  }
+
+  async listRunEvents(ownerId: string, runId: string, options: ListWorkflowRunEventsOptions = {}) {
+    const limit = Number.isInteger(options.limit) && options.limit && options.limit > 0
+      ? Math.min(options.limit, 500)
+      : 100;
+    const afterSequence = Number.isInteger(options.afterSequence) && options.afterSequence && options.afterSequence > 0
+      ? options.afterSequence
+      : 0;
+    const db = await this.getClient();
+    const result = await db.execute({
+      sql: `SELECT owner_id, run_id, event_id, sequence, type, data, created_at
+        FROM weave_workflow_run_events
+        WHERE owner_id = ? AND run_id = ? AND sequence > ?
+        ORDER BY sequence ASC
+        LIMIT ?`,
+      args: [requireOwnerId(ownerId), requireRunId(runId), afterSequence, limit],
+    });
+    return result.rows.map((row) => parseRunEventRow(row as Record<string, unknown>));
+  }
+
   private async finishRun(
     ownerId: string,
     runId: string,
@@ -351,6 +449,19 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
       ],
     });
     return this.getRun(ownerId, runId);
+  }
+
+  private async getRunEventById(ownerId: string, runId: string, eventId: string) {
+    const db = await this.getClient();
+    const result = await db.execute({
+      sql: `SELECT owner_id, run_id, event_id, sequence, type, data, created_at
+        FROM weave_workflow_run_events
+        WHERE owner_id = ? AND run_id = ? AND event_id = ?
+        LIMIT 1`,
+      args: [requireOwnerId(ownerId), requireRunId(runId), requireEventId(eventId)],
+    });
+    const row = result.rows[0];
+    return row ? parseRunEventRow(row as Record<string, unknown>) : undefined;
   }
 }
 

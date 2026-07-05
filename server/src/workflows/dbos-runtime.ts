@@ -1,6 +1,8 @@
 import type { JsonValue } from '../services/types';
 import { type WorkflowRunInput } from './definition';
+import { createWorkflowRunnerEventRecorder } from './events';
 import { executeWorkflowDefinition, type WorkflowStepRunner } from './runner';
+import type { WorkflowRunnerEventHandler } from './runner';
 import { type WorkflowServiceRuntime, workflowServiceRuntime } from './service-runtime';
 
 export const weaveDbosWorkflowName = 'weave.workflow.run';
@@ -68,6 +70,7 @@ export type DbosWorkflowRuntimeOptions = {
   adapter?: DbosAdapter;
   loadAdapter?: () => Promise<DbosAdapter>;
   runtime?: WorkflowServiceRuntime;
+  createRunnerEventHandler?: (input: WorkflowRunInput) => WorkflowRunnerEventHandler | undefined;
 };
 
 let defaultLaunch: DbosWorkflowRuntimeLaunchResult | undefined;
@@ -91,7 +94,11 @@ export const maybeLaunchDbosWorkflowRuntime = async (
     name: env.WEAVE_DBOS_APP_NAME?.trim() || 'weave-workflows',
     systemDatabaseUrl,
   });
-  const workflow = registerWeaveDbosWorkflow(adapter, options.runtime ?? workflowServiceRuntime);
+  const workflow = registerWeaveDbosWorkflow(
+    adapter,
+    options.runtime ?? workflowServiceRuntime,
+    options.createRunnerEventHandler,
+  );
   await adapter.launch();
 
   const result = { enabled: true, launched: true, workflowName: weaveDbosWorkflowName, workflow, adapter } as const;
@@ -102,10 +109,17 @@ export const maybeLaunchDbosWorkflowRuntime = async (
 export const registerWeaveDbosWorkflow = (
   adapter: DbosAdapter,
   runtime: WorkflowServiceRuntime = workflowServiceRuntime,
+  createRunnerEventHandler: (input: WorkflowRunInput) => WorkflowRunnerEventHandler | undefined =
+    createWorkflowRunnerEventRecorder,
 ) => {
   const stepRunner: WorkflowStepRunner = (name, operation) => adapter.runStep(operation, { name });
   return adapter.registerWorkflow(
-    (input) => executeWorkflowDefinition(input, { runtime, runStep: stepRunner }),
+    (input) =>
+      executeWorkflowDefinition(input, {
+        runtime,
+        runStep: stepRunner,
+        onEvent: createRunnerEventHandler(input),
+      }),
     { name: weaveDbosWorkflowName },
   );
 };

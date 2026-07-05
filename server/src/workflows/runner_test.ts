@@ -206,3 +206,68 @@ Deno.test('executeWorkflowDefinition runs resource lookup states', async () => {
 
   assertEquals(await result, 'att-1');
 });
+
+Deno.test('executeWorkflowDefinition emits replayable runner events', async () => {
+  const definition: WorkflowDefinition = {
+    id: 'workflow-1',
+    version: '1',
+    name: 'Runner events',
+    initialStateId: 'tool',
+    grants: [],
+    states: {
+      tool: {
+        type: 'tool',
+        toolId: 'echo',
+        input: { value: { $ref: 'input.value' } },
+        on: { success: 'condition' },
+      },
+      condition: {
+        type: 'condition',
+        cases: [{ ref: 'outputs.tool.value', equals: 'yes', to: 'end' }],
+        default: 'fallback',
+      },
+      fallback: { type: 'end', result: 'fallback' },
+      end: { type: 'end', result: { $ref: 'outputs.tool.value' } },
+    },
+  };
+  const events: { eventId: string; type: string; data: JsonValue }[] = [];
+
+  const result = await executeWorkflowDefinition(
+    {
+      ownerId: 'owner-1',
+      workflowRunId: 'workflow-run-1',
+      requestId: 'request-1',
+      definition,
+      input: { value: 'yes' },
+    },
+    {
+      runtime: createRuntime({
+        invokeTool: <T>(
+          _context: Parameters<WorkflowServiceRuntime['invokeTool']>[0],
+          input: Parameters<WorkflowServiceRuntime['invokeTool']>[1],
+        ) => Promise.resolve(input.input as T),
+      }),
+      onEvent: (event) => {
+        events.push(event);
+      },
+    },
+  );
+
+  assertEquals(result, 'yes');
+  assertEquals(events.map((event) => event.type), [
+    'workflow.execution.started',
+    'workflow.state.entered',
+    'workflow.state.succeeded',
+    'workflow.state.entered',
+    'workflow.condition.evaluated',
+    'workflow.state.entered',
+    'workflow.execution.completed',
+  ]);
+  assertEquals(events[0].eventId, 'runner:workflow-run-1:execution.started');
+  assertEquals(events[4].data, {
+    transition: 2,
+    stateId: 'condition',
+    matchedCaseIndex: 0,
+    nextStateId: 'end',
+  });
+});

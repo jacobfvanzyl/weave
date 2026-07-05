@@ -62,6 +62,19 @@ const workflowMigrations: InStatement[] = [
     ON weave_workflow_runs(owner_id, updated_at)`,
   `CREATE INDEX IF NOT EXISTS weave_workflow_runs_owner_workflow_idx
     ON weave_workflow_runs(owner_id, workflow_id, updated_at)`,
+  `CREATE TABLE IF NOT EXISTS weave_workflow_run_events (
+    owner_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (owner_id, run_id, sequence),
+    UNIQUE (owner_id, run_id, event_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS weave_workflow_run_events_owner_run_created_idx
+    ON weave_workflow_run_events(owner_id, run_id, created_at)`,
 ];
 
 const migrations: InStatement[] = [
@@ -138,6 +151,13 @@ const ensureWorkflowSchema = async (db: Client) => {
       {
         required: ['owner_id', 'run_id', 'workflow_id', 'workflow_version', 'status', 'backend', 'input', 'definition'],
         legacy: ['version_id', 'source', 'context', 'trigger_run_id', 'completed_at'],
+      },
+    ],
+    [
+      'weave_workflow_run_events',
+      {
+        required: ['owner_id', 'run_id', 'event_id', 'sequence', 'type', 'data', 'created_at'],
+        legacy: ['state_id', 'payload'],
       },
     ],
   ]);

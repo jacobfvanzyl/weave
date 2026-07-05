@@ -8,6 +8,7 @@ import {
   type WorkflowControlService,
   workflowControlService,
   workflowDefinitionResponse,
+  workflowRunEventResponse,
   workflowRunResponse,
 } from '../../workflows/control-service';
 import { type WorkflowDefinition, WorkflowDefinitionError } from '../../workflows/definition';
@@ -36,6 +37,12 @@ const parseLimit = (value: string | undefined) => {
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const parseAfterSequence = (value: string | undefined) => {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
 };
 
 const errorResponse = (c: WorkflowRouteContext, error: unknown) => {
@@ -156,6 +163,21 @@ export const createWorkflowRoutes = (service: WorkflowControlService = workflowC
       try {
         const run = await service.cancelRun(owner.id, c.req.param('runId'));
         return c.json({ run: workflowRunResponse(run) });
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  defineRoute('/workflow-runs/:runId/events', {
+    method: 'GET',
+    handler: async (c) => {
+      const owner = getOwner(c);
+      try {
+        const events = await service.listRunEvents(owner.id, c.req.param('runId'), {
+          afterSequence: parseAfterSequence(c.req.query('afterSequence')),
+          limit: parseLimit(c.req.query('limit')),
+        });
+        return c.json({ events: events.map(workflowRunEventResponse) });
       } catch (error) {
         return errorResponse(c, error);
       }

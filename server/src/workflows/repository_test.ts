@@ -21,6 +21,7 @@ const definition = (id = 'workflow-1'): WorkflowDefinition => ({
 const createFakeClient = () => {
   const definitions = new Map<string, Record<string, unknown>>();
   const runs = new Map<string, Record<string, unknown>>();
+  const events: Record<string, unknown>[] = [];
   return {
     execute(statement: { sql: string; args?: unknown[] }) {
       const sql = statement.sql;
@@ -121,6 +122,46 @@ const createFakeClient = () => {
         return { rows: [], rowsAffected: row?.status === status ? 1 : 0 };
       }
 
+      if (sql.includes('INSERT INTO weave_workflow_run_events')) {
+        const [ownerId, runId, eventId, sequenceOwnerId, sequenceRunId, type, data, createdAt] = args;
+        const existing = events.find((row) =>
+          row.owner_id === ownerId && row.run_id === runId && row.event_id === eventId
+        );
+        if (!existing) {
+          const sequence = events
+            .filter((row) => row.owner_id === sequenceOwnerId && row.run_id === sequenceRunId)
+            .reduce((max, row) => Math.max(max, Number(row.sequence)), 0) + 1;
+          events.push({
+            owner_id: ownerId,
+            run_id: runId,
+            event_id: eventId,
+            sequence,
+            type,
+            data,
+            created_at: createdAt,
+          });
+        }
+        return { rows: [], rowsAffected: existing ? 0 : 1 };
+      }
+
+      if (sql.includes('FROM weave_workflow_run_events') && sql.includes('event_id = ?')) {
+        const row = events.find((event) =>
+          event.owner_id === args[0] && event.run_id === args[1] && event.event_id === args[2]
+        );
+        return { rows: row ? [row] : [] };
+      }
+
+      if (sql.includes('FROM weave_workflow_run_events') && sql.includes('sequence > ?')) {
+        return {
+          rows: events
+            .filter((event) =>
+              event.owner_id === args[0] && event.run_id === args[1] && Number(event.sequence) > Number(args[2])
+            )
+            .sort((left, right) => Number(left.sequence) - Number(right.sequence))
+            .slice(0, Number(args[3])),
+        };
+      }
+
       if (sql.includes('FROM weave_workflow_runs') && sql.includes('run_id = ?')) {
         const row = runs.get(`${args[0]}:${args[1]}`);
         return { rows: row ? [row] : [] };
@@ -205,4 +246,42 @@ Deno.test('LibsqlWorkflowRepository marks running workflow runs cancelled withou
 
   await repository.completeRun('owner-1', 'run-1', 'late output');
   assertEquals((await repository.getRun('owner-1', 'run-1'))?.status, 'cancelled');
+});
+
+Deno.test('LibsqlWorkflowRepository appends and replays workflow run events', async () => {
+  const client = createFakeClient();
+  const repository = new LibsqlWorkflowRepository(() => Promise.resolve(client as never));
+
+  const first = await repository.appendRunEvent({
+    ownerId: 'owner-1',
+    runId: 'run-1',
+    eventId: 'event-1',
+    type: 'workflow.run.started',
+    data: { backend: 'direct' },
+  });
+  const duplicate = await repository.appendRunEvent({
+    ownerId: 'owner-1',
+    runId: 'run-1',
+    eventId: 'event-1',
+    type: 'workflow.run.started',
+    data: { backend: 'direct' },
+  });
+  const second = await repository.appendRunEvent({
+    ownerId: 'owner-1',
+    runId: 'run-1',
+    eventId: 'event-2',
+    type: 'workflow.run.completed',
+    data: 'done',
+  });
+
+  assertEquals(first.sequence, 1);
+  assertEquals(duplicate.sequence, 1);
+  assertEquals(second.sequence, 2);
+  assertEquals((await repository.listRunEvents('owner-1', 'run-1')).map((event) => event.type), [
+    'workflow.run.started',
+    'workflow.run.completed',
+  ]);
+  assertEquals((await repository.listRunEvents('owner-1', 'run-1', { afterSequence: 1 })).map((event) => event.type), [
+    'workflow.run.completed',
+  ]);
 });

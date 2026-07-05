@@ -34,6 +34,7 @@ const definition = (): WorkflowDefinition => ({
 const createFakeClient = () => {
   const definitions = new Map<string, Record<string, unknown>>();
   const runs = new Map<string, Record<string, unknown>>();
+  const events: Record<string, unknown>[] = [];
   return {
     execute(statement: { sql: string; args?: unknown[] }) {
       const sql = statement.sql;
@@ -128,6 +129,46 @@ const createFakeClient = () => {
         return { rows: [], rowsAffected: row?.status === status ? 1 : 0 };
       }
 
+      if (sql.includes('INSERT INTO weave_workflow_run_events')) {
+        const [ownerId, runId, eventId, sequenceOwnerId, sequenceRunId, type, data, createdAt] = args;
+        const existing = events.find((row) =>
+          row.owner_id === ownerId && row.run_id === runId && row.event_id === eventId
+        );
+        if (!existing) {
+          const sequence = events
+            .filter((row) => row.owner_id === sequenceOwnerId && row.run_id === sequenceRunId)
+            .reduce((max, row) => Math.max(max, Number(row.sequence)), 0) + 1;
+          events.push({
+            owner_id: ownerId,
+            run_id: runId,
+            event_id: eventId,
+            sequence,
+            type,
+            data,
+            created_at: createdAt,
+          });
+        }
+        return { rows: [], rowsAffected: existing ? 0 : 1 };
+      }
+
+      if (sql.includes('FROM weave_workflow_run_events') && sql.includes('event_id = ?')) {
+        const row = events.find((event) =>
+          event.owner_id === args[0] && event.run_id === args[1] && event.event_id === args[2]
+        );
+        return { rows: row ? [row] : [] };
+      }
+
+      if (sql.includes('FROM weave_workflow_run_events') && sql.includes('sequence > ?')) {
+        return {
+          rows: events
+            .filter((event) =>
+              event.owner_id === args[0] && event.run_id === args[1] && Number(event.sequence) > Number(args[2])
+            )
+            .sort((left, right) => Number(left.sequence) - Number(right.sequence))
+            .slice(0, Number(args[3])),
+        };
+      }
+
       if (sql.includes('FROM weave_workflow_runs') && sql.includes('run_id = ?')) {
         const row = runs.get(`${args[0]}:${args[1]}`);
         return { rows: row ? [row] : [] };
@@ -195,6 +236,11 @@ Deno.test('WorkflowControlService starts and settles workflow runs through the e
   const completed = await service.getRun('owner-1', 'run-1');
   assertEquals(completed?.status, 'completed');
   assertEquals(completed?.output, 'done');
+  assertEquals((await service.listRunEvents('owner-1', 'run-1')).map((event) => event.type), [
+    'workflow.run.created',
+    'workflow.run.started',
+    'workflow.run.completed',
+  ]);
 });
 
 Deno.test('WorkflowControlService marks runs failed when execution rejects', async () => {
@@ -239,6 +285,11 @@ Deno.test('WorkflowControlService reconciles DBOS-backed running runs on read', 
   const reconciled = await service.getRun('owner-1', 'run-1');
   assertEquals(reconciled?.status, 'completed');
   assertEquals(reconciled?.output, { ok: true });
+  assertEquals((await service.listRunEvents('owner-1', 'run-1')).map((event) => event.type), [
+    'workflow.run.created',
+    'workflow.run.started',
+    'workflow.run.completed',
+  ]);
 });
 
 Deno.test('WorkflowControlService cancels running runs and ignores late direct completion', async () => {
@@ -265,6 +316,11 @@ Deno.test('WorkflowControlService cancels running runs and ignores late direct c
   const stillCancelled = await service.getRun('owner-1', 'run-1');
   assertEquals(stillCancelled?.status, 'cancelled');
   assertEquals(stillCancelled?.output, undefined);
+  assertEquals((await service.listRunEvents('owner-1', 'run-1')).map((event) => event.type), [
+    'workflow.run.created',
+    'workflow.run.started',
+    'workflow.run.cancelled',
+  ]);
 });
 
 Deno.test('WorkflowControlService uses executor cancellation status for DBOS-backed runs', async () => {
