@@ -1,15 +1,15 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: supabase/postgres:17.6.1.142
     restart: unless-stopped
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "cron.database_name=weave"]
     environment:
       POSTGRES_DB: weave
-      POSTGRES_USER: weave
       POSTGRES_PASSWORD: weave
     volumes:
       - weave-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U weave -d weave"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d weave"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -32,10 +32,10 @@ services:
       PORT: 4111
       WEAVE_PORTAL_WS_PORT: 4112
       # Canonical app database. DBOS defaults to this URL when enabled.
-      WEAVE_DATABASE_URL: postgres://weave:weave@postgres:5432/weave
+      WEAVE_DATABASE_URL: postgres://supabase_admin:weave@postgres:5432/weave
       WEAVE_DBOS_ENABLED: "1"
       # Optional override if DBOS should use a different system database.
-      # DBOS_SYSTEM_DATABASE_URL: postgres://weave:weave@postgres:5432/weave
+      # DBOS_SYSTEM_DATABASE_URL: postgres://supabase_admin:weave@postgres:5432/weave
       WEAVE_ATTACHMENTS_DIR: /app/server/.data/attachments
       # Required single-owner auth. Prefer Dokploy environment variables/secrets over committing values.
       # WEAVE_OWNER_TOKEN: change-me

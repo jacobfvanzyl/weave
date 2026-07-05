@@ -30,6 +30,8 @@ The `dev` and `start` tasks load `server/.env` automatically when it exists, whi
 
 `WEAVE_DATABASE_URL` is required. Weave-owned metadata lives in the `weave` Postgres schema and is managed by Drizzle migrations under `server/drizzle`. Mastra storage/vector tables live in the `mastra` schema through `@mastra/pg`, and DBOS uses its own `dbos` schema when `WEAVE_DBOS_ENABLED=1`.
 
+The Dokploy compose file uses `supabase/postgres:17.6.1.142` so local/Dokploy Postgres has common extensions such as `vector`, `pg_cron`, `postgis`, `pg_net`, and `pgmq` available. That image owns the app database as `supabase_admin`, so `WEAVE_DATABASE_URL` uses that role by default; change the password through deployment secrets and update the URL accordingly.
+
 Run migrations explicitly before starting the server:
 
 ```shell
