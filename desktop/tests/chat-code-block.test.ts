@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canHighlightCodeFence,
   canRenderCodeMirrorFence,
+  getChatCodeBlockRenderMode,
   getCodeMirrorFencePath,
   isCompleteMarkdownCodeFence,
   shouldDeferCodeFenceHighlight,
@@ -51,7 +52,37 @@ describe("chat code block highlighting", () => {
     undefined,
     "",
     "font-mono",
+    "break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]",
     "language-text",
+    "language-plain",
+    "language-plaintext",
+    "language-txt",
+  ])("classifies no-language blocks as inline-style plaintext for %s", (className) => {
+    expect(getChatCodeBlockRenderMode(className)).toBe("plain");
+  });
+
+  it.each([
+    "language-ts",
+    "foo language-ts bar",
+    "language-json",
+    "language-md",
+  ])("classifies supported language blocks as CodeMirror for %s", (className) => {
+    expect(getChatCodeBlockRenderMode(className)).toBe("codemirror");
+  });
+
+  it.each([
+    "language-bash",
+    "language-rust",
+  ])("classifies unsupported language blocks as plain code for %s", (className) => {
+    expect(getChatCodeBlockRenderMode(className)).toBe("code");
+  });
+
+  it.each([
+    undefined,
+    "",
+    "font-mono",
+    "language-text",
+    "language-plaintext",
     "language-bash",
     "language-rust",
   ])("leaves unsupported or inline code unhighlighted for %s", (className) => {

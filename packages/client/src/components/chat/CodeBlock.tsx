@@ -43,9 +43,22 @@ const normalizeLanguage = (className?: string) =>
     .trim()
     .toLowerCase();
 
+export type ChatCodeBlockRenderMode = "plain" | "codemirror" | "code";
+
+const plainTextFenceLanguages = new Set(["plain", "plaintext", "text", "txt"]);
+
 export const getCodeMirrorFencePath = (className?: string) => {
   const language = normalizeLanguage(className);
   return language ? codeFenceLanguagePaths[language] : undefined;
+};
+
+export const getChatCodeBlockRenderMode = (
+  className?: string,
+): ChatCodeBlockRenderMode => {
+  const language = normalizeLanguage(className);
+  if (!language) return "plain";
+  if (plainTextFenceLanguages.has(language)) return "plain";
+  return getCodeMirrorFencePath(className) ? "codemirror" : "code";
 };
 
 export const canHighlightCodeFence = (
@@ -142,7 +155,7 @@ export const CodeBlock = ({
   }, [code, fencePath, shouldHighlight, shouldRenderCodeMirror]);
 
   if (!shouldRenderCodeMirror) {
-    return <code className={className}>{children}</code>;
+    return <code className={`${className ?? ""} block whitespace-pre font-mono`.trim()}>{children}</code>;
   }
 
   return <div ref={containerRef} />;

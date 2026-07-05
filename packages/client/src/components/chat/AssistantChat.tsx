@@ -45,7 +45,7 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collaps
 import { CommandPanel } from '../ui/command';
 import { Menu, MenuGroupLabel, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubPopup, MenuSubTrigger, MenuTrigger } from '../ui/menu';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../ui/tooltip';
-import { CodeBlock, shouldDeferCodeFenceHighlight } from './CodeBlock';
+import { CodeBlock, getChatCodeBlockRenderMode, shouldDeferCodeFenceHighlight } from './CodeBlock';
 import {
   getAutoCollapsedAssistantTextPartIndices,
   getAssistantContentRanges,
@@ -498,6 +498,22 @@ const getMarkdownNodeText = (node: ReactNode): string => {
   return '';
 };
 
+const getMarkdownCodeClassName = (node: ReactNode): string | undefined => {
+  if (node === null || node === undefined || typeof node === 'boolean') return undefined;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const className = getMarkdownCodeClassName(child);
+      if (className) return className;
+    }
+    return undefined;
+  }
+  if (isValidElement<{ className?: unknown; children?: ReactNode }>(node)) {
+    if (typeof node.props.className === 'string') return node.props.className;
+    return getMarkdownCodeClassName(node.props.children);
+  }
+  return undefined;
+};
+
 const writeClipboardText = async (text: string) => {
   try {
     await navigator.clipboard.writeText(text);
@@ -520,7 +536,15 @@ const writeClipboardText = async (text: string) => {
   }
 };
 
-const MarkdownPre = ({ children, showCopy = true }: { children: ReactNode; showCopy?: boolean }) => {
+const MarkdownPre = ({
+  children,
+  inlinePlainText = false,
+  showCopy = true,
+}: {
+  children: ReactNode;
+  inlinePlainText?: boolean;
+  showCopy?: boolean;
+}) => {
   const [isCopied, setIsCopied] = useState(false);
   const resetCopiedRef = useRef<number | null>(null);
   const copyText = useMemo(() => getMarkdownNodeText(children).replace(/\n$/, ''), [children]);
@@ -544,6 +568,34 @@ const MarkdownPre = ({ children, showCopy = true }: { children: ReactNode; showC
   }, [copyText]);
 
   const label = isCopied ? 'Copied' : 'Copy code';
+
+  if (inlinePlainText) {
+    return (
+      <div className="group relative my-2 max-w-full text-inherit leading-[var(--weave-chat-line-height)]">
+        <code className="box-decoration-clone whitespace-pre-wrap break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
+          {copyText}
+        </code>
+        {showCopy ? (
+          <Tooltip>
+            <TooltipTrigger
+              aria-label={label}
+              className={cn(
+                'ml-1 inline-flex size-5 align-text-bottom items-center justify-center rounded border border-border/70 bg-background/90 text-muted-foreground opacity-0 shadow-sm backdrop-blur transition-[background-color,border-color,color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-40 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:size-7 pointer-coarse:opacity-100',
+                isCopied && 'text-foreground',
+              )}
+              disabled={!copyText}
+              onClick={copyCode}
+              title={label}
+              type="button"
+            >
+              {isCopied ? <Check size={12} /> : <Clipboard size={12} />}
+            </TooltipTrigger>
+            <TooltipPopup side="right">{label}</TooltipPopup>
+          </Tooltip>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="group relative my-3 max-w-full rounded-md bg-muted font-mono text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)]">
@@ -589,7 +641,7 @@ const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string;
         del: ({ children }) => <del className="text-muted-foreground line-through">{children}</del>,
         a: ({ children, href }) => <a href={href} className="break-all text-primary underline underline-offset-2" target="_blank" rel="noreferrer">{children}</a>,
         code: ({ children, className, node }) =>
-          className?.startsWith('language-') ? (
+          getChatCodeBlockRenderMode(className) !== 'plain' ? (
             <CodeBlock
               className={className}
               deferHighlight={shouldDeferCodeFenceHighlight(text, node?.position, deferCodeHighlight)}
@@ -599,11 +651,17 @@ const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string;
           ) : (
             <code className={cn('break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]', className)}>{children}</code>
           ),
-        pre: ({ children, node }) => (
-          <MarkdownPre showCopy={!shouldDeferCodeFenceHighlight(text, node?.position, deferCodeHighlight)}>
-            {children}
-          </MarkdownPre>
-        ),
+        pre: ({ children, node }) => {
+          const renderMode = getChatCodeBlockRenderMode(getMarkdownCodeClassName(children));
+          return (
+            <MarkdownPre
+              inlinePlainText={renderMode === 'plain'}
+              showCopy={!shouldDeferCodeFenceHighlight(text, node?.position, deferCodeHighlight)}
+            >
+              {children}
+            </MarkdownPre>
+          );
+        },
         blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
         table: ({ children }) => <div className="my-3 max-w-full overflow-x-auto"><table className="w-full border-collapse text-left text-xs">{children}</table></div>,
         thead: ({ children }) => <thead className="border-b border-border bg-muted">{children}</thead>,
