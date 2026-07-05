@@ -1,11 +1,11 @@
 import { Mastra } from '@mastra/core/mastra';
 import { PinoLogger } from '@mastra/loggers';
-import { LibSQLStore } from '@mastra/libsql';
+import { PostgresStore } from '@mastra/pg';
 import { Observability, CloudExporter, SensitiveDataFilter } from '@mastra/observability';
 import { mageHandAgent } from './agents/mage-hand-agent';
 import { workspace } from './workspace';
 import { ChatGPTCodexGateway } from './providers/chatgpt-codex-gateway';
-import { storageAuthToken, storageUrl } from './storage-config';
+import { getMastraPostgresConfig } from './storage-config';
 
 export const mastra = new Mastra({
   workspace,
@@ -13,10 +13,10 @@ export const mastra = new Mastra({
   gateways: {
     chatgpt: new ChatGPTCodexGateway(),
   },
-  storage: new LibSQLStore({
+  storage: new PostgresStore({
     id: 'mastra-storage',
-    url: storageUrl,
-    authToken: storageAuthToken,
+    ...getMastraPostgresConfig(),
+    disableInit: true,
   }),
   logger: new PinoLogger({
     name: 'WeaveAgent',

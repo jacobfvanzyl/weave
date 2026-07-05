@@ -1,4 +1,5 @@
 import type { JsonValue } from '../services/types';
+import { getDbosSystemDatabaseUrl } from '../storage/database-url';
 import { type WorkflowRunInput } from './definition';
 import { createWorkflowRunnerEventRecorder } from './events';
 import { executeWorkflowDefinition, type WorkflowStepRunner } from './runner';
@@ -81,9 +82,9 @@ export const maybeLaunchDbosWorkflowRuntime = async (
   const env = options.env ?? process.env;
   if (env.WEAVE_DBOS_ENABLED !== '1') return { enabled: false, launched: false };
 
-  const systemDatabaseUrl = env.DBOS_SYSTEM_DATABASE_URL?.trim();
+  const systemDatabaseUrl = getDbosSystemDatabaseUrl(env);
   if (!systemDatabaseUrl) {
-    throw new Error('WEAVE_DBOS_ENABLED=1 requires DBOS_SYSTEM_DATABASE_URL for the DBOS system database.');
+    throw new Error('WEAVE_DBOS_ENABLED=1 requires WEAVE_DATABASE_URL or DBOS_SYSTEM_DATABASE_URL for the DBOS system database.');
   }
 
   const usesDefaultRuntime = !options.adapter && !options.loadAdapter && !options.runtime;

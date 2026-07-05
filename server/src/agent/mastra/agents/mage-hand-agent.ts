@@ -1,7 +1,7 @@
 import { Agent } from '@mastra/core/agent';
 import { ModelRouterEmbeddingModel } from '@mastra/core/llm';
 import { SkillSearchProcessor, ToolCallFilter } from '@mastra/core/processors';
-import { LibSQLVector } from '@mastra/libsql';
+import { PgVector } from '@mastra/pg';
 import { Memory } from '@mastra/memory';
 import { CurrentTurnImageProcessor } from '../current-turn-image-processor';
 import {
@@ -10,7 +10,7 @@ import {
   type SemanticRecallEmbeddingConfig,
 } from '../memory-policy';
 import { RuntimeContextProcessor } from '../runtime-context-processor';
-import { storageAuthToken, storageUrl } from '../storage-config';
+import { getMastraPostgresConfig } from '../storage-config';
 import { getToolHistoryFullSteps } from '../tool-call-filter-policy';
 import { baseWorkspace } from '../workspace';
 import {
@@ -44,10 +44,9 @@ const createSharedMemory = () => {
   return new Memory({
     ...(embeddingConfig
       ? {
-        vector: new LibSQLVector({
+        vector: new PgVector({
           id: 'weave-memory-vector',
-          url: storageUrl,
-          authToken: storageAuthToken,
+          ...getMastraPostgresConfig(),
         }),
         embedder: createSemanticRecallEmbedder(embeddingConfig),
       }

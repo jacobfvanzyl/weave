@@ -1,5 +1,4 @@
-import type { ResultSet } from '@libsql/client';
-import { getWeaveDb } from '../storage/weave-db';
+import { getWeaveDb, type WeaveDbClient, type WeaveDbResult } from '../storage/postgres';
 import type { ProductId, Project } from './types';
 import { productForProject } from './types';
 
@@ -20,9 +19,9 @@ export type ListProjectsOptions = {
   includeHidden?: boolean;
 };
 
-const toProjectRow = (row: ResultSet['rows'][number]) => row as unknown as ProjectRow;
+const toProjectRow = (row: WeaveDbResult['rows'][number]) => row as unknown as ProjectRow;
 
-const parseProject = (row: ResultSet['rows'][number]): Project => {
+const parseProject = (row: WeaveDbResult['rows'][number]): Project => {
   const projectRow = toProjectRow(row);
   return JSON.parse(String(projectRow.data)) as Project;
 };
@@ -32,17 +31,19 @@ const visibleProject = (project: Project) => !project.hidden && project.systemKi
 export class ProductProjectRepository {
   private migratedOwners = new Set<string>();
 
+  constructor(private readonly getClient: () => Promise<WeaveDbClient> = getWeaveDb) {}
+
   async save(project: Project) {
-    const db = await getWeaveDb();
+    const db = await this.getClient();
     const product = productForProject(project);
     await db.batch([
       {
-        sql: `DELETE FROM weave_product_projects
+        sql: `DELETE FROM product_projects
           WHERE owner_id = ? AND project_id = ? AND product <> ?`,
         args: [project.userId, project.id, product],
       },
       {
-        sql: `INSERT INTO weave_product_projects (
+        sql: `INSERT INTO product_projects (
             owner_id, product, project_id, project_kind, name, sort_order, created_at, updated_at, data
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(owner_id, product, project_id) DO UPDATE SET
@@ -69,11 +70,11 @@ export class ProductProjectRepository {
   }
 
   async get(ownerId: string, projectId: string, product?: ProductId) {
-    const db = await getWeaveDb();
+    const db = await this.getClient();
     const result = await db.execute({
       sql: product
-        ? `SELECT * FROM weave_product_projects WHERE owner_id = ? AND product = ? AND project_id = ? LIMIT 1`
-        : `SELECT * FROM weave_product_projects WHERE owner_id = ? AND project_id = ? LIMIT 1`,
+        ? `SELECT * FROM product_projects WHERE owner_id = ? AND product = ? AND project_id = ? LIMIT 1`
+        : `SELECT * FROM product_projects WHERE owner_id = ? AND project_id = ? LIMIT 1`,
       args: product ? [ownerId, product, projectId] : [ownerId, projectId],
     });
     const row = result.rows[0];
@@ -81,11 +82,11 @@ export class ProductProjectRepository {
   }
 
   async list(ownerId: string, options: ListProjectsOptions = {}) {
-    const db = await getWeaveDb();
+    const db = await this.getClient();
     const result = await db.execute({
       sql: options.product
-        ? `SELECT * FROM weave_product_projects WHERE owner_id = ? AND product = ?`
-        : `SELECT * FROM weave_product_projects WHERE owner_id = ?`,
+        ? `SELECT * FROM product_projects WHERE owner_id = ? AND product = ?`
+        : `SELECT * FROM product_projects WHERE owner_id = ?`,
       args: options.product ? [ownerId, options.product] : [ownerId],
     });
     return result.rows
@@ -97,9 +98,9 @@ export class ProductProjectRepository {
   }
 
   async delete(ownerId: string, projectId: string) {
-    const db = await getWeaveDb();
+    const db = await this.getClient();
     await db.execute({
-      sql: `DELETE FROM weave_product_projects WHERE owner_id = ? AND project_id = ?`,
+      sql: `DELETE FROM product_projects WHERE owner_id = ? AND project_id = ?`,
       args: [ownerId, projectId],
     });
   }

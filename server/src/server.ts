@@ -11,6 +11,9 @@ import { startServerPerfSampler } from './server/perf';
 import { getChatPerfSnapshot } from './modules/chat/routes/chat';
 import { internalServices } from './services';
 import { maybeLaunchDbosWorkflowRuntime } from './workflows';
+import { requireWeaveDatabaseUrl } from './storage/database-url';
+
+requireWeaveDatabaseUrl();
 
 const port = Number(process.env.PORT ?? process.env.WEAVE_SERVER_PORT ?? 4111);
 const auth = loadOwnerAuthConfig();

@@ -1,4 +1,4 @@
-import { LibsqlServiceBindingRepository, type ServiceBindingRepository } from './bindings';
+import { PostgresServiceBindingRepository, type ServiceBindingRepository } from './bindings';
 import { type EventService, eventService } from './event-service';
 import { PortalProvider } from './providers/portal-provider';
 import { StubProvider } from './providers/stub-providers';
@@ -21,7 +21,7 @@ export type InternalServices = {
 };
 
 export const createInternalServices = (): InternalServices => {
-  const bindings = new LibsqlServiceBindingRepository();
+  const bindings = new PostgresServiceBindingRepository();
   const providers = {
     portal: new PortalProvider(),
     client: new StubProvider('client'),
@@ -52,7 +52,7 @@ export type {
   ServiceProviderKind,
   UpsertServiceBindingInput,
 } from './bindings';
-export { isServiceProviderKind, LibsqlServiceBindingRepository } from './bindings';
+export { isServiceProviderKind, PostgresServiceBindingRepository } from './bindings';
 export type {
   JsonObject,
   JsonPrimitive,

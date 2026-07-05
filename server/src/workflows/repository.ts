@@ -1,5 +1,4 @@
-import type { Client } from '@libsql/client';
-import { getWeaveDb } from '../storage/weave-db';
+import { getWeaveDb, type WeaveDbClient } from '../storage/postgres';
 import { isJsonValue, type JsonValue, optionalString } from '../services/types';
 import { validateWorkflowDefinition, type WorkflowDefinition } from './definition';
 
@@ -199,8 +198,8 @@ export interface WorkflowRepository {
   ): Promise<WorkflowRunEventRecord[]>;
 }
 
-export class LibsqlWorkflowRepository implements WorkflowRepository {
-  constructor(private readonly getClient: () => Promise<Client> = getWeaveDb) {}
+export class PostgresWorkflowRepository implements WorkflowRepository {
+  constructor(private readonly getClient: () => Promise<WeaveDbClient> = getWeaveDb) {}
 
   async saveDefinition(ownerId: string, definition: WorkflowDefinition) {
     const normalizedOwnerId = requireOwnerId(ownerId);
@@ -208,7 +207,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     const at = new Date().toISOString();
     const db = await this.getClient();
     await db.execute({
-      sql: `INSERT INTO weave_workflow_definitions (
+      sql: `INSERT INTO workflow_definitions (
           owner_id, workflow_id, version, name, created_at, updated_at, definition
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, workflow_id) DO UPDATE SET
@@ -236,7 +235,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     const db = await this.getClient();
     const result = await db.execute({
       sql: `SELECT owner_id, workflow_id, version, name, created_at, updated_at, definition
-        FROM weave_workflow_definitions
+        FROM workflow_definitions
         WHERE owner_id = ? AND workflow_id = ?
         LIMIT 1`,
       args: [requireOwnerId(ownerId), requireWorkflowId(workflowId)],
@@ -249,7 +248,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     const db = await this.getClient();
     const result = await db.execute({
       sql: `SELECT owner_id, workflow_id, version, name, created_at, updated_at, definition
-        FROM weave_workflow_definitions
+        FROM workflow_definitions
         WHERE owner_id = ?
         ORDER BY updated_at DESC`,
       args: [requireOwnerId(ownerId)],
@@ -260,7 +259,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
   async deleteDefinition(ownerId: string, workflowId: string) {
     const db = await this.getClient();
     const result = await db.execute({
-      sql: `DELETE FROM weave_workflow_definitions WHERE owner_id = ? AND workflow_id = ?`,
+      sql: `DELETE FROM workflow_definitions WHERE owner_id = ? AND workflow_id = ?`,
       args: [requireOwnerId(ownerId), requireWorkflowId(workflowId)],
     });
     return Number(result.rowsAffected ?? 0) > 0;
@@ -276,7 +275,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
 
     const db = await this.getClient();
     await db.execute({
-      sql: `INSERT INTO weave_workflow_runs (
+      sql: `INSERT INTO workflow_runs (
           owner_id, run_id, workflow_id, workflow_version, status, backend, external_run_id, request_id,
           input, output, error, definition, created_at, updated_at, started_at, finished_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL)`,
@@ -309,7 +308,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     const at = new Date().toISOString();
     const db = await this.getClient();
     await db.execute({
-      sql: `UPDATE weave_workflow_runs
+      sql: `UPDATE workflow_runs
         SET backend = ?, external_run_id = ?, started_at = COALESCE(started_at, ?), updated_at = ?
         WHERE owner_id = ? AND run_id = ?`,
       args: [
@@ -344,7 +343,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     const result = await db.execute({
       sql: `SELECT owner_id, run_id, workflow_id, workflow_version, status, backend, external_run_id,
           request_id, input, output, error, definition, created_at, updated_at, started_at, finished_at
-        FROM weave_workflow_runs
+        FROM workflow_runs
         WHERE owner_id = ? AND run_id = ?
         LIMIT 1`,
       args: [requireOwnerId(ownerId), requireRunId(runId)],
@@ -363,13 +362,13 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
       sql: workflowId
         ? `SELECT owner_id, run_id, workflow_id, workflow_version, status, backend, external_run_id,
             request_id, input, output, error, definition, created_at, updated_at, started_at, finished_at
-          FROM weave_workflow_runs
+          FROM workflow_runs
           WHERE owner_id = ? AND workflow_id = ?
           ORDER BY updated_at DESC
           LIMIT ?`
         : `SELECT owner_id, run_id, workflow_id, workflow_version, status, backend, external_run_id,
             request_id, input, output, error, definition, created_at, updated_at, started_at, finished_at
-          FROM weave_workflow_runs
+          FROM workflow_runs
           WHERE owner_id = ?
           ORDER BY updated_at DESC
           LIMIT ?`,
@@ -387,19 +386,25 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
 
     const at = new Date().toISOString();
     const db = await this.getClient();
-    await db.execute({
-      sql: `INSERT INTO weave_workflow_run_events (
-          owner_id, run_id, event_id, sequence, type, data, created_at
-        ) VALUES (
-          ?, ?, ?,
-          COALESCE((
-            SELECT MAX(sequence) + 1 FROM weave_workflow_run_events WHERE owner_id = ? AND run_id = ?
-          ), 1),
-          ?, ?, ?
-        )
-        ON CONFLICT(owner_id, run_id, event_id) DO NOTHING`,
-      args: [ownerId, runId, eventId, ownerId, runId, type, JSON.stringify(input.data), at],
-    });
+    await db.batch([
+      {
+        sql: `SELECT pg_advisory_xact_lock(hashtext(?))`,
+        args: [`${ownerId}:${runId}`],
+      },
+      {
+        sql: `INSERT INTO workflow_run_events (
+            owner_id, run_id, event_id, sequence, type, data, created_at
+          ) VALUES (
+            ?, ?, ?,
+            COALESCE((
+              SELECT MAX(sequence) + 1 FROM workflow_run_events WHERE owner_id = ? AND run_id = ?
+            ), 1),
+            ?, ?, ?
+          )
+          ON CONFLICT(owner_id, run_id, event_id) DO NOTHING`,
+        args: [ownerId, runId, eventId, ownerId, runId, type, JSON.stringify(input.data), at],
+      },
+    ], 'write');
 
     const event = await this.getRunEventById(ownerId, runId, eventId);
     if (!event) throw new Error('Workflow run event was not saved.');
@@ -416,7 +421,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     const db = await this.getClient();
     const result = await db.execute({
       sql: `SELECT owner_id, run_id, event_id, sequence, type, data, created_at
-        FROM weave_workflow_run_events
+        FROM workflow_run_events
         WHERE owner_id = ? AND run_id = ? AND sequence > ?
         ORDER BY sequence ASC
         LIMIT ?`,
@@ -435,7 +440,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     const at = new Date().toISOString();
     const db = await this.getClient();
     await db.execute({
-      sql: `UPDATE weave_workflow_runs
+      sql: `UPDATE workflow_runs
         SET status = ?, output = ?, error = ?, finished_at = ?, updated_at = ?
         WHERE owner_id = ? AND run_id = ? AND status = 'running'`,
       args: [
@@ -455,7 +460,7 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
     const db = await this.getClient();
     const result = await db.execute({
       sql: `SELECT owner_id, run_id, event_id, sequence, type, data, created_at
-        FROM weave_workflow_run_events
+        FROM workflow_run_events
         WHERE owner_id = ? AND run_id = ? AND event_id = ?
         LIMIT 1`,
       args: [requireOwnerId(ownerId), requireRunId(runId), requireEventId(eventId)],
@@ -465,4 +470,4 @@ export class LibsqlWorkflowRepository implements WorkflowRepository {
   }
 }
 
-export const workflowRepository = new LibsqlWorkflowRepository();
+export const workflowRepository = new PostgresWorkflowRepository();

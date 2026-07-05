@@ -1,18 +1,42 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: weave
+      POSTGRES_USER: weave
+      POSTGRES_PASSWORD: weave
+    volumes:
+      - weave-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weave -d weave"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   weave-server:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "4111:4111"
       - "4112:4112"
     volumes:
-      - weave-data:/app/server/.data
+      - weave-attachments:/app/server/.data/attachments
     environment:
       NODE_ENV: production
       PORT: 4111
       WEAVE_PORTAL_WS_PORT: 4112
+      # Canonical app database. DBOS defaults to this URL when enabled.
+      WEAVE_DATABASE_URL: postgres://weave:weave@postgres:5432/weave
+      WEAVE_DBOS_ENABLED: "1"
+      # Optional override if DBOS should use a different system database.
+      # DBOS_SYSTEM_DATABASE_URL: postgres://weave:weave@postgres:5432/weave
+      WEAVE_ATTACHMENTS_DIR: /app/server/.data/attachments
       # Required single-owner auth. Prefer Dokploy environment variables/secrets over committing values.
       # WEAVE_OWNER_TOKEN: change-me
       # WEAVE_OWNER_ID: local-user
@@ -24,9 +48,7 @@ services:
       # OPENAI_API_KEY: ...
       # ANTHROPIC_API_KEY: ...
       # EXA_API_KEY: ...
-      # Optional remote storage instead of local /app/.data/mastra.db.
-      # TURSO_DATABASE_URL: ...
-      # TURSO_AUTH_TOKEN: ...
 
 volumes:
-  weave-data:
+  weave-postgres:
+  weave-attachments:

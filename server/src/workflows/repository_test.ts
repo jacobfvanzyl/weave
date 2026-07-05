@@ -1,4 +1,4 @@
-import { LibsqlWorkflowRepository } from './repository.ts';
+import { PostgresWorkflowRepository } from './repository.ts';
 import type { WorkflowDefinition } from './definition.ts';
 
 const assertEquals = (actual: unknown, expected: unknown, message?: string) => {
@@ -27,7 +27,11 @@ const createFakeClient = () => {
       const sql = statement.sql;
       const args = statement.args ?? [];
 
-      if (sql.includes('INSERT INTO weave_workflow_definitions')) {
+      if (sql.includes('pg_advisory_xact_lock')) {
+        return { rows: [], rowsAffected: 0 };
+      }
+
+      if (sql.includes('INSERT INTO workflow_definitions')) {
         const [ownerId, workflowId, version, name, createdAt, updatedAt, rawDefinition] = args;
         const key = `${ownerId}:${workflowId}`;
         const existing = definitions.get(key);
@@ -43,17 +47,17 @@ const createFakeClient = () => {
         return { rows: [], rowsAffected: 1 };
       }
 
-      if (sql.includes('DELETE FROM weave_workflow_definitions')) {
+      if (sql.includes('DELETE FROM workflow_definitions')) {
         const deleted = definitions.delete(`${args[0]}:${args[1]}`);
         return { rows: [], rowsAffected: deleted ? 1 : 0 };
       }
 
-      if (sql.includes('FROM weave_workflow_definitions') && sql.includes('workflow_id = ?')) {
+      if (sql.includes('FROM workflow_definitions') && sql.includes('workflow_id = ?')) {
         const row = definitions.get(`${args[0]}:${args[1]}`);
         return { rows: row ? [row] : [] };
       }
 
-      if (sql.includes('FROM weave_workflow_definitions') && sql.includes('WHERE owner_id = ?')) {
+      if (sql.includes('FROM workflow_definitions') && sql.includes('WHERE owner_id = ?')) {
         return {
           rows: [...definitions.values()]
             .filter((row) => row.owner_id === args[0])
@@ -61,7 +65,7 @@ const createFakeClient = () => {
         };
       }
 
-      if (sql.includes('INSERT INTO weave_workflow_runs')) {
+      if (sql.includes('INSERT INTO workflow_runs')) {
         const [
           ownerId,
           runId,
@@ -97,7 +101,7 @@ const createFakeClient = () => {
         return { rows: [], rowsAffected: 1 };
       }
 
-      if (sql.includes('UPDATE weave_workflow_runs') && sql.includes('SET backend = ?')) {
+      if (sql.includes('UPDATE workflow_runs') && sql.includes('SET backend = ?')) {
         const [backend, externalRunId, startedAt, updatedAt, ownerId, runId] = args;
         const row = runs.get(`${ownerId}:${runId}`);
         if (row) {
@@ -109,7 +113,7 @@ const createFakeClient = () => {
         return { rows: [], rowsAffected: row ? 1 : 0 };
       }
 
-      if (sql.includes('UPDATE weave_workflow_runs') && sql.includes('SET status = ?')) {
+      if (sql.includes('UPDATE workflow_runs') && sql.includes('SET status = ?')) {
         const [status, output, error, finishedAt, updatedAt, ownerId, runId] = args;
         const row = runs.get(`${ownerId}:${runId}`);
         if (row && row.status === 'running') {
@@ -122,7 +126,7 @@ const createFakeClient = () => {
         return { rows: [], rowsAffected: row?.status === status ? 1 : 0 };
       }
 
-      if (sql.includes('INSERT INTO weave_workflow_run_events')) {
+      if (sql.includes('INSERT INTO workflow_run_events')) {
         const [ownerId, runId, eventId, sequenceOwnerId, sequenceRunId, type, data, createdAt] = args;
         const existing = events.find((row) =>
           row.owner_id === ownerId && row.run_id === runId && row.event_id === eventId
@@ -144,14 +148,14 @@ const createFakeClient = () => {
         return { rows: [], rowsAffected: existing ? 0 : 1 };
       }
 
-      if (sql.includes('FROM weave_workflow_run_events') && sql.includes('event_id = ?')) {
+      if (sql.includes('FROM workflow_run_events') && sql.includes('event_id = ?')) {
         const row = events.find((event) =>
           event.owner_id === args[0] && event.run_id === args[1] && event.event_id === args[2]
         );
         return { rows: row ? [row] : [] };
       }
 
-      if (sql.includes('FROM weave_workflow_run_events') && sql.includes('sequence > ?')) {
+      if (sql.includes('FROM workflow_run_events') && sql.includes('sequence > ?')) {
         return {
           rows: events
             .filter((event) =>
@@ -162,12 +166,12 @@ const createFakeClient = () => {
         };
       }
 
-      if (sql.includes('FROM weave_workflow_runs') && sql.includes('run_id = ?')) {
+      if (sql.includes('FROM workflow_runs') && sql.includes('run_id = ?')) {
         const row = runs.get(`${args[0]}:${args[1]}`);
         return { rows: row ? [row] : [] };
       }
 
-      if (sql.includes('FROM weave_workflow_runs') && sql.includes('workflow_id = ?')) {
+      if (sql.includes('FROM workflow_runs') && sql.includes('workflow_id = ?')) {
         return {
           rows: [...runs.values()]
             .filter((row) => row.owner_id === args[0] && row.workflow_id === args[1])
@@ -175,7 +179,7 @@ const createFakeClient = () => {
         };
       }
 
-      if (sql.includes('FROM weave_workflow_runs') && sql.includes('WHERE owner_id = ?')) {
+      if (sql.includes('FROM workflow_runs') && sql.includes('WHERE owner_id = ?')) {
         return {
           rows: [...runs.values()]
             .filter((row) => row.owner_id === args[0])
@@ -185,12 +189,15 @@ const createFakeClient = () => {
 
       throw new Error(`Unexpected SQL: ${sql}`);
     },
+    batch(statements: { sql: string; args?: unknown[] }[]) {
+      return Promise.all(statements.map((statement) => this.execute(statement)));
+    },
   };
 };
 
-Deno.test('LibsqlWorkflowRepository stores owner-scoped workflow definitions', async () => {
+Deno.test('PostgresWorkflowRepository stores owner-scoped workflow definitions', async () => {
   const client = createFakeClient();
-  const repository = new LibsqlWorkflowRepository(() => Promise.resolve(client as never));
+  const repository = new PostgresWorkflowRepository(() => Promise.resolve(client as never));
   await repository.saveDefinition('owner-1', definition());
   await repository.saveDefinition('owner-2', definition());
 
@@ -203,9 +210,9 @@ Deno.test('LibsqlWorkflowRepository stores owner-scoped workflow definitions', a
   assertEquals((await repository.getDefinition('owner-2', 'workflow-1'))?.ownerId, 'owner-2');
 });
 
-Deno.test('LibsqlWorkflowRepository stores and updates workflow run records', async () => {
+Deno.test('PostgresWorkflowRepository stores and updates workflow run records', async () => {
   const client = createFakeClient();
-  const repository = new LibsqlWorkflowRepository(() => Promise.resolve(client as never));
+  const repository = new PostgresWorkflowRepository(() => Promise.resolve(client as never));
   const run = await repository.createRun({
     ownerId: 'owner-1',
     runId: 'run-1',
@@ -230,9 +237,9 @@ Deno.test('LibsqlWorkflowRepository stores and updates workflow run records', as
   ]);
 });
 
-Deno.test('LibsqlWorkflowRepository marks running workflow runs cancelled without overwriting terminal runs', async () => {
+Deno.test('PostgresWorkflowRepository marks running workflow runs cancelled without overwriting terminal runs', async () => {
   const client = createFakeClient();
-  const repository = new LibsqlWorkflowRepository(() => Promise.resolve(client as never));
+  const repository = new PostgresWorkflowRepository(() => Promise.resolve(client as never));
   await repository.createRun({
     ownerId: 'owner-1',
     runId: 'run-1',
@@ -248,9 +255,9 @@ Deno.test('LibsqlWorkflowRepository marks running workflow runs cancelled withou
   assertEquals((await repository.getRun('owner-1', 'run-1'))?.status, 'cancelled');
 });
 
-Deno.test('LibsqlWorkflowRepository appends and replays workflow run events', async () => {
+Deno.test('PostgresWorkflowRepository appends and replays workflow run events', async () => {
   const client = createFakeClient();
-  const repository = new LibsqlWorkflowRepository(() => Promise.resolve(client as never));
+  const repository = new PostgresWorkflowRepository(() => Promise.resolve(client as never));
 
   const first = await repository.appendRunEvent({
     ownerId: 'owner-1',

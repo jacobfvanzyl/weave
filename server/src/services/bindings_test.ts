@@ -1,4 +1,4 @@
-import { LibsqlServiceBindingRepository } from './bindings.ts';
+import { PostgresServiceBindingRepository } from './bindings.ts';
 import { ServiceError } from './types.ts';
 
 const assertEquals = (actual: unknown, expected: unknown, message?: string) => {
@@ -25,17 +25,17 @@ const createFakeClient = () => {
       const sql = statement.sql;
       const args = statement.args ?? [];
 
-      if (sql.includes('DELETE FROM weave_service_bindings')) {
+      if (sql.includes('DELETE FROM service_bindings')) {
         const deleted = bindings.delete(`${args[0]}:${args[1]}`);
         return { rows: [], rowsAffected: deleted ? 1 : 0 };
       }
 
-      if (sql.includes('FROM weave_service_bindings') && sql.includes('WHERE owner_id = ? AND binding_id = ?')) {
+      if (sql.includes('FROM service_bindings') && sql.includes('WHERE owner_id = ? AND binding_id = ?')) {
         const row = bindings.get(`${args[0]}:${args[1]}`);
         return { rows: row ? [row] : [] };
       }
 
-      if (sql.includes('FROM weave_service_bindings') && sql.includes('WHERE owner_id = ?')) {
+      if (sql.includes('FROM service_bindings') && sql.includes('WHERE owner_id = ?')) {
         return {
           rows: [...bindings.values()]
             .filter((row) => row.owner_id === args[0])
@@ -43,7 +43,7 @@ const createFakeClient = () => {
         };
       }
 
-      if (sql.includes('INSERT INTO weave_service_bindings')) {
+      if (sql.includes('INSERT INTO service_bindings')) {
         const [ownerId, bindingId, providerKind, scopeKind, data, createdAt, updatedAt] = args;
         const key = `${ownerId}:${bindingId}`;
         const existing = bindings.get(key);
@@ -64,9 +64,9 @@ const createFakeClient = () => {
   };
 };
 
-Deno.test('LibsqlServiceBindingRepository isolates bindings by owner', async () => {
+Deno.test('PostgresServiceBindingRepository isolates bindings by owner', async () => {
   const client = createFakeClient();
-  const repository = new LibsqlServiceBindingRepository(async () => client as never);
+  const repository = new PostgresServiceBindingRepository(async () => client as never);
 
   await repository.upsert({
     ownerId: 'owner-1',
@@ -99,9 +99,9 @@ Deno.test('LibsqlServiceBindingRepository isolates bindings by owner', async () 
   assertEquals((await repository.get({ ownerId: 'owner-1' }, 'workspace-binding'))?.ownerId, 'owner-1');
 });
 
-Deno.test('LibsqlServiceBindingRepository validates binding inputs', async () => {
+Deno.test('PostgresServiceBindingRepository validates binding inputs', async () => {
   const client = createFakeClient();
-  const repository = new LibsqlServiceBindingRepository(async () => client as never);
+  const repository = new PostgresServiceBindingRepository(async () => client as never);
 
   await assertRejectsServiceError(
     () =>

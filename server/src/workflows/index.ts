@@ -11,7 +11,7 @@ export { createWorkflowControlService, WorkflowControlError, workflowControlServ
 export { createWorkflowRunnerEventRecorder, recordWorkflowRunEvent, workflowRunEventId } from './events';
 export { executeWorkflowDefinition, WorkflowExecutionError } from './runner';
 export { validateWorkflowDefinition, WorkflowDefinitionError } from './definition';
-export { LibsqlWorkflowRepository, workflowRepository } from './repository';
+export { PostgresWorkflowRepository, workflowRepository } from './repository';
 export type {
   DbosAdapter,
   DbosRuntimeConfig,

@@ -14,11 +14,11 @@ const createFakeClient = () => {
       const sql = statement.sql;
       const args = statement.args ?? [];
 
-      if (sql.includes('FROM weave_portal_settings')) {
+      if (sql.includes('FROM portal_settings')) {
         return { rows: settings.has(String(args[0])) ? [settings.get(String(args[0]))!] : [] };
       }
 
-      if (sql.includes('INSERT INTO weave_portal_settings')) {
+      if (sql.includes('INSERT INTO portal_settings')) {
         const [ownerId, primaryPortalId, createdAt, updatedAt] = args;
         const existing = settings.get(String(ownerId));
         settings.set(String(ownerId), {
@@ -30,19 +30,19 @@ const createFakeClient = () => {
         return { rows: [], rowsAffected: 1 };
       }
 
-      if (sql.includes('FROM weave_portal_tokens') && sql.includes('WHERE owner_id = ? AND portal_id = ?')) {
+      if (sql.includes('FROM portal_tokens') && sql.includes('WHERE owner_id = ? AND portal_id = ?')) {
         const row = tokens.get(`${args[0]}:${args[1]}`);
         return { rows: row ? [row] : [] };
       }
 
-      if (sql.includes('FROM weave_portal_tokens') && sql.includes('WHERE portal_id = ? AND token = ?')) {
+      if (sql.includes('FROM portal_tokens') && sql.includes('WHERE portal_id = ? AND token = ?')) {
         const row = [...tokens.values()].find((item) =>
           item.portal_id === args[0] && item.token === args[1] && item.status === 'issued'
         );
         return { rows: row ? [row] : [] };
       }
 
-      if (sql.includes('INSERT INTO weave_portal_tokens')) {
+      if (sql.includes('INSERT INTO portal_tokens')) {
         const [ownerId, portalId, token, status, createdAt, updatedAt] = args;
         const key = `${ownerId}:${portalId}`;
         const existing = tokens.get(key);

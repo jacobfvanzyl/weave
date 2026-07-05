@@ -1,10 +1,10 @@
-import { LibsqlServiceBindingRepository } from './bindings';
+import { PostgresServiceBindingRepository } from './bindings';
 import { PortalProvider } from './providers/portal-provider';
 import { StubProvider } from './providers/stub-providers';
 import { DefaultToolService } from './tool-service';
 
 export const toolService = new DefaultToolService(
-  new LibsqlServiceBindingRepository(),
+  new PostgresServiceBindingRepository(),
   {
     portal: new PortalProvider(),
     client: new StubProvider('client'),

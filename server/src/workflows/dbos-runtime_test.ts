@@ -66,8 +66,31 @@ Deno.test('maybeLaunchDbosWorkflowRuntime requires Postgres URL when enabled', a
   resetDbosWorkflowRuntimeForTests();
   await assertRejects(
     () => maybeLaunchDbosWorkflowRuntime({ env: { WEAVE_DBOS_ENABLED: '1' } }),
-    'DBOS_SYSTEM_DATABASE_URL',
+    'WEAVE_DATABASE_URL or DBOS_SYSTEM_DATABASE_URL',
   );
+});
+
+Deno.test('maybeLaunchDbosWorkflowRuntime defaults DBOS database URL to WEAVE_DATABASE_URL', async () => {
+  resetDbosWorkflowRuntimeForTests();
+  const calls: string[] = [];
+  const adapter: DbosAdapter = {
+    setConfig: (config) => calls.push(`config:${config.systemDatabaseUrl}`),
+    registerWorkflow: (fn) => fn,
+    runStep: async (operation) => await operation(),
+    launch: () => Promise.resolve(),
+  };
+
+  await maybeLaunchDbosWorkflowRuntime({
+    env: {
+      WEAVE_DBOS_ENABLED: '1',
+      WEAVE_DATABASE_URL: 'postgres://user:pass@localhost:5432/weave',
+    },
+    adapter,
+    runtime: fakeRuntime(),
+    createRunnerEventHandler: () => undefined,
+  });
+
+  assertEquals(calls, ['config:postgres://user:pass@localhost:5432/weave']);
 });
 
 Deno.test('maybeLaunchDbosWorkflowRuntime configures, registers, and launches in order', async () => {
@@ -167,7 +190,7 @@ Deno.test('DBOS status and cancel helpers use the launched adapter when enabled'
 });
 
 Deno.test('DBOS integration smoke runs only when explicitly configured', async () => {
-  if (process.env.WEAVE_DBOS_INTEGRATION !== '1' || !process.env.DBOS_SYSTEM_DATABASE_URL) return;
+  if (process.env.WEAVE_DBOS_INTEGRATION !== '1' || !(process.env.DBOS_SYSTEM_DATABASE_URL || process.env.WEAVE_DATABASE_URL)) return;
 
   resetDbosWorkflowRuntimeForTests();
   const { DBOS } = await import('@dbos-inc/dbos-sdk');

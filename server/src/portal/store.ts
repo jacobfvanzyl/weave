@@ -1,5 +1,4 @@
-import { getWeaveDb } from '../storage/weave-db';
-import type { Client } from '@libsql/client';
+import { getWeaveDb, type WeaveDbClient } from '../storage/postgres';
 
 export type PortalOwnerSettings = {
   ownerId: string;
@@ -38,13 +37,13 @@ const portalTokenFromRow = (row: Record<string, unknown>): PortalTokenRecord => 
 });
 
 export class PortalRepository {
-  constructor(private readonly getClient: () => Promise<Client> = getWeaveDb) {}
+  constructor(private readonly getClient: () => Promise<WeaveDbClient> = getWeaveDb) {}
 
   async getSettings(ownerId: string) {
     const db = await this.getClient();
     const result = await db.execute({
       sql: `SELECT owner_id, primary_portal_id, created_at, updated_at
-        FROM weave_portal_settings
+        FROM portal_settings
         WHERE owner_id = ?
         LIMIT 1`,
       args: [ownerId],
@@ -61,7 +60,7 @@ export class PortalRepository {
     const at = nowIso();
     const db = await this.getClient();
     await db.execute({
-      sql: `INSERT INTO weave_portal_settings (
+      sql: `INSERT INTO portal_settings (
           owner_id, primary_portal_id, created_at, updated_at
         ) VALUES (?, ?, ?, ?)
         ON CONFLICT(owner_id) DO UPDATE SET
@@ -87,7 +86,7 @@ export class PortalRepository {
     const status = input.status ?? 'issued';
     const db = await this.getClient();
     await db.execute({
-      sql: `INSERT INTO weave_portal_tokens (
+      sql: `INSERT INTO portal_tokens (
           owner_id, portal_id, token, status, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, portal_id) DO UPDATE SET
@@ -110,7 +109,7 @@ export class PortalRepository {
     const db = await this.getClient();
     const result = await db.execute({
       sql: `SELECT owner_id, portal_id, token, status, created_at, updated_at
-        FROM weave_portal_tokens
+        FROM portal_tokens
         WHERE owner_id = ? AND portal_id = ?
         LIMIT 1`,
       args: [ownerId, portalId],
@@ -123,7 +122,7 @@ export class PortalRepository {
     const db = await this.getClient();
     const result = await db.execute({
       sql: `SELECT owner_id, portal_id, token, status, created_at, updated_at
-        FROM weave_portal_tokens
+        FROM portal_tokens
         WHERE portal_id = ? AND token = ? AND status = 'issued'
         LIMIT 1`,
       args: [portalId, token],

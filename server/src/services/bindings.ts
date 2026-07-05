@@ -1,5 +1,4 @@
-import type { Client } from '@libsql/client';
-import { getWeaveDb } from '../storage/weave-db';
+import { getWeaveDb, type WeaveDbClient } from '../storage/postgres';
 import type { JsonValue, ServiceCaller } from './types';
 import { isJsonValue, optionalString, ServiceError } from './types';
 
@@ -78,8 +77,8 @@ const requireBindingInput = (input: UpsertServiceBindingInput) => {
   };
 };
 
-export class LibsqlServiceBindingRepository implements ServiceBindingRepository {
-  constructor(private readonly getClient: () => Promise<Client> = getWeaveDb) {}
+export class PostgresServiceBindingRepository implements ServiceBindingRepository {
+  constructor(private readonly getClient: () => Promise<WeaveDbClient> = getWeaveDb) {}
 
   async get(caller: Pick<ServiceCaller, 'ownerId'>, bindingId: string) {
     const ownerId = optionalString(caller.ownerId);
@@ -90,7 +89,7 @@ export class LibsqlServiceBindingRepository implements ServiceBindingRepository 
     const db = await this.getClient();
     const result = await db.execute({
       sql: `SELECT owner_id, binding_id, provider_kind, scope_kind, data, created_at, updated_at
-        FROM weave_service_bindings
+        FROM service_bindings
         WHERE owner_id = ? AND binding_id = ?`,
       args: [ownerId, normalizedBindingId],
     });
@@ -105,7 +104,7 @@ export class LibsqlServiceBindingRepository implements ServiceBindingRepository 
     const db = await this.getClient();
     const result = await db.execute({
       sql: `SELECT owner_id, binding_id, provider_kind, scope_kind, data, created_at, updated_at
-        FROM weave_service_bindings
+        FROM service_bindings
         WHERE owner_id = ?
         ORDER BY updated_at DESC`,
       args: [normalizedOwnerId],
@@ -118,7 +117,7 @@ export class LibsqlServiceBindingRepository implements ServiceBindingRepository 
     const at = new Date().toISOString();
     const db = await this.getClient();
     await db.execute({
-      sql: `INSERT INTO weave_service_bindings (
+      sql: `INSERT INTO service_bindings (
           owner_id, binding_id, provider_kind, scope_kind, data, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, binding_id) DO UPDATE SET
@@ -155,7 +154,7 @@ export class LibsqlServiceBindingRepository implements ServiceBindingRepository 
 
     const db = await this.getClient();
     const result = await db.execute({
-      sql: `DELETE FROM weave_service_bindings WHERE owner_id = ? AND binding_id = ?`,
+      sql: `DELETE FROM service_bindings WHERE owner_id = ? AND binding_id = ?`,
       args: [ownerId, normalizedBindingId],
     });
     return Number(result.rowsAffected ?? 0) > 0;
