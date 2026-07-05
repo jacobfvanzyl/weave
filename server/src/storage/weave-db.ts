@@ -76,6 +76,41 @@ const migrations: InStatement[] = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS weave_portal_tokens_token_idx
     ON weave_portal_tokens(token)`,
+  `CREATE TABLE IF NOT EXISTS weave_workflow_definitions (
+    owner_id TEXT NOT NULL,
+    workflow_id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    PRIMARY KEY (owner_id, workflow_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS weave_workflow_definitions_owner_updated_idx
+    ON weave_workflow_definitions(owner_id, updated_at)`,
+  `CREATE TABLE IF NOT EXISTS weave_workflow_runs (
+    owner_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    workflow_id TEXT NOT NULL,
+    workflow_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    external_run_id TEXT,
+    request_id TEXT,
+    input TEXT NOT NULL,
+    output TEXT,
+    error TEXT,
+    definition TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    PRIMARY KEY (owner_id, run_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS weave_workflow_runs_owner_updated_idx
+    ON weave_workflow_runs(owner_id, updated_at)`,
+  `CREATE INDEX IF NOT EXISTS weave_workflow_runs_owner_workflow_idx
+    ON weave_workflow_runs(owner_id, workflow_id, updated_at)`,
 ];
 
 export const getWeaveDb = async () => {

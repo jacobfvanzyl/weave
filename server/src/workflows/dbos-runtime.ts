@@ -20,16 +20,36 @@ export type DbosStepConfig = {
 
 export type WeaveDbosWorkflow = (input: WorkflowRunInput) => Promise<JsonValue>;
 
+export type DbosStartWorkflowConfig = {
+  workflowID: string;
+  workflowAttributes?: Record<string, unknown>;
+};
+
+export type DbosWorkflowHandle = {
+  workflowID: string;
+  getResult(): Promise<JsonValue>;
+};
+
 export type DbosAdapter = {
   setConfig(config: DbosRuntimeConfig): void;
   registerWorkflow(fn: WeaveDbosWorkflow, config: DbosWorkflowConfig): WeaveDbosWorkflow;
   runStep<T>(operation: () => Promise<T>, config: DbosStepConfig): Promise<T>;
+  startWorkflow?(
+    workflow: WeaveDbosWorkflow,
+    config: DbosStartWorkflowConfig,
+  ): (input: WorkflowRunInput) => Promise<DbosWorkflowHandle>;
   launch(): Promise<void>;
 };
 
 export type DbosWorkflowRuntimeLaunchResult =
   | { enabled: false; launched: false }
-  | { enabled: true; launched: true; workflowName: string; workflow: WeaveDbosWorkflow };
+  | {
+    enabled: true;
+    launched: true;
+    workflowName: string;
+    workflow: WeaveDbosWorkflow;
+    adapter: DbosAdapter;
+  };
 
 export type DbosWorkflowRuntimeOptions = {
   env?: Record<string, string | undefined>;
@@ -62,7 +82,7 @@ export const maybeLaunchDbosWorkflowRuntime = async (
   const workflow = registerWeaveDbosWorkflow(adapter, options.runtime ?? workflowServiceRuntime);
   await adapter.launch();
 
-  const result = { enabled: true, launched: true, workflowName: weaveDbosWorkflowName, workflow } as const;
+  const result = { enabled: true, launched: true, workflowName: weaveDbosWorkflowName, workflow, adapter } as const;
   if (usesDefaultRuntime) defaultLaunch = result;
   return result;
 };
@@ -80,6 +100,30 @@ export const registerWeaveDbosWorkflow = (
 
 export const resetDbosWorkflowRuntimeForTests = () => {
   defaultLaunch = undefined;
+};
+
+export const startDbosWorkflowExecution = async (
+  input: WorkflowRunInput,
+  options: DbosWorkflowRuntimeOptions = {},
+) => {
+  const launch = await maybeLaunchDbosWorkflowRuntime(options);
+  if (!launch.enabled) return undefined;
+  if (!launch.adapter.startWorkflow) throw new Error('DBOS adapter does not support startWorkflow.');
+
+  const handle = await launch.adapter.startWorkflow(launch.workflow, {
+    workflowID: input.workflowRunId,
+    workflowAttributes: {
+      source: 'weave',
+      ownerId: input.ownerId,
+      workflowId: input.definition.id,
+      workflowVersion: input.definition.version,
+    },
+  })(input);
+
+  return {
+    workflowID: handle.workflowID,
+    result: handle.getResult(),
+  };
 };
 
 const loadDefaultDbosAdapter = async (): Promise<DbosAdapter> => {

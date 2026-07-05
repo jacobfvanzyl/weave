@@ -5,6 +5,7 @@ import { editorContextModule } from './editor-context';
 import { notesModule } from './notes/routes';
 import { notificationsModule } from './notifications';
 import { workspaceFilesModule } from './workspace-files';
+import { workflowsModule } from './workflows/routes';
 
 export const serverModules = [
   chatModule,
@@ -14,4 +15,5 @@ export const serverModules = [
   notificationsModule,
   workspaceFilesModule,
   attachmentsModule,
+  workflowsModule,
 ];
