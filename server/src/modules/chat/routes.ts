@@ -30,6 +30,6 @@ export const chatModule: ServerModule = {
       if (canonicalPath) mountRoute(app, route, { canonicalPath });
     }
     for (const route of chatStateRoutes) mountRoute(app, route);
-    for (const route of createChatRoutes(services.agent.service)) mountRoute(app, route);
+    for (const route of createChatRoutes(services.agent.service, services.internal.resources)) mountRoute(app, route);
   },
 };

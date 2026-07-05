@@ -1,10 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { createOpenAI } from '@ai-sdk/openai';
-import {
-  attachmentIdFromReference,
-  type AttachmentStorage,
-  attachmentStorage,
-} from '../../../modules/attachments/storage';
+import { attachmentIdFromReference, type AttachmentReadResult } from '../../../modules/attachments/storage';
+import { type ResourceService, resourceService as defaultResourceService } from '../../../services/resource-service';
+import { callerForOwner, type ServiceCaller } from '../../../services/types';
 import { contextUsageFromProviderUsage, recordThreadContextUsage } from '../context-usage';
 import { type CodexCredentials, getCodexCredentials } from './chatgpt-codex-auth';
 
@@ -20,7 +18,9 @@ type ProviderUsage = GenerateResult['usage'] | Extract<StreamPart, { type: 'fini
 type GetCodexCredentials = () => Promise<CodexCredentials>;
 type FetchFunction = typeof fetch;
 type RecordUsage = typeof recordThreadContextUsage;
-type AttachmentReader = Pick<AttachmentStorage, 'get'>;
+type LegacyAttachmentReader = { get(id: string): Promise<AttachmentReadResult | null> };
+type ResourceAttachmentReader = Pick<ResourceService, 'getAttachment'> & { caller?: ServiceCaller };
+type AttachmentReader = LegacyAttachmentReader | ResourceAttachmentReader;
 
 type ContextUsageTracking = {
   threadId: string;
@@ -32,6 +32,18 @@ const placeholderApiKey = 'chatgpt-subscription';
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+
+const defaultAttachmentReader: ResourceAttachmentReader = {
+  getAttachment: (caller, attachmentId) => defaultResourceService.getAttachment(caller, attachmentId),
+  caller: callerForOwner('system', 'system'),
+};
+
+const readAttachment = (reader: AttachmentReader, attachmentId: string) => {
+  if ('getAttachment' in reader) {
+    return reader.getAttachment(reader.caller ?? callerForOwner('system', 'system'), attachmentId);
+  }
+  return reader.get(attachmentId);
+};
 
 const getContextUsageTracking = (options: { providerOptions?: unknown }): ContextUsageTracking | undefined => {
   const tracking = asRecord(asRecord(options.providerOptions)?.mastraContextUsage);
@@ -205,7 +217,7 @@ const inlineLocalAttachmentImages = async (value: unknown, storage: AttachmentRe
   if (record.type === 'input_image' && typeof record.image_url === 'string') {
     const attachmentId = attachmentIdFromReference(record.image_url);
     if (attachmentId) {
-      const attachment = await storage.get(attachmentId);
+      const attachment = await readAttachment(storage, attachmentId);
       if (attachment) {
         record.image_url = `data:${attachment.mimeType};base64,${Buffer.from(attachment.bytes).toString('base64')}`;
         changed = true;
@@ -235,7 +247,7 @@ const inlineLocalAttachmentsInBody = async (
 export const createChatGPTCodexFetch = ({
   fetch: innerFetch = fetch,
   getCredentials = getCodexCredentials,
-  attachments = attachmentStorage,
+  attachments = defaultAttachmentReader,
 }: {
   fetch?: FetchFunction;
   getCredentials?: GetCodexCredentials;
@@ -356,8 +368,7 @@ const getNumberField = (record: Record<string, unknown> | undefined, key: string
   typeof record?.[key] === 'number' && Number.isFinite(record[key]) ? record[key] : undefined;
 
 const testTextId = (itemId: string, contentIndex: number) => `text-${itemId}-${contentIndex}`;
-const testReasoningSummaryId = (itemId: string, summaryIndex: number) =>
-  `reasoning-summary-${itemId}-${summaryIndex}`;
+const testReasoningSummaryId = (itemId: string, summaryIndex: number) => `reasoning-summary-${itemId}-${summaryIndex}`;
 
 const collectCodexResponseStreamParts = async (
   events: Array<Record<string, unknown>>,
@@ -550,7 +561,10 @@ const collectCodexResponseStreamParts = async (
 
   if (!sawTerminalEvent) {
     closeOpenParts();
-    parts.push({ type: 'error', error: new Error('ChatGPT Codex response stream ended before a terminal response event.') });
+    parts.push({
+      type: 'error',
+      error: new Error('ChatGPT Codex response stream ended before a terminal response event.'),
+    });
   }
 
   return parts;

@@ -2,7 +2,7 @@ import { LibsqlServiceBindingRepository, type ServiceBindingRepository } from '.
 import { DefaultEventService, type EventService } from './event-service';
 import { PortalProvider } from './providers/portal-provider';
 import { StubProvider } from './providers/stub-providers';
-import { DefaultResourceService, type ResourceService } from './resource-service';
+import { type ResourceService, resourceService } from './resource-service';
 import { DefaultSessionService, type SessionService } from './session-service';
 import { DefaultToolService, type ToolService } from './tool-service';
 
@@ -35,7 +35,7 @@ export const createInternalServices = (): InternalServices => {
     providers,
     tools,
     sessions,
-    resources: new DefaultResourceService(),
+    resources: resourceService,
     events: new DefaultEventService(),
   };
 };

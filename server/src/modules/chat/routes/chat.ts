@@ -4,12 +4,15 @@ import { type AgentService, agentService as defaultAgentService } from '../../..
 import { agentRunCoordinator } from '../../../agent/service';
 import { createAgentRunCoordinatorTestApi } from '../../../agent/run-coordinator';
 import { defineRoute } from '../../../server/routes';
+import { type ResourceService, resourceService as defaultResourceService } from '../../../services/resource-service';
+import { callerForOwner } from '../../../services/types';
 import {
   attachmentIdFromReference,
   attachmentModelUrl,
+  type AttachmentPayload,
   type AttachmentStorage,
-  attachmentStorage,
   parseBase64DataUrl,
+  type StoredAttachment,
   type StoredAttachmentMetadata,
 } from '../../attachments/storage';
 
@@ -96,12 +99,42 @@ const getSubmittedUserMessages = (messages: unknown) => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+type AttachmentNormalizerStorage = Pick<AttachmentStorage, 'findByThread' | 'put'>;
+
+const attachmentAccessForNormalization = (
+  options: {
+    resourceId?: string;
+    threadId?: string;
+    resources?: Pick<ResourceService, 'findAttachmentsByThread' | 'putAttachment'>;
+    storage?: AttachmentNormalizerStorage;
+  },
+): AttachmentNormalizerStorage => {
+  if (options.storage) return options.storage;
+
+  const resources = options.resources ?? defaultResourceService;
+  const caller = callerForOwner(
+    options.resourceId ?? 'unknown',
+    'ui',
+    options.threadId ? { threadId: options.threadId } : undefined,
+  );
+  return {
+    findByThread: (threadId: string): Promise<StoredAttachmentMetadata[]> =>
+      resources.findAttachmentsByThread(caller, threadId),
+    put: (input: AttachmentPayload): Promise<StoredAttachment> => resources.putAttachment(caller, input),
+  };
+};
+
 const normalizeMessageImageAttachments = async (
   messages: unknown,
-  options: { threadId?: string; storage?: Pick<AttachmentStorage, 'findByThread' | 'put'> },
+  options: {
+    resourceId?: string;
+    threadId?: string;
+    resources?: Pick<ResourceService, 'findAttachmentsByThread' | 'putAttachment'>;
+    storage?: AttachmentNormalizerStorage;
+  },
 ) => {
   if (!Array.isArray(messages)) return messages;
-  const storage = options.storage ?? attachmentStorage;
+  const storage = attachmentAccessForNormalization(options);
   const threadAttachments = options.threadId ? await storage.findByThread(options.threadId) : [];
 
   const newestMatchingAttachment = (part: Record<string, unknown>): StoredAttachmentMetadata | undefined => {
@@ -310,7 +343,10 @@ export const __chatRouteMemoryTest = {
 
 export const __chatRunRegistryTest = createAgentRunCoordinatorTestApi(agentRunCoordinator);
 
-export const createChatRoutes = (service: AgentService = defaultAgentService) => [
+export const createChatRoutes = (
+  service: AgentService = defaultAgentService,
+  resources: Pick<ResourceService, 'findAttachmentsByThread' | 'putAttachment'> = defaultResourceService,
+) => [
   defineRoute('/chat/runs/:threadId/stream', {
     method: 'GET',
     handler: async (c) => {
@@ -352,7 +388,7 @@ export const createChatRoutes = (service: AgentService = defaultAgentService) =>
       const normalizedMessages = sanitizeSubmittedMessagesForMastra(
         await normalizeMessageImageAttachments(
           submittedMessagesForMemory(submittedMessages, threadId),
-          { threadId },
+          { resourceId, threadId, resources },
         ),
       );
       const submittedUserMessage = getSubmittedUserMessages(normalizedMessages)[0];
@@ -381,7 +417,9 @@ export const createChatRoutes = (service: AgentService = defaultAgentService) =>
       const threadId = params?.memory?.thread;
       params.messages = sanitizeSubmittedMessagesForMastra(
         await normalizeMessageImageAttachments(submittedMessagesForMemory(params.messages, threadId), {
+          resourceId,
           threadId: typeof threadId === 'string' ? threadId : undefined,
+          resources,
         }),
       );
 

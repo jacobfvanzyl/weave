@@ -11,6 +11,7 @@ export type StoredAttachment = {
 };
 
 export type StoredAttachmentMetadata = StoredAttachment & {
+  ownerId?: string;
   threadId?: string;
   createdAt: string;
 };
@@ -19,6 +20,7 @@ export type AttachmentPayload = {
   bytes: Uint8Array;
   mimeType: string;
   originalName: string;
+  ownerId?: string;
   threadId?: string;
 };
 
@@ -27,6 +29,8 @@ export type AttachmentReadResult = {
   mimeType: string;
   sizeBytes: number;
   originalName: string;
+  ownerId?: string;
+  threadId?: string;
 };
 
 export interface AttachmentStorage {
@@ -43,6 +47,7 @@ type AttachmentMetadata = {
   sizeBytes: number;
   originalName: string;
   storedName: string;
+  ownerId?: string;
   threadId?: string;
   createdAt: string;
 };
@@ -125,6 +130,7 @@ export class LocalAttachmentStorage implements AttachmentStorage {
       sizeBytes: input.bytes.byteLength,
       originalName,
       storedName,
+      ...(input.ownerId ? { ownerId: input.ownerId } : {}),
       ...(input.threadId ? { threadId: input.threadId } : {}),
       createdAt: new Date().toISOString(),
     };
@@ -155,6 +161,8 @@ export class LocalAttachmentStorage implements AttachmentStorage {
         mimeType: metadata.mimeType,
         sizeBytes: metadata.sizeBytes,
         originalName: metadata.originalName,
+        ownerId: metadata.ownerId,
+        threadId: metadata.threadId,
       };
     } catch {
       return null;
@@ -162,13 +170,13 @@ export class LocalAttachmentStorage implements AttachmentStorage {
   }
 
   async findByThread(threadId: string): Promise<StoredAttachmentMetadata[]> {
-    return this.findWhere(metadata => metadata.threadId === threadId);
+    return this.findWhere((metadata) => metadata.threadId === threadId);
   }
 
   async findByOriginalName(originalName: string, mimeType?: string): Promise<StoredAttachmentMetadata[]> {
     const normalizedName = safeName(originalName, 'image');
     const normalizedMimeType = mimeType?.toLowerCase();
-    return this.findWhere(metadata =>
+    return this.findWhere((metadata) =>
       metadata.originalName === normalizedName &&
       (!normalizedMimeType || metadata.mimeType === normalizedMimeType)
     );
@@ -181,22 +189,27 @@ export class LocalAttachmentStorage implements AttachmentStorage {
       const entries = await readdir(this.baseDir, { withFileTypes: true });
       const attachments: StoredAttachmentMetadata[] = [];
 
-      await Promise.all(entries.filter(entry => entry.isDirectory()).map(async entry => {
-        try {
-          const metadata = JSON.parse(await readFile(metadataPath(this.baseDir, entry.name), 'utf8')) as AttachmentMetadata;
-          if (!predicate(metadata)) return;
-          attachments.push({
-            id: metadata.id,
-            urlPath: attachmentUrlPath(metadata.id),
-            mimeType: metadata.mimeType,
-            sizeBytes: metadata.sizeBytes,
-            originalName: metadata.originalName,
-            threadId: metadata.threadId,
-            createdAt: metadata.createdAt,
-          });
-        } catch {
-        }
-      }));
+      await Promise.all(
+        entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
+          try {
+            const metadata = JSON.parse(
+              await readFile(metadataPath(this.baseDir, entry.name), 'utf8'),
+            ) as AttachmentMetadata;
+            if (!predicate(metadata)) return;
+            attachments.push({
+              id: metadata.id,
+              urlPath: attachmentUrlPath(metadata.id),
+              mimeType: metadata.mimeType,
+              sizeBytes: metadata.sizeBytes,
+              originalName: metadata.originalName,
+              ownerId: metadata.ownerId,
+              threadId: metadata.threadId,
+              createdAt: metadata.createdAt,
+            });
+          } catch {
+          }
+        }),
+      );
 
       return attachments;
     } catch {
@@ -214,7 +227,7 @@ export const parseBase64DataUrl = (value: string): { mimeType: string; base64: s
   const match = /^data:([^,]+),([a-z0-9+/=\r\n ]+)$/i.exec(value.trim());
   if (!match) return null;
 
-  const headerParts = (match[1] ?? '').split(';').map(part => part.trim()).filter(Boolean);
+  const headerParts = (match[1] ?? '').split(';').map((part) => part.trim()).filter(Boolean);
   if (headerParts.at(-1)?.toLowerCase() !== 'base64') return null;
 
   const mimeType = headerParts[0]?.toLowerCase();
