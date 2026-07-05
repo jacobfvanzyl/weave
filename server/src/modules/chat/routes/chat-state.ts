@@ -2,46 +2,14 @@ import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { defineRoute } from '../../../server/routes';
 import type { MastraDBMessage } from '@mastra/core/agent';
 import { attachmentIdFromReference, attachmentUrlPath } from '../../attachments/storage';
+import { getAuthUserFromHeader, isCompactToolHistoryTextPart } from '../../../agent/runtime';
 import {
-  getAuthUserFromHeader,
-  getThreadContextUsageSnapshot,
-  isCompactToolHistoryTextPart,
-  resolveAgentContext,
-  resolveMemoryPolicy,
-} from '../../../agent/runtime';
+  agentService as defaultAgentService,
+  contextUsageRecallOptions,
+  estimateContextTokens,
+  estimateMemoryContextTokens,
+} from '../../../agent';
 import { getThreadRunSubmittedUserMessages, getThreadRunUiMessages } from './chat';
-import { isHiddenThread } from './thread-visibility';
-
-const agentId = 'mageHandAgent';
-
-type MastraThread = {
-  id: string;
-  title?: string;
-  updatedAt?: string;
-  metadata?: unknown;
-};
-
-const timestampString = (value: unknown) =>
-  typeof value === 'string' ? value : value instanceof Date ? value.toISOString() : '';
-
-const getTopSortOrder = async (
-  memory: any,
-  resourceId: string,
-  scope: { projectId?: string; workspaceId?: string },
-) => {
-  const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
-  const orders = result.threads
-    .filter((thread: any) => !isHiddenThread(thread))
-    .filter((thread: any) => {
-      const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
-      if (metadata.archived === true) return false;
-      if (scope.projectId) return metadata.projectId === scope.projectId && metadata.workspaceId === scope.workspaceId;
-      return metadata.adHoc === true || (metadata.mode !== 'project' && typeof metadata.projectId !== 'string');
-    })
-    .map((thread: any) => (thread.metadata as Record<string, unknown> | undefined)?.sortOrder)
-    .filter((value: unknown): value is number => typeof value === 'number');
-  return orders.length ? Math.min(...orders) - 1 : 0;
-};
 
 const getToolInvocation = (part: Record<string, unknown>) =>
   typeof part.toolInvocation === 'object' && part.toolInvocation !== null
@@ -285,116 +253,6 @@ const toUiMessage = (message: MastraDBMessage, origin: string) => {
   } satisfies UiChatMessage;
 };
 
-const getRenameTitle = (message: MastraDBMessage) => {
-  for (const part of message.content.parts) {
-    const record = part as Record<string, unknown>;
-    if (getToolName(record) !== 'renameThreadTool' && getToolName(record) !== 'rename-thread') continue;
-
-    const result = getToolResult(record);
-    if (typeof result === 'object' && result !== null && typeof (result as { title?: unknown }).title === 'string') {
-      return (result as { title: string }).title.trim();
-    }
-
-    const args = getToolArgs(record);
-    if (typeof args === 'object' && args !== null && typeof (args as { title?: unknown }).title === 'string') {
-      return (args as { title: string }).title.trim();
-    }
-  }
-
-  return '';
-};
-
-const messageTextForTokenEstimate = (message: MastraDBMessage) =>
-  message.content.parts
-    .map((part) => {
-      const record = part as Record<string, unknown>;
-      if (typeof record.text === 'string') return record.text;
-      if (typeof record.result === 'string') return record.result;
-      if (record.result !== undefined) return JSON.stringify(record.result);
-      if (record.output !== undefined) {
-        return typeof record.output === 'string' ? record.output : JSON.stringify(record.output);
-      }
-      return JSON.stringify(record);
-    })
-    .filter(Boolean)
-    .join('\n');
-
-const estimateTextTokens = (memory: any, text: string) =>
-  typeof memory.estimateTokens === 'function' ? memory.estimateTokens(text) : Math.ceil(text.length / 4);
-
-const estimateContextTokens = (memory: any, messages: MastraDBMessage[], systemMessage?: string) =>
-  messages.reduce((total, message) => {
-    const text = messageTextForTokenEstimate(message);
-    return total + estimateTextTokens(memory, text);
-  }, systemMessage ? estimateTextTokens(memory, systemMessage) : 0);
-
-const estimateMemoryContextTokens = async (
-  memory: any,
-  args: {
-    threadId: string;
-    resourceId: string;
-    memoryConfig: unknown;
-  },
-) => {
-  if (typeof memory.getContext === 'function') {
-    const context = await memory.getContext({
-      threadId: args.threadId,
-      resourceId: args.resourceId,
-      ...(isRecord(args.memoryConfig) ? { memoryConfig: args.memoryConfig } : {}),
-    });
-    return estimateContextTokens(
-      memory,
-      Array.isArray(context?.messages) ? context.messages : [],
-      context?.systemMessage,
-    );
-  }
-
-  const recalled = await memory.recall({
-    ...contextUsageRecallOptions(args.threadId, args.resourceId, args.memoryConfig),
-  });
-  return estimateContextTokens(memory, recalled.messages);
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const contextUsageRecallOptions = (
-  threadId: string,
-  resourceId: string,
-  threadConfig: unknown,
-) => ({
-  threadId,
-  resourceId,
-  ...(isRecord(threadConfig) ? { threadConfig } : {}),
-});
-
-const getThreadTitleFromMessages = (messages: MastraDBMessage[]) => {
-  for (const message of messages) {
-    const title = getRenameTitle(message);
-    if (title) return title;
-  }
-
-  return '';
-};
-
-const getMastra = (c: any) => {
-  const mastra = c.get('mastra');
-  if (!mastra) throw new Error('Mastra instance missing from route context');
-  return mastra;
-};
-
-const getMemory = async (c: any) => {
-  const mastra = getMastra(c);
-  const agent = await mastra.getAgent(agentId);
-  const memory = await agent.getMemory();
-
-  if (!memory) {
-    throw new Error(`${agentId} has no memory configured`);
-  }
-
-  return memory;
-};
-
 const getResourceId = (c: any) => {
   const resourceId = c.get('requestContext')?.get(MASTRA_RESOURCE_ID_KEY);
   if (typeof resourceId !== 'string' || !resourceId) throw new Error('Authenticated resource missing');
@@ -403,8 +261,11 @@ const getResourceId = (c: any) => {
 
 const errorResponse = (c: any, error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
+  const status = typeof (error as { status?: unknown })?.status === 'number'
+    ? (error as { status: number }).status
+    : 500;
   console.error('[chat-state]', error);
-  return c.json({ error: message }, 500);
+  return c.json({ error: message }, status);
 };
 
 export const chatStateRoutes = [
@@ -427,40 +288,7 @@ export const chatStateRoutes = [
       try {
         const resourceId = getResourceId(c);
 
-        const memory = await getMemory(c);
-        const result = await memory.listThreads({
-          filter: { resourceId },
-          perPage: false,
-          orderBy: { field: 'updatedAt', direction: 'DESC' },
-        });
-
-        const threads = await Promise.all(
-          result.threads.filter((thread: MastraThread) => !isHiddenThread(thread)).map(async (thread: MastraThread) => {
-            if (thread.title && !['New chat', '...'].includes(thread.title)) return thread;
-
-            const messages = await memory.recall({
-              threadId: thread.id,
-              resourceId,
-              perPage: false,
-              orderBy: { field: 'createdAt', direction: 'ASC' },
-            });
-            const title = getThreadTitleFromMessages(messages.messages);
-
-            return title ? { ...thread, title } : thread;
-          }),
-        );
-
-        const sortedThreads = threads.sort((a, b) => {
-          const aOrder = typeof (a.metadata as Record<string, unknown> | undefined)?.sortOrder === 'number'
-            ? (a.metadata as Record<string, number>).sortOrder
-            : Number.MAX_SAFE_INTEGER;
-          const bOrder = typeof (b.metadata as Record<string, unknown> | undefined)?.sortOrder === 'number'
-            ? (b.metadata as Record<string, number>).sortOrder
-            : Number.MAX_SAFE_INTEGER;
-          return aOrder - bOrder || timestampString(b.updatedAt).localeCompare(timestampString(a.updatedAt));
-        });
-
-        return c.json({ threads: sortedThreads });
+        return c.json({ threads: await defaultAgentService.listChatThreads({ resourceId }) });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -477,17 +305,12 @@ export const chatStateRoutes = [
         const projectId = typeof body?.projectId === 'string' ? body.projectId : undefined;
         const workspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
 
-        const memory = await getMemory(c);
-        const sortOrder = await getTopSortOrder(memory, resourceId, { projectId, workspaceId });
-        const metadata = projectId
-          ? { mode: 'project', projectId, workspaceId, sortOrder }
-          : { mode: 'plain', sortOrder };
-        const thread = await memory.createThread({
+        const thread = await defaultAgentService.createChatThread({
           resourceId,
           threadId,
           title,
-          metadata,
-          saveThread: true,
+          projectId,
+          workspaceId,
         });
 
         return c.json({ thread });
@@ -510,31 +333,15 @@ export const chatStateRoutes = [
         const scopeWorkspaceId = typeof scope?.workspaceId === 'string' ? scope.workspaceId : undefined;
         const plain = scope?.plain === true;
 
-        const memory = await getMemory(c);
-        const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
-        const visibleThreads = result.threads.filter((thread: MastraThread) => !isHiddenThread(thread));
-        const scopedThreads = visibleThreads.filter((thread: MastraThread) => {
-          const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
-          if (metadata.archived === true) return false;
-          if (plain) {
-            return metadata.adHoc === true || (metadata.mode !== 'project' && typeof metadata.projectId !== 'string');
-          }
-          if (scopeWorkspaceId) {
-            return metadata.projectId === scopeProjectId && metadata.workspaceId === scopeWorkspaceId;
-          }
-          if (scopeProjectId) return metadata.projectId === scopeProjectId && typeof metadata.workspaceId !== 'string';
-          return false;
+        await defaultAgentService.reorderChatThreads({
+          resourceId,
+          threadIds,
+          scope: {
+            ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
+            ...(scopeWorkspaceId ? { workspaceId: scopeWorkspaceId } : {}),
+            ...(plain ? { plain } : {}),
+          },
         });
-        const scopedIds = new Set(scopedThreads.map((thread: MastraThread) => thread.id));
-        if (threadIds.length !== scopedIds.size || threadIds.some((id: string) => !scopedIds.has(id))) {
-          return c.json({ error: 'threadIds must include all threads in scope' }, 400);
-        }
-
-        await Promise.all(threadIds.map(async (id: string, index: number) => {
-          const thread = scopedThreads.find((item: MastraThread) => item.id === id)!;
-          const metadata = { ...((thread.metadata ?? {}) as Record<string, unknown>), sortOrder: index };
-          await memory.updateThread({ id, title: thread.title, metadata });
-        }));
 
         return c.json({ ok: true });
       } catch (error) {
@@ -549,18 +356,8 @@ export const chatStateRoutes = [
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
 
-        const memory = await getMemory(c);
-        const result = await memory.recall({
-          threadId,
-          resourceId,
-          perPage: false,
-          orderBy: { field: 'createdAt', direction: 'ASC' },
-        });
-
-        return c.json({ messages: result.messages });
+        return c.json({ messages: await defaultAgentService.getChatThreadRawMessages({ resourceId, threadId }) });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.includes('No thread found')) return c.json({ messages: [] });
         return errorResponse(c, error);
       }
     },
@@ -571,42 +368,15 @@ export const chatStateRoutes = [
       try {
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
-        const mastra = getMastra(c);
-        const memory = await getMemory(c);
-        const resolvedContext = await resolveAgentContext({ mastra, resourceId, threadId });
-        const memoryPolicy = resolveMemoryPolicy({
-          agentMemory: resolvedContext.config.memory,
-          threadMetadata: resolvedContext.threadMetadata,
-        });
         const queryContextWindow = Number(c.req.query('contextWindow'));
-        const snapshot = getThreadContextUsageSnapshot(threadId, resourceId);
-        const contextWindow = Number.isFinite(queryContextWindow) && queryContextWindow > 0
-          ? queryContextWindow
-          : typeof snapshot?.maxTokens === 'number'
-          ? snapshot.maxTokens
-          : typeof memory.MAX_CONTEXT_TOKENS === 'number'
-          ? memory.MAX_CONTEXT_TOKENS
-          : undefined;
-        const tokens = snapshot?.usedTokens ?? await estimateMemoryContextTokens(memory, {
-          threadId,
-          resourceId,
-          memoryConfig: memoryPolicy.options,
-        });
-        return c.json({
-          tokens,
-          contextWindow,
-          percent: contextWindow ? Math.min(100, (tokens / contextWindow) * 100) : undefined,
-          source: snapshot ? snapshot.source : 'estimate',
-          updatedAt: snapshot?.updatedAt,
-          totalProcessedTokens: snapshot?.totalProcessedTokens,
-          inputTokens: snapshot?.inputTokens,
-          cachedInputTokens: snapshot?.cachedInputTokens,
-          outputTokens: snapshot?.outputTokens,
-          memoryPolicy: {
-            options: memoryPolicy.options,
-            status: memoryPolicy.status,
-          },
-        });
+
+        return c.json(
+          await defaultAgentService.getChatThreadContextUsage({
+            threadId,
+            resourceId,
+            queryContextWindow,
+          }),
+        );
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -619,16 +389,9 @@ export const chatStateRoutes = [
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
 
-        const memory = await getMemory(c);
-        const result = await memory.recall({
-          threadId,
-          resourceId,
-          perPage: false,
-          orderBy: { field: 'createdAt', direction: 'ASC' },
-        });
-
         const origin = new URL(c.req.url).origin;
-        const persistedMessages = result.messages.map((message: MastraDBMessage) => toUiMessage(message, origin));
+        const persistedMessages = (await defaultAgentService.getChatThreadMessages({ resourceId, threadId }))
+          .map((message: MastraDBMessage) => toUiMessage(message, origin));
         const pendingMessages = getThreadRunSubmittedUserMessages(resourceId, threadId)
           .map((message, index) => toPendingSubmittedMessage(message, origin, index))
           .filter((message): message is UiChatMessage => message !== null);
@@ -643,8 +406,6 @@ export const chatStateRoutes = [
           ),
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.includes('No thread found')) return c.json({ messages: [] });
         return errorResponse(c, error);
       }
     },
@@ -660,19 +421,14 @@ export const chatStateRoutes = [
         const hasArchived = typeof body?.archived === 'boolean';
         if (!title && !hasArchived) return c.json({ error: 'title or archived is required' }, 400);
 
-        const memory = await getMemory(c);
-        const thread = await memory.getThreadById({ threadId });
-        if (!thread || thread.resourceId !== resourceId) return c.json({ error: 'thread not found' }, 404);
-
-        const metadata = { ...((thread.metadata ?? {}) as Record<string, unknown>) };
-        if (hasArchived) metadata.archived = body.archived;
-        const updatedThread = await memory.updateThread({
-          id: threadId,
-          title: title || thread.title,
-          metadata,
+        const thread = await defaultAgentService.updateChatThread({
+          resourceId,
+          threadId,
+          ...(title ? { title } : {}),
+          ...(hasArchived ? { archived: body.archived } : {}),
         });
 
-        return c.json({ thread: updatedThread });
+        return c.json({ thread });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -685,11 +441,7 @@ export const chatStateRoutes = [
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
 
-        const memory = await getMemory(c);
-        const thread = await memory.getThreadById({ threadId });
-        if (!thread || thread.resourceId !== resourceId) return c.json({ error: 'thread not found' }, 404);
-
-        await memory.deleteThread(threadId);
+        await defaultAgentService.deleteChatThread({ resourceId, threadId });
         return c.json({ ok: true });
       } catch (error) {
         return errorResponse(c, error);

@@ -1,13 +1,31 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { recordThreadContextUsage } from '../../server/src/agent/mastra/context-usage';
-import { __chatRunRegistryTest, chatRoutes } from '../../server/src/modules/chat/routes/chat';
+import { __chatRunRegistryTest, chatRoutes, createChatRoutes } from '../../server/src/modules/chat/routes/chat';
 import { __chatStateContextUsageTest } from '../../server/src/modules/chat/routes/chat-state';
 
-const steerRouteHandler = () => {
-  const handler = chatRoutes.find(route => route.path === '/chat/runs/:threadId/steer')?.handler;
-  if (typeof handler !== 'function') throw new Error('steering route not found');
+const routeHandler = (path: string, routes = chatRoutes) => {
+  const handler = routes.find((route) => route.path === path)?.handler;
+  if (typeof handler !== 'function') {
+    throw new Error(`route not found: ${path}`);
+  }
   return handler as (c: any) => Promise<unknown>;
 };
+
+const steerRouteHandler = (routes = chatRoutes) => routeHandler('/chat/runs/:threadId/steer', routes);
+
+const chatRouteContext = (overrides: Record<string, unknown> = {}) => ({
+  get: (key: string) => {
+    if (key === 'requestContext') return { get: () => 'resource-1' };
+    return undefined;
+  },
+  req: {
+    param: () => 'thread-1',
+    json: async () => ({}),
+    raw: { signal: new AbortController().signal },
+  },
+  json: vi.fn((body: unknown, status?: number) => ({ body, status })),
+  ...overrides,
+});
 
 describe('chat active run registry', () => {
   afterEach(() => {
@@ -25,12 +43,21 @@ describe('chat active run registry', () => {
 
     const reader = __chatRunRegistryTest.observe(run).getReader();
 
-    await expect(reader.read()).resolves.toEqual({ done: false, value: startChunk });
-    await expect(reader.read()).resolves.toEqual({ done: false, value: textChunk });
+    await expect(reader.read()).resolves.toEqual({
+      done: false,
+      value: startChunk,
+    });
+    await expect(reader.read()).resolves.toEqual({
+      done: false,
+      value: textChunk,
+    });
 
     const liveRead = reader.read();
     __chatRunRegistryTest.append(run, finishChunk);
-    await expect(liveRead).resolves.toEqual({ done: false, value: finishChunk });
+    await expect(liveRead).resolves.toEqual({
+      done: false,
+      value: finishChunk,
+    });
 
     const closedRead = reader.read();
     __chatRunRegistryTest.complete(run);
@@ -48,7 +75,11 @@ describe('chat active run registry', () => {
         messageMetadata: __chatRunRegistryTest.runTimingMetadata(run, 'running'),
       });
       __chatRunRegistryTest.append(run, { type: 'text-start', id: 'text-1' });
-      __chatRunRegistryTest.append(run, { type: 'text-delta', id: 'text-1', delta: 'Done.' });
+      __chatRunRegistryTest.append(run, {
+        type: 'text-delta',
+        id: 'text-1',
+        delta: 'Done.',
+      });
 
       vi.setSystemTime(new Date('2026-07-02T10:00:19.000Z'));
       __chatRunRegistryTest.append(run, {
@@ -98,11 +129,15 @@ describe('chat active run registry', () => {
   it('returns not_active when steering a thread without an active run', async () => {
     const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
     const response = await steerRouteHandler()({
-      get: (key: string) => key === 'requestContext' ? { get: () => 'resource-1' } : undefined,
+      get: (key: string) => (key === 'requestContext' ? { get: () => 'resource-1' } : undefined),
       req: {
         param: () => 'thread-1',
         json: async () => ({
-          message: { id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'steer' }] },
+          message: {
+            id: 'user-1',
+            role: 'user',
+            parts: [{ type: 'text', text: 'steer' }],
+          },
         }),
       },
       json,
@@ -118,47 +153,173 @@ describe('chat active run registry', () => {
     });
   });
 
-  it('delivers active steering messages through Mastra sendMessage', async () => {
-    __chatRunRegistryTest.create('resource-1', 'thread-1');
-    const sendMessage = vi.fn(() => ({
-      accepted: true,
-      runId: 'mastra-run-1',
-      signal: { id: 'signal-1' },
+  it('returns 204 from stream endpoint when no AgentService run is active', async () => {
+    const routes = createChatRoutes({
+      observeChatRun: () => undefined,
+    } as any);
+    const response = await routeHandler('/chat/runs/:threadId/stream', routes)(chatRouteContext());
+
+    expect(response).toBeInstanceOf(Response);
+    expect((response as Response).status).toBe(204);
+  });
+
+  it('returns SSE from stream endpoint when AgentService has an active run', async () => {
+    const routes = createChatRoutes({
+      observeChatRun: () =>
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'finish' });
+            controller.close();
+          },
+        }),
+    } as any);
+    const response = (await routeHandler('/chat/runs/:threadId/stream', routes)(chatRouteContext())) as Response;
+
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(response.headers.get('x-vercel-ai-ui-message-stream')).toBe('v1');
+    await expect(response.text()).resolves.toBe('data: {"type":"finish"}\n\n');
+  });
+
+  it('adapts cancel endpoint to AgentService idempotent snapshots', async () => {
+    const cancelChatRun = vi.fn(() => ({
+      active: false,
+      status: 'cancelled',
+      runId: 'run-1',
     }));
-    const getAgent = vi.fn(async () => ({ sendMessage }));
+    const routes = createChatRoutes({ cancelChatRun } as any);
     const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
 
-    const response = await steerRouteHandler()({
+    const response = await routeHandler('/chat/runs/:threadId/cancel', routes)(chatRouteContext({ json }));
+
+    expect(cancelChatRun).toHaveBeenCalledWith('resource-1', 'thread-1');
+    expect(response).toEqual({
+      body: {
+        ok: true,
+        run: { active: false, status: 'cancelled', runId: 'run-1' },
+      },
+      status: undefined,
+    });
+  });
+
+  it('returns 409 from create run endpoint when AgentService reports an active thread', async () => {
+    const startChatRun = vi.fn();
+    const routes = createChatRoutes({
+      hasActiveThreadRun: () => true,
+      startChatRun,
+    } as any);
+    const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
+
+    const response = await routeHandler(
+      '/chat/runs',
+      routes,
+    )(
+      chatRouteContext({
+        json,
+        req: {
+          param: () => 'thread-1',
+          raw: { signal: new AbortController().signal },
+          json: async () => ({
+            memory: { thread: 'thread-1' },
+            messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'start' }] }],
+          }),
+        },
+      }),
+    );
+
+    expect(startChatRun).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      body: { error: 'thread has an active stream' },
+      status: 409,
+    });
+  });
+
+  it('delegates create run endpoint to AgentService and returns SSE headers', async () => {
+    const abortController = new AbortController();
+    const startChatRun = vi.fn(async () => ({
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'finish' });
+          controller.close();
+        },
+      }),
+    }));
+    const routes = createChatRoutes({
+      hasActiveThreadRun: () => false,
+      startChatRun,
+    } as any);
+    const requestContext = { get: () => 'resource-1' };
+    const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
+
+    const response = (await routeHandler(
+      '/chat/runs',
+      routes,
+    )(
+      chatRouteContext({
+        get: (key: string) => (key === 'requestContext' ? requestContext : undefined),
+        json,
+        req: {
+          param: () => 'thread-1',
+          raw: { signal: abortController.signal },
+          json: async () => ({
+            model: 'openai/gpt-5.5',
+            memory: { thread: 'thread-1' },
+            messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'start' }] }],
+          }),
+        },
+      }),
+    )) as Response;
+
+    expect(startChatRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceId: 'resource-1',
+        threadId: 'thread-1',
+        requestContext,
+        submittedUserMessages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'start' }] }],
+        abortSignal: abortController.signal,
+      }),
+    );
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(response.headers.get('x-vercel-ai-ui-message-stream')).toBe('v1');
+    await expect(response.text()).resolves.toBe('data: {"type":"finish"}\n\n');
+  });
+
+  it('delivers active steering messages through AgentService', async () => {
+    const sendChatMessage = vi.fn(async () => ({
+      accepted: true,
+      runId: 'mastra-run-1',
+      messageId: 'signal-1',
+    }));
+    const routes = createChatRoutes({
+      hasActiveThreadRun: () => true,
+      getChatRun: () => ({ active: true, status: 'running', runId: 'run-1' }),
+      sendChatMessage,
+    } as any);
+    const handler = steerRouteHandler(routes);
+    const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
+
+    const response = await handler({
       get: (key: string) => {
         if (key === 'requestContext') return { get: () => 'resource-1' };
-        if (key === 'mastra') return { getAgent };
         return undefined;
       },
       req: {
         param: () => 'thread-1',
         json: async () => ({
-          message: { id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'steer' }] },
+          message: {
+            id: 'user-1',
+            role: 'user',
+            parts: [{ type: 'text', text: 'steer' }],
+          },
         }),
       },
       json,
     });
 
-    expect(getAgent).toHaveBeenCalledWith('mageHandAgent');
-    expect(sendMessage).toHaveBeenCalledWith(
-      { contents: [{ type: 'text', text: 'steer' }] },
-      {
-        resourceId: 'resource-1',
-        threadId: 'thread-1',
-        ifActive: {
-          behavior: 'deliver',
-          attributes: {
-            source: 'composer',
-            delivery: 'while-active',
-          },
-        },
-        ifIdle: { behavior: 'discard' },
-      },
-    );
+    expect(sendChatMessage).toHaveBeenCalledWith({
+      resourceId: 'resource-1',
+      threadId: 'thread-1',
+      message: { contents: [{ type: 'text', text: 'steer' }] },
+    });
     expect(response).toEqual({
       body: {
         ok: true,
@@ -176,7 +337,10 @@ describe('chat active run registry', () => {
     __chatRunRegistryTest.append(run, textChunk);
 
     const reader = __chatRunRegistryTest.observe(run).getReader();
-    await expect(reader.read()).resolves.toEqual({ done: false, value: textChunk });
+    await expect(reader.read()).resolves.toEqual({
+      done: false,
+      value: textChunk,
+    });
 
     const contextRead = reader.read();
     recordThreadContextUsage({
@@ -209,10 +373,16 @@ describe('chat active run registry', () => {
     const finishChunk = { type: 'finish' };
     const finishRead = reader.read();
     __chatRunRegistryTest.append(run, finishChunk);
-    await expect(finishRead).resolves.toEqual({ done: false, value: finishChunk });
+    await expect(finishRead).resolves.toEqual({
+      done: false,
+      value: finishChunk,
+    });
 
     const replayReader = __chatRunRegistryTest.observe(run).getReader();
-    await expect(replayReader.read()).resolves.toEqual({ done: false, value: textChunk });
+    await expect(replayReader.read()).resolves.toEqual({
+      done: false,
+      value: textChunk,
+    });
     await expect(replayReader.read()).resolves.toEqual({
       done: false,
       value: {
@@ -232,12 +402,16 @@ describe('chat active run registry', () => {
   });
 
   it('merges pending submitted messages without duplicating persisted user turns', () => {
-    const pending = __chatStateContextUsageTest.toPendingSubmittedMessage({
-      id: 'user-1',
-      role: 'user',
-      metadata: { slashCommandOriginalText: '/commit current work' },
-      parts: [{ type: 'text', text: 'Expanded commit prompt' }],
-    }, 'http://localhost', 0);
+    const pending = __chatStateContextUsageTest.toPendingSubmittedMessage(
+      {
+        id: 'user-1',
+        role: 'user',
+        metadata: { slashCommandOriginalText: '/commit current work' },
+        parts: [{ type: 'text', text: 'Expanded commit prompt' }],
+      },
+      'http://localhost',
+      0,
+    );
 
     expect(pending).toMatchObject({
       id: 'user-1',
@@ -257,8 +431,7 @@ describe('chat active run registry', () => {
       role: 'user',
       parts: [{ type: 'text', text: '/commit current work' }],
     };
-    expect(__chatStateContextUsageTest.mergePendingSubmittedMessages([previous, persistedSameTurn], pending ? [pending] : []))
-      .toEqual([previous, persistedSameTurn]);
+    expect(__chatStateContextUsageTest.mergePendingSubmittedMessages([previous, persistedSameTurn], pending ? [pending] : [])).toEqual([previous, persistedSameTurn]);
   });
 
   it('detaches one observer without cancelling the run for other observers', async () => {
@@ -273,7 +446,10 @@ describe('chat active run registry', () => {
     __chatRunRegistryTest.append(run, chunk);
 
     await expect(secondRead).resolves.toEqual({ done: false, value: chunk });
-    expect(__chatRunRegistryTest.snapshot(run)).toMatchObject({ active: true, status: 'running' });
+    expect(__chatRunRegistryTest.snapshot(run)).toMatchObject({
+      active: true,
+      status: 'running',
+    });
   });
 
   it('cancels idempotently and closes observers with an abort chunk', async () => {
@@ -282,18 +458,39 @@ describe('chat active run registry', () => {
     const abortRead = reader.read();
 
     expect(__chatRunRegistryTest.cancel(run)).toBe(true);
-    await expect(abortRead).resolves.toEqual({ done: false, value: { type: 'abort', reason: 'cancelled' } });
-    await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+    await expect(abortRead).resolves.toEqual({
+      done: false,
+      value: { type: 'abort', reason: 'cancelled' },
+    });
+    await expect(reader.read()).resolves.toEqual({
+      done: true,
+      value: undefined,
+    });
     expect(__chatRunRegistryTest.cancel(run)).toBe(false);
-    expect(__chatRunRegistryTest.snapshot(run)).toMatchObject({ active: false, status: 'cancelled' });
+    expect(__chatRunRegistryTest.snapshot(run)).toMatchObject({
+      active: false,
+      status: 'cancelled',
+    });
   });
 
   it('reconstructs a retained assistant message from cancelled run chunks', () => {
     const run = __chatRunRegistryTest.create('resource-1', 'thread-1');
-    __chatRunRegistryTest.append(run, { type: 'start', messageId: 'assistant-1' });
+    __chatRunRegistryTest.append(run, {
+      type: 'start',
+      messageId: 'assistant-1',
+    });
     __chatRunRegistryTest.append(run, { type: 'text-start', id: 'text-1' });
-    __chatRunRegistryTest.append(run, { type: 'text-delta', id: 'text-1', delta: 'partial answer' });
-    __chatRunRegistryTest.append(run, { type: 'tool-input-available', toolCallId: 'call-1', toolName: 'bash', input: { command: 'date' } });
+    __chatRunRegistryTest.append(run, {
+      type: 'text-delta',
+      id: 'text-1',
+      delta: 'partial answer',
+    });
+    __chatRunRegistryTest.append(run, {
+      type: 'tool-input-available',
+      toolCallId: 'call-1',
+      toolName: 'bash',
+      input: { command: 'date' },
+    });
     __chatRunRegistryTest.cancel(run);
 
     expect(__chatRunRegistryTest.uiMessages('resource-1', 'thread-1')).toEqual([
@@ -316,9 +513,16 @@ describe('chat active run registry', () => {
 
   it('reconstructs retained assistant and steered user messages in stream order', () => {
     const run = __chatRunRegistryTest.create('resource-1', 'thread-1');
-    __chatRunRegistryTest.append(run, { type: 'start', messageId: 'assistant-1' });
+    __chatRunRegistryTest.append(run, {
+      type: 'start',
+      messageId: 'assistant-1',
+    });
     __chatRunRegistryTest.append(run, { type: 'text-start', id: 'text-1' });
-    __chatRunRegistryTest.append(run, { type: 'text-delta', id: 'text-1', delta: 'first answer' });
+    __chatRunRegistryTest.append(run, {
+      type: 'text-delta',
+      id: 'text-1',
+      delta: 'first answer',
+    });
     __chatRunRegistryTest.append(run, {
       type: 'data-user-message',
       transient: true,
@@ -329,9 +533,16 @@ describe('chat active run registry', () => {
         createdAt: '2026-07-02T10:00:00.000Z',
       },
     });
-    __chatRunRegistryTest.append(run, { type: 'start', messageId: 'assistant-2' });
+    __chatRunRegistryTest.append(run, {
+      type: 'start',
+      messageId: 'assistant-2',
+    });
     __chatRunRegistryTest.append(run, { type: 'text-start', id: 'text-2' });
-    __chatRunRegistryTest.append(run, { type: 'text-delta', id: 'text-2', delta: 'second answer' });
+    __chatRunRegistryTest.append(run, {
+      type: 'text-delta',
+      id: 'text-2',
+      delta: 'second answer',
+    });
 
     expect(__chatRunRegistryTest.uiMessages('resource-1', 'thread-1')).toEqual([
       {
@@ -357,7 +568,11 @@ describe('chat active run registry', () => {
   it('flushes buffered assistant text before a steered user message chunk', async () => {
     const input = new ReadableStream({
       start(controller) {
-        controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'partial' });
+        controller.enqueue({
+          type: 'text-delta',
+          id: 'text-1',
+          delta: 'partial',
+        });
         controller.enqueue({
           type: 'data-user-message',
           transient: true,
@@ -379,29 +594,53 @@ describe('chat active run registry', () => {
     });
     await expect(reader.read()).resolves.toMatchObject({
       done: false,
-      value: { type: 'data-user-message', transient: false, data: { id: 'steer-1' } },
+      value: {
+        type: 'data-user-message',
+        transient: false,
+        data: { id: 'steer-1' },
+      },
     });
-    await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+    await expect(reader.read()).resolves.toEqual({
+      done: true,
+      value: undefined,
+    });
   });
 
   it('marks an active run as errored when the stream emits an error chunk', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const run = __chatRunRegistryTest.create('resource-1', 'thread-1');
     const reader = __chatRunRegistryTest.observe(run).getReader();
-    const textChunk = { type: 'text-delta', id: 'msg-1', delta: 'before failure' };
-    const errorChunk = { type: 'error', errorText: 'Provider stream ended before completion.' };
+    const textChunk = {
+      type: 'text-delta',
+      id: 'msg-1',
+      delta: 'before failure',
+    };
+    const errorChunk = {
+      type: 'error',
+      errorText: 'Provider stream ended before completion.',
+    };
 
     try {
-      __chatRunRegistryTest.pump(run, new ReadableStream({
-        start(controller) {
-          controller.enqueue(textChunk);
-          controller.enqueue(errorChunk);
-          controller.enqueue({ type: 'text-delta', id: 'msg-1', delta: 'after failure' });
-          controller.close();
-        },
-      }));
+      __chatRunRegistryTest.pump(
+        run,
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(textChunk);
+            controller.enqueue(errorChunk);
+            controller.enqueue({
+              type: 'text-delta',
+              id: 'msg-1',
+              delta: 'after failure',
+            });
+            controller.close();
+          },
+        }),
+      );
 
-      await expect(reader.read()).resolves.toEqual({ done: false, value: textChunk });
+      await expect(reader.read()).resolves.toEqual({
+        done: false,
+        value: textChunk,
+      });
       await expect(reader.read()).rejects.toThrow('Provider stream ended before completion.');
       expect(__chatRunRegistryTest.snapshot(run)).toMatchObject({
         active: false,
@@ -410,9 +649,18 @@ describe('chat active run registry', () => {
       });
 
       const replayReader = __chatRunRegistryTest.observe(run).getReader();
-      await expect(replayReader.read()).resolves.toEqual({ done: false, value: textChunk });
-      await expect(replayReader.read()).resolves.toEqual({ done: false, value: errorChunk });
-      await expect(replayReader.read()).resolves.toEqual({ done: true, value: undefined });
+      await expect(replayReader.read()).resolves.toEqual({
+        done: false,
+        value: textChunk,
+      });
+      await expect(replayReader.read()).resolves.toEqual({
+        done: false,
+        value: errorChunk,
+      });
+      await expect(replayReader.read()).resolves.toEqual({
+        done: true,
+        value: undefined,
+      });
     } finally {
       consoleError.mockRestore();
     }
