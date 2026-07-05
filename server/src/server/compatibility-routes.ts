@@ -6,14 +6,23 @@ import { chatStateRoutes } from '../modules/chat/routes/chat-state';
 import { projectRoutes } from '../modules/code/routes/projects';
 import { terminalRoutes } from '../modules/code/routes/terminals';
 import { portalRoutes } from '../portal/routes/portals';
-import { windowSessionRoutes } from '../portal/routes/window-sessions';
+import { createWindowSessionRoutes } from '../portal/routes/window-sessions';
+import type { SessionService } from '../services/session-service';
 import { mountRoute, type RouteDefinition } from './routes';
 import type { WeaveApp } from './types';
+
+type CompatibilityRouteServices = {
+  sessions?: SessionService;
+};
 
 const replacePrefix = (path: string, from: string, to: string) =>
   path === from ? to : path.startsWith(`${from}/`) ? `${to}${path.slice(from.length)}` : undefined;
 
-const aliasRoutes = (app: WeaveApp, routes: RouteDefinition[], aliasPath: (canonicalPath: string) => string | undefined) => {
+const aliasRoutes = (
+  app: WeaveApp,
+  routes: RouteDefinition[],
+  aliasPath: (canonicalPath: string) => string | undefined,
+) => {
   for (const route of routes) {
     const canonicalPath = aliasPath(route.path);
     if (canonicalPath) mountRoute(app, route, { canonicalPath });
@@ -39,16 +48,20 @@ const codeProjectAlias = (path: string) => {
   return replacePrefix(path, '/code/projects', '/projects');
 };
 
-export const registerCompatibilityRoutes = (app: WeaveApp) => {
+export const registerCompatibilityRoutes = (app: WeaveApp, services: CompatibilityRouteServices = {}) => {
   aliasRoutes(app, chatStateRoutes, chatStateAlias);
   aliasRoutes(app, chatRoutes, chatRunAlias);
   aliasRoutes(app, projectRoutes, codeProjectAlias);
-  aliasRoutes(app, terminalRoutes, path => replacePrefix(path, '/code/terminals', '/terminals'));
-  aliasRoutes(app, promptRoutes, path => replacePrefix(path, '/agent/prompts', '/prompts'));
-  aliasRoutes(app, modelRoutes, path => replacePrefix(path, '/agent/models', '/models'));
-  aliasRoutes(app, chatgptAuthRoutes, path => replacePrefix(path, '/agent/chatgpt', '/chatgpt'));
-  aliasRoutes(app, portalRoutes, path => replacePrefix(path, '/portal', '/portals'));
-  aliasRoutes(app, windowSessionRoutes, path => replacePrefix(path, '/portal/window-sessions', '/window-sessions'));
+  aliasRoutes(app, terminalRoutes, (path) => replacePrefix(path, '/code/terminals', '/terminals'));
+  aliasRoutes(app, promptRoutes, (path) => replacePrefix(path, '/agent/prompts', '/prompts'));
+  aliasRoutes(app, modelRoutes, (path) => replacePrefix(path, '/agent/models', '/models'));
+  aliasRoutes(app, chatgptAuthRoutes, (path) => replacePrefix(path, '/agent/chatgpt', '/chatgpt'));
+  aliasRoutes(app, portalRoutes, (path) => replacePrefix(path, '/portal', '/portals'));
+  aliasRoutes(
+    app,
+    createWindowSessionRoutes({ sessions: services.sessions }),
+    (path) => replacePrefix(path, '/portal/window-sessions', '/window-sessions'),
+  );
 };
 
 export const __compatibilityRoutesTest = {

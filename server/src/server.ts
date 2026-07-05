@@ -68,9 +68,9 @@ app.get('/health', (c) => c.json({ ok: true }));
 app.use('*', createOwnerAuthMiddleware({ auth, mastra }));
 
 agentCore.registerRoutes(app);
-portalCore.registerRoutes(app, { mastra });
+portalCore.registerRoutes(app, { mastra, sessions: internalServices.sessions });
 registerServerModules(app, { auth, agent: agentCore, portal: portalCore, internal: internalServices }, serverModules);
-registerCompatibilityRoutes(app);
+registerCompatibilityRoutes(app, { sessions: internalServices.sessions });
 
 startServerPerfSampler({
   sample: () => ({ chat: getChatPerfSnapshot() }),

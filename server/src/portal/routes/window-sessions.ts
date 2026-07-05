@@ -2,6 +2,9 @@ import { defineRoute } from '../../server/routes';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { getPortalConnection, listPortalConnections, requestPortalTool } from '../registry';
 import { issueWindowSessionToken } from '../window-relay';
+import type { SessionService } from '../../services/session-service';
+import { portalToolScope } from '../../services/providers/portal-provider';
+import { callerForOwner } from '../../services/types';
 
 const windowSessionCapability = 'portal.window.session';
 const windowListCapability = 'portal.window.list';
@@ -36,12 +39,14 @@ const assertWindowPortal = (
 ) => {
   const portal = portalId
     ? getPortalConnection(portalId)
-    : listPortalConnections(resourceId).find(connection =>
+    : listPortalConnections(resourceId).find((connection) =>
       connection.status === 'online' && connection.capabilities.includes(capability)
     );
 
   if (!portal || portal.userId !== resourceId) throw new Error('Portal is offline or unavailable.');
-  if (!portal.capabilities.includes(capability)) throw new Error('Portal does not support the requested window capability.');
+  if (!portal.capabilities.includes(capability)) {
+    throw new Error('Portal does not support the requested window capability.');
+  }
   return portal;
 };
 
@@ -51,14 +56,27 @@ const errorResponse = (c: any, error: unknown) => {
   return c.json({ error: message }, status);
 };
 
-export const windowSessionRoutes = [
+type WindowSessionRouteDeps = {
+  sessions?: SessionService;
+};
+
+export const createWindowSessionRoutes = (deps: WindowSessionRouteDeps = {}) => [
   defineRoute('/portal/window-sessions/windows', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const portalId = optionalString(c.req.query('portalId'));
         const portal = assertWindowPortal(resourceId, portalId, windowListCapability);
+        if (deps.sessions) {
+          const result = await deps.sessions.listWindows({
+            caller: callerForOwner(resourceId, 'ui'),
+            scope: portalToolScope({ portalId: portal.portalId }),
+            timeoutMs: 10_000,
+          });
+          const { target: serviceTarget, ...body } = result;
+          return c.json({ portalId: serviceTarget.portalId, ...body });
+        }
         const result = await requestPortalTool({
           portalId: portal.portalId,
           tool: windowListCapability,
@@ -73,11 +91,20 @@ export const windowSessionRoutes = [
   }),
   defineRoute('/portal/window-sessions/applications', {
     method: 'GET',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const portalId = optionalString(c.req.query('portalId'));
         const portal = assertWindowPortal(resourceId, portalId, applicationListCapability);
+        if (deps.sessions) {
+          const result = await deps.sessions.listApplications({
+            caller: callerForOwner(resourceId, 'ui'),
+            scope: portalToolScope({ portalId: portal.portalId }),
+            timeoutMs: 10_000,
+          });
+          const { target: serviceTarget, ...body } = result;
+          return c.json({ portalId: serviceTarget.portalId, ...body });
+        }
         const result = await requestPortalTool({
           portalId: portal.portalId,
           tool: applicationListCapability,
@@ -92,13 +119,23 @@ export const windowSessionRoutes = [
   }),
   defineRoute('/portal/window-sessions/applications/open', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
         const portal = assertWindowPortal(resourceId, optionalString(body.portalId), applicationOpenCapability);
         const applicationId = optionalString(body.applicationId);
         if (!applicationId) throw new Error('applicationId is required.');
+        if (deps.sessions) {
+          const result = await deps.sessions.openApplication({
+            caller: callerForOwner(resourceId, 'ui'),
+            scope: portalToolScope({ portalId: portal.portalId }),
+            applicationId,
+            timeoutMs: 15_000,
+          });
+          const { target: serviceTarget, ...responseBody } = result;
+          return c.json({ portalId: serviceTarget.portalId, ...responseBody });
+        }
         const result = await requestPortalTool({
           portalId: portal.portalId,
           tool: applicationOpenCapability,
@@ -113,13 +150,26 @@ export const windowSessionRoutes = [
   }),
   defineRoute('/portal/window-sessions/token', {
     method: 'POST',
-    handler: async c => {
+    handler: async (c) => {
       try {
         const resourceId = getResourceId(c);
         const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
         const portal = assertWindowPortal(resourceId, optionalString(body.portalId));
-        const sessionId = `window_${crypto.randomUUID().replace(/-/g, '')}`;
         const windowId = optionalString(body.windowId);
+        if (deps.sessions) {
+          const session = await deps.sessions.issueWindowSessionToken({
+            caller: callerForOwner(resourceId, 'ui'),
+            scope: portalToolScope({ portalId: portal.portalId }),
+            windowId,
+          });
+          return c.json({
+            token: session.token,
+            sessionId: session.sessionId,
+            portalId: session.target.portalId,
+            wsUrl: getWindowWsUrl(c),
+          });
+        }
+        const sessionId = `window_${crypto.randomUUID().replace(/-/g, '')}`;
         const token = issueWindowSessionToken({
           resourceId,
           portalId: portal.portalId,
@@ -138,3 +188,5 @@ export const windowSessionRoutes = [
     },
   }),
 ];
+
+export const windowSessionRoutes = createWindowSessionRoutes();

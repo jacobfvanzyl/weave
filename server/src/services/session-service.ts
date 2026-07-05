@@ -2,10 +2,16 @@ import { issueJupyterSessionToken } from '../portal/jupyter-relay';
 import { issueLspSessionToken } from '../portal/lsp-relay';
 import { issueTerminalToken, type TerminalSessionKind } from '../portal/terminal-relay';
 import { issueWorkspaceFileWatchToken } from '../portal/workspace-file-watch-relay';
+import { issueWindowSessionToken as issueWindowRelaySessionToken } from '../portal/window-relay';
 import type { ResolvedPortalToolTarget } from './providers/portal-provider';
 import type { ToolService } from './tool-service';
 import type { ServiceCaller, ServiceGrant, ServiceScope } from './types';
 import { optionalString, requireServiceGrant, ServiceError } from './types';
+
+const windowSessionCapability = 'portal.window.session';
+const windowListCapability = 'portal.window.list';
+const applicationListCapability = 'portal.applications.list';
+const applicationOpenCapability = 'portal.applications.open';
 
 export type TerminalSessionInput = {
   caller: ServiceCaller;
@@ -41,6 +47,24 @@ export type WorkspaceFileWatchSessionInput = {
   grants?: ServiceGrant[];
 };
 
+export type WindowSessionInput = {
+  caller: ServiceCaller;
+  scope: ServiceScope;
+  grants?: ServiceGrant[];
+  windowId?: string;
+};
+
+export type WindowSessionToolInput = {
+  caller: ServiceCaller;
+  scope: ServiceScope;
+  grants?: ServiceGrant[];
+  timeoutMs?: number;
+};
+
+export type WindowApplicationOpenInput = WindowSessionToolInput & {
+  applicationId: string;
+};
+
 export interface SessionService {
   issueTerminalToken(input: TerminalSessionInput): Promise<{ token: string; target: ResolvedPortalToolTarget }>;
   startLspSession(
@@ -49,6 +73,16 @@ export interface SessionService {
   handleJupyter(
     input: JupyterSessionInput,
   ): Promise<Record<string, unknown> & { token?: string; target: ResolvedPortalToolTarget }>;
+  listWindows(input: WindowSessionToolInput): Promise<Record<string, unknown> & { target: ResolvedPortalToolTarget }>;
+  listApplications(
+    input: WindowSessionToolInput,
+  ): Promise<Record<string, unknown> & { target: ResolvedPortalToolTarget }>;
+  openApplication(
+    input: WindowApplicationOpenInput,
+  ): Promise<Record<string, unknown> & { target: ResolvedPortalToolTarget }>;
+  issueWindowSessionToken(
+    input: WindowSessionInput,
+  ): Promise<{ token: string; sessionId: string; target: ResolvedPortalToolTarget }>;
   issueWorkspaceFileWatchToken(
     input: WorkspaceFileWatchSessionInput,
   ): Promise<{ token: string; target: ResolvedPortalToolTarget }>;
@@ -63,6 +97,16 @@ const cleanPortalEnvelope = (result: unknown, fallbackMessage: string) => {
   }
   const { id: _id, type: _type, ...body } = record;
   return body;
+};
+
+const validatePortalEnvelope = (result: unknown, fallbackMessage: string) => {
+  const record = result && typeof result === 'object' && !Array.isArray(result)
+    ? result as Record<string, unknown>
+    : {};
+  if (record.ok === false) {
+    throw new ServiceError('operation_failed', optionalString(record.error) ?? fallbackMessage, 400);
+  }
+  return record;
 };
 
 const requireCapability = (target: ResolvedPortalToolTarget, capability: string, message: string) => {
@@ -183,6 +227,89 @@ export class DefaultSessionService implements SessionService {
       kernelName: optionalString(result.kernelName) ?? input.kernelName,
     });
     return { ...result, token, target };
+  }
+
+  async listWindows(input: WindowSessionToolInput) {
+    requireServiceGrant(input.grants, {
+      service: 'session',
+      operation: windowListCapability,
+      scope: input.scope,
+    });
+    const target = await this.tools.resolvePortalTarget(input.caller, input.scope);
+    requireCapability(target, windowListCapability, 'Portal does not support the requested window capability.');
+    const result = validatePortalEnvelope(
+      await this.tools.requestPortal({
+        caller: input.caller,
+        scope: input.scope,
+        tool: windowListCapability,
+        args: {},
+        timeoutMs: input.timeoutMs,
+      }),
+      'Portal window request failed.',
+    ) as Record<string, unknown>;
+    return { ...result, target };
+  }
+
+  async listApplications(input: WindowSessionToolInput) {
+    requireServiceGrant(input.grants, {
+      service: 'session',
+      operation: applicationListCapability,
+      scope: input.scope,
+    });
+    const target = await this.tools.resolvePortalTarget(input.caller, input.scope);
+    requireCapability(target, applicationListCapability, 'Portal does not support the requested window capability.');
+    const result = validatePortalEnvelope(
+      await this.tools.requestPortal({
+        caller: input.caller,
+        scope: input.scope,
+        tool: applicationListCapability,
+        args: {},
+        timeoutMs: input.timeoutMs,
+      }),
+      'Portal application request failed.',
+    ) as Record<string, unknown>;
+    return { ...result, target };
+  }
+
+  async openApplication(input: WindowApplicationOpenInput) {
+    const applicationId = optionalString(input.applicationId);
+    if (!applicationId) throw new ServiceError('operation_failed', 'applicationId is required.', 400);
+    requireServiceGrant(input.grants, {
+      service: 'session',
+      operation: applicationOpenCapability,
+      scope: input.scope,
+    });
+    const target = await this.tools.resolvePortalTarget(input.caller, input.scope);
+    requireCapability(target, applicationOpenCapability, 'Portal does not support the requested window capability.');
+    const result = validatePortalEnvelope(
+      await this.tools.requestPortal({
+        caller: input.caller,
+        scope: input.scope,
+        tool: applicationOpenCapability,
+        args: { applicationId },
+        timeoutMs: input.timeoutMs,
+      }),
+      'Portal application request failed.',
+    ) as Record<string, unknown>;
+    return { ...result, target };
+  }
+
+  async issueWindowSessionToken(input: WindowSessionInput) {
+    requireServiceGrant(input.grants, {
+      service: 'session',
+      operation: windowSessionCapability,
+      scope: input.scope,
+    });
+    const target = await this.tools.resolvePortalTarget(input.caller, input.scope);
+    requireCapability(target, windowSessionCapability, 'Portal does not support the requested window capability.');
+    const sessionId = `window_${crypto.randomUUID().replace(/-/g, '')}`;
+    const token = issueWindowRelaySessionToken({
+      resourceId: input.caller.ownerId,
+      portalId: target.portalId,
+      sessionId,
+      windowId: input.windowId,
+    });
+    return { token, sessionId, target };
   }
 
   async issueWorkspaceFileWatchToken(input: WorkspaceFileWatchSessionInput) {
