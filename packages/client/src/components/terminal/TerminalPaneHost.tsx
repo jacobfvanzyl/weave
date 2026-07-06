@@ -11,6 +11,7 @@ type TerminalPaneHostProps = {
   focusRequest: number;
   isSyncing?: boolean;
   isEffectivelyMaximized: boolean;
+  layoutSyncKey?: string;
   onActiveTabIdChange: (tabId: string) => void;
   onAddTab: () => void;
   onCloseTab: (tab: TerminalPanelTab) => void;
@@ -36,6 +37,7 @@ export const TerminalPaneHost = ({
   focusRequest,
   isSyncing,
   isEffectivelyMaximized,
+  layoutSyncKey,
   onActiveTabIdChange,
   onAddTab,
   onCloseTab,
@@ -60,6 +62,7 @@ export const TerminalPaneHost = ({
       focusRequest={focusRequest}
       isExpanded={variant === 'main' ? isEffectivelyMaximized : false}
       isSyncing={isSyncing}
+      layoutSyncKey={layoutSyncKey}
       onActiveTabIdChange={onActiveTabIdChange}
       onAddTab={onAddTab}
       onCloseTab={onCloseTab}

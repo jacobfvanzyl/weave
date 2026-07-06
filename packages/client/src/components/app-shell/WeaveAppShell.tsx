@@ -33,6 +33,7 @@ import { ProposalReviewPane } from '../proposals/ProposalReviewPane';
 import { GlobalTerminalOverlay } from '../terminal/GlobalTerminalOverlay';
 import { TerminalPaneHost } from '../terminal/TerminalPaneHost';
 import type { TerminalPanelTab, TerminalPanelTabsChange, TerminalPanelTarget } from '../terminal/TerminalPanel';
+import { createTerminalLayoutSyncKey } from '../terminal/terminal-resize-sync';
 import type { TerminalTargetInput, TerminalTransport, TerminalWindowRecord } from '../../lib/terminal-types';
 import { NotificationHost } from '../notifications/NotificationHost';
 import { shouldCloseUnavailableTerminalPane } from './terminal-pane-availability';
@@ -246,6 +247,15 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const showTerminalInChatPane = terminalHost === 'chat';
   const showTerminalInEditorPane = terminalHost === 'editor';
   const showStandaloneTerminalPane = terminalHost === 'standalone';
+  const terminalLayoutSyncKey = createTerminalLayoutSyncKey({
+    isTerminalEffectivelyMaximized,
+    showChatPane,
+    showEditorPane,
+    showTerminalPane,
+    target: terminalTarget,
+    terminalHost,
+    terminalPaneColumn,
+  });
   const breadcrumbPane = showChatPane ? 'chat' : showEditorPane ? 'editor' : showStandaloneTerminalPane ? 'terminal' : undefined;
   const contextBreadcrumb = activeProject?.name || (hasThreadTitle && activeThread?.title) ? (
     <ContextBreadcrumb
@@ -936,6 +946,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       focusRequest={terminalFocusRequest}
       isSyncing={isWorkspaceTerminalSyncing}
       isEffectivelyMaximized={isTerminalEffectivelyMaximized}
+      layoutSyncKey={terminalLayoutSyncKey}
       onActiveTabIdChange={handleActiveTerminalTabChange}
       onAddTab={() => void addTerminalTabForTarget(workspaceTerminalSyncTarget)}
       onCloseTab={tab => void closeTerminalTabForTarget(workspaceTerminalSyncTarget, tab, () => closePane('terminal'))}

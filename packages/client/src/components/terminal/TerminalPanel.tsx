@@ -11,6 +11,7 @@ import {
   mergeTerminalPanelTabMeta,
 } from './terminal-panel-tabs';
 import { cancelScheduledTerminalDetach, scheduleTerminalDetach } from './terminal-detach-scheduler';
+import { scheduleTerminalLayoutResizeSync } from './terminal-resize-sync';
 
 export type TerminalPanelTarget = {
   kind: TerminalSessionKind;
@@ -52,6 +53,7 @@ type TerminalPanelProps = {
   focusRequest?: number;
   isExpanded?: boolean;
   isSyncing?: boolean;
+  layoutSyncKey?: string;
   error?: string;
   onActiveTabIdChange: (tabId: string) => void;
   onAddTab: () => void;
@@ -105,6 +107,7 @@ const TerminalColumnIcon = ({ column }: { column: TerminalPaneColumn }) => {
 type TerminalSessionViewProps = {
   focusRequest: number;
   isActive: boolean;
+  layoutSyncKey?: string;
   onExit: (tabId: string) => void;
   onMetaChange: (tabId: string, meta: TerminalTabMeta) => void;
   onSessionActiveChange: (tabId: string, isActive: boolean) => void;
@@ -119,6 +122,7 @@ const terminalRevealFallbackMs = 1_500;
 const TerminalSessionView = ({
   focusRequest,
   isActive,
+  layoutSyncKey,
   onExit,
   onMetaChange,
   onSessionActiveChange,
@@ -130,6 +134,8 @@ const TerminalSessionView = ({
   const onExitRef = useRef(onExit);
   const onSessionActiveChangeRef = useRef(onSessionActiveChange);
   const isActiveRef = useRef(isActive);
+  const lastHandledFocusRequestRef = useRef(focusRequest);
+  const hasPendingFocusRequestRef = useRef(false);
   const startedTerminalRef = useRef<string | undefined>(undefined);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latestSizeRef = useRef<TerminalSize | undefined>(undefined);
@@ -214,13 +220,24 @@ const TerminalSessionView = ({
   }, [tab.terminalId, transport]);
 
   useEffect(() => {
-    if (!isActive || !isTerminalReady) return undefined;
+    if (focusRequest !== lastHandledFocusRequestRef.current) {
+      lastHandledFocusRequestRef.current = focusRequest;
+      hasPendingFocusRequestRef.current = true;
+    }
+
+    if (!hasPendingFocusRequestRef.current || !isActive || !isTerminalReady) return undefined;
     const animationFrame = window.requestAnimationFrame(() => {
       syncTerminalSize();
       terminalRef.current?.focus();
+      hasPendingFocusRequestRef.current = false;
     });
     return () => window.cancelAnimationFrame(animationFrame);
   }, [focusRequest, isActive, isTerminalReady, syncTerminalSize]);
+
+  useEffect(() => {
+    if (!layoutSyncKey || !isActive || !isTerminalReady) return undefined;
+    return scheduleTerminalLayoutResizeSync(syncTerminalSize);
+  }, [isActive, isTerminalReady, layoutSyncKey, syncTerminalSize]);
 
   const handleTitleChange = useCallback((nextTitle: string) => {
     setTitle(nextTitle.trim() || undefined);
@@ -407,6 +424,7 @@ export const TerminalPanel = ({
   focusRequest = 0,
   isExpanded = false,
   isSyncing = false,
+  layoutSyncKey,
   onActiveTabIdChange,
   onAddTab,
   onCloseTab,
@@ -631,6 +649,7 @@ export const TerminalPanel = ({
               key={tab.id}
               focusRequest={focusRequest}
               isActive={isActiveTab}
+              layoutSyncKey={layoutSyncKey}
               onExit={handleTabExit}
               onMetaChange={handleTabMetaChange}
               onSessionActiveChange={updateTabActiveState}
