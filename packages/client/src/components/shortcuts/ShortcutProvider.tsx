@@ -16,7 +16,10 @@ import {
   formatShortcutForDisplayParts,
   isModifierOnlyShortcutKey,
   isShortcutAllowedForTarget,
+  isShortcutCommandEnabled,
+  isShortcutCommandVisible,
   normalizeKeyboardEvent,
+  resolveShortcutCommandLabel,
   resolveShortcutPlatform,
   shortcutLeaderHotkey,
   toMutableShortcutSequence,
@@ -63,16 +66,10 @@ const consumeKeyboardEvent = (event: KeyboardEvent) => {
   event.stopImmediatePropagation();
 };
 
-const isCommandEnabled = (command: ShortcutCommand | undefined, context: ShortcutCommandContext) =>
-  Boolean(command && (command.isEnabled?.(context) ?? true));
-
-const getContextForDisplay = (platform: ShortcutPlatform): ShortcutCommandContext => ({
-  platform,
-  tanStackPlatform: toTanStackShortcutPlatform(platform),
-  target: null,
-  isTextInputTarget: false,
-  now: Date.now(),
-});
+const getContextForDisplay = (platform: ShortcutPlatform): ShortcutCommandContext => {
+  const target = typeof document === 'undefined' ? null : document.activeElement;
+  return createShortcutContext({ target }, platform);
+};
 
 const shortcutBindingSortValue = (binding: ShortcutBinding) => binding.order ?? 100;
 
@@ -129,10 +126,12 @@ const ShortcutOverlay = ({
         binding,
         command,
         displayHotkeys: getBindingDisplayHotkeys(binding),
-        enabled: isCommandEnabled(command, displayContext),
+        enabled: isShortcutCommandEnabled(command, displayContext),
+        label: command ? resolveShortcutCommandLabel(command, displayContext) : '',
+        visible: isShortcutCommandVisible(command, displayContext),
       };
     })
-    .filter(row => row.command);
+    .filter(row => row.command && row.visible);
   const sequenceText = leaderState.sequence
     .map(hotkey => formatShortcutForDisplayParts(hotkey, platform).join('+'))
     .join(' ');
@@ -154,7 +153,7 @@ const ShortcutOverlay = ({
         <ShortcutKbdGroup hotkeys={[shortcutLeaderHotkey]} platform={platform} />
       </div>
       <div className="max-h-[min(60dvh,24rem)] overflow-y-auto p-2">
-        {rows.map(({ binding, command, displayHotkeys, enabled }) => (
+        {rows.map(({ binding, displayHotkeys, enabled, label }) => (
           <div
             key={binding.commandId}
             className={cn(
@@ -163,7 +162,7 @@ const ShortcutOverlay = ({
             )}
             aria-disabled={!enabled}
           >
-            <span className="min-w-0 flex-1 truncate">{command?.label}</span>
+            <span className="min-w-0 flex-1 truncate">{label}</span>
             <ShortcutKbdGroup hotkeys={displayHotkeys} isDisabled={!enabled} platform={platform} />
           </div>
         ))}
@@ -172,11 +171,15 @@ const ShortcutOverlay = ({
   );
 };
 
-const shortcutBindingMeta = (binding: ShortcutBinding, command: ShortcutCommand | undefined) => ({
+const shortcutBindingMeta = (
+  binding: ShortcutBinding,
+  command: ShortcutCommand | undefined,
+  context: ShortcutCommandContext,
+) => ({
   allowInInputs: binding.allowInInputs,
   commandId: binding.commandId,
-  description: command?.label,
-  name: command?.label,
+  description: command ? resolveShortcutCommandLabel(command, context) : undefined,
+  name: command ? resolveShortcutCommandLabel(command, context) : undefined,
   order: binding.order,
   scope: binding.scope ?? 'app',
   surface: command?.surface,
@@ -256,7 +259,7 @@ const ShortcutRuntime = ({
   const runShortcutCommand = useCallback((commandId: ShortcutCommandId, context: ShortcutCommandContext) => {
     const command = commandsByIdRef.current.get(commandId);
     if (!command) return false;
-    if (!(command.isEnabled?.(context) ?? true)) {
+    if (!isShortcutCommandEnabled(command, context)) {
       setLeaderState({ active: true, message: 'Unavailable', sequence: [] });
       showLeaderOverlay();
       return false;
@@ -270,6 +273,7 @@ const ShortcutRuntime = ({
     .filter((binding): binding is ShortcutBinding & { hotkey: ShortcutHotkey } => binding.kind === 'hotkey' && Boolean(binding.hotkey))
     .map(binding => {
       const command = commandsById.get(binding.commandId);
+      const displayContext = getContextForDisplay(platform);
       return {
         hotkey: binding.hotkey,
         callback: (event, hotkeyContext) => {
@@ -287,7 +291,7 @@ const ShortcutRuntime = ({
         options: {
           conflictBehavior: 'allow',
           ignoreInputs: binding.allowInInputs !== true,
-          meta: shortcutBindingMeta(binding, command),
+          meta: shortcutBindingMeta(binding, command, displayContext),
           platform: tanStackPlatform,
           preventDefault: true,
           stopPropagation: true,
@@ -299,6 +303,7 @@ const ShortcutRuntime = ({
     .filter((binding): binding is ShortcutBinding & { sequence: readonly ShortcutHotkey[] } => binding.kind === 'sequence' && Boolean(binding.sequence?.length))
     .map(binding => {
       const command = commandsById.get(binding.commandId);
+      const displayContext = getContextForDisplay(platform);
       return {
         sequence: toMutableShortcutSequence(binding.sequence),
         callback: (event, hotkeyContext) => {
@@ -314,7 +319,7 @@ const ShortcutRuntime = ({
         options: {
           conflictBehavior: 'allow',
           ignoreInputs: binding.allowInInputs !== true,
-          meta: shortcutBindingMeta(binding, command),
+          meta: shortcutBindingMeta(binding, command, displayContext),
           platform: tanStackPlatform,
           preventDefault: true,
           stopPropagation: true,

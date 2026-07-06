@@ -783,6 +783,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const shortcutCommands = useAppShortcuts({
     createThreadFromShortcut,
     focusChat,
+    focusEditor,
     focusSidebar,
     focusTerminal,
     handleChatPaneToggle,
@@ -795,7 +796,10 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     hasGeneralTerminalTarget,
     hasTerminalTarget,
     isSidebarOpen,
+    showChatPane,
+    showEditorPane,
     showSidebarPreview,
+    showTerminalPane,
     toggleSidebar,
   });
   useEffect(() => {

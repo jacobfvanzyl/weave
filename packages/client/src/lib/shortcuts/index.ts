@@ -36,7 +36,12 @@ export type {
   ShortcutSurface,
   TanStackShortcutPlatform,
 } from './types';
-export { toMutableShortcutSequence } from './types';
+export {
+  isShortcutCommandEnabled,
+  isShortcutCommandVisible,
+  resolveShortcutCommandLabel,
+  toMutableShortcutSequence,
+} from './types';
 export {
   useHeldKeyCodes as useShortcutHeldKeyCodes,
   useHeldKeys as useShortcutHeldKeys,

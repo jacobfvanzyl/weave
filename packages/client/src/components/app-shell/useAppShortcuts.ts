@@ -1,10 +1,42 @@
 import { useMemo } from 'react';
-import type { ShortcutCommand } from '../../lib/shortcuts';
+import type { ShortcutCommand, ShortcutContext, ShortcutSurface } from '../../lib/shortcuts';
 import type { MainPane } from '../../stores/workspace-surface-store';
+
+type StateAwarePaneShortcutInput = {
+  focus: () => void;
+  focusLabel: string;
+  isOpen: boolean;
+  surface: Extract<ShortcutSurface, 'chat' | 'editor' | 'terminal'>;
+  toggle: () => void;
+  toggleLabel: string;
+};
+
+export const shouldFocusOpenPaneFromShortcut = (
+  context: Pick<ShortcutContext, 'activeSurface'>,
+  { isOpen, surface }: Pick<StateAwarePaneShortcutInput, 'isOpen' | 'surface'>,
+) => isOpen && context.activeSurface !== surface;
+
+export const getStateAwarePaneShortcutLabel = (
+  context: Pick<ShortcutContext, 'activeSurface'>,
+  input: Pick<StateAwarePaneShortcutInput, 'focusLabel' | 'isOpen' | 'surface' | 'toggleLabel'>,
+) => shouldFocusOpenPaneFromShortcut(context, input) ? input.focusLabel : input.toggleLabel;
+
+export const runStateAwarePaneShortcut = (
+  context: Pick<ShortcutContext, 'activeSurface'>,
+  input: StateAwarePaneShortcutInput,
+) => {
+  if (shouldFocusOpenPaneFromShortcut(context, input)) {
+    input.focus();
+    return;
+  }
+
+  input.toggle();
+};
 
 type UseAppShortcutsInput = {
   createThreadFromShortcut: () => void;
   focusChat: () => void;
+  focusEditor: () => void;
   focusSidebar: () => void;
   focusTerminal: () => void;
   handleChatPaneToggle: () => void;
@@ -17,13 +49,17 @@ type UseAppShortcutsInput = {
   hasGeneralTerminalTarget: boolean;
   hasTerminalTarget: boolean;
   isSidebarOpen: boolean;
+  showChatPane: boolean;
+  showEditorPane: boolean;
   showSidebarPreview: boolean;
+  showTerminalPane: boolean;
   toggleSidebar: () => void;
 };
 
 export const useAppShortcuts = ({
   createThreadFromShortcut,
   focusChat,
+  focusEditor,
   focusSidebar,
   focusTerminal,
   handleChatPaneToggle,
@@ -36,7 +72,10 @@ export const useAppShortcuts = ({
   hasGeneralTerminalTarget,
   hasTerminalTarget,
   isSidebarOpen,
+  showChatPane,
+  showEditorPane,
   showSidebarPreview,
+  showTerminalPane,
   toggleSidebar,
 }: UseAppShortcutsInput) => useMemo<ShortcutCommand[]>(() => [
   {
@@ -57,10 +96,22 @@ export const useAppShortcuts = ({
   },
   {
     id: 'chat.focus',
-    label: 'Focus chat',
+    label: context => getStateAwarePaneShortcutLabel(context, {
+      focusLabel: 'Focus chat',
+      isOpen: showChatPane,
+      surface: 'chat',
+      toggleLabel: 'Toggle chat pane',
+    }),
     surface: 'chat',
     isEnabled: () => hasChatPaneTarget,
-    run: focusChat,
+    run: context => runStateAwarePaneShortcut(context, {
+      focus: focusChat,
+      focusLabel: 'Focus chat',
+      isOpen: showChatPane,
+      surface: 'chat',
+      toggle: handleChatPaneToggle,
+      toggleLabel: 'Toggle chat pane',
+    }),
   },
   {
     id: 'chat.toggle',
@@ -84,16 +135,29 @@ export const useAppShortcuts = ({
   },
   {
     id: 'terminal.toggle',
-    label: 'Toggle terminal pane',
+    label: context => getStateAwarePaneShortcutLabel(context, {
+      focusLabel: 'Focus terminal pane',
+      isOpen: showTerminalPane,
+      surface: 'terminal',
+      toggleLabel: 'Toggle terminal pane',
+    }),
     surface: 'terminal',
     isEnabled: () => hasTerminalTarget,
-    run: handleTerminalPaneToggle,
+    run: context => runStateAwarePaneShortcut(context, {
+      focus: focusTerminal,
+      focusLabel: 'Focus terminal pane',
+      isOpen: showTerminalPane,
+      surface: 'terminal',
+      toggle: handleTerminalPaneToggle,
+      toggleLabel: 'Toggle terminal pane',
+    }),
   },
   {
     id: 'terminal.expandToggle',
     label: 'Expand terminal pane',
     surface: 'terminal',
-    isEnabled: () => hasTerminalTarget,
+    isEnabled: () => hasTerminalTarget && showTerminalPane,
+    isVisible: () => showTerminalPane,
     run: () => {
       handleMainPaneMaximizeToggle('terminal');
       window.requestAnimationFrame(focusTerminal);
@@ -101,16 +165,29 @@ export const useAppShortcuts = ({
   },
   {
     id: 'editor.toggle',
-    label: 'Toggle editor pane',
+    label: context => getStateAwarePaneShortcutLabel(context, {
+      focusLabel: 'Focus editor pane',
+      isOpen: showEditorPane,
+      surface: 'editor',
+      toggleLabel: 'Toggle editor pane',
+    }),
     surface: 'editor',
     isEnabled: () => hasEditorTarget,
-    run: handleEditorPaneToggle,
+    run: context => runStateAwarePaneShortcut(context, {
+      focus: focusEditor,
+      focusLabel: 'Focus editor pane',
+      isOpen: showEditorPane,
+      surface: 'editor',
+      toggle: handleEditorPaneToggle,
+      toggleLabel: 'Toggle editor pane',
+    }),
   },
   {
     id: 'editor.expandToggle',
     label: 'Expand editor pane',
     surface: 'editor',
-    isEnabled: () => hasEditorTarget,
+    isEnabled: () => hasEditorTarget && showEditorPane,
+    isVisible: () => showEditorPane,
     run: () => {
       handleMainPaneMaximizeToggle('editor');
     },
@@ -118,6 +195,7 @@ export const useAppShortcuts = ({
 ], [
   createThreadFromShortcut,
   focusChat,
+  focusEditor,
   focusSidebar,
   focusTerminal,
   handleChatPaneToggle,
@@ -130,6 +208,9 @@ export const useAppShortcuts = ({
   hasGeneralTerminalTarget,
   hasTerminalTarget,
   isSidebarOpen,
+  showChatPane,
+  showEditorPane,
   showSidebarPreview,
+  showTerminalPane,
   toggleSidebar,
 ]);

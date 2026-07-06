@@ -37,11 +37,21 @@ export type ShortcutBinding = {
 
 export type ShortcutCommand = {
   id: ShortcutCommandId;
-  label: string;
+  label: string | ((context: ShortcutContext) => string);
   surface: ShortcutSurface;
   run: (context: ShortcutContext) => void;
   isEnabled?: (context: ShortcutContext) => boolean;
+  isVisible?: (context: ShortcutContext) => boolean;
 };
+
+export const resolveShortcutCommandLabel = (command: ShortcutCommand, context: ShortcutContext) =>
+  typeof command.label === 'function' ? command.label(context) : command.label;
+
+export const isShortcutCommandVisible = (command: ShortcutCommand | undefined, context: ShortcutContext) =>
+  Boolean(command && (command.isVisible?.(context) ?? true));
+
+export const isShortcutCommandEnabled = (command: ShortcutCommand | undefined, context: ShortcutContext) =>
+  Boolean(command && isShortcutCommandVisible(command, context) && (command.isEnabled?.(context) ?? true));
 
 export type NormalizedShortcutEvent = {
   key: string;

@@ -457,8 +457,14 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     const composer = page.locator('[data-weave-active-thread="true"] textarea');
     await composer.waitFor({ state: 'visible', timeout: 5_000 });
     await playwrightExpect(composer).toBeEnabled({ timeout: 5_000 });
-    await composer.focus({ timeout: 5_000 });
     const shortcutOverlay = page.locator('[data-weave-shortcut-overlay]');
+    await page.getByRole('button', { name: 'Hide sidebar' }).focus();
+    await page.keyboard.press(shortcut);
+    await playwrightExpect(shortcutOverlay).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(shortcutOverlay.getByText('Focus chat')).toBeVisible({ timeout: 5_000 });
+    await page.keyboard.press('c');
+    await playwrightExpect(shortcutOverlay).toBeHidden({ timeout: 5_000 });
+    await playwrightExpect(composer).toBeFocused({ timeout: 5_000 });
 
     await page.keyboard.press(shortcut);
     await page.keyboard.press('s');
@@ -470,12 +476,15 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await page.keyboard.press(shortcut);
     await playwrightExpect(shortcutOverlay).toBeVisible({ timeout: 5_000 });
     await playwrightExpect(shortcutOverlay.getByText('Toggle sidebar')).toBeVisible({ timeout: 5_000 });
-    await playwrightExpect(shortcutOverlay.getByText('Toggle terminal')).toBeVisible({ timeout: 5_000 });
-    await playwrightExpect(shortcutOverlay.getByText('Toggle editor')).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(shortcutOverlay.getByText('Toggle chat pane')).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(shortcutOverlay.getByText('Toggle terminal pane')).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(shortcutOverlay.getByText('Toggle editor pane')).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(shortcutOverlay.getByText('Expand terminal pane')).toHaveCount(0);
+    await playwrightExpect(shortcutOverlay.getByText('Expand editor pane')).toHaveCount(0);
 
     await page.keyboard.press('c');
     await playwrightExpect(shortcutOverlay).toBeHidden({ timeout: 5_000 });
-    await playwrightExpect(composer).toBeFocused({ timeout: 5_000 });
+    await playwrightExpect(page.getByRole('button', { name: 'Show chat' }).first()).toBeVisible({ timeout: 5_000 });
 
     expect(await page.evaluate(() => typeof window.require)).toBe('undefined');
     expect(await page.locator('body').evaluate(element => getComputedStyle(element).colorScheme)).toBe('dark');

@@ -9,13 +9,21 @@ import {
   formatShortcutForDisplay,
   formatShortcutSequenceForDisplay,
   getShortcutHotkeySignature,
+  isShortcutCommandEnabled,
+  isShortcutCommandVisible,
   normalizeKeyboardEvent,
+  resolveShortcutCommandLabel,
   resolveShortcutPlatform,
   shortcutLeaderHotkey,
   type ShortcutBinding,
+  type ShortcutCommand,
   type ShortcutHotkey,
   type ShortcutSurface,
 } from '@weave/client/lib/shortcuts';
+import {
+  getStateAwarePaneShortcutLabel,
+  runStateAwarePaneShortcut,
+} from '../../packages/client/src/components/app-shell/useAppShortcuts';
 
 const makeKeyEvent = ({
   altKey = false,
@@ -142,5 +150,85 @@ describe('shortcut matching', () => {
     }])).toEqual([expect.objectContaining({
       risk: 'high',
     })]);
+  });
+
+  it('resolves dynamic shortcut command labels from the active DOM surface', () => {
+    const target = makeTarget({ surface: 'sidebar' });
+    const context = contextFor(makeKeyEvent({ target }));
+
+    expect(resolveShortcutCommandLabel({
+      id: 'terminal.toggle',
+      label: labelContext => labelContext.activeSurface === 'sidebar' ? 'Focus terminal pane' : 'Toggle terminal pane',
+      surface: 'terminal',
+      run: () => undefined,
+    }, context)).toBe('Focus terminal pane');
+  });
+
+  it('treats invisible shortcut commands as hidden and unavailable', () => {
+    const editorContext = contextFor(makeKeyEvent({ target: makeTarget({ surface: 'editor' }) }));
+    const chatContext = contextFor(makeKeyEvent({ target: makeTarget({ surface: 'chat' }) }));
+    const command: ShortcutCommand = {
+      id: 'editor.expandToggle' as const,
+      label: 'Expand editor pane',
+      surface: 'editor' as const,
+      isEnabled: () => true,
+      isVisible: context => context.activeSurface === 'editor',
+      run: () => undefined,
+    };
+
+    expect(isShortcutCommandVisible(command, editorContext)).toBe(true);
+    expect(isShortcutCommandEnabled(command, editorContext)).toBe(true);
+    expect(isShortcutCommandVisible(command, chatContext)).toBe(false);
+    expect(isShortcutCommandEnabled(command, chatContext)).toBe(false);
+  });
+
+  it('labels open pane shortcuts as focus until that pane owns keyboard focus', () => {
+    expect(getStateAwarePaneShortcutLabel(
+      { activeSurface: 'chat' },
+      {
+        focusLabel: 'Focus terminal pane',
+        isOpen: true,
+        surface: 'terminal',
+        toggleLabel: 'Toggle terminal pane',
+      },
+    )).toBe('Focus terminal pane');
+
+    expect(getStateAwarePaneShortcutLabel(
+      { activeSurface: 'terminal' },
+      {
+        focusLabel: 'Focus terminal pane',
+        isOpen: true,
+        surface: 'terminal',
+        toggleLabel: 'Toggle terminal pane',
+      },
+    )).toBe('Toggle terminal pane');
+
+    expect(getStateAwarePaneShortcutLabel(
+      { activeSurface: 'editor' },
+      {
+        focusLabel: 'Focus chat',
+        isOpen: false,
+        surface: 'chat',
+        toggleLabel: 'Toggle chat pane',
+      },
+    )).toBe('Toggle chat pane');
+  });
+
+  it('runs focus for open unfocused panes and toggle for closed or focused panes', () => {
+    const calls: string[] = [];
+    const input = {
+      focus: () => calls.push('focus'),
+      focusLabel: 'Focus editor pane',
+      isOpen: true,
+      surface: 'editor' as const,
+      toggle: () => calls.push('toggle'),
+      toggleLabel: 'Toggle editor pane',
+    };
+
+    runStateAwarePaneShortcut({ activeSurface: 'chat' }, input);
+    runStateAwarePaneShortcut({ activeSurface: 'editor' }, input);
+    runStateAwarePaneShortcut({ activeSurface: 'chat' }, { ...input, isOpen: false });
+
+    expect(calls).toEqual(['focus', 'toggle', 'toggle']);
   });
 });
