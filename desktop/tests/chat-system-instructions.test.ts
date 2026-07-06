@@ -34,11 +34,12 @@ describe('chat system instructions', () => {
     expect(text).toContain('do not move from discussion/planning into source-file implementation until a proposal artifact exists');
     expect(text).toContain('treat that as approval to create the proposal, not approval to edit source files');
     expect(text).toContain('Proposal review artifacts');
-    expect(text).toContain('Each file_edit proposal item must contain a real unified diff');
-    expect(text).toContain('use write_proposal_patch for larger proposal regeneration from a patch file');
+    expect(text).toContain('Use proposal_start to create or reopen a draft proposal workspace');
+    expect(text).toContain('Treat proposal tools like file tools over a virtual proposed filesystem');
+    expect(text).toContain('proposal_write replaces one proposed buffer');
+    expect(text).toContain('Draft proposals become live-reviewable after they contain file items');
+    expect(text).toContain('Before proposal_finalize, call proposal_status');
     expect(text).toContain('Each proposal item must represent exactly one source file');
-    expect(text).toContain('Do not build large single-line JSON proposal payloads through shell/read loops');
-    expect(text).toContain('A diff must be executable patch content, not natural-language implementation notes');
     expect(text).toContain('Proposal approval is human review feedback');
     expect(text).toContain('implement only approved items');
     expect(text).toContain('verify every approved code item is complete in the artifact body');

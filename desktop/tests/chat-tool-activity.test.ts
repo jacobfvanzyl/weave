@@ -63,7 +63,7 @@ describe('chat tool activity helpers', () => {
     expect(message).toContain('Approved item ids: item-1, item-2');
     expect(message).toContain('Implement only approved items.');
     expect(message).toContain('Do not implement pending, rejected, stale, or changes-requested items.');
-    expect(message).toContain('update the proposal artifact');
+    expect(message).toContain('use proposal_mark for applied/stale/changes_requested outcomes');
   });
 
   it('builds compact display metadata for proposal implementation messages', () => {
@@ -199,6 +199,19 @@ describe('chat tool activity helpers', () => {
     expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([]);
   });
 
+  it('hides leaked proposal function-call text while preserving adjacent assistant text', () => {
+    const parts = [
+      { type: 'text', text: 'I am updating the draft proposal.' },
+      { type: 'text', text: 'functions.proposal_status({"proposalPath":".agents/proposals/demo.md"})' },
+      { type: 'tool-functions.proposal_status', toolCallId: 'proposal-1', input: {}, output: { items: [] }, state: 'output-available' },
+    ];
+
+    expect(getAssistantContentRanges(parts, false)).toEqual([
+      { type: 'part', index: 0 },
+      { type: 'tool-activity', indices: [2] },
+    ]);
+  });
+
   it('selects only trailing final text when an assistant turn has earlier visible work', () => {
     const parts = [
       { type: 'reasoning', text: 'I should inspect the repo.' },
@@ -322,11 +335,36 @@ describe('chat tool activity helpers', () => {
     })).toEqual({ type: 'renameThread', title: 'A sharper thread title' });
   });
 
-  it('does not treat removed apply_proposal calls as proposal activity', () => {
-    expect(isProposalTool('write_proposal')).toBe(true);
-    expect(isProposalTool('update_proposal')).toBe(true);
+  it('recognizes only the proposal workspace tools as proposal activity', () => {
+    expect(isProposalTool('proposal_start')).toBe(true);
+    expect(isProposalTool('proposal_read')).toBe(true);
+    expect(isProposalTool('proposal_write')).toBe(true);
+    expect(isProposalTool('proposal_edit')).toBe(true);
+    expect(isProposalTool('proposal_delete')).toBe(true);
+    expect(isProposalTool('proposal_discard')).toBe(true);
+    expect(isProposalTool('proposal_status')).toBe(true);
+    expect(isProposalTool('proposal_finalize')).toBe(true);
+    expect(isProposalTool('proposal_mark')).toBe(true);
+    expect(isProposalTool('functions.proposal_status')).toBe(true);
     expect(isProposalTool('apply_proposal')).toBe(false);
     expect(isProposalTool('applyProposalTool')).toBe(false);
+    expect(toToolActivityCall({
+      type: 'tool-functions.proposal_status',
+      toolCallId: 'proposal-1',
+      input: { proposalPath: '.agents/proposals/demo.md' },
+      output: {
+        path: '.agents/proposals/demo.md',
+        status: 'draft',
+        items: [{
+          id: 'item-1',
+          kind: 'file_edit',
+          status: 'pending',
+          title: 'Update file',
+          path: 'src/file.ts',
+        }],
+      },
+      state: 'output-available',
+    })?.toolName).toBe('proposal_status');
   });
 
   it('extracts legacy and artifact plan side effects', () => {

@@ -12,7 +12,7 @@ import {
   type ClientAppInputId,
 } from '../../lib/client-app';
 import { projectBelongsToProduct, productForProjectKind, type ProductId } from '../../lib/products';
-import { shouldShowProposalReview } from '../../lib/proposal-review-state';
+import { canViewProposalReview } from '../../lib/proposal-review-state';
 import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { workspaceRefKey } from '../../lib/thread-eligibility';
 import { sendTestNotification } from '../../lib/notifications/test-notification';
@@ -207,13 +207,13 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const canAutoShowActiveProposalReview = Boolean(
     activeSurface.kind === 'thread'
       && activeThreadProposal?.path === activeProposalPath
-      && shouldShowProposalReview(activeThreadProposal),
+      && canViewProposalReview(activeThreadProposal),
   );
   const canBackToActiveProposalReview = Boolean(
     editorSlotMode === 'editor'
       && activeProposalPath
       && activeThreadProposal?.path === activeProposalPath
-      && shouldShowProposalReview(activeThreadProposal),
+      && canViewProposalReview(activeThreadProposal),
   );
   const canFollowWrites = Boolean(editorTarget && activeThread?.workspaceId && activeSurface.kind === 'thread');
   const showChatPane = hasChatPaneTarget && paneVisibility.chatOpen;

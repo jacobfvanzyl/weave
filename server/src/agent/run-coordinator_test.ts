@@ -1,4 +1,9 @@
-import { AgentRunCoordinator, type AgentThreadRun, bufferAssistantTextStream } from './run-coordinator.ts';
+import {
+  AgentRunCoordinator,
+  type AgentThreadRun,
+  bufferAssistantTextStream,
+  filterCompactToolHistoryTextStream,
+} from './run-coordinator.ts';
 
 const assert: (condition: unknown, message: string) => asserts condition = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -292,6 +297,151 @@ Deno.test('AgentRunCoordinator reconstructs assistant and steered user messages 
   } finally {
     coordinator.clearForTests();
   }
+});
+
+Deno.test('AgentRunCoordinator drops compact tool-history text from reconstructed assistant messages', () => {
+  const { coordinator } = createTestCoordinator();
+  try {
+    const run = coordinator.createThreadRun('resource-1', 'thread-1');
+    coordinator.appendChunk(run, { type: 'start', messageId: 'assistant-1' });
+    coordinator.appendChunk(run, {
+      type: 'tool-input-available',
+      toolCallId: 'call-read',
+      toolName: 'read',
+      input: { path: 'src/example.ts' },
+    });
+    coordinator.appendChunk(run, {
+      type: 'tool-output-available',
+      toolCallId: 'call-read',
+      output: { ok: true, path: 'src/example.ts', content: 'raw content' },
+    });
+    coordinator.appendChunk(run, { type: 'text-start', id: 'compact-text' });
+    coordinator.appendChunk(run, {
+      type: 'text-delta',
+      id: 'compact-text',
+      delta: 'read result:\nread\nok: true\npath: src/example.ts\ncontentHash: abc123',
+    });
+    coordinator.appendChunk(run, { type: 'text-end', id: 'compact-text' });
+    coordinator.appendChunk(run, { type: 'text-start', id: 'answer-text' });
+    coordinator.appendChunk(run, { type: 'text-delta', id: 'answer-text', delta: 'Done.' });
+
+    assertEquals(coordinator.getUiMessages('resource-1', 'thread-1'), [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        status: { type: 'running' },
+        parts: [
+          {
+            type: 'tool-read',
+            toolCallId: 'call-read',
+            state: 'output-available',
+            input: { path: 'src/example.ts' },
+            output: { ok: true, path: 'src/example.ts', content: 'raw content' },
+          },
+          { type: 'text', text: 'Done.' },
+        ],
+      },
+    ]);
+  } finally {
+    coordinator.clearForTests();
+  }
+});
+
+Deno.test('filterCompactToolHistoryTextStream suppresses split compact tool-history deltas', async () => {
+  const reader = filterCompactToolHistoryTextStream(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+        controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'read result:\n' });
+        controller.enqueue({
+          type: 'text-delta',
+          id: 'text-1',
+          delta: 'read\nok: true\npath: src/example.ts\ncontentHash: abc123',
+        });
+        controller.enqueue({ type: 'text-end', id: 'text-1' });
+        controller.enqueue({ type: 'finish' });
+        controller.close();
+      },
+    }),
+  ).getReader();
+
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-start', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-end', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: false, value: { type: 'finish' } });
+  assertEquals(await reader.read(), { done: true });
+});
+
+Deno.test('filterCompactToolHistoryTextStream suppresses parallel wrapper compact tool-history deltas', async () => {
+  const reader = filterCompactToolHistoryTextStream(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+        controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'multi_tool_use.parallel result:\n' });
+        controller.enqueue({
+          type: 'text-delta',
+          id: 'text-1',
+          delta: [
+            'multi_tool_use.parallel ok: true results:',
+            '',
+            '- recipient_name: functions.read ok: true result: read ok: true path: lib/entities/enums.dart contentHash: abc123',
+          ].join('\n'),
+        });
+        controller.enqueue({ type: 'text-end', id: 'text-1' });
+        controller.enqueue({ type: 'finish' });
+        controller.close();
+      },
+    }),
+  ).getReader();
+
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-start', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-end', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: false, value: { type: 'finish' } });
+  assertEquals(await reader.read(), { done: true });
+});
+
+Deno.test('filterCompactToolHistoryTextStream suppresses leaked proposal function call text', async () => {
+  const reader = filterCompactToolHistoryTextStream(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+        controller.enqueue({
+          type: 'text-delta',
+          id: 'text-1',
+          delta: 'functions.proposal_read({"proposalPath":".agents/proposals/demo.md","path":"src/file.ts","offset":1,"limit":140})',
+        });
+        controller.enqueue({ type: 'text-end', id: 'text-1' });
+        controller.enqueue({ type: 'finish' });
+        controller.close();
+      },
+    }),
+  ).getReader();
+
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-start', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-end', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: false, value: { type: 'finish' } });
+  assertEquals(await reader.read(), { done: true });
+});
+
+Deno.test('filterCompactToolHistoryTextStream releases ordinary assistant text containing result words', async () => {
+  const firstDelta = { type: 'text-delta', id: 'text-1', delta: 'read result:\n' };
+  const secondDelta = { type: 'text-delta', id: 'text-1', delta: 'This phrase is part of a normal explanation.' };
+  const reader = filterCompactToolHistoryTextStream(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+        controller.enqueue(firstDelta);
+        controller.enqueue(secondDelta);
+        controller.enqueue({ type: 'text-end', id: 'text-1' });
+        controller.close();
+      },
+    }),
+  ).getReader();
+
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-start', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: false, value: firstDelta });
+  assertEquals(await reader.read(), { done: false, value: secondDelta });
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-end', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: true });
 });
 
 Deno.test('bufferAssistantTextStream flushes before user-message data chunks', async () => {

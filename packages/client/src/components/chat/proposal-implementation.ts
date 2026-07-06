@@ -64,12 +64,12 @@ export const buildProposalImplementationMessage = (
       `Address review feedback for the proposal at ${request.proposalPath}.`,
       '',
       'Before editing anything, read the proposal artifact and its review comments.',
-      'Do not modify source files yet. Revise the proposal artifact so the concrete code diffs/content address the feedback.',
+      'Do not modify source files yet. Use proposal_read plus proposal_write/proposal_edit/proposal_delete to revise the proposed file buffers so they address the feedback.',
       'Re-evaluate the entire proposal in light of the requested changes, not only the commented file.',
       'Update any affected proposal items so the whole preview remains coherent, consistent, and implementable.',
       'If a previously approved item must change, reset it to pending and explain why in the proposal.',
       'Keep the reviewed scope intact unless the user explicitly requested new scope.',
-      'Reset revised code proposal items to pending when they are ready for another human preview.',
+      'Run proposal_finalize when revised code proposal items are ready for another human preview.',
       'Do not implement source changes until all code proposal items are approved and the user submits implementation.',
     ].join('\n');
   }
@@ -84,9 +84,9 @@ export const buildProposalImplementationMessage = (
     'Do not implement pending, rejected, stale, or changes-requested items.',
     'Implement only approved code proposal items. Do not implement commands, pending, rejected, stale, or changes-requested items.',
     'Do not implement if any code proposal item is not approved; update the proposal or explain what still needs review instead.',
-    'Respect review comments and the exact reviewed content/diffs as guidance, but apply changes using normal coding tools.',
-    'If the code has drifted or the approved proposal cannot be implemented safely, update the affected proposal items to stale or changes_requested and explain why instead of inventing new scope.',
-    'Run the most relevant validation you can, then update the proposal artifact with applied/stale/changes_requested outcomes.',
+    'Respect review comments and the exact reviewed proposed content as guidance, but apply changes using normal coding tools.',
+    'If the code has drifted or the approved proposal cannot be implemented safely, use proposal_mark to mark affected items stale or changes_requested and explain why instead of inventing new scope.',
+    'Run the most relevant validation you can, then use proposal_mark for applied/stale/changes_requested outcomes.',
   ].join('\n');
 };
 

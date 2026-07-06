@@ -483,6 +483,72 @@ describe('chat-state Project/Workspace API client', () => {
     })]);
   });
 
+  it('prefers latest draft proposal metadata over older finalized proposal metadata', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const proposalItem = {
+      id: 'src-file-ts',
+      kind: 'file_edit',
+      status: 'pending',
+      title: 'Update file',
+      path: 'src/file.ts',
+      additions: 2,
+      deletions: 1,
+      viewed: false,
+      current_hash: 'old-hash',
+      proposed_hash: 'new-hash',
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      threads: [{
+        id: 'thread-1',
+        title: 'Proposal work',
+        resourceId: 'user-1',
+        createdAt: '2026-06-03T08:00:00.000Z',
+        updatedAt: '2026-06-03T09:00:00.000Z',
+        metadata: {
+          latestProposal: {
+            id: 'old-ready',
+            title: 'Old ready proposal',
+            path: '.agents/proposals/old-ready.md',
+            status: 'ready',
+            summary: 'Older finalized proposal.',
+            items: [{ ...proposalItem, id: 'old-item', status: 'approved' }],
+            counts: { approved: 1 },
+            updatedAt: '2026-06-18T12:00:00.000Z',
+            contentHash: 'ready-hash',
+          },
+          latestProposalDraft: {
+            id: 'draft-review',
+            title: 'Draft review proposal',
+            path: '.agents/proposals/draft-review.md',
+            status: 'draft',
+            summary: 'Draft proposal in progress.',
+            items: [proposalItem],
+            counts: { pending: 1 },
+            updatedAt: '2026-06-18T12:05:00.000Z',
+            contentHash: 'draft-hash',
+          },
+        },
+      }],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listServerThreads()).resolves.toEqual([expect.objectContaining({
+      latestProposal: expect.objectContaining({
+        id: 'draft-review',
+        title: 'Draft review proposal',
+        path: '.agents/proposals/draft-review.md',
+        status: 'draft',
+        contentHash: 'draft-hash',
+        items: [expect.objectContaining({
+          id: 'src-file-ts',
+          path: 'src/file.ts',
+          currentHash: 'old-hash',
+          proposedHash: 'new-hash',
+        })],
+      }),
+    })]);
+  });
+
   it('overlays live git-state and strips stale branch metadata', () => {
     const legacyProject: Project = {
       ...project,

@@ -5,6 +5,11 @@ import {
   logServerPerfEvent,
   memoryDelta,
 } from '../server/perf';
+import {
+  isCompactToolHistoryTextPart,
+  isLegacyCompactToolHistoryText,
+  isPotentialCompactToolHistoryText,
+} from './mastra/compact-tool-history-processor';
 import { subscribeThreadContextUsage, type ThreadContextUsageSnapshot } from './mastra/context-usage';
 
 const activeThreadRunCleanupDelayMs = 5 * 60 * 1000;
@@ -80,6 +85,12 @@ type BufferedAssistantTextState = {
   timer: ReturnType<typeof setTimeout> | undefined;
 };
 
+type CompactToolHistoryTextState = {
+  chunks: unknown[];
+  text: string;
+  forceCompact: boolean;
+};
+
 type PendingToolInput = {
   text: string;
   toolName: string;
@@ -153,6 +164,105 @@ const isBufferedAssistantTextChunk = (
       typeof record.delta === 'string',
   );
 };
+
+const isCompactToolHistoryMetadataChunk = (chunk: unknown) => {
+  if (!chunk || typeof chunk !== 'object' || Array.isArray(chunk)) return false;
+  const record = chunk as Record<string, unknown>;
+  return isCompactToolHistoryTextPart({
+    type: 'text',
+    text: '',
+    providerMetadata: record.providerMetadata,
+    providerOptions: record.providerOptions,
+  });
+};
+
+export const filterCompactToolHistoryTextStream = (stream: ReadableStream<unknown>) =>
+  new ReadableStream<unknown>({
+    async start(controller) {
+      const reader = stream.getReader();
+      const pendingText = new Map<string, CompactToolHistoryTextState>();
+
+      const resolvePendingText = (id: string) => {
+        const state = pendingText.get(id);
+        if (!state) return;
+
+        pendingText.delete(id);
+        if (state.forceCompact || isLegacyCompactToolHistoryText(state.text)) return;
+
+        for (const chunk of state.chunks) controller.enqueue(chunk);
+      };
+
+      const resolveAllPendingText = () => {
+        for (const id of [...pendingText.keys()]) resolvePendingText(id);
+      };
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const type = getStreamChunkType(value);
+          const id = getStreamChunkId(value);
+
+          if (type === 'text-start' && id && isCompactToolHistoryMetadataChunk(value)) {
+            pendingText.set(id, { chunks: [], text: '', forceCompact: true });
+            controller.enqueue(value);
+            continue;
+          }
+
+          if (type === 'text-delta' && id && value && typeof value === 'object' && !Array.isArray(value)) {
+            const delta = typeof (value as Record<string, unknown>).delta === 'string'
+              ? (value as Record<string, string>).delta
+              : undefined;
+            if (delta === undefined) {
+              controller.enqueue(value);
+              continue;
+            }
+
+            const previousState = pendingText.get(id);
+            const forceCompact = previousState?.forceCompact === true || isCompactToolHistoryMetadataChunk(value);
+            const text = `${previousState?.text ?? ''}${delta}`;
+            const state: CompactToolHistoryTextState = {
+              chunks: [...(previousState?.chunks ?? []), value],
+              text,
+              forceCompact,
+            };
+
+            if (forceCompact || isPotentialCompactToolHistoryText(text)) {
+              pendingText.set(id, state);
+              continue;
+            }
+
+            pendingText.delete(id);
+            for (const chunk of state.chunks) controller.enqueue(chunk);
+            continue;
+          }
+
+          if (type === 'text-end' && id) {
+            resolvePendingText(id);
+            controller.enqueue(value);
+            continue;
+          }
+
+          if (type === 'data-user-message' || type === 'start' || type === 'finish') {
+            resolveAllPendingText();
+          }
+
+          controller.enqueue(value);
+        }
+
+        resolveAllPendingText();
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        reader.releaseLock();
+      }
+    },
+    cancel(reason) {
+      return stream.cancel(reason).catch(() => undefined);
+    },
+  });
 
 const hasUnclosedInlineCode = (text: string) => {
   let openRunLength: number | undefined;
@@ -569,7 +679,10 @@ const buildRunUserMessageFromSignalChunk = (
 const filterRunMessageParts = (message: RunUiMessage) =>
   message.parts.filter((part) => {
     if (part.type === 'reasoning') return typeof part.text === 'string' && part.text.trim().length > 0;
-    if (part.type === 'text') return typeof part.text === 'string' && part.text.length > 0;
+    if (part.type === 'text') {
+      return typeof part.text === 'string' && part.text.length > 0 &&
+        !isCompactToolHistoryTextPart(part);
+    }
     return true;
   });
 

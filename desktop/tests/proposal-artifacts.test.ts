@@ -5,6 +5,7 @@ import {
   type ProposalFrontmatter,
 } from '../../server/src/agent/mastra/tools/proposal-artifacts';
 import { __proposalToolTest } from '../../server/src/agent/mastra/tools/proposal-tool';
+import { hashText } from '../../server/src/agent/mastra/tools/model-output';
 import {
   getProposalCompleteness as getClientProposalCompleteness,
   parseProposalArtifact as parseClientProposalArtifact,
@@ -38,6 +39,13 @@ const frontmatter = (overrides: Partial<ProposalFrontmatter> = {}): ProposalFron
     },
   ],
   ...overrides,
+});
+
+const hashResult = (contentHash: string) => ({
+  ok: true as const,
+  contentHash,
+  lineCount: undefined,
+  size: undefined,
 });
 
 describe('proposal artifact helpers', () => {
@@ -231,44 +239,119 @@ describe('proposal artifact helpers', () => {
         { path: 'src/two.ts', oldPath: 'src/two.ts', newPath: 'src/two.ts' },
       ],
     });
-    expect(__proposalToolTest.buildProposalFilesFromPatch([
-      { path: 'src/one.ts', description: 'Update one.' },
-      { path: 'src/two.ts', rationale: 'Update two.' },
-    ], patch)).toMatchObject([
-      { kind: 'file_edit', path: 'src/one.ts', description: 'Update one.', diff: expect.stringContaining('ONE') },
-      { kind: 'file_edit', path: 'src/two.ts', rationale: 'Update two.', diff: expect.stringContaining('TWO') },
-    ]);
   });
 
-  it('rejects patch metadata mismatches, unsupported patch item kinds, and combined item paths', () => {
-    const editPatch = [
-      'diff --git a/src/one.ts b/src/one.ts',
-      '--- a/src/one.ts',
-      '+++ b/src/one.ts',
-      '@@ -1 +1 @@',
-      '-one',
-      '+ONE',
-    ].join('\n');
-    const createPatch = [
-      'diff --git a/src/new.ts b/src/new.ts',
-      'new file mode 100644',
-      '--- /dev/null',
-      '+++ b/src/new.ts',
-      '@@ -0,0 +1 @@',
-      '+new',
-    ].join('\n');
-
-    expect(() => __proposalToolTest.writeProposalInputSchema.parse({
-      title: 'Bad paths',
-      summary: 'Combined paths are invalid.',
-      files: [{ kind: 'file_edit', path: 'src/one.ts and src/two.ts', diff: '@@ -1 +1 @@\n-a\n+b' }],
+  it('validates proposal workspace paths and exact replacement edits', () => {
+    expect(() => __proposalToolTest.proposalWriteInputSchema.parse({
+      proposalPath: '.agents/proposals/demo.md',
+      path: 'src/one.ts and src/two.ts',
+      content: 'new',
     })).toThrow(/exactly one source file/);
-    expect(() => __proposalToolTest.buildProposalFilesFromPatch([
-      { path: 'src/two.ts' },
-    ], editPatch)).toThrow(/paths must match metadata paths exactly/);
-    expect(() => __proposalToolTest.buildProposalFilesFromPatch([
-      { path: 'src/new.ts' },
-    ], createPatch)).toThrow(/supports file_edit diffs only/);
+    expect(__proposalToolTest.applyExactReplacements('one two three', [
+      { oldText: 'two', newText: 'TWO' },
+      { oldText: 'three', newText: 'THREE' },
+    ])).toBe('one TWO THREE');
+    expect(() => __proposalToolTest.applyExactReplacements('one two two', [
+      { oldText: 'two', newText: 'TWO' },
+    ])).toThrow(/matches more than once/);
+    expect(() => __proposalToolTest.applyExactReplacements('abcdef', [
+      { oldText: 'abc', newText: 'ABC' },
+      { oldText: 'bcd', newText: 'BCD' },
+    ])).toThrow(/overlaps/);
+  });
+
+  it('rebases draft mutations while preserving untouched review state', () => {
+    const firstItem = {
+      ...frontmatter().items[0],
+      status: 'approved' as const,
+      viewed: true,
+      current_hash: hashText('old-a'),
+      proposed_hash: hashText('reviewed-a'),
+      comment: 'Looks good.',
+    };
+    const secondItem = {
+      ...frontmatter().items[0],
+      id: 'src-second-ts',
+      title: 'Update second file',
+      path: 'src/second.ts',
+      status: 'approved' as const,
+      viewed: true,
+      current_hash: hashText('old-b'),
+      proposed_hash: hashText('reviewed-b'),
+      comment: 'Keep this approval.',
+    };
+    const latest = __proposalArtifactTest.parseProposalArtifact(__proposalArtifactTest.renderProposalArtifact(
+      frontmatter({ status: 'draft', items: [firstItem, secondItem] }),
+      {
+        items: [
+          { id: firstItem.id, currentContent: 'old-a', proposedContent: 'reviewed-a' },
+          { id: secondItem.id, currentContent: 'old-b', proposedContent: 'reviewed-b' },
+        ],
+      },
+    ));
+    const changedFirstItem = {
+      ...firstItem,
+      status: 'pending' as const,
+      viewed: false,
+      proposed_hash: hashText('changed-a'),
+      comment: undefined,
+    };
+    const staleSecondItem = {
+      ...secondItem,
+      status: 'pending' as const,
+      viewed: false,
+      comment: undefined,
+    };
+    const next = __proposalArtifactTest.parseProposalArtifact(__proposalArtifactTest.renderProposalArtifact(
+      frontmatter({ status: 'draft', items: [changedFirstItem, staleSecondItem] }),
+      {
+        items: [
+          { id: changedFirstItem.id, currentContent: 'old-a', proposedContent: 'changed-a' },
+          { id: staleSecondItem.id, currentContent: 'old-b', proposedContent: 'stale-b' },
+        ],
+      },
+    ));
+
+    const merged = __proposalToolTest.mergeDraftArtifact(next, latest, { resetItemIds: new Set([firstItem.id]) });
+
+    expect(merged.frontmatter.items[0]).toMatchObject({
+      id: firstItem.id,
+      status: 'pending',
+      viewed: false,
+      proposed_hash: hashText('changed-a'),
+    });
+    expect(merged.frontmatter.items[1]).toMatchObject({
+      id: secondItem.id,
+      status: 'approved',
+      viewed: true,
+      comment: 'Keep this approval.',
+      proposed_hash: hashText('reviewed-b'),
+    });
+    expect(merged.body.items[1]).toMatchObject({
+      id: secondItem.id,
+      proposedContent: 'reviewed-b',
+    });
+  });
+
+  it('includes review comments in compact proposal model output', () => {
+    const output = __proposalToolTest.proposalModelOutput('proposal_status', {
+      ok: true,
+      path: '.agents/proposals/demo.md',
+      status: 'draft',
+      items: [{
+        id: 'src-file-ts',
+        kind: 'file_edit',
+        status: 'changes_requested',
+        title: 'Update file',
+        path: 'src/file.ts',
+        additions: 1,
+        deletions: 0,
+        viewed: true,
+        comment: 'Please preserve the existing hover behavior.',
+      }],
+    });
+
+    expect(output).toContain('src-file-ts [changes_requested] src/file.ts comment: Please preserve the existing hover behavior.');
   });
 
   it('marks code items with missing body sections as incomplete', () => {
@@ -435,93 +518,116 @@ describe('proposal artifact helpers', () => {
     ])).toThrow(/missing Proposed Content/);
   });
 
-  it('accepts null optional fields and diff-only write_proposal inputs', () => {
-    const parsed = __proposalToolTest.writeProposalInputSchema.parse({
-      title: 'Diff proposal',
-      summary: 'A compact unified diff is enough.',
+  it('accepts proposal workspace tool schemas with null optional fields', () => {
+    expect(__proposalToolTest.proposalStartInputSchema.parse({
+      title: 'Draft proposal',
+      summary: 'Use virtual file buffers.',
       proposalPath: null,
       planPath: null,
       overview: null,
-      files: [
-        {
-          kind: 'file_edit',
-          path: 'src/App.tsx',
-          title: null,
-          description: null,
-          rationale: null,
-          diff: '@@ -1 +1 @@\n-old\n+new',
-          currentContent: null,
-          proposedContent: null,
-          currentHash: null,
-        },
-      ],
+    })).toMatchObject({
+      title: 'Draft proposal',
+      summary: 'Use virtual file buffers.',
     });
-
-    expect(parsed.title).toBe('Diff proposal');
-    expect(parsed.summary).toBe('A compact unified diff is enough.');
-    expect(parsed.proposalPath).toBeUndefined();
-    expect(parsed.planPath).toBeUndefined();
-    expect(parsed.overview).toBeUndefined();
-    expect(parsed.files[0].path).toBe('src/App.tsx');
-    expect(parsed.files[0].title).toBeUndefined();
-    expect(parsed.files[0].diff).toBe('@@ -1 +1 @@\n-old\n+new');
-    expect(parsed.files[0].currentContent).toBeUndefined();
-    expect(parsed.files[0].proposedContent).toBeUndefined();
-    expect(parsed.files[0].currentHash).toBeUndefined();
-
-    __proposalToolTest.assertProposalFileInputsComplete(parsed.files);
-    expect(() => __proposalToolTest.assertProposalFileInputsComplete(__proposalToolTest.writeProposalInputSchema.parse({
-      title: 'Incomplete proposal',
-      summary: 'No concrete code body is present.',
-      files: [{ kind: 'file_edit', path: 'src/App.tsx' }],
-    }).files)).toThrow(/file_edit needs a unified diff/);
-
-    for (const file of [
-      { kind: 'file_create' as const, path: 'src/new.ts', diff: '@@ -0,0 +1 @@\n+new' },
-      { kind: 'file_delete' as const, path: 'src/old.ts' },
-    ]) {
-      __proposalToolTest.assertProposalFileInputsComplete(__proposalToolTest.writeProposalInputSchema.parse({
-        title: 'Diff proposal',
-        summary: 'Unified diff is concrete review content.',
-        files: [file],
-      }).files);
-    }
-
-    expect(() => __proposalToolTest.assertProposalFileInputsComplete(__proposalToolTest.writeProposalInputSchema.parse({
-      title: 'Legacy body blocks',
-      summary: 'New file_edit proposals must use repository-validated diffs.',
-      files: [{ kind: 'file_edit', path: 'src/App.tsx', currentContent: 'old', proposedContent: 'new' }],
-    }).files)).toThrow(/file_edit needs a unified diff/);
+    expect(__proposalToolTest.proposalReadInputSchema.parse({
+      proposalPath: null,
+      path: 'src/App.tsx',
+      offset: 2,
+      limit: 4,
+    })).toMatchObject({ path: 'src/App.tsx', offset: 2, limit: 4 });
+    expect(__proposalToolTest.proposalWriteInputSchema.parse({
+      proposalPath: null,
+      path: 'src/App.tsx',
+      content: 'new content',
+      title: null,
+      description: null,
+      rationale: null,
+    })).toMatchObject({ path: 'src/App.tsx', content: 'new content' });
+    expect(__proposalToolTest.proposalEditInputSchema.parse({
+      proposalPath: null,
+      path: 'src/App.tsx',
+      edits: [{ oldText: 'old', newText: 'new' }],
+      title: null,
+      description: null,
+      rationale: null,
+    })).toMatchObject({ path: 'src/App.tsx', edits: [{ oldText: 'old', newText: 'new' }] });
+    expect(__proposalToolTest.proposalDeleteInputSchema.parse({
+      proposalPath: null,
+      path: 'src/App.tsx',
+      title: null,
+      description: null,
+      rationale: null,
+    })).toMatchObject({ path: 'src/App.tsx' });
+    expect(__proposalToolTest.proposalDiscardInputSchema.parse({
+      proposalPath: null,
+      path: 'src/App.tsx',
+    })).toMatchObject({ path: 'src/App.tsx' });
+    expect(__proposalToolTest.proposalStatusInputSchema.parse({ proposalPath: null })).toEqual({});
+    expect(__proposalToolTest.proposalFinalizeInputSchema.parse({ proposalPath: null })).toEqual({});
+    expect(__proposalToolTest.proposalMarkInputSchema.parse({
+      proposalPath: null,
+      items: [{ id: 'item-1', status: 'applied', comment: null }],
+    })).toMatchObject({ items: [{ id: 'item-1', status: 'applied' }] });
   });
 
-  it('accepts null optional fields for write_proposal_patch inputs', () => {
-    const parsed = __proposalToolTest.writeProposalPatchInputSchema.parse({
-      title: 'Patch proposal',
-      summary: 'Use a patch file for compact proposal generation.',
-      proposalPath: null,
-      planPath: null,
-      overview: null,
-      status: null,
-      patchPath: '.agents/tmp/proposal.patch',
-      allowDroppingItems: true,
-      files: [
-        {
-          id: null,
-          path: 'src/App.tsx',
-          title: null,
-          description: null,
-          rationale: null,
-        },
-      ],
-    });
+  it('validates draft proposals before finalizing against live disk drift', async () => {
+    const currentContent = 'old\n';
+    const proposedContent = 'new\n';
+    const editItem = {
+      ...frontmatter().items[0],
+      current_hash: hashText(currentContent),
+      proposed_hash: hashText(proposedContent),
+    };
+    const editFrontmatter = frontmatter({ status: 'draft', items: [editItem] });
+    const editBody = {
+      items: [{ id: editItem.id, currentContent, proposedContent }],
+    };
 
-    expect(parsed.proposalPath).toBeUndefined();
-    expect(parsed.planPath).toBeUndefined();
-    expect(parsed.overview).toBeUndefined();
-    expect(parsed.status).toBeUndefined();
-    expect(parsed.patchPath).toBe('.agents/tmp/proposal.patch');
-    expect(parsed.files[0]).toMatchObject({ path: 'src/App.tsx' });
-    expect(parsed.files[0].id).toBeUndefined();
+    await expect(__proposalToolTest.validateProposalForFinalize(editFrontmatter, editBody, {}, {
+      readHash: async () => hashResult(hashText(currentContent)),
+    })).resolves.toBeUndefined();
+
+    await expect(__proposalToolTest.validateProposalForFinalize(editFrontmatter, editBody, {}, {
+      readHash: async () => hashResult(hashText('changed\n')),
+    })).rejects.toThrow(/source changed on disk/);
+
+    const createItem = {
+      ...editItem,
+      id: 'src-new-ts',
+      kind: 'file_create' as const,
+      title: 'Create file',
+      path: 'src/new.ts',
+      current_hash: undefined,
+      proposed_hash: hashText(proposedContent),
+    };
+    await expect(__proposalToolTest.validateProposalForFinalize(
+      frontmatter({ status: 'draft', items: [createItem] }),
+      { items: [{ id: createItem.id, proposedContent }] },
+      {},
+      { readHash: async () => hashResult(hashText('already exists')) },
+    )).rejects.toThrow(/target now exists/);
+
+    const deleteItem = {
+      ...editItem,
+      id: 'src-old-ts',
+      kind: 'file_delete' as const,
+      title: 'Delete file',
+      path: 'src/old.ts',
+      proposed_hash: undefined,
+    };
+    await expect(__proposalToolTest.validateProposalForFinalize(
+      frontmatter({ status: 'draft', items: [deleteItem] }),
+      { items: [{ id: deleteItem.id, currentContent }] },
+      {},
+      { readHash: async () => ({ ok: false as const, error: 'not found' }) },
+    )).rejects.toThrow(/source file is missing/);
+
+    await expect(__proposalToolTest.validateProposalForFinalize(
+      editFrontmatter,
+      { items: [{ id: editItem.id, currentContent, proposedContent: 'tampered\n' }] },
+      {},
+      { readHash: async () => hashResult(hashText(currentContent)) },
+    )).rejects.toThrow(/Proposed Content|proposed_hash/);
   });
 
   it('allows client approval persistence for complete code items', () => {

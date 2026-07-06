@@ -1,14 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
-import {
-  applyUnifiedDiff,
-  countUnifiedDiffChanges,
-  isLikelyProseUnifiedDiff,
-  isMissingPathError,
-  parseUnifiedDiff,
-  splitUnifiedDiffByFile,
-} from '../../../../../packages/client/src/lib/proposal-unified-diff';
-import { formatToolModelOutput, hashText } from './model-output';
+import { isMissingPathError } from '../../../../../packages/client/src/lib/proposal-unified-diff';
+import { formatToolModelOutput, getCodeToolModelOutputMaxChars, hashText } from './model-output';
 import { summarizeProposalToolInput } from './proposal-tool-input-summary';
 import {
   assertProposalItemsCompleteForStatuses,
@@ -23,51 +16,18 @@ import {
   proposalSnapshotFromFrontmatter,
   renderProposalArtifact,
   validateProposalPath,
+  type ParsedProposalArtifact,
   type ProposalBody,
+  type ProposalBodyItem,
   type ProposalFrontmatter,
   type ProposalItem,
+  type ProposalItemKind,
+  type ProposalSnapshot,
 } from './proposal-artifacts';
 import { getThreadBinding, offlineMessage, routePortalTool } from './portal-tools';
 
-const proposalToolOutputSchema = z.object({
-  ok: z.boolean(),
-  error: z.string().optional(),
-  updated: z.boolean(),
-  applied: z.number().optional(),
-  stale: z.number().optional(),
-  skipped: z.number().optional(),
-  version: z.number().optional(),
-  id: z.string().optional(),
-  title: z.string().optional(),
-  path: z.string().optional(),
-  planPath: z.string().optional(),
-  status: z.string().optional(),
-  summary: z.string().optional(),
-  items: z.array(proposalItemSchema).optional(),
-  counts: z.record(z.string(), z.number()).optional(),
-  updatedAt: z.string().optional(),
-  contentHash: z.string().optional(),
-  bytes: z.number().optional(),
-}).strict();
-
-const proposalCodeItemKindSchema = z.enum(['file_edit', 'file_create', 'file_delete']);
-const writeProposalStatusSchema = z.enum(['draft', 'ready']);
-const updateProposalStatusSchema = z.enum([
-  'draft',
-  'ready',
-  'partially_approved',
-  'approved',
-  'changes_requested',
-  'applied',
-  'rejected',
-  'stale',
-]);
-
 const optionalString = (schema: z.ZodString = z.string()) =>
   schema.nullish().transform(value => value ?? undefined);
-
-const optionalWriteProposalStatus = writeProposalStatusSchema.nullish().transform(value => value ?? undefined);
-const optionalUpdateProposalStatus = updateProposalStatusSchema.nullish().transform(value => value ?? undefined);
 
 const isSingleProposalFilePath = (path: string) => {
   const trimmed = path.trim();
@@ -82,117 +42,155 @@ const proposalFilePathSchema = z.string().min(1).refine(isSingleProposalFilePath
   message: 'path must identify exactly one source file; create separate proposal items for separate files',
 });
 
-const proposalFileInputSchema = z.object({
-  id: optionalString(z.string().min(1).max(100)),
-  kind: proposalCodeItemKindSchema.default('file_edit'),
-  title: optionalString(z.string().min(1).max(240)),
-  path: proposalFilePathSchema,
-  description: optionalString().describe('Optional human-readable description of this item. Do not put proposed code here.'),
-  rationale: optionalString(),
-  diff: optionalString().describe('Concrete unified diff hunk(s) for file_edit, or create-style hunks for file_create. Do not put prose here.'),
-  currentContent: optionalString().describe('Legacy compatibility only. New file_edit and file_delete proposals ignore this field.'),
-  proposedContent: optionalString().describe('Required for file_create unless a create-style diff is provided. Ignored for file_edit.'),
-  currentHash: optionalString().describe('Legacy compatibility only. The tool computes current hashes from the repository.'),
+const exactEditSchema = z.object({
+  oldText: z.string().min(1).describe(
+    'Exact text for one targeted replacement. Must be unique in the proposed buffer and non-overlapping with other edits.',
+  ),
+  newText: z.string().describe('Replacement text for this targeted edit.'),
 }).strict();
 
-const writeProposalInputSchema = z.object({
+const proposalStartInputSchema = z.object({
   title: z.string().min(1).max(180),
   summary: z.string().min(1).max(500),
   proposalPath: optionalString().describe(`Optional artifact path. Must be ${proposalDirectory}/<name>.md.`),
   planPath: optionalString().describe('Optional linked plan artifact path.'),
-  status: optionalWriteProposalStatus,
   overview: optionalString(),
-  files: z.array(proposalFileInputSchema).min(1).max(120),
 }).strict();
 
-const proposalPatchFileMetadataSchema = z.object({
-  id: optionalString(z.string().min(1).max(100)),
+const proposalReadInputSchema = z.object({
+  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's active draft proposal. Must be ${proposalDirectory}/<name>.md.`),
   path: proposalFilePathSchema,
+  offset: z.number().int().min(1).optional().describe('Line number to start reading from, 1-indexed.'),
+  limit: z.number().int().min(1).max(2000).optional().describe('Maximum number of lines to return.'),
+}).strict();
+
+const proposalWriteInputSchema = z.object({
+  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's active draft proposal. Must be ${proposalDirectory}/<name>.md.`),
+  path: proposalFilePathSchema,
+  content: z.string().describe('Full proposed file content. This updates only the proposal buffer, not the source file.'),
   title: optionalString(z.string().min(1).max(240)),
-  description: optionalString().describe('Optional human-readable description of this item. Do not put proposed code here.'),
+  description: optionalString().describe('Optional human-readable description of this file proposal. Do not put proposed code here.'),
   rationale: optionalString(),
 }).strict();
 
-const writeProposalPatchInputSchema = z.object({
-  title: z.string().min(1).max(180),
-  summary: z.string().min(1).max(500),
-  proposalPath: optionalString().describe(`Optional artifact path. Must be ${proposalDirectory}/<name>.md.`),
-  planPath: optionalString().describe('Optional linked plan artifact path.'),
-  status: optionalWriteProposalStatus,
-  overview: optionalString(),
-  patchPath: z.string().min(1).describe('Workspace-relative path to a patch file containing a multi-file unified diff.'),
-  files: z.array(proposalPatchFileMetadataSchema).min(1).max(120),
-  allowDroppingItems: z.boolean().optional().describe('Set true only when intentionally replacing an existing proposal with fewer file items.'),
+const proposalEditInputSchema = z.object({
+  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's active draft proposal. Must be ${proposalDirectory}/<name>.md.`),
+  path: proposalFilePathSchema,
+  edits: z.array(exactEditSchema).min(1).max(120),
+  title: optionalString(z.string().min(1).max(240)),
+  description: optionalString(),
+  rationale: optionalString(),
 }).strict();
 
-const proposalItemUpdateInputSchema = z.object({
-  id: z.string().min(1).max(100),
-  status: proposalItemStatusSchema.optional(),
-  viewed: z.boolean().optional(),
-  comment: optionalString(),
-}).strict().refine(value => value.status || typeof value.viewed === 'boolean' || typeof value.comment === 'string', {
-  message: 'Provide at least one item update',
-});
+const proposalDeleteInputSchema = z.object({
+  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's active draft proposal. Must be ${proposalDirectory}/<name>.md.`),
+  path: proposalFilePathSchema,
+  title: optionalString(z.string().min(1).max(240)),
+  description: optionalString(),
+  rationale: optionalString(),
+}).strict();
 
-const updateProposalInputSchema = z.object({
-  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's latest proposal. Must be ${proposalDirectory}/<name>.md.`),
-  status: optionalUpdateProposalStatus,
-  approveAllPending: z.boolean().optional(),
-  approveAllViewed: z.boolean().optional(),
-  rejectAllPending: z.boolean().optional(),
-  requestChanges: optionalString(),
-  items: z.array(proposalItemUpdateInputSchema).max(120).optional(),
-}).strict().refine(value => Boolean(
-  value.status
-  || value.approveAllPending
-  || value.approveAllViewed
-  || value.rejectAllPending
-  || value.requestChanges
-  || value.items?.length
-), { message: 'Provide at least one proposal update' });
+const proposalDiscardInputSchema = z.object({
+  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's active draft proposal. Must be ${proposalDirectory}/<name>.md.`),
+  path: proposalFilePathSchema,
+}).strict();
+
+const proposalStatusInputSchema = z.object({
+  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's active proposal. Must be ${proposalDirectory}/<name>.md.`),
+}).strict();
+
+const proposalFinalizeInputSchema = z.object({
+  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's active draft proposal. Must be ${proposalDirectory}/<name>.md.`),
+}).strict();
+
+const proposalMarkInputSchema = z.object({
+  proposalPath: optionalString().describe(`Optional artifact path. Omit to use the thread's latest finalized proposal. Must be ${proposalDirectory}/<name>.md.`),
+  items: z.array(z.object({
+    id: z.string().min(1).max(100),
+    status: proposalItemStatusSchema,
+    comment: optionalString(),
+  }).strict()).min(1).max(120),
+}).strict();
+
+const proposalToolOutputSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+  updated: z.boolean(),
+  version: z.number().optional(),
+  id: z.string().optional(),
+  title: z.string().optional(),
+  path: z.string().optional(),
+  planPath: z.string().optional(),
+  status: z.string().optional(),
+  summary: z.string().optional(),
+  items: z.array(proposalItemSchema).optional(),
+  counts: z.record(z.string(), z.number()).optional(),
+  updatedAt: z.string().optional(),
+  contentHash: z.string().optional(),
+  bytes: z.number().optional(),
+  source: z.enum(['proposal', 'live']).optional(),
+  exists: z.boolean().optional(),
+  deleted: z.boolean().optional(),
+  offset: z.number().optional(),
+  limit: z.number().optional(),
+  totalLines: z.number().optional(),
+  totalChars: z.number().optional(),
+  returnedLines: z.number().optional(),
+  currentHash: z.string().optional(),
+  proposedHash: z.string().optional(),
+  applied: z.number().optional(),
+  stale: z.number().optional(),
+  skipped: z.number().optional(),
+  discarded: z.number().optional(),
+  drift: z.array(z.string()).optional(),
+}).strict();
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
-const hasContentBlock = (value: string | undefined) => typeof value === 'string';
-const hasUnifiedDiff = (value: string | undefined) =>
-  typeof value === 'string' && value.trim().length > 0;
-
-const hasConcreteProposalContent = (file: z.infer<typeof proposalFileInputSchema>) => {
-  if (file.kind === 'file_create') return hasContentBlock(file.proposedContent) || hasUnifiedDiff(file.diff);
-  if (file.kind === 'file_delete') return true;
-  return hasUnifiedDiff(file.diff);
-};
-
-const proposalContentError = (file: z.infer<typeof proposalFileInputSchema>) => {
-  const required = file.kind === 'file_create'
-    ? 'file_create needs proposedContent or a create-style unified diff'
-    : file.kind === 'file_delete'
-      ? 'file_delete needs an existing path'
-      : 'file_edit needs a unified diff that applies to the current file';
-  return `File proposal item ${file.path} is incomplete (${required}).`;
-};
-
-const assertProposalFileInputsComplete = (files: Array<z.infer<typeof proposalFileInputSchema>>) => {
-  const incomplete = files.filter(file => !hasConcreteProposalContent(file));
-  if (!incomplete.length) return;
-
-  const examples = incomplete
-    .slice(0, 8)
-    .map(file => proposalContentError(file))
-    .join(' ');
-  const omitted = incomplete.length > 8 ? ` ${incomplete.length - 8} more incomplete item(s) omitted.` : '';
-  throw new Error(`${incomplete.length} proposal file item(s) are incomplete. ${examples}${omitted}`);
-};
+const textByteLength = (value: string) => new TextEncoder().encode(value).byteLength;
 
 const summarizeToolPayloadInput = ({ input }: { input?: unknown }) => summarizeProposalToolInput(input);
+
+const payloadTextSummary = (value: unknown, prefix: string) => {
+  if (typeof value !== 'string') return {};
+  return {
+    [`${prefix}Chars`]: value.length,
+    [`${prefix}Hash`]: hashText(value),
+  };
+};
+
+const summarizeToolPayloadOutput = ({ output }: { output?: unknown }) => {
+  if (!isRecord(output)) return output;
+  return {
+    ok: output.ok,
+    ...(typeof output.path === 'string' ? { path: output.path } : {}),
+    ...(typeof output.status === 'string' ? { status: output.status } : {}),
+    ...(typeof output.source === 'string' ? { source: output.source } : {}),
+    ...(typeof output.deleted === 'boolean' ? { deleted: output.deleted } : {}),
+    ...(typeof output.updated === 'boolean' ? { updated: output.updated } : {}),
+    ...(typeof output.offset === 'number' ? { offset: output.offset } : {}),
+    ...(typeof output.limit === 'number' ? { limit: output.limit } : {}),
+    ...(typeof output.totalLines === 'number' ? { totalLines: output.totalLines } : {}),
+    ...(typeof output.totalChars === 'number' ? { totalChars: output.totalChars } : {}),
+    ...(typeof output.contentHash === 'string' ? { contentHash: output.contentHash } : {}),
+    ...(typeof output.currentHash === 'string' ? { currentHash: output.currentHash } : {}),
+    ...(typeof output.proposedHash === 'string' ? { proposedHash: output.proposedHash } : {}),
+    ...(typeof output.error === 'string' ? { error: output.error } : {}),
+    ...(Array.isArray(output.items) ? { items: output.items } : {}),
+    ...(isRecord(output.counts) ? { counts: output.counts } : {}),
+    ...payloadTextSummary(output.content, 'content'),
+  };
+};
 
 const proposalToolTransform = {
   display: {
     input: summarizeToolPayloadInput,
+    output: summarizeToolPayloadOutput,
   },
   transcript: {
     input: summarizeToolPayloadInput,
+    output: summarizeToolPayloadOutput,
   },
 };
 
@@ -208,15 +206,20 @@ const portalError = (result: unknown, fallback: string) => {
   return typeof record.error === 'string' && record.error ? record.error : fallback;
 };
 
-const readPortalFile = async (path: string, context: any) => {
-  const result = await routePortalTool('read', { path }, context);
+const readWorkspaceTextFile = async (path: string, context: any) => {
+  const result = await routePortalTool('portal.fs.read', { path }, context);
   const record = isRecord(result) ? result : {};
-  if (record.ok !== true) return { ok: false as const, error: portalError(result, `Unable to read ${path}`) };
+  if (record.ok === false) return { ok: false as const, error: portalError(result, `Unable to read ${path}`) };
   if (typeof record.content !== 'string') return { ok: false as const, error: `Portal read returned no content for ${path}` };
-  return { ok: true as const, content: record.content };
+  return {
+    ok: true as const,
+    content: record.content,
+    version: typeof record.version === 'string' ? record.version : undefined,
+    size: typeof record.size === 'number' ? record.size : undefined,
+  };
 };
 
-const readPortalFileHash = async (path: string, context: any) => {
+const readWorkspaceFileHash = async (path: string, context: any) => {
   const result = await routePortalTool('portal.fs.hash', { path }, context);
   const record = isRecord(result) ? result : {};
   if (record.ok === false) return { ok: false as const, error: portalError(result, `Unable to hash ${path}`) };
@@ -225,37 +228,18 @@ const readPortalFileHash = async (path: string, context: any) => {
     ok: true as const,
     contentHash: record.contentHash,
     lineCount: typeof record.lineCount === 'number' ? record.lineCount : undefined,
+    size: typeof record.size === 'number' ? record.size : undefined,
   };
 };
 
-const previewPortalDiff = async (path: string, diff: string, context: any) => {
-  const result = await routePortalTool('portal.fs.diffPreview', { path, diff }, context);
+const writeWorkspaceTextFile = async (path: string, content: string, context: any) => {
+  const result = await routePortalTool('portal.fs.write', { path, content, createParents: true }, context);
   const record = isRecord(result) ? result : {};
-  if (record.ok === false) return { ok: false as const, error: portalError(result, `Unable to preview diff for ${path}`) };
-  if (
-    typeof record.currentHash !== 'string'
-    || typeof record.proposedHash !== 'string'
-    || typeof record.proposedContent !== 'string'
-    || typeof record.additions !== 'number'
-    || typeof record.deletions !== 'number'
-  ) {
-    return { ok: false as const, error: `Portal diff preview returned incomplete metadata for ${path}` };
-  }
+  if (record.ok === false) return { ok: false as const, error: portalError(result, `Unable to write ${path}`) };
   return {
     ok: true as const,
-    currentHash: record.currentHash,
-    proposedHash: record.proposedHash,
-    proposedContent: record.proposedContent,
-    additions: record.additions,
-    deletions: record.deletions,
+    bytes: typeof record.size === 'number' ? record.size : textByteLength(content),
   };
-};
-
-const writePortalFile = async (path: string, content: string, context: any) => {
-  const result = await routePortalTool('write', { path, content }, context);
-  const record = isRecord(result) ? result : {};
-  if (record.ok !== true) return { ok: false as const, error: portalError(result, `Unable to write ${path}`) };
-  return { ok: true as const, bytes: typeof record.bytes === 'number' ? record.bytes : undefined };
 };
 
 const getThreadRecord = async (context: any) => {
@@ -283,23 +267,42 @@ const getGitProposalBinding = async (context: any) => {
 const threadIdsWith = (threadIds: string[], threadId: string) =>
   Array.from(new Set([...threadIds, threadId].filter(Boolean)));
 
-const latestProposalPathFromThread = (thread: any) => {
-  const metadata = isRecord(thread?.metadata) ? thread.metadata : {};
-  const latestProposal = isRecord(metadata.latestProposal) ? metadata.latestProposal : undefined;
-  if (typeof latestProposal?.path !== 'string') return undefined;
+const metadataProposalPath = (metadata: unknown, key: 'latestProposal' | 'latestProposalDraft') => {
+  const record = isRecord(metadata) ? metadata : {};
+  const proposal = isRecord(record[key]) ? record[key] : undefined;
+  if (typeof proposal?.path !== 'string') return undefined;
   try {
-    return validateProposalPath(latestProposal.path);
+    return validateProposalPath(proposal.path);
   } catch {
     return undefined;
   }
 };
 
-const updateThreadProposalMetadata = async (context: any, snapshot: ReturnType<typeof proposalSnapshotFromFrontmatter>) => {
+const latestProposalPathFromThread = (thread: any, preferDraft: boolean) => {
+  const draft = metadataProposalPath(thread?.metadata, 'latestProposalDraft');
+  const latest = metadataProposalPath(thread?.metadata, 'latestProposal');
+  return preferDraft ? draft ?? latest : latest ?? draft;
+};
+
+const updateThreadProposalMetadata = async (
+  context: any,
+  snapshot: ProposalSnapshot,
+  mode: 'draft' | 'finalized',
+) => {
   const { threadId, memory, thread } = await getThreadRecord(context);
-  const metadata = {
-    ...(isRecord(thread.metadata) ? thread.metadata : {}),
-    latestProposal: snapshot,
-  };
+  const metadata = { ...(isRecord(thread.metadata) ? thread.metadata : {}) };
+
+  if (mode === 'draft') {
+    metadata.latestProposalDraft = snapshot;
+    if (isRecord(metadata.latestProposal) && metadata.latestProposal.path === snapshot.path) {
+      delete metadata.latestProposal;
+    }
+  } else {
+    metadata.latestProposal = snapshot;
+    if (isRecord(metadata.latestProposalDraft) && metadata.latestProposalDraft.path === snapshot.path) {
+      delete metadata.latestProposalDraft;
+    }
+  }
 
   await (memory as any).updateThread({
     id: threadId,
@@ -309,7 +312,7 @@ const updateThreadProposalMetadata = async (context: any, snapshot: ReturnType<t
 };
 
 const buildSnapshotOutput = (
-  snapshot: ReturnType<typeof proposalSnapshotFromFrontmatter>,
+  snapshot: ProposalSnapshot,
   bytes?: number,
   extra: Record<string, unknown> = {},
 ) => ({
@@ -320,12 +323,34 @@ const buildSnapshotOutput = (
   ...(bytes !== undefined ? { bytes } : {}),
 });
 
-const resolveProposalPath = async (inputPath: string | undefined, context: any) => {
+const resolveProposalPath = async (
+  inputPath: string | undefined,
+  context: any,
+  options: { preferDraft?: boolean } = {},
+) => {
   if (inputPath) return validateProposalPath(inputPath);
   const { thread } = await getThreadRecord(context);
-  const path = latestProposalPathFromThread(thread);
-  if (!path) throw new Error('No proposalPath provided and this thread has no latest proposal artifact.');
+  const path = latestProposalPathFromThread(thread, options.preferDraft !== false);
+  if (!path) throw new Error('No proposalPath provided and this thread has no active proposal artifact. Call proposal_start first.');
   return path;
+};
+
+const readProposalArtifactMaybe = async (artifactPath: string, context: any) => {
+  const read = await readWorkspaceTextFile(artifactPath, context);
+  if (!read.ok) {
+    if (isMissingPathError(read.error)) return undefined;
+    throw new Error(read.error);
+  }
+  return {
+    content: read.content,
+    parsed: parseProposalArtifact(read.content),
+  };
+};
+
+const readProposalArtifactRequired = async (artifactPath: string, context: any) => {
+  const artifact = await readProposalArtifactMaybe(artifactPath, context);
+  if (!artifact) throw new Error(`Proposal artifact does not exist: ${artifactPath}. Call proposal_start first.`);
+  return artifact;
 };
 
 const proposalModelOutput = (name: string, output: unknown) => {
@@ -334,7 +359,10 @@ const proposalModelOutput = (name: string, output: unknown) => {
   const body = items.map((item, index) => {
     const id = typeof item.id === 'string' ? item.id : `item-${index + 1}`;
     const path = typeof item.path === 'string' ? ` ${item.path}` : '';
-    return `${index + 1}. ${id} [${item.status ?? 'unknown'}]${path}`;
+    const comment = typeof item.comment === 'string' && item.comment.trim()
+      ? ` comment: ${item.comment.trim().slice(0, 300)}`
+      : '';
+    return `${index + 1}. ${id} [${item.status ?? 'unknown'}]${path}${comment}`;
   }).join('\n');
 
   return formatToolModelOutput(name, [
@@ -342,422 +370,445 @@ const proposalModelOutput = (name: string, output: unknown) => {
     ['updated', result.updated],
     ['path', result.path],
     ['status', result.status],
+    ['source', result.source],
+    ['deleted', result.deleted],
+    ['offset', result.offset],
+    ['limit', result.limit],
+    ['totalLines', result.totalLines],
+    ['totalChars', result.totalChars],
+    ['contentHash', result.contentHash],
+    ['currentHash', result.currentHash],
+    ['proposedHash', result.proposedHash],
     ['applied', result.applied],
     ['stale', result.stale],
     ['skipped', result.skipped],
-    ['contentHash', result.contentHash],
+    ['discarded', result.discarded],
     ['error', result.error],
   ], body);
 };
 
-const itemIdForPath = (path: string, index: number) =>
-  `${path.replace(/[^a-zA-Z0-9._/-]+/g, '-').replace(/[/.]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'item'}-${index + 1}`.slice(0, 100);
-
-type ProposalFileInput = z.infer<typeof proposalFileInputSchema>;
-
-type PreparedProposalFile = {
-  input: ProposalFileInput;
-  currentHash?: string;
-  proposedHash?: string;
-  additions: number;
-  deletions: number;
-  body: ProposalBody['items'][number];
+const proposalReadModelOutput = (output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
+  const result = isRecord(output) ? output : {};
+  return formatToolModelOutput('proposal_read', [
+    ['ok', result.ok],
+    ['path', result.path],
+    ['source', result.source],
+    ['deleted', result.deleted],
+    ['offset', result.offset],
+    ['limit', result.limit],
+    ['totalLines', result.totalLines],
+    ['totalChars', result.totalChars],
+    ['contentHash', result.contentHash],
+    ['currentHash', result.currentHash],
+    ['proposedHash', result.proposedHash],
+    ['error', result.error],
+  ], result.content, maxChars);
 };
 
-const assertUsableDiff = (path: string, diff: string | undefined) => {
-  const sections = splitUnifiedDiffByFile(diff);
-  if (sections.ok) {
-    if (sections.value.length > 1) {
-      throw new Error(`File proposal item ${path} has a multi-file unified diff. Use one proposal item per source file.`);
-    }
-    const [section] = sections.value;
-    if (section.path !== path) {
-      throw new Error(`File proposal item ${path} has a unified diff for ${section.path}. The diff path must match the item path.`);
-    }
-  }
+const itemIdForPath = (path: string) =>
+  (path.replace(/[^a-zA-Z0-9._/-]+/g, '-').replace(/[/.]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'item')
+    .slice(0, 96);
 
-  const parsed = parseUnifiedDiff(diff);
-  if (!parsed.ok) throw new Error(`File proposal item ${path} has an invalid unified diff: ${parsed.error}`);
-  if (isLikelyProseUnifiedDiff(diff)) {
-    throw new Error(`File proposal item ${path} has prose in its unified diff. Provide actual code diff hunks, not implementation notes.`);
-  }
-  return parsed.value;
+const codeProposalItemKinds = new Set<ProposalItemKind>(['file_edit', 'file_create', 'file_delete']);
+
+const findFileItemIndex = (items: ProposalItem[], path: string) =>
+  items.findIndex(item => codeProposalItemKinds.has(item.kind) && item.path === path);
+
+const bodyItemById = (body: ProposalBody, id: string) => body.items.find(item => item.id === id);
+
+const countTextLines = (content: string) => {
+  if (!content) return 0;
+  return content.endsWith('\n') ? content.slice(0, -1).split('\n').length : content.split('\n').length;
 };
 
-const assertPathMissingForCreate = async (path: string, context: any) => {
-  const existing = await readPortalFileHash(path, context);
-  if (existing.ok) {
-    throw new Error(`File proposal item ${path} is a file_create but the target path already exists. Use file_edit instead.`);
-  }
-  if (!isMissingPathError(existing.error)) throw new Error(existing.error);
-};
-
-const prepareProposalFileInput = async (file: ProposalFileInput, context: any): Promise<PreparedProposalFile> => {
-  if (file.kind === 'file_edit') {
-    if (!file.diff) throw new Error(proposalContentError(file));
-    assertUsableDiff(file.path, file.diff);
-    const preview = await previewPortalDiff(file.path, file.diff, context);
-    if (!preview.ok) throw new Error(preview.error);
-    return {
-      input: file,
-      currentHash: preview.currentHash,
-      proposedHash: preview.proposedHash,
-      additions: preview.additions,
-      deletions: preview.deletions,
-      body: {
-        id: '',
-        description: file.description,
-        rationale: file.rationale,
-        diff: file.diff,
-      },
-    };
+const paginateContent = (content: string, offset = 1, limit?: number) => {
+  const totalLines = countTextLines(content);
+  const totalChars = content.length;
+  if (!content) {
+    return { content: '', offset, limit, totalLines, totalChars, returnedLines: 0 };
   }
 
-  if (file.kind === 'file_delete') {
-    const current = await readPortalFileHash(file.path, context);
-    if (!current.ok) throw new Error(current.error);
-    return {
-      input: file,
-      currentHash: current.contentHash,
-      additions: 0,
-      deletions: current.lineCount ?? 0,
-      body: {
-        id: '',
-        description: file.description,
-        rationale: file.rationale,
-      },
-    };
-  }
-
-  await assertPathMissingForCreate(file.path, context);
-  const proposedContent = file.proposedContent;
-  if (file.diff) assertUsableDiff(file.path, file.diff);
-  const diffProposed = file.diff && proposedContent === undefined
-    ? (() => {
-        const applied = applyUnifiedDiff('', file.diff!);
-        if (!applied.ok) throw new Error(`File proposal item ${file.path} has an invalid create diff: ${applied.error}`);
-        return applied.value.content;
-      })()
-    : undefined;
-  const concreteProposedContent = proposedContent ?? diffProposed;
-  if (concreteProposedContent === undefined) throw new Error(proposalContentError(file));
-  const counts = file.diff ? countUnifiedDiffChanges(file.diff) : countProposalChanges({
-    kind: file.kind,
-    proposedContent: concreteProposedContent,
-  });
+  const lines = content.split('\n');
+  if (offset > lines.length) throw new Error(`Offset ${offset} is beyond end of file (${totalLines} lines total)`);
+  const startIndex = offset - 1;
+  const endIndex = limit ? Math.min(startIndex + limit, lines.length) : lines.length;
+  const selected = lines.slice(startIndex, endIndex).join('\n');
   return {
-    input: file,
-    proposedHash: hashText(concreteProposedContent),
-    additions: counts.additions,
-    deletions: counts.deletions,
-    body: {
-      id: '',
-      description: file.description,
-      rationale: file.rationale,
-      diff: file.diff,
-      proposedContent,
-    },
+    content: selected,
+    offset,
+    ...(limit !== undefined ? { limit } : {}),
+    totalLines,
+    totalChars,
+    returnedLines: countTextLines(selected),
   };
 };
 
-const uniqueByPath = <T extends { path: string }>(items: T[], label: string) => {
-  const seen = new Set<string>();
-  const duplicates = new Set<string>();
-  for (const item of items) {
-    if (seen.has(item.path)) duplicates.add(item.path);
-    seen.add(item.path);
+const assertBodyHashesMatchItem = (item: ProposalItem, bodyItem: ProposalBodyItem | undefined) => {
+  if (!bodyItem) throw new Error(`Proposal item ${item.id} is missing its body section.`);
+  if (item.current_hash && typeof bodyItem.currentContent === 'string' && hashText(bodyItem.currentContent) !== item.current_hash) {
+    throw new Error(`Proposal item ${item.id} has stale current content; current_hash does not match the stored buffer.`);
   }
-  if (duplicates.size) {
-    throw new Error(`${label} contains duplicate path(s): ${Array.from(duplicates).join(', ')}`);
+  if (item.proposed_hash && typeof bodyItem.proposedContent === 'string' && hashText(bodyItem.proposedContent) !== item.proposed_hash) {
+    throw new Error(`Proposal item ${item.id} has stale proposed content; proposed_hash does not match the stored buffer.`);
   }
 };
 
-const formatPathList = (paths: string[]) => {
-  const shown = paths.slice(0, 8).join(', ');
-  return paths.length > 8 ? `${shown}, ... ${paths.length - 8} more` : shown;
+type VirtualFileState = {
+  source: 'proposal' | 'live';
+  kind: 'file_edit' | 'file_create' | 'file_delete';
+  currentContent?: string;
+  currentHash?: string;
+  proposedContent?: string;
+  proposedHash?: string;
+  item?: ProposalItem;
+  bodyItem?: ProposalBodyItem;
+  deleted: boolean;
 };
 
-const buildProposalFilesFromPatch = (
-  metadataInput: Array<z.input<typeof proposalPatchFileMetadataSchema>>,
-  patchContent: string,
-): ProposalFileInput[] => {
-  const metadata = z.array(proposalPatchFileMetadataSchema).parse(metadataInput);
-  uniqueByPath(metadata, 'Proposal patch metadata');
-  const split = splitUnifiedDiffByFile(patchContent);
-  if (!split.ok) throw new Error(split.error);
-  uniqueByPath(split.value, 'Proposal patch');
-
-  const unsupported = split.value.filter(section => !section.oldPath || !section.newPath || section.oldPath !== section.newPath);
-  if (unsupported.length) {
-    throw new Error(
-      `write_proposal_patch supports file_edit diffs only. Use write_proposal for creates/deletes/renames: ${formatPathList(unsupported.map(section => section.path))}`,
-    );
-  }
-
-  const patchPaths = new Set(split.value.map(section => section.path));
-  const metadataPaths = new Set(metadata.map(file => file.path));
-  const missingInPatch = metadata.filter(file => !patchPaths.has(file.path)).map(file => file.path);
-  const missingMetadata = split.value.filter(section => !metadataPaths.has(section.path)).map(section => section.path);
-  const errors = [
-    ...(missingInPatch.length ? [`metadata paths missing from patch: ${formatPathList(missingInPatch)}`] : []),
-    ...(missingMetadata.length ? [`patch paths missing metadata: ${formatPathList(missingMetadata)}`] : []),
-  ];
-  if (errors.length) throw new Error(`Proposal patch paths must match metadata paths exactly (${errors.join('; ')}).`);
-
-  const sectionsByPath = new Map(split.value.map(section => [section.path, section]));
-  return metadata.map(file => {
-    const section = sectionsByPath.get(file.path);
-    if (!section) throw new Error(`Proposal patch is missing ${file.path}.`);
-    return proposalFileInputSchema.parse({
-      kind: 'file_edit',
-      id: file.id,
-      path: file.path,
-      title: file.title,
-      description: file.description,
-      rationale: file.rationale,
-      diff: section.diff,
-    });
-  });
-};
-
-const assertReplacementDoesNotDropItems = async (
-  artifactPath: string,
-  incomingPaths: string[],
-  allowDroppingItems: boolean | undefined,
+const getVirtualFileState = async (
+  parsed: ParsedProposalArtifact,
+  path: string,
   context: any,
-) => {
-  if (allowDroppingItems) return;
-  const read = await readPortalFile(artifactPath, context);
-  if (!read.ok) {
-    if (isMissingPathError(read.error)) return;
-    throw new Error(read.error);
+): Promise<VirtualFileState> => {
+  const itemIndex = findFileItemIndex(parsed.frontmatter.items, path);
+  if (itemIndex >= 0) {
+    const item = parsed.frontmatter.items[itemIndex];
+    const bodyItem = bodyItemById(parsed.body, item.id);
+    assertBodyHashesMatchItem(item, bodyItem);
+
+    if (item.kind === 'file_delete') {
+      return {
+        source: 'proposal',
+        kind: 'file_delete',
+        currentContent: bodyItem?.currentContent,
+        currentHash: item.current_hash,
+        item,
+        bodyItem,
+        deleted: true,
+      };
+    }
+
+    if (item.kind === 'file_create') {
+      if (typeof bodyItem?.proposedContent !== 'string') {
+        throw new Error(`Proposal item ${item.id} is missing Proposed Content.`);
+      }
+      return {
+        source: 'proposal',
+        kind: 'file_create',
+        proposedContent: bodyItem.proposedContent,
+        proposedHash: item.proposed_hash,
+        item,
+        bodyItem,
+        deleted: false,
+      };
+    }
+
+    if (typeof bodyItem?.currentContent !== 'string') {
+      throw new Error(`Proposal item ${item.id} is missing Current Content.`);
+    }
+    if (typeof bodyItem.proposedContent !== 'string') {
+      throw new Error(`Proposal item ${item.id} is missing Proposed Content.`);
+    }
+    return {
+      source: 'proposal',
+      kind: 'file_edit',
+      currentContent: bodyItem.currentContent,
+      currentHash: item.current_hash,
+      proposedContent: bodyItem.proposedContent,
+      proposedHash: item.proposed_hash,
+      item,
+      bodyItem,
+      deleted: false,
+    };
   }
 
-  let parsed: ReturnType<typeof parseProposalArtifact>;
-  try {
-    parsed = parseProposalArtifact(read.content);
-  } catch {
-    return;
-  }
-
-  const incoming = new Set(incomingPaths);
-  const existingPaths = parsed.frontmatter.items
-    .filter(item => item.kind === 'file_edit' || item.kind === 'file_create' || item.kind === 'file_delete')
-    .map(item => item.path)
-    .filter((itemPath): itemPath is string => typeof itemPath === 'string');
-  const missing = existingPaths.filter(path => !incoming.has(path));
-  if (missing.length && incomingPaths.length < existingPaths.length) {
-    throw new Error(
-      `Replacement proposal has fewer file items than existing ${artifactPath}; missing ${formatPathList(missing)}. Set allowDroppingItems: true only if this is intentional.`,
-    );
-  }
+  const live = await readWorkspaceTextFile(path, context);
+  if (!live.ok) throw new Error(live.error);
+  const hash = await readWorkspaceFileHash(path, context);
+  if (!hash.ok) throw new Error(hash.error);
+  return {
+    source: 'live',
+    kind: 'file_edit',
+    currentContent: live.content,
+    currentHash: hash.contentHash,
+    proposedContent: live.content,
+    proposedHash: hash.contentHash,
+    deleted: false,
+  };
 };
 
-export const writeProposalTool = createTool({
-  id: 'write_proposal',
-  strict: true,
-  description: [
-    'Create a git-scoped proposed change artifact at .agents/proposals/<name>.md.',
-    'Use this before mutating source files for Guided work: new features, significant refactors, migrations, schema changes, cross-cutting changes, risky or production-sensitive work, multi-file implementation, or work that already has an ExecPlan artifact.',
-    'If a human confirms a Guided plan but no proposal exists, create the proposal instead of editing source files.',
-    'For file_edit, provide a real unified diff that applies to the current repository file. The tool reads the file and computes current_hash.',
-    'For file_delete, provide only the path. The tool reads the file metadata and computes current_hash.',
-    'For file_create, provide proposedContent or a create-style unified diff. The target path must not already exist.',
-    'Optional prose belongs in description or rationale, never in diff or proposedContent.',
-    'This tool only writes the proposal artifact. It does not apply proposed changes.',
-  ].join('\n'),
-  inputSchema: writeProposalInputSchema,
-  outputSchema: proposalToolOutputSchema,
-  transform: proposalToolTransform,
-  execute: async (input, context) => {
-    let path: string | undefined;
-    try {
-      await getGitProposalBinding(context);
-      const { threadId } = await getThreadRecord(context);
-      const proposalInput = writeProposalInputSchema.parse(input);
-      assertProposalFileInputsComplete(proposalInput.files);
-      const artifactPath = proposalInput.proposalPath ? validateProposalPath(proposalInput.proposalPath) : proposalPathForName(proposalInput.title);
-      path = artifactPath;
-      const now = new Date().toISOString();
-      const preparedFiles = await Promise.all(proposalInput.files.map(file => prepareProposalFileInput(file, context)));
-      const items: ProposalItem[] = preparedFiles.map((prepared, index) => {
-        const file = prepared.input;
-        return proposalItemSchema.parse({
-          id: file.id ?? itemIdForPath(file.path, index),
-          kind: file.kind,
-          status: 'pending',
-          title: file.title ?? file.path,
-          path: file.path,
-          additions: prepared.additions,
-          deletions: prepared.deletions,
-          viewed: false,
-          current_hash: prepared.currentHash,
-          proposed_hash: prepared.proposedHash,
-        });
-      });
-      const frontmatter: ProposalFrontmatter = proposalFrontmatterSchema.parse({
-        weave_proposal_version: 1,
-        id: artifactPath.slice(proposalDirectory.length + 1, -'.md'.length),
-        title: proposalInput.title.trim(),
-        status: proposalInput.status ?? inferProposalStatus(items),
-        scope: 'git',
-        plan_path: proposalInput.planPath,
-        thread_ids: [threadId],
-        path: artifactPath,
-        updated_at: now,
-        summary: proposalInput.summary.trim(),
-        items,
-      });
-      const body: ProposalBody = {
-        overview: proposalInput.overview,
-        items: preparedFiles.map((prepared, index) => ({
-          ...prepared.body,
-          id: items[index].id,
-        })),
-      };
-      assertProposalItemsCompleteForStatuses(items, body.items, ['pending', 'approved', 'applied']);
-      const content = renderProposalArtifact(frontmatter, body);
-      const write = await writePortalFile(artifactPath, content, context);
-      if (!write.ok) return toolError(write.error, artifactPath);
+const readLiveFileMaybe = async (path: string, context: any) => {
+  const live = await readWorkspaceTextFile(path, context);
+  if (!live.ok) {
+    if (isMissingPathError(live.error)) return undefined;
+    throw new Error(live.error);
+  }
+  const hash = await readWorkspaceFileHash(path, context);
+  if (!hash.ok) throw new Error(hash.error);
+  return { content: live.content, hash: hash.contentHash };
+};
 
-      const snapshot = proposalSnapshotFromFrontmatter(frontmatter, content);
-      const output = buildSnapshotOutput(snapshot, write.bytes);
-      await updateThreadProposalMetadata(context, snapshot);
-      return output;
-    } catch (error) {
-      return toolError(error, path);
+type UpsertFileItemInput = {
+  path: string;
+  kind: 'file_edit' | 'file_create' | 'file_delete';
+  currentContent?: string;
+  proposedContent?: string;
+  title?: string;
+  description?: string;
+  rationale?: string;
+};
+
+const upsertFileItem = (
+  parsed: ParsedProposalArtifact,
+  input: UpsertFileItemInput,
+  threadId: string,
+) => {
+  const existingIndex = findFileItemIndex(parsed.frontmatter.items, input.path);
+  const existingItem = existingIndex >= 0 ? parsed.frontmatter.items[existingIndex] : undefined;
+  const existingBody = existingItem ? bodyItemById(parsed.body, existingItem.id) : undefined;
+  const removedIds = new Set(
+    parsed.frontmatter.items
+      .filter(item => codeProposalItemKinds.has(item.kind) && item.path === input.path)
+      .map(item => item.id),
+  );
+  const id = existingItem?.id ?? itemIdForPath(input.path);
+  const currentHash = input.currentContent !== undefined ? hashText(input.currentContent) : undefined;
+  const proposedHash = input.proposedContent !== undefined ? hashText(input.proposedContent) : undefined;
+  const counts = countProposalChanges({
+    kind: input.kind,
+    currentContent: input.currentContent,
+    proposedContent: input.proposedContent,
+  });
+
+  const item = proposalItemSchema.parse({
+    id,
+    kind: input.kind,
+    status: 'pending',
+    title: input.title ?? existingItem?.title ?? input.path,
+    path: input.path,
+    additions: counts.additions,
+    deletions: counts.deletions,
+    viewed: false,
+    current_hash: currentHash,
+    proposed_hash: proposedHash,
+  });
+  const bodyItem: ProposalBodyItem = {
+    id,
+    description: input.description ?? existingBody?.description,
+    rationale: input.rationale ?? existingBody?.rationale,
+    ...(input.currentContent !== undefined ? { currentContent: input.currentContent } : {}),
+    ...(input.proposedContent !== undefined ? { proposedContent: input.proposedContent } : {}),
+  };
+
+  const remainingItems = parsed.frontmatter.items.filter(item => !removedIds.has(item.id));
+  const insertIndex = existingIndex >= 0 ? existingIndex : remainingItems.length;
+  remainingItems.splice(insertIndex, 0, item);
+  const remainingBodyItems = parsed.body.items.filter(body => !removedIds.has(body.id));
+  remainingBodyItems.splice(insertIndex, 0, bodyItem);
+
+  const now = new Date().toISOString();
+  const frontmatter = proposalFrontmatterSchema.parse({
+    ...parsed.frontmatter,
+    status: 'draft',
+    thread_ids: threadIdsWith(parsed.frontmatter.thread_ids, threadId),
+    updated_at: now,
+    items: remainingItems,
+  });
+  const body: ProposalBody = {
+    overview: parsed.body.overview,
+    items: remainingBodyItems,
+  };
+  const content = renderProposalArtifact(frontmatter, body);
+  return { frontmatter, body, content, item };
+};
+
+type DraftWriteOptions = {
+  resetItemIds?: Set<string>;
+  removeItemIds?: Set<string>;
+};
+
+const mergeDraftArtifact = (
+  next: ParsedProposalArtifact,
+  latest: ParsedProposalArtifact | undefined,
+  options: DraftWriteOptions,
+) => {
+  if (!latest) return next;
+
+  const nextItemsById = new Map(next.frontmatter.items.map(item => [item.id, item]));
+  const nextBodyById = new Map(next.body.items.map(item => [item.id, item]));
+  const latestBodyById = new Map(latest.body.items.map(item => [item.id, item]));
+  const resetItemIds = options.resetItemIds ?? new Set<string>();
+  const removeItemIds = options.removeItemIds ?? new Set<string>();
+  const mergedItems: ProposalItem[] = [];
+  const mergedBodyItems: ProposalBodyItem[] = [];
+  const addedIds = new Set<string>();
+
+  const addItem = (item: ProposalItem, bodyItem: ProposalBodyItem | undefined) => {
+    if (removeItemIds.has(item.id) || addedIds.has(item.id)) return;
+    mergedItems.push(item);
+    if (bodyItem) mergedBodyItems.push(bodyItem);
+    addedIds.add(item.id);
+  };
+
+  for (const latestItem of latest.frontmatter.items) {
+    const nextItem = nextItemsById.get(latestItem.id);
+    if (nextItem && resetItemIds.has(latestItem.id)) {
+      addItem(nextItem, nextBodyById.get(latestItem.id));
+      continue;
     }
-  },
-  toModelOutput: output => proposalModelOutput('write_proposal', output),
-});
+    addItem(latestItem, latestBodyById.get(latestItem.id));
+  }
 
-export const writeProposalPatchTool = createTool({
-  id: 'write_proposal_patch',
-  strict: true,
-  description: [
-    'Create a git-scoped proposal artifact from a workspace patch file at .agents/proposals/<name>.md.',
-    'Use this for larger proposal regeneration instead of assembling large files[].diff JSON payloads.',
-    'Write a multi-file unified patch to a workspace scratch path, then pass patchPath and one metadata entry per file.',
-    'The patch file paths and files[].path values must match exactly. Each metadata entry represents exactly one source file.',
-    'This tool reads the patch through Portal, validates each file_edit diff against the live repository file, computes hashes, and writes the normal proposal artifact.',
-    'This tool supports file_edit diffs only. Use write_proposal for file_create or file_delete proposal items.',
-    'Do not print or read back large patch bodies before calling this tool.',
-    'This tool only writes the proposal artifact. It does not apply proposed changes.',
-  ].join('\n'),
-  inputSchema: writeProposalPatchInputSchema,
-  outputSchema: proposalToolOutputSchema,
-  transform: proposalToolTransform,
-  execute: async (input, context) => {
-    let path: string | undefined;
-    try {
-      await getGitProposalBinding(context);
-      const { threadId } = await getThreadRecord(context);
-      const proposalInput = writeProposalPatchInputSchema.parse(input);
-      const artifactPath = proposalInput.proposalPath ? validateProposalPath(proposalInput.proposalPath) : proposalPathForName(proposalInput.title);
-      path = artifactPath;
+  for (const nextItem of next.frontmatter.items) {
+    addItem(nextItem, nextBodyById.get(nextItem.id));
+  }
 
-      const patch = await readPortalFile(proposalInput.patchPath, context);
-      if (!patch.ok) return toolError(patch.error, artifactPath);
+  return {
+    frontmatter: proposalFrontmatterSchema.parse({
+      ...next.frontmatter,
+      items: mergedItems,
+    }),
+    body: {
+      overview: next.body.overview,
+      items: mergedBodyItems,
+    },
+    rawBody: next.rawBody,
+  };
+};
 
-      const files = buildProposalFilesFromPatch(proposalInput.files, patch.content);
-      assertProposalFileInputsComplete(files);
-      await assertReplacementDoesNotDropItems(
-        artifactPath,
-        files.map(file => file.path),
-        proposalInput.allowDroppingItems,
-        context,
-      );
+const rebaseDraftArtifact = async (
+  artifactPath: string,
+  next: ParsedProposalArtifact,
+  context: any,
+  options: DraftWriteOptions,
+) => mergeDraftArtifact(next, (await readProposalArtifactMaybe(artifactPath, context))?.parsed, options);
 
-      const now = new Date().toISOString();
-      const preparedFiles = await Promise.all(files.map(file => prepareProposalFileInput(file, context)));
-      const items: ProposalItem[] = preparedFiles.map((prepared, index) => {
-        const file = prepared.input;
-        return proposalItemSchema.parse({
-          id: file.id ?? itemIdForPath(file.path, index),
-          kind: file.kind,
-          status: 'pending',
-          title: file.title ?? file.path,
-          path: file.path,
-          additions: prepared.additions,
-          deletions: prepared.deletions,
-          viewed: false,
-          current_hash: prepared.currentHash,
-          proposed_hash: prepared.proposedHash,
-        });
-      });
-      const frontmatter: ProposalFrontmatter = proposalFrontmatterSchema.parse({
-        weave_proposal_version: 1,
-        id: artifactPath.slice(proposalDirectory.length + 1, -'.md'.length),
-        title: proposalInput.title.trim(),
-        status: proposalInput.status ?? inferProposalStatus(items),
-        scope: 'git',
-        plan_path: proposalInput.planPath,
-        thread_ids: [threadId],
-        path: artifactPath,
-        updated_at: now,
-        summary: proposalInput.summary.trim(),
-        items,
-      });
-      const body: ProposalBody = {
-        overview: proposalInput.overview,
-        items: preparedFiles.map((prepared, index) => ({
-          ...prepared.body,
-          id: items[index].id,
-        })),
-      };
-      assertProposalItemsCompleteForStatuses(items, body.items, ['pending', 'approved', 'applied']);
-      const content = renderProposalArtifact(frontmatter, body);
-      const write = await writePortalFile(artifactPath, content, context);
-      if (!write.ok) return toolError(write.error, artifactPath);
+const writeDraftArtifact = async (
+  context: any,
+  artifactPath: string,
+  content: string,
+  options: DraftWriteOptions = {},
+) => {
+  const rebased = await rebaseDraftArtifact(artifactPath, parseProposalArtifact(content), context, options);
+  const nextContent = renderProposalArtifact(rebased.frontmatter, rebased.body);
+  const write = await writeWorkspaceTextFile(artifactPath, nextContent, context);
+  if (!write.ok) throw new Error(write.error);
+  const snapshot = proposalSnapshotFromFrontmatter(rebased.frontmatter, nextContent);
+  await updateThreadProposalMetadata(context, snapshot, 'draft');
+  return buildSnapshotOutput(snapshot, write.bytes);
+};
 
-      const snapshot = proposalSnapshotFromFrontmatter(frontmatter, content);
-      const output = buildSnapshotOutput(snapshot, write.bytes, {
-        counts: { patchBytes: patch.content.length, files: files.length },
-      });
-      await updateThreadProposalMetadata(context, snapshot);
-      return output;
-    } catch (error) {
-      return toolError(error, path);
+const exactReplacementRanges = (content: string, edits: Array<z.infer<typeof exactEditSchema>>) => {
+  const ranges = edits.map((edit, index) => {
+    const first = content.indexOf(edit.oldText);
+    if (first < 0) throw new Error(`edits[${index}].oldText was not found in the proposed buffer.`);
+    if (content.indexOf(edit.oldText, first + edit.oldText.length) >= 0) {
+      throw new Error(`edits[${index}].oldText matches more than once in the proposed buffer; make the oldText more specific.`);
     }
-  },
-  toModelOutput: output => proposalModelOutput('write_proposal_patch', output),
-});
-
-const applyItemUpdates = (items: ProposalItem[], input: z.infer<typeof updateProposalInputSchema>) => {
-  let next = items.map(item => ({ ...item }));
-  if (input.approveAllPending) {
-    next = next.map(item => item.status === 'pending' ? { ...item, status: 'approved' as const } : item);
-  }
-  if (input.approveAllViewed) {
-    next = next.map(item => item.status === 'pending' && item.viewed ? { ...item, status: 'approved' as const } : item);
-  }
-  if (input.rejectAllPending) {
-    next = next.map(item => item.status === 'pending' ? { ...item, status: 'rejected' as const } : item);
-  }
-  if (input.requestChanges) {
-    next = next.map(item => item.status === 'pending' || item.status === 'approved'
-      ? { ...item, status: 'changes_requested' as const, comment: input.requestChanges }
-      : item);
-  }
-
-  for (const update of input.items ?? []) {
-    const index = next.findIndex(item => item.id === update.id);
-    if (index < 0) throw new Error(`Unknown proposal item id: ${update.id}`);
-    next[index] = {
-      ...next[index],
-      ...(update.status ? { status: update.status } : {}),
-      ...(typeof update.viewed === 'boolean' ? { viewed: update.viewed } : {}),
-      ...(typeof update.comment === 'string' ? { comment: update.comment } : {}),
+    return {
+      index,
+      start: first,
+      end: first + edit.oldText.length,
+      oldText: edit.oldText,
+      newText: edit.newText,
     };
+  }).sort((left, right) => left.start - right.start);
+
+  for (let index = 1; index < ranges.length; index += 1) {
+    if (ranges[index].start < ranges[index - 1].end) {
+      throw new Error(`edits[${ranges[index].index}] overlaps edits[${ranges[index - 1].index}]. Merge nearby changes into one edit.`);
+    }
+  }
+  return ranges;
+};
+
+const applyExactReplacements = (content: string, edits: Array<z.infer<typeof exactEditSchema>>) => {
+  const ranges = exactReplacementRanges(content, edits);
+  let next = content;
+  for (const range of [...ranges].reverse()) {
+    next = `${next.slice(0, range.start)}${range.newText}${next.slice(range.end)}`;
   }
   return next;
 };
 
-export const updateProposalTool = createTool({
-  id: 'update_proposal',
+const validateProposalForFinalize = async (
+  frontmatter: ProposalFrontmatter,
+  body: ProposalBody,
+  context: any,
+  deps: { readHash?: typeof readWorkspaceFileHash } = {},
+) => {
+  const readHash = deps.readHash ?? readWorkspaceFileHash;
+  if (frontmatter.items.length === 0) throw new Error('Cannot finalize an empty proposal. Add at least one file item first.');
+  assertProposalItemsCompleteForStatuses(
+    frontmatter.items,
+    body.items,
+    ['pending', 'approved', 'applied', 'changes_requested', 'rejected', 'stale'],
+  );
+
+  const bodyById = new Map(body.items.map(item => [item.id, item]));
+  const drift: string[] = [];
+  for (const item of frontmatter.items) {
+    if (!codeProposalItemKinds.has(item.kind)) continue;
+    if (!item.path) {
+      drift.push(`${item.id}: missing path`);
+      continue;
+    }
+    const bodyItem = bodyById.get(item.id);
+    try {
+      assertBodyHashesMatchItem(item, bodyItem);
+    } catch (error) {
+      drift.push(error instanceof Error ? error.message : String(error));
+      continue;
+    }
+    if (item.kind === 'file_edit') {
+      if (typeof bodyItem?.currentContent !== 'string' || typeof bodyItem.proposedContent !== 'string') {
+        drift.push(`${item.path}: file_edit items must contain Current Content and Proposed Content buffers.`);
+        continue;
+      }
+    }
+    if (item.kind === 'file_create' && typeof bodyItem?.proposedContent !== 'string') {
+      drift.push(`${item.path}: file_create items must contain Proposed Content.`);
+      continue;
+    }
+    if (item.kind === 'file_delete' && typeof bodyItem?.currentContent !== 'string') {
+      drift.push(`${item.path}: file_delete items must contain Current Content.`);
+      continue;
+    }
+
+    if (item.kind === 'file_create') {
+      const liveHash = await readHash(item.path, context);
+      if (liveHash.ok) {
+        drift.push(`${item.path}: target now exists on disk; recreate this proposal item as an edit.`);
+      } else if (!isMissingPathError(liveHash.error)) {
+        drift.push(`${item.path}: ${liveHash.error}`);
+      }
+      continue;
+    }
+
+    const liveHash = await readHash(item.path, context);
+    if (!liveHash.ok) {
+      drift.push(`${item.path}: source file is missing on disk.`);
+      continue;
+    }
+    if (item.current_hash && liveHash.contentHash !== item.current_hash) {
+      drift.push(`${item.path}: source changed on disk (expected ${item.current_hash}, got ${liveHash.contentHash}).`);
+    }
+  }
+
+  if (drift.length) {
+    throw new Error(`Proposal cannot be finalized because file state drifted. ${drift.slice(0, 5).join(' ')}`);
+  }
+};
+
+export const proposalStartTool = createTool({
+  id: 'proposal_start',
   strict: true,
-  description: 'Update approval, viewed, rejection, or request-changes state in a proposal artifact.',
-  inputSchema: updateProposalInputSchema,
+  description: [
+    'Start or reopen a git-scoped draft proposal workspace at .agents/proposals/<name>.md.',
+    'This creates a draft proposal artifact with no source-file changes. Use proposal_write, proposal_edit, and proposal_delete to mutate one proposed file at a time.',
+    'Draft proposals are live-reviewable after file items exist, but they are not implementation-ready until proposal_finalize succeeds.',
+  ].join('\n'),
+  inputSchema: proposalStartInputSchema,
   outputSchema: proposalToolOutputSchema,
   transform: proposalToolTransform,
   execute: async (input, context) => {
@@ -765,48 +816,415 @@ export const updateProposalTool = createTool({
     try {
       await getGitProposalBinding(context);
       const { threadId } = await getThreadRecord(context);
-      const artifactPath = await resolveProposalPath(input.proposalPath, context);
+      const proposalInput = proposalStartInputSchema.parse(input);
+      const artifactPath = proposalInput.proposalPath ? validateProposalPath(proposalInput.proposalPath) : proposalPathForName(proposalInput.title);
       path = artifactPath;
-      const read = await readPortalFile(artifactPath, context);
-      if (!read.ok) return toolError(read.error, artifactPath);
-
-      const parsed = parseProposalArtifact(read.content);
+      const existing = await readProposalArtifactMaybe(artifactPath, context);
       const now = new Date().toISOString();
-      const items = applyItemUpdates(parsed.frontmatter.items, input);
-      assertProposalItemsCompleteForStatuses(
-        items,
-        parsed.body.items,
-        input.status === 'approved' || input.status === 'applied'
-          ? ['pending', 'approved', 'applied']
-          : ['approved', 'applied'],
-      );
       const frontmatter = proposalFrontmatterSchema.parse({
-        ...parsed.frontmatter,
-        status: input.status ?? inferProposalStatus(items),
-        thread_ids: threadIdsWith(parsed.frontmatter.thread_ids, threadId),
+        weave_proposal_version: 1,
+        id: artifactPath.slice(proposalDirectory.length + 1, -'.md'.length),
+        title: proposalInput.title.trim(),
+        status: 'draft',
+        scope: 'git',
+        plan_path: proposalInput.planPath ?? existing?.parsed.frontmatter.plan_path,
+        thread_ids: threadIdsWith(existing?.parsed.frontmatter.thread_ids ?? [], threadId),
+        path: artifactPath,
         updated_at: now,
-        items,
+        summary: proposalInput.summary.trim(),
+        items: existing?.parsed.frontmatter.items ?? [],
       });
-      const content = renderProposalArtifact(frontmatter, parsed.body);
-      const write = await writePortalFile(artifactPath, content, context);
-      if (!write.ok) return toolError(write.error, artifactPath);
-
-      const snapshot = proposalSnapshotFromFrontmatter(frontmatter, content);
-      const output = buildSnapshotOutput(snapshot, write.bytes);
-      await updateThreadProposalMetadata(context, snapshot);
-      return output;
+      const body: ProposalBody = {
+        overview: proposalInput.overview ?? existing?.parsed.body.overview,
+        items: existing?.parsed.body.items ?? [],
+      };
+      const content = renderProposalArtifact(frontmatter, body);
+      return await writeDraftArtifact(context, artifactPath, content);
     } catch (error) {
       return toolError(error, path);
     }
   },
-  toModelOutput: output => proposalModelOutput('update_proposal', output),
+  toModelOutput: output => proposalModelOutput('proposal_start', output),
+});
+
+export const proposalReadTool = createTool({
+  id: 'proposal_read',
+  strict: true,
+  description: [
+    'Read a file through the proposal workspace.',
+    'If the file has a proposed buffer, this returns the proposed content. Otherwise it reads the live Workspace file.',
+    'Use offset and limit for large files. This tool does not mutate source files or proposal files.',
+  ].join('\n'),
+  inputSchema: proposalReadInputSchema,
+  outputSchema: proposalToolOutputSchema.extend({ content: z.string().optional() }).strict(),
+  transform: proposalToolTransform,
+  execute: async (input, context) => {
+    let path: string | undefined;
+    try {
+      await getGitProposalBinding(context);
+      const proposalInput = proposalReadInputSchema.parse(input);
+      path = proposalInput.path;
+      const artifactPath = await resolveProposalPath(proposalInput.proposalPath, context, { preferDraft: true });
+      const { parsed } = await readProposalArtifactRequired(artifactPath, context);
+      const state = await getVirtualFileState(parsed, proposalInput.path, context);
+      if (state.deleted) {
+        return {
+          ok: true,
+          updated: false,
+          path: proposalInput.path,
+          source: 'proposal' as const,
+          exists: false,
+          deleted: true,
+          content: '',
+          contentHash: state.currentHash,
+          currentHash: state.currentHash,
+          totalLines: 0,
+          totalChars: 0,
+          returnedLines: 0,
+          offset: proposalInput.offset ?? 1,
+          ...(proposalInput.limit !== undefined ? { limit: proposalInput.limit } : {}),
+        };
+      }
+
+      const content = state.proposedContent ?? '';
+      return {
+        ok: true,
+        updated: false,
+        path: proposalInput.path,
+        source: state.source,
+        exists: true,
+        deleted: false,
+        contentHash: state.proposedHash ?? hashText(content),
+        currentHash: state.currentHash,
+        proposedHash: state.proposedHash ?? hashText(content),
+        ...paginateContent(content, proposalInput.offset ?? 1, proposalInput.limit),
+      };
+    } catch (error) {
+      return toolError(error, path);
+    }
+  },
+  toModelOutput: proposalReadModelOutput,
+});
+
+export const proposalWriteTool = createTool({
+  id: 'proposal_write',
+  strict: true,
+  description: [
+    'Write full proposed content for one file in the active draft proposal.',
+    'This creates or replaces only the proposal buffer. It never writes the source file.',
+  ].join('\n'),
+  inputSchema: proposalWriteInputSchema,
+  outputSchema: proposalToolOutputSchema,
+  transform: proposalToolTransform,
+  execute: async (input, context) => {
+    let path: string | undefined;
+    try {
+      await getGitProposalBinding(context);
+      const { threadId } = await getThreadRecord(context);
+      const proposalInput = proposalWriteInputSchema.parse(input);
+      path = proposalInput.path;
+      const artifactPath = await resolveProposalPath(proposalInput.proposalPath, context, { preferDraft: true });
+      const { parsed } = await readProposalArtifactRequired(artifactPath, context);
+      const existingState = findFileItemIndex(parsed.frontmatter.items, proposalInput.path) >= 0
+        ? await getVirtualFileState(parsed, proposalInput.path, context)
+        : undefined;
+      const live = existingState ? undefined : await readLiveFileMaybe(proposalInput.path, context);
+      const kind = existingState?.kind === 'file_create' || !existingState && !live ? 'file_create' : 'file_edit';
+      const currentContent = kind === 'file_create'
+        ? undefined
+        : existingState?.currentContent ?? live?.content;
+      const { content, item } = upsertFileItem(parsed, {
+        path: proposalInput.path,
+        kind,
+        currentContent,
+        proposedContent: proposalInput.content,
+        title: proposalInput.title,
+        description: proposalInput.description,
+        rationale: proposalInput.rationale,
+      }, threadId);
+      return await writeDraftArtifact(context, artifactPath, content, { resetItemIds: new Set([item.id]) });
+    } catch (error) {
+      return toolError(error, path);
+    }
+  },
+  toModelOutput: output => proposalModelOutput('proposal_write', output),
+});
+
+export const proposalEditTool = createTool({
+  id: 'proposal_edit',
+  strict: true,
+  description: [
+    'Edit one proposed file buffer using exact text replacement.',
+    'Every edits[].oldText must match a unique, non-overlapping region of the original proposed buffer. Each edit is matched against the original buffer, not incrementally.',
+    'This updates only the proposal buffer and never writes the source file.',
+  ].join('\n'),
+  inputSchema: proposalEditInputSchema,
+  outputSchema: proposalToolOutputSchema,
+  transform: proposalToolTransform,
+  execute: async (input, context) => {
+    let path: string | undefined;
+    try {
+      await getGitProposalBinding(context);
+      const { threadId } = await getThreadRecord(context);
+      const proposalInput = proposalEditInputSchema.parse(input);
+      path = proposalInput.path;
+      const artifactPath = await resolveProposalPath(proposalInput.proposalPath, context, { preferDraft: true });
+      const { parsed } = await readProposalArtifactRequired(artifactPath, context);
+      const state = await getVirtualFileState(parsed, proposalInput.path, context);
+      if (state.deleted) throw new Error(`${proposalInput.path} is currently proposed for deletion. Use proposal_write to replace it with content or proposal_discard to remove the item.`);
+      const original = state.proposedContent ?? '';
+      const next = applyExactReplacements(original, proposalInput.edits);
+      const kind = state.kind === 'file_create' ? 'file_create' : 'file_edit';
+      const { content, item } = upsertFileItem(parsed, {
+        path: proposalInput.path,
+        kind,
+        currentContent: kind === 'file_create' ? undefined : state.currentContent,
+        proposedContent: next,
+        title: proposalInput.title,
+        description: proposalInput.description,
+        rationale: proposalInput.rationale,
+      }, threadId);
+      return await writeDraftArtifact(context, artifactPath, content, { resetItemIds: new Set([item.id]) });
+    } catch (error) {
+      return toolError(error, path);
+    }
+  },
+  toModelOutput: output => proposalModelOutput('proposal_edit', output),
+});
+
+export const proposalDeleteTool = createTool({
+  id: 'proposal_delete',
+  strict: true,
+  description: [
+    'Record a proposed deletion for one file in the active draft proposal.',
+    'This does not delete the source file. Use proposal_discard to remove a proposed file item instead.',
+  ].join('\n'),
+  inputSchema: proposalDeleteInputSchema,
+  outputSchema: proposalToolOutputSchema,
+  transform: proposalToolTransform,
+  execute: async (input, context) => {
+    let path: string | undefined;
+    try {
+      await getGitProposalBinding(context);
+      const { threadId } = await getThreadRecord(context);
+      const proposalInput = proposalDeleteInputSchema.parse(input);
+      path = proposalInput.path;
+      const artifactPath = await resolveProposalPath(proposalInput.proposalPath, context, { preferDraft: true });
+      const { parsed } = await readProposalArtifactRequired(artifactPath, context);
+      const itemIndex = findFileItemIndex(parsed.frontmatter.items, proposalInput.path);
+      const state = itemIndex >= 0 ? await getVirtualFileState(parsed, proposalInput.path, context) : undefined;
+      if (state?.kind === 'file_create') {
+        throw new Error(`${proposalInput.path} only exists as a proposed create. Use proposal_discard to remove that proposal item.`);
+      }
+      const live = state ? undefined : await readLiveFileMaybe(proposalInput.path, context);
+      if (!state && !live) throw new Error(`${proposalInput.path} does not exist on disk, so it cannot be proposed for deletion.`);
+      const currentContent = state?.currentContent ?? live?.content;
+      if (currentContent === undefined) throw new Error(`${proposalInput.path} has no current content snapshot to delete.`);
+      const { content, item } = upsertFileItem(parsed, {
+        path: proposalInput.path,
+        kind: 'file_delete',
+        currentContent,
+        title: proposalInput.title,
+        description: proposalInput.description,
+        rationale: proposalInput.rationale,
+      }, threadId);
+      return await writeDraftArtifact(context, artifactPath, content, { resetItemIds: new Set([item.id]) });
+    } catch (error) {
+      return toolError(error, path);
+    }
+  },
+  toModelOutput: output => proposalModelOutput('proposal_delete', output),
+});
+
+export const proposalDiscardTool = createTool({
+  id: 'proposal_discard',
+  strict: true,
+  description: 'Discard one proposed file item from the active draft proposal. This does not touch the source file.',
+  inputSchema: proposalDiscardInputSchema,
+  outputSchema: proposalToolOutputSchema,
+  transform: proposalToolTransform,
+  execute: async (input, context) => {
+    let path: string | undefined;
+    try {
+      await getGitProposalBinding(context);
+      const { threadId } = await getThreadRecord(context);
+      const proposalInput = proposalDiscardInputSchema.parse(input);
+      path = proposalInput.path;
+      const artifactPath = await resolveProposalPath(proposalInput.proposalPath, context, { preferDraft: true });
+      const { parsed } = await readProposalArtifactRequired(artifactPath, context);
+      const removedIds = new Set(
+        parsed.frontmatter.items
+          .filter(item => codeProposalItemKinds.has(item.kind) && item.path === proposalInput.path)
+          .map(item => item.id),
+      );
+      if (!removedIds.size) {
+        const snapshot = proposalSnapshotFromFrontmatter(parsed.frontmatter, renderProposalArtifact(parsed.frontmatter, parsed.body));
+        return { ok: true, updated: false, ...snapshot, discarded: 0 };
+      }
+      const frontmatter = proposalFrontmatterSchema.parse({
+        ...parsed.frontmatter,
+        status: 'draft',
+        thread_ids: threadIdsWith(parsed.frontmatter.thread_ids, threadId),
+        updated_at: new Date().toISOString(),
+        items: parsed.frontmatter.items.filter(item => !removedIds.has(item.id)),
+      });
+      const body = {
+        overview: parsed.body.overview,
+        items: parsed.body.items.filter(item => !removedIds.has(item.id)),
+      };
+      const content = renderProposalArtifact(frontmatter, body);
+      const output = await writeDraftArtifact(context, artifactPath, content, { removeItemIds: removedIds });
+      return { ...output, discarded: removedIds.size };
+    } catch (error) {
+      return toolError(error, path);
+    }
+  },
+  toModelOutput: output => proposalModelOutput('proposal_discard', output),
+});
+
+export const proposalStatusTool = createTool({
+  id: 'proposal_status',
+  strict: true,
+  description: 'Return compact status for the active proposal artifact without returning proposed file contents.',
+  inputSchema: proposalStatusInputSchema,
+  outputSchema: proposalToolOutputSchema,
+  transform: proposalToolTransform,
+  execute: async (input, context) => {
+    let path: string | undefined;
+    try {
+      await getGitProposalBinding(context);
+      const proposalInput = proposalStatusInputSchema.parse(input);
+      const artifactPath = await resolveProposalPath(proposalInput.proposalPath, context, { preferDraft: true });
+      path = artifactPath;
+      const { parsed, content } = await readProposalArtifactRequired(artifactPath, context);
+      return {
+        ok: true,
+        updated: false,
+        ...proposalSnapshotFromFrontmatter(parsed.frontmatter, content),
+      };
+    } catch (error) {
+      return toolError(error, path);
+    }
+  },
+  toModelOutput: output => proposalModelOutput('proposal_status', output),
+});
+
+export const proposalFinalizeTool = createTool({
+  id: 'proposal_finalize',
+  strict: true,
+  description: [
+    'Validate the active draft proposal against live disk state and publish it as implementation-ready review state.',
+    'Finalization blocks when source files drifted, create targets now exist, delete targets are missing, or item buffers are incomplete.',
+  ].join('\n'),
+  inputSchema: proposalFinalizeInputSchema,
+  outputSchema: proposalToolOutputSchema,
+  transform: proposalToolTransform,
+  execute: async (input, context) => {
+    let path: string | undefined;
+    try {
+      await getGitProposalBinding(context);
+      const { threadId } = await getThreadRecord(context);
+      const proposalInput = proposalFinalizeInputSchema.parse(input);
+      const artifactPath = await resolveProposalPath(proposalInput.proposalPath, context, { preferDraft: true });
+      path = artifactPath;
+      const { parsed } = await readProposalArtifactRequired(artifactPath, context);
+      await validateProposalForFinalize(parsed.frontmatter, parsed.body, context);
+      const frontmatter = proposalFrontmatterSchema.parse({
+        ...parsed.frontmatter,
+        status: inferProposalStatus(parsed.frontmatter.items),
+        thread_ids: threadIdsWith(parsed.frontmatter.thread_ids, threadId),
+        updated_at: new Date().toISOString(),
+      });
+      const content = renderProposalArtifact(frontmatter, parsed.body);
+      const write = await writeWorkspaceTextFile(artifactPath, content, context);
+      if (!write.ok) throw new Error(write.error);
+      const snapshot = proposalSnapshotFromFrontmatter(frontmatter, content);
+      await updateThreadProposalMetadata(context, snapshot, 'finalized');
+      return buildSnapshotOutput(snapshot, write.bytes);
+    } catch (error) {
+      return toolError(error, path);
+    }
+  },
+  toModelOutput: output => proposalModelOutput('proposal_finalize', output),
+});
+
+export const proposalMarkTool = createTool({
+  id: 'proposal_mark',
+  strict: true,
+  description: 'Mark proposal items with review or implementation outcomes. This updates proposal state only and never applies source changes.',
+  inputSchema: proposalMarkInputSchema,
+  outputSchema: proposalToolOutputSchema,
+  transform: proposalToolTransform,
+  execute: async (input, context) => {
+    let path: string | undefined;
+    try {
+      await getGitProposalBinding(context);
+      const { threadId } = await getThreadRecord(context);
+      const proposalInput = proposalMarkInputSchema.parse(input);
+      const artifactPath = await resolveProposalPath(proposalInput.proposalPath, context, { preferDraft: false });
+      path = artifactPath;
+      const { parsed } = await readProposalArtifactRequired(artifactPath, context);
+      const updatesById = new Map(proposalInput.items.map(item => [item.id, item]));
+      let applied = 0;
+      let stale = 0;
+      let skipped = 0;
+      const items = parsed.frontmatter.items.map(item => {
+        const update = updatesById.get(item.id);
+        if (!update) return item;
+        updatesById.delete(item.id);
+        if (update.status === item.status && update.comment === undefined) {
+          skipped += 1;
+          return item;
+        }
+        if (update.status === 'applied') applied += 1;
+        if (update.status === 'stale') stale += 1;
+        return {
+          ...item,
+          status: update.status,
+          viewed: update.status === 'approved' || update.status === 'applied' ? true : item.viewed,
+          ...(update.comment !== undefined ? { comment: update.comment } : {}),
+          ...(update.status === 'applied' ? { applied_at: new Date().toISOString() } : {}),
+        };
+      });
+      const unknown = [...updatesById.keys()];
+      if (unknown.length) throw new Error(`Unknown proposal item id(s): ${unknown.join(', ')}`);
+      assertProposalItemsCompleteForStatuses(items, parsed.body.items, ['pending', 'approved', 'applied']);
+      const frontmatter = proposalFrontmatterSchema.parse({
+        ...parsed.frontmatter,
+        status: parsed.frontmatter.status === 'draft' ? 'draft' : inferProposalStatus(items),
+        thread_ids: threadIdsWith(parsed.frontmatter.thread_ids, threadId),
+        updated_at: new Date().toISOString(),
+        items,
+      });
+      const content = renderProposalArtifact(frontmatter, parsed.body);
+      const write = await writeWorkspaceTextFile(artifactPath, content, context);
+      if (!write.ok) throw new Error(write.error);
+      const snapshot = proposalSnapshotFromFrontmatter(frontmatter, content);
+      await updateThreadProposalMetadata(context, snapshot, frontmatter.status === 'draft' ? 'draft' : 'finalized');
+      return buildSnapshotOutput(snapshot, write.bytes, { applied, stale, skipped });
+    } catch (error) {
+      return toolError(error, path);
+    }
+  },
+  toModelOutput: output => proposalModelOutput('proposal_mark', output),
 });
 
 export const __proposalToolTest = {
-  assertProposalFileInputsComplete,
-  buildProposalFilesFromPatch,
+  applyExactReplacements,
+  exactEditSchema,
   isSingleProposalFilePath,
-  writeProposalInputSchema,
-  writeProposalPatchInputSchema,
-  updateProposalInputSchema,
+  itemIdForPath,
+  mergeDraftArtifact,
+  paginateContent,
+  proposalModelOutput,
+  proposalDeleteInputSchema,
+  proposalDiscardInputSchema,
+  proposalEditInputSchema,
+  proposalFinalizeInputSchema,
+  proposalMarkInputSchema,
+  proposalReadInputSchema,
+  proposalStartInputSchema,
+  proposalStatusInputSchema,
+  proposalWriteInputSchema,
+  validateProposalForFinalize,
 };

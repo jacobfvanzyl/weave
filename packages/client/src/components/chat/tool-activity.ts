@@ -74,7 +74,7 @@ export type ToolActivityCall = {
 export type ToolActivitySideEffect =
   | { type: 'renameThread'; title: string }
   | { type: 'updatePlan'; plan: ToolActivityPlan }
-  | { type: 'updateProposal'; proposal: ToolActivityProposal };
+  | { type: 'proposal'; proposal: ToolActivityProposal };
 
 export type ToolActivityFollowTarget = {
   path: string;
@@ -88,11 +88,32 @@ export const isEmptyObject = (value: unknown) =>
 export const isDegradedToolCall = ({ toolName, args, result }: Pick<ToolActivityCall, 'toolName' | 'args' | 'result'>) =>
   (toolName === 'call' || toolName === 'tool') && isEmptyObject(args) && result === undefined;
 
-export const isRenameThreadTool = (toolName: string) => ['renameThreadTool', 'rename-thread'].includes(toolName);
+const normalizeToolName = (toolName: string) =>
+  toolName.startsWith('functions.') ? toolName.slice('functions.'.length) : toolName;
+
+export const isRenameThreadTool = (toolName: string) => ['renameThreadTool', 'rename-thread'].includes(normalizeToolName(toolName));
 export const isUpdatePlanTool = (toolName: string) =>
-  ['writePlanTool', 'write_plan', 'write-plan', 'updatePlanTool', 'update_plan', 'update-plan'].includes(toolName);
+  ['writePlanTool', 'write_plan', 'write-plan', 'updatePlanTool', 'update_plan', 'update-plan'].includes(normalizeToolName(toolName));
+const proposalToolNames = [
+  'proposal_start',
+  'proposal_read',
+  'proposal_write',
+  'proposal_edit',
+  'proposal_delete',
+  'proposal_discard',
+  'proposal_status',
+  'proposal_finalize',
+  'proposal_mark',
+];
 export const isProposalTool = (toolName: string) =>
-  ['writeProposalTool', 'write_proposal', 'write-proposal', 'updateProposalTool', 'update_proposal', 'update-proposal'].includes(toolName);
+  proposalToolNames.includes(normalizeToolName(toolName));
+
+const leakedProposalToolCallPattern = new RegExp(
+  `^\\s*(?:functions\\.)?(?:${proposalToolNames.join('|')})\\s*\\([\\s\\S]*\\)\\s*$`,
+);
+
+export const isLeakedProposalToolCallText = (text: string) =>
+  leakedProposalToolCallPattern.test(text);
 
 const isPlanStepStatus = (value: unknown): value is ToolActivityPlanStepStatus =>
   value === 'pending' || value === 'in_progress' || value === 'completed' || value === 'blocked';
@@ -223,6 +244,7 @@ export const getToolChipDetail = (toolName: string, args: unknown) => {
   }
   if (isProposalTool(toolName)) {
     if (typeof record?.proposalPath === 'string') return record.proposalPath;
+    if (typeof record?.path === 'string') return record.path;
     if (typeof record?.title === 'string') return record.title;
   }
   return '';
@@ -276,7 +298,8 @@ export const getToolCallRawStatus = (part: Record<string, unknown>) => {
 
 export const toToolActivityCall = (part: unknown): ToolActivityCall | null => {
   if (!isToolCallRecord(part)) return null;
-  const toolName = typeof part.toolName === 'string' ? part.toolName : dynamicToolNameFromType(part.type);
+  const rawToolName = typeof part.toolName === 'string' ? part.toolName : dynamicToolNameFromType(part.type);
+  const toolName = typeof rawToolName === 'string' ? normalizeToolName(rawToolName) : undefined;
   if (typeof part.toolCallId !== 'string' || typeof toolName !== 'string') return null;
 
   return {
@@ -422,7 +445,7 @@ export const getToolActivitySideEffect = (call: ToolActivityCall): ToolActivityS
 
   if (isProposalTool(call.toolName)) {
     const payload = getProposalPayload(call.result, call.args);
-    return payload ? { type: 'updateProposal', proposal: { ...payload, isBusy: getToolActivityStatus(call) === 'running' } } : null;
+    return payload ? { type: 'proposal', proposal: { ...payload, isBusy: getToolActivityStatus(call) === 'running' } } : null;
   }
 
   return null;

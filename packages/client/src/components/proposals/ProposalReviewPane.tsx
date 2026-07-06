@@ -10,10 +10,12 @@ import {
   type ProposalCompletenessIssue,
   type ParsedProposalArtifact,
 } from '../../lib/proposal-artifacts';
+import { getProposalReviewUpdates, sameReviewedProposalItem, withReviewFields } from '../../lib/proposal-review-conflict';
 import { applyUnifiedDiff, isMissingPathError } from '../../lib/proposal-unified-diff';
-import { getNextProposalReviewItemId } from '../../lib/proposal-review-state';
+import { canSubmitProposalReview, getNextProposalReviewItemId } from '../../lib/proposal-review-state';
 import { cn } from '../../lib/cn';
 import { useChatStore, type ThreadProposalItem } from '../../stores/chat-store';
+import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import {
   Dialog,
@@ -168,6 +170,11 @@ type ProposalPreview = {
 
 const completenessRequiredStatuses = new Set(['pending', 'approved', 'applied']);
 
+const isWorkspaceVersionConflict = (reason: unknown) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return /File changed on disk|Reload before saving/i.test(message);
+};
+
 const liveIssue = (
   item: ThreadProposalItem,
   code: ProposalCompletenessIssue['code'],
@@ -311,6 +318,7 @@ export const ProposalReviewPane = ({
 
   const persistItems = useCallback(async (items: ThreadProposalItem[]) => {
     if (!proposal) return false;
+    const reviewUpdates = getProposalReviewUpdates(proposal.items, items);
     setIsSaving(true);
     setError(null);
     try {
@@ -323,6 +331,36 @@ export const ProposalReviewPane = ({
       setThreadProposal(threadId, parsed);
       return true;
     } catch (reason) {
+      if (isWorkspaceVersionConflict(reason) && reviewUpdates.length > 0) {
+        try {
+          const latestFile = await codeBackend.read(stableTarget, proposalPath);
+          const latestProposal = parseProposalArtifact(latestFile.content);
+          const pendingUpdates = new Set(reviewUpdates.map(update => update.expected.id));
+          const latestItems = latestProposal.items.map(item => {
+            const reviewUpdate = reviewUpdates.find(update => update.expected.id === item.id);
+            if (!reviewUpdate) return item;
+            pendingUpdates.delete(item.id);
+            if (!sameReviewedProposalItem(reviewUpdate.expected, item)) {
+              throw new Error('Proposal item changed while you were reviewing it. Reload the proposal before approving or requesting changes.');
+            }
+            return withReviewFields(item, reviewUpdate.next);
+          });
+          if (pendingUpdates.size > 0) {
+            throw new Error('Proposal item changed while you were reviewing it. Reload the proposal before approving or requesting changes.');
+          }
+          const nextContent = renderProposalArtifact(latestProposal, latestItems);
+          const write = await codeBackend.write(stableTarget, proposalPath, nextContent, latestFile.version);
+          const parsed = parseProposalArtifact(nextContent);
+          proposalRef.current = parsed;
+          setProposal(parsed);
+          setArtifactVersion(write.version);
+          setThreadProposal(threadId, parsed);
+          return true;
+        } catch (retryReason) {
+          setError(retryReason instanceof Error ? retryReason.message : String(retryReason));
+          return false;
+        }
+      }
       setError(reason instanceof Error ? reason.message : String(reason));
       return false;
     } finally {
@@ -426,6 +464,10 @@ export const ProposalReviewPane = ({
   const submitReview = useCallback(() => {
     if (!proposal) return;
     const codeItems = proposal.items.filter(isCodeProposalItem);
+    if (!canSubmitProposalReview(proposal)) {
+      setError('Finalize the proposal before submitting implementation or review feedback.');
+      return;
+    }
     if (firstBlockingCompletenessIssue) {
       setError(formatProposalCompletenessIssue(firstBlockingCompletenessIssue));
       return;
@@ -459,11 +501,13 @@ export const ProposalReviewPane = ({
     onClose();
   }, [enqueueProposalImplementationRequest, firstBlockingCompletenessIssue, onClose, proposal, proposalPath, threadId]);
 
+  const isDraftProposal = proposal?.status === 'draft';
   const hasFeedback = codeItems.some(item => item.status === 'changes_requested');
   const allCodeItemsApproved = codeItems.length > 0 && codeItems.every(item => item.status === 'approved' || item.status === 'applied');
   const hasPendingImplementation = Boolean(pendingImplementationRequest);
   const canSubmitReview = Boolean(
     proposal
+      && canSubmitProposalReview(proposal)
       && codeItems.length > 0
       && (hasFeedback || allCodeItemsApproved)
       && !firstBlockingCompletenessIssue
@@ -472,19 +516,23 @@ export const ProposalReviewPane = ({
       && !hasPendingImplementation,
   );
 
-  const submitLabel = isThreadRunning
-    ? 'Agent running'
-    : hasPendingImplementation
-      ? 'Queued'
-      : 'Submit';
+  const submitLabel = isDraftProposal
+    ? 'Draft'
+    : isThreadRunning
+      ? 'Agent running'
+      : hasPendingImplementation
+        ? 'Queued'
+        : 'Submit';
 
-  const submitTitle = firstBlockingCompletenessIssue
-    ? formatProposalCompletenessIssue(firstBlockingCompletenessIssue)
-    : hasFeedback
-      ? 'Send review feedback to the agent'
-      : allCodeItemsApproved
-        ? 'Start the agent to implement approved code proposals'
-        : 'Approve all code proposals or request changes before submitting';
+  const submitTitle = isDraftProposal
+    ? 'Finalize the proposal before submitting implementation or review feedback'
+    : firstBlockingCompletenessIssue
+      ? formatProposalCompletenessIssue(firstBlockingCompletenessIssue)
+      : hasFeedback
+        ? 'Send review feedback to the agent'
+        : allCodeItemsApproved
+          ? 'Start the agent to implement approved code proposals'
+          : 'Approve all code proposals or request changes before submitting';
 
   const filteredItems = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -633,6 +681,11 @@ export const ProposalReviewPane = ({
           <div className="min-w-0 flex-1 truncate text-sm font-medium">
             {proposal?.title ?? 'Proposal review'}
           </div>
+          {proposal ? (
+            <Badge size="sm" variant={isDraftProposal ? 'outline' : 'info'}>
+              {isDraftProposal ? 'Draft' : 'Finalized'}
+            </Badge>
+          ) : null}
           <Button
             size="sm"
             variant="outline"
@@ -647,7 +700,7 @@ export const ProposalReviewPane = ({
             onClick={submitReview}
             disabled={!canSubmitReview}
             title={submitTitle}
-            className={cn(allCodeItemsApproved && !hasFeedback && 'border-success-button bg-success-button text-[#11111b] hover:bg-success-button/90')}
+            className={cn(!isDraftProposal && allCodeItemsApproved && !hasFeedback && 'border-success-button bg-success-button text-[#11111b] hover:bg-success-button/90')}
           >
             {submitLabel}
           </Button>
@@ -745,7 +798,7 @@ export const ProposalReviewPane = ({
             ) : null}
           </div>
           {selectedBody?.description ? (
-            <div className="shrink-0 border-b border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <div className="shrink-0 border-b border-border bg-muted/30 px-3 py-2 text-sm text-foreground">
               {selectedBody.description}
             </div>
           ) : null}

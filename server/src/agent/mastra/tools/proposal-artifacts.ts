@@ -62,7 +62,7 @@ export const proposalFrontmatterSchema = z.object({
   path: z.string().min(1),
   updated_at: z.string().min(1),
   summary: z.string().min(1).max(500),
-  items: z.array(proposalItemSchema).min(1).max(120),
+  items: z.array(proposalItemSchema).max(120).default([]),
 }).strict();
 
 export type ProposalStatus = z.infer<typeof proposalStatusSchema>;

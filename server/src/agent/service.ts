@@ -23,6 +23,7 @@ import {
   type AgentThreadRunSnapshot,
   bufferAssistantTextStream,
   buildRunTimingMetadata,
+  filterCompactToolHistoryTextStream,
   toThreadRunSnapshot,
 } from './run-coordinator';
 import { type EventService, eventService as defaultEventService } from '../services/event-service';
@@ -335,7 +336,9 @@ export class MastraAgentService implements AgentService {
         } as never,
       });
 
-      const bufferedStream = bufferAssistantTextStream(stream as ReadableStream<unknown>);
+      const bufferedStream = bufferAssistantTextStream(
+        filterCompactToolHistoryTextStream(stream as ReadableStream<unknown>),
+      );
       if (!run) {
         return { stream: bufferedStream, snapshot: { active: false, status: 'idle' } };
       }

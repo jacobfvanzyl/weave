@@ -296,7 +296,7 @@ const toChatThread = (thread: ServerThread): ChatThread => ({
   workspacePath: typeof thread.metadata?.workspacePath === 'string' ? thread.metadata.workspacePath : undefined,
   removedWorkspace: toRemovedWorkspace(thread.metadata?.removedWorkspace),
   latestPlan: toThreadPlan(thread.metadata?.latestPlan),
-  latestProposal: toThreadProposal(thread.metadata?.latestProposal),
+  latestProposal: toThreadProposal(thread.metadata?.latestProposalDraft) ?? toThreadProposal(thread.metadata?.latestProposal),
 });
 
 export class ApiError extends Error {

@@ -7,6 +7,64 @@ import { hashText } from './tools/model-output';
 import { summarizeProposalToolInput } from './tools/proposal-tool-input-summary';
 
 const compactToolHistoryPrefix = 'Compact tool result summary';
+const legacyCompactToolHistoryToolNames = [
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'webSearch',
+  'webExtract',
+  'rename-thread',
+  'renameThreadTool',
+  'write_plan',
+  'writePlanTool',
+  'update_plan',
+  'updatePlanTool',
+  'proposal_start',
+  'proposal_read',
+  'proposal_write',
+  'proposal_edit',
+  'proposal_delete',
+  'proposal_discard',
+  'proposal_status',
+  'proposal_finalize',
+  'proposal_mark',
+  'multi_tool_use.parallel',
+];
+const legacyCompactToolHistoryFields = [
+  'ok',
+  'path',
+  'command',
+  'query',
+  'results',
+  'renamed',
+  'updated',
+  'completed',
+  'total',
+  'contentChars',
+  'contentHash',
+  'exitCode',
+  'result',
+  'recipient_name',
+];
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const legacyCompactToolHistoryToolPattern = legacyCompactToolHistoryToolNames.map(escapeRegExp).join('|');
+const legacyCompactToolHistoryFieldPatternSource = legacyCompactToolHistoryFields.map(escapeRegExp).join('|');
+const legacyFunctionToolCallPattern = new RegExp(
+  `^\\s*(?:functions\\.)?(?:${legacyCompactToolHistoryToolPattern})\\s*\\([\\s\\S]*\\)\\s*$`,
+);
+const potentialLegacyFunctionToolCallPattern = new RegExp(
+  `^\\s*(?:functions\\.)?(?:${legacyCompactToolHistoryToolPattern})?\\s*(?:\\([\\s\\S]*)?$`,
+);
+const legacyCompactToolHistoryHeadingPattern = new RegExp(
+  `^(${legacyCompactToolHistoryToolPattern}) result:\\s*\\n`,
+);
+const legacyCompactToolHistoryFieldPattern = new RegExp(
+  `(?:^|\\n)(${legacyCompactToolHistoryFieldPatternSource}):\\s`,
+);
+const legacyCompactToolHistoryInlineFieldPattern = new RegExp(
+  `(?:^|\\s)(${legacyCompactToolHistoryFieldPatternSource}):\\s`,
+);
 
 type PromptMessage = Record<string, unknown> & {
   role?: unknown;
@@ -88,15 +146,15 @@ const getToolInvocationCallId = (part: PromptPart) => {
 const hasToolCallPart = (message: PromptMessage) => getContentParts(message).some(part => isToolCallPart(part) || isToolInvocationPart(part));
 
 const proposalToolNames = new Set([
-  'writeProposalTool',
-  'write_proposal',
-  'write-proposal',
-  'writeProposalPatchTool',
-  'write_proposal_patch',
-  'write-proposal-patch',
-  'updateProposalTool',
-  'update_proposal',
-  'update-proposal',
+  'proposal_start',
+  'proposal_read',
+  'proposal_write',
+  'proposal_edit',
+  'proposal_delete',
+  'proposal_discard',
+  'proposal_status',
+  'proposal_finalize',
+  'proposal_mark',
 ]);
 
 const textHashSummary = (value: unknown, prefix: string) => {
@@ -143,10 +201,30 @@ const compactPortalBashResult = (result: Record<string, unknown>, args?: Record<
   ['stdoutErrors', firstErrorLines(result.stdout)],
 ]);
 
+const compactProposalReadResult = (result: Record<string, unknown>) => summaryLines([
+  ['ok', result.ok],
+  ['path', result.path],
+  ['source', result.source],
+  ['deleted', result.deleted],
+  ['offset', result.offset],
+  ['limit', result.limit],
+  ['totalLines', result.totalLines],
+  ['totalChars', result.totalChars],
+  ['contentHash', result.contentHash],
+  ['currentHash', result.currentHash],
+  ['proposedHash', result.proposedHash],
+  ['error', result.error],
+  ...textHashSummary(result.content, 'content'),
+]);
+
 const compactToolResultForPrompt = (toolName: string, output: unknown, args?: Record<string, unknown>): string | null => {
   if (isRecord(output) && typeof output.type !== 'string') {
     if (toolName === 'read') {
       const summary = compactPortalReadResult(output);
+      if (summary) return summary;
+    }
+    if (toolName === 'proposal_read') {
+      const summary = compactProposalReadResult(output);
       if (summary) return summary;
     }
     if (toolName === 'bash') {
@@ -157,7 +235,7 @@ const compactToolResultForPrompt = (toolName: string, output: unknown, args?: Re
 
   const summary = toolResultOutputToText(output);
   if (!summary) return null;
-  if ((toolName === 'read' || toolName === 'bash') && summary.length > 2_000) {
+  if ((toolName === 'read' || toolName === 'bash' || toolName === 'proposal_read') && summary.length > 2_000) {
     return summaryLines([
       ['resultChars', summary.length],
       ['resultHash', hashText(summary)],
@@ -239,11 +317,49 @@ export const createCompactToolHistoryPart = (
 
 export const isLegacyCompactToolHistoryText = (text: string) => {
   if (text.startsWith(`${compactToolHistoryPrefix}\n`)) return true;
+  if (legacyFunctionToolCallPattern.test(text)) return true;
 
-  const legacyHeading = /^(read|write|edit|bash|webSearch|webExtract|rename-thread|renameThreadTool|write_plan|writePlanTool|update_plan|updatePlanTool|write_proposal|writeProposalTool|write_proposal_patch|writeProposalPatchTool|update_proposal|updateProposalTool) result:\s*\n/;
-  if (!legacyHeading.test(text)) return false;
+  if (!legacyCompactToolHistoryHeadingPattern.test(text)) return false;
 
-  return /(?:^|\n)(ok|path|command|query|results|renamed|updated|completed|total|contentChars|contentHash|exitCode):\s/.test(text);
+  if (legacyCompactToolHistoryFieldPattern.test(text)) return true;
+
+  const body = text.slice((legacyCompactToolHistoryHeadingPattern.exec(text)?.[0] ?? '').length);
+  const firstNonEmptyLine = body.split(/\r?\n/).find(line => line.trim().length > 0)?.trimStart() ?? '';
+  return isPotentialCompactToolHistoryToolLine(firstNonEmptyLine) &&
+    legacyCompactToolHistoryInlineFieldPattern.test(firstNonEmptyLine);
+};
+
+const isPotentialCompactToolHistoryFieldLine = (line: string) =>
+  legacyCompactToolHistoryFields.some(field => `${field}: `.startsWith(line) || line.startsWith(`${field}:`));
+
+const isPotentialCompactToolHistoryToolLine = (line: string) =>
+  legacyCompactToolHistoryToolNames.some(toolName =>
+    toolName.startsWith(line) || line === toolName || line.startsWith(`${toolName} `) || line.startsWith(`${toolName}:`)
+  );
+
+export const isPotentialCompactToolHistoryText = (text: string) => {
+  if (!text) return true;
+
+  const compactPrefixHeading = `${compactToolHistoryPrefix}\n`;
+  if (compactPrefixHeading.startsWith(text) || text.startsWith(compactPrefixHeading)) return true;
+  if (text.trimStart().startsWith('functions.') || potentialLegacyFunctionToolCallPattern.test(text)) return true;
+
+  for (const toolName of legacyCompactToolHistoryToolNames) {
+    const heading = `${toolName} result:\n`;
+    if (heading.startsWith(text)) return true;
+  }
+
+  const headingMatch = legacyCompactToolHistoryHeadingPattern.exec(text);
+  if (!headingMatch) return false;
+
+  const body = text.slice(headingMatch[0].length);
+  if (!body.trim()) return true;
+
+  const firstNonEmptyLine = body.split(/\r?\n/).find(line => line.trim().length > 0)?.trimStart() ?? '';
+  if (!firstNonEmptyLine) return true;
+
+  return isPotentialCompactToolHistoryToolLine(firstNonEmptyLine) ||
+    isPotentialCompactToolHistoryFieldLine(firstNonEmptyLine);
 };
 
 export const isCompactToolHistoryTextPart = (part: unknown) => {

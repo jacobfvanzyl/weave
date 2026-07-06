@@ -4,9 +4,13 @@ export const getPendingProposalReviewCount = (
   proposal: Pick<ThreadProposal, 'counts' | 'items'> | undefined,
 ) => proposal?.counts.pending ?? proposal?.items.filter(item => item.status === 'pending').length ?? 0;
 
-export const shouldShowProposalReview = (
-  proposal: Pick<ThreadProposal, 'path' | 'counts' | 'items'> | undefined,
-) => Boolean(proposal?.path && getPendingProposalReviewCount(proposal) > 0);
+export const canViewProposalReview = (
+  proposal: Pick<ThreadProposal, 'path' | 'status' | 'counts' | 'items'> | undefined,
+) => Boolean(proposal?.path && proposal.items.length > 0);
+
+export const canSubmitProposalReview = (
+  proposal: Pick<ThreadProposal, 'path' | 'status' | 'items'> | undefined,
+) => Boolean(proposal?.path && proposal.status && proposal.status !== 'draft' && proposal.items.length > 0);
 
 const reviewedProposalItemStatuses = new Set<ProposalItemStatus>([
   'approved',

@@ -307,11 +307,20 @@ export const useChatStore = create<ChatState>()(
           const shouldClearSubmittedProposal = shouldClearSubmittedProposalForProposal(submittedProposal, proposal);
           const pendingCount = proposal.counts.pending ?? proposal.items.filter(item => item.status === 'pending').length;
           const approvedCount = proposal.counts.approved ?? proposal.items.filter(item => item.status === 'approved').length;
+          const canViewProposal = Boolean(proposal.path && proposal.items.length > 0);
+          const canSubmitProposal = canViewProposal && proposal.status !== 'draft';
           const hasNewPendingApprovals = pendingCount > 0
+            && canSubmitProposal
             && (!previous || previous.contentHash !== proposal.contentHash || (previous.counts.pending ?? 0) < pendingCount);
-          const hasNewApprovedImplementation = approvedCount > 0 && (!previous || (previous.counts.approved ?? 0) < approvedCount);
+          const hasNewApprovedImplementation = approvedCount > 0
+            && canSubmitProposal
+            && (!previous || (previous.counts.approved ?? 0) < approvedCount);
+          const hasNewDraftReview = proposal.status === 'draft'
+            && canViewProposal
+            && (!previous || previous.path !== proposal.path || previous.status !== 'draft');
           const shouldExpand = options.autoExpand !== false
-            && (proposal.status === 'changes_requested' || proposal.status === 'stale' || hasNewPendingApprovals || hasNewApprovedImplementation);
+            && canViewProposal
+            && (hasNewDraftReview || proposal.status === 'changes_requested' || proposal.status === 'stale' || hasNewPendingApprovals || hasNewApprovedImplementation);
           return {
             threadProposals: { ...state.threadProposals, [threadId]: proposal },
             submittedProposalImplementations: shouldClearSubmittedProposal

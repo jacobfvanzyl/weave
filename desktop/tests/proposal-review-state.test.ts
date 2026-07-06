@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canSubmitProposalReview,
+  canViewProposalReview,
   getNextProposalReviewItemId,
   getPendingProposalReviewCount,
-  shouldShowProposalReview,
 } from '../../packages/client/src/lib/proposal-review-state';
+import {
+  getProposalReviewUpdates,
+  sameReviewedProposalItem,
+  withReviewFields,
+} from '../../packages/client/src/lib/proposal-review-conflict';
 import type { ThreadProposal } from '../../packages/client/src/stores/chat-store';
 
 const proposal = (overrides: Partial<ThreadProposal> = {}): ThreadProposal => ({
@@ -26,24 +32,34 @@ const proposal = (overrides: Partial<ThreadProposal> = {}): ThreadProposal => ({
 });
 
 describe('proposal review state', () => {
-  it('shows review only for proposals with pending approvals and an artifact path', () => {
-    expect(shouldShowProposalReview(proposal())).toBe(true);
-    expect(shouldShowProposalReview(proposal({ path: undefined }))).toBe(false);
-    expect(shouldShowProposalReview(proposal({
+  it('allows viewing draft or finalized proposals with items and an artifact path', () => {
+    expect(canViewProposalReview(proposal())).toBe(true);
+    expect(canViewProposalReview(proposal({ status: 'draft' }))).toBe(true);
+    expect(canViewProposalReview(proposal({ path: undefined }))).toBe(false);
+    expect(canViewProposalReview(proposal({ items: [] }))).toBe(false);
+    expect(canViewProposalReview(proposal({
       counts: { approved: 1, pending: 0 },
       items: [{ ...proposal().items[0], status: 'approved' }],
       status: 'approved',
-    }))).toBe(false);
-    expect(shouldShowProposalReview(proposal({
+    }))).toBe(true);
+    expect(canViewProposalReview(proposal({
       counts: { changes_requested: 1, pending: 0 },
       items: [{ ...proposal().items[0], status: 'changes_requested' }],
       status: 'changes_requested',
-    }))).toBe(false);
-    expect(shouldShowProposalReview(proposal({
+    }))).toBe(true);
+    expect(canViewProposalReview(proposal({
       counts: { stale: 1, pending: 0 },
       items: [{ ...proposal().items[0], status: 'stale' }],
       status: 'stale',
-    }))).toBe(false);
+    }))).toBe(true);
+  });
+
+  it('allows submission only after finalization', () => {
+    expect(canSubmitProposalReview(proposal({ status: 'ready' }))).toBe(true);
+    expect(canSubmitProposalReview(proposal({ status: 'draft' }))).toBe(false);
+    expect(canSubmitProposalReview(proposal())).toBe(false);
+    expect(canSubmitProposalReview(proposal({ path: undefined }))).toBe(false);
+    expect(canSubmitProposalReview(proposal({ items: [] }))).toBe(false);
   });
 
   it('falls back to item status counts when frontmatter counts omit pending', () => {
@@ -76,5 +92,29 @@ describe('proposal review state', () => {
       { id: 'applied', status: 'applied' },
       { id: 'rejected', status: 'rejected' },
     ], 'current')).toBeUndefined();
+  });
+
+  it('rebases review-only fields only when the reviewed item has not changed', () => {
+    const current = proposal().items[0];
+    const reviewed = {
+      ...current,
+      status: 'approved' as const,
+      viewed: true,
+      comment: undefined,
+    };
+    const [update] = getProposalReviewUpdates([current], [reviewed]);
+    expect(update).toMatchObject({
+      expected: current,
+      next: { status: 'approved', viewed: true },
+    });
+
+    const latest = { ...current, currentHash: 'old-hash', proposedHash: 'same-hash' };
+    const expected = { ...current, currentHash: 'old-hash', proposedHash: 'same-hash' };
+    expect(sameReviewedProposalItem(expected, latest)).toBe(true);
+    expect(sameReviewedProposalItem(expected, { ...latest, proposedHash: 'changed-hash' })).toBe(false);
+    expect(withReviewFields(latest, update!.next)).toMatchObject({
+      status: 'approved',
+      viewed: true,
+    });
   });
 });

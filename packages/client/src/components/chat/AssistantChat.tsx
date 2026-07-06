@@ -36,7 +36,7 @@ import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-
 import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, type ModelOption } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptResolutionContext, type PromptSummary } from '../../lib/prompts-api';
-import { shouldShowProposalReview } from '../../lib/proposal-review-state';
+import { canViewProposalReview } from '../../lib/proposal-review-state';
 import { useChatStore, type ChatThread, type ReasoningEffort, type ServiceTier } from '../../stores/chat-store';
 import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Badge } from '../ui/badge';
@@ -95,6 +95,7 @@ const ThreadAutoCollapseContext = createContext<ThreadAutoCollapseContextValue>(
   liveAssistantTurnIds: {},
 });
 const toolCallCache = new Map<string, Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result' | 'isError'>>();
+const openedProposalReviewPhases = new Set<string>();
 
 const areAutoCollapsedTurnIdsEqual = (left: AutoCollapsedTurnIds, right: AutoCollapsedTurnIds) => {
   const leftIds = Object.keys(left);
@@ -356,16 +357,21 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
           } else if (effect.type === 'updatePlan') {
             const shouldAutoExpand = useChatStore.getState().runningThreadIds.includes(targetThreadId);
             useChatStore.getState().setThreadPlan(targetThreadId, effect.plan, { autoExpand: shouldAutoExpand });
-          } else {
+          } else if (effect.type === 'proposal') {
             const shouldAutoExpand = useChatStore.getState().runningThreadIds.includes(targetThreadId);
             useChatStore.getState().setThreadProposal(targetThreadId, effect.proposal, { autoExpand: shouldAutoExpand });
-            const proposalReviewPath = shouldShowProposalReview(effect.proposal) ? effect.proposal.path : undefined;
+            const proposalReviewPath = canViewProposalReview(effect.proposal) ? effect.proposal.path : undefined;
+            const proposalReviewPhase = effect.proposal.status === 'draft' ? 'draft' : 'finalized';
+            const proposalReviewKey = proposalReviewPath ? `${targetThreadId}:${proposalReviewPath}:${proposalReviewPhase}` : undefined;
             if (
               targetThreadId === activeThreadId
               && activeSurface.kind === 'thread'
               && getToolActivityStatus(call) === 'complete'
               && proposalReviewPath
+              && proposalReviewKey
+              && !openedProposalReviewPhases.has(proposalReviewKey)
             ) {
+              openedProposalReviewPhases.add(proposalReviewKey);
               openProposalReview(proposalReviewPath);
             }
           }

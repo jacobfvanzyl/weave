@@ -653,26 +653,19 @@ describe('tool model output compaction', () => {
   });
 
   it('summarizes proposal tool-call inputs without raw proposal bodies', () => {
-    const diff = '@@ -1 +1 @@\n-before\n+after';
-    const currentContent = 'before';
-    const proposedContent = 'after';
+    const proposedContent = 'export const value = "after";\n';
     const prompt = [
       {
         role: 'assistant',
         content: [{
           type: 'tool-call',
           toolCallId: 'call-proposal',
-          toolName: 'writeProposalTool',
+          toolName: 'proposal_write',
           input: {
-            title: 'Proposal input compaction',
-            summary: 'Compact proposal tool-call bodies.',
-            files: [{
-              kind: 'file_edit',
-              path: 'src/example.ts',
-              diff,
-              currentContent,
-              proposedContent,
-            }],
+            proposalPath: '.agents/proposals/demo.md',
+            path: 'src/example.ts',
+            content: proposedContent,
+            description: 'Update the exported value.',
           },
         }],
       },
@@ -681,8 +674,8 @@ describe('tool model output compaction', () => {
         content: [{
           type: 'tool-result',
           toolCallId: 'call-proposal',
-          toolName: 'writeProposalTool',
-          output: { type: 'text', value: 'write_proposal\nok: true\npath: .agents/proposals/demo.md' },
+          toolName: 'proposal_write',
+          output: { type: 'text', value: 'proposal_write\nok: true\npath: .agents/proposals/demo.md' },
         }],
       },
     ];
@@ -691,33 +684,29 @@ describe('tool model output compaction', () => {
     const input = compacted[0].content[0].input;
 
     expect(compacted).toHaveLength(2);
-    expect(input.files[0]).toMatchObject({
-      kind: 'file_edit',
+    expect(input).toMatchObject({
+      proposalPath: '.agents/proposals/demo.md',
       path: 'src/example.ts',
-      diffChars: diff.length,
-      currentContentChars: currentContent.length,
-      proposedContentChars: proposedContent.length,
+      contentChars: proposedContent.length,
+      descriptionChars: 'Update the exported value.'.length,
     });
-    expect(input.files[0].diffHash).toMatch(/^[a-f0-9]{12}$/);
-    expect(input.files[0].currentContentHash).toMatch(/^[a-f0-9]{12}$/);
-    expect(input.files[0].proposedContentHash).toMatch(/^[a-f0-9]{12}$/);
-    expect(input.files[0].diff).toBeUndefined();
-    expect(input.files[0].currentContent).toBeUndefined();
-    expect(input.files[0].proposedContent).toBeUndefined();
+    expect(input.contentHash).toMatch(/^[a-f0-9]{12}$/);
+    expect(input.descriptionHash).toMatch(/^[a-f0-9]{12}$/);
+    expect(input.content).toBeUndefined();
+    expect(input.description).toBeUndefined();
     const compactedJson = JSON.stringify(compacted);
-    expect(compactedJson.includes(diff)).toBe(false);
-    expect(compactedJson.includes(currentContent)).toBe(false);
     expect(compactedJson.includes(proposedContent)).toBe(false);
+    expect(compactedJson.includes('Update the exported value.')).toBe(false);
     expect(compacted[1].content[0]).toMatchObject({
       type: 'tool-result',
       toolCallId: 'call-proposal',
-      toolName: 'writeProposalTool',
+      toolName: 'proposal_write',
     });
     expect(compacted[1].content[0].output.value).toContain('Compact tool result summary');
   });
 
   it('compacts persisted tool-invocation proposal inputs and long read/bash bodies', () => {
-    const diff = '@@ -1 +1 @@\n-before\n+after';
+    const proposedContent = `${'proposed body\n'.repeat(600)}proposal tail`;
     const longContent = `${'patch body\n'.repeat(600)}secret tail`;
     const longStdout = `${'stdout patch body\n'.repeat(600)}stdout tail`;
     const prompt = [
@@ -728,20 +717,30 @@ describe('tool model output compaction', () => {
             type: 'tool-invocation',
             toolInvocation: {
               state: 'result',
-              toolName: 'writeProposalTool',
+              toolName: 'proposal_write',
               toolCallId: 'call-proposal',
               args: {
-                title: 'Proposal input compaction',
-                summary: 'Compact proposal tool-call bodies.',
-                files: [{
-                  kind: 'file_edit',
-                  path: 'src/example.ts',
-                  diff,
-                  currentContent: 'before',
-                  proposedContent: 'after',
-                }],
+                proposalPath: '.agents/proposals/demo.md',
+                path: 'src/example.ts',
+                content: proposedContent,
               },
               result: { ok: true, path: '.agents/proposals/demo.md' },
+            },
+          },
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              state: 'result',
+              toolName: 'proposal_read',
+              toolCallId: 'call-proposal-read',
+              args: { proposalPath: '.agents/proposals/demo.md', path: 'src/example.ts' },
+              result: {
+                ok: true,
+                path: 'src/example.ts',
+                source: 'proposal',
+                content: proposedContent,
+                contentHash: 'hash',
+              },
             },
           },
           {
@@ -769,24 +768,24 @@ describe('tool model output compaction', () => {
     ];
 
     const compacted = compactToolHistoryPrompt(prompt as any, { preserveToolCalls: 0 }) as any[];
-    const [proposalPart, readPart, bashPart] = compacted[0].content;
+    const [proposalPart, proposalReadPart, readPart, bashPart] = compacted[0].content;
     const proposalArgs = proposalPart.toolInvocation.args;
     const compactedJson = JSON.stringify(compacted);
 
-    expect(proposalArgs.files[0]).toMatchObject({
-      kind: 'file_edit',
+    expect(proposalArgs).toMatchObject({
+      proposalPath: '.agents/proposals/demo.md',
       path: 'src/example.ts',
-      diffChars: diff.length,
-      currentContentChars: 'before'.length,
-      proposedContentChars: 'after'.length,
+      contentChars: proposedContent.length,
     });
-    expect(proposalArgs.files[0].diff).toBeUndefined();
+    expect(proposalArgs.content).toBeUndefined();
+    expect(proposalReadPart.toolInvocation).toMatchObject({ toolName: 'proposal_read', toolCallId: 'call-proposal-read' });
+    expect(proposalReadPart.toolInvocation.result.value).toContain('contentHash:');
     expect(readPart.toolInvocation).toMatchObject({ toolName: 'read', toolCallId: 'call-read' });
     expect(readPart.toolInvocation.result.value).toContain('Compact tool result summary');
     expect(readPart.toolInvocation.result.value).toContain('contentHash:');
     expect(bashPart.toolInvocation).toMatchObject({ toolName: 'bash', toolCallId: 'call-bash' });
     expect(bashPart.toolInvocation.result.value).toContain('stdoutHash:');
-    expect(compactedJson.includes(diff)).toBe(false);
+    expect(compactedJson.includes('proposal tail')).toBe(false);
     expect(compactedJson.includes('secret tail')).toBe(false);
     expect(compactedJson.includes('stdout tail')).toBe(false);
   });

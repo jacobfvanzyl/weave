@@ -283,6 +283,25 @@ describe('chat store', () => {
     expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
   });
 
+  it('expands the guided card when a draft proposal first becomes reviewable', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    useChatStore.getState().setGuidedTaskExpanded('thread-1', false);
+
+    useChatStore.getState().setThreadProposal('thread-1', {
+      title: 'Draft proposal',
+      path: '.agents/proposals/demo.md',
+      status: 'draft',
+      items: [
+        { id: 'item-1', kind: 'file_edit', status: 'pending', title: 'Update file', additions: 1, deletions: 0, viewed: false },
+      ],
+      counts: { pending: 1 },
+      updatedAt: '2026-06-18T12:00:00.000Z',
+      contentHash: 'draft-proposal',
+    });
+
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(true);
+  });
+
   it('collapses the guided card when returning to a thread', async () => {
     const { useChatStore } = await loadFreshChatStore();
     const now = '2026-06-18T12:00:00.000Z';

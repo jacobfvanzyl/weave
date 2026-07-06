@@ -1,6 +1,6 @@
-import { AlertTriangle, Check, ChevronDown, Circle, FileText, GitPullRequestArrow, Loader2, MessageSquareWarning } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, Circle, CircleDashed, FileText, GitPullRequestArrow, Loader2, MessageSquareWarning } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { getPendingProposalReviewCount, shouldShowProposalReview } from '../../lib/proposal-review-state';
+import { canViewProposalReview, getPendingProposalReviewCount } from '../../lib/proposal-review-state';
 import {
   useChatStore,
   type PlanStepStatus,
@@ -11,7 +11,7 @@ import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
 import { guidedTaskDisplay, isPlanComplete } from './guided-task-card-display';
 
-const PlanStatusGlyph = ({ status }: { status: PlanStepStatus }) => {
+const PlanStatusGlyph = ({ status, isBusy }: { status: PlanStepStatus; isBusy?: boolean }) => {
   if (status === 'completed') {
     return (
       <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
@@ -21,7 +21,9 @@ const PlanStatusGlyph = ({ status }: { status: PlanStepStatus }) => {
   }
 
   if (status === 'in_progress') {
-    return <Loader2 size={16} className="mt-0.5 shrink-0 animate-spin text-primary" />;
+    return isBusy
+      ? <Loader2 size={16} className="mt-0.5 shrink-0 animate-spin text-primary" />
+      : <CircleDashed size={16} className="mt-0.5 shrink-0 text-primary" />;
   }
 
   if (status === 'blocked') {
@@ -44,6 +46,9 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
   const threadWorkspaceId = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.workspaceId);
   const requestEditorFollow = useWorkspaceSurfaceStore(state => state.requestEditorFollow);
   const openProposalReview = useWorkspaceSurfaceStore(state => state.openProposalReview);
+  const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
+  const editorSlotMode = useWorkspaceSurfaceStore(state => state.editorSlotMode);
+  const activeProposalPath = useWorkspaceSurfaceStore(state => state.activeProposalPath);
 
   if (!plan && !proposal) return null;
 
@@ -61,8 +66,16 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
         || proposal.contentHash === submittedProposalImplementation.proposalContentHash
       ),
   );
-  const hasPendingApproval = shouldShowProposalReview(proposal) && !hasSubmittedProposal;
+  const hasProposalReview = canViewProposalReview(proposal) && !hasSubmittedProposal;
   const pendingApprovalCount = getPendingProposalReviewCount(proposal);
+  const isDraftProposal = proposal?.status === 'draft';
+  const isProposalReviewOpen = Boolean(
+    proposal?.path
+      && editorSlotMode === 'proposal_review'
+      && activeProposalPath === proposal.path
+      && activeSurface.kind === 'thread'
+      && activeSurface.threadId === threadId,
+  );
 
   const openPlan = () => {
     if (!plan?.path || !threadWorkspaceId) return;
@@ -108,13 +121,24 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
             Plan
           </Button>
         ) : null}
-        {hasPendingApproval ? (
-          <Button size="xs" variant="ghost" type="button" onClick={openReview}>
+        {hasProposalReview ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            type="button"
+            className={isProposalReviewOpen ? 'bg-accent' : undefined}
+            aria-pressed={isProposalReviewOpen}
+            data-active={isProposalReviewOpen ? 'true' : undefined}
+            data-pressed={isProposalReviewOpen ? 'true' : undefined}
+            onClick={openReview}
+          >
             <GitPullRequestArrow size={14} />
-            Review
-            <Badge size="sm" variant="info" className="ml-0.5">
-              {pendingApprovalCount}
-            </Badge>
+            {isDraftProposal ? 'Draft' : 'Review'}
+            {pendingApprovalCount > 0 ? (
+              <Badge size="sm" variant={isDraftProposal ? 'outline' : 'info'} className="ml-0.5">
+                {pendingApprovalCount}
+              </Badge>
+            ) : null}
           </Button>
         ) : null}
       </div>
@@ -138,7 +162,7 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
             <ol className={cn('space-y-2', showBodyHeader || showProposalPathWarning ? 'mt-3' : undefined)}>
               {plan.plan.map((item, index) => (
                 <li key={`${item.status}-${item.step}-${index}`} className="flex min-w-0 gap-2 text-sm leading-5">
-                  <PlanStatusGlyph status={item.status} />
+                  <PlanStatusGlyph status={item.status} isBusy={plan.isBusy} />
                   <span className={cn(
                     'min-w-0 break-words',
                     item.status === 'completed' && 'text-muted-foreground line-through',
