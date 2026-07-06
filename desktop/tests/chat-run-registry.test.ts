@@ -226,7 +226,7 @@ describe('chat active run registry', () => {
       }),
     );
 
-    expect(startChatRun).not.toHaveBeenCalled();
+    expect(startChatRun).toHaveBeenCalledTimes(0);
     expect(response).toEqual({
       body: { error: 'thread has an active stream' },
       status: 409,

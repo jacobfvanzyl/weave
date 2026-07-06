@@ -199,6 +199,7 @@ Deno.test('detectLspLanguageId maps common web language files', () => {
   assertEquals(detectLspLanguageId('lib/main.dart'), 'dart');
   assertEquals(detectLspLanguageId('schema.graphql'), 'graphql');
   assertEquals(detectLspLanguageId('schema.gql'), 'graphql');
+  assertEquals(detectLspLanguageId('server/drizzle/0000_initial_weave.sql'), undefined);
   assertEquals(detectLspLanguageId('config.yaml'), undefined);
   assertEquals(detectLspLanguageId('.env.local'), undefined);
 });

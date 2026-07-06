@@ -9,6 +9,7 @@ import { registerWeaveVimCommenting } from "../../packages/client/src/lib/codemi
 import {
   detectLanguagePackLspId,
   findLanguagePack,
+  type LanguageCommentTokens,
 } from "../../packages/client/src/lib/language-packs/core";
 
 const toggleCommentForPath = (path: string, doc: string) => {
@@ -24,6 +25,14 @@ const toggleCommentForPath = (path: string, doc: string) => {
     },
   });
   return { handled, doc: nextState.doc.toString() };
+};
+
+const commentTokensForPath = (path: string) => {
+  const state = EditorState.create({
+    doc: "SELECT 1;",
+    extensions: getCodeMirrorLanguageExtensions(path),
+  });
+  return state.languageDataAt<LanguageCommentTokens>("commentTokens", 0);
 };
 
 describe("CodeMirror language registry", () => {
@@ -56,12 +65,20 @@ describe("CodeMirror language registry", () => {
       id: "yaml",
       comments: { line: "#" },
     });
+    expect(findLanguagePack("server/drizzle/0000_initial_weave.sql")).toMatchObject({
+      id: "sql",
+      comments: {
+        line: "--",
+        block: { open: "/*", close: "*/" },
+      },
+    });
   });
 
   it("detects LSP language IDs from the shared language pack registry", () => {
     expect(detectLanguagePackLspId("src/main.tsx")).toBe("typescriptreact");
     expect(detectLanguagePackLspId("src/index.ts")).toBe("typescript");
     expect(detectLanguagePackLspId("schema.graphql")).toBe("graphql");
+    expect(detectLanguagePackLspId("server/drizzle/0000_initial_weave.sql")).toBeUndefined();
     expect(detectLanguagePackLspId("config.yaml")).toBeUndefined();
     expect(detectLanguagePackLspId(".env.local")).toBeUndefined();
   });
@@ -92,6 +109,10 @@ describe("CodeMirror language registry", () => {
       id: "yaml",
       syntaxProvider: "codemirror-lezer",
     });
+    expect(getCodeMirrorLanguageEntry("query.sql")).toMatchObject({
+      id: "sql",
+      syntaxProvider: "codemirror-lezer",
+    });
     expect(getCodeMirrorLanguageEntry(".env.local")).toMatchObject({
       id: "env",
       syntaxProvider: "plain",
@@ -116,11 +137,20 @@ describe("CodeMirror language registry", () => {
     [".env.local", "WEAVE=1", "# WEAVE=1"],
     ["sample.env", "WEAVE=1", "# WEAVE=1"],
     ["schema.graphql", "type Query { id: ID }", "# type Query { id: ID }"],
+    ["query.sql", "SELECT 1;", "-- SELECT 1;"],
   ])("toggles comments for %s", (path, source, expected) => {
     expect(toggleCommentForPath(path, source)).toEqual({
       handled: true,
       doc: expected,
     });
+  });
+
+  it("exposes SQL line and block comment metadata", () => {
+    expect(commentTokensForPath("query.sql")).toEqual(
+      expect.arrayContaining([
+        { line: "--", block: { open: "/*", close: "*/" } },
+      ]),
+    );
   });
 
   it("keeps strict JSON without comment toggling", () => {

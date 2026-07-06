@@ -32,6 +32,11 @@ const hashComments = {
   line: "#",
 } satisfies LanguageCommentTokens;
 
+const sqlComments = {
+  line: "--",
+  block: { open: "/*", close: "*/" },
+} satisfies LanguageCommentTokens;
+
 export const languagePacks: readonly LanguagePack[] = [
   {
     id: "typescriptreact",
@@ -181,6 +186,12 @@ export const languagePacks: readonly LanguagePack[] = [
       languageId: "graphql",
       defaultServerIds: ["biome"],
     },
+  },
+  {
+    id: "sql",
+    label: "SQL",
+    match: { extensions: ["sql"] },
+    comments: sqlComments,
   },
   {
     id: "yaml",

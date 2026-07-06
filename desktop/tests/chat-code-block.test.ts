@@ -34,6 +34,10 @@ describe("chat code block highlighting", () => {
     ["language-dart", "snippet.dart"],
     ["language-py", "snippet.py"],
     ["language-python", "snippet.py"],
+    ["language-sql", "snippet.sql"],
+    ["language-pgsql", "snippet.sql"],
+    ["language-postgres", "snippet.sql"],
+    ["language-postgresql", "snippet.sql"],
     ["language-yaml", "snippet.yaml"],
     ["language-yml", "snippet.yml"],
   ])("maps %s to an existing CodeMirror language path", (className, path) => {
@@ -66,6 +70,7 @@ describe("chat code block highlighting", () => {
     "foo language-ts bar",
     "language-json",
     "language-md",
+    "language-sql",
   ])("classifies supported language blocks as CodeMirror for %s", (className) => {
     expect(getChatCodeBlockRenderMode(className)).toBe("codemirror");
   });
