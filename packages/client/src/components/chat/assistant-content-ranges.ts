@@ -1,4 +1,4 @@
-import { isHiddenToolCall, isLeakedProposalToolCallText, toToolActivityCall } from './tool-activity';
+import { isHiddenToolCall, isLeakedToolOutputText, toToolActivityCall } from './tool-activity';
 
 export type AssistantContentRange =
   | { type: 'part'; index: number }
@@ -36,7 +36,7 @@ const isVisibleReasoningPart = (part: unknown) =>
 const isVisibleTextPart = (part: unknown) =>
   getPartType(part) === 'text'
   && getTextPartText(part).length > 0
-  && !isLeakedProposalToolCallText(getTextPartText(part));
+  && !isLeakedToolOutputText(getTextPartText(part));
 
 const isVisibleToolOutputPart = (part: unknown) => {
   const call = toToolActivityCall(part);

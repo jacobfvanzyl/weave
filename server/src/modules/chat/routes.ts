@@ -3,7 +3,7 @@ import { registerAgentContribution } from '../../agent/contributions';
 import type { ServerModule } from '../types';
 import { productProjectRoutes } from '../code/routes/projects';
 import { createChatRoutes } from './routes/chat';
-import { chatStateRoutes } from './routes/chat-state';
+import { createChatStateRoutes } from './routes/chat-state';
 
 const chatProjectPath = (path: string) =>
   path === '/code/projects'
@@ -29,7 +29,7 @@ export const chatModule: ServerModule = {
       const canonicalPath = chatProjectPath(route.path);
       if (canonicalPath) mountRoute(app, route, { canonicalPath });
     }
-    for (const route of chatStateRoutes) mountRoute(app, route);
+    for (const route of createChatStateRoutes(services.agent.service)) mountRoute(app, route);
     for (const route of createChatRoutes(services.agent.service, services.internal.resources)) mountRoute(app, route);
   },
 };

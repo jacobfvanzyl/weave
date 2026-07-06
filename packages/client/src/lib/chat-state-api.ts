@@ -2,6 +2,7 @@ import type { UIMessage } from 'ai';
 import { getAuthHeaders } from './mastra-client';
 import { weaveRoutes } from './weave-routes';
 import { productForProjectKind, type ProductId } from './products';
+import { selectPreferredThreadProposal } from './proposal-review-state';
 import type {
   ChatThread,
   PlanStepStatus,
@@ -283,21 +284,27 @@ const toThreadProposal = (value: unknown): ThreadProposal | undefined => {
   };
 };
 
-const toChatThread = (thread: ServerThread): ChatThread => ({
-  id: thread.id,
-  title: thread.title || '...',
-  createdAt: thread.createdAt,
-  updatedAt: thread.updatedAt,
-  sortOrder: typeof thread.metadata?.sortOrder === 'number' ? thread.metadata.sortOrder : undefined,
-  projectId: typeof thread.metadata?.projectId === 'string' ? thread.metadata.projectId : undefined,
-  workspaceId: typeof thread.metadata?.workspaceId === 'string' ? thread.metadata.workspaceId : undefined,
-  archived: thread.metadata?.archived === true,
-  adHoc: thread.metadata?.adHoc === true,
-  workspacePath: typeof thread.metadata?.workspacePath === 'string' ? thread.metadata.workspacePath : undefined,
-  removedWorkspace: toRemovedWorkspace(thread.metadata?.removedWorkspace),
-  latestPlan: toThreadPlan(thread.metadata?.latestPlan),
-  latestProposal: toThreadProposal(thread.metadata?.latestProposalDraft) ?? toThreadProposal(thread.metadata?.latestProposal),
-});
+const toChatThread = (thread: ServerThread): ChatThread => {
+  const latestProposal = selectPreferredThreadProposal(
+    toThreadProposal(thread.metadata?.latestProposal),
+    toThreadProposal(thread.metadata?.latestProposalDraft),
+  );
+  return {
+    id: thread.id,
+    title: thread.title || '...',
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    sortOrder: typeof thread.metadata?.sortOrder === 'number' ? thread.metadata.sortOrder : undefined,
+    projectId: typeof thread.metadata?.projectId === 'string' ? thread.metadata.projectId : undefined,
+    workspaceId: typeof thread.metadata?.workspaceId === 'string' ? thread.metadata.workspaceId : undefined,
+    archived: thread.metadata?.archived === true,
+    adHoc: thread.metadata?.adHoc === true,
+    workspacePath: typeof thread.metadata?.workspacePath === 'string' ? thread.metadata.workspacePath : undefined,
+    removedWorkspace: toRemovedWorkspace(thread.metadata?.removedWorkspace),
+    latestPlan: toThreadPlan(thread.metadata?.latestPlan),
+    latestProposal,
+  };
+};
 
 export class ApiError extends Error {
   status: number;

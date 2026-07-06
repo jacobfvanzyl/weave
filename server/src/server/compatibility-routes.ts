@@ -1,17 +1,21 @@
 import { chatgptAuthRoutes } from '../agent/routes/chatgpt-auth';
 import { modelRoutes } from '../agent/routes/models';
 import { promptRoutes } from '../agent/routes/prompts';
-import { chatRoutes } from '../modules/chat/routes/chat';
-import { chatStateRoutes } from '../modules/chat/routes/chat-state';
+import type { AgentService } from '../agent/service';
+import { createChatRoutes } from '../modules/chat/routes/chat';
+import { createChatStateRoutes } from '../modules/chat/routes/chat-state';
 import { projectRoutes } from '../modules/code/routes/projects';
 import { terminalRoutes } from '../modules/code/routes/terminals';
 import { portalRoutes } from '../portal/routes/portals';
 import { createWindowSessionRoutes } from '../portal/routes/window-sessions';
+import type { ResourceService } from '../services/resource-service';
 import type { SessionService } from '../services/session-service';
 import { mountRoute, type RouteDefinition } from './routes';
 import type { WeaveApp } from './types';
 
 type CompatibilityRouteServices = {
+  agent: AgentService;
+  resources: Pick<ResourceService, 'findAttachmentsByThread' | 'putAttachment'>;
   sessions?: SessionService;
 };
 
@@ -48,9 +52,9 @@ const codeProjectAlias = (path: string) => {
   return replacePrefix(path, '/code/projects', '/projects');
 };
 
-export const registerCompatibilityRoutes = (app: WeaveApp, services: CompatibilityRouteServices = {}) => {
-  aliasRoutes(app, chatStateRoutes, chatStateAlias);
-  aliasRoutes(app, chatRoutes, chatRunAlias);
+export const registerCompatibilityRoutes = (app: WeaveApp, services: CompatibilityRouteServices) => {
+  aliasRoutes(app, createChatStateRoutes(services.agent), chatStateAlias);
+  aliasRoutes(app, createChatRoutes(services.agent, services.resources), chatRunAlias);
   aliasRoutes(app, projectRoutes, codeProjectAlias);
   aliasRoutes(app, terminalRoutes, (path) => replacePrefix(path, '/code/terminals', '/terminals'));
   aliasRoutes(app, promptRoutes, (path) => replacePrefix(path, '/agent/prompts', '/prompts'));

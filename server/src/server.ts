@@ -8,7 +8,6 @@ import { serverModules } from './modules';
 import { registerCompatibilityRoutes } from './server/compatibility-routes';
 import type { ServerVariables } from './server/types';
 import { startServerPerfSampler } from './server/perf';
-import { getChatPerfSnapshot } from './modules/chat/routes/chat';
 import { internalServices } from './services';
 import { maybeLaunchDbosWorkflowRuntime } from './workflows';
 import { requireWeaveDatabaseUrl } from './storage/database-url';
@@ -74,10 +73,14 @@ app.use('*', createOwnerAuthMiddleware({ auth, mastra }));
 agentCore.registerRoutes(app);
 portalCore.registerRoutes(app, { mastra, sessions: internalServices.sessions });
 registerServerModules(app, { auth, agent: agentCore, portal: portalCore, internal: internalServices }, serverModules);
-registerCompatibilityRoutes(app, { sessions: internalServices.sessions });
+registerCompatibilityRoutes(app, {
+  agent: agentCore.service,
+  resources: internalServices.resources,
+  sessions: internalServices.sessions,
+});
 
 startServerPerfSampler({
-  sample: () => ({ chat: getChatPerfSnapshot() }),
+  sample: () => ({ chat: agentCore.service.getChatPerfSnapshot() }),
 });
 
 await maybeLaunchDbosWorkflowRuntime();

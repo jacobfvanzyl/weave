@@ -6,7 +6,6 @@ import { getThreadContextUsageSnapshot } from './mastra/context-usage';
 import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from './model-capabilities';
 import { getModelConfig, type ModelConfig } from './model-options';
 import { buildChatSystemMessages } from './mastra/agents/instructions';
-import { mastra as defaultMastra } from './mastra/index';
 import { expandPromptTemplate, listPromptSummaries } from './mastra/prompt-templates/registry';
 import {
   type AgentContextInput,
@@ -26,8 +25,11 @@ import {
   filterCompactToolHistoryTextStream,
   toThreadRunSnapshot,
 } from './run-coordinator';
+import { contextUsageRecallOptions, estimateMemoryContextTokens } from './context-token-estimate';
 import { type EventService, eventService as defaultEventService } from '../services/event-service';
 import { type JsonValue, type ServiceCaller, ServiceError } from '../services/types';
+
+export { contextUsageRecallOptions, estimateContextTokens, estimateMemoryContextTokens } from './context-token-estimate';
 
 export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'failed';
 
@@ -173,7 +175,15 @@ export type UpdateChatThreadRequest = ChatThreadMessagesRequest & {
 
 type ChatStreamHandler = typeof handleChatStream;
 type AgentContextResolver = (input: AgentContextInput) => Promise<ResolvedAgentContext>;
+type MastraProvider = Mastra | (() => Mastra | Promise<Mastra>);
 const genericRunCleanupDelayMs = 5 * 60 * 1000;
+
+let defaultMastraPromise: Promise<Mastra> | undefined;
+
+const loadDefaultMastra = () => {
+  defaultMastraPromise ??= import('./mastra/index').then((module) => module.mastra);
+  return defaultMastraPromise;
+};
 
 export interface AgentService {
   listCapabilities(): Promise<Record<string, unknown>>;
@@ -211,7 +221,7 @@ export class MastraAgentService implements AgentService {
   private readonly genericRuns = new Map<string, GenericAgentRun>();
 
   constructor(
-    private readonly mastra: Mastra = defaultMastra,
+    private readonly mastraProvider: MastraProvider = loadDefaultMastra,
     private readonly runCoordinator: AgentRunCoordinator = new AgentRunCoordinator(),
     private readonly chatStreamHandler: ChatStreamHandler = handleChatStream,
     private readonly contextResolver: AgentContextResolver = resolveAgentContext,
@@ -219,10 +229,11 @@ export class MastraAgentService implements AgentService {
   ) {}
 
   async listCapabilities() {
+    const mastra = await this.getMastra();
     return {
       agents: [{ id: 'mage-hand' }],
       models: await this.listModels(),
-      prompts: await listPromptSummaries({ mastra: this.mastra }),
+      prompts: await listPromptSummaries({ mastra }),
       contributions: listAgentContributions(),
       runLifecycle: {
         startRun: true,
@@ -240,15 +251,15 @@ export class MastraAgentService implements AgentService {
   }
 
   async listPromptTemplates(context: PromptContextInput) {
-    return listPromptSummaries(this.promptContext(context));
+    return listPromptSummaries(await this.promptContext(context));
   }
 
   async expandPrompt(name: string, args: string, context: PromptContextInput) {
-    return expandPromptTemplate(name, args, this.promptContext(context));
+    return expandPromptTemplate(name, args, await this.promptContext(context));
   }
 
   async resolveContext(context: PromptContextInput) {
-    return this.contextResolver(this.promptContext(context));
+    return this.contextResolver(await this.promptContext(context));
   }
 
   putResolvedContext(requestContext: unknown, resolved: ResolvedAgentContext) {
@@ -304,13 +315,14 @@ export class MastraAgentService implements AgentService {
     }
 
     const prepared = await this.prepareChatRun(input);
+    const mastra = await this.getMastra();
     const run = input.threadId
       ? this.runCoordinator.createThreadRun(input.resourceId, input.threadId, input.submittedUserMessages ?? [])
       : undefined;
 
     try {
       const stream = await this.chatStreamHandler({
-        mastra: this.mastra,
+        mastra,
         agentId: 'mage-hand',
         version: 'v6',
         sendReasoning: true,
@@ -368,7 +380,8 @@ export class MastraAgentService implements AgentService {
   }
 
   async sendChatMessage(input: SendChatMessageRequest): Promise<SendChatMessageResult> {
-    const agent = await this.mastra.getAgent('mageHandAgent');
+    const mastra = await this.getMastra();
+    const agent = await mastra.getAgent('mageHandAgent');
     if (!agent) throw new ServiceError('operation_failed', 'Agent was not found: mageHandAgent', 404);
 
     const result = await agent.sendMessage(input.message, {
@@ -494,8 +507,9 @@ export class MastraAgentService implements AgentService {
 
   async getChatThreadContextUsage(input: ChatThreadContextUsageRequest): Promise<ChatThreadContextUsage> {
     const memory = await this.getMemory();
+    const mastra = await this.getMastra();
     const resolvedContext = await this.contextResolver({
-      mastra: this.mastra,
+      mastra,
       resourceId: input.resourceId,
       threadId: input.threadId,
     });
@@ -561,7 +575,8 @@ export class MastraAgentService implements AgentService {
   }
 
   private async getMemory(): Promise<any> {
-    const agent = await this.mastra.getAgent('mageHandAgent');
+    const mastra = await this.getMastra();
+    const agent = await mastra.getAgent('mageHandAgent');
     const memory = await agent?.getMemory();
     if (!memory) throw new ServiceError('operation_failed', 'mageHandAgent has no memory configured', 500);
     return memory;
@@ -579,9 +594,10 @@ export class MastraAgentService implements AgentService {
 
   private async prepareChatRun(input: StartChatRunRequest) {
     const params = input.params;
+    const mastra = await this.getMastra();
     putChatRuntimeContext(input.requestContext, { now: new Date() });
     const resolvedContext = input.resourceId
-      ? await this.contextResolver({ mastra: this.mastra, resourceId: input.resourceId, threadId: input.threadId })
+      ? await this.contextResolver({ mastra, resourceId: input.resourceId, threadId: input.threadId })
       : undefined;
     if (resolvedContext) putAgentContext(input.requestContext, resolvedContext);
     const memoryPolicy = resolvedContext
@@ -657,7 +673,8 @@ export class MastraAgentService implements AgentService {
   }
 
   private async getAgentOrThrow(agentId: string, displayId = agentId): Promise<any> {
-    const agent = await this.mastra.getAgent(agentId);
+    const mastra = await this.getMastra();
+    const agent = await mastra.getAgent(agentId);
     if (!agent) throw new ServiceError('operation_failed', `Agent was not found: ${displayId}`, 404);
     return agent;
   }
@@ -816,9 +833,13 @@ export class MastraAgentService implements AgentService {
     }, genericRunCleanupDelayMs);
   }
 
-  private promptContext(context: PromptContextInput): any {
+  private async getMastra() {
+    return typeof this.mastraProvider === 'function' ? await this.mastraProvider() : this.mastraProvider;
+  }
+
+  private async promptContext(context: PromptContextInput): Promise<any> {
     return {
-      mastra: this.mastra,
+      mastra: await this.getMastra(),
       resourceId: context.resourceId,
       threadId: context.threadId,
       projectId: context.projectId,
@@ -828,7 +849,7 @@ export class MastraAgentService implements AgentService {
 }
 
 export const agentRunCoordinator = new AgentRunCoordinator();
-export const agentService = new MastraAgentService(defaultMastra, agentRunCoordinator);
+export const agentService = new MastraAgentService(loadDefaultMastra, agentRunCoordinator);
 
 const stringValue = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
@@ -962,67 +983,6 @@ const getThreadTitleFromMessages = (messages: MastraDBMessage[]) => {
   }
 
   return '';
-};
-
-const messageTextForTokenEstimate = (message: MastraDBMessage) =>
-  message.content.parts
-    .map((part) => {
-      const record = part as Record<string, unknown>;
-      if (typeof record.text === 'string') return record.text;
-      if (typeof record.result === 'string') return record.result;
-      if (record.result !== undefined) return JSON.stringify(record.result);
-      if (record.output !== undefined) {
-        return typeof record.output === 'string' ? record.output : JSON.stringify(record.output);
-      }
-      return JSON.stringify(record);
-    })
-    .filter(Boolean)
-    .join('\n');
-
-const estimateTextTokens = (memory: any, text: string) =>
-  typeof memory.estimateTokens === 'function' ? memory.estimateTokens(text) : Math.ceil(text.length / 4);
-
-export const estimateContextTokens = (memory: any, messages: MastraDBMessage[], systemMessage?: string) =>
-  messages.reduce((total, message) => {
-    const text = messageTextForTokenEstimate(message);
-    return total + estimateTextTokens(memory, text);
-  }, systemMessage ? estimateTextTokens(memory, systemMessage) : 0);
-
-export const contextUsageRecallOptions = (
-  threadId: string,
-  resourceId: string,
-  threadConfig: unknown,
-) => ({
-  threadId,
-  resourceId,
-  ...(isRecord(threadConfig) ? { threadConfig } : {}),
-});
-
-export const estimateMemoryContextTokens = async (
-  memory: any,
-  args: {
-    threadId: string;
-    resourceId: string;
-    memoryConfig: unknown;
-  },
-) => {
-  if (typeof memory.getContext === 'function') {
-    const context = await memory.getContext({
-      threadId: args.threadId,
-      resourceId: args.resourceId,
-      ...(isRecord(args.memoryConfig) ? { memoryConfig: args.memoryConfig } : {}),
-    });
-    return estimateContextTokens(
-      memory,
-      Array.isArray(context?.messages) ? context.messages : [],
-      context?.systemMessage,
-    );
-  }
-
-  const recalled = await memory.recall({
-    ...contextUsageRecallOptions(args.threadId, args.resourceId, args.memoryConfig),
-  });
-  return estimateContextTokens(memory, recalled.messages);
 };
 
 const isNoThreadFoundError = (error: unknown) => {

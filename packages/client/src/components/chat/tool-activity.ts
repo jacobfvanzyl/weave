@@ -108,6 +108,104 @@ const proposalToolNames = [
 export const isProposalTool = (toolName: string) =>
   proposalToolNames.includes(normalizeToolName(toolName));
 
+const leakedToolOutputToolNames = [
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'webSearch',
+  'webExtract',
+  'rename-thread',
+  'renameThreadTool',
+  'write_plan',
+  'writePlanTool',
+  'update_plan',
+  'updatePlanTool',
+  ...proposalToolNames,
+  'git_status',
+  'git_diff',
+  'git_log',
+  'git_show',
+  'git_branch',
+  'git_switch',
+  'git_worktree',
+  'editor_context',
+  'code_intel_capabilities',
+  'code_diagnostics',
+  'code_hover',
+  'code_definition',
+  'code_references',
+  'code_symbols',
+  'workspace_symbols',
+  'code_actions',
+  'code_action_preview',
+  'rename_preview',
+  'format_preview',
+  'file_index',
+  'file_read',
+  'file_write',
+  'file_mkdir',
+  'file_move',
+  'file_delete',
+  'file_upload',
+  'multi_tool_use.parallel',
+];
+const leakedToolOutputFields = [
+  'ok',
+  'path',
+  'command',
+  'query',
+  'results',
+  'renamed',
+  'updated',
+  'completed',
+  'total',
+  'contentChars',
+  'contentHash',
+  'exitCode',
+  'result',
+  'recipient_name',
+  'branch',
+  'head',
+  'clean',
+  'ahead',
+  'behind',
+];
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const leakedToolOutputToolPattern = leakedToolOutputToolNames.map(escapeRegExp).join('|');
+const leakedToolOutputFieldPatternSource = leakedToolOutputFields.map(escapeRegExp).join('|');
+const leakedToolOutputHeadingPattern = new RegExp(
+  `^\\s*(${leakedToolOutputToolPattern}) result:\\s*\\n`,
+);
+const leakedToolOutputFunctionCallPattern = new RegExp(
+  `^\\s*(?:functions\\.)?(?:${leakedToolOutputToolPattern})\\s*\\([\\s\\S]*\\)\\s*$`,
+);
+const leakedToolOutputFieldPattern = new RegExp(
+  `(?:^|\\n)(${leakedToolOutputFieldPatternSource}):\\s`,
+);
+const leakedToolOutputInlineFieldPattern = new RegExp(
+  `(?:^|\\s)(${leakedToolOutputFieldPatternSource}):\\s`,
+);
+
+const isPotentialLeakedToolOutputToolLine = (line: string) =>
+  leakedToolOutputToolNames.some(toolName =>
+    toolName.startsWith(line) || line === toolName || line.startsWith(`${toolName} `) || line.startsWith(`${toolName}:`)
+  );
+
+export const isLeakedToolOutputText = (text: string) => {
+  if (text.startsWith('Compact tool result summary\n')) return true;
+  if (leakedToolOutputFunctionCallPattern.test(text)) return true;
+
+  const headingMatch = leakedToolOutputHeadingPattern.exec(text);
+  if (!headingMatch) return false;
+  if (leakedToolOutputFieldPattern.test(text)) return true;
+
+  const body = text.slice(headingMatch[0].length);
+  const firstNonEmptyLine = body.split(/\r?\n/).find(line => line.trim().length > 0)?.trimStart() ?? '';
+  return isPotentialLeakedToolOutputToolLine(firstNonEmptyLine) &&
+    leakedToolOutputInlineFieldPattern.test(firstNonEmptyLine);
+};
+
 const leakedProposalToolCallPattern = new RegExp(
   `^\\s*(?:functions\\.)?(?:${proposalToolNames.join('|')})\\s*\\([\\s\\S]*\\)\\s*$`,
 );

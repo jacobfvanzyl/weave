@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { recordThreadContextUsage } from '../../server/src/agent/mastra/context-usage';
-import { __chatRunRegistryTest, chatRoutes, createChatRoutes } from '../../server/src/modules/chat/routes/chat';
+import { __chatRunRegistryTest, createChatRoutes } from '../../server/src/modules/chat/routes/chat';
 import { __chatStateContextUsageTest } from '../../server/src/modules/chat/routes/chat-state';
 
-const routeHandler = (path: string, routes = chatRoutes) => {
+const routeHandler = (path: string, routes: ReturnType<typeof createChatRoutes>) => {
   const handler = routes.find((route) => route.path === path)?.handler;
   if (typeof handler !== 'function') {
     throw new Error(`route not found: ${path}`);
@@ -11,7 +11,7 @@ const routeHandler = (path: string, routes = chatRoutes) => {
   return handler as (c: any) => Promise<unknown>;
 };
 
-const steerRouteHandler = (routes = chatRoutes) => routeHandler('/chat/runs/:threadId/steer', routes);
+const steerRouteHandler = (routes: ReturnType<typeof createChatRoutes>) => routeHandler('/chat/runs/:threadId/steer', routes);
 
 const chatRouteContext = (overrides: Record<string, unknown> = {}) => ({
   get: (key: string) => {
@@ -127,8 +127,12 @@ describe('chat active run registry', () => {
   });
 
   it('returns not_active when steering a thread without an active run', async () => {
+    const routes = createChatRoutes({
+      hasActiveThreadRun: () => false,
+      getChatRun: () => ({ active: false, status: 'idle' }),
+    } as any);
     const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
-    const response = await steerRouteHandler()({
+    const response = await steerRouteHandler(routes)({
       get: (key: string) => (key === 'requestContext' ? { get: () => 'resource-1' } : undefined),
       req: {
         param: () => 'thread-1',

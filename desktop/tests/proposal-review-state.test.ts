@@ -4,6 +4,7 @@ import {
   canViewProposalReview,
   getNextProposalReviewItemId,
   getPendingProposalReviewCount,
+  isProposalComplete,
 } from '../../packages/client/src/lib/proposal-review-state';
 import {
   getProposalReviewUpdates,
@@ -60,6 +61,16 @@ describe('proposal review state', () => {
     expect(canSubmitProposalReview(proposal())).toBe(false);
     expect(canSubmitProposalReview(proposal({ path: undefined }))).toBe(false);
     expect(canSubmitProposalReview(proposal({ items: [] }))).toBe(false);
+  });
+
+  it('treats applied proposals as complete', () => {
+    const appliedItem = { ...proposal().items[0], status: 'applied' as const, viewed: true };
+
+    expect(isProposalComplete(proposal({ status: 'applied' }))).toBe(true);
+    expect(isProposalComplete(proposal({ items: [appliedItem], counts: { applied: 1 } }))).toBe(true);
+    expect(isProposalComplete(proposal({ status: 'approved', items: [appliedItem], counts: { approved: 1 } }))).toBe(true);
+    expect(isProposalComplete(proposal({ status: 'approved' }))).toBe(false);
+    expect(isProposalComplete(proposal({ status: 'draft' }))).toBe(false);
   });
 
   it('falls back to item status counts when frontmatter counts omit pending', () => {

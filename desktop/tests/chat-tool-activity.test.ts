@@ -212,6 +212,30 @@ describe('chat tool activity helpers', () => {
     ]);
   });
 
+  it('hides leaked compact git diff output while preserving ordinary result prose', () => {
+    const parts = [
+      { type: 'text', text: 'I checked the current diff.' },
+      {
+        type: 'text',
+        text: [
+          'git_diff result:',
+          'git_diff ok: true contentChars: 519 contentHash: 8e76b34ccec3',
+          '',
+          'diff --git a/lib/entities/enums.dart b/lib/entities/enums.dart',
+          '@@ -80,6 +80,10 @@ enum Entity {',
+          '+  spreaderInstruction(',
+          "+    label: 'Spreader Instruction',",
+        ].join('\n'),
+      },
+      { type: 'text', text: 'git_diff result:\nThis phrase is part of a normal explanation.' },
+    ];
+
+    expect(getAssistantContentRanges(parts, false)).toEqual([
+      { type: 'part', index: 0 },
+      { type: 'part', index: 2 },
+    ]);
+  });
+
   it('selects only trailing final text when an assistant turn has earlier visible work', () => {
     const parts = [
       { type: 'reasoning', text: 'I should inspect the repo.' },

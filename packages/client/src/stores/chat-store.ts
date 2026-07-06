@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import { archiveServerThread, createProjectThread, createServerThread, deleteServerThread, renameServerThread, type RemovedWorkspaceSnapshot } from '../lib/chat-state-api';
 import { createClientAppPersistStorage, getClientAppStorageKey } from '../lib/client-app';
 import { createClientId } from '../lib/client-id';
+import { selectPreferredThreadProposal, shouldAcceptThreadProposalUpdate } from '../lib/proposal-review-state';
 import {
   createThreadOpenabilityContext,
   emptyThreadOpenabilityContext,
@@ -148,7 +149,7 @@ type ChatState = {
   setShowReasoning: (showReasoning: boolean) => void;
   setShowPlanPanel: (showPlanPanel: boolean) => void;
   setThreadPlan: (threadId: string, plan: ThreadPlan, options?: { autoExpand?: boolean }) => void;
-  setThreadProposal: (threadId: string, proposal: ThreadProposal, options?: { autoExpand?: boolean }) => void;
+  setThreadProposal: (threadId: string, proposal: ThreadProposal, options?: { autoExpand?: boolean }) => boolean;
   clearThreadPlan: (threadId: string) => void;
   clearThreadProposal: (threadId: string) => void;
   enqueueProposalImplementationRequest: (threadId: string, request: Omit<ProposalImplementationRequest, 'id' | 'requestedAt'> & Partial<Pick<ProposalImplementationRequest, 'id' | 'requestedAt'>>) => ProposalImplementationRequest;
@@ -300,9 +301,12 @@ export const useChatStore = create<ChatState>()(
           const { [threadId]: _removed, ...threadPlans } = state.threadPlans;
           return { threadPlans };
         }),
-      setThreadProposal: (threadId, proposal, options = {}) =>
+      setThreadProposal: (threadId, proposal, options = {}) => {
+        let accepted = false;
         set(state => {
           const previous = state.threadProposals[threadId];
+          if (!shouldAcceptThreadProposalUpdate(previous, proposal)) return state;
+          accepted = true;
           const submittedProposal = state.submittedProposalImplementations[threadId];
           const shouldClearSubmittedProposal = shouldClearSubmittedProposalForProposal(submittedProposal, proposal);
           const pendingCount = proposal.counts.pending ?? proposal.items.filter(item => item.status === 'pending').length;
@@ -331,7 +335,9 @@ export const useChatStore = create<ChatState>()(
               [threadId]: shouldExpand ? true : state.guidedTaskExpandedByThread[threadId] ?? false,
             },
           };
-        }),
+        });
+        return accepted;
+      },
       clearThreadProposal: threadId =>
         set(state => {
           const threadProposals = withoutRecordKey(state.threadProposals, threadId);
@@ -425,7 +431,10 @@ export const useChatStore = create<ChatState>()(
             }
             if (thread.latestProposal) {
               const currentProposal = threadProposals[thread.id];
-              const nextProposal = currentProposal?.isBusy ? currentProposal : thread.latestProposal;
+              const nextProposal = currentProposal?.isBusy
+                ? currentProposal
+                : selectPreferredThreadProposal(currentProposal, thread.latestProposal);
+              if (!nextProposal) continue;
               threadProposals[thread.id] = nextProposal;
               if (shouldClearSubmittedProposalForProposal(submittedProposalImplementations[thread.id], nextProposal)) {
                 submittedProposalImplementations = withoutRecordKey(submittedProposalImplementations, thread.id);

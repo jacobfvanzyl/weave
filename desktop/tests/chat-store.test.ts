@@ -37,6 +37,19 @@ const loadFreshChatStore = async (seed?: (storage: Storage) => void) => {
   return import('../../packages/client/src/stores/chat-store');
 };
 
+const proposalFixture = (overrides: Partial<ThreadProposal> = {}): ThreadProposal => ({
+  title: 'Proposal review',
+  path: '.agents/proposals/demo.md',
+  status: 'ready',
+  items: [
+    { id: 'item-1', kind: 'file_edit', status: 'pending', title: 'Update file', additions: 1, deletions: 0, viewed: false },
+  ],
+  counts: { pending: 1 },
+  updatedAt: '2026-06-18T12:00:00.000Z',
+  contentHash: 'proposal-hash',
+  ...overrides,
+});
+
 describe('chat store', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -281,6 +294,107 @@ describe('chat store', () => {
     }, { autoExpand: false });
 
     expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
+  });
+
+  it('ignores replayed same-path draft proposals after finalized proposal state', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    useChatStore.getState().setGuidedTaskExpanded('thread-1', false);
+
+    const acceptedReady = useChatStore.getState().setThreadProposal('thread-1', proposalFixture({
+      status: 'ready',
+      updatedAt: '2026-06-18T12:10:00.000Z',
+      contentHash: 'ready-hash',
+    }), { autoExpand: false });
+    const acceptedReplay = useChatStore.getState().setThreadProposal('thread-1', proposalFixture({
+      status: 'draft',
+      updatedAt: '2026-06-18T12:05:00.000Z',
+      contentHash: 'draft-hash',
+    }));
+
+    expect(acceptedReady).toBe(true);
+    expect(acceptedReplay).toBe(false);
+    expect(useChatStore.getState().threadProposals['thread-1']).toMatchObject({
+      status: 'ready',
+      contentHash: 'ready-hash',
+    });
+    expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
+  });
+
+  it('does not downgrade applied proposal state to a newer same-path draft', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const appliedItem: ThreadProposal['items'][number] = {
+      id: 'item-1',
+      kind: 'file_edit',
+      status: 'applied',
+      title: 'Update file',
+      additions: 1,
+      deletions: 0,
+      viewed: true,
+    };
+
+    useChatStore.getState().setThreadProposal('thread-1', proposalFixture({
+      status: 'applied',
+      items: [appliedItem],
+      counts: { applied: 1 },
+      updatedAt: '2026-06-18T12:10:00.000Z',
+      contentHash: 'applied-hash',
+    }), { autoExpand: false });
+    const acceptedReplay = useChatStore.getState().setThreadProposal('thread-1', proposalFixture({
+      status: 'draft',
+      updatedAt: '2026-06-18T12:20:00.000Z',
+      contentHash: 'newer-draft-hash',
+    }));
+
+    expect(acceptedReplay).toBe(false);
+    expect(useChatStore.getState().threadProposals['thread-1']).toMatchObject({
+      status: 'applied',
+      contentHash: 'applied-hash',
+    });
+  });
+
+  it('accepts a newer same-path draft revision over finalized proposal state', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+
+    useChatStore.getState().setThreadProposal('thread-1', proposalFixture({
+      status: 'ready',
+      updatedAt: '2026-06-18T12:00:00.000Z',
+      contentHash: 'ready-hash',
+    }), { autoExpand: false });
+    const acceptedDraft = useChatStore.getState().setThreadProposal('thread-1', proposalFixture({
+      status: 'draft',
+      updatedAt: '2026-06-18T12:05:00.000Z',
+      contentHash: 'new-draft-hash',
+    }), { autoExpand: false });
+
+    expect(acceptedDraft).toBe(true);
+    expect(useChatStore.getState().threadProposals['thread-1']).toMatchObject({
+      status: 'draft',
+      contentHash: 'new-draft-hash',
+    });
+  });
+
+  it('accepts a newer different-path draft after finalized proposal state', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+
+    useChatStore.getState().setThreadProposal('thread-1', proposalFixture({
+      path: '.agents/proposals/old-ready.md',
+      status: 'ready',
+      updatedAt: '2026-06-18T12:00:00.000Z',
+      contentHash: 'old-ready-hash',
+    }), { autoExpand: false });
+    const acceptedDraft = useChatStore.getState().setThreadProposal('thread-1', proposalFixture({
+      path: '.agents/proposals/new-draft.md',
+      status: 'draft',
+      updatedAt: '2026-06-18T12:05:00.000Z',
+      contentHash: 'new-draft-hash',
+    }), { autoExpand: false });
+
+    expect(acceptedDraft).toBe(true);
+    expect(useChatStore.getState().threadProposals['thread-1']).toMatchObject({
+      path: '.agents/proposals/new-draft.md',
+      status: 'draft',
+      contentHash: 'new-draft-hash',
+    });
   });
 
   it('expands the guided card when a draft proposal first becomes reviewable', async () => {

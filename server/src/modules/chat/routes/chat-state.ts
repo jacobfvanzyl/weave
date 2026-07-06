@@ -2,14 +2,14 @@ import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { defineRoute } from '../../../server/routes';
 import type { MastraDBMessage } from '@mastra/core/agent';
 import { attachmentIdFromReference, attachmentUrlPath } from '../../attachments/storage';
-import { getAuthUserFromHeader, isCompactToolHistoryTextPart } from '../../../agent/runtime';
+import { getAuthUserFromHeader } from '../../../agent/mastra/auth';
+import { isCompactToolHistoryTextPart } from '../../../agent/mastra/compact-tool-history-processor';
+import type { AgentService } from '../../../agent/service';
 import {
-  agentService as defaultAgentService,
   contextUsageRecallOptions,
   estimateContextTokens,
   estimateMemoryContextTokens,
-} from '../../../agent';
-import { getThreadRunSubmittedUserMessages, getThreadRunUiMessages } from './chat';
+} from '../../../agent/context-token-estimate';
 
 const getToolInvocation = (part: Record<string, unknown>) =>
   typeof part.toolInvocation === 'object' && part.toolInvocation !== null
@@ -268,7 +268,13 @@ const errorResponse = (c: any, error: unknown) => {
   return c.json({ error: message }, status);
 };
 
-export const chatStateRoutes = [
+const unwiredAgentService = new Proxy({}, {
+  get(_target, prop) {
+    throw new Error(`Chat state route "${String(prop)}" requires an injected AgentService`);
+  },
+}) as AgentService;
+
+export const createChatStateRoutes = (service: AgentService) => [
   defineRoute('/owner/me', {
     method: 'GET',
     handler: async (c) => {
@@ -288,7 +294,7 @@ export const chatStateRoutes = [
       try {
         const resourceId = getResourceId(c);
 
-        return c.json({ threads: await defaultAgentService.listChatThreads({ resourceId }) });
+        return c.json({ threads: await service.listChatThreads({ resourceId }) });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -305,7 +311,7 @@ export const chatStateRoutes = [
         const projectId = typeof body?.projectId === 'string' ? body.projectId : undefined;
         const workspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
 
-        const thread = await defaultAgentService.createChatThread({
+        const thread = await service.createChatThread({
           resourceId,
           threadId,
           title,
@@ -333,7 +339,7 @@ export const chatStateRoutes = [
         const scopeWorkspaceId = typeof scope?.workspaceId === 'string' ? scope.workspaceId : undefined;
         const plain = scope?.plain === true;
 
-        await defaultAgentService.reorderChatThreads({
+        await service.reorderChatThreads({
           resourceId,
           threadIds,
           scope: {
@@ -356,7 +362,7 @@ export const chatStateRoutes = [
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
 
-        return c.json({ messages: await defaultAgentService.getChatThreadRawMessages({ resourceId, threadId }) });
+        return c.json({ messages: await service.getChatThreadRawMessages({ resourceId, threadId }) });
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -371,7 +377,7 @@ export const chatStateRoutes = [
         const queryContextWindow = Number(c.req.query('contextWindow'));
 
         return c.json(
-          await defaultAgentService.getChatThreadContextUsage({
+          await service.getChatThreadContextUsage({
             threadId,
             resourceId,
             queryContextWindow,
@@ -390,12 +396,12 @@ export const chatStateRoutes = [
         const threadId = c.req.param('threadId');
 
         const origin = new URL(c.req.url).origin;
-        const persistedMessages = (await defaultAgentService.getChatThreadMessages({ resourceId, threadId }))
+        const persistedMessages = (await service.getChatThreadMessages({ resourceId, threadId }))
           .map((message: MastraDBMessage) => toUiMessage(message, origin));
-        const pendingMessages = getThreadRunSubmittedUserMessages(resourceId, threadId)
+        const pendingMessages = service.getChatSubmittedUserMessages(resourceId, threadId)
           .map((message, index) => toPendingSubmittedMessage(message, origin, index))
           .filter((message): message is UiChatMessage => message !== null);
-        const pendingRunMessages = getThreadRunUiMessages(resourceId, threadId);
+        const pendingRunMessages = service.getChatUiMessages(resourceId, threadId) as UiChatMessage[];
         const shouldAppendRunMessages = pendingRunMessages.length > 0 &&
           (pendingMessages.length > 0 || persistedMessages[persistedMessages.length - 1]?.role !== 'assistant');
 
@@ -421,7 +427,7 @@ export const chatStateRoutes = [
         const hasArchived = typeof body?.archived === 'boolean';
         if (!title && !hasArchived) return c.json({ error: 'title or archived is required' }, 400);
 
-        const thread = await defaultAgentService.updateChatThread({
+        const thread = await service.updateChatThread({
           resourceId,
           threadId,
           ...(title ? { title } : {}),
@@ -441,7 +447,7 @@ export const chatStateRoutes = [
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
 
-        await defaultAgentService.deleteChatThread({ resourceId, threadId });
+        await service.deleteChatThread({ resourceId, threadId });
         return c.json({ ok: true });
       } catch (error) {
         return errorResponse(c, error);
@@ -449,6 +455,8 @@ export const chatStateRoutes = [
     },
   }),
 ];
+
+export const chatStateRoutes = createChatStateRoutes(unwiredAgentService);
 
 export const __chatStateContextUsageTest = {
   contextUsageRecallOptions,

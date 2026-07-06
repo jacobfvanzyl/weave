@@ -22,7 +22,8 @@ import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Check, ChevronRight, Clipboard, Crosshair, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
 import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, sendThreadSteeringMessage, type ContextUsage } from '../../lib/chat-state-api';
+import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
+import { sendSteeringMessageOrFallback } from '../../lib/chat-steering';
 import { cn } from '../../lib/cn';
 import {
   abandonComposerDraftServerAck,
@@ -75,6 +76,7 @@ import { buildProposalImplementationUserMessage, getProposalActionDisplay, getPr
 import { getWorkedForLabel, getWorkingForLabel } from './turn-timing';
 
 const ThreadIdContext = createContext<string | null>(null);
+const StopThreadRunContext = createContext<(() => Promise<void>) | null>(null);
 type AutoCollapsedTurnIds = Record<string, true>;
 type AutoCollapsedTurnStateProps = {
   autoCollapseContext: ThreadAutoCollapseContextValue;
@@ -359,20 +361,22 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
             useChatStore.getState().setThreadPlan(targetThreadId, effect.plan, { autoExpand: shouldAutoExpand });
           } else if (effect.type === 'proposal') {
             const shouldAutoExpand = useChatStore.getState().runningThreadIds.includes(targetThreadId);
-            useChatStore.getState().setThreadProposal(targetThreadId, effect.proposal, { autoExpand: shouldAutoExpand });
-            const proposalReviewPath = canViewProposalReview(effect.proposal) ? effect.proposal.path : undefined;
-            const proposalReviewPhase = effect.proposal.status === 'draft' ? 'draft' : 'finalized';
-            const proposalReviewKey = proposalReviewPath ? `${targetThreadId}:${proposalReviewPath}:${proposalReviewPhase}` : undefined;
-            if (
-              targetThreadId === activeThreadId
-              && activeSurface.kind === 'thread'
-              && getToolActivityStatus(call) === 'complete'
-              && proposalReviewPath
-              && proposalReviewKey
-              && !openedProposalReviewPhases.has(proposalReviewKey)
-            ) {
-              openedProposalReviewPhases.add(proposalReviewKey);
-              openProposalReview(proposalReviewPath);
+            const proposalAccepted = useChatStore.getState().setThreadProposal(targetThreadId, effect.proposal, { autoExpand: shouldAutoExpand });
+            if (proposalAccepted) {
+              const proposalReviewPath = canViewProposalReview(effect.proposal) ? effect.proposal.path : undefined;
+              const proposalReviewPhase = effect.proposal.status === 'draft' ? 'draft' : 'finalized';
+              const proposalReviewKey = proposalReviewPath ? `${targetThreadId}:${proposalReviewPath}:${proposalReviewPhase}` : undefined;
+              if (
+                targetThreadId === activeThreadId
+                && activeSurface.kind === 'thread'
+                && getToolActivityStatus(call) === 'complete'
+                && proposalReviewPath
+                && proposalReviewKey
+                && !openedProposalReviewPhases.has(proposalReviewKey)
+              ) {
+                openedProposalReviewPhases.add(proposalReviewKey);
+                openProposalReview(proposalReviewPath);
+              }
             }
           }
         }
@@ -1674,6 +1678,7 @@ const SlashHighlightedInput = ({
 const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   const aui = useAui();
   const threadId = useContext(ThreadIdContext);
+  const stopActiveThreadRun = useContext(StopThreadRunContext);
   const queryClient = useQueryClient();
   const resourceId = useChatStore(state => state.resourceId);
   const composerRef = useRef<HTMLFormElement>(null);
@@ -1783,10 +1788,11 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
           }
         : undefined;
       const message = await buildSteeringUserMessage(messageText, attachments, metadata);
-      const result = await sendThreadSteeringMessage(threadId, message);
+      const result = await sendSteeringMessageOrFallback(threadId, message, {
+        sendFallbackMessage: () => aui.composer().send(),
+      });
 
       if (!result.ok) {
-        aui.composer().send();
         return;
       }
 
@@ -1849,22 +1855,6 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   const connectChatGPT = async () => {
     const login = await startChatGPTLogin();
     window.open(login.url, 'mage-hand-chatgpt-login', 'width=720,height=820,popup=yes');
-  };
-
-  const stopThreadRun = async () => {
-    if (!threadId) return;
-    try {
-      await cancelThreadRun(threadId);
-    } catch (error) {
-      console.error('[chat] failed to cancel thread run', error);
-    } finally {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] }),
-        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
-        queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
-      ]);
-    }
   };
 
   return (
@@ -1949,12 +1939,17 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
             </Button>
           ) : null}
           {isThreadRunning ? (
-            <ComposerPrimitive.Cancel
-              onClick={() => void stopThreadRun()}
-              render={<Button size="icon-lg" variant="ghost" className="h-11 w-11 shrink-0 rounded-full text-primary" aria-label="Stop generation" title="Stop generation" />}
+            <Button
+              type="button"
+              size="icon-lg"
+              variant="ghost"
+              className="h-11 w-11 shrink-0 rounded-full text-primary"
+              aria-label="Stop generation"
+              title="Stop generation"
+              onClick={() => void stopActiveThreadRun?.()}
             >
               <Square size={18} fill="currentColor" strokeWidth={2.5} />
-            </ComposerPrimitive.Cancel>
+            </Button>
           ) : null}
         </div>
       </div>
@@ -2298,6 +2293,27 @@ const AssistantChatRuntime = ({
     },
   });
 
+  const stopActiveThreadRun = useCallback(async () => {
+    resumeRunIdRef.current = runState?.runId ?? 'active';
+    useChatStore.getState().setThreadRunning(threadId, false);
+    const cancelRun = cancelThreadRun(threadId);
+    chat.stop();
+
+    try {
+      await cancelRun;
+    } catch (error) {
+      console.error('[chat] failed to cancel thread run', error);
+    } finally {
+      chat.stop();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
+      ]);
+    }
+  }, [chat, queryClient, resourceId, runState?.runId, threadId]);
+
   const runtime = useAISDKRuntime(chat, {
     adapters: { attachments: imageAttachmentAdapter },
   });
@@ -2340,16 +2356,18 @@ const AssistantChatRuntime = ({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ThreadIdContext.Provider value={threadId}>
-        <ThreadRunningTracker threadId={threadId} />
-        <IdleActiveThreadRefresher threadId={threadId} />
-        <Thread
-          autoCollapseContext={autoCollapseContext}
-          activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
-          canFollowWrites={canFollowWrites}
-          setIsFollowingBottom={setIsFollowingBottom}
-        />
-      </ThreadIdContext.Provider>
+      <StopThreadRunContext.Provider value={stopActiveThreadRun}>
+        <ThreadIdContext.Provider value={threadId}>
+          <ThreadRunningTracker threadId={threadId} />
+          <IdleActiveThreadRefresher threadId={threadId} />
+          <Thread
+            autoCollapseContext={autoCollapseContext}
+            activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
+            canFollowWrites={canFollowWrites}
+            setIsFollowingBottom={setIsFollowingBottom}
+          />
+        </ThreadIdContext.Provider>
+      </StopThreadRunContext.Provider>
     </AssistantRuntimeProvider>
   );
 };

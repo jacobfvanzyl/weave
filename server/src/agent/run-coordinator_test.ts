@@ -399,6 +399,37 @@ Deno.test('filterCompactToolHistoryTextStream suppresses parallel wrapper compac
   assertEquals(await reader.read(), { done: true });
 });
 
+Deno.test('filterCompactToolHistoryTextStream suppresses git diff compact tool-history deltas', async () => {
+  const reader = filterCompactToolHistoryTextStream(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+        controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'git_diff result:\n' });
+        controller.enqueue({
+          type: 'text-delta',
+          id: 'text-1',
+          delta: [
+            'git_diff ok: true contentChars: 519 contentHash: 8e76b34ccec3',
+            '',
+            'diff --git a/lib/entities/enums.dart b/lib/entities/enums.dart',
+            '@@ -80,6 +80,10 @@ enum Entity {',
+            '+  spreaderInstruction(',
+            "+    label: 'Spreader Instruction',",
+          ].join('\n'),
+        });
+        controller.enqueue({ type: 'text-end', id: 'text-1' });
+        controller.enqueue({ type: 'finish' });
+        controller.close();
+      },
+    }),
+  ).getReader();
+
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-start', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: false, value: { type: 'text-end', id: 'text-1' } });
+  assertEquals(await reader.read(), { done: false, value: { type: 'finish' } });
+  assertEquals(await reader.read(), { done: true });
+});
+
 Deno.test('filterCompactToolHistoryTextStream suppresses leaked proposal function call text', async () => {
   const reader = filterCompactToolHistoryTextStream(
     new ReadableStream({
@@ -473,4 +504,46 @@ Deno.test('bufferAssistantTextStream flushes before user-message data chunks', a
   assertEquals((userMessage.value as any).type, 'data-user-message');
   assertEquals((userMessage.value as any).transient, false);
   assertEquals(await reader.read(), { done: true });
+});
+
+Deno.test('AgentRunCoordinator pump flushes buffered assistant text before abort and marks stopped', async () => {
+  const { coordinator } = createTestCoordinator();
+  try {
+    const run = coordinator.createThreadRun('resource-1', 'thread-1');
+    coordinator.startRunPump(
+      run,
+      bufferAssistantTextStream(
+        filterCompactToolHistoryTextStream(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'start', messageId: 'assistant-1' });
+              controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'partial' });
+              controller.enqueue({ type: 'abort', reason: 'cancelled' });
+              controller.close();
+            },
+          }),
+        ),
+      ),
+    );
+
+    await waitFor(
+      () => coordinator.getThreadRunSnapshot('resource-1', 'thread-1').status === 'cancelled',
+      'expected run to settle as cancelled',
+    );
+    assertEquals(run.chunks, [
+      { type: 'start', messageId: 'assistant-1' },
+      { type: 'text-delta', id: 'text-1', delta: 'partial' },
+      { type: 'abort', reason: 'cancelled' },
+    ]);
+    assertEquals(coordinator.getUiMessages('resource-1', 'thread-1'), [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        status: { type: 'complete', reason: 'stop' },
+        parts: [{ type: 'text', text: 'partial' }],
+      },
+    ]);
+  } finally {
+    coordinator.clearForTests();
+  }
 });

@@ -483,7 +483,7 @@ describe('chat-state Project/Workspace API client', () => {
     })]);
   });
 
-  it('prefers latest draft proposal metadata over older finalized proposal metadata', async () => {
+  it('prefers newer draft proposal metadata over older different-path finalized proposal metadata', async () => {
     configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const proposalItem = {
       id: 'src-file-ts',
@@ -545,6 +545,65 @@ describe('chat-state Project/Workspace API client', () => {
           currentHash: 'old-hash',
           proposedHash: 'new-hash',
         })],
+      }),
+    })]);
+  });
+
+  it('prefers finalized proposal metadata over stale same-path draft metadata', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
+    const proposalItem = {
+      id: 'src-file-ts',
+      kind: 'file_edit',
+      status: 'applied',
+      title: 'Update file',
+      path: 'src/file.ts',
+      additions: 2,
+      deletions: 1,
+      viewed: true,
+      current_hash: 'old-hash',
+      proposed_hash: 'new-hash',
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      threads: [{
+        id: 'thread-1',
+        title: 'Proposal work',
+        resourceId: 'user-1',
+        createdAt: '2026-06-03T08:00:00.000Z',
+        updatedAt: '2026-06-03T09:00:00.000Z',
+        metadata: {
+          latestProposal: {
+            id: 'applied-review',
+            title: 'Applied proposal',
+            path: '.agents/proposals/demo.md',
+            status: 'applied',
+            summary: 'Applied proposal.',
+            items: [proposalItem],
+            counts: { applied: 1 },
+            updatedAt: '2026-06-18T12:10:00.000Z',
+            contentHash: 'applied-hash',
+          },
+          latestProposalDraft: {
+            id: 'draft-review',
+            title: 'Draft review proposal',
+            path: '.agents/proposals/demo.md',
+            status: 'draft',
+            summary: 'Draft proposal in progress.',
+            items: [{ ...proposalItem, status: 'pending', viewed: false }],
+            counts: { pending: 1 },
+            updatedAt: '2026-06-18T12:05:00.000Z',
+            contentHash: 'draft-hash',
+          },
+        },
+      }],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listServerThreads()).resolves.toEqual([expect.objectContaining({
+      latestProposal: expect.objectContaining({
+        id: 'applied-review',
+        path: '.agents/proposals/demo.md',
+        status: 'applied',
+        contentHash: 'applied-hash',
       }),
     })]);
   });

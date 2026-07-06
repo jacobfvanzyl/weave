@@ -1,10 +1,9 @@
 import type { AgentMessageInput } from '@mastra/core/agent';
 import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
-import { type AgentService, agentService as defaultAgentService } from '../../../agent';
-import { agentRunCoordinator } from '../../../agent/service';
-import { createAgentRunCoordinatorTestApi } from '../../../agent/run-coordinator';
+import type { AgentService } from '../../../agent/service';
+import { AgentRunCoordinator, createAgentRunCoordinatorTestApi } from '../../../agent/run-coordinator';
 import { defineRoute } from '../../../server/routes';
-import { type ResourceService, resourceService as defaultResourceService } from '../../../services/resource-service';
+import type { ResourceService } from '../../../services/resource-service';
 import { callerForOwner } from '../../../services/types';
 import {
   attachmentIdFromReference,
@@ -73,18 +72,6 @@ const getResourceId = (c: any) => {
   return resourceId;
 };
 
-export const getChatPerfSnapshot = () => defaultAgentService.getChatPerfSnapshot();
-
-export const hasActiveThreadRun = (resourceId: string | undefined, threadId: string | undefined) =>
-  defaultAgentService.hasActiveThreadRun(resourceId, threadId);
-
-export const getThreadRunSubmittedUserMessages = (resourceId: string | undefined, threadId: string | undefined) =>
-  defaultAgentService.getChatSubmittedUserMessages(resourceId, threadId);
-
-export const getThreadRunUiMessages = (resourceId: string | undefined, threadId: string | undefined) => {
-  return defaultAgentService.getChatUiMessages(resourceId, threadId);
-};
-
 const getSubmittedUserMessages = (messages: unknown) => {
   if (!Array.isArray(messages)) return [];
 
@@ -111,7 +98,16 @@ const attachmentAccessForNormalization = (
 ): AttachmentNormalizerStorage => {
   if (options.storage) return options.storage;
 
-  const resources = options.resources ?? defaultResourceService;
+  const resources = options.resources;
+  if (!resources) {
+    return {
+      findByThread: async () => [],
+      put: async () => {
+        throw new Error('Attachment storage is not configured for chat route normalization');
+      },
+    };
+  }
+
   const caller = callerForOwner(
     options.resourceId ?? 'unknown',
     'ui',
@@ -341,11 +337,17 @@ export const __chatRouteMemoryTest = {
   toAgentMessageInput,
 };
 
-export const __chatRunRegistryTest = createAgentRunCoordinatorTestApi(agentRunCoordinator);
+export const __chatRunRegistryTest = createAgentRunCoordinatorTestApi(new AgentRunCoordinator());
+
+const unwiredAgentService = new Proxy({}, {
+  get(_target, prop) {
+    throw new Error(`Chat route "${String(prop)}" requires an injected AgentService`);
+  },
+}) as AgentService;
 
 export const createChatRoutes = (
-  service: AgentService = defaultAgentService,
-  resources: Pick<ResourceService, 'findAttachmentsByThread' | 'putAttachment'> = defaultResourceService,
+  service: AgentService,
+  resources?: Pick<ResourceService, 'findAttachmentsByThread' | 'putAttachment'>,
 ) => [
   defineRoute('/chat/runs/:threadId/stream', {
     method: 'GET',
@@ -441,4 +443,4 @@ export const createChatRoutes = (
   }),
 ];
 
-export const chatRoutes = createChatRoutes();
+export const chatRoutes = createChatRoutes(unwiredAgentService);

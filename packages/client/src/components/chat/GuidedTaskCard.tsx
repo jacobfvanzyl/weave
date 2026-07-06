@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, ChevronDown, Circle, CircleDashed, FileText, GitPullRequestArrow, Loader2, MessageSquareWarning } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { canViewProposalReview, getPendingProposalReviewCount } from '../../lib/proposal-review-state';
+import { canViewProposalReview, getPendingProposalReviewCount, isProposalComplete } from '../../lib/proposal-review-state';
 import {
   useChatStore,
   type PlanStepStatus,
@@ -66,7 +66,7 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
         || proposal.contentHash === submittedProposalImplementation.proposalContentHash
       ),
   );
-  const hasProposalReview = canViewProposalReview(proposal) && !hasSubmittedProposal;
+  const hasProposalReview = canViewProposalReview(proposal) && !hasSubmittedProposal && !isProposalComplete(proposal);
   const pendingApprovalCount = getPendingProposalReviewCount(proposal);
   const isDraftProposal = proposal?.status === 'draft';
   const isProposalReviewOpen = Boolean(

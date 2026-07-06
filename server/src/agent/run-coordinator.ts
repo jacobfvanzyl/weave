@@ -244,7 +244,7 @@ export const filterCompactToolHistoryTextStream = (stream: ReadableStream<unknow
             continue;
           }
 
-          if (type === 'data-user-message' || type === 'start' || type === 'finish') {
+          if (type === 'data-user-message' || type === 'start' || type === 'finish' || type === 'abort') {
             resolveAllPendingText();
           }
 
@@ -461,7 +461,7 @@ export const bufferAssistantTextStream = (stream: ReadableStream<unknown>) =>
           }
 
           const type = getStreamChunkType(value);
-          if (type === 'data-user-message' || type === 'start') flushAll();
+          if (type === 'data-user-message' || type === 'start' || type === 'abort') flushAll();
           const endKind = type ? bufferedAssistantEndTypes[type] : undefined;
           const id = getStreamChunkId(value);
           if (endKind && id) flushKey(getBufferedTextKey(endKind, id), { force: true });

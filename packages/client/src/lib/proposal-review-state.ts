@@ -12,6 +12,62 @@ export const canSubmitProposalReview = (
   proposal: Pick<ThreadProposal, 'path' | 'status' | 'items'> | undefined,
 ) => Boolean(proposal?.path && proposal.status && proposal.status !== 'draft' && proposal.items.length > 0);
 
+export const isProposalComplete = (
+  proposal: Pick<ThreadProposal, 'status' | 'counts' | 'items'> | undefined,
+) => Boolean(
+  proposal
+    && (
+      proposal.status === 'applied'
+      || (proposal.items.length > 0 && proposal.items.every(item => item.status === 'applied'))
+      || (proposal.items.length > 0 && (proposal.counts.applied ?? 0) >= proposal.items.length)
+    ),
+);
+
+const proposalUpdatedAtMillis = (proposal: Pick<ThreadProposal, 'updatedAt'>) => {
+  const millis = Date.parse(proposal.updatedAt);
+  return Number.isFinite(millis) ? millis : undefined;
+};
+
+const proposalContentChanged = (
+  current: Pick<ThreadProposal, 'contentHash'>,
+  incoming: Pick<ThreadProposal, 'contentHash'>,
+) => !current.contentHash || !incoming.contentHash || current.contentHash !== incoming.contentHash;
+
+export const shouldAcceptThreadProposalUpdate = (
+  current: Pick<ThreadProposal, 'path' | 'status' | 'updatedAt' | 'contentHash'> | undefined,
+  incoming: Pick<ThreadProposal, 'path' | 'status' | 'updatedAt' | 'contentHash'>,
+) => {
+  if (!current) return true;
+
+  const samePath = Boolean(current.path && incoming.path && current.path === incoming.path);
+  const currentUpdatedAt = proposalUpdatedAtMillis(current);
+  const incomingUpdatedAt = proposalUpdatedAtMillis(incoming);
+  const hasComparableTimestamps = currentUpdatedAt !== undefined && incomingUpdatedAt !== undefined;
+
+  if (samePath) {
+    if (hasComparableTimestamps && incomingUpdatedAt < currentUpdatedAt) return false;
+    if (current.status === 'applied' && incoming.status !== 'applied') return false;
+    if (incoming.status === 'draft' && current.status && current.status !== 'draft') {
+      return hasComparableTimestamps
+        && incomingUpdatedAt > currentUpdatedAt
+        && proposalContentChanged(current, incoming);
+    }
+    return true;
+  }
+
+  if (hasComparableTimestamps) return incomingUpdatedAt >= currentUpdatedAt;
+  return true;
+};
+
+export const selectPreferredThreadProposal = (
+  current: ThreadProposal | undefined,
+  incoming: ThreadProposal | undefined,
+) => {
+  if (!current) return incoming;
+  if (!incoming) return current;
+  return shouldAcceptThreadProposalUpdate(current, incoming) ? incoming : current;
+};
+
 const reviewedProposalItemStatuses = new Set<ProposalItemStatus>([
   'approved',
   'changes_requested',
