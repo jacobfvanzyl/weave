@@ -21,6 +21,12 @@ import {
   toToolActivityCall,
 } from '../../packages/client/src/components/chat/tool-activity';
 import {
+  buildAskUserResponseMetadata,
+  buildAskUserResponseText,
+  parseAskUserResponseMetadata,
+  parseAskUserPart,
+} from '../../packages/client/src/components/chat/ask-user';
+import {
   formatWorkDuration,
   getWorkedForLabel,
   getWorkingForLabel,
@@ -199,6 +205,195 @@ describe('chat tool activity helpers', () => {
     expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([]);
   });
 
+  it('keeps submitted ask_user data as a visible assistant content boundary', () => {
+    const askPart = {
+      type: 'data-ask-user',
+      data: {
+        mastraRunId: 'mastra-run-1',
+        toolCallId: 'ask-1',
+        status: 'submitted',
+        questions: [
+          {
+            id: 'scope',
+            header: 'Scope',
+            question: 'How broad should this be?',
+            options: [
+              { id: 'narrow', label: 'Narrow', description: 'Only the current path.' },
+              { id: 'broad', label: 'Broad', description: 'Include adjacent surfaces.' },
+            ],
+          },
+        ],
+      },
+    };
+    const parts = [
+      { type: 'text', text: 'I need one decision.' },
+      askPart,
+      { type: 'text', text: 'I will continue after that.' },
+    ];
+
+    expect(parseAskUserPart(askPart)).toMatchObject({
+      mastraRunId: 'mastra-run-1',
+      toolCallId: 'ask-1',
+      status: 'submitted',
+      questions: [{ id: 'scope', options: [{ id: 'narrow' }, { id: 'broad' }] }],
+    });
+    expect(getAssistantContentRanges(parts, false)).toEqual([
+      { type: 'part', index: 0 },
+      { type: 'part', index: 1 },
+      { type: 'part', index: 2 },
+    ]);
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([2]);
+  });
+
+  it('hides pending ask_user data from inline assistant content ranges', () => {
+    const askPart = {
+      type: 'data-ask-user',
+      data: {
+        mastraRunId: 'mastra-run-1',
+        toolCallId: 'ask-1',
+        status: 'pending',
+        questions: [
+          {
+            id: 'scope',
+            question: 'How broad should this be?',
+            options: [
+              { id: 'narrow', label: 'Narrow' },
+              { id: 'broad', label: 'Broad' },
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(parseAskUserPart(askPart)).toMatchObject({
+      mastraRunId: 'mastra-run-1',
+      toolCallId: 'ask-1',
+      status: 'pending',
+      questions: [{ id: 'scope' }],
+    });
+    expect(getAssistantContentRanges([askPart], false)).toEqual([]);
+    expect(getAutoCollapsedAssistantTextPartIndices([askPart], false)).toEqual([]);
+  });
+
+  it('parses assistant-ui normalized ask_user data parts', () => {
+    const askPart = {
+      type: 'data',
+      name: 'ask-user',
+      data: {
+        mastraRunId: 'mastra-run-1',
+        toolCallId: 'ask-1',
+        status: 'pending',
+        questions: [
+          {
+            id: 'scope',
+            question: 'How broad should this be?',
+            options: [
+              { id: 'narrow', label: 'Narrow' },
+              { id: 'broad', label: 'Broad' },
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(parseAskUserPart(askPart)).toMatchObject({
+      mastraRunId: 'mastra-run-1',
+      toolCallId: 'ask-1',
+      status: 'pending',
+      questions: [{ id: 'scope', options: [{ id: 'narrow' }, { id: 'broad' }] }],
+    });
+    expect(getAssistantContentRanges([askPart], false)).toEqual([]);
+  });
+
+  it('parses raw ask_user suspension envelopes from Mastra streams', () => {
+    const rawSuspension = {
+      type: 'data-tool-call-suspended',
+      runId: 'mastra-run-1',
+      toolCallId: 'ask-1',
+      toolName: 'ask_user',
+      suspendPayload: {
+        questions: [
+          {
+            id: 'scope',
+            question: 'How broad should this be?',
+            options: [
+              { id: 'narrow', label: 'Narrow' },
+              { id: 'broad', label: 'Broad' },
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(parseAskUserPart(rawSuspension)).toMatchObject({
+      mastraRunId: 'mastra-run-1',
+      toolCallId: 'ask-1',
+      status: 'pending',
+      questions: [{ id: 'scope' }],
+    });
+    expect(parseAskUserPart({
+      type: 'data',
+      name: 'tool-call-suspended',
+      data: rawSuspension,
+    })).toMatchObject({
+      mastraRunId: 'mastra-run-1',
+      toolCallId: 'ask-1',
+      questions: [{ id: 'scope' }],
+    });
+  });
+
+  it('builds ask_user response text and metadata for resume submissions', () => {
+    const part = parseAskUserPart({
+      type: 'data-ask-user',
+      data: {
+        mastraRunId: 'mastra-run-1',
+        toolCallId: 'ask-1',
+        status: 'pending',
+        questions: [
+          {
+            id: 'scope',
+            header: 'Scope',
+            question: 'How broad should this be?',
+            options: [
+              { id: 'narrow', label: 'Narrow' },
+              { id: 'broad', label: 'Broad' },
+            ],
+          },
+        ],
+      },
+    });
+    if (!part) throw new Error('expected ask_user part to parse');
+    const resume = {
+      action: 'submit' as const,
+      answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+    };
+
+    expect(buildAskUserResponseText(part!, resume)).toBe('Scope: Narrow');
+    const metadata = buildAskUserResponseMetadata(part!, resume);
+    expect(metadata).toMatchObject({
+      askUserResponse: {
+        toolCallId: 'ask-1',
+        mastraRunId: 'mastra-run-1',
+        questions: [{ id: 'scope', header: 'Scope' }],
+        action: 'submit',
+        answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+      },
+      weaveDisplay: {
+        kind: 'ask_user_response',
+        toolCallId: 'ask-1',
+      },
+    });
+    expect(parseAskUserResponseMetadata(metadata)).toMatchObject({
+      toolCallId: 'ask-1',
+      mastraRunId: 'mastra-run-1',
+      questions: [{ id: 'scope', header: 'Scope' }],
+      resume: {
+        action: 'submit',
+        answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+      },
+    });
+  });
+
   it('hides leaked proposal function-call text while preserving adjacent assistant text', () => {
     const parts = [
       { type: 'text', text: 'I am updating the draft proposal.' },
@@ -348,6 +543,7 @@ describe('chat tool activity helpers', () => {
 
   it('keeps rename hidden while rendering artifact plan tool cards', () => {
     expect(isHiddenToolCall({ toolCallId: 'rename-1', toolName: 'renameThreadTool' })).toBe(true);
+    expect(isHiddenToolCall({ toolCallId: 'ask-1', toolName: 'ask_user' })).toBe(true);
     expect(isHiddenToolCall({ toolCallId: 'write-plan-1', toolName: 'write_plan' })).toBe(false);
     expect(isHiddenToolCall({ toolCallId: 'update-plan-1', toolName: 'update_plan' })).toBe(false);
 

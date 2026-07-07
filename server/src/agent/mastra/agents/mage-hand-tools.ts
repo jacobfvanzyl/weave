@@ -48,9 +48,11 @@ import {
   workspaceSymbolsTool,
 } from '../tools/language-intelligence-tools';
 import { editorContextTool } from '../tools/editor-context-tools';
+import { askUserTool } from '../tools/ask-user-tool';
 
 export const mageHandTools = {
   renameThreadTool,
+  ask_user: askUserTool,
   writePlanTool,
   updatePlanTool,
   proposal_start: proposalStartTool,

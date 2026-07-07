@@ -287,6 +287,55 @@ describe('chat active run registry', () => {
     await expect(response.text()).resolves.toBe('data: {"type":"finish"}\n\n');
   });
 
+  it('preserves Mastra resume fields when creating a resumed chat run', async () => {
+    const startChatRun = vi.fn(async () => ({
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'finish' });
+          controller.close();
+        },
+      }),
+    }));
+    const routes = createChatRoutes({
+      hasActiveThreadRun: () => false,
+      startChatRun,
+    } as any);
+    const resumeData = {
+      action: 'submit',
+      answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+    };
+
+    await routeHandler(
+      '/chat/runs',
+      routes,
+    )(
+      chatRouteContext({
+        req: {
+          param: () => 'thread-1',
+          raw: { signal: new AbortController().signal },
+          json: async () => ({
+            runId: 'mastra-run-1',
+            toolCallId: 'ask-1',
+            resumeData,
+            memory: { thread: 'thread-1' },
+            messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'Scope: Narrow' }] }],
+          }),
+        },
+      }),
+    );
+
+    expect(startChatRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          runId: 'mastra-run-1',
+          toolCallId: 'ask-1',
+          resumeData,
+        }),
+        submittedUserMessages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'Scope: Narrow' }] }],
+      }),
+    );
+  });
+
   it('delivers active steering messages through AgentService', async () => {
     const sendChatMessage = vi.fn(async () => ({
       accepted: true,
@@ -436,6 +485,216 @@ describe('chat active run registry', () => {
       parts: [{ type: 'text', text: '/commit current work' }],
     };
     expect(__chatStateContextUsageTest.mergePendingSubmittedMessages([previous, persistedSameTurn], pending ? [pending] : [])).toEqual([previous, persistedSameTurn]);
+  });
+
+  it('anchors or suppresses pending ask_user response messages when merging hydrated chat state', () => {
+    const assistantAsk = {
+      id: 'assistant-ask',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'data-ask-user',
+          data: {
+            mastraRunId: 'mastra-run-1',
+            toolCallId: 'ask-1',
+            toolName: 'ask_user',
+            status: 'pending',
+            questions: [
+              {
+                id: 'scope',
+                header: 'Scope',
+                question: 'How broad should this be?',
+                options: [
+                  { id: 'narrow', label: 'Narrow' },
+                  { id: 'broad', label: 'Broad' },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const assistantAfter = {
+      id: 'assistant-after',
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'Continuing after the answer.' }],
+    };
+    const pendingAskResponse = {
+      id: 'pending-answer',
+      role: 'user',
+      parts: [{ type: 'text', text: 'Scope: Narrow' }],
+      metadata: {
+        askUserResponse: {
+          toolCallId: 'ask-1',
+          mastraRunId: 'mastra-run-1',
+          action: 'submit',
+          answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+        },
+      },
+    };
+
+    expect(
+      __chatStateContextUsageTest.mergePendingSubmittedMessages(
+        [assistantAsk, assistantAfter],
+        [pendingAskResponse],
+      ),
+    ).toEqual([assistantAsk, pendingAskResponse, assistantAfter]);
+
+    const completedAsk = {
+      ...assistantAsk,
+      parts: [
+        {
+          type: 'data-ask-user',
+          data: {
+            ...(assistantAsk.parts[0] as any).data,
+            status: 'submitted',
+            resume: {
+              action: 'submit',
+              answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+            },
+          },
+        },
+      ],
+    };
+
+    expect(
+      __chatStateContextUsageTest.mergePendingSubmittedMessages(
+        [completedAsk, assistantAfter],
+        [pendingAskResponse],
+      ),
+    ).toEqual([completedAsk, assistantAfter]);
+  });
+
+  it('hydrates persisted ask_user suspensions as submitted when matching output exists', () => {
+    const message = {
+      id: 'assistant-ask',
+      role: 'assistant',
+      threadId: 'thread-1',
+      resourceId: 'resource-1',
+      createdAt: new Date(),
+      content: {
+        parts: [
+          {
+            type: 'data-tool-call-suspended',
+            data: {
+              state: 'data-tool-call-suspended',
+              runId: 'mastra-run-1',
+              toolCallId: 'ask-1',
+              toolName: 'ask_user',
+              suspendPayload: {
+                questions: [
+                  {
+                    id: 'scope',
+                    question: 'How broad should this be?',
+                    options: [
+                      { id: 'narrow', label: 'Narrow' },
+                      { id: 'broad', label: 'Broad' },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          {
+            type: 'tool-ask_user',
+            toolCallId: 'ask-1',
+            output: { ok: true },
+          },
+        ],
+      },
+    } as any;
+    const completedAskIds = __chatStateContextUsageTest.collectCompletedAskToolCallIds([message]);
+    const uiMessage = __chatStateContextUsageTest.toUiMessage(message, 'http://localhost', completedAskIds);
+
+    expect(uiMessage.parts[0]).toMatchObject({
+      type: 'data-ask-user',
+      data: {
+        mastraRunId: 'mastra-run-1',
+        toolCallId: 'ask-1',
+        status: 'submitted',
+      },
+    });
+  });
+
+  it('hydrates persisted ask_user tool invocations with Mastra suspended run ids', () => {
+    const message = {
+      id: 'assistant-ask',
+      role: 'assistant',
+      threadId: 'thread-1',
+      resourceId: 'resource-1',
+      createdAt: new Date(),
+      content: {
+        parts: [
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              state: 'result',
+              toolName: 'ask_user',
+              toolCallId: 'ask-1',
+              args: {
+                questions: [
+                  {
+                    id: 'scope',
+                    question: 'How broad should this be?',
+                    options: [
+                      { id: 'narrow', label: 'Narrow' },
+                      { id: 'broad', label: 'Broad' },
+                    ],
+                  },
+                ],
+              },
+              result: {
+                ok: true,
+                answered: 1,
+                questionCount: 1,
+                answers: [
+                  {
+                    id: 'scope',
+                    selectedOptionId: 'narrow',
+                    finalAnswer: 'Narrow',
+                    question: 'How broad should this be?',
+                    selectedOptionLabel: 'Narrow',
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    } as any;
+
+    const uiMessage = __chatStateContextUsageTest.toUiMessage(
+      message,
+      'http://localhost',
+      new Set(),
+      { 'ask-1': 'mastra-run-1' },
+    );
+
+    expect(uiMessage.parts).toEqual([
+      {
+        type: 'data-ask-user',
+        data: {
+          mastraRunId: 'mastra-run-1',
+          toolCallId: 'ask-1',
+          toolName: 'ask_user',
+          questions: [
+            {
+              id: 'scope',
+              question: 'How broad should this be?',
+              options: [
+                { id: 'narrow', label: 'Narrow' },
+                { id: 'broad', label: 'Broad' },
+              ],
+            },
+          ],
+          status: 'submitted',
+          resume: {
+            action: 'submit',
+            answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+          },
+        },
+      },
+    ]);
   });
 
   it('detaches one observer without cancelling the run for other observers', async () => {

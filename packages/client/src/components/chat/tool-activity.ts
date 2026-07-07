@@ -92,6 +92,7 @@ const normalizeToolName = (toolName: string) =>
   toolName.startsWith('functions.') ? toolName.slice('functions.'.length) : toolName;
 
 export const isRenameThreadTool = (toolName: string) => ['renameThreadTool', 'rename-thread'].includes(normalizeToolName(toolName));
+export const isAskUserTool = (toolName: string) => normalizeToolName(toolName) === 'ask_user';
 export const isUpdatePlanTool = (toolName: string) =>
   ['writePlanTool', 'write_plan', 'write-plan', 'updatePlanTool', 'update_plan', 'update-plan'].includes(normalizeToolName(toolName));
 const proposalToolNames = [
@@ -115,6 +116,7 @@ const leakedToolOutputToolNames = [
   'bash',
   'webSearch',
   'webExtract',
+  'ask_user',
   'rename-thread',
   'renameThreadTool',
   'write_plan',
@@ -157,6 +159,8 @@ const leakedToolOutputFields = [
   'query',
   'results',
   'renamed',
+  'answered',
+  'cancelled',
   'updated',
   'completed',
   'total',
@@ -416,7 +420,7 @@ export const getToolActivityStatus = (call: ToolActivityCall) => {
   return call.rawStatus ?? 'running';
 };
 
-export const isHiddenToolCall = (call: ToolActivityCall) => isRenameThreadTool(call.toolName);
+export const isHiddenToolCall = (call: ToolActivityCall) => isRenameThreadTool(call.toolName) || isAskUserTool(call.toolName);
 
 export const getArgsRecord = (args: unknown) => args && typeof args === 'object' ? args as Record<string, unknown> : {};
 

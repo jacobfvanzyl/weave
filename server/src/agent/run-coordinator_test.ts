@@ -3,6 +3,7 @@ import {
   type AgentThreadRun,
   bufferAssistantTextStream,
   filterCompactToolHistoryTextStream,
+  normalizeAskUserSuspensionStream,
 } from './run-coordinator.ts';
 
 const assert: (condition: unknown, message: string) => asserts condition = (condition, message) => {
@@ -65,6 +66,53 @@ const createTestCoordinator = () => {
     emitContextUsage: (snapshot: any) => contextUsageListener?.(snapshot),
     unsubscribeCount: () => unsubscribeCount,
   };
+};
+
+const rawAskUserSuspensionChunk = {
+  type: 'data-tool-call-suspended',
+  data: {
+    state: 'data-tool-call-suspended',
+    runId: 'mastra-run-1',
+    toolCallId: 'ask-1',
+    toolName: 'ask_user',
+    suspendPayload: {
+      requestedAt: '2026-07-07T10:00:00.000Z',
+      questions: [
+        {
+          id: 'scope',
+          header: 'Scope',
+          question: 'How broad should this be?',
+          options: [
+            { id: 'narrow', label: 'Narrow', description: 'Only the current path.' },
+            { id: 'broad', label: 'Broad', description: 'Include adjacent surfaces.' },
+          ],
+        },
+      ],
+    },
+  },
+};
+
+const normalizedAskUserPart = {
+  type: 'data-ask-user',
+  id: 'ask-1',
+  data: {
+    mastraRunId: 'mastra-run-1',
+    toolCallId: 'ask-1',
+    toolName: 'ask_user',
+    questions: [
+      {
+        id: 'scope',
+        header: 'Scope',
+        question: 'How broad should this be?',
+        options: [
+          { id: 'narrow', label: 'Narrow', description: 'Only the current path.' },
+          { id: 'broad', label: 'Broad', description: 'Include adjacent surfaces.' },
+        ],
+      },
+    ],
+    status: 'pending',
+    requestedAt: '2026-07-07T10:00:00.000Z',
+  },
 };
 
 Deno.test('AgentRunCoordinator creates active run snapshots and submitted message retention', () => {
@@ -163,6 +211,105 @@ Deno.test('AgentRunCoordinator pump completes successful streams', async () => {
     );
     assertEquals(coordinator.getThreadRunSnapshot('resource-1', 'thread-1').active, false);
   } finally {
+    coordinator.clearForTests();
+  }
+});
+
+Deno.test('normalizeAskUserSuspensionStream converts raw Mastra ask suspensions to chat data parts', async () => {
+  const reader = normalizeAskUserSuspensionStream(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(rawAskUserSuspensionChunk);
+        controller.close();
+      },
+    }),
+  ).getReader();
+
+  assertEquals(await reader.read(), {
+    done: false,
+    value: normalizedAskUserPart,
+  });
+  assertEquals(await reader.read(), { done: true });
+});
+
+Deno.test('normalizeAskUserSuspensionStream converts ask_user tool input chunks to chat data parts', async () => {
+  const reader = normalizeAskUserSuspensionStream(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'ask-1',
+          toolName: 'ask_user',
+          input: {
+            questions: [
+              {
+                id: 'scope',
+                header: 'Scope',
+                question: 'How broad should this be?',
+                options: [
+                  { id: 'narrow', label: 'Narrow', description: 'Only the current path.' },
+                  { id: 'broad', label: 'Broad', description: 'Include adjacent surfaces.' },
+                ],
+              },
+            ],
+          },
+        });
+        controller.close();
+      },
+    }),
+    { mastraRunId: 'mastra-run-1' },
+  ).getReader();
+
+  const { requestedAt: _requestedAt, ...expectedData } = normalizedAskUserPart.data;
+  assertEquals(await reader.read(), {
+    done: false,
+    value: {
+      type: 'data-ask-user',
+      id: 'ask-1',
+      data: expectedData,
+    },
+  });
+  assertEquals(await reader.read(), { done: true });
+});
+
+Deno.test('AgentRunCoordinator pump completes local run when ask_user suspends', async () => {
+  const { coordinator } = createTestCoordinator();
+  let controller: ReadableStreamDefaultController<unknown> | undefined;
+  try {
+    const run = coordinator.createThreadRun('resource-1', 'thread-1');
+    const reader = coordinator.observeRun(run).getReader();
+
+    coordinator.startRunPump(
+      run,
+      bufferAssistantTextStream(
+        filterCompactToolHistoryTextStream(
+          normalizeAskUserSuspensionStream(
+            new ReadableStream({
+              start(streamController) {
+                controller = streamController;
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+
+    assert(controller, 'expected stream controller');
+    controller.enqueue(rawAskUserSuspensionChunk);
+
+    assertEquals(await reader.read(), {
+      done: false,
+      value: normalizedAskUserPart,
+    });
+    const finishRead = await reader.read();
+    assertEquals(finishRead.done, false);
+    assertEquals((finishRead.value as any).type, 'finish');
+    assertEquals((finishRead.value as any).finishReason, 'tool-calls');
+    assertEquals(await reader.read(), { done: true });
+    assertEquals(coordinator.getThreadRunSnapshot('resource-1', 'thread-1').active, false);
+    assertEquals(coordinator.getThreadRunSnapshot('resource-1', 'thread-1').status, 'completed');
+  } finally {
+    controller?.close();
     coordinator.clearForTests();
   }
 });
@@ -294,6 +441,80 @@ Deno.test('AgentRunCoordinator reconstructs assistant and steered user messages 
         parts: [{ type: 'text', text: 'second answer' }],
       },
     ]);
+  } finally {
+    coordinator.clearForTests();
+  }
+});
+
+Deno.test('AgentRunCoordinator reconstructs ask_user suspension parts from retained chunks', () => {
+  const { coordinator } = createTestCoordinator();
+  try {
+    const run = coordinator.createThreadRun('resource-1', 'thread-1');
+    coordinator.appendChunk(run, { type: 'start', messageId: 'assistant-1' });
+    coordinator.appendChunk(run, {
+      type: 'data-tool-call-suspended',
+      data: {
+        state: 'data-tool-call-suspended',
+        runId: 'mastra-run-1',
+        toolCallId: 'ask-1',
+        toolName: 'ask_user',
+        suspendPayload: {
+          requestedAt: '2026-07-07T10:00:00.000Z',
+          questions: [
+            {
+              id: 'scope',
+              header: 'Scope',
+              question: 'How broad should this be?',
+              options: [
+                { id: 'narrow', label: 'Narrow', description: 'Only the current path.' },
+                { id: 'broad', label: 'Broad', description: 'Include adjacent surfaces.' },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    assertEquals(coordinator.getUiMessages('resource-1', 'thread-1'), [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        status: { type: 'running' },
+        parts: [
+          {
+            type: 'data-ask-user',
+            id: 'ask-1',
+            data: {
+              mastraRunId: 'mastra-run-1',
+              toolCallId: 'ask-1',
+              toolName: 'ask_user',
+              status: 'pending',
+              requestedAt: '2026-07-07T10:00:00.000Z',
+              questions: [
+                {
+                  id: 'scope',
+                  header: 'Scope',
+                  question: 'How broad should this be?',
+                  options: [
+                    { id: 'narrow', label: 'Narrow', description: 'Only the current path.' },
+                    { id: 'broad', label: 'Broad', description: 'Include adjacent surfaces.' },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    coordinator.appendChunk(run, {
+      type: 'tool-output-available',
+      toolCallId: 'ask-1',
+      toolName: 'ask_user',
+      output: { ok: true },
+    });
+    const askPart = coordinator.getUiMessages('resource-1', 'thread-1')[0].parts[0] as any;
+    assertEquals(askPart.data.status, 'submitted');
   } finally {
     coordinator.clearForTests();
   }

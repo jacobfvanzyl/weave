@@ -72,11 +72,30 @@ import {
   type ToolActivityCall,
 } from './tool-activity';
 import { GuidedTaskCard } from './GuidedTaskCard';
+import { AskUserCard } from './AskUserCard';
+import {
+  buildAskUserResponseMetadata,
+  buildAskUserResponseText,
+  parseAskUserResponseMetadata,
+  parseAskUserPart,
+  type AskUserPart,
+  type AskUserQuestion,
+  type AskUserResume,
+} from './ask-user';
 import { buildProposalImplementationUserMessage, getProposalActionDisplay, getProposalActionDisplayLabel } from './proposal-implementation';
 import { getWorkedForLabel, getWorkingForLabel } from './turn-timing';
 
 const ThreadIdContext = createContext<string | null>(null);
 const StopThreadRunContext = createContext<(() => Promise<void>) | null>(null);
+type PendingAskUserResume = {
+  mastraRunId: string;
+  toolCallId: string;
+  resumeData: AskUserResume;
+};
+type AskUserResponseContextValue = {
+  respond: (part: AskUserPart, resume: AskUserResume) => Promise<void>;
+};
+const AskUserResponseContext = createContext<AskUserResponseContextValue | null>(null);
 type AutoCollapsedTurnIds = Record<string, true>;
 type AutoCollapsedTurnStateProps = {
   autoCollapseContext: ThreadAutoCollapseContextValue;
@@ -1104,6 +1123,21 @@ const AssistantGroupedContent = ({
           return <SteeredUserMessageBoundary key={range.index} part={part} />;
         }
 
+        const askUserPart = parseAskUserPart(part);
+        if (askUserPart?.status === 'submitted') {
+          if (!askUserPart.resume) return null;
+          return (
+            <div key={`${askUserPart.toolCallId}-${range.index}`} className="my-3 flex w-full justify-end">
+              <AskUserCard
+                part={askUserPart}
+                placement="user"
+                readOnly
+                resume={askUserPart.resume}
+              />
+            </div>
+          );
+        }
+
         if (getPartType(part) === 'text' && part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') {
           return <MarkdownText key={range.index} text={(part as { text: string }).text} deferCodeHighlight={deferCodeHighlight} />;
         }
@@ -1200,12 +1234,63 @@ const getThreadMessageText = (message: ThreadMessage) =>
     .map(part => part.text)
     .join('');
 
+const findAskUserQuestionsByToolCallId = (
+  messages: readonly ThreadMessage[],
+  toolCallId: string,
+): AskUserQuestion[] | undefined => {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    if (message.role !== 'assistant') continue;
+
+    for (let partIndex = message.content.length - 1; partIndex >= 0; partIndex -= 1) {
+      const askPart = parseAskUserPart(message.content[partIndex]);
+      if (askPart?.toolCallId === toolCallId) return askPart.questions;
+    }
+  }
+
+  return undefined;
+};
+
+const getAskUserResponseDisplay = (metadata: unknown, messages: readonly ThreadMessage[]) => {
+  const response = parseAskUserResponseMetadata(metadata);
+  if (!response) return null;
+
+  const questions = response.questions ?? findAskUserQuestionsByToolCallId(messages, response.toolCallId);
+  if (!questions) return null;
+
+  return {
+    part: {
+      mastraRunId: response.mastraRunId,
+      toolCallId: response.toolCallId,
+      questions,
+      status: 'submitted' as const,
+    },
+    resume: response.resume,
+  };
+};
+
 const UserMessageContent = () => {
   const message = useMessage();
+  const messages = useThread(state => state.messages);
   const proposalActionDisplay = getProposalActionDisplay(message.metadata, getThreadMessageText(message));
+  const askUserResponseDisplay = useMemo(
+    () => getAskUserResponseDisplay(message.metadata, messages),
+    [message.metadata, messages],
+  );
 
   if (proposalActionDisplay) {
     return <ProposalActionUserBubble kind={proposalActionDisplay.kind} />;
+  }
+
+  if (askUserResponseDisplay) {
+    return (
+      <AskUserCard
+        part={askUserResponseDisplay.part}
+        placement="user"
+        readOnly
+        resume={askUserResponseDisplay.resume}
+      />
+    );
   }
 
   return (
@@ -1225,7 +1310,7 @@ const ThreadMessage = () => (
   <MessagePrimitive.Root className="chat-message-shell mx-auto w-full max-w-[var(--weave-chat-content-max-width)] px-4 py-3 sm:px-[38px]">
     <MessagePrimitive.If assistant>
       <div className="chat-message-row flex min-w-0 justify-start">
-        <div className="chat-message-bubble min-w-0 max-w-full text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)]">
+        <div className="chat-message-bubble min-w-0 w-full max-w-full text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)]">
           <AssistantMessageContent />
           <div className="text-red-300">
             <MessagePrimitive.Error />
@@ -1958,6 +2043,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
 };
 
 const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
+  const queryClient = useQueryClient();
   const wasRunning = useRef(false);
   const resourceId = useChatStore(state => state.resourceId);
   const isLocalRunning = useThread(state => state.isRunning);
@@ -1978,12 +2064,17 @@ const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
 
     if (wasRunning.current && !isRunning) {
       markThreadCompleted(threadId);
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
+      ]);
     }
 
     wasRunning.current = isRunning;
 
     return undefined;
-  }, [activeThreadId, isRunning, markThreadCompleted, setThreadRunning, threadId]);
+  }, [activeThreadId, isRunning, markThreadCompleted, queryClient, resourceId, setThreadRunning, threadId]);
 
   useEffect(() => {
     if (activeThreadId === threadId) {
@@ -2058,9 +2149,10 @@ const getPartVersion = (part: UIMessage['parts'][number]) => {
     record.type,
     getStableValueVersion(record.text),
     getStableValueVersion(record.state),
-    getStableValueVersion(record.toolCallId),
+    getStableValueVersion(record.toolCallId ?? (record.data as Record<string, unknown> | undefined)?.toolCallId),
     getStableValueVersion(record.input ?? record.args),
     getStableValueVersion(record.output ?? record.result ?? record.errorText),
+    getStableValueVersion(record.data),
   ].join(':');
 };
 
@@ -2074,6 +2166,36 @@ const bottomFollowThresholdPx = 64;
 const isViewportAtBottom = (element: HTMLElement) =>
   element.scrollHeight - element.scrollTop - element.clientHeight <= bottomFollowThresholdPx;
 
+const getLatestPendingAskUserPart = (messages: readonly ThreadMessage[]) => {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    if (message.role !== 'assistant') continue;
+
+    for (let partIndex = message.content.length - 1; partIndex >= 0; partIndex -= 1) {
+      const askUserPart = parseAskUserPart(message.content[partIndex]);
+      if (askUserPart?.status === 'pending') return askUserPart;
+    }
+  }
+
+  return null;
+};
+
+const PendingAskUserDock = ({ part }: { part: AskUserPart }) => {
+  const askUserResponse = useContext(AskUserResponseContext);
+
+  return (
+    <AskUserCard
+      part={part}
+      placement="dock"
+      disabled={!askUserResponse}
+      onRespond={async (askPart, resumeData) => {
+        if (!askUserResponse) throw new Error('Ask response handler is not available.');
+        await askUserResponse.respond(askPart, resumeData);
+      }}
+    />
+  );
+};
+
 const Thread = ({
   autoCollapseContext,
   activeRunStartedAt,
@@ -2085,6 +2207,7 @@ const Thread = ({
   const pendingProposalImplementationRequest = useChatStore(state => threadId ? state.pendingProposalImplementationRequests[threadId] : undefined);
   const isRunning = useThread(state => state.isRunning);
   const messages = useThread(state => state.messages);
+  const pendingAskUserPart = useMemo(() => getLatestPendingAskUserPart(messages), [messages]);
   const isEmptyIdleDraft = isDraft && !isRunning && messages.length === 0;
   const composerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -2148,6 +2271,7 @@ const Thread = ({
         </ThreadPrimitive.Viewport>
         <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
           {threadId ? <GuidedTaskCard threadId={threadId} /> : null}
+          {pendingAskUserPart ? <PendingAskUserDock key={pendingAskUserPart.toolCallId} part={pendingAskUserPart} /> : null}
           <Composer canFollowWrites={canFollowWrites} />
         </div>
       </ThreadPrimitive.Root>
@@ -2198,6 +2322,7 @@ const AssistantChatRuntime = ({
   const markThreadCompleted = useChatStore(state => state.markThreadCompleted);
   const chatApi = getChatUrl();
   const resumeRunIdRef = useRef<string | undefined>(undefined);
+  const pendingAskUserResumeRef = useRef<PendingAskUserResume | undefined>(undefined);
   const sendingProposalImplementationRequestRef = useRef<string | undefined>(undefined);
   const { data: modelConfig } = useQuery({
     queryKey: ['models'],
@@ -2234,13 +2359,14 @@ const AssistantChatRuntime = ({
           };
         },
         async prepareSendMessagesRequest({ messages }) {
+          const askResume = pendingAskUserResumeRef.current;
           const firstUserText = messages.find(message => message.role === 'user') ? getMessageText(messages.find(message => message.role === 'user')!).trim() : '';
           const lastUserText = getMessageText([...messages].reverse().find(message => message.role === 'user') ?? messages[messages.length - 1]).trim();
           const slashCommand = parseSlashCommand(lastUserText);
           const threadTitle = firstUserText?.slice(0, 64);
           const threadBeforePersist = useChatStore.getState().threads.find(thread => thread.id === threadId);
           const promptContext = promptContextForThread(threadId, threadBeforePersist);
-          markComposerDraftAwaitingServerAck(threadId, lastUserText);
+          if (!askResume) markComposerDraftAwaitingServerAck(threadId, lastUserText);
           await useChatStore.getState().ensureThreadPersisted(threadId, threadTitle);
           useChatStore.getState().touchThread(threadId, threadTitle, true);
 
@@ -2251,17 +2377,27 @@ const AssistantChatRuntime = ({
               })
             : messages;
 
+          const body = {
+            messages: latestUserMessageOnly(requestMessages),
+            ...(selectedModel ? { model: selectedModel } : {}),
+            reasoningEffort,
+            ...(requestServiceTier ? { serviceTier: requestServiceTier } : {}),
+            memory: {
+              thread: threadId,
+            },
+            ...(askResume
+              ? {
+                runId: askResume.mastraRunId,
+                toolCallId: askResume.toolCallId,
+                resumeData: askResume.resumeData,
+              }
+              : {}),
+          };
+          if (askResume) pendingAskUserResumeRef.current = undefined;
+
           return {
             headers: getAuthHeaders(),
-            body: {
-              messages: latestUserMessageOnly(requestMessages),
-              ...(selectedModel ? { model: selectedModel } : {}),
-              reasoningEffort,
-              ...(requestServiceTier ? { serviceTier: requestServiceTier } : {}),
-              memory: {
-                thread: threadId,
-              },
-            },
+            body,
           };
         },
       }),
@@ -2314,6 +2450,26 @@ const AssistantChatRuntime = ({
     }
   }, [chat, queryClient, resourceId, runState?.runId, threadId]);
 
+  const respondToAskUser = useCallback(async (part: AskUserPart, resumeData: AskUserResume) => {
+    pendingAskUserResumeRef.current = {
+      mastraRunId: part.mastraRunId,
+      toolCallId: part.toolCallId,
+      resumeData,
+    };
+
+    try {
+      await chat.sendMessage({
+        text: buildAskUserResponseText(part, resumeData),
+        metadata: buildAskUserResponseMetadata(part, resumeData) as never,
+      });
+    } catch (error) {
+      if (pendingAskUserResumeRef.current?.toolCallId === part.toolCallId) {
+        pendingAskUserResumeRef.current = undefined;
+      }
+      throw error;
+    }
+  }, [chat]);
+
   const runtime = useAISDKRuntime(chat, {
     adapters: { attachments: imageAttachmentAdapter },
   });
@@ -2357,16 +2513,18 @@ const AssistantChatRuntime = ({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <StopThreadRunContext.Provider value={stopActiveThreadRun}>
-        <ThreadIdContext.Provider value={threadId}>
-          <ThreadRunningTracker threadId={threadId} />
-          <IdleActiveThreadRefresher threadId={threadId} />
-          <Thread
-            autoCollapseContext={autoCollapseContext}
-            activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
-            canFollowWrites={canFollowWrites}
-            setIsFollowingBottom={setIsFollowingBottom}
-          />
-        </ThreadIdContext.Provider>
+        <AskUserResponseContext.Provider value={{ respond: respondToAskUser }}>
+          <ThreadIdContext.Provider value={threadId}>
+            <ThreadRunningTracker threadId={threadId} />
+            <IdleActiveThreadRefresher threadId={threadId} />
+            <Thread
+              autoCollapseContext={autoCollapseContext}
+              activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
+              canFollowWrites={canFollowWrites}
+              setIsFollowingBottom={setIsFollowingBottom}
+            />
+          </ThreadIdContext.Provider>
+        </AskUserResponseContext.Provider>
       </StopThreadRunContext.Provider>
     </AssistantRuntimeProvider>
   );

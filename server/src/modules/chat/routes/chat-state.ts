@@ -11,6 +11,18 @@ import {
   estimateMemoryContextTokens,
 } from '../../../agent/context-token-estimate';
 
+const askUserToolName = 'ask_user';
+
+type NormalizedAskUserAnswer = {
+  id: string;
+  finalAnswer: string;
+  selectedOptionId?: string;
+  customAnswer?: string;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
 const getToolInvocation = (part: Record<string, unknown>) =>
   typeof part.toolInvocation === 'object' && part.toolInvocation !== null
     ? (part.toolInvocation as Record<string, unknown>)
@@ -48,6 +60,165 @@ const getToolResult = (part: Record<string, unknown>) => {
   return parseJsonString(invocation?.result ?? invocation?.output ?? part.result ?? part.output);
 };
 
+const nonEmptyString = (value: unknown) =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+const getToolCallId = (
+  part: Record<string, unknown>,
+  messageId: string,
+  partIndex: number,
+  toolName: string,
+) =>
+  typeof getToolInvocation(part)?.toolCallId === 'string'
+    ? getToolInvocation(part)!.toolCallId as string
+    : typeof part.toolCallId === 'string'
+    ? part.toolCallId
+    : `${messageId}-${partIndex}-${toolName}`;
+
+const normalizeAskUserQuestions = (value: unknown): Array<Record<string, unknown>> | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const questions = value.flatMap((question): Array<Record<string, unknown>> => {
+    if (!isRecord(question)) return [];
+    const id = nonEmptyString(question.id);
+    const text = nonEmptyString(question.question);
+    const options = Array.isArray(question.options)
+      ? question.options.flatMap((option): Array<Record<string, unknown>> => {
+        if (!isRecord(option)) return [];
+        const optionId = nonEmptyString(option.id);
+        const label = nonEmptyString(option.label);
+        if (!optionId || !label) return [];
+        return [{
+          id: optionId,
+          label,
+          ...(nonEmptyString(option.description) ? { description: nonEmptyString(option.description) } : {}),
+        }];
+      })
+      : [];
+
+    if (!id || !text || options.length < 2) return [];
+    return [{
+      id,
+      question: text,
+      options,
+      ...(nonEmptyString(question.header) ? { header: nonEmptyString(question.header) } : {}),
+    }];
+  });
+
+  return questions.length > 0 ? questions : undefined;
+};
+
+const normalizeAskUserAnswers = (value: unknown): NormalizedAskUserAnswer[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+
+  const answers = value.map((answer) => {
+    if (!isRecord(answer)) return undefined;
+    const id = nonEmptyString(answer.id);
+    const finalAnswer = nonEmptyString(answer.finalAnswer);
+    if (!id || !finalAnswer) return undefined;
+
+    return {
+      id,
+      finalAnswer,
+      ...(nonEmptyString(answer.selectedOptionId) ? { selectedOptionId: nonEmptyString(answer.selectedOptionId) } : {}),
+      ...(nonEmptyString(answer.customAnswer) ? { customAnswer: nonEmptyString(answer.customAnswer) } : {}),
+    };
+  }).filter((answer): answer is NormalizedAskUserAnswer => Boolean(answer));
+
+  return answers.length > 0 ? answers : undefined;
+};
+
+const normalizeAskUserResume = (value: unknown) => {
+  if (!isRecord(value)) return undefined;
+  if (value.action === 'cancel') {
+    return {
+      action: 'cancel',
+      ...(nonEmptyString(value.reason) ? { reason: nonEmptyString(value.reason) } : {}),
+    };
+  }
+
+  if (value.action === 'submit') {
+    const answers = normalizeAskUserAnswers(value.answers);
+    return answers ? { action: 'submit', answers } : undefined;
+  }
+
+  if (value.cancelled === true) return { action: 'cancel' };
+  const answers = normalizeAskUserAnswers(value.answers);
+  return answers ? { action: 'submit', answers } : undefined;
+};
+
+const toAskUserUiPart = (part: Record<string, unknown>, completedAskToolCallIds: ReadonlySet<string>) => {
+  const data = isRecord(part.data) ? part.data : part;
+  const isNormalized = part.type === 'data-ask-user';
+  if (!isNormalized && data.toolName !== askUserToolName) return null;
+
+  const suspendPayload = isRecord(data.suspendPayload) ? data.suspendPayload : undefined;
+  const questions = normalizeAskUserQuestions(isNormalized ? data.questions : suspendPayload?.questions);
+  const mastraRunId = nonEmptyString(data.mastraRunId) ?? nonEmptyString(data.runId);
+  const toolCallId = nonEmptyString(data.toolCallId);
+  if (!mastraRunId || !toolCallId || !questions) return null;
+  const requestedAt = nonEmptyString(data.requestedAt) ?? nonEmptyString(suspendPayload?.requestedAt);
+  const resume = normalizeAskUserResume(data.resume);
+
+  return {
+    type: 'data-ask-user',
+    data: {
+      mastraRunId,
+      toolCallId,
+      toolName: askUserToolName,
+      questions,
+      status: completedAskToolCallIds.has(toolCallId) ? 'submitted' : nonEmptyString(data.status) ?? 'pending',
+      ...(resume ? { resume } : {}),
+      ...(requestedAt ? { requestedAt } : {}),
+    },
+  };
+};
+
+const toPersistedAskUserToolPart = (
+  part: Record<string, unknown>,
+  messageId: string,
+  partIndex: number,
+  completedAskToolCallIds: ReadonlySet<string>,
+  suspendedAskUserRunIds: Readonly<Record<string, string>>,
+) => {
+  if (getToolName(part) !== askUserToolName) return null;
+
+  const toolCallId = getToolCallId(part, messageId, partIndex, askUserToolName);
+  const mastraRunId = nonEmptyString(suspendedAskUserRunIds[toolCallId]);
+  const questions = normalizeAskUserQuestions((getToolArgs(part) as Record<string, unknown> | undefined)?.questions);
+  const resume = normalizeAskUserResume(getToolResult(part));
+  if (!mastraRunId || !questions) return null;
+
+  return {
+    type: 'data-ask-user',
+    data: {
+      mastraRunId,
+      toolCallId,
+      toolName: askUserToolName,
+      questions,
+      status: resume || completedAskToolCallIds.has(toolCallId) ? 'submitted' : 'pending',
+      ...(resume ? { resume } : {}),
+    },
+  };
+};
+
+const collectCompletedAskToolCallIds = (messages: MastraDBMessage[]) => {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.content.parts) {
+      if (!isRecord(part)) continue;
+      const record = part as Record<string, unknown>;
+      if (getToolName(record) !== askUserToolName || getToolResult(record) === undefined) continue;
+      const id = typeof getToolInvocation(record)?.toolCallId === 'string'
+        ? getToolInvocation(record)!.toolCallId as string
+        : typeof record.toolCallId === 'string'
+        ? record.toolCallId
+        : undefined;
+      if (id) ids.add(id);
+    }
+  }
+  return ids;
+};
+
 const absoluteAttachmentUrl = (url: string, origin: string) => {
   const attachmentId = attachmentIdFromReference(url);
   if (attachmentId) return `${origin}${attachmentUrlPath(attachmentId)}`;
@@ -61,6 +232,8 @@ const toUiPart = (
   origin: string,
   messageId: string,
   partIndex: number,
+  completedAskToolCallIds: ReadonlySet<string> = new Set(),
+  suspendedAskUserRunIds: Readonly<Record<string, string>> = {},
 ) => {
   if (isCompactToolHistoryTextPart(part)) return null;
 
@@ -110,6 +283,20 @@ const toUiPart = (
   }
 
   const record = part as Record<string, unknown>;
+  const askUserPart = typeof record.type === 'string' && record.type.startsWith('data-')
+    ? toAskUserUiPart(record, completedAskToolCallIds)
+    : null;
+  if (askUserPart) return askUserPart;
+
+  const persistedAskUserPart = toPersistedAskUserToolPart(
+    record,
+    messageId,
+    partIndex,
+    completedAskToolCallIds,
+    suspendedAskUserRunIds,
+  );
+  if (persistedAskUserPart) return persistedAskUserPart;
+
   const hasToolData = record.type === 'tool-call' ||
     (typeof part.type === 'string' && part.type.startsWith('tool-')) ||
     typeof record.toolCallId === 'string' ||
@@ -123,11 +310,7 @@ const toUiPart = (
 
   return {
     type: `tool-${toolName}`,
-    toolCallId: typeof getToolInvocation(record)?.toolCallId === 'string'
-      ? getToolInvocation(record)!.toolCallId as string
-      : typeof record.toolCallId === 'string'
-      ? record.toolCallId
-      : `${messageId}-${partIndex}-${toolName}`,
+    toolCallId: getToolCallId(record, messageId, partIndex, toolName),
     state: result === undefined ? 'input-available' : isError ? 'output-error' : 'output-available',
     input: getToolArgs(record),
     output: result,
@@ -177,6 +360,69 @@ const getPendingAttachmentSignature = (message: UiChatMessage) =>
 const getPendingMessageSignature = (message: UiChatMessage) =>
   `${message.role}:${getPendingMessageText(message)}:${getPendingAttachmentSignature(message)}`;
 
+const normalizeAskUserResponseText = (value: string) => value.replace(/\s+/g, ' ').trim();
+
+const getAskUserResponseMetadata = (metadata: unknown): Record<string, unknown> | undefined => {
+  if (!isRecord(metadata)) return undefined;
+  if (isRecord(metadata.askUserResponse)) return metadata.askUserResponse;
+  return isRecord(metadata.custom) && isRecord(metadata.custom.askUserResponse)
+    ? metadata.custom.askUserResponse
+    : undefined;
+};
+
+const getAskUserResponseToolCallId = (message: UiChatMessage) =>
+  nonEmptyString(getAskUserResponseMetadata(message.metadata)?.toolCallId);
+
+const getAskUserPartData = (part: Record<string, unknown>) =>
+  part.type === 'data-ask-user' && isRecord(part.data) ? part.data : undefined;
+
+const getAskUserResponseTextFromPart = (part: Record<string, unknown>) => {
+  const data = getAskUserPartData(part);
+  if (!data || !isRecord(data.resume)) return undefined;
+  if (data.resume.action !== 'submit') return undefined;
+
+  const questions = Array.isArray(data.questions) ? data.questions : [];
+  const answers = normalizeAskUserAnswers(data.resume.answers);
+  if (!answers) return undefined;
+
+  const lines = answers.map((answer) => {
+    const question = questions.find((item) => isRecord(item) && item.id === answer.id);
+    const prefix = isRecord(question)
+      ? nonEmptyString(question.header) ?? nonEmptyString(question.question) ?? String(answer.id)
+      : String(answer.id);
+    return `${prefix}: ${String(answer.finalAnswer)}`;
+  });
+
+  return normalizeAskUserResponseText(lines.join('\n'));
+};
+
+const getCompletedAskUserToolCallIds = (messages: UiChatMessage[]) => {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      const data = getAskUserPartData(part);
+      if (data?.status === 'submitted' && nonEmptyString(data.toolCallId)) ids.add(nonEmptyString(data.toolCallId)!);
+    }
+  }
+  return ids;
+};
+
+const getAskUserResponseTextSignatures = (messages: UiChatMessage[]) => {
+  const signatures = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      const signature = getAskUserResponseTextFromPart(part);
+      if (signature) signatures.add(signature);
+    }
+  }
+  return signatures;
+};
+
+const findAskUserMessageIndex = (messages: UiChatMessage[], toolCallId: string) =>
+  messages.findIndex(message =>
+    message.parts.some(part => getAskUserPartData(part)?.toolCallId === toolCallId)
+  );
+
 const mergePendingSubmittedMessages = (messages: UiChatMessage[], pendingMessages: UiChatMessage[]) => {
   if (pendingMessages.length === 0) return messages;
 
@@ -186,7 +432,23 @@ const mergePendingSubmittedMessages = (messages: UiChatMessage[], pendingMessage
 
   for (const pendingMessage of pendingMessages) {
     const signature = getPendingMessageSignature(pendingMessage);
+    const askToolCallId = getAskUserResponseToolCallId(pendingMessage);
+    const completedAskToolCallIds = getCompletedAskUserToolCallIds(merged);
+    const askResponseTextSignatures = getAskUserResponseTextSignatures(merged);
+
     if (existingIds.has(pendingMessage.id) || existingSignatures.has(signature)) continue;
+    if (askToolCallId && completedAskToolCallIds.has(askToolCallId)) continue;
+    if (askResponseTextSignatures.has(normalizeAskUserResponseText(getPendingMessageText(pendingMessage)))) continue;
+
+    if (askToolCallId) {
+      const askMessageIndex = findAskUserMessageIndex(merged, askToolCallId);
+      if (askMessageIndex >= 0) {
+        merged.splice(askMessageIndex + 1, 0, pendingMessage);
+        existingIds.add(pendingMessage.id);
+        existingSignatures.add(signature);
+        continue;
+      }
+    }
 
     merged.push(pendingMessage);
     existingIds.add(pendingMessage.id);
@@ -228,7 +490,12 @@ const toPendingSubmittedMessage = (message: unknown, origin: string, index: numb
   };
 };
 
-const toUiMessage = (message: MastraDBMessage, origin: string) => {
+const toUiMessage = (
+  message: MastraDBMessage,
+  origin: string,
+  completedAskToolCallIds: ReadonlySet<string> = new Set(),
+  suspendedAskUserRunIds: Readonly<Record<string, string>> = {},
+) => {
   const metadata = message.content.metadata as Record<string, unknown> | undefined;
   const originalText = message.role === 'user' && typeof metadata?.slashCommandOriginalText === 'string'
     ? metadata.slashCommandOriginalText
@@ -243,9 +510,9 @@ const toUiMessage = (message: MastraDBMessage, origin: string) => {
     id: message.id,
     role: message.role,
     parts: originalText ? [{ type: 'text', text: originalText }, ...attachments] : [
-      ...message.content.parts.map((part, index) => toUiPart(part, origin, message.id, index)).filter((part) =>
-        part !== null
-      ),
+      ...message.content.parts.map((part, index) =>
+        toUiPart(part, origin, message.id, index, completedAskToolCallIds, suspendedAskUserRunIds)
+      ).filter((part) => part !== null),
       ...attachments,
     ],
     status: message.role === 'assistant' ? { type: 'complete' } : undefined,
@@ -396,8 +663,15 @@ export const createChatStateRoutes = (service: AgentService) => [
         const threadId = c.req.param('threadId');
 
         const origin = new URL(c.req.url).origin;
-        const persistedMessages = (await service.getChatThreadMessages({ resourceId, threadId }))
-          .map((message: MastraDBMessage) => toUiMessage(message, origin));
+        const [rawMessages, suspendedAskUserRunIds] = await Promise.all([
+          service.getChatThreadMessages({ resourceId, threadId }),
+          service.getChatSuspendedAskUserRunIds({ resourceId, threadId }),
+        ]);
+        const completedAskToolCallIds = collectCompletedAskToolCallIds(rawMessages);
+        const persistedMessages = rawMessages
+          .map((message: MastraDBMessage) =>
+            toUiMessage(message, origin, completedAskToolCallIds, suspendedAskUserRunIds)
+          );
         const pendingMessages = service.getChatSubmittedUserMessages(resourceId, threadId)
           .map((message, index) => toPendingSubmittedMessage(message, origin, index))
           .filter((message): message is UiChatMessage => message !== null);
@@ -463,6 +737,7 @@ export const __chatStateContextUsageTest = {
   estimateContextTokens,
   estimateMemoryContextTokens,
   toUiMessage,
+  collectCompletedAskToolCallIds,
   toPendingSubmittedMessage,
   mergePendingSubmittedMessages,
 };

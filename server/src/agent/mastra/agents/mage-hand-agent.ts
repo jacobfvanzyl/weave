@@ -81,7 +81,7 @@ const resolveOpenAIProviderOptions = (requestContext: any) => {
     : undefined;
 };
 
-const baseToolKeys = new Set(['renameThreadTool', 'webSearch', 'webExtract']);
+const baseToolKeys = new Set(['renameThreadTool', 'ask_user', 'webSearch', 'webExtract']);
 
 const portalWorkspaceToolKeys = new Set(['read', 'write', 'edit', 'bash']);
 

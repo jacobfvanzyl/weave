@@ -244,7 +244,13 @@ export const filterCompactToolHistoryTextStream = (stream: ReadableStream<unknow
             continue;
           }
 
-          if (type === 'data-user-message' || type === 'start' || type === 'finish' || type === 'abort') {
+          if (
+            type === 'data-user-message' ||
+            type === 'data-ask-user' ||
+            type === 'start' ||
+            type === 'finish' ||
+            type === 'abort'
+          ) {
             resolveAllPendingText();
           }
 
@@ -461,7 +467,9 @@ export const bufferAssistantTextStream = (stream: ReadableStream<unknown>) =>
           }
 
           const type = getStreamChunkType(value);
-          if (type === 'data-user-message' || type === 'start' || type === 'abort') flushAll();
+          if (type === 'data-user-message' || type === 'data-ask-user' || type === 'start' || type === 'abort') {
+            flushAll();
+          }
           const endKind = type ? bufferedAssistantEndTypes[type] : undefined;
           const id = getStreamChunkId(value);
           if (endKind && id) flushKey(getBufferedTextKey(endKind, id), { force: true });
@@ -546,6 +554,223 @@ const toContextUsageChunk = (snapshot: ThreadContextUsageSnapshot) => ({
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const askUserToolName = 'ask_user';
+
+type NormalizedAskUserAnswer = {
+  id: string;
+  finalAnswer: string;
+  selectedOptionId?: string;
+  customAnswer?: string;
+};
+
+const nonEmptyString = (value: unknown) =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+const normalizeAskUserQuestions = (value: unknown): Array<Record<string, unknown>> | undefined => {
+  if (!Array.isArray(value)) return undefined;
+
+  const questions = value.flatMap((question): Array<Record<string, unknown>> => {
+    if (!isRecord(question)) return [];
+    const id = nonEmptyString(question.id);
+    const text = nonEmptyString(question.question);
+    const rawOptions = Array.isArray(question.options) ? question.options : [];
+    const options = rawOptions.flatMap((option): Array<Record<string, unknown>> => {
+      if (!isRecord(option)) return [];
+      const optionId = nonEmptyString(option.id);
+      const label = nonEmptyString(option.label);
+      if (!optionId || !label) return [];
+      return [{
+        id: optionId,
+        label,
+        ...(nonEmptyString(option.description) ? { description: nonEmptyString(option.description) } : {}),
+      }];
+    });
+
+    if (!id || !text || options.length < 2) return [];
+    return [{
+      id,
+      question: text,
+      options,
+      ...(nonEmptyString(question.header) ? { header: nonEmptyString(question.header) } : {}),
+    }];
+  });
+
+  return questions.length > 0 ? questions : undefined;
+};
+
+const normalizeAskUserAnswers = (value: unknown): NormalizedAskUserAnswer[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+
+  const answers = value.map((answer) => {
+    if (!isRecord(answer)) return undefined;
+    const id = nonEmptyString(answer.id);
+    const finalAnswer = nonEmptyString(answer.finalAnswer);
+    if (!id || !finalAnswer) return undefined;
+
+    return {
+      id,
+      finalAnswer,
+      ...(nonEmptyString(answer.selectedOptionId) ? { selectedOptionId: nonEmptyString(answer.selectedOptionId) } : {}),
+      ...(nonEmptyString(answer.customAnswer) ? { customAnswer: nonEmptyString(answer.customAnswer) } : {}),
+    };
+  }).filter((answer): answer is NormalizedAskUserAnswer => Boolean(answer));
+
+  return answers.length > 0 ? answers : undefined;
+};
+
+const normalizeAskUserResume = (value: unknown) => {
+  if (!isRecord(value)) return undefined;
+  if (value.action === 'cancel') {
+    return {
+      action: 'cancel',
+      ...(nonEmptyString(value.reason) ? { reason: nonEmptyString(value.reason) } : {}),
+    };
+  }
+
+  if (value.action === 'submit') {
+    const answers = normalizeAskUserAnswers(value.answers);
+    return answers ? { action: 'submit', answers } : undefined;
+  }
+
+  if (value.cancelled === true) return { action: 'cancel' };
+  const answers = normalizeAskUserAnswers(value.answers);
+  return answers ? { action: 'submit', answers } : undefined;
+};
+
+const normalizeAskUserSuspensionPart = (chunk: Record<string, unknown>) => {
+  const data = isRecord(chunk.data) ? chunk.data : chunk;
+  if (data.toolName !== askUserToolName) return undefined;
+
+  const suspendPayload = isRecord(data.suspendPayload)
+    ? data.suspendPayload
+    : isRecord(chunk.suspendPayload)
+    ? chunk.suspendPayload
+    : undefined;
+  const questions = normalizeAskUserQuestions(suspendPayload?.questions);
+  const mastraRunId = nonEmptyString(data.runId) ?? nonEmptyString(data.mastraRunId);
+  const toolCallId = nonEmptyString(data.toolCallId);
+  if (!mastraRunId || !toolCallId || !questions) return undefined;
+
+  return {
+    type: 'data-ask-user',
+    id: toolCallId,
+    data: {
+      mastraRunId,
+      toolCallId,
+      toolName: askUserToolName,
+      questions,
+      status: 'pending',
+      ...(nonEmptyString(suspendPayload?.requestedAt) ? { requestedAt: nonEmptyString(suspendPayload?.requestedAt) } : {}),
+    },
+  };
+};
+
+export const normalizeAskUserSuspensionChunk = (chunk: unknown) => {
+  if (!isRecord(chunk) || chunk.type !== 'data-tool-call-suspended') return undefined;
+  return normalizeAskUserSuspensionPart(chunk);
+};
+
+const getAskUserToolInput = (chunk: Record<string, unknown>) => {
+  if (chunk.toolName !== askUserToolName) return undefined;
+  const input = isRecord(chunk.input)
+    ? chunk.input
+    : isRecord(chunk.args)
+    ? chunk.args
+    : undefined;
+  const questions = normalizeAskUserQuestions(input?.questions);
+  const toolCallId = nonEmptyString(chunk.toolCallId);
+  if (!toolCallId || !questions) return undefined;
+
+  return {
+    toolCallId,
+    questions,
+  };
+};
+
+export const normalizeAskUserToolInputChunk = (chunk: unknown, mastraRunId?: string) => {
+  if (!isRecord(chunk)) return undefined;
+  if (chunk.type !== 'tool-input-available' && chunk.type !== 'tool-call') return undefined;
+
+  const input = getAskUserToolInput(chunk);
+  const runId = nonEmptyString(chunk.runId) ?? nonEmptyString(chunk.mastraRunId) ?? nonEmptyString(mastraRunId);
+  if (!input || !runId) return undefined;
+
+  return {
+    type: 'data-ask-user',
+    id: input.toolCallId,
+    data: {
+      mastraRunId: runId,
+      toolCallId: input.toolCallId,
+      toolName: askUserToolName,
+      questions: input.questions,
+      status: 'pending',
+    },
+  };
+};
+
+export const isAskUserSuspensionChunk = (chunk: unknown) => {
+  if (!isRecord(chunk)) return false;
+  if (chunk.type === 'data-ask-user') {
+    const data = isRecord(chunk.data) ? chunk.data : {};
+    return data.toolName === askUserToolName &&
+      Boolean(
+        nonEmptyString(data.mastraRunId) &&
+          nonEmptyString(data.toolCallId) &&
+          normalizeAskUserQuestions(data.questions),
+      );
+  }
+
+  return Boolean(normalizeAskUserSuspensionChunk(chunk));
+};
+
+export const normalizeAskUserSuspensionStream = (
+  stream: ReadableStream<unknown>,
+  options: { mastraRunId?: string } = {},
+) =>
+  new ReadableStream<unknown>({
+    async start(controller) {
+      const reader = stream.getReader();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          controller.enqueue(
+            normalizeAskUserSuspensionChunk(value) ??
+              normalizeAskUserToolInputChunk(value, options.mastraRunId) ??
+              value,
+          );
+        }
+
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        reader.releaseLock();
+      }
+    },
+    cancel(reason) {
+      return stream.cancel(reason).catch(() => undefined);
+    },
+  });
+
+const markAskUserPartSubmitted = (
+  completedMessages: RunUiMessage[],
+  currentMessage: RunUiMessage | undefined,
+  toolCallId: string,
+  resumeData?: Record<string, unknown>,
+) => {
+  for (const candidate of [...completedMessages, ...(currentMessage ? [currentMessage] : [])]) {
+    for (const part of candidate.parts) {
+      if (part.type !== 'data-ask-user' || !isRecord(part.data)) continue;
+      if (part.data.toolCallId !== toolCallId) continue;
+      part.data.status = 'submitted';
+      if (resumeData) part.data.resume = resumeData;
+    }
+  }
+};
 
 const mergeRunMessageMetadata = (current: unknown, next: unknown) => {
   if (next === undefined || next === null) return current;
@@ -892,9 +1117,10 @@ export const buildRunUiMessagesFromChunks = (run: AgentThreadRun): RunUiMessage[
           : typeof existingPart?.type === 'string' && existingPart.type.startsWith('tool-')
           ? existingPart.type.slice('tool-'.length)
           : 'tool';
+        const toolName = typeof chunk.toolName === 'string' ? chunk.toolName : existingToolName;
         upsertRunToolPart(assistantMessage, {
           toolCallId: chunk.toolCallId,
-          toolName: existingToolName,
+          toolName,
           state: chunk.type === 'tool-output-available' ? 'output-available' : 'output-error',
           input: existingPart?.input,
           rawInput: existingPart?.rawInput,
@@ -907,6 +1133,9 @@ export const buildRunUiMessagesFromChunks = (run: AgentThreadRun): RunUiMessage[
           toolMetadata: chunk.toolMetadata ?? existingPart?.toolMetadata,
           providerMetadata: chunk.providerMetadata,
         });
+        if (toolName === askUserToolName) {
+          markAskUserPartSubmitted(messages, message, chunk.toolCallId, normalizeAskUserResume(chunk.output));
+        }
         break;
       }
       case 'file': {
@@ -940,7 +1169,14 @@ export const buildRunUiMessagesFromChunks = (run: AgentThreadRun): RunUiMessage[
         break;
       }
       default: {
-        if (chunk.type.startsWith('data-') && chunk.transient !== true) getAssistantMessage().parts.push({ ...chunk });
+        const askUserPart = chunk.type === 'data-tool-call-suspended'
+          ? normalizeAskUserSuspensionPart(chunk)
+          : undefined;
+        if (askUserPart) {
+          getAssistantMessage().parts.push(askUserPart);
+        } else if (chunk.type.startsWith('data-') && chunk.transient !== true) {
+          getAssistantMessage().parts.push({ ...chunk });
+        }
         break;
       }
     }
@@ -1149,6 +1385,14 @@ export class AgentRunCoordinator {
           if (streamError) {
             this.settleRun(run, 'error', streamError);
             return;
+          }
+          if (isAskUserSuspensionChunk(value)) {
+            this.appendChunk(run, {
+              type: 'finish',
+              finishReason: 'tool-calls',
+              messageMetadata: buildRunTimingMetadata(run, 'completed'),
+            });
+            this.settleRun(run, 'completed');
           }
         }
 

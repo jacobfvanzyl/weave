@@ -1,4 +1,5 @@
 import { isHiddenToolCall, isLeakedToolOutputText, toToolActivityCall } from './tool-activity';
+import { parseAskUserPart } from './ask-user';
 
 export type AssistantContentRange =
   | { type: 'part'; index: number }
@@ -43,6 +44,8 @@ const isVisibleToolOutputPart = (part: unknown) => {
   return call !== null && !isHiddenToolCall(call);
 };
 
+const isSubmittedAskUserPart = (part: unknown) => parseAskUserPart(part)?.status === 'submitted';
+
 export const isSteeredUserMessagePart = (part: unknown) => {
   if (!part || typeof part !== 'object') return false;
   const record = part as Record<string, unknown>;
@@ -57,6 +60,7 @@ export const isVisibleNonReasoningOutputPart = (part: unknown) => {
   if (type === 'reasoning') return false;
   if (type === 'text') return isVisibleTextPart(part);
   if (toToolActivityCall(part)) return isVisibleToolOutputPart(part);
+  if (isSubmittedAskUserPart(part)) return true;
   if (isSteeredUserMessagePart(part)) return true;
   return false;
 };

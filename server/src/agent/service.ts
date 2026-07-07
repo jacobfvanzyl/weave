@@ -23,11 +23,13 @@ import {
   bufferAssistantTextStream,
   buildRunTimingMetadata,
   filterCompactToolHistoryTextStream,
+  normalizeAskUserSuspensionStream,
   toThreadRunSnapshot,
 } from './run-coordinator';
 import { contextUsageRecallOptions, estimateMemoryContextTokens } from './context-token-estimate';
 import { type EventService, eventService as defaultEventService } from '../services/event-service';
 import { type JsonValue, type ServiceCaller, ServiceError } from '../services/types';
+import { getWeaveDb } from '../storage/postgres';
 
 export { contextUsageRecallOptions, estimateContextTokens, estimateMemoryContextTokens } from './context-token-estimate';
 
@@ -212,6 +214,7 @@ export interface AgentService {
   reorderChatThreads(input: ReorderChatThreadsRequest): Promise<void>;
   getChatThreadRawMessages(input: ChatThreadMessagesRequest): Promise<MastraDBMessage[]>;
   getChatThreadMessages(input: ChatThreadMessagesRequest): Promise<MastraDBMessage[]>;
+  getChatSuspendedAskUserRunIds(input: ChatThreadMessagesRequest): Promise<Record<string, string>>;
   getChatThreadContextUsage(input: ChatThreadContextUsageRequest): Promise<ChatThreadContextUsage>;
   updateChatThread(input: UpdateChatThreadRequest): Promise<ChatThreadRecord>;
   deleteChatThread(input: ChatThreadMessagesRequest): Promise<void>;
@@ -321,6 +324,7 @@ export class MastraAgentService implements AgentService {
       : undefined;
 
     try {
+      const mastraRunId = stringValue(input.params.runId) ?? crypto.randomUUID();
       const stream = await this.chatStreamHandler({
         mastra,
         agentId: 'mage-hand',
@@ -339,6 +343,7 @@ export class MastraAgentService implements AgentService {
           : {}),
         params: {
           ...input.params,
+          runId: mastraRunId,
           ...(prepared.routedModel ? { model: prepared.routedModel } : {}),
           providerOptions: prepared.providerOptions as never,
           memory: prepared.memory as never,
@@ -349,7 +354,9 @@ export class MastraAgentService implements AgentService {
       });
 
       const bufferedStream = bufferAssistantTextStream(
-        filterCompactToolHistoryTextStream(stream as ReadableStream<unknown>),
+        filterCompactToolHistoryTextStream(
+          normalizeAskUserSuspensionStream(stream as ReadableStream<unknown>, { mastraRunId }),
+        ),
       );
       if (!run) {
         return { stream: bufferedStream, snapshot: { active: false, status: 'idle' } };
@@ -503,6 +510,25 @@ export class MastraAgentService implements AgentService {
       if (isNoThreadFoundError(error)) return [];
       throw error;
     }
+  }
+
+  async getChatSuspendedAskUserRunIds(input: ChatThreadMessagesRequest): Promise<Record<string, string>> {
+    const db = await getWeaveDb();
+    const result = await db.execute({
+      sql: `
+        select run_id, snapshot
+        from mastra.mastra_workflow_snapshot
+        where workflow_name = 'executionWorkflow'
+          and "resourceId" = ?
+          and snapshot::text ilike ?
+          and snapshot::text ilike '%ask_user%'
+        order by coalesce("updatedAtZ", "updatedAt" at time zone 'UTC') desc
+        limit 100
+      `,
+      args: [input.resourceId, `%${input.threadId}%`],
+    });
+
+    return extractSuspendedAskUserRunIdsFromWorkflowSnapshots(result.rows);
   }
 
   async getChatThreadContextUsage(input: ChatThreadContextUsageRequest): Promise<ChatThreadContextUsage> {
@@ -988,6 +1014,33 @@ const getThreadTitleFromMessages = (messages: MastraDBMessage[]) => {
 const isNoThreadFoundError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes('No thread found');
+};
+
+const workflowSnapshotToolCallPayload = (snapshot: unknown) => {
+  const parsed = parseJsonString(snapshot);
+  if (!isRecord(parsed)) return [];
+
+  const context = isRecord(parsed.context) ? parsed.context : undefined;
+  const toolCallStep = isRecord(context?.toolCallStep) ? context.toolCallStep : undefined;
+  return Array.isArray(toolCallStep?.payload) ? toolCallStep.payload : [];
+};
+
+export const extractSuspendedAskUserRunIdsFromWorkflowSnapshots = (rows: Array<Record<string, unknown>>) => {
+  const runIdsByToolCallId: Record<string, string> = {};
+
+  for (const row of rows) {
+    const runId = stringValue(row.run_id) ?? stringValue(row.runId);
+    if (!runId) continue;
+
+    for (const item of workflowSnapshotToolCallPayload(row.snapshot)) {
+      if (!isRecord(item) || item.toolName !== 'ask_user') continue;
+      const toolCallId = stringValue(item.toolCallId);
+      if (!toolCallId || runIdsByToolCallId[toolCallId]) continue;
+      runIdsByToolCallId[toolCallId] = runId;
+    }
+  }
+
+  return runIdsByToolCallId;
 };
 
 const buildProviderOptions = (

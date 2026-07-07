@@ -1,4 +1,4 @@
-import { MastraAgentService } from './service.ts';
+import { extractSuspendedAskUserRunIdsFromWorkflowSnapshots, MastraAgentService } from './service.ts';
 import { AgentRunCoordinator } from './run-coordinator.ts';
 import type { ResolvedAgentContext } from './mastra/context/resolver.ts';
 import { __modelOptionsTest } from './model-options.ts';
@@ -121,6 +121,7 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
     });
     assertEquals(captured.options.params.memory.thread, 'thread-1');
     assertEquals(captured.options.params.memory.resource, 'resource-1');
+    assert(typeof captured.options.params.runId === 'string', 'expected generated Mastra run id');
     assert(
       captured.options.params.memory.options && typeof captured.options.params.memory.options === 'object',
       'expected memory options',
@@ -138,6 +139,48 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
     coordinator.clearForTests();
     console.info = originalInfo;
   }
+});
+
+Deno.test('extractSuspendedAskUserRunIdsFromWorkflowSnapshots maps current ask_user payloads only', () => {
+  assertEquals(
+    extractSuspendedAskUserRunIdsFromWorkflowSnapshots([
+      {
+        run_id: 'mastra-run-1',
+        snapshot: JSON.stringify({
+          context: {
+            toolCallStep: {
+              payload: [
+                { toolName: 'ask_user', toolCallId: 'ask-1' },
+                { toolName: 'read', toolCallId: 'read-1' },
+              ],
+            },
+            messageList: {
+              messages: [
+                {
+                  content: {
+                    parts: [
+                      { toolName: 'ask_user', toolCallId: 'copied-old-ask' },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        }),
+      },
+      {
+        run_id: 'older-mastra-run',
+        snapshot: {
+          context: {
+            toolCallStep: {
+              payload: [{ toolName: 'ask_user', toolCallId: 'ask-1' }],
+            },
+          },
+        },
+      },
+    ]),
+    { 'ask-1': 'mastra-run-1' },
+  );
 });
 
 Deno.test('MastraAgentService.startChatRun uses coordinator abort signal for threaded runs and request signal for unthreaded runs', async () => {
