@@ -33,8 +33,14 @@ describe('chat system instructions', () => {
     expect(text).toContain('Guided approval gate');
     expect(text).toContain('do not move from discussion/planning into source-file implementation until a proposal artifact exists');
     expect(text).toContain('treat that as approval to create the proposal, not approval to edit source files');
+    expect(text).toContain('ExecPlan phase boundaries');
+    expect(text).toContain('Before proposal_start for a new phase that will likely need a new proposal, present a concise phase outline');
+    expect(text).toContain('Wait for explicit human agreement on the phase outline before crafting the phase proposal to finalization');
+    expect(text).toContain('Persist the agreed phase outline in the ExecPlan with update_plan');
+    expect(text).toContain('Minor revisions to an existing same-phase proposal do not need a fresh phase outline');
     expect(text).toContain('Proposal review artifacts');
     expect(text).toContain('Use proposal_start to create or reopen a draft proposal workspace');
+    expect(text).toContain('pass the current planPath to proposal_start and encode the agreed phase scope');
     expect(text).toContain('Treat proposal tools like file tools over a virtual proposed filesystem');
     expect(text).toContain('proposal_write replaces one proposed buffer');
     expect(text).toContain('Draft proposals become live-reviewable after they contain file items');
