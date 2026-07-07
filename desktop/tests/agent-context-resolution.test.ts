@@ -106,7 +106,7 @@ describe('singleton agent context', () => {
 describe('context tool policy', () => {
   it('exposes only plain chat tools without a workspace context', () => {
     const keys = __mageHandAgentTest.toolKeysForContext(requestContextFor());
-    expect([...keys].sort()).toEqual(['renameThreadTool', 'webExtract', 'webSearch']);
+    expect([...keys].sort()).toEqual(['ask_user', 'renameThreadTool', 'webExtract', 'webSearch']);
   });
 
   it('adds Portal, Git, plan/proposal, and LSP tools for Git workspaces', () => {

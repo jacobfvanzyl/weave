@@ -50,6 +50,12 @@ describe('chat system instructions', () => {
     expect(text).toContain('implement only approved items');
     expect(text).toContain('verify every approved code item is complete in the artifact body');
     expect(text).toContain('do not infer missing reviewed content from chat history, memory, artifact history, or surrounding files');
+    expect(text).toContain('While implementing an approved in-progress proposal');
+    expect(text).toContain('pause affected work and amend the proposal before continuing those changed parts');
+    expect(text).toContain('preserve unaffected approved items, reset changed proposal items to pending');
+    expect(text).toContain('call proposal_status, call proposal_finalize, and re-present the revised proposal for human review');
+    expect(text).toContain('inconsequential deviations that still satisfy the approved proposal intent');
+    expect(text).toContain('continue implementation and surface those deviations in the end-of-turn summary');
     expect(text.includes('# Runtime Context')).toBe(false);
   });
 

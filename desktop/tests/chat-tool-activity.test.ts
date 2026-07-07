@@ -13,6 +13,7 @@ import {
 import {
   getToolActivityFollowTarget,
   getToolActivitySideEffect,
+  getToolChipDetail,
   getToolResultText,
   isProposalTool,
   isHiddenToolCall,
@@ -539,6 +540,36 @@ describe('chat tool activity helpers', () => {
         '+new value',
       ].join('\n'),
     })).toBe('Applied 2 replacements.');
+  });
+
+  it('uses source file paths for file-scoped proposal tool chips', () => {
+    const args = {
+      proposalPath: '.agents/proposals/demo.md',
+      path: 'src/file.ts',
+    };
+
+    expect(getToolChipDetail('proposal_edit', args)).toBe('src/file.ts');
+    expect(getToolChipDetail('functions.proposal_read', args)).toBe('src/file.ts');
+    expect(getToolChipDetail('proposal_status', args)).toBe('.agents/proposals/demo.md');
+    expect(getToolChipDetail('proposal_finalize', args)).toBe('.agents/proposals/demo.md');
+  });
+
+  it('summarizes file-scoped proposal results with source file paths', () => {
+    const args = {
+      proposalPath: '.agents/proposals/demo.md',
+      path: 'src/file.ts',
+    };
+    const artifactResult = {
+      ok: true,
+      updated: true,
+      path: '.agents/proposals/demo.md',
+    };
+
+    expect(getToolResultText('proposal_edit', artifactResult, args)).toBe('Proposal file item updated: src/file.ts');
+    expect(getToolResultText('proposal_read', { ok: true, updated: false, path: 'src/file.ts' }, args)).toBe('Proposal file read: src/file.ts');
+    expect(getToolResultText('proposal_discard', { ...artifactResult, discarded: 1 }, args)).toBe('Proposal file item discarded: src/file.ts');
+    expect(getToolResultText('proposal_discard', { ...artifactResult, discarded: 0 }, args)).toBe('No proposal file item discarded: src/file.ts');
+    expect(getToolResultText('proposal_finalize', artifactResult, args)).toBe('Proposal artifact updated: .agents/proposals/demo.md');
   });
 
   it('keeps rename hidden while rendering artifact plan tool cards', () => {

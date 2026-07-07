@@ -109,6 +109,17 @@ const proposalToolNames = [
 export const isProposalTool = (toolName: string) =>
   proposalToolNames.includes(normalizeToolName(toolName));
 
+const fileScopedProposalToolNames = new Set([
+  'proposal_read',
+  'proposal_write',
+  'proposal_edit',
+  'proposal_delete',
+  'proposal_discard',
+]);
+
+const isFileScopedProposalTool = (toolName: string) =>
+  fileScopedProposalToolNames.has(normalizeToolName(toolName));
+
 const leakedToolOutputToolNames = [
   'read',
   'write',
@@ -345,6 +356,7 @@ export const getToolChipDetail = (toolName: string, args: unknown) => {
     if (typeof record?.title === 'string') return record.title;
   }
   if (isProposalTool(toolName)) {
+    if (isFileScopedProposalTool(toolName) && typeof record?.path === 'string') return record.path;
     if (typeof record?.proposalPath === 'string') return record.proposalPath;
     if (typeof record?.path === 'string') return record.path;
     if (typeof record?.title === 'string') return record.title;
@@ -352,7 +364,15 @@ export const getToolChipDetail = (toolName: string, args: unknown) => {
   return '';
 };
 
-export const getToolResultText = (toolName: string, result: unknown) => {
+const getProposalFilePath = (toolName: string, args: unknown, result: unknown) => {
+  const argsRecord = args && typeof args === 'object' ? args as Record<string, unknown> : undefined;
+  if (typeof argsRecord?.path === 'string') return argsRecord.path;
+  if (normalizeToolName(toolName) !== 'proposal_read') return undefined;
+  const resultRecord = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
+  return typeof resultRecord?.path === 'string' ? resultRecord.path : undefined;
+};
+
+export const getToolResultText = (toolName: string, result: unknown, args?: unknown) => {
   if (result === undefined) return '';
   if (typeof result === 'string') return result;
   if (result && typeof result === 'object') {
@@ -367,6 +387,18 @@ export const getToolResultText = (toolName: string, result: unknown) => {
     if (typeof record.diff === 'string' && record.diff.trim()) return record.diff;
     if (typeof record.error === 'string') return record.error;
     if (isUpdatePlanTool(toolName) && typeof record.path === 'string') return `Plan artifact updated: ${record.path}`;
+    if (isFileScopedProposalTool(toolName)) {
+      const path = getProposalFilePath(toolName, args, result);
+      if (path) {
+        if (normalizeToolName(toolName) === 'proposal_read') return `Proposal file read: ${path}`;
+        if (normalizeToolName(toolName) === 'proposal_discard') {
+          return record.discarded === 0
+            ? `No proposal file item discarded: ${path}`
+            : `Proposal file item discarded: ${path}`;
+        }
+        return `Proposal file item updated: ${path}`;
+      }
+    }
     if (isProposalTool(toolName) && typeof record.path === 'string') return `Proposal artifact updated: ${record.path}`;
   }
   return JSON.stringify(result, null, 2);

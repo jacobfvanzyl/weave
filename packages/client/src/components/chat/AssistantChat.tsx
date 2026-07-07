@@ -266,8 +266,8 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
   const [isResultCopied, setIsResultCopied] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const resultText = useMemo(
-    () => isOpen && display.result !== undefined ? getToolResultText(display.toolName, display.result) : '',
-    [display.result, display.toolName, isOpen],
+    () => isOpen && display.result !== undefined ? getToolResultText(display.toolName, display.result, display.args) : '',
+    [display.args, display.result, display.toolName, isOpen],
   );
 
   if (!isDegradedToolCall(display)) {
