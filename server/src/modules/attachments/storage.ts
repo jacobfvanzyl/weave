@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { type AttachmentMetadataRepository, attachmentMetadataRepository } from './repository';
+import { type ObjectStore, objectStore } from '../../storage/object-store';
 
 export type StoredAttachment = {
   id: string;
@@ -86,14 +86,12 @@ const extensionFromName = (name: string) => {
 const inferExtension = (mimeType: string, name: string) =>
   imageExtensionByMimeType[mimeType.toLowerCase()] ?? (extensionFromName(name) || '.bin');
 
-const isSafeAttachmentId = (id: string) => /^[a-z0-9_-]+$/i.test(id) && id.length <= 128;
+export const isSafeAttachmentId = (id: string) => /^[a-z0-9_-]+$/i.test(id) && id.length <= 128;
 const modelAttachmentHost = 'weave.local';
-
-const dataPath = (baseDir: string, id: string, storedName: string) => join(baseDir, id, storedName);
-const metadataPath = (baseDir: string, id: string) => join(baseDir, id, 'metadata.json');
 
 export const attachmentUrlPath = (id: string) => `/attachments/${encodeURIComponent(id)}`;
 export const attachmentModelUrl = (id: string) => `https://${modelAttachmentHost}${attachmentUrlPath(id)}`;
+export const attachmentObjectKey = (id: string, storedName: string) => `attachments/${id}/${storedName}`;
 
 export const attachmentIdFromReference = (value: string) => {
   const matchPath = /^\/attachments\/([^/?#]+)$/.exec(value);
@@ -109,8 +107,12 @@ export const attachmentIdFromReference = (value: string) => {
   }
 };
 
-export class LocalAttachmentStorage implements AttachmentStorage {
-  constructor(private readonly baseDir: string) {}
+export class ObjectAttachmentStorage implements AttachmentStorage {
+  constructor(
+    private readonly objects: ObjectStore = objectStore,
+    private readonly metadata: AttachmentMetadataRepository = attachmentMetadataRepository,
+    private readonly bucket?: string,
+  ) {}
 
   async put(input: AttachmentPayload): Promise<StoredAttachment> {
     const mimeType = input.mimeType.toLowerCase();
@@ -120,10 +122,20 @@ export class LocalAttachmentStorage implements AttachmentStorage {
     const id = `att_${randomUUID().replace(/-/g, '')}`;
     const originalName = safeName(input.originalName, 'image');
     const storedName = `content${inferExtension(mimeType, originalName)}`;
-    const dir = join(this.baseDir, id);
-    await mkdir(dir, { recursive: true });
+    const objectBucket = this.bucket ?? this.objects.defaultBucket;
+    const objectKey = attachmentObjectKey(id, storedName);
+    const createdAt = new Date().toISOString();
 
-    await writeFile(dataPath(this.baseDir, id, storedName), input.bytes);
+    await this.objects.putObject({
+      bucket: objectBucket,
+      key: objectKey,
+      body: input.bytes,
+      contentType: mimeType,
+      metadata: {
+        attachmentId: id,
+        originalName,
+      },
+    });
     const metadata: AttachmentMetadata = {
       id,
       mimeType,
@@ -132,9 +144,20 @@ export class LocalAttachmentStorage implements AttachmentStorage {
       storedName,
       ...(input.ownerId ? { ownerId: input.ownerId } : {}),
       ...(input.threadId ? { threadId: input.threadId } : {}),
-      createdAt: new Date().toISOString(),
+      createdAt,
     };
-    await writeFile(metadataPath(this.baseDir, id), JSON.stringify(metadata, null, 2));
+    try {
+      await this.metadata.save({
+        ...metadata,
+        objectBucket,
+        objectKey,
+        updatedAt: createdAt,
+        urlPath: attachmentUrlPath(id),
+      });
+    } catch (error) {
+      await this.objects.deleteObject({ bucket: objectBucket, key: objectKey }).catch(() => undefined);
+      throw error;
+    }
 
     return {
       id,
@@ -148,78 +171,37 @@ export class LocalAttachmentStorage implements AttachmentStorage {
   async get(id: string): Promise<AttachmentReadResult | null> {
     if (!isSafeAttachmentId(id)) return null;
 
-    try {
-      const metadata = JSON.parse(await readFile(metadataPath(this.baseDir, id), 'utf8')) as AttachmentMetadata;
-      if (metadata.id !== id || !metadata.storedName) return null;
+    const metadata = await this.metadata.get(id);
+    if (!metadata) return null;
+    const object = await this.objects.getObject({ bucket: metadata.objectBucket, key: metadata.objectKey });
+    if (!object) return null;
 
-      const path = dataPath(this.baseDir, id, metadata.storedName);
-      const fileInfo = await stat(path);
-      if (!fileInfo.isFile()) return null;
-
-      return {
-        bytes: await readFile(path),
-        mimeType: metadata.mimeType,
-        sizeBytes: metadata.sizeBytes,
-        originalName: metadata.originalName,
-        ownerId: metadata.ownerId,
-        threadId: metadata.threadId,
-      };
-    } catch {
-      return null;
-    }
+    return {
+      bytes: object.body,
+      mimeType: metadata.mimeType,
+      sizeBytes: metadata.sizeBytes,
+      originalName: metadata.originalName,
+      ownerId: metadata.ownerId,
+      threadId: metadata.threadId,
+    };
   }
 
   async findByThread(threadId: string): Promise<StoredAttachmentMetadata[]> {
-    return this.findWhere((metadata) => metadata.threadId === threadId);
+    return this.metadata.findByThread(threadId);
   }
 
   async findByOriginalName(originalName: string, mimeType?: string): Promise<StoredAttachmentMetadata[]> {
     const normalizedName = safeName(originalName, 'image');
     const normalizedMimeType = mimeType?.toLowerCase();
-    return this.findWhere((metadata) =>
-      metadata.originalName === normalizedName &&
-      (!normalizedMimeType || metadata.mimeType === normalizedMimeType)
-    );
-  }
-
-  private async findWhere(predicate: (metadata: AttachmentMetadata) => boolean): Promise<StoredAttachmentMetadata[]> {
-    const { readdir } = await import('node:fs/promises');
-
-    try {
-      const entries = await readdir(this.baseDir, { withFileTypes: true });
-      const attachments: StoredAttachmentMetadata[] = [];
-
-      await Promise.all(
-        entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
-          try {
-            const metadata = JSON.parse(
-              await readFile(metadataPath(this.baseDir, entry.name), 'utf8'),
-            ) as AttachmentMetadata;
-            if (!predicate(metadata)) return;
-            attachments.push({
-              id: metadata.id,
-              urlPath: attachmentUrlPath(metadata.id),
-              mimeType: metadata.mimeType,
-              sizeBytes: metadata.sizeBytes,
-              originalName: metadata.originalName,
-              ownerId: metadata.ownerId,
-              threadId: metadata.threadId,
-              createdAt: metadata.createdAt,
-            });
-          } catch {
-          }
-        }),
-      );
-
-      return attachments;
-    } catch {
-      return [];
-    }
+    return this.metadata.findByOriginalName(normalizedName, normalizedMimeType);
   }
 
   async delete(id: string): Promise<void> {
     if (!isSafeAttachmentId(id)) return;
-    await rm(join(this.baseDir, id), { recursive: true, force: true });
+    const metadata = await this.metadata.get(id);
+    if (!metadata) return;
+    await this.objects.deleteObject({ bucket: metadata.objectBucket, key: metadata.objectKey }).catch(() => undefined);
+    await this.metadata.delete(id);
   }
 }
 
@@ -237,6 +219,4 @@ export const parseBase64DataUrl = (value: string): { mimeType: string; base64: s
   return { mimeType, base64, bytes: Buffer.from(base64, 'base64') };
 };
 
-export const attachmentStorage = new LocalAttachmentStorage(
-  process.env.WEAVE_ATTACHMENTS_DIR ?? join(process.cwd(), '.data', 'attachments'),
-);
+export const attachmentStorage = new ObjectAttachmentStorage();

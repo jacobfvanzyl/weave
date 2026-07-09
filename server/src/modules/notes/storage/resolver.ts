@@ -69,6 +69,8 @@ const normalizeNotesStorageMetadata = (value: unknown): NotesStorageMetadata | u
   return {
     ...sanitized,
     kind: value.kind.trim(),
+    bucket: optionalString(value.bucket),
+    prefix: optionalString(value.prefix),
     portalId: optionalString(value.portalId),
     rootId: optionalString(value.rootId),
     vaultPath: optionalString(value.vaultPath),

@@ -1,3 +1,4 @@
+import { objectNotesVaultBackend } from './object-backend';
 import { portalNotesVaultBackend } from './portal-backend';
 import type { NotesVaultBackend } from './types';
 
@@ -13,3 +14,4 @@ export const getNotesVaultBackend = (kind: string) => backends.get(kind);
 export const listNotesVaultBackendKinds = () => [...backends.keys()].sort();
 
 registerNotesVaultBackend(portalNotesVaultBackend);
+registerNotesVaultBackend(objectNotesVaultBackend);

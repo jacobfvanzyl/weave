@@ -1,0 +1,34 @@
+# Local developer override for server/compose.dokploy.yml.
+#
+# Use with:
+#   docker compose -p weave -f server/compose.dokploy.yml -f server/compose.local.yml up -d postgres garage ollama
+#
+# Set WEAVE_POSTGRES_VOLUME to an existing local Docker volume when cutting over
+# from a manually-created Postgres container. Compose will mount that volume
+# instead of creating a fresh project-scoped one.
+
+services:
+  postgres:
+    container_name: ${WEAVE_POSTGRES_CONTAINER:-weave-dbos-postgres}
+    ports:
+      - '127.0.0.1:${WEAVE_POSTGRES_PORT:-54329}:5432'
+
+  garage:
+    ports:
+      - '127.0.0.1:${WEAVE_GARAGE_S3_PORT:-3900}:3900'
+      - '127.0.0.1:${WEAVE_GARAGE_ADMIN_PORT:-3903}:3903'
+
+  ollama:
+    container_name: ${WEAVE_OLLAMA_CONTAINER:-weave-ollama-embeddings}
+    ports:
+      - '127.0.0.1:${WEAVE_OLLAMA_PORT:-11434}:11434'
+
+volumes:
+  weave-postgres:
+    name: ${WEAVE_POSTGRES_VOLUME:-weave-postgres}
+  weave-garage-meta:
+    name: ${WEAVE_GARAGE_META_VOLUME:-weave_weave-garage-meta}
+  weave-garage-data:
+    name: ${WEAVE_GARAGE_DATA_VOLUME:-weave_weave-garage-data}
+  weave-ollama:
+    name: ${WEAVE_OLLAMA_VOLUME:-weave-ollama}

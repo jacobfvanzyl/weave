@@ -32,6 +32,16 @@ The `dev` and `start` tasks load `server/.env` automatically when it exists, whi
 
 The Dokploy compose file uses `supabase/postgres:17.6.1.142` so local/Dokploy Postgres has common extensions such as `vector`, `pg_cron`, `postgis`, `pg_net`, and `pgmq` available. That image owns the app database as `supabase_admin`, so `WEAVE_DATABASE_URL` uses that role by default; change the password through deployment secrets and update the URL accordingly.
 
+For local infrastructure, use the root compose tasks. They combine `compose.dokploy.yml` with `compose.local.yml` so Postgres, Garage, and Ollama keep private compose networking while also binding local development ports:
+
+```shell
+deno task infra:up
+deno task infra:ollama:pull
+deno task infra:ps
+```
+
+When cutting over from a manually-created Postgres container, set `WEAVE_POSTGRES_VOLUME` to that container's existing Docker volume before `infra:up`. This mounts the existing database files instead of creating a fresh compose volume. The local Ollama compose service uses the existing `weave-ollama` volume by default.
+
 Run migrations explicitly before starting the server:
 
 ```shell

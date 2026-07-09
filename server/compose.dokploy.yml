@@ -2,17 +2,61 @@ services:
   postgres:
     image: supabase/postgres:17.6.1.142
     restart: unless-stopped
-    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "cron.database_name=weave"]
+    command: ['postgres', '-c', 'config_file=/etc/postgresql/postgresql.conf', '-c', 'cron.database_name=weave']
     environment:
       POSTGRES_DB: weave
-      POSTGRES_PASSWORD: weave
+      POSTGRES_PASSWORD: ${WEAVE_POSTGRES_PASSWORD:-weave}
     volumes:
       - weave-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d weave"]
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d weave']
       interval: 10s
       timeout: 5s
       retries: 5
+
+  garage:
+    image: dxflrs/garage:v2.3.0
+    restart: unless-stopped
+    command: ['/garage', 'server', '--single-node', '--default-bucket']
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
+      GARAGE_DEFAULT_BUCKET: ${WEAVE_OBJECT_STORAGE_BUCKET:-weave}
+      GARAGE_DEFAULT_ACCESS_KEY: ${WEAVE_OBJECT_STORAGE_ACCESS_KEY}
+      GARAGE_DEFAULT_SECRET_KEY: ${WEAVE_OBJECT_STORAGE_SECRET_KEY}
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - weave-garage-meta:/var/lib/garage/meta
+      - weave-garage-data:/var/lib/garage/data
+
+  ollama:
+    image: ${WEAVE_OLLAMA_IMAGE:-ollama/ollama:latest}
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    volumes:
+      - weave-ollama:/root/.ollama
+    healthcheck:
+      test: ['CMD', 'ollama', 'list']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ollama-models:
+    image: ${WEAVE_OLLAMA_IMAGE:-ollama/ollama:latest}
+    profiles: ['setup']
+    depends_on:
+      ollama:
+        condition: service_started
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      WEAVE_OLLAMA_MODEL: ${WEAVE_OLLAMA_MODEL:-nomic-embed-text}
+    entrypoint: ['/bin/sh', '-lc']
+    command:
+      - |
+        until ollama list >/dev/null 2>&1; do
+          sleep 1
+        done
+        ollama pull "$${WEAVE_OLLAMA_MODEL}"
 
   weave-server:
     build:
@@ -22,21 +66,30 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      garage:
+        condition: service_started
+      ollama:
+        condition: service_started
     ports:
-      - "4111:4111"
-      - "4112:4112"
-    volumes:
-      - weave-attachments:/app/server/.data/attachments
+      - '4111:4111'
+      - '4112:4112'
     environment:
       NODE_ENV: production
       PORT: 4111
       WEAVE_PORTAL_WS_PORT: 4112
       # Canonical app database. DBOS defaults to this URL when enabled.
       WEAVE_DATABASE_URL: postgres://supabase_admin:weave@postgres:5432/weave
-      WEAVE_DBOS_ENABLED: "1"
+      WEAVE_DBOS_ENABLED: '1'
       # Optional override if DBOS should use a different system database.
       # DBOS_SYSTEM_DATABASE_URL: postgres://supabase_admin:weave@postgres:5432/weave
-      WEAVE_ATTACHMENTS_DIR: /app/server/.data/attachments
+      WEAVE_MEMORY_EMBEDDING_MODEL: ${WEAVE_MEMORY_EMBEDDING_MODEL:-ollama/nomic-embed-text}
+      WEAVE_MEMORY_EMBEDDING_BASE_URL: ${WEAVE_MEMORY_EMBEDDING_BASE_URL:-http://ollama:11434/v1}
+      WEAVE_OBJECT_STORAGE_ENDPOINT: http://garage:3900
+      WEAVE_OBJECT_STORAGE_REGION: garage
+      WEAVE_OBJECT_STORAGE_BUCKET: ${WEAVE_OBJECT_STORAGE_BUCKET:-weave}
+      WEAVE_OBJECT_STORAGE_ACCESS_KEY: ${WEAVE_OBJECT_STORAGE_ACCESS_KEY}
+      WEAVE_OBJECT_STORAGE_SECRET_KEY: ${WEAVE_OBJECT_STORAGE_SECRET_KEY}
+      WEAVE_OBJECT_STORAGE_FORCE_PATH_STYLE: '1'
       # Required single-owner auth. Prefer Dokploy environment variables/secrets over committing values.
       # WEAVE_OWNER_TOKEN: change-me
       # WEAVE_OWNER_ID: local-user
@@ -51,4 +104,6 @@ services:
 
 volumes:
   weave-postgres:
-  weave-attachments:
+  weave-garage-meta:
+  weave-garage-data:
+  weave-ollama:

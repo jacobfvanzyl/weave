@@ -27,6 +27,27 @@ export const productProjects = weaveSchema.table(
   ],
 );
 
+export const attachments = weaveSchema.table(
+  'attachments',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id'),
+    threadId: text('thread_id'),
+    originalName: text('original_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    objectBucket: text('object_bucket').notNull(),
+    objectKey: text('object_key').notNull(),
+    storedName: text('stored_name').notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index('attachments_thread_created_idx').on(table.threadId, table.createdAt),
+    index('attachments_original_name_mime_idx').on(table.originalName, table.mimeType, table.createdAt),
+    index('attachments_owner_created_idx').on(table.ownerId, table.createdAt),
+  ],
+);
+
 export const serviceBindings = weaveSchema.table(
   'service_bindings',
   {
@@ -40,7 +61,10 @@ export const serviceBindings = weaveSchema.table(
   (table) => [
     primaryKey({ columns: [table.ownerId, table.bindingId] }),
     index('service_bindings_owner_provider_idx').on(table.ownerId, table.providerKind, table.updatedAt),
-    check('service_bindings_provider_kind_check', sql`${table.providerKind} in ('portal', 'client', 'server', 'external')`),
+    check(
+      'service_bindings_provider_kind_check',
+      sql`${table.providerKind} in ('portal', 'client', 'server', 'external')`,
+    ),
   ],
 );
 
@@ -142,4 +166,3 @@ export const legacyLibsqlRows = weaveSchema.table(
     primaryKey({ columns: [table.sourceTable, table.sourcePrimaryKey] }),
   ],
 );
-

@@ -406,6 +406,15 @@ const createVirtualNotesWorkspace = (baseProject: Project, name: string): Worksp
   updatedAt: baseProject.createdAt,
 });
 
+const createObjectNotesStorage = (
+  baseProject: Project,
+  requestedStorage?: NotesStorageMetadata,
+): NotesStorageMetadata => ({
+  ...(requestedStorage ?? {}),
+  kind: 'object',
+  prefix: optionalString(requestedStorage?.prefix) ?? `notes/${baseProject.id}`,
+});
+
 const createNotesProject = async (
   _c: any,
   resourceId: string,
@@ -414,9 +423,10 @@ const createNotesProject = async (
 ): Promise<Project> => {
   const requestedStorage = sanitizeNotesStorageMetadata(body?.notesStorage);
   if (requestedStorage && requestedStorage.kind !== 'portal') {
+    const storage = createObjectNotesStorage(baseProject, requestedStorage);
     return {
       ...baseProject,
-      notesStorage: requestedStorage,
+      notesStorage: storage,
       workspaces: [createVirtualNotesWorkspace(baseProject, optionalString(body?.workspaceName) ?? baseProject.name)],
     };
   }
@@ -427,6 +437,15 @@ const createNotesProject = async (
     requestedStorage?.vaultPath ??
     requestedStorage?.workspacePath ??
     '';
+
+  if (!portalId && !rootId && !vaultPath) {
+    return {
+      ...baseProject,
+      notesStorage: createObjectNotesStorage(baseProject),
+      workspaces: [createVirtualNotesWorkspace(baseProject, optionalString(body?.workspaceName) ?? baseProject.name)],
+    };
+  }
+
   assertPortalForUser(portalId, resourceId);
   if (!rootId) throw new Error('rootId is required for notes projects');
 

@@ -1,5 +1,7 @@
 export type NotesStorageMetadata = {
   kind: string;
+  bucket?: string;
+  prefix?: string;
   portalId?: string;
   rootId?: string;
   vaultPath?: string;
