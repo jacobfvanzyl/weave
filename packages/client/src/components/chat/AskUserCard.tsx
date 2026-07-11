@@ -129,11 +129,12 @@ export const AskUserCard = ({
   const respond = async (resume: AskUserResume) => {
     if (!onRespond) return;
     setIsSubmitting(true);
+    setSubmittedResume(resume);
     setError(null);
     try {
       await onRespond(part, resume);
-      setSubmittedResume(resume);
     } catch (responseError) {
+      setSubmittedResume(null);
       setError(responseError instanceof Error ? responseError.message : String(responseError));
     } finally {
       setIsSubmitting(false);

@@ -219,15 +219,17 @@ export const buildAskUserResponseText = (part: AskUserPart, resume: AskUserResum
 };
 
 export const buildAskUserResponseMetadata = (part: AskUserPart, resume: AskUserResume) => ({
-  askUserResponse: {
-    toolCallId: part.toolCallId,
-    mastraRunId: part.mastraRunId,
-    questions: part.questions,
-    action: resume.action,
-    ...(resume.action === 'submit' ? { answers: resume.answers } : { reason: resume.reason }),
-  },
-  weaveDisplay: {
-    kind: 'ask_user_response',
-    toolCallId: part.toolCallId,
+  custom: {
+    askUserResponse: {
+      toolCallId: part.toolCallId,
+      mastraRunId: part.mastraRunId,
+      questions: part.questions,
+      action: resume.action,
+      ...(resume.action === 'submit' ? { answers: resume.answers } : { reason: resume.reason }),
+    },
+    weaveDisplay: {
+      kind: 'ask_user_response',
+      toolCallId: part.toolCallId,
+    },
   },
 });

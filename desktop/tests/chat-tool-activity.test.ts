@@ -372,16 +372,18 @@ describe('chat tool activity helpers', () => {
     expect(buildAskUserResponseText(part!, resume)).toBe('Scope: Narrow');
     const metadata = buildAskUserResponseMetadata(part!, resume);
     expect(metadata).toMatchObject({
-      askUserResponse: {
-        toolCallId: 'ask-1',
-        mastraRunId: 'mastra-run-1',
-        questions: [{ id: 'scope', header: 'Scope' }],
-        action: 'submit',
-        answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
-      },
-      weaveDisplay: {
-        kind: 'ask_user_response',
-        toolCallId: 'ask-1',
+      custom: {
+        askUserResponse: {
+          toolCallId: 'ask-1',
+          mastraRunId: 'mastra-run-1',
+          questions: [{ id: 'scope', header: 'Scope' }],
+          action: 'submit',
+          answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+        },
+        weaveDisplay: {
+          kind: 'ask_user_response',
+          toolCallId: 'ask-1',
+        },
       },
     });
     expect(parseAskUserResponseMetadata(metadata)).toMatchObject({
@@ -391,6 +393,37 @@ describe('chat tool activity helpers', () => {
       resume: {
         action: 'submit',
         answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+      },
+    });
+    expect(parseAskUserResponseMetadata(metadata.custom)).toMatchObject({
+      toolCallId: 'ask-1',
+      mastraRunId: 'mastra-run-1',
+      resume: {
+        action: 'submit',
+        answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+      },
+    });
+
+    const cancelMetadata = buildAskUserResponseMetadata(part!, {
+      action: 'cancel',
+      reason: 'cancelled_by_user',
+    });
+    expect(cancelMetadata).toMatchObject({
+      custom: {
+        askUserResponse: {
+          toolCallId: 'ask-1',
+          mastraRunId: 'mastra-run-1',
+          action: 'cancel',
+          reason: 'cancelled_by_user',
+        },
+      },
+    });
+    expect(parseAskUserResponseMetadata(cancelMetadata)).toMatchObject({
+      toolCallId: 'ask-1',
+      mastraRunId: 'mastra-run-1',
+      resume: {
+        action: 'cancel',
+        reason: 'cancelled_by_user',
       },
     });
   });

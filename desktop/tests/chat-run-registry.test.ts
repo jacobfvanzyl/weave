@@ -524,11 +524,13 @@ describe('chat active run registry', () => {
       role: 'user',
       parts: [{ type: 'text', text: 'Scope: Narrow' }],
       metadata: {
-        askUserResponse: {
-          toolCallId: 'ask-1',
-          mastraRunId: 'mastra-run-1',
-          action: 'submit',
-          answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+        custom: {
+          askUserResponse: {
+            toolCallId: 'ask-1',
+            mastraRunId: 'mastra-run-1',
+            action: 'submit',
+            answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+          },
         },
       },
     };
