@@ -527,19 +527,23 @@ const hasCompatibleAssistantText = (persistedText: string, retainedText: string)
 
 const mergeRetainedRunMessages = (persistedMessages: UiChatMessage[], retainedRunMessages: UiChatMessage[]) => {
   if (retainedRunMessages.length === 0) return persistedMessages;
-  if (retainedRunMessages.some(message => message.status?.type === 'running')) return persistedMessages;
-  if (retainedRunMessages.some(message => message.role !== 'assistant')) return persistedMessages;
+  if (retainedRunMessages.some((message) => message.status?.type === 'running')) return persistedMessages;
+  if (retainedRunMessages.some((message) => message.role !== 'assistant')) return persistedMessages;
 
   const lastAssistantIndex = findLastAssistantMessageIndex(persistedMessages);
   if (lastAssistantIndex < 0) return persistedMessages;
 
-  const persistedTail = persistedMessages.slice(lastAssistantIndex);
-  if (persistedTail.some(message => message.role !== 'assistant')) return persistedMessages;
+  const retainedMessageIds = new Set(retainedRunMessages.map((message) => message.id).filter(Boolean));
+  const firstOverlappingAssistantIndex = persistedMessages.findIndex((message) =>
+    message.role === 'assistant' && retainedMessageIds.has(message.id)
+  );
+  const mergeStartIndex = firstOverlappingAssistantIndex >= 0 ? firstOverlappingAssistantIndex : lastAssistantIndex;
+  const persistedTail = persistedMessages.slice(mergeStartIndex);
+  if (persistedTail.some((message) => message.role !== 'assistant')) return persistedMessages;
 
   const persistedStats = getAssistantStructureStats(persistedTail);
   const retainedStats = getAssistantStructureStats(retainedRunMessages);
-  const retainedIsRicher =
-    retainedStats.toolParts > persistedStats.toolParts ||
+  const retainedIsRicher = retainedStats.toolParts > persistedStats.toolParts ||
     retainedStats.visibleParts > persistedStats.visibleParts ||
     retainedStats.assistantMessages > persistedStats.assistantMessages;
 
@@ -547,7 +551,7 @@ const mergeRetainedRunMessages = (persistedMessages: UiChatMessage[], retainedRu
   if (!hasCompatibleAssistantText(persistedStats.text, retainedStats.text)) return persistedMessages;
 
   return [
-    ...persistedMessages.slice(0, lastAssistantIndex),
+    ...persistedMessages.slice(0, mergeStartIndex),
     ...retainedRunMessages,
   ];
 };

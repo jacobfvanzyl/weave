@@ -16,24 +16,27 @@ export type RunQualitySnapshot = {
   toolCalls: number;
   toolFailures: number;
   maxRepeatedFailure: number;
+  maxRepeatedCall: number;
   redundantToolCalls: number;
   validationCalls: number;
   validationFailures: number;
   restoreCommands: number;
   steeringMessages: number;
-  circuitBreakerReason?: 'max_steps' | 'repeated_tool_failure' | 'excessive_tool_failures';
+  circuitBreakerReason?: 'max_steps' | 'repeated_tool_call' | 'repeated_tool_failure' | 'excessive_tool_failures';
   evaluation: RunQualityEvaluation;
   evaluationReasons: string[];
 };
 
 type RunQualityProcessorOptions = {
   maxSteps?: number;
+  repeatedCallLimit?: number;
   repeatedFailureLimit?: number;
   totalFailureLimit?: number;
 };
 
 const defaultAgentMaxSteps = 64;
 const hardAgentMaxSteps = 96;
+const defaultRepeatedCallLimit = 4;
 const defaultRepeatedFailureLimit = 3;
 const defaultTotalFailureLimit = 8;
 const validationCommandPattern =
@@ -202,6 +205,7 @@ export const summarizeRunQuality = (
     toolCalls: calls.length,
     toolFailures,
     maxRepeatedFailure: Math.max(0, ...failureCounts.values()),
+    maxRepeatedCall: Math.max(0, ...fingerprints.values()),
     redundantToolCalls: [...fingerprints.values()].reduce((total, count) => total + Math.max(0, count - 1), 0),
     validationCalls,
     validationFailures,
@@ -218,6 +222,7 @@ const circuitBreakerFor = (
   stepNumber: number,
 ): RunQualitySnapshot['circuitBreakerReason'] | undefined => {
   if (stepNumber >= options.maxSteps - 1) return 'max_steps';
+  if (snapshot.maxRepeatedCall >= options.repeatedCallLimit) return 'repeated_tool_call';
   if (snapshot.maxRepeatedFailure >= options.repeatedFailureLimit) return 'repeated_tool_failure';
   if (snapshot.toolFailures >= options.totalFailureLimit) return 'excessive_tool_failures';
   return undefined;
@@ -231,6 +236,7 @@ export class RunQualityProcessor implements Processor<'weave-run-quality'> {
   constructor(options: RunQualityProcessorOptions = {}) {
     this.options = {
       maxSteps: options.maxSteps ?? getAgentMaxSteps(),
+      repeatedCallLimit: options.repeatedCallLimit ?? defaultRepeatedCallLimit,
       repeatedFailureLimit: options.repeatedFailureLimit ?? defaultRepeatedFailureLimit,
       totalFailureLimit: options.totalFailureLimit ?? defaultTotalFailureLimit,
     };
@@ -251,6 +257,8 @@ export class RunQualityProcessor implements Processor<'weave-run-quality'> {
           ? `This is the final step (${
             args.stepNumber + 1
           } of ${this.options.maxSteps}). Do not call tools. Give the user a concise, honest handoff with completed work, failed validation, and remaining risks.`
+          : reason === 'repeated_tool_call'
+          ? `The run-quality circuit breaker fired because the same successful tool call is repeating without progress. Do not call tools. Stop repeating work and give the user a concise, honest handoff with what was learned and the safest next action.`
           : `The run-quality circuit breaker fired because tool failures are repeating. Do not call tools. Stop retrying, state the repeated failure, and give the user a concise, honest handoff with the safest next action.`,
         attributes: { reason, step: args.stepNumber + 1 },
       });

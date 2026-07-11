@@ -17,6 +17,7 @@ const assertEquals = (actual: unknown, expected: unknown) => {
 
 const options = {
   maxSteps: 64,
+  repeatedCallLimit: 4,
   repeatedFailureLimit: 3,
   totalFailureLimit: 8,
 };
@@ -73,12 +74,50 @@ Deno.test('run-quality summary records failures, redundancy, restores, validatio
   assertEquals(snapshot.toolCalls, 3);
   assertEquals(snapshot.toolFailures, 3);
   assertEquals(snapshot.maxRepeatedFailure, 2);
+  assertEquals(snapshot.maxRepeatedCall, 2);
   assertEquals(snapshot.redundantToolCalls, 1);
   assertEquals(snapshot.validationCalls, 1);
   assertEquals(snapshot.validationFailures, 1);
   assertEquals(snapshot.restoreCommands, 1);
   assertEquals(snapshot.steeringMessages, 2);
   assertEquals(snapshot.evaluation, 'fail');
+});
+
+Deno.test('run-quality processor finalizes after four identical successful tool calls', async () => {
+  const processor = new RunQualityProcessor(options);
+  const signals: unknown[] = [];
+  const state: Record<string, unknown> = {};
+  const repeatedSteps = Array.from({ length: 4 }, (_, index) => ({
+    toolCalls: [{
+      payload: {
+        toolCallId: `call-${index}`,
+        toolName: 'git_status',
+        args: { workspaceId: 'workspace-1' },
+      },
+    }],
+    toolResults: [{
+      payload: {
+        toolCallId: `call-${index}`,
+        toolName: 'git_status',
+        result: { ok: true, clean: true },
+      },
+    }],
+  }));
+
+  const result = await processor.processInputStep({
+    stepNumber: 4,
+    steps: repeatedSteps,
+    messages: [],
+    state,
+    sendSignal: (signal: unknown) => {
+      signals.push(signal);
+      return Promise.resolve(signal as never);
+    },
+  } as any);
+
+  assertEquals(result, { toolChoice: 'none', activeTools: [] });
+  assertEquals(state.circuitBreakerReason, 'repeated_tool_call');
+  assert(String((signals[0] as any).contents).includes('without progress'), 'expected repetition signal');
 });
 
 Deno.test('run-quality processor finalizes after three repeated tool failures', async () => {

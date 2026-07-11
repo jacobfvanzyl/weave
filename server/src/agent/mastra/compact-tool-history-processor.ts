@@ -1,8 +1,4 @@
-import type {
-  ProcessLLMRequestArgs,
-  ProcessLLMRequestResult,
-  Processor,
-} from '@mastra/core/processors';
+import type { ProcessLLMRequestArgs, ProcessLLMRequestResult, Processor } from '@mastra/core/processors';
 import { hashText } from './tools/model-output';
 import { summarizeProposalToolInput } from './tools/proposal-tool-input-summary';
 import { getModelContextBudget } from '../context-budget';
@@ -131,6 +127,10 @@ type CompactToolHistoryPart = {
 const defaultPreserveToolCalls = 8;
 const tokensPerMessage = 3.8;
 const tokensPerConversation = 24;
+const rememberedConversationPrefix = 'The following messages were remembered from a different conversation:';
+const rememberedConversationTag = '<remembered_from_other_conversation>';
+const rememberedConversationMaxTokens = 32_000;
+const rememberedConversationBudgetPercent = 10;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -176,10 +176,13 @@ const getToolInvocationName = (part: PromptPart) => {
 
 const getToolInvocationCallId = (part: PromptPart) => {
   const invocation = getToolInvocation(part);
-  return typeof invocation?.toolCallId === 'string' && invocation.toolCallId.trim() ? invocation.toolCallId.trim() : undefined;
+  return typeof invocation?.toolCallId === 'string' && invocation.toolCallId.trim()
+    ? invocation.toolCallId.trim()
+    : undefined;
 };
 
-const hasToolCallPart = (message: PromptMessage) => getContentParts(message).some(part => isToolCallPart(part) || isToolInvocationPart(part));
+const hasToolCallPart = (message: PromptMessage) =>
+  getContentParts(message).some((part) => isToolCallPart(part) || isToolInvocationPart(part));
 
 const normalizeToolName = (toolName: string) =>
   toolName.startsWith('functions.') ? toolName.slice('functions.'.length) : toolName;
@@ -236,7 +239,7 @@ const isLegacyGeneratedProposalActionText = (text: string) => {
 
 const isGeneratedProposalActionMessage = (message: PromptMessage) =>
   message.role === 'user' &&
-    (isGeneratedProposalActionMetadata(message) || isLegacyGeneratedProposalActionText(promptMessageText(message)));
+  (isGeneratedProposalActionMetadata(message) || isLegacyGeneratedProposalActionText(promptMessageText(message)));
 
 const textHashSummary = (value: unknown, prefix: string) => {
   if (typeof value !== 'string') return [];
@@ -250,7 +253,7 @@ const firstErrorLines = (value: unknown) => {
   if (typeof value !== 'string' || !value.trim()) return undefined;
   return value
     .split(/\r?\n/)
-    .filter(line => /error|failed|exception|traceback|denied|not found|invalid/i.test(line))
+    .filter((line) => /error|failed|exception|traceback|denied|not found|invalid/i.test(line))
     .slice(0, 8)
     .join('\n')
     .slice(0, 1_200) || undefined;
@@ -262,43 +265,50 @@ const summaryLines = (fields: Array<readonly [string, unknown]>) =>
     .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
     .join('\n');
 
-const compactPortalReadResult = (result: Record<string, unknown>) => summaryLines([
-  ['ok', result.ok],
-  ['path', result.path],
-  ['offset', result.offset],
-  ['limit', result.limit],
-  ['error', result.error],
-  ...textHashSummary(result.content, 'content'),
-]);
+const compactPortalReadResult = (result: Record<string, unknown>) =>
+  summaryLines([
+    ['ok', result.ok],
+    ['path', result.path],
+    ['offset', result.offset],
+    ['limit', result.limit],
+    ['error', result.error],
+    ...textHashSummary(result.content, 'content'),
+  ]);
 
-const compactPortalBashResult = (result: Record<string, unknown>, args?: Record<string, unknown>) => summaryLines([
-  ['ok', result.ok],
-  ['command', typeof result.command === 'string' ? result.command : args?.command],
-  ['exitCode', result.exitCode],
-  ['error', result.error],
-  ...textHashSummary(result.stdout, 'stdout'),
-  ...textHashSummary(result.stderr, 'stderr'),
-  ['stderrErrors', firstErrorLines(result.stderr)],
-  ['stdoutErrors', firstErrorLines(result.stdout)],
-]);
+const compactPortalBashResult = (result: Record<string, unknown>, args?: Record<string, unknown>) =>
+  summaryLines([
+    ['ok', result.ok],
+    ['command', typeof result.command === 'string' ? result.command : args?.command],
+    ['exitCode', result.exitCode],
+    ['error', result.error],
+    ...textHashSummary(result.stdout, 'stdout'),
+    ...textHashSummary(result.stderr, 'stderr'),
+    ['stderrErrors', firstErrorLines(result.stderr)],
+    ['stdoutErrors', firstErrorLines(result.stdout)],
+  ]);
 
-const compactProposalReadResult = (result: Record<string, unknown>) => summaryLines([
-  ['ok', result.ok],
-  ['path', result.path],
-  ['source', result.source],
-  ['deleted', result.deleted],
-  ['offset', result.offset],
-  ['limit', result.limit],
-  ['totalLines', result.totalLines],
-  ['totalChars', result.totalChars],
-  ['contentHash', result.contentHash],
-  ['currentHash', result.currentHash],
-  ['proposedHash', result.proposedHash],
-  ['error', result.error],
-  ...textHashSummary(result.content, 'content'),
-]);
+const compactProposalReadResult = (result: Record<string, unknown>) =>
+  summaryLines([
+    ['ok', result.ok],
+    ['path', result.path],
+    ['source', result.source],
+    ['deleted', result.deleted],
+    ['offset', result.offset],
+    ['limit', result.limit],
+    ['totalLines', result.totalLines],
+    ['totalChars', result.totalChars],
+    ['contentHash', result.contentHash],
+    ['currentHash', result.currentHash],
+    ['proposedHash', result.proposedHash],
+    ['error', result.error],
+    ...textHashSummary(result.content, 'content'),
+  ]);
 
-const compactToolResultForPrompt = (toolName: string, output: unknown, args?: Record<string, unknown>): string | null => {
+const compactToolResultForPrompt = (
+  toolName: string,
+  output: unknown,
+  args?: Record<string, unknown>,
+): string | null => {
   if (isRecord(output) && typeof output.type !== 'string') {
     if (toolName === 'read') {
       const summary = compactPortalReadResult(output);
@@ -316,7 +326,10 @@ const compactToolResultForPrompt = (toolName: string, output: unknown, args?: Re
 
   const summary = toolResultOutputToText(output);
   if (!summary) return null;
-  if ((toolName === 'read' || toolName === 'bash' || normalizeToolName(toolName) === 'proposal_read') && summary.length > 2_000) {
+  if (
+    (toolName === 'read' || toolName === 'bash' || normalizeToolName(toolName) === 'proposal_read') &&
+    summary.length > 2_000
+  ) {
     return summaryLines([
       ['resultChars', summary.length],
       ['resultHash', hashText(summary)],
@@ -361,24 +374,55 @@ const promptPartText = (part: PromptPart) => {
 
 const estimatePromptTokens = (prompt: PromptMessage[]) => {
   const content = prompt
-    .map(message => [
-      typeof message.role === 'string' ? message.role : '',
-      typeof message.content === 'string'
-        ? message.content
-        : getContentParts(message).map(promptPartText).join('\n'),
-    ].join('\n'))
+    .map((message) =>
+      [
+        typeof message.role === 'string' ? message.role : '',
+        typeof message.content === 'string' ? message.content : getContentParts(message).map(promptPartText).join('\n'),
+      ].join('\n')
+    )
     .join('\n');
 
   return Math.ceil(content.length / 4) + prompt.length * tokensPerMessage + tokensPerConversation;
 };
 
-const compactSummaryText = (toolName: string, summary: string, toolCallId?: string) => [
-  compactToolHistoryPrefix,
-  `tool: ${toolName}`,
-  ...(toolCallId ? [`toolCallId: ${toolCallId}`] : []),
-  '',
-  summary,
-].join('\n');
+const truncateRememberedConversation = (content: string, maxChars: number) => {
+  if (content.length <= maxChars) return content;
+  const marker = '\n\n[Weave truncated recalled conversation to fit the model context budget.]\n\n';
+  const availableChars = Math.max(0, maxChars - marker.length);
+  const headChars = Math.ceil(availableChars * 0.7);
+  const tailChars = availableChars - headChars;
+  return `${content.slice(0, headChars)}${marker}${tailChars > 0 ? content.slice(-tailChars) : ''}`;
+};
+
+const limitRememberedConversationPrompt = (prompt: PromptMessage[], tokenLimit: number) => {
+  const recallTokenLimit = Math.min(
+    rememberedConversationMaxTokens,
+    Math.max(512, Math.floor(tokenLimit * rememberedConversationBudgetPercent / 100)),
+  );
+  const recallCharLimit = recallTokenLimit * 4;
+
+  return prompt.map((message) => {
+    const content = message.content;
+    if (
+      typeof content !== 'string' ||
+      !content.startsWith(rememberedConversationPrefix) ||
+      !content.includes(rememberedConversationTag) ||
+      content.length <= recallCharLimit
+    ) {
+      return message;
+    }
+    return { ...message, content: truncateRememberedConversation(content, recallCharLimit) };
+  });
+};
+
+const compactSummaryText = (toolName: string, summary: string, toolCallId?: string) =>
+  [
+    compactToolHistoryPrefix,
+    `tool: ${toolName}`,
+    ...(toolCallId ? [`toolCallId: ${toolCallId}`] : []),
+    '',
+    summary,
+  ].join('\n');
 
 export const createCompactToolHistoryPart = (
   toolName: string,
@@ -405,16 +449,16 @@ export const isLegacyCompactToolHistoryText = (text: string) => {
   if (legacyCompactToolHistoryFieldPattern.test(text)) return true;
 
   const body = text.slice((legacyCompactToolHistoryHeadingPattern.exec(text)?.[0] ?? '').length);
-  const firstNonEmptyLine = body.split(/\r?\n/).find(line => line.trim().length > 0)?.trimStart() ?? '';
+  const firstNonEmptyLine = body.split(/\r?\n/).find((line) => line.trim().length > 0)?.trimStart() ?? '';
   return isPotentialCompactToolHistoryToolLine(firstNonEmptyLine) &&
     legacyCompactToolHistoryInlineFieldPattern.test(firstNonEmptyLine);
 };
 
 const isPotentialCompactToolHistoryFieldLine = (line: string) =>
-  legacyCompactToolHistoryFields.some(field => `${field}: `.startsWith(line) || line.startsWith(`${field}:`));
+  legacyCompactToolHistoryFields.some((field) => `${field}: `.startsWith(line) || line.startsWith(`${field}:`));
 
 const isPotentialCompactToolHistoryToolLine = (line: string) =>
-  legacyCompactToolHistoryToolNames.some(toolName =>
+  legacyCompactToolHistoryToolNames.some((toolName) =>
     toolName.startsWith(line) || line === toolName || line.startsWith(`${toolName} `) || line.startsWith(`${toolName}:`)
   );
 
@@ -436,7 +480,7 @@ export const isPotentialCompactToolHistoryText = (text: string) => {
   const body = text.slice(headingMatch[0].length);
   if (!body.trim()) return true;
 
-  const firstNonEmptyLine = body.split(/\r?\n/).find(line => line.trim().length > 0)?.trimStart() ?? '';
+  const firstNonEmptyLine = body.split(/\r?\n/).find((line) => line.trim().length > 0)?.trimStart() ?? '';
   if (!firstNonEmptyLine) return true;
 
   return isPotentialCompactToolHistoryToolLine(firstNonEmptyLine) ||
@@ -463,11 +507,13 @@ const getPreservedToolCallIds = (prompt: PromptMessage[], preserveToolCalls: num
   if (preserveToolCalls <= 0) return new Set<string>();
 
   const toolCallIds = prompt
-    .filter(message => message.role === 'assistant')
-    .flatMap(message => getContentParts(message)
-      .filter(part => isToolCallPart(part) || isToolInvocationPart(part))
-      .map(part => isToolCallPart(part) ? getToolCallId(part) : getToolInvocationCallId(part))
-      .filter((id): id is string => typeof id === 'string'));
+    .filter((message) => message.role === 'assistant')
+    .flatMap((message) =>
+      getContentParts(message)
+        .filter((part) => isToolCallPart(part) || isToolInvocationPart(part))
+        .map((part) => isToolCallPart(part) ? getToolCallId(part) : getToolInvocationCallId(part))
+        .filter((id): id is string => typeof id === 'string')
+    );
 
   return new Set(toolCallIds.slice(-preserveToolCalls));
 };
@@ -533,7 +579,7 @@ const compactToolInvocationPart = (part: PromptPart, preserveToolCallIds: Set<st
 };
 
 const compactAssistantMessage = (message: PromptMessage, preserveToolCallIds: Set<string>) => {
-  const nextContent = getContentParts(message).flatMap(part => {
+  const nextContent = getContentParts(message).flatMap((part) => {
     if (isCompactToolHistoryTextPart(part)) return [];
 
     if (isToolCallPart(part) && isProposalToolName(getToolName(part))) return [];
@@ -561,7 +607,7 @@ const compactAssistantMessage = (message: PromptMessage, preserveToolCallIds: Se
 };
 
 const compactToolMessage = (message: PromptMessage, preserveToolCallIds: Set<string>) => {
-  const nextContent = getContentParts(message).flatMap(part => {
+  const nextContent = getContentParts(message).flatMap((part) => {
     if (!isToolResultPart(part)) return [];
 
     if (isProposalToolName(getToolName(part))) return [];
@@ -586,7 +632,7 @@ export const compactToolHistoryPrompt = (
   );
   let changed = false;
 
-  const nextPrompt = prompt.flatMap(message => {
+  const nextPrompt = prompt.flatMap((message) => {
     if (isGeneratedProposalActionMessage(message)) {
       changed = true;
       return [];
@@ -606,7 +652,7 @@ export const compactToolHistoryPrompt = (
       return compacted;
     }
 
-    const nextContent = getContentParts(message).filter(part => !isCompactToolHistoryTextPart(part));
+    const nextContent = getContentParts(message).filter((part) => !isCompactToolHistoryTextPart(part));
     if (nextContent.length === getContentParts(message).length) return [message];
 
     changed = true;
@@ -640,10 +686,11 @@ export const limitCompactToolHistoryPrompt = (
   tokenLimit: number | undefined,
 ) => {
   if (!Number.isFinite(tokenLimit) || !tokenLimit || tokenLimit <= 0) return prompt;
-  if (estimatePromptTokens(prompt) <= tokenLimit) return prompt;
+  const boundedPrompt = limitRememberedConversationPrompt(prompt, tokenLimit);
+  if (estimatePromptTokens(boundedPrompt) <= tokenLimit) return boundedPrompt;
 
-  const systemMessages = prompt.filter(message => message.role === 'system');
-  const nonSystemGroups = promptGroups(prompt.filter(message => message.role !== 'system'));
+  const systemMessages = boundedPrompt.filter((message) => message.role === 'system');
+  const nonSystemGroups = promptGroups(boundedPrompt.filter((message) => message.role !== 'system'));
   const keptGroups = [...nonSystemGroups];
 
   while (keptGroups.length > 1) {
@@ -665,7 +712,10 @@ export class CompactToolHistoryProcessor implements Processor<'weave-compact-too
     const compactedPrompt = compactToolHistoryPrompt(args.prompt as PromptMessage[], this.options);
     const contextLimit = getModelContextBudget(args.requestContext)?.contextLimitTokens;
     return {
-      prompt: limitCompactToolHistoryPrompt(compactedPrompt, contextLimit ?? this.options.tokenLimit) as typeof args.prompt,
+      prompt: limitCompactToolHistoryPrompt(
+        compactedPrompt,
+        contextLimit ?? this.options.tokenLimit,
+      ) as typeof args.prompt,
     };
   }
 }

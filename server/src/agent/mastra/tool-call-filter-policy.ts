@@ -1,7 +1,9 @@
 const defaultToolHistoryFullSteps = 8;
 
 const positiveInteger = (value: unknown) => {
-  const number = typeof value === 'string' ? Number(value) : value;
+  const normalized = typeof value === 'string' ? value.trim() : value;
+  if (normalized === '') return undefined;
+  const number = typeof normalized === 'string' ? Number(normalized) : normalized;
   return typeof number === 'number' && Number.isInteger(number) && number >= 0 ? number : undefined;
 };
 
