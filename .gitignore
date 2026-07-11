@@ -11,6 +11,7 @@ portal/native/window-stream-native/build/
 .mastra
 .env.development
 .env
+server/.env.deploy
 *.db
 *.db-*
 *.duckdb

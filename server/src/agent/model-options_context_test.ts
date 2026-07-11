@@ -31,6 +31,15 @@ Deno.test('WEAVE_MODEL_OPTIONS contextWindow explicitly overrides built-in adver
   });
 });
 
+Deno.test('an empty WEAVE_DEFAULT_MODEL falls back to the default subscription model', async () => {
+  await withModelEnv({ WEAVE_DEFAULT_MODEL: '' }, async () => {
+    const config = await getModelConfig();
+    if (config.defaultModel !== 'openai/gpt-5.6-sol') {
+      throw new Error(`expected Sol fallback, got ${config.defaultModel}`);
+    }
+  });
+});
+
 Deno.test('a selected model without advertised context is rejected', async () => {
   await withModelEnv({
     WEAVE_DEFAULT_MODEL: 'custom/unadvertised',

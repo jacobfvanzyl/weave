@@ -34,6 +34,7 @@ import {
 } from './terminal-input';
 import { PortalSupervisor, PortalTerminalClient } from './portal-terminal-client';
 import { startDesktopPerfSampler } from './perf';
+import { ChatGPTLoginBroker } from './chatgpt-login';
 import {
   clearNativeNotifications,
   getNativeNotificationPermissionState,
@@ -48,6 +49,7 @@ let portalTerminalClient: PortalTerminalClient | undefined;
 let portalWorkspaceFileClient: PortalWorkspaceFileClient | undefined;
 let portalLspClient: PortalLspClient | undefined;
 let desktopPerfSampler: ReturnType<typeof startDesktopPerfSampler> | undefined;
+let chatGPTLoginBroker: ChatGPTLoginBroker | undefined;
 
 const ipcErrorResult = (error: unknown) => ({
   __weaveIpcError: true,
@@ -142,6 +144,19 @@ const testConnection = async (input?: DesktopConnectionInput): Promise<DesktopCo
 const openExternal = async (url: string) => {
   if (!isHttpUrl(url)) throw new Error('Only http and https URLs can be opened externally.');
   await shell.openExternal(url);
+};
+
+const getChatGPTLoginBroker = () => {
+  if (!chatGPTLoginBroker) {
+    chatGPTLoginBroker = new ChatGPTLoginBroker({
+      getConnection: () => ({
+        mastraUrl: getSettingsStore().getSettings().mastraUrl,
+        authToken: getSettingsStore().getAuthToken(),
+      }),
+      openExternal,
+    });
+  }
+  return chatGPTLoginBroker;
 };
 
 type ProjectListing = {
@@ -275,6 +290,7 @@ const registerIpcHandlers = () => {
     testConnection(input === undefined ? undefined : parseDesktopConnectionInput(input)),
   );
   ipcMain.handle('shell:open-external', (_event, url: string) => openExternal(url));
+  ipcMain.handle('chatgpt:connect', () => handleIpcResult(() => getChatGPTLoginBroker().connect()));
   ipcMain.handle('terminal:snapshot', () => getPortalTerminalClient().snapshot());
   ipcMain.handle('terminal:list', async (_event, input: unknown) => {
     const parsed = parseTerminalTargetInput(input);
@@ -450,5 +466,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   desktopPerfSampler?.stop();
+  chatGPTLoginBroker?.dispose();
   portalTerminalClient?.dispose();
 });

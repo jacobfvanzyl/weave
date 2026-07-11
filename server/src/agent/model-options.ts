@@ -184,7 +184,7 @@ const parseModelOptions = (catalog?: ModelsDevCatalog): ModelOption[] => {
 };
 
 export const getModelConfig = async (): Promise<ModelConfig> => {
-  const defaultModel = process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.6-sol';
+  const defaultModel = process.env.WEAVE_DEFAULT_MODEL?.trim() || 'openai/gpt-5.6-sol';
   let catalog: ModelsDevCatalog | undefined;
   try {
     catalog = await getModelsDevCatalog();
@@ -203,7 +203,7 @@ export const getModelConfig = async (): Promise<ModelConfig> => {
 
 export const resolveModelOption = async (modelId: string): Promise<ModelOption> => {
   const config = await getModelConfig();
-  const option = config.options.find(candidate => candidate.id === modelId);
+  const option = config.options.find((candidate) => candidate.id === modelId);
   if (!option) throw new Error(`Selected model is not configured: ${modelId}`);
   if (!option.contextWindow) throw new Error(`Model ${modelId} does not advertise a valid context window.`);
   return option;

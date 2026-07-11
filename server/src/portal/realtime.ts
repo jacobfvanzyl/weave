@@ -44,10 +44,23 @@ const portalThreadPrefix = '__portal__';
 const portalThreadId = (portalId: string) => `${portalThreadPrefix}${portalId}`;
 const defaultPort = 4112;
 
+type PortalMemoryLike = {
+  getThreadById: (input: { threadId: string }) => Promise<
+    | {
+      metadata?: unknown;
+      resourceId?: unknown;
+    }
+    | null
+    | undefined
+  >;
+};
+
 type MastraLike = {
   getAgent: (
     agentId: string,
-  ) => Promise<{ getMemory: () => Promise<any> | any }> | { getMemory: () => Promise<any> | any };
+  ) => Promise<{ getMemory: () => Promise<PortalMemoryLike | undefined> | PortalMemoryLike | undefined }> | {
+    getMemory: () => Promise<PortalMemoryLike | undefined> | PortalMemoryLike | undefined;
+  };
   getLogger?: () => {
     info?: (message: string, details?: unknown) => void;
     warn?: (message: string, details?: unknown) => void;
@@ -74,6 +87,12 @@ type PortalWebSocketRuntime = {
 
 let server: PortalHttpServer | undefined;
 
+export const portalRealtimeHealthResponse = (request: Request) => {
+  const url = new URL(request.url);
+  if (request.method !== 'GET' || url.pathname !== '/health') return undefined;
+  return Response.json({ ok: true });
+};
+
 const denoRuntime = () => {
   const runtime = (globalThis as typeof globalThis & { Deno?: PortalWebSocketRuntime }).Deno;
   if (!runtime) throw new Error('Deno runtime is required for Portal realtime.');
@@ -93,7 +112,7 @@ const validatePortalToken = async (mastra: MastraLike, portalId: string, token: 
   if (metadata?.kind !== 'portal-token') return undefined;
   if (metadata?.portalId !== portalId) return undefined;
   if (metadata?.token !== token) return undefined;
-  const ownerId = typeof thread.resourceId === 'string' && thread.resourceId ? thread.resourceId : undefined;
+  const ownerId = typeof thread?.resourceId === 'string' && thread.resourceId ? thread.resourceId : undefined;
   if (ownerId) await portalRepository.saveToken({ ownerId, portalId, token }).catch(() => undefined);
   return ownerId;
 };
@@ -359,6 +378,9 @@ export const startPortalRealtimeServer = (mastra: MastraLike) => {
   const port = Number(process.env.WEAVE_PORTAL_WS_PORT ?? defaultPort);
   const runtime = denoRuntime();
   server = runtime.serve({ port, onListen: () => undefined }, (request: Request) => {
+    const healthResponse = portalRealtimeHealthResponse(request);
+    if (healthResponse) return healthResponse;
+
     const url = new URL(request.url);
     if (
       url.pathname !== '/portals/connect' &&

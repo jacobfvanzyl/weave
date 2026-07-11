@@ -15,7 +15,10 @@ services:
       retries: 5
 
   garage:
-    image: dxflrs/garage:v2.3.0
+    image: ${WEAVE_GARAGE_IMAGE:-weave-garage:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.garage
     restart: unless-stopped
     command: ['/garage', 'server', '--single-node', '--default-bucket']
     environment:
@@ -24,9 +27,16 @@ services:
       GARAGE_DEFAULT_ACCESS_KEY: ${WEAVE_OBJECT_STORAGE_ACCESS_KEY}
       GARAGE_DEFAULT_SECRET_KEY: ${WEAVE_OBJECT_STORAGE_SECRET_KEY}
     volumes:
-      - ./garage.toml:/etc/garage.toml:ro
       - weave-garage-meta:/var/lib/garage/meta
       - weave-garage-data:/var/lib/garage/data
+    ports:
+      - '${WEAVE_BIND_ADDRESS:-127.0.0.1}:${WEAVE_GARAGE_S3_PORT:-3900}:3900'
+    healthcheck:
+      test: ['CMD', '/garage', 'status']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   ollama:
     image: ${WEAVE_OLLAMA_IMAGE:-ollama/ollama:latest}
@@ -43,10 +53,9 @@ services:
 
   ollama-models:
     image: ${WEAVE_OLLAMA_IMAGE:-ollama/ollama:latest}
-    profiles: ['setup']
     depends_on:
       ollama:
-        condition: service_started
+        condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
       WEAVE_OLLAMA_MODEL: ${WEAVE_OLLAMA_MODEL:-nomic-embed-text}
@@ -56,32 +65,23 @@ services:
         until ollama list >/dev/null 2>&1; do
           sleep 1
         done
-        ollama pull "$${WEAVE_OLLAMA_MODEL}"
+        ollama show "$${WEAVE_OLLAMA_MODEL}" >/dev/null 2>&1 || ollama pull "$${WEAVE_OLLAMA_MODEL}"
 
-  weave-server:
+  weave-migrate:
+    image: ${WEAVE_SERVER_IMAGE:-weave-server:local}
     build:
       context: .
       dockerfile: Dockerfile
-    restart: unless-stopped
+    restart: 'no'
     depends_on:
       postgres:
         condition: service_healthy
-      garage:
-        condition: service_started
-      ollama:
-        condition: service_started
-    ports:
-      - '4111:4111'
-      - '4112:4112'
-    environment:
+    environment: &weave-server-environment
       NODE_ENV: production
       PORT: 4111
       WEAVE_PORTAL_WS_PORT: 4112
-      # Canonical app database. DBOS defaults to this URL when enabled.
-      WEAVE_DATABASE_URL: postgres://supabase_admin:weave@postgres:5432/weave
+      WEAVE_DATABASE_URL: postgres://supabase_admin:${WEAVE_POSTGRES_PASSWORD:-weave}@postgres:5432/weave
       WEAVE_DBOS_ENABLED: '1'
-      # Optional override if DBOS should use a different system database.
-      # DBOS_SYSTEM_DATABASE_URL: postgres://supabase_admin:weave@postgres:5432/weave
       WEAVE_MEMORY_EMBEDDING_MODEL: ${WEAVE_MEMORY_EMBEDDING_MODEL:-ollama/nomic-embed-text}
       WEAVE_MEMORY_EMBEDDING_BASE_URL: ${WEAVE_MEMORY_EMBEDDING_BASE_URL:-http://ollama:11434/v1}
       WEAVE_OBJECT_STORAGE_ENDPOINT: http://garage:3900
@@ -90,25 +90,69 @@ services:
       WEAVE_OBJECT_STORAGE_ACCESS_KEY: ${WEAVE_OBJECT_STORAGE_ACCESS_KEY}
       WEAVE_OBJECT_STORAGE_SECRET_KEY: ${WEAVE_OBJECT_STORAGE_SECRET_KEY}
       WEAVE_OBJECT_STORAGE_FORCE_PATH_STYLE: '1'
-      # Required single-owner auth. Prefer Dokploy environment variables/secrets over committing values.
-      # WEAVE_OWNER_TOKEN: change-me
-      # WEAVE_OWNER_ID: local-user
-      # WEAVE_OWNER_NAME: Local User
-      # Model config lives on server only.
-      # WEAVE_DEFAULT_MODEL: openai/gpt-5.6-sol
-      # WEAVE_MODEL_OPTIONS: '[{"id":"openai/gpt-5.6-sol"},{"id":"openai/gpt-5.6-terra"},{"id":"openai/gpt-5.6-luna"},{"id":"openai/gpt-5.5"}]'
-      # WEAVE_THREAD_COMPACTION: "true"
-      # WEAVE_CONTEXT_LIMIT_PERCENT: "80"
-      # WEAVE_COMPACTION_RECENT_PERCENT: "5"
-      # WEAVE_COMPACTION_SUMMARY_OUTPUT_PERCENT: "2"
-      # WEAVE_COMPACTION_MODEL: openai/gpt-5.6-luna
-      # Provider keys, if used by configured models/tools.
-      # OPENAI_API_KEY: ...
-      # ANTHROPIC_API_KEY: ...
-      # EXA_API_KEY: ...
+      WEAVE_OWNER_TOKEN: ${WEAVE_OWNER_TOKEN:-}
+      WEAVE_OWNER_ID: ${WEAVE_OWNER_ID:-local-user}
+      WEAVE_OWNER_NAME: ${WEAVE_OWNER_NAME:-Local User}
+      WEAVE_DEFAULT_MODEL: ${WEAVE_DEFAULT_MODEL:-openai/gpt-5.6-sol}
+      WEAVE_MODEL_OPTIONS: ${WEAVE_MODEL_OPTIONS:-}
+      WEAVE_AGENT_MAX_STEPS: ${WEAVE_AGENT_MAX_STEPS:-}
+      WEAVE_TOOL_HISTORY_FULL_CALLS: ${WEAVE_TOOL_HISTORY_FULL_CALLS:-}
+      WEAVE_TOOL_HISTORY_FULL_STEPS: ${WEAVE_TOOL_HISTORY_FULL_STEPS:-}
+      WEAVE_SEMANTIC_RECALL: ${WEAVE_SEMANTIC_RECALL:-}
+      WEAVE_CONTEXT_LIMIT_PERCENT: ${WEAVE_CONTEXT_LIMIT_PERCENT:-80}
+      WEAVE_COMPACTION_RECENT_PERCENT: ${WEAVE_COMPACTION_RECENT_PERCENT:-5}
+      WEAVE_COMPACTION_SUMMARY_OUTPUT_PERCENT: ${WEAVE_COMPACTION_SUMMARY_OUTPUT_PERCENT:-2}
+      WEAVE_THREAD_COMPACTION: ${WEAVE_THREAD_COMPACTION:-true}
+      WEAVE_COMPACTION_MODEL: ${WEAVE_COMPACTION_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+    command: ['deno', 'task', '--config', 'deno.json', 'db:migrate']
+
+  weave-server:
+    image: ${WEAVE_SERVER_IMAGE:-weave-server:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      ollama-models:
+        condition: service_completed_successfully
+      weave-migrate:
+        condition: service_completed_successfully
+    ports:
+      - '${WEAVE_BIND_ADDRESS:-127.0.0.1}:${WEAVE_SERVER_PORT:-4111}:4111'
+      - '${WEAVE_BIND_ADDRESS:-127.0.0.1}:${WEAVE_PORTAL_HOST_PORT:-4112}:4112'
+    environment:
+      <<: *weave-server-environment
+      WEAVE_CREDENTIAL_ENCRYPTION_KEY: ${WEAVE_CREDENTIAL_ENCRYPTION_KEY}
+    healthcheck:
+      test:
+        - CMD
+        - deno
+        - eval
+        - |
+          for (const url of ['http://127.0.0.1:4111/health', 'http://127.0.0.1:4112/health']) {
+            const response = await fetch(url);
+            if (!response.ok) Deno.exit(1);
+          }
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
 volumes:
   weave-postgres:
+    name: ${WEAVE_POSTGRES_VOLUME:-weave-postgres}
   weave-garage-meta:
+    name: ${WEAVE_GARAGE_META_VOLUME:-weave-garage-meta}
   weave-garage-data:
+    name: ${WEAVE_GARAGE_DATA_VOLUME:-weave-garage-data}
   weave-ollama:
+    name: ${WEAVE_OLLAMA_VOLUME:-weave-ollama}

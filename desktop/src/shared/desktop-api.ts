@@ -39,11 +39,18 @@ export type DesktopConnectionTestResult =
   | { ok: true; user: { id: string; name: string } }
   | { ok: false; status?: number; error: string };
 
+export type DesktopChatGPTAuthStatus = {
+  connected: boolean;
+  accountId?: string;
+  expires?: number;
+};
+
 export type WeaveDesktopBridge = {
   getConnectionSettings: () => Promise<DesktopConnectionSettings>;
   saveConnectionSettings: (input: DesktopConnectionInput) => Promise<DesktopConnectionSettings>;
   testConnection: (input?: DesktopConnectionInput) => Promise<DesktopConnectionTestResult>;
   openExternal: (url: string) => Promise<void>;
+  connectChatGPT: () => Promise<DesktopChatGPTAuthStatus>;
   getPlatform: () => NodeJS.Platform;
   terminalSnapshot: () => Promise<TerminalWindowRecord[]>;
   terminalList: (input: TerminalTargetInput) => Promise<TerminalWindowRecord[]>;

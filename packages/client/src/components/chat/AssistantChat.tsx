@@ -40,7 +40,7 @@ import {
   markComposerDraftAwaitingServerAck,
   saveComposerDraft,
 } from '../../lib/composer-drafts';
-import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
+import { canConnectChatGPT, connectChatGPT, getChatGPTAuthStatus } from '../../lib/chatgpt-auth-api';
 import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, type ModelOption } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptResolutionContext, type PromptSummary } from '../../lib/prompts-api';
@@ -1813,6 +1813,8 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   const isRemovedWorkspaceThread = Boolean(thread?.removedWorkspace);
   const [isSteeringSending, setIsSteeringSending] = useState(false);
   const [isCompacting, setIsCompacting] = useState(false);
+  const [isConnectingChatGPT, setIsConnectingChatGPT] = useState(false);
+  const [chatgptLoginError, setChatgptLoginError] = useState<string>();
   const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
   const [activeIndex, setActiveIndex] = useState(0);
   const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
@@ -1825,7 +1827,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
     queryFn: () => listPrompts(promptContext),
     staleTime: 1000 * 60,
   });
-  const { data: chatgptAuth } = useQuery({
+  const { data: chatgptAuth, error: chatgptAuthError } = useQuery({
     queryKey: ['chatgpt-auth-status'],
     queryFn: getChatGPTAuthStatus,
     staleTime: 10_000,
@@ -1837,6 +1839,8 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   });
   const activeModel = selectedModel || modelConfig?.defaultModel || '';
   const isChatGPTConnected = chatgptAuth?.connected === true;
+  const chatgptStatusError = chatgptAuthError instanceof Error ? chatgptAuthError.message : undefined;
+  const canStartChatGPTLogin = canConnectChatGPT();
   const isSendActive = isChatGPTConnected && !isComposerEmpty && !isRemovedWorkspaceThread;
   const slashCommands = useMemo(() => mergeSlashCommands(prompts), [prompts]);
   const knownPromptNames = useMemo(() => new Set(slashCommands.map(command => command.name)), [slashCommands]);
@@ -1845,6 +1849,10 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   useEffect(() => {
     setActiveIndex(0);
   }, [slashMatch?.[1]]);
+
+  useEffect(() => {
+    if (isChatGPTConnected) setChatgptLoginError(undefined);
+  }, [isChatGPTConnected]);
 
   useEffect(() => {
     composerTextRef.current = composerText;
@@ -2006,9 +2014,18 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
     void sendSteeringMessage();
   };
 
-  const connectChatGPT = async () => {
-    const login = await startChatGPTLogin();
-    window.open(login.url, 'mage-hand-chatgpt-login', 'width=720,height=820,popup=yes');
+  const connectChatGPTAccount = async () => {
+    if (isConnectingChatGPT) return;
+    setIsConnectingChatGPT(true);
+    setChatgptLoginError(undefined);
+    try {
+      await connectChatGPT();
+      await queryClient.invalidateQueries({ queryKey: ['chatgpt-auth-status'] });
+    } catch (error) {
+      setChatgptLoginError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsConnectingChatGPT(false);
+    }
   };
 
   return (
@@ -2072,13 +2089,15 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
             ) : (
               <Button
                 type="button"
-                aria-label="Connect ChatGPT"
-                onClick={() => void connectChatGPT()}
+                aria-label={canStartChatGPTLogin ? 'Connect ChatGPT' : 'ChatGPT login requires Weave Desktop'}
+                title={canStartChatGPTLogin ? 'Connect ChatGPT' : 'Connect ChatGPT from Weave Desktop'}
+                onClick={() => void connectChatGPTAccount()}
+                disabled={isConnectingChatGPT}
                 size="icon-lg"
                 variant="ghost"
                 className="h-11 w-11 shrink-0 rounded-full text-primary"
               >
-                <KeyRound size={20} />
+                {isConnectingChatGPT ? <Loader2 size={18} className="animate-spin" /> : <KeyRound size={20} />}
               </Button>
             )
           ) : isSendActive ? (
@@ -2109,6 +2128,11 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
           ) : null}
         </div>
       </div>
+      {chatgptLoginError || chatgptStatusError ? (
+        <div role="alert" className="mt-2 text-xs text-destructive">
+          {chatgptLoginError ?? chatgptStatusError}
+        </div>
+      ) : null}
     </ComposerPrimitive.Root>
   );
 };

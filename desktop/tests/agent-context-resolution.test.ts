@@ -77,7 +77,7 @@ describe('singleton agent context', () => {
     );
     expect(singletonAgentConfig.instructions).toContain('Cite URLs when web tools are used.');
     expect(singletonAgentConfig.instructions).toContain(
-      'Keep progress visible during longer work, but update only for a material finding, decision, completed checkpoint, changed risk, or roughly a minute of otherwise silent work.',
+      'Before the first tool call for each new user request, send one brief user-visible opening update',
     );
   });
 

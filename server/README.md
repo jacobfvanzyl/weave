@@ -23,6 +23,80 @@ deno task server:db:migrate
 deno task server:db:import-libsql --dry-run
 ```
 
+## Headless Dokploy development
+
+Desktop and Portal can remain on the development Mac while the server stack runs on the Raspberry Pi. The supported
+development deployment is a private Git snapshot plus a Dokploy API deployment:
+
+```shell
+deno task server:deploy
+```
+
+The command typechecks the server, builds a commit from `HEAD` plus the current `server/` working tree, and pushes it to
+`deploy/pi-dev` with `--force-with-lease`. It does not stage files, move the current branch, or create a commit on that
+branch. Dokploy Auto Deploy must be disabled because the command explicitly queues and follows the Compose deployment.
+After Dokploy reports success, both remote health endpoints are checked and the commit is recorded in
+`deploy/pi-last-good`.
+
+Other commands are:
+
+```shell
+deno task server:deploy:prepare   # push the first deploy/pi-dev snapshot before Dokploy is configured
+deno task server:deploy:status    # show refs, latest Dokploy deployment, and health
+deno task server:deploy:rollback  # redeploy application code from deploy/pi-last-good
+deno task server:deploy:cutover   # guarded one-time Postgres/Garage migration
+deno task server:deploy:test      # deployment-tool unit tests
+```
+
+Rollback changes application code only. Database migrations are forward-only, so migrations deployed through this loop
+must remain compatible with the preceding server version.
+
+### One-time Dokploy setup
+
+1. Enable Tailscale SSH on `homelab` and allow this Mac to connect as the selected Linux user in the tailnet SSH policy.
+2. Run `deno task server:deploy:prepare`.
+3. Create a Dokploy Docker Compose service with:
+   - repository `jacobfvanzyl/weave`
+   - branch `deploy/pi-dev`
+   - Compose path `server/compose.dokploy.yml`
+   - stable app name `weave`
+   - Auto Deploy disabled
+4. Set `WEAVE_BIND_ADDRESS=100.127.235.59` in Dokploy. Configure a URL-safe, non-default
+   `WEAVE_POSTGRES_PASSWORD`, the owner token/identity, Garage secrets, model configuration, and provider keys in the
+   Dokploy environment editor. Generate `WEAVE_CREDENTIAL_ENCRYPTION_KEY` with `openssl rand -base64 32`; it encrypts
+   per-owner ChatGPT OAuth credentials stored in Garage and must remain stable across deployments. The Compose file
+   forwards this key only into the server container.
+5. Generate a Dokploy API token, copy `server/.env.deploy.example` to the ignored `server/.env.deploy`, fill in its
+   values, and restrict it with `chmod 600 server/.env.deploy`.
+
+The tailnet endpoints are `http://homelab:4111`, `http://homelab:4112`, and Garage S3 on
+`http://homelab:3900`. Postgres, the Garage admin API, and Ollama are not published by the Dokploy stack.
+
+### Initial data cutover
+
+First deploy the empty Pi stack and confirm `deno task server:deploy:status` can reach it. Stop the local Weave server,
+then run:
+
+```shell
+deno task server:deploy:cutover
+```
+
+The command requires the exact confirmation text before it changes remote state. It discovers Dokploy containers by
+Compose labels, stops the remote server, streams custom-format dumps of the `weave`, `mastra`, and `dbos` schemas over
+Tailscale SSH, copies and verifies Garage objects through S3, reruns the migration container, and verifies both health
+endpoints. It then pauses while you point Desktop at the Pi and verify terminal and file operations. Local Compose
+infrastructure is stopped only after the second typed confirmation. Declining that confirmation leaves the local
+services running, and local Docker volumes are never deleted.
+
+Finally set the Desktop server URL to `http://homelab:4111` with the same owner token configured in Dokploy. Portal
+realtime is derived as `ws://homelab:4112`.
+
+ChatGPT subscription login is initiated from Desktop. Desktop receives OpenAI's loopback callback on
+`127.0.0.1:1455` and forwards the short-lived authorization code to the configured server. Access and refresh tokens
+never enter the renderer: the server exchanges and encrypts them into
+`users/{ownerId}/credentials/chatgpt-codex.v1.json` in Garage. Web and Mobile can use an authenticated server but cannot
+initiate login.
+
 The HTTP server listens on [http://localhost:4111](http://localhost:4111). Portal realtime remains on port `4112` during the compatibility phase.
 The `dev` and `start` tasks load `server/.env` automatically when it exists, while still allowing shell environment variables to override local defaults.
 

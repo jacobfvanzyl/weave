@@ -12,9 +12,11 @@ import { internalServices } from './services';
 import { maybeLaunchDbosWorkflowRuntime } from './workflows';
 import { requireWeaveDatabaseUrl } from './storage/database-url';
 import { getContextBudgetPercentages } from './agent/context-budget';
+import { assertCredentialEncryptionConfigured } from './agent/credentials/chatgpt-credential-repository';
 
 requireWeaveDatabaseUrl();
 getContextBudgetPercentages();
+assertCredentialEncryptionConfigured();
 
 const port = Number(process.env.PORT ?? process.env.WEAVE_SERVER_PORT ?? 4111);
 const auth = loadOwnerAuthConfig();

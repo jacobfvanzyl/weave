@@ -1,9 +1,6 @@
 import { defineRoute } from '../../server/routes';
-import {
-  completeCodexBrowserLogin,
-  getCodexAuthStatus,
-  startCodexBrowserLogin,
-} from '../mastra/providers/chatgpt-codex-auth';
+import { getOwner } from '../../owner/auth';
+import { type ChatGPTCodexAuthService, chatGPTCodexAuthService } from '../mastra/providers/chatgpt-codex-auth';
 
 const jsonResponse = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -11,43 +8,51 @@ const jsonResponse = (data: unknown, status = 200) =>
     headers: { 'content-type': 'application/json' },
   });
 
-const htmlResponse = (title: string, message: string, status = 200) =>
-  new Response(`<!doctype html><html><head><title>${title}</title></head><body><h1>${title}</h1><p>${message}</p><script>setTimeout(() => window.close(), 1200)</script></body></html>`, {
-    status,
-    headers: { 'content-type': 'text/html; charset=utf-8' },
-  });
+const errorStatus = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/required|state|different owner/i.test(message)) return 400;
+  if (/token exchange/i.test(message)) return 502;
+  return 500;
+};
 
-export const chatgptAuthRoutes = [
+export const createChatGPTAuthRoutes = (
+  authService: Pick<ChatGPTCodexAuthService, 'startBrowserLogin' | 'completeBrowserLogin' | 'getAuthStatus'> =
+    chatGPTCodexAuthService,
+) => [
   defineRoute('/agent/chatgpt/login/start', {
     method: 'POST',
-    handler: async c => {
-      const login = await startCodexBrowserLogin();
+    handler: async (c) => {
+      const login = authService.startBrowserLogin(getOwner(c).id);
       return jsonResponse(login);
     },
   }),
-  defineRoute('/agent/chatgpt/login/callback', {
-    method: 'GET',
-    requiresAuth: false,
-    handler: async c => {
-      const url = new URL(c.req.url);
-      const code = url.searchParams.get('code');
-      const state = url.searchParams.get('state');
-      const error = url.searchParams.get('error_description') ?? url.searchParams.get('error');
-
-      if (error) return htmlResponse('ChatGPT Login Failed', error, 400);
-      if (!code || !state) return htmlResponse('ChatGPT Login Failed', 'Missing code or state.', 400);
+  defineRoute('/agent/chatgpt/login/complete', {
+    method: 'POST',
+    handler: async (c) => {
+      const body = await c.req.json().catch(() => undefined) as Record<string, unknown> | undefined;
+      const code = typeof body?.code === 'string' ? body.code : '';
+      const state = typeof body?.state === 'string' ? body.state : '';
 
       try {
-        await completeCodexBrowserLogin({ code, state });
-        return htmlResponse('ChatGPT Connected', 'You can close this window and return to Mage Hand.');
+        const credentials = await authService.completeBrowserLogin({ ownerId: getOwner(c).id, code, state });
+        return jsonResponse({ connected: true, accountId: credentials.accountId, expires: credentials.expires });
       } catch (loginError) {
         const message = loginError instanceof Error ? loginError.message : String(loginError);
-        return htmlResponse('ChatGPT Login Failed', message, 400);
+        return jsonResponse({ error: message }, errorStatus(loginError));
       }
     },
   }),
   defineRoute('/agent/chatgpt/auth-status', {
     method: 'GET',
-    handler: async () => jsonResponse(await getCodexAuthStatus()),
+    handler: async (c) => {
+      try {
+        return jsonResponse(await authService.getAuthStatus(getOwner(c).id));
+      } catch (statusError) {
+        const message = statusError instanceof Error ? statusError.message : String(statusError);
+        return jsonResponse({ error: message }, 500);
+      }
+    },
   }),
 ];
+
+export const chatgptAuthRoutes = createChatGPTAuthRoutes();

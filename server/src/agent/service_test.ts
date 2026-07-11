@@ -135,7 +135,10 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
     assertEquals(captured.options.sendReasoning, true);
     assertEquals(captured.options.defaultOptions, { maxSteps: 64 });
     assertEquals(captured.options.params.maxSteps, 64);
-    assertEquals(captured.options.params.model, 'chatgpt/codex/gpt-5.6-sol');
+    assertEquals(captured.options.params.model, [{
+      model: 'chatgpt/codex/gpt-5.6-sol',
+      headers: { 'x-weave-credential-owner-id': 'resource-1' },
+    }]);
     assertEquals(captured.options.params.providerOptions.openai, {
       existing: true,
       reasoningEffort: 'xhigh',

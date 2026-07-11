@@ -115,9 +115,13 @@ Deno.test('manual compaction uses Luna with medium reasoning and leaves the tran
       model: 'test/conversation',
     });
     if (result.status !== 'completed') throw new Error('expected completed compaction');
-    if (capturedOptions?.model !== 'chatgpt/codex/gpt-5.6-luna') throw new Error('expected Luna gateway model');
+    const scopedModel = (capturedOptions?.model as any)?.[0];
+    if (scopedModel?.model !== 'chatgpt/codex/gpt-5.6-luna') throw new Error('expected Luna gateway model');
     if ((capturedOptions?.providerOptions as any)?.openai?.reasoningEffort !== 'medium') {
       throw new Error('expected medium compaction reasoning');
+    }
+    if (scopedModel?.headers?.['x-weave-credential-owner-id'] !== 'resource-1') {
+      throw new Error('expected owner-scoped compaction credentials');
     }
     if (capturedOptions?.toolChoice !== 'none') throw new Error('expected tool-free compaction request');
     if (capturedOptions?.maxOutputTokens !== 7_440) throw new Error('expected Luna-relative output allowance');

@@ -36,6 +36,26 @@ deno task portal:check
 deno task portal:test
 ```
 
+## Raspberry Pi Server Deployment
+
+The development server stack runs in Dokploy on the Tailscale host `homelab`; Desktop and Portal normally continue to
+run on the Mac. Deploy server changes headlessly from the repository root:
+
+```bash
+deno task server:deploy
+```
+
+This typechecks the server, snapshots `HEAD` plus the current `server/` working tree through a temporary Git index,
+force-with-lease pushes `deploy/pi-dev`, triggers the Dokploy Compose API, follows the deployment, and verifies the
+Tailscale health endpoints. It must not stage files, switch the current branch, or create a commit on the working branch.
+Keep Dokploy Auto Deploy disabled so one edit produces one intentional deployment.
+
+Supporting commands are `server:deploy:prepare`, `server:deploy:status`, `server:deploy:rollback`, and the guarded
+one-time `server:deploy:cutover`. Rollback changes application code only; database migrations must remain
+backward-compatible with the preceding server version. Runtime secrets belong in Dokploy. Deploy-control credentials
+belong only in ignored, mode-`0600` `server/.env.deploy`; never print or commit that file. See `server/README.md` for the
+one-time setup, Tailscale endpoints, cutover procedure, and recovery details.
+
 ## Boundaries
 
 - Do not commit `.env` files or secrets.

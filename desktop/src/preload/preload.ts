@@ -3,6 +3,7 @@ import type {
   DesktopConnectionInput,
   DesktopConnectionSettings,
   DesktopConnectionTestResult,
+  DesktopChatGPTAuthStatus,
   WeaveDesktopBridge,
 } from '../shared/desktop-api';
 import type {
@@ -55,6 +56,8 @@ const bridge: WeaveDesktopBridge = {
   testConnection: (input?: DesktopConnectionInput) =>
     ipcRenderer.invoke('connection:test', input) as Promise<DesktopConnectionTestResult>,
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<void>,
+  connectChatGPT: () =>
+    unwrapIpcResult<DesktopChatGPTAuthStatus>(ipcRenderer.invoke('chatgpt:connect')),
   getPlatform: () => process.platform,
   terminalSnapshot: () =>
     ipcRenderer.invoke('terminal:snapshot') as Promise<TerminalWindowRecord[]>,

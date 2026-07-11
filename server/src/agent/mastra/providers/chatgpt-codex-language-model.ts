@@ -3,6 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { attachmentIdFromReference, type AttachmentReadResult } from '../../../modules/attachments/storage';
 import { type ResourceService, resourceService as defaultResourceService } from '../../../services/resource-service';
 import { callerForOwner, type ServiceCaller } from '../../../services/types';
+import { WEAVE_CREDENTIAL_OWNER_HEADER } from '../../credential-owner';
 import { contextUsageFromProviderUsage, recordThreadContextUsage } from '../context-usage';
 import { type CodexCredentials, getCodexCredentials } from './chatgpt-codex-auth';
 
@@ -15,7 +16,7 @@ type StreamOptions = Parameters<OpenAIResponsesModel['doStream']>[0];
 type StreamResult = Awaited<ReturnType<OpenAIResponsesModel['doStream']>>;
 type StreamPart = StreamResult['stream'] extends ReadableStream<infer Part> ? Part : never;
 type ProviderUsage = GenerateResult['usage'] | Extract<StreamPart, { type: 'finish' }>['usage'];
-type GetCodexCredentials = () => Promise<CodexCredentials>;
+type GetCodexCredentials = (ownerId: string) => Promise<CodexCredentials>;
 type FetchFunction = typeof fetch;
 type RecordUsage = typeof recordThreadContextUsage;
 type LegacyAttachmentReader = { get(id: string): Promise<AttachmentReadResult | null> };
@@ -33,6 +34,7 @@ type ContextUsageTracking = {
 
 const placeholderApiKey = 'chatgpt-subscription';
 const codexCompatibilityClient = 'codex_cli_rs';
+export { WEAVE_CREDENTIAL_OWNER_HEADER } from '../../credential-owner';
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
@@ -196,7 +198,13 @@ const recordContextUsage = (options: { providerOptions?: unknown }, usage: Provi
   });
 };
 
-const withSubscriptionRequiredOptions = <Options extends { providerOptions?: unknown; prompt?: unknown }>(
+const withSubscriptionRequiredOptions = <
+  Options extends {
+    providerOptions?: unknown;
+    prompt?: unknown;
+    headers?: Record<string, string | undefined>;
+  },
+>(
   options: Options,
 ): Options => {
   const providerOptions = asRecord(options.providerOptions) ?? {};
@@ -267,8 +275,16 @@ export const createChatGPTCodexFetch = ({
   attachments?: AttachmentReader;
 } = {}): FetchFunction => {
   return async (input, init) => {
-    const credentials = await getCredentials();
     const headers = new Headers(init?.headers);
+    const encodedOwnerId = headers.get(WEAVE_CREDENTIAL_OWNER_HEADER) ?? '';
+    headers.delete(WEAVE_CREDENTIAL_OWNER_HEADER);
+    let ownerId = '';
+    try {
+      ownerId = decodeURIComponent(encodedOwnerId);
+    } catch {
+      throw new Error('ChatGPT credential owner id is invalid.');
+    }
+    const credentials = await getCredentials(ownerId);
     const body = await inlineLocalAttachmentsInBody(init?.body, attachments);
 
     headers.set('Authorization', `Bearer ${credentials.access}`);

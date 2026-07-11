@@ -85,6 +85,7 @@ export const weaveRoutePaths = {
     promptExpand: (name: string, query?: QueryInput) => appendQuery(`/agent/prompts/${encodePath(name)}/expand`, query),
     chatgptAuthStatus: () => '/agent/chatgpt/auth-status',
     chatgptLoginStart: () => '/agent/chatgpt/login/start',
+    chatgptLoginComplete: () => '/agent/chatgpt/login/complete',
   },
   portal: {
     portals: () => '/portal',
@@ -172,6 +173,7 @@ export const weaveRoutes = {
     promptExpand: (name: string, query?: QueryInput) => url(weaveRoutePaths.agent.promptExpand(name, query)),
     chatgptAuthStatus: () => url(weaveRoutePaths.agent.chatgptAuthStatus()),
     chatgptLoginStart: () => url(weaveRoutePaths.agent.chatgptLoginStart()),
+    chatgptLoginComplete: () => url(weaveRoutePaths.agent.chatgptLoginComplete()),
   },
   portal: {
     portals: () => url(weaveRoutePaths.portal.portals()),

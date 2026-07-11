@@ -1,39 +1,33 @@
-import { randomBytes, createHash } from 'node:crypto';
-import http from 'node:http';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
+import { Buffer } from 'node:buffer';
+import { chatGPTCredentialRepository, type ChatGPTCredentials } from '../../credentials/chatgpt-credential-repository';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
 const TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const ACCOUNT_CLAIM = 'https://api.openai.com/auth';
-const localAuthPath = join(homedir(), '.mage-hand', 'chatgpt-auth.json');
 const redirectUri = 'http://localhost:1455/auth/callback';
+const loginLifetimeMs = 5 * 60_000;
 
-export interface CodexCredentials {
-  access: string;
-  refresh?: string;
-  expires?: number;
-  accountId?: string;
-}
+export type CodexCredentials = ChatGPTCredentials;
 
 type PendingLogin = {
   verifier: string;
-  expires: number;
+  expiresAt: number;
+  ownerId: string;
 };
 
-const pendingLogins = new Map<string, PendingLogin>();
-let callbackServer: http.Server | undefined;
+type CredentialStore = Pick<typeof chatGPTCredentialRepository, 'get' | 'put'>;
 
-const base64Url = (input: Buffer | ArrayBuffer) =>
-  Buffer.isBuffer(input)
-    ? input.toString('base64url')
-    : Buffer.from(new Uint8Array(input)).toString('base64url');
+type CodexAuthServiceOptions = {
+  credentials?: CredentialStore;
+  fetch?: typeof fetch;
+  now?: () => number;
+  random?: (size: number) => Uint8Array;
+};
 
-const createVerifier = () => base64Url(randomBytes(32));
-const createChallenge = (verifier: string) => base64Url(createHash('sha256').update(verifier).digest());
-const createState = () => base64Url(randomBytes(24));
+const base64Url = (input: Uint8Array | ArrayBuffer) =>
+  Buffer.from(input instanceof Uint8Array ? input : new Uint8Array(input)).toString('base64url');
 
 const decodeJwtPayload = (token: string): Record<string, unknown> | undefined => {
   const payload = token.split('.')[1];
@@ -49,14 +43,13 @@ const decodeJwtPayload = (token: string): Record<string, unknown> | undefined =>
 export const extractCodexAccountId = (token: string): string | undefined => {
   const payload = decodeJwtPayload(token);
   const auth = payload?.[ACCOUNT_CLAIM];
-  const nested = auth && typeof auth === 'object' && 'chatgpt_account_id' in auth
-    ? auth.chatgpt_account_id
-    : undefined;
+  const nested = auth && typeof auth === 'object' && 'chatgpt_account_id' in auth ? auth.chatgpt_account_id : undefined;
   const direct = payload?.chatgpt_account_id;
   const organizations = payload?.organizations;
-  const organizationId = Array.isArray(organizations) && organizations[0] && typeof organizations[0] === 'object' && 'id' in organizations[0]
-    ? organizations[0].id
-    : undefined;
+  const organizationId =
+    Array.isArray(organizations) && organizations[0] && typeof organizations[0] === 'object' && 'id' in organizations[0]
+      ? organizations[0].id
+      : undefined;
 
   if (typeof nested === 'string' && nested.length > 0) return nested;
   if (typeof direct === 'string' && direct.length > 0) return direct;
@@ -64,187 +57,181 @@ export const extractCodexAccountId = (token: string): string | undefined => {
   return undefined;
 };
 
-const readJson = async <T>(path: string): Promise<T | undefined> => {
-  try {
-    return JSON.parse(await readFile(path, 'utf8')) as T;
-  } catch {
-    return undefined;
-  }
+const requireValue = (value: string, label: string) => {
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`${label} is required.`);
+  return normalized;
 };
 
-const readLocalCredentials = async (): Promise<CodexCredentials | undefined> => {
-  return readJson<CodexCredentials>(localAuthPath);
-};
+export class ChatGPTCodexAuthService {
+  private readonly credentials: CredentialStore;
+  private readonly request: typeof fetch;
+  private readonly now: () => number;
+  private readonly random: (size: number) => Uint8Array;
+  private readonly pendingLogins = new Map<string, PendingLogin>();
+  private readonly refreshes = new Map<string, Promise<CodexCredentials>>();
 
-const writeLocalCredentials = async (credentials: CodexCredentials) => {
-  await mkdir(dirname(localAuthPath), { recursive: true });
-  await writeFile(localAuthPath, `${JSON.stringify(credentials, null, 2)}\n`, { mode: 0o600 });
-};
-
-const exchangeCode = async (code: string, verifier: string): Promise<CodexCredentials> => {
-  const response = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: CLIENT_ID,
-      code,
-      code_verifier: verifier,
-      redirect_uri: redirectUri,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => response.statusText);
-    throw new Error(`ChatGPT Codex token exchange failed (${response.status}): ${text}`);
+  constructor(options: CodexAuthServiceOptions = {}) {
+    this.credentials = options.credentials ?? chatGPTCredentialRepository;
+    this.request = options.fetch ?? fetch;
+    this.now = options.now ?? Date.now;
+    this.random = options.random ?? ((size) => randomBytes(size));
   }
 
-  const json = await response.json() as {
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-    id_token?: string;
-  };
+  startBrowserLogin(ownerId: string) {
+    const normalizedOwnerId = requireValue(ownerId, 'Owner id');
+    const verifier = base64Url(this.random(32));
+    const challenge = base64Url(createHash('sha256').update(verifier).digest());
+    const state = base64Url(this.random(24));
+    const expiresAt = this.now() + loginLifetimeMs;
+    const url = new URL(AUTHORIZE_URL);
 
-  if (!json.access_token || !json.refresh_token) throw new Error('ChatGPT Codex token exchange response missing tokens');
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('client_id', CLIENT_ID);
+    url.searchParams.set('redirect_uri', redirectUri);
+    url.searchParams.set('scope', 'openid profile email offline_access');
+    url.searchParams.set('code_challenge', challenge);
+    url.searchParams.set('code_challenge_method', 'S256');
+    url.searchParams.set('state', state);
+    url.searchParams.set('id_token_add_organizations', 'true');
+    url.searchParams.set('codex_cli_simplified_flow', 'true');
+    url.searchParams.set('originator', 'mage-hand');
 
-  return {
-    access: json.access_token,
-    refresh: json.refresh_token,
-    expires: Date.now() + (json.expires_in ?? 3600) * 1000,
-    accountId: extractCodexAccountId(json.id_token ?? '') ?? extractCodexAccountId(json.access_token),
-  };
-};
-
-const successHtml = () => '<!doctype html><html><head><title>ChatGPT Connected</title></head><body><h1>ChatGPT Connected</h1><p>You can close this window and return to Mage Hand.</p><script>setTimeout(() => window.close(), 1200)</script></body></html>';
-const errorHtml = (message: string) => `<!doctype html><html><head><title>ChatGPT Login Failed</title></head><body><h1>ChatGPT Login Failed</h1><p>${message}</p></body></html>`;
-
-const ensureCallbackServer = () => {
-  if (callbackServer?.listening) return;
-
-  callbackServer = http.createServer((req, res) => {
-    void (async () => {
-      try {
-        const url = new URL(req.url ?? '/', 'http://localhost:1455');
-        if (url.pathname !== '/auth/callback') {
-          res.writeHead(404, { 'content-type': 'text/plain' });
-          res.end('Not found');
-          return;
-        }
-
-        const error = url.searchParams.get('error_description') ?? url.searchParams.get('error');
-        const code = url.searchParams.get('code');
-        const state = url.searchParams.get('state');
-        if (error) throw new Error(error);
-        if (!code || !state) throw new Error('Missing code or state');
-
-        await completeCodexBrowserLogin({ code, state });
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        res.end(successHtml());
-      } catch (callbackError) {
-        const message = callbackError instanceof Error ? callbackError.message : String(callbackError);
-        res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
-        res.end(errorHtml(message));
-      }
-    })();
-  });
-
-  callbackServer.listen(1455, '127.0.0.1');
-};
-
-const refreshCredentials = async (credentials: CodexCredentials): Promise<CodexCredentials> => {
-  if (!credentials.refresh) return credentials;
-
-  const response = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: credentials.refresh,
-      client_id: CLIENT_ID,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => response.statusText);
-    throw new Error(`ChatGPT Codex token refresh failed (${response.status}): ${text}`);
+    this.pendingLogins.set(state, { verifier, expiresAt, ownerId: normalizedOwnerId });
+    return { url: url.toString(), state, expiresAt };
   }
 
-  const json = await response.json() as {
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-  };
+  async completeBrowserLogin({ ownerId, code, state }: { ownerId: string; code: string; state: string }) {
+    const normalizedOwnerId = requireValue(ownerId, 'Owner id');
+    const normalizedCode = requireValue(code, 'Authorization code');
+    const normalizedState = requireValue(state, 'Login state');
+    const pending = this.pendingLogins.get(normalizedState);
+    this.pendingLogins.delete(normalizedState);
 
-  if (!json.access_token) throw new Error('ChatGPT Codex token refresh response missing access_token');
+    if (!pending) throw new Error('Login state expired or not found.');
+    if (pending.expiresAt < this.now()) throw new Error('Login state expired or not found.');
+    if (pending.ownerId !== normalizedOwnerId) throw new Error('Login state belongs to a different owner.');
 
-  const next = {
-    access: json.access_token,
-    refresh: json.refresh_token ?? credentials.refresh,
-    expires: Date.now() + (json.expires_in ?? 3600) * 1000,
-    accountId: extractCodexAccountId(json.access_token) ?? credentials.accountId,
-  };
-
-  await writeLocalCredentials(next);
-  return next;
-};
-
-export const startCodexBrowserLogin = async () => {
-  ensureCallbackServer();
-  const verifier = createVerifier();
-  const challenge = createChallenge(verifier);
-  const state = createState();
-  const url = new URL(AUTHORIZE_URL);
-
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('client_id', CLIENT_ID);
-  url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('scope', 'openid profile email offline_access');
-  url.searchParams.set('code_challenge', challenge);
-  url.searchParams.set('code_challenge_method', 'S256');
-  url.searchParams.set('state', state);
-  url.searchParams.set('id_token_add_organizations', 'true');
-  url.searchParams.set('codex_cli_simplified_flow', 'true');
-  url.searchParams.set('originator', 'mage-hand');
-
-  pendingLogins.set(state, { verifier, expires: Date.now() + 5 * 60_000 });
-  return { url: url.toString(), state };
-};
-
-export const completeCodexBrowserLogin = async ({ code, state }: { code: string; state: string }) => {
-  const pending = pendingLogins.get(state);
-  pendingLogins.delete(state);
-
-  if (!pending || pending.expires < Date.now()) throw new Error('Login state expired or not found');
-
-  const credentials = await exchangeCode(code, pending.verifier);
-  if (!credentials.accountId) throw new Error('Could not extract ChatGPT account id from login token');
-
-  await writeLocalCredentials(credentials);
-  return credentials;
-};
-
-export const getCodexAuthStatus = async () => {
-  const credentials = await readLocalCredentials();
-  return {
-    connected: Boolean(credentials?.access),
-    accountId: credentials?.accountId,
-    expires: credentials?.expires,
-    authPath: localAuthPath,
-  };
-};
-
-export const getCodexCredentials = async (): Promise<CodexCredentials> => {
-  const credentials = await readLocalCredentials();
-  if (!credentials?.access) {
-    throw new Error('No ChatGPT Codex credentials. Connect ChatGPT from Mage Hand login first.');
+    const credentials = await this.exchangeCode(normalizedCode, pending.verifier);
+    if (!credentials.accountId) throw new Error('Could not extract ChatGPT account id from login token.');
+    await this.credentials.put(normalizedOwnerId, credentials);
+    return credentials;
   }
 
-  const expires = credentials.expires ?? 0;
-  const shouldRefresh = Boolean(credentials.refresh && expires > 0 && expires - Date.now() < 60_000);
-  const fresh = shouldRefresh ? await refreshCredentials(credentials) : credentials;
-  const accountId = fresh.accountId ?? extractCodexAccountId(fresh.access);
+  async getAuthStatus(ownerId: string) {
+    const credentials = await this.credentials.get(requireValue(ownerId, 'Owner id'));
+    return {
+      connected: Boolean(credentials?.access),
+      accountId: credentials?.accountId,
+      expires: credentials?.expires,
+    };
+  }
 
-  if (!accountId) throw new Error('Could not extract ChatGPT account id from Codex access token');
-  return { ...fresh, accountId };
-};
+  async getCredentials(ownerId: string): Promise<CodexCredentials> {
+    const normalizedOwnerId = requireValue(ownerId, 'Credential owner id');
+    const credentials = await this.credentials.get(normalizedOwnerId);
+    if (!credentials?.access) {
+      throw new Error('No ChatGPT Codex credentials. Connect ChatGPT from Weave Desktop first.');
+    }
+    if (!this.shouldRefresh(credentials)) return this.withAccountId(credentials);
+
+    const activeRefresh = this.refreshes.get(normalizedOwnerId);
+    if (activeRefresh) return await activeRefresh;
+
+    const refresh = this.refreshOwnerCredentials(normalizedOwnerId).finally(() => {
+      if (this.refreshes.get(normalizedOwnerId) === refresh) this.refreshes.delete(normalizedOwnerId);
+    });
+    this.refreshes.set(normalizedOwnerId, refresh);
+    return await refresh;
+  }
+
+  private shouldRefresh(credentials: CodexCredentials) {
+    const expires = credentials.expires ?? 0;
+    return Boolean(credentials.refresh && expires > 0 && expires - this.now() < 60_000);
+  }
+
+  private withAccountId(credentials: CodexCredentials) {
+    const accountId = credentials.accountId ?? extractCodexAccountId(credentials.access);
+    if (!accountId) throw new Error('Could not extract ChatGPT account id from Codex access token.');
+    return { ...credentials, accountId };
+  }
+
+  private async refreshOwnerCredentials(ownerId: string) {
+    const current = await this.credentials.get(ownerId);
+    if (!current?.access) {
+      throw new Error('No ChatGPT Codex credentials. Connect ChatGPT from Weave Desktop first.');
+    }
+    if (!this.shouldRefresh(current)) return this.withAccountId(current);
+    if (!current.refresh) return this.withAccountId(current);
+
+    const response = await this.request(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: current.refresh,
+        client_id: CLIENT_ID,
+      }),
+    });
+    if (!response.ok) throw new Error(`ChatGPT Codex token refresh failed (${response.status}).`);
+
+    const json = await response.json() as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+    if (!json.access_token) throw new Error('ChatGPT Codex token refresh response missing access token.');
+
+    const next: CodexCredentials = {
+      access: json.access_token,
+      refresh: json.refresh_token ?? current.refresh,
+      expires: this.now() + (json.expires_in ?? 3600) * 1000,
+      accountId: extractCodexAccountId(json.access_token) ?? current.accountId,
+    };
+    const resolved = this.withAccountId(next);
+    await this.credentials.put(ownerId, resolved);
+    return resolved;
+  }
+
+  private async exchangeCode(code: string, verifier: string): Promise<CodexCredentials> {
+    const response = await this.request(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CLIENT_ID,
+        code,
+        code_verifier: verifier,
+        redirect_uri: redirectUri,
+      }),
+    });
+    if (!response.ok) throw new Error(`ChatGPT Codex token exchange failed (${response.status}).`);
+
+    const json = await response.json() as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+      id_token?: string;
+    };
+    if (!json.access_token || !json.refresh_token) {
+      throw new Error('ChatGPT Codex token exchange response missing tokens.');
+    }
+    return {
+      access: json.access_token,
+      refresh: json.refresh_token,
+      expires: this.now() + (json.expires_in ?? 3600) * 1000,
+      accountId: extractCodexAccountId(json.id_token ?? '') ?? extractCodexAccountId(json.access_token),
+    };
+  }
+}
+
+export const chatGPTCodexAuthService = new ChatGPTCodexAuthService();
+
+export const startCodexBrowserLogin = (ownerId: string) => chatGPTCodexAuthService.startBrowserLogin(ownerId);
+
+export const completeCodexBrowserLogin = (input: { ownerId: string; code: string; state: string }) =>
+  chatGPTCodexAuthService.completeBrowserLogin(input);
+
+export const getCodexAuthStatus = (ownerId: string) => chatGPTCodexAuthService.getAuthStatus(ownerId);
+
+export const getCodexCredentials = (ownerId: string) => chatGPTCodexAuthService.getCredentials(ownerId);

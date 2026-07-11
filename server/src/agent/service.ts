@@ -8,6 +8,7 @@ import {
   type ModelContextBudget,
 } from './context-budget';
 import { getThreadContextUsageSnapshot } from './mastra/context-usage';
+import { credentialOwnerHeaders } from './credential-owner';
 import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from './model-capabilities';
 import { getModelConfig, resolveModelOption, type ModelConfig } from './model-options';
 import { buildChatSystemMessages } from './mastra/agents/instructions';
@@ -396,7 +397,9 @@ export class MastraAgentService implements AgentService {
           ...input.params,
           maxSteps,
           runId: mastraRunId,
-          ...(prepared.routedModel ? { model: prepared.routedModel } : {}),
+          ...(prepared.routedModel
+            ? { model: ownerScopedSubscriptionModel(prepared.routedModel, input.resourceId) }
+            : {}),
           providerOptions: prepared.providerOptions as never,
           memory: prepared.memory as never,
           system: prepared.system as never,
@@ -756,9 +759,11 @@ export class MastraAgentService implements AgentService {
           transcript: serializeCompactionMessages(batch),
           instructions: input.instructions,
         }), {
-          model: routeSubscriptionModel(compactionModel),
+          model: ownerScopedSubscriptionModel(routeSubscriptionModel(compactionModel), input.resourceId),
           maxOutputTokens: compactionBudget.summaryOutputTokens,
-          providerOptions: { openai: { reasoningEffort: 'medium' } },
+          providerOptions: buildProviderOptions(undefined, {
+            reasoningEffort: 'medium',
+          }),
           toolChoice: 'none',
           ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
         } as never);
@@ -1221,6 +1226,11 @@ const routeSubscriptionModel = (model: unknown) => {
 
   return `chatgpt/codex/${model.slice('openai/'.length)}`;
 };
+
+const ownerScopedSubscriptionModel = (model: unknown, ownerId: string) => [{
+  model,
+  headers: credentialOwnerHeaders(ownerId),
+}];
 
 export const threadCompactionEnabled = () => {
   const value = process.env.WEAVE_THREAD_COMPACTION?.trim().toLowerCase();

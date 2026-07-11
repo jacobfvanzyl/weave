@@ -15,20 +15,9 @@ services:
 
   garage:
     ports:
-      - '127.0.0.1:${WEAVE_GARAGE_S3_PORT:-3900}:3900'
       - '127.0.0.1:${WEAVE_GARAGE_ADMIN_PORT:-3903}:3903'
 
   ollama:
     container_name: ${WEAVE_OLLAMA_CONTAINER:-weave-ollama-embeddings}
     ports:
       - '127.0.0.1:${WEAVE_OLLAMA_PORT:-11434}:11434'
-
-volumes:
-  weave-postgres:
-    name: ${WEAVE_POSTGRES_VOLUME:-weave-postgres}
-  weave-garage-meta:
-    name: ${WEAVE_GARAGE_META_VOLUME:-weave_weave-garage-meta}
-  weave-garage-data:
-    name: ${WEAVE_GARAGE_DATA_VOLUME:-weave_weave-garage-data}
-  weave-ollama:
-    name: ${WEAVE_OLLAMA_VOLUME:-weave-ollama}

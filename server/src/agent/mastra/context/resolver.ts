@@ -70,7 +70,7 @@ export const singletonBaseInstructions = readFileSync(new URL('./base-instructio
 
 export const singletonAgentConfig: AgentRuntimeConfig = {
   instructions: singletonBaseInstructions,
-  model: process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.6-sol',
+  model: process.env.WEAVE_DEFAULT_MODEL?.trim() || 'openai/gpt-5.6-sol',
   reasoningEffort: 'high',
   serviceTier: undefined,
   memory: {},

@@ -2,6 +2,7 @@ import {
   CHATGPT_CODEX_BASE_URL,
   createChatGPTCodexFetch,
   createChatGPTCodexLanguageModel,
+  WEAVE_CREDENTIAL_OWNER_HEADER,
 } from './chatgpt-codex-language-model.ts';
 
 const assert: (condition: unknown, message: string) => asserts condition = (condition, message) => {
@@ -61,8 +62,12 @@ const usage = {
 
 Deno.test('createChatGPTCodexFetch injects fresh subscription headers', async () => {
   let captured: CapturedRequest | undefined;
+  let credentialOwner = '';
   const codexFetch = createChatGPTCodexFetch({
-    getCredentials: async () => ({ access: 'fresh-token', accountId: 'account-1' }),
+    getCredentials: async ownerId => {
+      credentialOwner = ownerId;
+      return { access: 'fresh-token', accountId: 'account-1' };
+    },
     fetch: async (input, init) => {
       captured = {
         url: requestUrl(input),
@@ -80,6 +85,7 @@ Deno.test('createChatGPTCodexFetch injects fresh subscription headers', async ()
       originator: 'mage-hand',
       'User-Agent': 'mage-hand',
       'OpenAI-Beta': 'stale',
+      [WEAVE_CREDENTIAL_OWNER_HEADER]: encodeURIComponent('owner/one'),
     },
     body: JSON.stringify({ model: 'gpt-5.6-luna' }),
   });
@@ -92,6 +98,33 @@ Deno.test('createChatGPTCodexFetch injects fresh subscription headers', async ()
   assertEquals(request.headers.get('originator'), 'codex_cli_rs');
   assertEquals(request.headers.get('User-Agent'), 'codex_cli_rs');
   assertEquals(request.headers.get('OpenAI-Beta'), 'responses=experimental');
+  assertEquals(request.headers.get(WEAVE_CREDENTIAL_OWNER_HEADER), null);
+  assertEquals(credentialOwner, 'owner/one');
+});
+
+Deno.test('createChatGPTCodexFetch resolves concurrent owners without leaking the private header upstream', async () => {
+  const captured: Array<{ owner: string; authorization: string | null; privateHeader: string | null }> = [];
+  const codexFetch = createChatGPTCodexFetch({
+    getCredentials: async ownerId => ({ access: `token-${ownerId}`, accountId: `account-${ownerId}` }),
+    fetch: async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      captured.push({
+        owner: headers.get('ChatGPT-Account-Id') ?? '',
+        authorization: headers.get('Authorization'),
+        privateHeader: headers.get(WEAVE_CREDENTIAL_OWNER_HEADER),
+      });
+      return jsonResponse({});
+    },
+  });
+
+  await Promise.all(['owner-a', 'owner-b'].map(ownerId => codexFetch('https://example.com/responses', {
+    headers: { [WEAVE_CREDENTIAL_OWNER_HEADER]: encodeURIComponent(ownerId) },
+  })));
+
+  const authorizations = captured.map(item => item.authorization).sort();
+  assertEquals(authorizations[0], 'Bearer token-owner-a');
+  assertEquals(authorizations[1], 'Bearer token-owner-b');
+  assert(captured.every(item => item.privateHeader === null), 'private owner header must be stripped');
 });
 
 Deno.test('createChatGPTCodexFetch inlines Weave-local image attachments only', async () => {
@@ -293,15 +326,20 @@ Deno.test('legacy tool result output is normalized before the official adapter',
 
 Deno.test('generate usage is bridged to Weave context usage', async () => {
   const usageSnapshots: Array<Record<string, unknown>> = [];
+  let credentialOwner = '';
   const model = createChatGPTCodexLanguageModel({
     modelId: 'gpt-5.4',
-    getCredentials: async () => ({ access: 'fresh-token', accountId: 'account-1' }),
+    getCredentials: async ownerId => {
+      credentialOwner = ownerId;
+      return { access: 'fresh-token', accountId: 'account-1' };
+    },
     recordUsage: (snapshot) => usageSnapshots.push(snapshot),
     fetch: async () => jsonResponse(openAIResponse(usage)),
   });
 
   await model.doGenerate({
     prompt: userPrompt,
+    headers: { [WEAVE_CREDENTIAL_OWNER_HEADER]: encodeURIComponent('resource-1') },
     providerOptions: {
       mastraContextUsage: {
         threadId: 'thread-generate',
@@ -320,6 +358,7 @@ Deno.test('generate usage is bridged to Weave context usage', async () => {
   assertEquals(usageSnapshots[0].outputTokens, 8);
   assertEquals(usageSnapshots[0].totalProcessedTokens, 108);
   assertEquals(usageSnapshots[0].maxTokens, 2000);
+  assertEquals(credentialOwner, 'resource-1');
 });
 
 Deno.test('stream finish usage is bridged to Weave context usage', async () => {
