@@ -133,6 +133,8 @@ export type DiscoveredWorktree = {
 
 export type NotesStorageMetadata = {
   kind: string;
+  bucket?: string;
+  prefix?: string;
   portalId?: string;
   rootId?: string;
   vaultPath?: string;
@@ -193,8 +195,8 @@ const toPlanStep = (value: unknown): ThreadPlanStep | undefined => {
   const step = typeof record?.step === 'string'
     ? record.step
     : typeof record?.text === 'string'
-      ? record.text
-      : undefined;
+    ? record.text
+    : undefined;
   if (!step || !isPlanStepStatus(record?.status)) return undefined;
   return {
     step,
@@ -210,8 +212,8 @@ const toThreadPlan = (value: unknown): ThreadPlan | undefined => {
   const sourcePlan = Array.isArray(record?.checklist)
     ? record.checklist
     : Array.isArray(record?.plan)
-      ? record.plan
-      : undefined;
+    ? record.plan
+    : undefined;
   if (!sourcePlan) return undefined;
 
   const plan = sourcePlan.map(toPlanStep).filter((item): item is ThreadPlanStep => Boolean(item));
@@ -219,24 +221,28 @@ const toThreadPlan = (value: unknown): ThreadPlan | undefined => {
 
   return {
     plan,
-    completed: typeof record?.completed === 'number' ? record.completed : plan.filter(item => item.status === 'completed').length,
+    completed: typeof record?.completed === 'number'
+      ? record.completed
+      : plan.filter((item) => item.status === 'completed').length,
     total: typeof record?.total === 'number' ? record.total : plan.length,
     updatedAt: typeof record?.updatedAt === 'string' ? record.updatedAt : new Date().toISOString(),
-    ...(typeof record?.id === 'string' ? { id: record.id } : {}),
     ...(typeof record?.title === 'string' ? { title: record.title } : {}),
-    ...(typeof record?.path === 'string' ? { path: record.path } : {}),
+    ...(typeof record?.artifactPath === 'string'
+      ? { artifactPath: record.artifactPath }
+      : typeof record?.path === 'string'
+      ? { artifactPath: record.path }
+      : {}),
     ...(isPlanStepStatus(record?.status) ? { status: record.status } : {}),
-    ...(typeof record?.contentHash === 'string' ? { contentHash: record.contentHash } : {}),
   };
 };
 
 const isProposalStatus = (value: unknown): value is ProposalStatus =>
-  value === 'draft' || value === 'ready' || value === 'partially_approved' || value === 'approved'
-  || value === 'changes_requested' || value === 'applied' || value === 'rejected' || value === 'stale';
+  value === 'draft' || value === 'ready' || value === 'partially_approved' || value === 'approved' ||
+  value === 'changes_requested' || value === 'applied' || value === 'rejected' || value === 'stale';
 
 const isProposalItemStatus = (value: unknown): value is ProposalItemStatus =>
-  value === 'pending' || value === 'approved' || value === 'changes_requested' || value === 'rejected'
-  || value === 'applied' || value === 'stale';
+  value === 'pending' || value === 'approved' || value === 'changes_requested' || value === 'rejected' ||
+  value === 'applied' || value === 'stale';
 
 const toProposalItem = (value: unknown): ThreadProposalItem | undefined => {
   const record = value && typeof value === 'object' && !Array.isArray(value)
@@ -269,7 +275,9 @@ const toThreadProposal = (value: unknown): ThreadProposal | undefined => {
   const countsRecord = record?.counts && typeof record.counts === 'object' && !Array.isArray(record.counts)
     ? record.counts as Record<string, unknown>
     : {};
-  const counts = Object.fromEntries(Object.entries(countsRecord).filter(([, count]) => typeof count === 'number')) as Record<string, number>;
+  const counts = Object.fromEntries(
+    Object.entries(countsRecord).filter(([, count]) => typeof count === 'number'),
+  ) as Record<string, number>;
   return {
     items,
     counts,
@@ -493,14 +501,15 @@ export type UpdateWorkspaceInput = {
   base?: string;
 };
 
-const normalizePortalRoots = (roots: unknown): PortalRoot[] => Array.isArray(roots)
-  ? roots.flatMap(root => {
+const normalizePortalRoots = (roots: unknown): PortalRoot[] =>
+  Array.isArray(roots)
+    ? roots.flatMap((root) => {
       const record = root && typeof root === 'object' ? root as Record<string, unknown> : undefined;
       const id = typeof record?.id === 'string' ? record.id.trim() : '';
       if (!id) return [];
       return [{ id, name: typeof record?.name === 'string' ? record.name : undefined }];
     })
-  : [];
+    : [];
 
 const normalizePortalConnection = (portal: unknown): PortalConnection | undefined => {
   const record = portal && typeof portal === 'object' ? portal as Record<string, unknown> : undefined;
@@ -509,7 +518,9 @@ const normalizePortalConnection = (portal: unknown): PortalConnection | undefine
     portalId: record.portalId,
     userId: record.userId,
     name: typeof record.name === 'string' ? record.name : undefined,
-    capabilities: Array.isArray(record.capabilities) ? record.capabilities.filter((item): item is string => typeof item === 'string') : [],
+    capabilities: Array.isArray(record.capabilities)
+      ? record.capabilities.filter((item): item is string => typeof item === 'string')
+      : [],
     roots: normalizePortalRoots(record.roots),
     status: record.status === 'online' ? 'online' : 'offline',
     primary: record.primary === true,
@@ -521,7 +532,7 @@ export const listPortals = async () => {
     await fetch(weaveRoutes.portal.portals(), { headers: getAuthHeaders() }),
   );
 
-  return result.portals.flatMap(portal => normalizePortalConnection(portal) ?? []);
+  return result.portals.flatMap((portal) => normalizePortalConnection(portal) ?? []);
 };
 
 export const browsePortal = async (portalId: string, rootId = 'default', path = '') => {
@@ -541,7 +552,7 @@ export const setPrimaryPortal = async (portalId: string) => {
 
   return {
     primaryPortalId: result.primaryPortalId,
-    portals: result.portals.flatMap(portal => normalizePortalConnection(portal) ?? []),
+    portals: result.portals.flatMap((portal) => normalizePortalConnection(portal) ?? []),
   };
 };
 
@@ -562,7 +573,9 @@ export const createProject = async (input: string | CreateProjectInput) => {
 export const deleteProject = async (projectId: string, projectKind?: Project['projectKind']) => {
   await parseJson<{ ok: true }>(
     await fetch(
-      projectKind ? productProjectRoutes(productForProjectKind(projectKind)).project(projectId) : weaveRoutes.compat.project(projectId),
+      projectKind
+        ? productProjectRoutes(productForProjectKind(projectKind)).project(projectId)
+        : weaveRoutes.compat.project(projectId),
       { method: 'DELETE', headers: getAuthHeaders() },
     ),
   );
@@ -721,7 +734,10 @@ export const createProjectThread = async (
   return { thread: toChatThread(result.thread), workspace: result.workspace };
 };
 
-export const reorderThreads = async (scope: { plain?: true; projectId?: string; workspaceId?: string }, threadIds: string[]) => {
+export const reorderThreads = async (
+  scope: { plain?: true; projectId?: string; workspaceId?: string },
+  threadIds: string[],
+) => {
   await parseJson<{ ok: true }>(
     await fetch(weaveRoutes.chat.reorderThreads(), {
       method: 'PATCH',
@@ -767,14 +783,29 @@ export const cancelThreadRun = async (threadId: string) => {
 
 export type ThreadSteeringResult =
   | { ok: true; accepted: true; runId: string; messageId: string }
-  | { ok: false; reason: 'not_active'; run: ThreadRunState };
+  | { ok: false; reason: 'not_active' | 'stale_run'; run: ThreadRunState };
 
-export const sendThreadSteeringMessage = async (threadId: string, message: UIMessage): Promise<ThreadSteeringResult> => {
+export type SendThreadSteeringMessageOptions = {
+  runId?: string;
+  timeoutMs?: number;
+};
+
+const defaultThreadSteeringTimeoutMs = 5_000;
+
+export const sendThreadSteeringMessage = async (
+  threadId: string,
+  message: UIMessage,
+  options: SendThreadSteeringMessageOptions = {},
+): Promise<ThreadSteeringResult> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? defaultThreadSteeringTimeoutMs);
+
   const response = await fetch(weaveRoutes.chat.steerRun(threadId), {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ message }),
-  });
+    body: JSON.stringify({ message, ...(options.runId ? { runId: options.runId } : {}) }),
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
 
   if (response.status === 409) {
     const text = await response.text();
@@ -786,6 +817,7 @@ export const sendThreadSteeringMessage = async (threadId: string, message: UIMes
       }
     })();
     if (body?.reason === 'not_active' && body.run) return { ok: false, reason: 'not_active', run: body.run };
+    if (body?.reason === 'stale_run' && body.run) return { ok: false, reason: 'stale_run', run: body.run };
     throw new ApiError(typeof body?.error === 'string' ? body.error : text, response.status, { body });
   }
 
@@ -793,20 +825,41 @@ export const sendThreadSteeringMessage = async (threadId: string, message: UIMes
 };
 
 export type ContextUsage = {
+  modelId: string;
   tokens: number;
-  contextWindow?: number;
-  percent?: number;
+  contextWindow: number;
+  contextLimitPercent: number;
+  contextLimitTokens: number;
+  percent: number;
+  compactionEnabled: boolean;
   source?: 'provider' | 'estimate';
   updatedAt?: string;
   totalProcessedTokens?: number;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
+  compaction?: {
+    generation: number;
+    state: 'running' | 'completed' | 'failed' | 'cancelled';
+    at: string;
+    projectedTokens?: number;
+  };
 };
 
-export const getThreadContextUsage = async (threadId: string, contextWindow?: number) => {
-  const params = contextWindow ? new URLSearchParams({ contextWindow: String(contextWindow) }) : undefined;
+export const getThreadContextUsage = async (threadId: string, modelId: string) => {
+  const params = new URLSearchParams({ model: modelId });
   return parseJson<ContextUsage>(
     await fetch(weaveRoutes.chat.threadContextUsage(threadId, params), { headers: getAuthHeaders() }),
   );
 };
+
+export type CompactThreadResult = {
+  status: 'completed' | 'not_needed';
+};
+
+export const compactThread = async (threadId: string, model: string, instructions?: string) =>
+  parseJson<CompactThreadResult>(await fetch(weaveRoutes.chat.compactThread(threadId), {
+    method: 'POST',
+    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, ...(instructions?.trim() ? { instructions: instructions.trim() } : {}) }),
+  }));

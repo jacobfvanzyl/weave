@@ -95,8 +95,13 @@ services:
       # WEAVE_OWNER_ID: local-user
       # WEAVE_OWNER_NAME: Local User
       # Model config lives on server only.
-      # WEAVE_DEFAULT_MODEL: openai/gpt-5.5
-      # WEAVE_MODEL_OPTIONS: '[{"id":"openai/gpt-5.5","label":"GPT 5.5"}]'
+      # WEAVE_DEFAULT_MODEL: openai/gpt-5.6-sol
+      # WEAVE_MODEL_OPTIONS: '[{"id":"openai/gpt-5.6-sol"},{"id":"openai/gpt-5.6-terra"},{"id":"openai/gpt-5.6-luna"},{"id":"openai/gpt-5.5"}]'
+      # WEAVE_THREAD_COMPACTION: "true"
+      # WEAVE_CONTEXT_LIMIT_PERCENT: "80"
+      # WEAVE_COMPACTION_RECENT_PERCENT: "5"
+      # WEAVE_COMPACTION_SUMMARY_OUTPUT_PERCENT: "2"
+      # WEAVE_COMPACTION_MODEL: openai/gpt-5.6-luna
       # Provider keys, if used by configured models/tools.
       # OPENAI_API_KEY: ...
       # ANTHROPIC_API_KEY: ...

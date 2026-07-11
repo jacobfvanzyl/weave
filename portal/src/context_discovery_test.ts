@@ -38,7 +38,7 @@ Deno.test('Portal discovery reads ~/.config/weave prompts, skills, MCP, and conf
     await write(`${home}/.config/weave/profiles/default.md`, '# Default\n');
     await write(`${home}/.config/weave/prompts/ship.md`, '# Ship\n');
     await write(`${home}/.config/weave/skills/release/SKILL.md`, '---\nname: release\ndescription: Release\n---\n');
-    await write(`${home}/.config/weave/skills/release/references/notes.md`, 'not collected');
+    await write(`${home}/.config/weave/skills/release/references/notes.md`, 'supporting notes');
 
     const result = await discoverGlobalWeaveContext();
     assertEquals(result.basePath, `${home}/.config/weave`);
@@ -47,6 +47,7 @@ Deno.test('Portal discovery reads ~/.config/weave prompts, skills, MCP, and conf
       'mcp:.config/weave/mcp.json',
       'prompt:.config/weave/prompts/ship.md',
       'skill:.config/weave/skills/release/SKILL.md',
+      'skill:.config/weave/skills/release/references/notes.md',
     ]);
   } finally {
     if (previousHome === undefined) Deno.env.delete('HOME');
@@ -55,12 +56,11 @@ Deno.test('Portal discovery reads ~/.config/weave prompts, skills, MCP, and conf
   }
 });
 
-Deno.test('Portal discovery returns AGENTS.md and .weave files from git root to workspace path', async () => {
+Deno.test('Portal project discovery reads only the selected workspace root', async () => {
   const repo = await Deno.realPath(await Deno.makeTempDir({ prefix: 'weave-project-context-' }));
   const workspace = `${repo}/packages/app`;
   try {
     await Deno.mkdir(workspace, { recursive: true });
-    await runGit(repo, ['init']);
 
     await write(`${repo}/AGENTS.md`, 'root agents');
     await write(`${repo}/packages/AGENTS.md`, 'packages agents');
@@ -69,19 +69,16 @@ Deno.test('Portal discovery returns AGENTS.md and .weave files from git root to 
     await write(`${repo}/packages/.weave/prompts/packages.md`, '# Packages prompt\n');
     await write(`${workspace}/.weave/mcp.json`, '{"servers":{}}');
     await write(`${workspace}/.weave/skills/app/SKILL.md`, '---\nname: app\ndescription: App\n---\n');
-    await write(`${workspace}/.weave/skills/app/references/notes.md`, 'not collected');
+    await write(`${workspace}/.weave/skills/app/references/notes.md`, 'supporting notes');
 
     const result = await discoverProjectWeaveContext(portalConfig, { workspacePath: workspace });
-    assertEquals(result.basePath, repo);
+    assertEquals(result.basePath, workspace);
     assertEquals(result.workspacePath, workspace);
-    assertEquals(result.files.map((file) => `${file.kind}:${file.path}`), [
+    assertEquals(result.files.map((file) => `${file.kind}:${file.path}`).sort(), [
       'agents:AGENTS.md',
-      'agents:packages/AGENTS.md',
-      'agents:packages/app/AGENTS.md',
-      'prompt:.weave/prompts/root.md',
-      'prompt:packages/.weave/prompts/packages.md',
-      'mcp:packages/app/.weave/mcp.json',
-      'skill:packages/app/.weave/skills/app/SKILL.md',
+      'mcp:.weave/mcp.json',
+      'skill:.weave/skills/app/SKILL.md',
+      'skill:.weave/skills/app/references/notes.md',
     ]);
   } finally {
     await Deno.remove(repo, { recursive: true }).catch(() => undefined);

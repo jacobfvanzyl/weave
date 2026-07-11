@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __notesJupyterRoutesTest } from '../../server/src/modules/notes/jupyter-routes';
 import type { NotesProject, NotesVaultBackend } from '../../server/src/modules/notes/storage/types';
 import { connectPortal, disconnectPortal, handlePortalMessage } from '../../server/src/portal/registry';
+import { productProjectRepository } from '../../server/src/products/project-repository';
 
 const now = '2026-06-22T10:00:00.000Z';
 const connectedPortalIds: string[] = [];
@@ -53,19 +54,28 @@ const memoryForProject = (project: NotesProject) => ({
   ),
 });
 
-const routeContext = (body: Record<string, unknown>, project: NotesProject, resourceId = 'user-1') => {
+const routeContext = (
+  body: Record<string, unknown>,
+  project: NotesProject,
+  resourceId = 'user-1',
+) => {
   const memory = memoryForProject(project);
   const c = {
     get: vi.fn((key: string) => {
       if (key === 'requestContext') return { get: () => resourceId };
-      if (key === 'mastra') return { getAgent: async () => ({ getMemory: async () => memory }) };
+      if (key === 'mastra') {
+        return { getAgent: async () => ({ getMemory: async () => memory }) };
+      }
       return undefined;
     }),
     req: {
       json: async () => body,
       url: 'http://127.0.0.1:4111/notes/jupyter/session',
     },
-    json: vi.fn((payload: unknown, status?: number) => ({ payload, status: status ?? 200 })),
+    json: vi.fn((payload: unknown, status?: number) => ({
+      payload,
+      status: status ?? 200,
+    })),
   };
   return { c, memory };
 };
@@ -91,14 +101,22 @@ const readToolCall = async (ws: { send: ReturnType<typeof vi.fn> }) => {
   };
 };
 
+beforeEach(() => {
+  vi.spyOn(productProjectRepository, 'get').mockResolvedValue(undefined);
+});
+
 afterEach(() => {
+  vi.restoreAllMocks();
   connectedPortalIds.splice(0).forEach((portalId) => disconnectPortal(portalId));
 });
 
 describe('notes Jupyter routes', () => {
   it('routes status requests through Portal capabilities', async () => {
     const ws = connectTestPortal(['portal.jupyter.status']);
-    const { c } = routeContext({ target: { projectId: 'project-1' } }, notesProject());
+    const { c } = routeContext(
+      { target: { projectId: 'project-1' } },
+      notesProject(),
+    );
 
     const responsePromise = __notesJupyterRoutesTest.handleNotesJupyterRoute(
       c,
@@ -127,7 +145,11 @@ describe('notes Jupyter routes', () => {
   it('issues a short-lived WebSocket token for document sessions', async () => {
     const ws = connectTestPortal(['portal.jupyter.session']);
     const { c } = routeContext(
-      { target: { projectId: 'project-1' }, path: 'Notebook.cpr', language: 'python' },
+      {
+        target: { projectId: 'project-1' },
+        path: 'Notebook.cpr',
+        language: 'python',
+      },
       notesProject(),
     );
 
@@ -139,7 +161,10 @@ describe('notes Jupyter routes', () => {
     );
     const request = await readToolCall(ws);
     expect(request.tool).toBe('portal.jupyter.session');
-    expect(request.args).toMatchObject({ path: 'Notebook.cpr', language: 'python' });
+    expect(request.args).toMatchObject({
+      path: 'Notebook.cpr',
+      language: 'python',
+    });
 
     handlePortalMessage({
       type: 'tool.result',
@@ -175,13 +200,17 @@ describe('notes Jupyter routes', () => {
     const objectProject = notesProject({
       notesStorage: { kind: 'object' },
     });
-    const objectContext = routeContext({ target: { projectId: 'project-1' } }, objectProject);
-    const objectResponse = await __notesJupyterRoutesTest.handleNotesJupyterRoute(
-      objectContext.c,
-      'status',
-      1_000,
-      resolverDeps(createBackend('object')),
+    const objectContext = routeContext(
+      { target: { projectId: 'project-1' } },
+      objectProject,
     );
+    const objectResponse = await __notesJupyterRoutesTest
+      .handleNotesJupyterRoute(
+        objectContext.c,
+        'status',
+        1_000,
+        resolverDeps(createBackend('object')),
+      );
     expect(objectResponse.status).toBe(400);
     expect(objectResponse.payload).toMatchObject({
       error: 'Jupyter execution is only available for Portal-backed Notes storage.',
@@ -192,12 +221,13 @@ describe('notes Jupyter routes', () => {
       { target: { projectId: 'project-1' }, path: 'Notebook.cpr' },
       notesProject(),
     );
-    const missingCapabilityResponse = await __notesJupyterRoutesTest.handleNotesJupyterRoute(
-      missingCapabilityContext.c,
-      'session',
-      1_000,
-      resolverDeps(),
-    );
+    const missingCapabilityResponse = await __notesJupyterRoutesTest
+      .handleNotesJupyterRoute(
+        missingCapabilityContext.c,
+        'session',
+        1_000,
+        resolverDeps(),
+      );
     expect(missingCapabilityResponse.status).toBe(400);
     expect(missingCapabilityResponse.payload).toMatchObject({
       error: 'The connected Portal does not support Jupyter execution yet.',

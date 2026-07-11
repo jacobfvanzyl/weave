@@ -1,5 +1,7 @@
 import { mountRoute } from '../../server/routes';
 import { registerAgentContribution } from '../../agent/contributions';
+import { contributionDescription } from '../../instructions/contribution-instructions';
+import { toolDescription } from '../../instructions/tool-instructions';
 import type { ServerModule } from '../types';
 import { createLspRoutes } from './routes/lsp';
 import { projectRoutes } from './routes/projects';
@@ -8,45 +10,32 @@ import { createTerminalRoutes } from './routes/terminals';
 registerAgentContribution({
   moduleId: 'code',
   tools: [
-    { id: 'read', description: 'Read files from the current Code workspace through Portal.' },
-    { id: 'write', description: 'Write files in the current Code workspace through Portal.' },
-    { id: 'edit', description: 'Patch files in the current Code workspace through Portal.' },
-    { id: 'bash', description: 'Run shell commands in the current Code workspace through Portal.' },
-    { id: 'git_status', description: 'Inspect structured Git status for the current Code workspace.' },
-    { id: 'git_diff', description: 'Read Git diffs for the current Code workspace.' },
-    { id: 'git_log', description: 'Read Git history for the current Code workspace.' },
-    { id: 'git_show', description: 'Read Git object contents for the current Code workspace.' },
-    { id: 'git_branch', description: 'List and manage Git branches for the current Code workspace.' },
-    { id: 'git_switch', description: 'Switch branches for the current Code workspace.' },
-    { id: 'git_worktree', description: 'List, create, switch, and remove worktrees for the current Code project.' },
-    {
-      id: 'code_intel_capabilities',
-      description: 'Inspect configured and runtime language-server capabilities for a Code workspace file.',
-    },
-    { id: 'code_diagnostics', description: 'Read LSP diagnostics for a Code workspace file.' },
-    { id: 'code_hover', description: 'Read LSP hover information at a file position.' },
-    { id: 'code_definition', description: 'Find LSP definitions at a file position.' },
-    { id: 'code_references', description: 'Find LSP references at a file position.' },
-    { id: 'code_symbols', description: 'List LSP document symbols for a file.' },
-    { id: 'workspace_symbols', description: 'Search LSP workspace symbols.' },
-    { id: 'code_actions', description: 'List LSP code actions for a range.' },
-    { id: 'code_action_preview', description: 'Preview the WorkspaceEdit for an LSP code action without applying it.' },
-    { id: 'rename_preview', description: 'Preview an LSP rename WorkspaceEdit without applying it.' },
-    { id: 'format_preview', description: 'Preview LSP formatting edits without applying them.' },
-    { id: 'update_plan', description: 'Update the plan artifact for the current Code workspace.' },
-    { id: 'write_plan', description: 'Write a plan artifact for the current Code workspace.' },
-    { id: 'proposal_start', description: 'Start a draft proposal workspace for the current Code workspace.' },
-    { id: 'proposal_read', description: 'Read live or proposed file content through the proposal workspace.' },
-    { id: 'proposal_write', description: 'Write proposed content for one file without touching source files.' },
-    { id: 'proposal_edit', description: 'Edit proposed content for one file without touching source files.' },
-    { id: 'proposal_delete', description: 'Record a proposed file delete without touching source files.' },
-    { id: 'proposal_discard', description: 'Discard one proposed file item from a draft proposal.' },
-    { id: 'proposal_status', description: 'Inspect proposal status without returning raw proposed content.' },
-    { id: 'proposal_finalize', description: 'Validate a draft proposal and publish it for human review.' },
-    { id: 'proposal_mark', description: 'Mark proposal item review or implementation outcomes.' },
+    { id: 'read', description: toolDescription('read') },
+    { id: 'write', description: toolDescription('write') },
+    { id: 'edit', description: toolDescription('edit') },
+    { id: 'bash', description: toolDescription('bash') },
+    { id: 'git_status', description: toolDescription('git_status') },
+    { id: 'git_diff', description: toolDescription('git_diff') },
+    { id: 'git_log', description: toolDescription('git_log') },
+    { id: 'git_show', description: toolDescription('git_show') },
+    { id: 'git_branch', description: toolDescription('git_branch') },
+    { id: 'git_switch', description: toolDescription('git_switch') },
+    { id: 'git_worktree', description: toolDescription('git_worktree') },
+    { id: 'code_intel_capabilities', description: toolDescription('code_intel_capabilities') },
+    { id: 'code_diagnostics', description: toolDescription('code_diagnostics') },
+    { id: 'code_hover', description: toolDescription('code_hover') },
+    { id: 'code_definition', description: toolDescription('code_definition') },
+    { id: 'code_references', description: toolDescription('code_references') },
+    { id: 'code_symbols', description: toolDescription('code_symbols') },
+    { id: 'workspace_symbols', description: toolDescription('workspace_symbols') },
+    { id: 'code_actions', description: toolDescription('code_actions') },
+    { id: 'code_action_preview', description: toolDescription('code_action_preview') },
+    { id: 'rename_preview', description: toolDescription('rename_preview') },
+    { id: 'format_preview', description: toolDescription('format_preview') },
+    { id: 'update_plan', description: toolDescription('update_plan') },
   ],
   sources: [
-    { id: 'code.workspace.context', description: 'Workspace AGENTS.md and .weave context discovered through Portal.' },
+    { id: 'code.workspace.context', description: contributionDescription('code.workspace.context') },
   ],
 });
 

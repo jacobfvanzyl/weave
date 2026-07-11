@@ -421,6 +421,30 @@ const collectTextFiles = async (
   return files;
 };
 
+const collectSkillDirectoryFiles = async (
+  root: string,
+  contextPrefix: string,
+): Promise<WeaveContextFile[]> => {
+  const files: WeaveContextFile[] = [];
+  const visit = async (dir: string, depth: number) => {
+    if (depth > 8) return;
+    for (const entry of await listDirEntries(dir)) {
+      const absolutePath = `${dir}/${entry.name}`;
+      if (entry.isDirectory) {
+        await visit(absolutePath, depth + 1);
+        continue;
+      }
+      if (!entry.isFile) continue;
+      const contextPath = `${contextPrefix}/${relativePath(root, absolutePath)}`;
+      const file = await readWeaveContextFile(absolutePath, contextPath, 'skill');
+      if (file) files.push(file);
+    }
+  };
+
+  await visit(root, 0);
+  return files;
+};
+
 const collectWeaveDirectory = async (
   dir: string,
   contextPrefix: string,
@@ -447,36 +471,17 @@ const collectWeaveDirectory = async (
     }),
   );
   files.push(
-    ...await collectTextFiles(`${dir}/skills`, `${contextPrefix}/skills`, 'skill', {
-      fileNames: ['SKILL.md'],
-      maxDepth: 8,
-    }),
+    ...await collectSkillDirectoryFiles(`${dir}/skills`, `${contextPrefix}/skills`),
   );
 
   return files;
 };
 
-const collectAgentInstructionChain = async (gitRoot: string, workspaceRoot: string) => {
-  const root = await Deno.realPath(gitRoot);
-  const target = await Deno.realPath(workspaceRoot);
-  const chain: string[] = [root];
-
-  if (target.startsWith(`${root}/`)) {
-    let current = target;
-    const parents: string[] = [];
-    while (current !== root && current.startsWith(`${root}/`)) {
-      parents.push(current);
-      current = getParentPath(current);
-    }
-    chain.push(...parents.reverse());
-  }
-
+const collectRootAgentInstructions = async (workspaceRoot: string) => {
+  const root = await Deno.realPath(workspaceRoot);
   const files: WeaveContextFile[] = [];
-  for (const dir of chain) {
-    const contextPath = relativePath(root, `${dir}/AGENTS.md`) || 'AGENTS.md';
-    const file = await readWeaveContextFile(`${dir}/AGENTS.md`, contextPath, 'agents');
-    if (file) files.push(file);
-  }
+  const file = await readWeaveContextFile(`${root}/AGENTS.md`, 'AGENTS.md', 'agents');
+  if (file) files.push(file);
   return files;
 };
 
@@ -580,29 +585,9 @@ const readAgentInstructionsTool = async (config: ResolvedPortalConfig, request: 
   return { ok: true, agentInstructions };
 };
 
-const collectProjectWeaveDirectories = async (gitRoot: string, workspaceRoot: string) => {
-  const root = await Deno.realPath(gitRoot);
-  const target = await Deno.realPath(workspaceRoot);
-  const chain: string[] = [root];
-
-  if (target.startsWith(`${root}/`)) {
-    let current = target;
-    const parents: string[] = [];
-    while (current !== root && current.startsWith(`${root}/`)) {
-      parents.push(current);
-      current = getParentPath(current);
-    }
-    chain.push(...parents.reverse());
-  }
-
-  const files: WeaveContextFile[] = [];
-  for (const dir of chain) {
-    const weaveDir = `${dir}/.weave`;
-    const prefix = relativePath(root, weaveDir) || '.weave';
-    files.push(...await collectWeaveDirectory(weaveDir, prefix, { includeConfig: false }));
-  }
-
-  return files;
+const collectProjectWeaveDirectory = async (workspaceRoot: string) => {
+  const root = await Deno.realPath(workspaceRoot);
+  return await collectWeaveDirectory(`${root}/.weave`, '.weave', { includeConfig: false });
 };
 
 export const discoverGlobalWeaveContext = async () => {
@@ -615,12 +600,11 @@ export const discoverGlobalWeaveContext = async () => {
 
 export const discoverProjectWeaveContext = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
   const workspaceRoot = await resolveWorkspaceRoot(config, request);
-  const gitRoot = await runGit(workspaceRoot, ['rev-parse', '--show-toplevel']).catch(() => workspaceRoot);
   const [agents, weaveFiles] = await Promise.all([
-    collectAgentInstructionChain(gitRoot, workspaceRoot),
-    collectProjectWeaveDirectories(gitRoot, workspaceRoot),
+    collectRootAgentInstructions(workspaceRoot),
+    collectProjectWeaveDirectory(workspaceRoot),
   ]);
-  return { basePath: gitRoot, workspacePath: workspaceRoot, files: [...agents, ...weaveFiles] };
+  return { basePath: workspaceRoot, workspacePath: workspaceRoot, files: [...agents, ...weaveFiles] };
 };
 
 export const discoverWeaveContextTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
@@ -1017,7 +1001,11 @@ const bashTool = async (config: ResolvedPortalConfig, request: Record<string, un
     stderr: 'piped',
   });
   const child = command.spawn();
-  const timeout = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill('SIGTERM');
+  }, timeoutMs);
 
   try {
     const output = await child.output();
@@ -1026,6 +1014,8 @@ const bashTool = async (config: ResolvedPortalConfig, request: Record<string, un
       stdout: new TextDecoder().decode(output.stdout),
       stderr: new TextDecoder().decode(output.stderr),
       exitCode: output.code,
+      timedOut,
+      ...(timedOut ? { error: `Command timed out after ${timeoutMs}ms` } : {}),
     };
   } finally {
     clearTimeout(timeout);

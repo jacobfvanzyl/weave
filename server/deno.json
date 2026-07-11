@@ -14,7 +14,7 @@
   },
   "nodeModulesDir": "auto",
   "imports": {
-    "@ai-sdk/openai": "npm:@ai-sdk/openai@3.0.63",
+    "@ai-sdk/openai": "npm:@ai-sdk/openai@3.0.84",
     "@mastra/ai-sdk": "npm:@mastra/ai-sdk@1.4.5",
     "@mastra/core/": "npm:@mastra/core@1.42.0/",
     "@mastra/loggers": "npm:@mastra/loggers@1.1.2",

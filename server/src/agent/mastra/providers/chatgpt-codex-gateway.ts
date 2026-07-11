@@ -4,9 +4,11 @@ import {
   MastraModelGateway,
   type ProviderConfig,
 } from '@mastra/core/llm';
+import { CHATGPT_CODEX_GPT_5_6_MODELS } from '../../model-capabilities';
 import { createChatGPTCodexLanguageModel } from './chatgpt-codex-language-model';
 
 const models = [
+  ...CHATGPT_CODEX_GPT_5_6_MODELS.map(({ slug }) => slug),
   'gpt-5.1-codex',
   'gpt-5.1-codex-max',
   'gpt-5.1-codex-mini',

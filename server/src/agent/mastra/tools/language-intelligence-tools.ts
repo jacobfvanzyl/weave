@@ -1,12 +1,13 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import { toolDescription, toolInputDescription } from './instructions';
 import { routePortalTool } from './portal-tools';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars } from './model-output';
 
-const positionSchema = {
-  line: z.number().int().min(0).optional().describe('Zero-based line number'),
-  character: z.number().int().min(0).optional().describe('Zero-based UTF-16 character offset'),
-};
+const positionSchema = (toolId: string) => ({
+  line: z.number().int().min(0).optional().describe(toolInputDescription(toolId, 'line')),
+  character: z.number().int().min(0).optional().describe(toolInputDescription(toolId, 'character')),
+});
 
 const rangeSchema = z.object({
   start: z.object({
@@ -19,13 +20,13 @@ const rangeSchema = z.object({
   }).strict(),
 }).strict();
 
-const baseInputSchema = z.object({
-  path: z.string().describe('File path relative to the current Workspace root'),
-  languageId: z.string().optional().describe('Optional LSP language id override'),
-  serverId: z.string().optional().describe('Optional language-server adapter id override'),
+const baseInputSchema = (toolId: string) => z.object({
+  path: z.string().describe(toolInputDescription(toolId, 'path')),
+  languageId: z.string().optional().describe(toolInputDescription(toolId, 'languageId')),
+  serverId: z.string().optional().describe(toolInputDescription(toolId, 'serverId')),
 });
 
-const positionInputSchema = baseInputSchema.extend(positionSchema);
+const positionInputSchema = (toolId: string) => baseInputSchema(toolId).extend(positionSchema(toolId));
 
 const queryOutputSchema = z.object({
   ok: z.boolean(),
@@ -68,8 +69,8 @@ const lspModelOutput = (name: string, output: unknown) => {
 
 export const codeIntelCapabilitiesTool = createTool({
   id: 'code_intel_capabilities',
-  description: 'Inspect configured language-server metadata and runtime capabilities for a file in the current Code workspace.',
-  inputSchema: baseInputSchema,
+  description: toolDescription('code_intel_capabilities'),
+  inputSchema: baseInputSchema('code_intel_capabilities'),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('capabilities', input, context),
   toModelOutput: output => lspModelOutput('code_intel_capabilities', output),
@@ -77,8 +78,8 @@ export const codeIntelCapabilitiesTool = createTool({
 
 export const codeDiagnosticsTool = createTool({
   id: 'code_diagnostics',
-  description: 'Read LSP diagnostics for a file. Diagnostics preserve server source, severity, range, code, and message where provided.',
-  inputSchema: baseInputSchema,
+  description: toolDescription('code_diagnostics'),
+  inputSchema: baseInputSchema('code_diagnostics'),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('diagnostics', input, context),
   toModelOutput: output => lspModelOutput('code_diagnostics', output),
@@ -86,8 +87,8 @@ export const codeDiagnosticsTool = createTool({
 
 export const codeHoverTool = createTool({
   id: 'code_hover',
-  description: 'Read LSP hover information for a zero-based file position.',
-  inputSchema: positionInputSchema,
+  description: toolDescription('code_hover'),
+  inputSchema: positionInputSchema('code_hover'),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('hover', input, context),
   toModelOutput: output => lspModelOutput('code_hover', output),
@@ -95,8 +96,8 @@ export const codeHoverTool = createTool({
 
 export const codeDefinitionTool = createTool({
   id: 'code_definition',
-  description: 'Find LSP definitions for a zero-based file position.',
-  inputSchema: positionInputSchema,
+  description: toolDescription('code_definition'),
+  inputSchema: positionInputSchema('code_definition'),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('definition', input, context),
   toModelOutput: output => lspModelOutput('code_definition', output),
@@ -104,8 +105,8 @@ export const codeDefinitionTool = createTool({
 
 export const codeReferencesTool = createTool({
   id: 'code_references',
-  description: 'Find LSP references for a zero-based file position.',
-  inputSchema: positionInputSchema,
+  description: toolDescription('code_references'),
+  inputSchema: positionInputSchema('code_references'),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('references', input, context),
   toModelOutput: output => lspModelOutput('code_references', output),
@@ -113,8 +114,8 @@ export const codeReferencesTool = createTool({
 
 export const codeSymbolsTool = createTool({
   id: 'code_symbols',
-  description: 'List LSP document symbols for a file.',
-  inputSchema: baseInputSchema,
+  description: toolDescription('code_symbols'),
+  inputSchema: baseInputSchema('code_symbols'),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('symbols', input, context),
   toModelOutput: output => lspModelOutput('code_symbols', output),
@@ -122,9 +123,9 @@ export const codeSymbolsTool = createTool({
 
 export const workspaceSymbolsTool = createTool({
   id: 'workspace_symbols',
-  description: 'Search LSP workspace symbols. Provide any file path in the target workspace so Weave can select the server/root.',
-  inputSchema: baseInputSchema.extend({
-    query: z.string().optional().describe('Workspace symbol query'),
+  description: toolDescription('workspace_symbols'),
+  inputSchema: baseInputSchema('workspace_symbols').extend({
+    query: z.string().optional().describe(toolInputDescription('workspace_symbols', 'query')),
   }),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('workspaceSymbols', input, context),
@@ -133,8 +134,8 @@ export const workspaceSymbolsTool = createTool({
 
 export const codeActionsTool = createTool({
   id: 'code_actions',
-  description: 'List LSP code actions for a file range without applying them.',
-  inputSchema: positionInputSchema.extend({
+  description: toolDescription('code_actions'),
+  inputSchema: positionInputSchema('code_actions').extend({
     range: rangeSchema.optional(),
   }),
   outputSchema: queryOutputSchema,
@@ -144,11 +145,13 @@ export const codeActionsTool = createTool({
 
 export const codeActionPreviewTool = createTool({
   id: 'code_action_preview',
-  description: 'Preview the WorkspaceEdit for an LSP code action. This never applies edits.',
-  inputSchema: positionInputSchema.extend({
+  description: toolDescription('code_action_preview'),
+  inputSchema: positionInputSchema('code_action_preview').extend({
     range: rangeSchema.optional(),
-    action: z.unknown().optional().describe('A CodeAction object returned by code_actions'),
-    actionIndex: z.number().int().min(0).optional().describe('Index from code_actions to preview when action is omitted'),
+    action: z.unknown().optional().describe(toolInputDescription('code_action_preview', 'action')),
+    actionIndex: z.number().int().min(0).optional().describe(
+      toolInputDescription('code_action_preview', 'actionIndex'),
+    ),
   }),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('codeActionPreview', input, context),
@@ -157,9 +160,9 @@ export const codeActionPreviewTool = createTool({
 
 export const renamePreviewTool = createTool({
   id: 'rename_preview',
-  description: 'Preview an LSP rename WorkspaceEdit. This never applies edits.',
-  inputSchema: positionInputSchema.extend({
-    newName: z.string().describe('Replacement symbol name'),
+  description: toolDescription('rename_preview'),
+  inputSchema: positionInputSchema('rename_preview').extend({
+    newName: z.string().describe(toolInputDescription('rename_preview', 'newName')),
   }),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('renamePreview', input, context),
@@ -168,8 +171,8 @@ export const renamePreviewTool = createTool({
 
 export const formatPreviewTool = createTool({
   id: 'format_preview',
-  description: 'Preview LSP document formatting edits. This never applies edits.',
-  inputSchema: baseInputSchema,
+  description: toolDescription('format_preview'),
+  inputSchema: baseInputSchema('format_preview'),
   outputSchema: queryOutputSchema,
   execute: async (input, context) => await runLspQuery('formatPreview', input, context),
   toModelOutput: output => lspModelOutput('format_preview', output),

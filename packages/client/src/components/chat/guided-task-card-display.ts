@@ -1,4 +1,11 @@
 import type { ThreadPlan, ThreadProposal } from '../../stores/chat-store';
+import { proposalWorkflowEnabled } from '../../lib/proposal-workflow';
+
+export const getVisibleGuidedTaskProposal = (proposal: ThreadProposal | undefined) =>
+  proposalWorkflowEnabled ? proposal : undefined;
+
+export const hasVisibleGuidedTask = (plan: ThreadPlan | undefined, proposal: ThreadProposal | undefined) =>
+  Boolean(plan || getVisibleGuidedTaskProposal(proposal));
 
 const currentTaskLine = (plan: ThreadPlan | undefined, proposal: ThreadProposal | undefined) => {
   const activeStep = plan?.plan.find(item => item.status === 'in_progress')

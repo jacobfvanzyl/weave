@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique } from 'drizzle-orm/pg-core';
+import { check, doublePrecision, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique } from 'drizzle-orm/pg-core';
 
 export const weaveSchema = pgSchema('weave');
 
@@ -151,6 +151,75 @@ export const workflowRunEvents = weaveSchema.table(
     primaryKey({ columns: [table.ownerId, table.runId, table.sequence] }),
     unique('workflow_run_events_owner_run_event_id_idx').on(table.ownerId, table.runId, table.eventId),
     index('workflow_run_events_owner_run_created_idx').on(table.ownerId, table.runId, table.createdAt),
+  ],
+);
+
+export const userArtifacts = weaveSchema.table(
+  'user_artifacts',
+  {
+    ownerId: text('owner_id').notNull(),
+    artifactKind: text('artifact_kind').notNull(),
+    name: text('name').notNull(),
+    objectBucket: text('object_bucket').notNull(),
+    objectKey: text('object_key').notNull(),
+    objectPrefix: text('object_prefix'),
+    contentHash: text('content_hash').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    metadata: jsonb('metadata').notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.artifactKind, table.name] }),
+    index('user_artifacts_owner_kind_updated_idx').on(table.ownerId, table.artifactKind, table.updatedAt),
+    check('user_artifacts_kind_check', sql`${table.artifactKind} in ('prompt', 'skill')`),
+  ],
+);
+
+export const threadCompactions = weaveSchema.table(
+  'thread_compactions',
+  {
+    id: text('id').primaryKey(),
+    resourceId: text('resource_id').notNull(),
+    threadId: text('thread_id').notNull(),
+    generation: integer('generation').notNull(),
+    previousCompactionId: text('previous_compaction_id'),
+    trigger: text('trigger').notNull(),
+    status: text('status').notNull(),
+    instructions: text('instructions'),
+    summary: text('summary'),
+    compactedThroughMessageId: text('compacted_through_message_id'),
+    compactedThroughCreatedAt: timestamp('compacted_through_created_at', { withTimezone: true }),
+    compactedMessageCount: integer('compacted_message_count'),
+    firstRetainedMessageId: text('first_retained_message_id'),
+    conversationModel: text('conversation_model').notNull(),
+    compactionModel: text('compaction_model').notNull(),
+    reasoningEffort: text('reasoning_effort').notNull(),
+    advertisedContextTokens: integer('advertised_context_tokens').notNull(),
+    contextLimitPercent: doublePrecision('context_limit_percent').notNull(),
+    contextLimitTokens: integer('context_limit_tokens').notNull(),
+    recentTailTokens: integer('recent_tail_tokens').notNull(),
+    retryDeltaTokens: integer('retry_delta_tokens').notNull(),
+    compactionAdvertisedContextTokens: integer('compaction_advertised_context_tokens').notNull(),
+    compactionContextLimitTokens: integer('compaction_context_limit_tokens').notNull(),
+    summaryOutputTokens: integer('summary_output_tokens').notNull(),
+    sourceTokens: integer('source_tokens'),
+    summaryTokens: integer('summary_tokens'),
+    projectedTokens: integer('projected_tokens'),
+    sourceFingerprint: text('source_fingerprint'),
+    error: text('error'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    unique('thread_compactions_resource_thread_generation_idx').on(
+      table.resourceId,
+      table.threadId,
+      table.generation,
+    ),
+    index('thread_compactions_resource_thread_created_idx').on(table.resourceId, table.threadId, table.createdAt),
+    check('thread_compactions_trigger_check', sql`${table.trigger} in ('manual', 'automatic')`),
+    check('thread_compactions_status_check', sql`${table.status} in ('running', 'completed', 'failed', 'cancelled')`),
   ],
 );
 

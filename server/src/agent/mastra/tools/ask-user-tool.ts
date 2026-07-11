@@ -1,20 +1,25 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput } from './model-output';
 
 const idSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/);
 
 export const askUserOptionSchema = z.object({
-  id: idSchema.describe('Stable option id. Use short kebab_case, snake_case, or camelCase.'),
-  label: z.string().trim().min(1).max(96).describe('Short user-facing option label. Put the recommended option first.'),
-  description: z.string().trim().min(1).max(240).optional().describe('One concise sentence explaining the tradeoff.'),
+  id: idSchema.describe(toolInputDescription('ask_user', 'questions[].options[].id')),
+  label: z.string().trim().min(1).max(96).describe(toolInputDescription('ask_user', 'questions[].options[].label')),
+  description: z.string().trim().min(1).max(240).optional().describe(
+    toolInputDescription('ask_user', 'questions[].options[].description'),
+  ),
 });
 
 export const askUserQuestionSchema = z.object({
-  id: idSchema.describe('Stable question id used to map the user answer.'),
-  header: z.string().trim().min(1).max(32).optional().describe('Short section label for this question.'),
-  question: z.string().trim().min(1).max(280).describe('The question to ask the user.'),
-  options: z.array(askUserOptionSchema).min(2).max(4).describe('Two to four meaningful, mutually exclusive options.'),
+  id: idSchema.describe(toolInputDescription('ask_user', 'questions[].id')),
+  header: z.string().trim().min(1).max(32).optional().describe(toolInputDescription('ask_user', 'questions[].header')),
+  question: z.string().trim().min(1).max(280).describe(toolInputDescription('ask_user', 'questions[].question')),
+  options: z.array(askUserOptionSchema).min(2).max(4).describe(
+    toolInputDescription('ask_user', 'questions[].options'),
+  ),
 }).superRefine((question, context) => {
   const optionIds = new Set<string>();
   for (const option of question.options) {
@@ -30,7 +35,7 @@ export const askUserQuestionSchema = z.object({
 });
 
 export const askUserInputSchema = z.object({
-  questions: z.array(askUserQuestionSchema).min(1).max(3).describe('One to three concise structured questions.'),
+  questions: z.array(askUserQuestionSchema).min(1).max(3).describe(toolInputDescription('ask_user', 'questions')),
 }).superRefine((input, context) => {
   const questionIds = new Set<string>();
   for (const question of input.questions) {
@@ -167,13 +172,7 @@ export const buildAskUserOutput = (input: AskUserInput, resumeData: AskUserResum
 
 export const askUserTool = createTool({
   id: 'ask_user',
-  description: [
-    'Ask the user one to three structured clarification questions and pause until they answer.',
-    'Use only when missing information materially changes the plan, implementation, or tradeoff.',
-    'Also use when the user explicitly asks to test, demonstrate, show, or use this tool; in that case ask a harmless sample question.',
-    'Do not use for secrets, credentials, permission prompts, or routine status updates.',
-    'Put the recommended option first when there is a clear default; the UI always provides a custom answer path.',
-  ].join(' '),
+  description: toolDescription('ask_user'),
   inputSchema: askUserInputSchema,
   suspendSchema: askUserSuspendSchema,
   resumeSchema: askUserResumeSchema,

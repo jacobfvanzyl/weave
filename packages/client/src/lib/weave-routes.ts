@@ -26,6 +26,7 @@ export const weaveRoutePaths = {
     threadMessages: (threadId: string) => `/chat/threads/${encodePath(threadId)}/messages`,
     threadContextUsage: (threadId: string, query?: QueryInput) =>
       appendQuery(`/chat/threads/${encodePath(threadId)}/context-usage`, query),
+    compactThread: (threadId: string) => `/chat/threads/${encodePath(threadId)}/compact`,
     runs: () => '/chat/runs',
     run: (threadId: string) => `/chat/runs/${encodePath(threadId)}`,
     cancelRun: (threadId: string) => `/chat/runs/${encodePath(threadId)}/cancel`,
@@ -112,6 +113,7 @@ export const weaveRoutes = {
     threadMessages: (threadId: string) => url(weaveRoutePaths.chat.threadMessages(threadId)),
     threadContextUsage: (threadId: string, query?: QueryInput) =>
       url(weaveRoutePaths.chat.threadContextUsage(threadId, query)),
+    compactThread: (threadId: string) => url(weaveRoutePaths.chat.compactThread(threadId)),
     runs: () => url(weaveRoutePaths.chat.runs()),
     run: (threadId: string) => url(weaveRoutePaths.chat.run(threadId)),
     cancelRun: (threadId: string) => url(weaveRoutePaths.chat.cancelRun(threadId)),

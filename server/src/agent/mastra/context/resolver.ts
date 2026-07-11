@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { userArtifactRepository } from '../../../modules/user-artifacts/repository';
 import { productProjectRepository } from '../../../products/project-repository';
-import { portalRepository } from '../../../portal/store';
 import { portalToolScope, type PortalToolTarget } from '../../../services/providers/portal-provider';
 import { toolService } from '../../../services/tool-runtime';
 import { callerForOwner, ServiceError } from '../../../services/types';
@@ -17,7 +17,7 @@ export type WeaveContextFile = {
 };
 
 export type WeaveContextSnapshot = {
-  scope: 'global' | 'project';
+  scope: 'user' | 'project';
   portalId?: string;
   basePath?: string;
   workspacePath?: string;
@@ -46,7 +46,7 @@ export type RuntimeProjectContext = {
 
 export type ResolvedAgentContext = RuntimeProjectContext & {
   config: AgentRuntimeConfig;
-  globalSnapshot?: WeaveContextSnapshot;
+  userSnapshot?: WeaveContextSnapshot;
 };
 
 export type AgentContextInput = {
@@ -59,8 +59,7 @@ export type AgentContextInput = {
 
 const agentId = 'mageHandAgent';
 const projectThreadId = (projectId: string) => `__project__${projectId}`;
-const portalSettingsThreadIdPrefix = '__portal_settings__';
-const globalSnapshotRefreshMs = 30_000;
+const userSnapshotRefreshMs = 30_000;
 const projectSnapshotRefreshMs = 30_000;
 
 export const agentContextRequestContextKey = 'weave.agentContext';
@@ -71,21 +70,16 @@ export const singletonBaseInstructions = readFileSync(new URL('./base-instructio
 
 export const singletonAgentConfig: AgentRuntimeConfig = {
   instructions: singletonBaseInstructions,
-  model: process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.5',
+  model: process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.6-sol',
   reasoningEffort: 'high',
   serviceTier: undefined,
   memory: {},
 };
 
-const globalSnapshots = new Map<string, WeaveContextSnapshot>();
+const userSnapshots = new Map<string, WeaveContextSnapshot>();
 const projectSnapshots = new Map<string, WeaveContextSnapshot>();
 
 const nowIso = () => new Date().toISOString();
-
-const hashText = async (value: string) => {
-  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(bytes)).slice(0, 12).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-};
 
 const getMemory = async (mastra: any) => {
   const agent = await mastra?.getAgent(agentId);
@@ -99,26 +93,10 @@ const stale = (snapshot: WeaveContextSnapshot | undefined, refreshMs: number) =>
 
 const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
-const getLegacyPrimaryPortalId = async (memory: any, resourceId: string) => {
-  const threadId = `${portalSettingsThreadIdPrefix}${await hashText(resourceId)}`;
-  const thread = await memory.getThreadById({ threadId }).catch(() => undefined);
-  const metadata = thread?.metadata as Record<string, unknown> | undefined;
-  return optionalString(metadata?.primaryPortalId);
-};
-
-const getPrimaryPortalId = async (memory: any, resourceId: string) => {
-  const stored = await portalRepository.getPrimaryPortalId(resourceId);
-  if (stored) return stored;
-
-  const legacy = await getLegacyPrimaryPortalId(memory, resourceId);
-  if (legacy) await portalRepository.setPrimaryPortalId(resourceId, legacy).catch(() => undefined);
-  return legacy;
-};
-
 const discoverPortalContext = async (
   resourceId: string,
   target: PortalToolTarget,
-  scope: 'global' | 'project',
+  scope: 'project',
   args: Record<string, unknown> = {},
 ) => {
   const caller = callerForOwner(resourceId, 'agent');
@@ -176,17 +154,21 @@ const discoverPortalContext = async (
   } satisfies WeaveContextSnapshot;
 };
 
-const loadGlobalSnapshot = async (memory: any, resourceId: string) => {
-  const cached = globalSnapshots.get(resourceId);
-  if (!stale(cached, globalSnapshotRefreshMs)) return cached;
+const loadUserSnapshot = async (resourceId: string) => {
+  const cached = userSnapshots.get(resourceId);
+  if (!stale(cached, userSnapshotRefreshMs)) return cached;
 
-  const primaryPortalId = await getPrimaryPortalId(memory, resourceId);
   try {
-    const snapshot = await discoverPortalContext(resourceId, { portalId: primaryPortalId }, 'global');
-    globalSnapshots.set(resourceId, snapshot);
+    const snapshot = {
+      scope: 'user' as const,
+      basePath: `users/${encodeURIComponent(resourceId)}`,
+      files: await userArtifactRepository.readUserContextFiles(resourceId),
+      checkedAt: nowIso(),
+    } satisfies WeaveContextSnapshot;
+    userSnapshots.set(resourceId, snapshot);
     return snapshot;
   } catch (error) {
-    console.warn('[agent-context] global context discovery failed', error);
+    console.warn('[agent-context] user context discovery failed', error);
     return cached;
   }
 };
@@ -309,15 +291,15 @@ const getRuntimeProjectContext = async (
 
 export const resolveAgentContext = async (input: AgentContextInput): Promise<ResolvedAgentContext> => {
   const memory = await getMemory(input.mastra);
-  const [globalSnapshot, projectContext] = await Promise.all([
-    loadGlobalSnapshot(memory, input.resourceId),
+  const [userSnapshot, projectContext] = await Promise.all([
+    loadUserSnapshot(input.resourceId),
     getRuntimeProjectContext(memory, input.resourceId, input),
   ]);
 
   return {
     ...projectContext,
     config: singletonAgentConfig,
-    globalSnapshot,
+    userSnapshot,
   };
 };
 

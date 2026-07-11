@@ -1,9 +1,9 @@
 # Weave Portal
 
-Deno daemon for host-side Portal tools, terminal PTYs, and Desktop/Web bridging.
+Deno daemon for host-side Portal tools, terminal sessions, and Desktop/Web bridging.
 
-Portal owns PTY sessions on macOS/Linux through a small Rust FFI library built
-with `portable-pty`. TypeScript keeps session routing, replay, batching, and the
+Portal owns terminal sessions through a dedicated tmux server. TypeScript keeps
+session routing, tmux control-mode streaming, snapshot replay, batching, and the
 local/WebSocket protocol.
 
 ## Commands
@@ -60,16 +60,16 @@ Portal itself with the same shared home.
 
 Use `--no-control` for remote/headless Portal runs that Desktop should not adopt.
 
-## Native PTY
+## Terminal Backend
 
-Development builds compile the native PTY library first:
+Portal terminals require `tmux` on `PATH`. Portal creates a private `_weave`
+tmux session under `${WEAVE_PORTAL_HOME}/tmux`, attaches through tmux control
+mode for live output/input/resize, and uses `capture-pane` only as an attach-time
+snapshot after resizing the pane.
 
-```bash
-deno task --config portal/deno.json native
-```
-
-`WEAVE_PORTAL_PTY_LIB_PATH` can point Portal at a locally built library while
-iterating on Rust.
+The tmux pane `TERM` defaults to `tmux-256color` when local terminfo supports it
+and falls back to `screen-256color`. Set `WEAVE_PORTAL_TMUX_TERM` to override
+that selection while debugging local terminfo problems.
 
 ## Window Streaming
 

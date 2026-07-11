@@ -9,7 +9,7 @@ import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
-import { guidedTaskDisplay, isPlanComplete } from './guided-task-card-display';
+import { getVisibleGuidedTaskProposal, guidedTaskDisplay, hasVisibleGuidedTask, isPlanComplete } from './guided-task-card-display';
 
 const PlanStatusGlyph = ({ status, isBusy }: { status: PlanStepStatus; isBusy?: boolean }) => {
   if (status === 'completed') {
@@ -49,48 +49,49 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
   const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
   const editorSlotMode = useWorkspaceSurfaceStore(state => state.editorSlotMode);
   const activeProposalPath = useWorkspaceSurfaceStore(state => state.activeProposalPath);
+  const visibleProposal = getVisibleGuidedTaskProposal(proposal);
 
-  if (!plan && !proposal) return null;
+  if (!hasVisibleGuidedTask(plan, proposal)) return null;
 
   const complete = isPlanComplete(plan);
   const blockedCount = plan?.plan.filter(item => item.status === 'blocked').length ?? 0;
-  const display = guidedTaskDisplay(plan, proposal, expanded);
+  const display = guidedTaskDisplay(plan, visibleProposal, expanded);
   const showBodyHeader = Boolean(display.bodyTitle || display.summary);
-  const showProposalPathWarning = Boolean(proposal && !proposal.path);
+  const showProposalPathWarning = Boolean(visibleProposal && !visibleProposal.path);
   const hasSubmittedProposal = Boolean(
-    proposal?.path
-      && submittedProposalImplementation?.proposalPath === proposal.path
+    visibleProposal?.path
+      && submittedProposalImplementation?.proposalPath === visibleProposal.path
       && (
-        !proposal.contentHash
+        !visibleProposal.contentHash
         || !submittedProposalImplementation.proposalContentHash
-        || proposal.contentHash === submittedProposalImplementation.proposalContentHash
+        || visibleProposal.contentHash === submittedProposalImplementation.proposalContentHash
       ),
   );
-  const hasProposalReview = canViewProposalReview(proposal) && !hasSubmittedProposal && !isProposalComplete(proposal);
-  const pendingApprovalCount = getPendingProposalReviewCount(proposal);
-  const isDraftProposal = proposal?.status === 'draft';
+  const hasProposalReview = canViewProposalReview(visibleProposal) && !hasSubmittedProposal && !isProposalComplete(visibleProposal);
+  const pendingApprovalCount = getPendingProposalReviewCount(visibleProposal);
+  const isDraftProposal = visibleProposal?.status === 'draft';
   const isProposalReviewOpen = Boolean(
-    proposal?.path
+    visibleProposal?.path
       && editorSlotMode === 'proposal_review'
-      && activeProposalPath === proposal.path
+      && activeProposalPath === visibleProposal.path
       && activeSurface.kind === 'thread'
       && activeSurface.threadId === threadId,
   );
 
   const openPlan = () => {
-    if (!plan?.path || !threadWorkspaceId) return;
+    if (!plan?.artifactPath || !threadWorkspaceId) return;
     requestEditorFollow({
       threadId,
       workspaceId: threadWorkspaceId,
-      path: plan.path,
+      path: plan.artifactPath,
       line: 1,
       toolCallId: 'plan-artifact',
     });
   };
 
   const openReview = () => {
-    if (!proposal?.path) return;
-    openProposalReview(proposal.path);
+    if (!visibleProposal?.path) return;
+    openProposalReview(visibleProposal.path);
   };
 
   return (
@@ -115,7 +116,7 @@ export const GuidedTaskCard = ({ threadId }: GuidedTaskCardProps) => {
             {plan.completed}/{plan.total}
           </Badge>
         ) : null}
-        {plan?.path ? (
+        {plan?.artifactPath ? (
           <Button size="xs" variant="ghost" type="button" onClick={openPlan}>
             <FileText size={14} />
             Plan

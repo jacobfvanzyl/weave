@@ -1,9 +1,10 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { FitAddon, Ghostty, Terminal } from 'ghostty-web';
-import type { ITheme } from 'ghostty-web';
-import ghosttyWasmUrl from 'ghostty-web/ghostty-vt.wasm?url';
+import { Terminal } from '@xterm/xterm';
+import type { ITheme } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
 
-type GhosttyTerminalViewProps = {
+type TerminalRendererViewProps = {
   autoFocus?: boolean;
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
@@ -11,7 +12,7 @@ type GhosttyTerminalViewProps = {
   onTitleChange?: (title: string) => void;
 };
 
-export type GhosttyTerminalHandle = {
+export type TerminalRendererHandle = {
   fit: () => TerminalGridSize | undefined;
   focus: () => void;
   getSize: () => TerminalGridSize | undefined;
@@ -22,78 +23,6 @@ export type GhosttyTerminalHandle = {
 type TerminalGridSize = {
   cols: number;
   rows: number;
-};
-
-type TerminalCursorStyle = 'block' | 'underline' | 'bar';
-
-type TerminalCursorMode = {
-  blink: boolean;
-  style: TerminalCursorStyle;
-};
-
-let ghosttyPromise: Promise<Ghostty> | undefined;
-
-const ensureGhosttyReady = () => {
-  ghosttyPromise ??= Ghostty.load(ghosttyWasmUrl);
-  return ghosttyPromise;
-};
-
-const cursorStyleSequencePattern = /\x1b\[(\d*) q/g;
-const cursorStyleSequencePrefixPattern = /^\x1b(?:\[(?:\d{0,3}(?: )?)?)?$/;
-const maxCursorStyleSequencePrefixLength = 6;
-
-const getCursorMode = (rawMode: string): TerminalCursorMode | undefined => {
-  const mode = rawMode === '' ? 0 : Number(rawMode);
-  if (!Number.isInteger(mode)) return undefined;
-
-  switch (mode) {
-    case 0:
-    case 1:
-      return { blink: true, style: 'block' };
-    case 2:
-      return { blink: false, style: 'block' };
-    case 3:
-      return { blink: true, style: 'underline' };
-    case 4:
-      return { blink: false, style: 'underline' };
-    case 5:
-      return { blink: true, style: 'bar' };
-    case 6:
-      return { blink: false, style: 'bar' };
-    default:
-      return undefined;
-  }
-};
-
-const getIncompleteCursorStyleSequence = (data: string) => {
-  const maxLength = Math.min(data.length, maxCursorStyleSequencePrefixLength);
-  for (let length = maxLength; length > 0; length--) {
-    const suffix = data.slice(-length);
-    if (cursorStyleSequencePrefixPattern.test(suffix)) return suffix;
-  }
-
-  return '';
-};
-
-const applyCursorStyleSequences = (terminal: Terminal, data: string, incompleteSequence: { current: string }) => {
-  const input = incompleteSequence.current + data;
-  let nextCursorMode: TerminalCursorMode | undefined;
-
-  cursorStyleSequencePattern.lastIndex = 0;
-  for (const match of input.matchAll(cursorStyleSequencePattern)) {
-    nextCursorMode = getCursorMode(match[1] ?? '');
-  }
-
-  incompleteSequence.current = getIncompleteCursorStyleSequence(input);
-
-  if (!nextCursorMode) return;
-  terminal.options.cursorStyle = nextCursorMode.style;
-  terminal.options.cursorBlink = nextCursorMode.blink;
-};
-
-const writeTerminalData = (terminal: Terminal, data: string, incompleteCursorSequence: { current: string }) => {
-  applyCursorStyleSequences(terminal, data, incompleteCursorSequence);
-  terminal.write(data);
 };
 
 const fitTerminal = (
@@ -194,13 +123,12 @@ const loadTerminalFontConfig = async () => {
   return config;
 };
 
-export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerminalViewProps>(
+export const XtermTerminalView = forwardRef<TerminalRendererHandle, TerminalRendererViewProps>(
   ({ autoFocus = true, onInput, onResize, onError, onTitleChange }, ref) => {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const pendingWritesRef = useRef<string[]>([]);
-    const incompleteCursorSequenceRef = useRef('');
 
     useImperativeHandle(ref, () => ({
       fit: () => fitTerminal(terminalRef.current, fitAddonRef.current),
@@ -210,10 +138,9 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
         : undefined,
       resetAndWrite: data => {
         const terminal = terminalRef.current;
-        incompleteCursorSequenceRef.current = '';
         if (terminal) {
           terminal.reset();
-          writeTerminalData(terminal, data, incompleteCursorSequenceRef);
+          terminal.write(data);
           return;
         }
 
@@ -222,7 +149,7 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
       write: data => {
         const terminal = terminalRef.current;
         if (terminal) {
-          writeTerminalData(terminal, data, incompleteCursorSequenceRef);
+          terminal.write(data);
           return;
         }
 
@@ -262,14 +189,10 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
       };
 
       const setup = async () => {
-        const [ghostty, fontConfig] = await Promise.all([
-          ensureGhosttyReady(),
-          loadTerminalFontConfig(),
-        ]);
+        const fontConfig = await loadTerminalFontConfig();
         if (disposed || !containerRef.current) return;
 
         terminal = new Terminal({
-          ghostty,
           cols: 80,
           rows: 24,
           cursorBlink: true,
@@ -290,7 +213,6 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
         const titleSubscription = terminal.onTitleChange(title => onTitleChange?.(title));
 
         const fittedSize = fitTerminal(terminal, fitAddon);
-        fitAddon.observeResize();
         if (fittedSize) onResize(fittedSize.cols, fittedSize.rows);
         terminalResizeObserver = new ResizeObserver(() => {
           emitFittedSize();
@@ -302,7 +224,7 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
         const pendingWrites = pendingWritesRef.current;
         pendingWritesRef.current = [];
         for (const data of pendingWrites) {
-          writeTerminalData(terminal, data, incompleteCursorSequenceRef);
+          terminal.write(data);
         }
 
         if (autoFocus) terminal.focus();
@@ -335,7 +257,6 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
         initialFitTimers.forEach(timer => window.clearTimeout(timer));
         terminalRef.current = null;
         fitAddonRef.current = null;
-        incompleteCursorSequenceRef.current = '';
         disposeSubscriptions?.();
         fitAddon?.dispose();
         terminal?.dispose();
@@ -345,7 +266,7 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
     return (
       <div
         ref={containerRef}
-        className="relative grid h-full min-h-0 w-full place-items-center overflow-hidden outline-none select-text"
+        className="relative h-full min-h-0 w-full overflow-hidden outline-none select-text"
         data-weave-terminal-view
         data-weave-text-surface="true"
         style={{ caretColor: 'transparent' }}
@@ -355,4 +276,4 @@ export const GhosttyTerminalView = forwardRef<GhosttyTerminalHandle, GhosttyTerm
   },
 );
 
-GhosttyTerminalView.displayName = 'GhosttyTerminalView';
+XtermTerminalView.displayName = 'XtermTerminalView';

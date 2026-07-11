@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { guidedTaskDisplay } from '../../packages/client/src/components/chat/guided-task-card-display';
+import { guidedTaskDisplay, hasVisibleGuidedTask } from '../../packages/client/src/components/chat/guided-task-card-display';
 import type { ThreadPlan, ThreadProposal } from '../../packages/client/src/stores/chat-store';
 
 const plan = (overrides: Partial<ThreadPlan> = {}): ThreadPlan => ({
@@ -67,5 +67,10 @@ describe('guided task card display', () => {
     }), true)).toMatchObject({
       summary: undefined,
     });
+  });
+
+  it('hides proposal-only guided cards while the proposal workflow is disabled', () => {
+    expect(hasVisibleGuidedTask(undefined, proposal())).toBe(false);
+    expect(hasVisibleGuidedTask(plan(), proposal())).toBe(true);
   });
 });

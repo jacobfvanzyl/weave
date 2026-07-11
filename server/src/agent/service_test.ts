@@ -1,7 +1,17 @@
-import { extractSuspendedAskUserRunIdsFromWorkflowSnapshots, MastraAgentService } from './service.ts';
+import {
+  extractSuspendedAskUserRunIdsFromWorkflowSnapshots,
+  MastraAgentService,
+  threadCompactionEnabled,
+} from './service.ts';
 import { AgentRunCoordinator } from './run-coordinator.ts';
 import type { ResolvedAgentContext } from './mastra/context/resolver.ts';
 import { __modelOptionsTest } from './model-options.ts';
+
+// Service tests that do not provide a compaction repository keep the feature
+// disabled explicitly; production defaults to enabled when the variable is absent.
+if (Deno.env.get('WEAVE_THREAD_COMPACTION') === undefined) {
+  Deno.env.set('WEAVE_THREAD_COMPACTION', 'false');
+}
 
 const assert: (condition: unknown, message: string) => asserts condition = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -48,7 +58,7 @@ const resolvedContext = (): ResolvedAgentContext => ({
   }],
   config: {
     instructions: 'base',
-    model: 'openai/gpt-5.5',
+    model: 'openai/gpt-5.6-sol',
     reasoningEffort: 'xhigh',
     serviceTier: 'priority',
     memory: {
@@ -70,6 +80,21 @@ const streamOf = (...chunks: unknown[]) =>
       controller.close();
     },
   });
+
+Deno.test('thread compaction defaults to enabled and can be explicitly disabled', () => {
+  const previous = Deno.env.get('WEAVE_THREAD_COMPACTION');
+  try {
+    Deno.env.delete('WEAVE_THREAD_COMPACTION');
+    assertEquals(threadCompactionEnabled(), true);
+    Deno.env.set('WEAVE_THREAD_COMPACTION', 'false');
+    assertEquals(threadCompactionEnabled(), false);
+    Deno.env.set('WEAVE_THREAD_COMPACTION', '0');
+    assertEquals(threadCompactionEnabled(), false);
+  } finally {
+    if (previous === undefined) Deno.env.delete('WEAVE_THREAD_COMPACTION');
+    else Deno.env.set('WEAVE_THREAD_COMPACTION', previous);
+  }
+});
 
 Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider options, and context', async () => {
   const originalInfo = console.info;
@@ -96,7 +121,7 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
       abortSignal: new AbortController().signal,
       submittedUserMessages: [{ id: 'user-1', role: 'user' }],
       params: {
-        model: 'openai/gpt-5.5',
+        model: 'openai/gpt-5.6-sol',
         providerOptions: { openai: { existing: true } },
         memory: { thread: 'thread-1' },
         system: 'Caller system',
@@ -108,8 +133,9 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
     assertEquals(captured.options.agentId, 'mage-hand');
     assertEquals(captured.options.version, 'v6');
     assertEquals(captured.options.sendReasoning, true);
-    assertEquals(captured.options.defaultOptions, { maxSteps: 1000 });
-    assertEquals(captured.options.params.model, 'chatgpt/codex/gpt-5.5');
+    assertEquals(captured.options.defaultOptions, { maxSteps: 64 });
+    assertEquals(captured.options.params.maxSteps, 64);
+    assertEquals(captured.options.params.model, 'chatgpt/codex/gpt-5.6-sol');
     assertEquals(captured.options.params.providerOptions.openai, {
       existing: true,
       reasoningEffort: 'xhigh',
@@ -118,6 +144,10 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
     assertEquals(captured.options.params.providerOptions.mastraContextUsage, {
       threadId: 'thread-1',
       resourceId: 'resource-1',
+      modelId: 'openai/gpt-5.6-sol',
+      advertisedContextTokens: 372_000,
+      contextLimitPercent: 80,
+      maxTokens: 297_600,
     });
     assertEquals(captured.options.params.memory.thread, 'thread-1');
     assertEquals(captured.options.params.memory.resource, 'resource-1');
@@ -271,6 +301,34 @@ Deno.test('MastraAgentService.sendChatMessage preserves active delivery and idle
     runId: 'mastra-run-1',
     messageId: 'signal-1',
   });
+});
+
+Deno.test('MastraAgentService.sendChatMessage rejects stale guarded thread runs before Mastra delivery', async () => {
+  let getAgentCalled = false;
+  const service = new MastraAgentService(
+    {
+      getAgent: async () => {
+        getAgentCalled = true;
+        return undefined;
+      },
+    } as any,
+    createCoordinator(),
+    async () => streamOf() as any,
+    async () => resolvedContext(),
+  );
+
+  const result = await service.sendChatMessage({
+    resourceId: 'resource-1',
+    threadId: 'thread-1',
+    activeThreadRunId: 'run-1',
+    message: { contents: [{ type: 'text', text: 'steer' }] } as any,
+  });
+
+  assertEquals(result, {
+    accepted: false,
+    reason: 'stale_run',
+  });
+  assertEquals(getAgentCalled, false);
 });
 
 Deno.test('MastraAgentService.runPrompt invokes Mastra without chat thread semantics', async () => {
@@ -439,6 +497,68 @@ Deno.test('MastraAgentService.listModels exposes the shared model config contrac
   }
 });
 
+Deno.test('MastraAgentService.listModels defaults to Sol with GPT-5.6 subscription metadata', async () => {
+  __modelOptionsTest.clearCache();
+  const originalFetch = globalThis.fetch;
+  const originalDefault = Deno.env.get('WEAVE_DEFAULT_MODEL');
+  const originalOptions = Deno.env.get('WEAVE_MODEL_OPTIONS');
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          openai: {
+            name: 'OpenAI',
+            models: {
+              'gpt-5.6-sol': { name: 'GPT-5.6 Sol', limit: { context: 1_050_000 } },
+              'gpt-5.6-terra': { name: 'GPT-5.6 Terra', limit: { context: 1_050_000 } },
+              'gpt-5.6-luna': { name: 'GPT-5.6 Luna', limit: { context: 1_050_000 } },
+              'gpt-5.5': { name: 'GPT-5.5', limit: { context: 1_050_000 } },
+            },
+          },
+        }),
+        { status: 200 },
+      ),
+    )) as typeof fetch;
+  Deno.env.delete('WEAVE_DEFAULT_MODEL');
+  Deno.env.delete('WEAVE_MODEL_OPTIONS');
+  const service = new MastraAgentService({} as any, createCoordinator(), async () => streamOf() as any);
+
+  try {
+    const config = await service.listModels();
+    assertEquals(config.defaultModel, 'openai/gpt-5.6-sol');
+    assertEquals(
+      config.options.map((option) => option.id),
+      [
+        'openai/gpt-5.6-sol',
+        'openai/gpt-5.6-terra',
+        'openai/gpt-5.6-luna',
+        'openai/gpt-5.5',
+      ],
+    );
+
+    for (const option of config.options.slice(0, 3)) {
+      assertEquals(option.contextWindow, 372_000);
+      assertEquals(option.supportedReasoningEfforts?.map((effort) => effort.effort), [
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ]);
+      assertEquals(option.defaultReasoningEffort, 'medium');
+      assertEquals(option.serviceTiers?.map((tier) => tier.id), ['priority']);
+    }
+    assertEquals(config.options[0]?.label, 'OpenAI/GPT-5.6 Sol');
+  } finally {
+    __modelOptionsTest.clearCache();
+    globalThis.fetch = originalFetch;
+    if (originalDefault === undefined) Deno.env.delete('WEAVE_DEFAULT_MODEL');
+    else Deno.env.set('WEAVE_DEFAULT_MODEL', originalDefault);
+    if (originalOptions === undefined) Deno.env.delete('WEAVE_MODEL_OPTIONS');
+    else Deno.env.set('WEAVE_MODEL_OPTIONS', originalOptions);
+  }
+});
+
 Deno.test('MastraAgentService chat thread state methods keep memory access behind service', async () => {
   const threadMessages = [{
     id: 'message-1',
@@ -550,8 +670,13 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
     threadMessages,
   );
 
-  const usage = await service.getChatThreadContextUsage({ resourceId: 'resource-1', threadId: 'thread-1' });
-  assertEquals(usage.contextWindow, 1000);
+  const usage = await service.getChatThreadContextUsage({
+    resourceId: 'resource-1',
+    threadId: 'thread-1',
+    modelId: 'openai/gpt-5.6-luna',
+  });
+  assertEquals(usage.contextWindow, 372_000);
+  assertEquals(usage.contextLimitTokens, 297_600);
   assertEquals(usage.source, 'estimate');
   assert(usage.tokens > 0, 'expected token estimate');
 

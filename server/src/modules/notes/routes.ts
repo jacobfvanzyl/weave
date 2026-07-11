@@ -1,5 +1,7 @@
 import { mountRoute } from '../../server/routes';
 import { registerAgentContribution } from '../../agent/contributions';
+import { contributionDescription } from '../../instructions/contribution-instructions';
+import { toolDescription } from '../../instructions/tool-instructions';
 import type { ServerModule } from '../types';
 import { productProjectRoutes } from '../code/routes/projects';
 import { createNotesJupyterRoutes } from './jupyter-routes';
@@ -14,24 +16,18 @@ const notesProjectPath = (path: string) =>
 registerAgentContribution({
   moduleId: 'notes',
   tools: [
-    { id: 'file_index', description: 'Index the current Notes workspace files.' },
-    {
-      id: 'file_read',
-      description: 'Read files from the current Notes workspace, including Markdown and .cpr documents.',
-    },
-    {
-      id: 'file_write',
-      description: 'Write files in the current Notes workspace, including Markdown and .cpr documents.',
-    },
-    { id: 'file_mkdir', description: 'Create folders in the current Notes workspace.' },
-    { id: 'file_move', description: 'Move files or folders in the current Notes workspace.' },
-    { id: 'file_delete', description: 'Delete files or folders in the current Notes workspace.' },
-    { id: 'file_upload', description: 'Upload attachments into the current Notes workspace.' },
+    { id: 'file_index', description: toolDescription('file_index') },
+    { id: 'file_read', description: toolDescription('file_read') },
+    { id: 'file_write', description: toolDescription('file_write') },
+    { id: 'file_mkdir', description: toolDescription('file_mkdir') },
+    { id: 'file_move', description: toolDescription('file_move') },
+    { id: 'file_delete', description: toolDescription('file_delete') },
+    { id: 'file_upload', description: toolDescription('file_upload') },
   ],
   sources: [
     {
       id: 'notes.workspace-files.context',
-      description: 'Notes workspace-file context resolved through the configured notes storage backend.',
+      description: contributionDescription('notes.workspace-files.context'),
     },
   ],
 });

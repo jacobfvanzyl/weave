@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import { archiveServerThread, createProjectThread, createServerThread, deleteServerThread, renameServerThread, type RemovedWorkspaceSnapshot } from '../lib/chat-state-api';
 import { createClientAppPersistStorage, getClientAppStorageKey } from '../lib/client-app';
 import { createClientId } from '../lib/client-id';
+import { selectPreferredThreadPlan, shouldAcceptThreadPlanUpdate } from '../lib/plan-state';
 import { selectPreferredThreadProposal, shouldAcceptThreadProposalUpdate } from '../lib/proposal-review-state';
 import {
   createThreadOpenabilityContext,
@@ -47,15 +48,13 @@ export type ThreadPlanStep = {
 };
 
 export type ThreadPlan = {
-  id?: string;
   title?: string;
-  path?: string;
+  artifactPath?: string;
   status?: PlanStepStatus;
   plan: ThreadPlanStep[];
   completed: number;
   total: number;
   updatedAt: string;
-  contentHash?: string;
   isBusy?: boolean;
 };
 
@@ -106,7 +105,7 @@ export type SubmittedProposalImplementation = {
   requestedAt: string;
 };
 
-export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type ServiceTier = 'auto' | 'default' | 'flex' | 'priority';
 
 type PersistedChatState = {
@@ -185,7 +184,8 @@ const isDraftThread = (thread: ChatThread | undefined) => thread?.draft === true
 const normalizeReasoningEffort = (value: unknown): ReasoningEffort =>
   value === 'off' || value === 'minimal'
     ? 'low'
-    : value === 'none' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh'
+    : value === 'none' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' ||
+        value === 'max'
     ? value
     : 'medium';
 
@@ -283,6 +283,7 @@ export const useChatStore = create<ChatState>()(
       setThreadPlan: (threadId, plan, options = {}) =>
         set(state => {
           const previous = state.threadPlans[threadId];
+          if (!shouldAcceptThreadPlanUpdate(previous, plan)) return state;
           const hasBlockedStep = plan.plan.some(item => item.status === 'blocked') || plan.status === 'blocked';
           const isComplete = plan.total > 0 && plan.completed >= plan.total;
           const wasComplete = Boolean(previous && previous.total > 0 && previous.completed >= previous.total);
@@ -427,7 +428,8 @@ export const useChatStore = create<ChatState>()(
           for (const thread of nextThreads) {
             if (thread.latestPlan) {
               const currentPlan = threadPlans[thread.id];
-              threadPlans[thread.id] = currentPlan?.isBusy ? currentPlan : thread.latestPlan;
+              const nextPlan = selectPreferredThreadPlan(currentPlan, thread.latestPlan, { preserveBusy: true });
+              if (nextPlan) threadPlans[thread.id] = nextPlan;
             }
             if (thread.latestProposal) {
               const currentProposal = threadProposals[thread.id];

@@ -69,16 +69,8 @@ export type ResolvedMemoryPolicy = {
   };
 };
 
-const defaultContextTokenLimit = 120_000;
 const defaultSemanticRecallEmbeddingModel = 'ollama/nomic-embed-text';
 const defaultOllamaEmbeddingBaseUrl = 'http://127.0.0.1:11434/v1';
-const defaultObservationalMemoryModel = 'chatgpt/codex/gpt-5.4-mini';
-const openAIMediumReasoningModels = new Set([
-  defaultObservationalMemoryModel,
-  'openai/gpt-5.4-mini',
-  'chatgpt/codex/gpt-5.5',
-  'openai/gpt-5.5',
-]);
 const disabledEnvValues = new Set(['0', 'false']);
 const embeddingProviderApiKeyEnvVars: Record<string, string[]> = {
   openai: ['OPENAI_API_KEY'],
@@ -95,9 +87,6 @@ const positiveInteger = (value: unknown) => {
   const number = typeof value === 'string' ? Number(value) : value;
   return typeof number === 'number' && Number.isInteger(number) && number > 0 ? number : undefined;
 };
-
-export const getContextTokenLimit = (env: NodeJS.ProcessEnv = process.env) =>
-  positiveInteger(env.WEAVE_CONTEXT_TOKEN_LIMIT) ?? defaultContextTokenLimit;
 
 export const getSemanticRecallEmbeddingModel = (env: NodeJS.ProcessEnv = process.env) => {
   const semanticRecallSetting = optionalString(env.WEAVE_SEMANTIC_RECALL)?.toLowerCase();
@@ -176,10 +165,6 @@ const getSemanticRecallUnavailableReason = (
 };
 
 export const getMemoryCapabilities = (env: NodeJS.ProcessEnv = process.env): MemoryCapabilities => {
-  const observationalMemorySetting = optionalString(env.WEAVE_OBSERVATIONAL_MEMORY)?.toLowerCase();
-  const observationalMemoryEnabled = !disabledEnvValues.has(observationalMemorySetting ?? '');
-  const observationalMemoryModel = optionalString(env.WEAVE_OBSERVATIONAL_MEMORY_MODEL) ??
-    defaultObservationalMemoryModel;
   const semanticRecallEmbeddingModel = getSemanticRecallEmbeddingModel(env);
   const semanticRecallEmbeddingConfig = getSemanticRecallEmbeddingConfig(env);
   const semanticRecallUnavailableReason = getSemanticRecallUnavailableReason(
@@ -193,41 +178,14 @@ export const getMemoryCapabilities = (env: NodeJS.ProcessEnv = process.env): Mem
     ...(semanticRecallEmbeddingModel ? { semanticRecallEmbeddingModel } : {}),
     ...(semanticRecallEmbeddingConfig ? { semanticRecallEmbeddingConfig } : {}),
     ...(semanticRecallUnavailableReason ? { semanticRecallUnavailableReason } : {}),
-    observationalMemory: observationalMemoryEnabled,
-    ...(observationalMemoryEnabled ? { observationalMemoryModel } : {}),
+    observationalMemory: false,
   };
 };
 
 export const resolveObservationalMemoryConfig = (
-  capabilities: MemoryCapabilities = getMemoryCapabilities(),
+  _capabilities: MemoryCapabilities = getMemoryCapabilities(),
 ): WeaveObservationalMemoryConfig | undefined => {
-  if (!capabilities.observationalMemory || !capabilities.observationalMemoryModel) return undefined;
-  const usesOpenAIMediumReasoning = openAIMediumReasoningModels.has(
-    capabilities.observationalMemoryModel.toLowerCase(),
-  );
-  const openAIMediumReasoningProviderOptions = usesOpenAIMediumReasoning
-    ? {
-      providerOptions: {
-        openai: {
-          reasoningEffort: 'medium' as const,
-        },
-      },
-    }
-    : undefined;
-
-  return {
-    model: capabilities.observationalMemoryModel,
-    scope: 'thread',
-    activateAfterIdle: '5m',
-    activateOnProviderChange: true,
-    temporalMarkers: true,
-    ...(openAIMediumReasoningProviderOptions
-      ? {
-        observation: openAIMediumReasoningProviderOptions,
-        reflection: openAIMediumReasoningProviderOptions,
-      }
-      : {}),
-  };
+  return undefined;
 };
 
 const getSemanticScope = (semanticRecall: unknown): WeaveSemanticRecallScope | undefined => {
@@ -277,18 +235,21 @@ export const resolveMemoryPolicy = ({
   agentMemory,
   threadMetadata,
   capabilities = getMemoryCapabilities(),
-  tokenLimit = getContextTokenLimit(),
+  tokenLimit,
+  lastMessages,
 }: {
   agentMemory?: MemoryRecord;
   threadMetadata?: MemoryRecord;
   capabilities?: MemoryCapabilities;
   tokenLimit?: number;
+  lastMessages?: number;
 }): ResolvedMemoryPolicy => {
   const base = isRecord(agentMemory) ? { ...agentMemory } : {};
   const semanticValue = Object.hasOwn(base, 'semanticRecall') ? base.semanticRecall : true;
   delete base.lastMessages;
   delete base.semanticRecall;
   delete base.observationalMemory;
+  if (positiveInteger(lastMessages)) base.lastMessages = lastMessages;
 
   const semanticRequested = semanticValue !== false;
   const aliasScope = getSemanticScope(semanticValue) ?? 'workspace';
@@ -327,27 +288,16 @@ export const resolveMemoryPolicy = ({
     };
   }
 
-  const observationalMemoryConfig = resolveObservationalMemoryConfig(capabilities);
-  if (observationalMemoryConfig) {
-    base.observationalMemory = observationalMemoryConfig;
-  }
-
   return {
     options: base,
     status: {
       semanticRecall: semanticStatus,
-      observationalMemory: capabilities.observationalMemory
-        ? observationalMemoryConfig ? { enabled: true, configured: true } : {
-          enabled: false,
-          configured: false,
-          reason: 'observational memory model is not configured',
-        }
-        : {
-          enabled: false,
-          configured: false,
-          reason: 'observational memory disabled by env',
-        },
-      tokenLimit,
+      observationalMemory: {
+        enabled: false,
+        configured: false,
+        reason: 'observational memory is disabled in Weave',
+      },
+      tokenLimit: tokenLimit ?? 0,
     },
   };
 };

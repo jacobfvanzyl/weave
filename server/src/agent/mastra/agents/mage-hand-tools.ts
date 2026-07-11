@@ -1,16 +1,5 @@
 import { renameThreadTool } from '../tools/rename-thread-tool';
-import {
-  proposalDeleteTool,
-  proposalDiscardTool,
-  proposalEditTool,
-  proposalFinalizeTool,
-  proposalMarkTool,
-  proposalReadTool,
-  proposalStartTool,
-  proposalStatusTool,
-  proposalWriteTool,
-} from '../tools/proposal-tool';
-import { updatePlanTool, writePlanTool } from '../tools/update-plan-tool';
+import { updatePlanTool } from '../tools/update-plan-tool';
 import { webExtractTool, webSearchTool } from '../tools/web-search-tools';
 import {
   gitBranchTool,
@@ -53,17 +42,7 @@ import { askUserTool } from '../tools/ask-user-tool';
 export const mageHandTools = {
   renameThreadTool,
   ask_user: askUserTool,
-  writePlanTool,
   updatePlanTool,
-  proposal_start: proposalStartTool,
-  proposal_read: proposalReadTool,
-  proposal_write: proposalWriteTool,
-  proposal_edit: proposalEditTool,
-  proposal_delete: proposalDeleteTool,
-  proposal_discard: proposalDiscardTool,
-  proposal_status: proposalStatusTool,
-  proposal_finalize: proposalFinalizeTool,
-  proposal_mark: proposalMarkTool,
   webSearch: webSearchTool,
   webExtract: webExtractTool,
   editor_context: editorContextTool,

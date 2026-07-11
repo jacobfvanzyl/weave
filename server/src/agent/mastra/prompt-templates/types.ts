@@ -5,7 +5,7 @@ export type PromptTemplate = {
   argumentHint?: string;
   tags: string[];
   content: string;
-  source: 'app' | 'global' | 'project';
+  source: 'app' | 'user' | 'project';
   path?: string;
 };
 

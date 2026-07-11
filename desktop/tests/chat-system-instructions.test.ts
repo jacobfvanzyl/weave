@@ -30,32 +30,16 @@ describe('chat system instructions', () => {
 
     expect(text).toContain('Repository rules');
     expect(text).toContain('Agent instructions');
-    expect(text).toContain('Guided approval gate');
-    expect(text).toContain('do not move from discussion/planning into source-file implementation until a proposal artifact exists');
-    expect(text).toContain('treat that as approval to create the proposal, not approval to edit source files');
-    expect(text).toContain('ExecPlan phase boundaries');
-    expect(text).toContain('Before proposal_start for a new phase that will likely need a new proposal, present a concise phase outline');
-    expect(text).toContain('Wait for explicit human agreement on the phase outline before crafting the phase proposal to finalization');
-    expect(text).toContain('Persist the agreed phase outline in the ExecPlan with update_plan');
-    expect(text).toContain('Minor revisions to an existing same-phase proposal do not need a fresh phase outline');
-    expect(text).toContain('Proposal review artifacts');
-    expect(text).toContain('Use proposal_start to create or reopen a draft proposal workspace');
-    expect(text).toContain('pass the current planPath to proposal_start and encode the agreed phase scope');
-    expect(text).toContain('Treat proposal tools like file tools over a virtual proposed filesystem');
-    expect(text).toContain('proposal_write replaces one proposed buffer');
-    expect(text).toContain('Draft proposals become live-reviewable after they contain file items');
-    expect(text).toContain('Before proposal_finalize, call proposal_status');
-    expect(text).toContain('Each proposal item must represent exactly one source file');
-    expect(text).toContain('Proposal approval is human review feedback');
-    expect(text).toContain('implement only approved items');
-    expect(text).toContain('verify every approved code item is complete in the artifact body');
-    expect(text).toContain('do not infer missing reviewed content from chat history, memory, artifact history, or surrounding files');
-    expect(text).toContain('While implementing an approved in-progress proposal');
-    expect(text).toContain('pause affected work and amend the proposal before continuing those changed parts');
-    expect(text).toContain('preserve unaffected approved items, reset changed proposal items to pending');
-    expect(text).toContain('call proposal_status, call proposal_finalize, and re-present the revised proposal for human review');
-    expect(text).toContain('inconsequential deviations that still satisfy the approved proposal intent');
-    expect(text).toContain('continue implementation and surface those deviations in the end-of-turn summary');
+    expect(text).toContain('Use update_plan for non-trivial multi-step work');
+    expect(text).toContain('Load the execplans skill');
+    expect(text).toContain('Create and maintain ExecPlan Markdown with the normal write and edit tools');
+    expect(text).toContain('A check passes only when its actual process exit is zero');
+    expect(text).toContain('invalidate all earlier validation');
+    expect(text.includes('write_plan')).toBe(false);
+    expect(text.includes('Guided approval gate')).toBe(false);
+    expect(text.includes('Proposal review artifacts')).toBe(false);
+    expect(text.includes('.agents/proposals')).toBe(false);
+    expect(/proposal_(start|read|write|edit|delete|discard|status|finalize|mark)/.test(text)).toBe(false);
     expect(text.includes('# Runtime Context')).toBe(false);
   });
 
@@ -85,7 +69,7 @@ describe('chat system instructions', () => {
   it('adds bounded available-skill guidance without eager skill bodies', () => {
     const skills = Array.from({ length: 31 }, (_, index) => ({
       name: `skill-${index.toString().padStart(2, '0')}`,
-      source: index % 2 === 0 ? 'project' as const : 'global' as const,
+      source: index % 2 === 0 ? 'project' as const : 'user' as const,
       path: `.weave/skills/skill-${index.toString().padStart(2, '0')}/SKILL.md`,
       description: `Description for skill ${index}`,
       content: 'FULL SKILL BODY SHOULD NOT BE INCLUDED',
@@ -102,7 +86,7 @@ describe('chat system instructions', () => {
     expect(text).toContain('call search_skills with focused keywords');
     expect(text).toContain('If the user explicitly mentions $skill-name');
     expect(text).toContain('- skill-00 (project, .weave/skills/skill-00/SKILL.md): Description for skill 0');
-    expect(text).toContain('- skill-29 (global, .weave/skills/skill-29/SKILL.md): Description for skill 29');
+    expect(text).toContain('- skill-29 (user, .weave/skills/skill-29/SKILL.md): Description for skill 29');
     expect(text).toContain('- 1 more skill(s) are available. Use search_skills to find them.');
     expect(text.includes('skill-30')).toBe(false);
     expect(text.includes('FULL SKILL BODY SHOULD NOT BE INCLUDED')).toBe(false);

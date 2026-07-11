@@ -2,9 +2,14 @@ import { handleChatStream } from '@mastra/ai-sdk';
 import type { AgentMessageInput, MastraDBMessage } from '@mastra/core/agent';
 import type { Mastra } from '@mastra/core/mastra';
 import { listAgentContributions } from './contributions';
+import {
+  putModelContextBudget,
+  resolveModelContextBudget,
+  type ModelContextBudget,
+} from './context-budget';
 import { getThreadContextUsageSnapshot } from './mastra/context-usage';
 import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from './model-capabilities';
-import { getModelConfig, type ModelConfig } from './model-options';
+import { getModelConfig, resolveModelOption, type ModelConfig } from './model-options';
 import { buildChatSystemMessages } from './mastra/agents/instructions';
 import { expandPromptTemplate, listPromptSummaries } from './mastra/prompt-templates/registry';
 import {
@@ -15,6 +20,7 @@ import {
 } from './mastra/context/resolver';
 import { listResolvedContextSkillSummaries } from './mastra/context/skill-source';
 import { resolveMemoryPolicy } from './mastra/memory-policy';
+import { clampAgentMaxSteps, getAgentMaxSteps } from './mastra/run-quality-processor';
 import { putChatRuntimeContext } from './mastra/runtime-context-processor';
 import {
   AgentRunCoordinator,
@@ -30,6 +36,22 @@ import { contextUsageRecallOptions, estimateMemoryContextTokens } from './contex
 import { type EventService, eventService as defaultEventService } from '../services/event-service';
 import { type JsonValue, type ServiceCaller, ServiceError } from '../services/types';
 import { getWeaveDb } from '../storage/postgres';
+import {
+  buildCompactionPrompt,
+  batchCompactionMessages,
+  compactionSourceFingerprint,
+  estimateMessageTokens,
+  putThreadCompactionContext,
+  selectCompactionCut,
+  serializeCompactionMessages,
+  validateCompactionSummary,
+} from './thread-compaction';
+import {
+  threadCompactionRepository,
+  type ThreadCompactionRepository,
+  type ThreadCompactionRecord,
+  type ThreadCompactionTrigger,
+} from './thread-compaction-repository';
 
 export { contextUsageRecallOptions, estimateContextTokens, estimateMemoryContextTokens } from './context-token-estimate';
 
@@ -108,13 +130,15 @@ export type StartChatRunResult = {
 export type SendChatMessageRequest = {
   resourceId: string;
   threadId: string;
+  activeThreadRunId?: string;
   message: AgentMessageInput;
 };
 
 export type SendChatMessageResult = {
   accepted: boolean;
   runId?: string;
-  messageId: string;
+  messageId?: string;
+  reason?: 'stale_run';
 };
 
 export type ChatThreadRecord = {
@@ -151,23 +175,46 @@ export type ChatThreadMessagesRequest = {
 };
 
 export type ChatThreadContextUsageRequest = ChatThreadMessagesRequest & {
-  queryContextWindow?: number;
+  modelId?: string;
 };
 
 export type ChatThreadContextUsage = {
+  modelId: string;
   tokens: number;
-  contextWindow?: number;
-  percent?: number;
+  contextWindow: number;
+  contextLimitPercent: number;
+  contextLimitTokens: number;
+  percent: number;
+  compactionEnabled: boolean;
   source: string;
   updatedAt?: string;
   totalProcessedTokens?: number;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
+  compaction?: {
+    generation: number;
+    state: ThreadCompactionRecord['status'];
+    at: string;
+    projectedTokens?: number;
+  };
   memoryPolicy: {
     options: unknown;
     status: unknown;
   };
+};
+
+export type CompactChatThreadRequest = ChatThreadMessagesRequest & {
+  model: string;
+  instructions?: string;
+  trigger?: ThreadCompactionTrigger;
+  abortSignal?: AbortSignal;
+};
+
+export type CompactChatThreadResult = {
+  status: 'completed' | 'not_needed';
+  checkpoint?: ThreadCompactionRecord;
+  budget: ModelContextBudget;
 };
 
 export type UpdateChatThreadRequest = ChatThreadMessagesRequest & {
@@ -216,6 +263,8 @@ export interface AgentService {
   getChatThreadMessages(input: ChatThreadMessagesRequest): Promise<MastraDBMessage[]>;
   getChatSuspendedAskUserRunIds(input: ChatThreadMessagesRequest): Promise<Record<string, string>>;
   getChatThreadContextUsage(input: ChatThreadContextUsageRequest): Promise<ChatThreadContextUsage>;
+  compactChatThread(input: CompactChatThreadRequest): Promise<CompactChatThreadResult>;
+  listChatThreadCompactions(input: ChatThreadMessagesRequest): Promise<ThreadCompactionRecord[]>;
   updateChatThread(input: UpdateChatThreadRequest): Promise<ChatThreadRecord>;
   deleteChatThread(input: ChatThreadMessagesRequest): Promise<void>;
 }
@@ -229,6 +278,7 @@ export class MastraAgentService implements AgentService {
     private readonly chatStreamHandler: ChatStreamHandler = handleChatStream,
     private readonly contextResolver: AgentContextResolver = resolveAgentContext,
     private readonly events: EventService = defaultEventService,
+    private readonly compactions: ThreadCompactionRepository = threadCompactionRepository,
   ) {}
 
   async listCapabilities() {
@@ -325,12 +375,13 @@ export class MastraAgentService implements AgentService {
 
     try {
       const mastraRunId = stringValue(input.params.runId) ?? crypto.randomUUID();
+      const maxSteps = getAgentMaxSteps();
       const stream = await this.chatStreamHandler({
         mastra,
         agentId: 'mage-hand',
         version: 'v6',
         sendReasoning: true,
-        defaultOptions: { maxSteps: 1000 },
+        defaultOptions: { maxSteps },
         ...(run
           ? {
             messageMetadata: ({ part }: { part?: unknown }) => {
@@ -343,6 +394,7 @@ export class MastraAgentService implements AgentService {
           : {}),
         params: {
           ...input.params,
+          maxSteps,
           runId: mastraRunId,
           ...(prepared.routedModel ? { model: prepared.routedModel } : {}),
           providerOptions: prepared.providerOptions as never,
@@ -353,9 +405,12 @@ export class MastraAgentService implements AgentService {
         } as never,
       });
 
+      const modelStream = prepared.automaticCompaction
+        ? prependStreamValues(stream as ReadableStream<unknown>, threadCompactionStreamEvents(prepared.automaticCompaction))
+        : stream as ReadableStream<unknown>;
       const bufferedStream = bufferAssistantTextStream(
         filterCompactToolHistoryTextStream(
-          normalizeAskUserSuspensionStream(stream as ReadableStream<unknown>, { mastraRunId }),
+          normalizeAskUserSuspensionStream(modelStream, { mastraRunId }),
         ),
       );
       if (!run) {
@@ -387,6 +442,13 @@ export class MastraAgentService implements AgentService {
   }
 
   async sendChatMessage(input: SendChatMessageRequest): Promise<SendChatMessageResult> {
+    if (input.activeThreadRunId) {
+      const activeRun = this.runCoordinator.getActiveThreadRun(input.resourceId, input.threadId);
+      if (activeRun?.runId !== input.activeThreadRunId) {
+        return { accepted: false, runId: activeRun?.runId, reason: 'stale_run' };
+      }
+    }
+
     const mastra = await this.getMastra();
     const agent = await mastra.getAgent('mageHandAgent');
     if (!agent) throw new ServiceError('operation_failed', 'Agent was not found: mageHandAgent', 404);
@@ -534,44 +596,216 @@ export class MastraAgentService implements AgentService {
   async getChatThreadContextUsage(input: ChatThreadContextUsageRequest): Promise<ChatThreadContextUsage> {
     const memory = await this.getMemory();
     const mastra = await this.getMastra();
+    const snapshot = getThreadContextUsageSnapshot(input.threadId, input.resourceId);
+    const selectedModel = input.modelId ?? snapshot?.modelId ?? (await getModelConfig()).defaultModel;
+    const budget = await this.resolveContextBudget(selectedModel);
+    const checkpoint = threadCompactionEnabled()
+      ? await this.compactions.latest(input.resourceId, input.threadId, false)
+      : undefined;
+    const completedCheckpoint = !threadCompactionEnabled()
+      ? undefined
+      : checkpoint?.status === 'completed'
+      ? checkpoint
+      : await this.compactions.latest(input.resourceId, input.threadId);
     const resolvedContext = await this.contextResolver({
       mastra,
       resourceId: input.resourceId,
       threadId: input.threadId,
     });
+    const totalMessages = completedCheckpoint ? await this.getStoredMessageTotal(memory, input) : undefined;
     const memoryPolicy = resolveMemoryPolicy({
       agentMemory: resolvedContext.config.memory,
       threadMetadata: resolvedContext.threadMetadata,
+      tokenLimit: budget.contextLimitTokens,
+      lastMessages: completedCheckpoint?.compactedMessageCount !== undefined && totalMessages !== undefined
+        ? Math.max(1, totalMessages - completedCheckpoint.compactedMessageCount)
+        : undefined,
     });
-    const snapshot = getThreadContextUsageSnapshot(input.threadId, input.resourceId);
-    const contextWindow = Number.isFinite(input.queryContextWindow) && input.queryContextWindow! > 0
-      ? input.queryContextWindow
-      : typeof snapshot?.maxTokens === 'number'
-      ? snapshot.maxTokens
-      : typeof memory.MAX_CONTEXT_TOKENS === 'number'
-      ? memory.MAX_CONTEXT_TOKENS
-      : undefined;
-    const tokens = snapshot?.usedTokens ?? await estimateMemoryContextTokens(memory, {
-      threadId: input.threadId,
-      resourceId: input.resourceId,
-      memoryConfig: memoryPolicy.options,
-    });
+    const checkpointIsNewer = completedCheckpoint?.completedAt &&
+      (!snapshot?.updatedAt || Date.parse(completedCheckpoint.completedAt) > Date.parse(snapshot.updatedAt));
+    const tokens = checkpointIsNewer && completedCheckpoint.projectedTokens !== undefined
+      ? completedCheckpoint.projectedTokens
+      : snapshot?.usedTokens ?? (await estimateMemoryContextTokens(memory, {
+        threadId: input.threadId,
+        resourceId: input.resourceId,
+        memoryConfig: memoryPolicy.options,
+      })) + (completedCheckpoint?.summary ? Math.ceil(completedCheckpoint.summary.length / 4) : 0);
 
     return {
+      modelId: budget.modelId,
       tokens,
-      contextWindow,
-      percent: contextWindow ? Math.min(100, (tokens / contextWindow) * 100) : undefined,
-      source: snapshot ? snapshot.source : 'estimate',
-      updatedAt: snapshot?.updatedAt,
+      contextWindow: budget.advertisedContextTokens,
+      contextLimitPercent: budget.contextLimitPercent,
+      contextLimitTokens: budget.contextLimitTokens,
+      percent: Math.min(100, (tokens / budget.contextLimitTokens) * 100),
+      compactionEnabled: threadCompactionEnabled(),
+      source: checkpointIsNewer ? 'estimate' : snapshot ? snapshot.source : 'estimate',
+      updatedAt: checkpointIsNewer ? completedCheckpoint?.completedAt : snapshot?.updatedAt,
       totalProcessedTokens: snapshot?.totalProcessedTokens,
       inputTokens: snapshot?.inputTokens,
       cachedInputTokens: snapshot?.cachedInputTokens,
       outputTokens: snapshot?.outputTokens,
+      ...(checkpoint
+        ? {
+          compaction: {
+            generation: checkpoint.generation,
+            state: checkpoint.status,
+            at: checkpoint.completedAt ?? checkpoint.updatedAt,
+            ...(checkpoint.projectedTokens !== undefined ? { projectedTokens: checkpoint.projectedTokens } : {}),
+          },
+        }
+        : {}),
       memoryPolicy: {
         options: memoryPolicy.options,
         status: memoryPolicy.status,
       },
     };
+  }
+
+  async listChatThreadCompactions(input: ChatThreadMessagesRequest) {
+    if (!threadCompactionEnabled()) return [];
+    return await this.compactions.completed(input.resourceId, input.threadId);
+  }
+
+  async compactChatThread(input: CompactChatThreadRequest): Promise<CompactChatThreadResult> {
+    if (!threadCompactionEnabled()) {
+      throw new ServiceError(
+        'operation_failed',
+        'Thread compaction is disabled. Remove WEAVE_THREAD_COMPACTION=false to enable it.',
+        404,
+      );
+    }
+    if (this.hasActiveThreadRun(input.resourceId, input.threadId)) {
+      throw new ServiceError('operation_failed', 'thread has an active stream', 409, { reason: 'active_run' });
+    }
+
+    const memory = await this.getMemory();
+    const thread = await memory.getThreadById({ threadId: input.threadId });
+    if (!thread || thread.resourceId !== input.resourceId) {
+      throw new ServiceError('operation_failed', 'thread not found', 404);
+    }
+
+    const conversationBudget = await this.resolveContextBudget(input.model);
+    const previous = await this.compactions.latest(input.resourceId, input.threadId);
+    const messages = await this.recallThreadMessages(memory, input);
+    const cut = selectCompactionCut(
+      messages,
+      conversationBudget.recentTailTokens,
+      previous?.compactedMessageCount ?? 0,
+    );
+    if (!cut) return { status: 'not_needed', budget: conversationBudget };
+
+    const compactionModel = process.env.WEAVE_COMPACTION_MODEL?.trim() || 'openai/gpt-5.6-luna';
+    const compactionBudget = await this.resolveContextBudget(compactionModel);
+    const promptOverheadTokens = 2_000;
+    const previousSummaryTokens = previous?.summary ? Math.ceil(previous.summary.length / 4) : 0;
+    const inputCapacity = compactionBudget.contextLimitTokens - compactionBudget.summaryOutputTokens -
+      promptOverheadTokens - Math.max(previousSummaryTokens, compactionBudget.summaryOutputTokens);
+    if (inputCapacity <= 0) {
+      throw new ServiceError('operation_failed', 'Compaction model has no remaining input capacity.', 500);
+    }
+
+    const sourceTokens = cut.source.reduce((total, message) => total + estimateMessageTokens(message), 0);
+    if ((input.trigger ?? 'manual') === 'automatic') {
+      const latestAttempt = await this.compactions.latest(input.resourceId, input.threadId, false);
+      const retryAt = latestAttempt?.status === 'failed'
+        ? Date.parse(latestAttempt.updatedAt) + 15 * 60 * 1000
+        : 0;
+      const enoughNewContext = latestAttempt?.status !== 'failed' ||
+        sourceTokens >= (latestAttempt.sourceTokens ?? 0) + conversationBudget.retryDeltaTokens;
+      if (!enoughNewContext && Date.now() < retryAt) {
+        throw new ServiceError('operation_failed', 'Automatic compaction is cooling down after a failed attempt.', 409, {
+          reason: 'compaction_retry_throttled',
+          retryAt: new Date(retryAt).toISOString(),
+          retryDeltaTokens: conversationBudget.retryDeltaTokens,
+        });
+      }
+    }
+
+    let job: ThreadCompactionRecord | undefined;
+    try {
+      job = await this.compactions.begin({
+        resourceId: input.resourceId,
+        threadId: input.threadId,
+        trigger: input.trigger ?? 'manual',
+        instructions: input.instructions,
+        conversationBudget,
+        compactionBudget,
+        compactionModel,
+        reasoningEffort: 'medium',
+        sourceTokens,
+      });
+    } catch (error) {
+      if ((error as { status?: number }).status === 409) {
+        throw new ServiceError('operation_failed', 'thread compaction is already running', 409, {
+          reason: 'compaction_in_progress',
+        });
+      }
+      throw error;
+    }
+
+    try {
+      const mastra = await this.getMastra();
+      const agent = await mastra.getAgent('threadCompactionAgent');
+      if (!agent) throw new Error('threadCompactionAgent is not registered');
+      const batches = batchCompactionMessages(cut.source, inputCapacity);
+      let summary = previous?.summary;
+      for (const batch of batches) {
+        const output = await agent.stream(buildCompactionPrompt({
+          previousSummary: summary,
+          transcript: serializeCompactionMessages(batch),
+          instructions: input.instructions,
+        }), {
+          model: routeSubscriptionModel(compactionModel),
+          maxOutputTokens: compactionBudget.summaryOutputTokens,
+          providerOptions: { openai: { reasoningEffort: 'medium' } },
+          toolChoice: 'none',
+          ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+        } as never);
+        summary = validateCompactionSummary(
+          String(await (output as { text: Promise<unknown> }).text),
+          compactionBudget.summaryOutputTokens,
+        ).summary;
+      }
+
+      const validated = validateCompactionSummary(summary ?? '', compactionBudget.summaryOutputTokens);
+      await this.compactions.complete(job.id, {
+        summary: validated.summary,
+        compactedThroughMessageId: cut.compactedThrough.id,
+        compactedThroughCreatedAt: timestampString(cut.compactedThrough.createdAt),
+        compactedMessageCount: cut.compactedMessageCount,
+        firstRetainedMessageId: cut.firstRetained?.id,
+        sourceTokens,
+        summaryTokens: validated.tokens,
+        projectedTokens: validated.tokens + cut.retainedTokens,
+        sourceFingerprint: compactionSourceFingerprint(cut.source),
+      });
+      console.info('[thread-compaction] completed', {
+        resourceId: input.resourceId,
+        threadId: input.threadId,
+        generation: job.generation,
+        trigger: job.trigger,
+        durationMs: Date.now() - Date.parse(job.startedAt),
+        sourceTokens,
+        projectedTokens: validated.tokens + cut.retainedTokens,
+        compressionRatio: sourceTokens > 0 ? validated.tokens / sourceTokens : 0,
+      });
+      const checkpoint = await this.compactions.latest(input.resourceId, input.threadId);
+      return { status: 'completed', checkpoint, budget: conversationBudget };
+    } catch (error) {
+      await this.compactions.fail(job.id, error, input.abortSignal?.aborted);
+      console.error('[thread-compaction] failed', {
+        resourceId: input.resourceId,
+        threadId: input.threadId,
+        generation: job.generation,
+        trigger: job.trigger,
+        durationMs: Date.now() - Date.parse(job.startedAt),
+      });
+      if (error instanceof ServiceError) throw error;
+      throw new ServiceError('operation_failed', error instanceof Error ? error.message : String(error), 500, {
+        reason: 'compaction_failed',
+      });
+    }
   }
 
   async updateChatThread(input: UpdateChatThreadRequest): Promise<ChatThreadRecord> {
@@ -597,6 +831,7 @@ export class MastraAgentService implements AgentService {
       throw new ServiceError('operation_failed', 'thread not found', 404);
     }
 
+    if (threadCompactionEnabled()) await this.compactions.deleteThread(input.resourceId, input.threadId);
     await memory.deleteThread(input.threadId);
   }
 
@@ -626,12 +861,75 @@ export class MastraAgentService implements AgentService {
       ? await this.contextResolver({ mastra, resourceId: input.resourceId, threadId: input.threadId })
       : undefined;
     if (resolvedContext) putAgentContext(input.requestContext, resolvedContext);
-    const memoryPolicy = resolvedContext
+    const selectedModel = stringValue(params.model) ?? resolvedContext?.config.model ?? (await getModelConfig()).defaultModel;
+    const contextBudget = await this.resolveContextBudget(selectedModel);
+    putModelContextBudget(input.requestContext, contextBudget);
+
+    const memory = input.threadId && threadCompactionEnabled() ? await this.getMemory() : undefined;
+    let checkpoint = input.threadId && threadCompactionEnabled()
+      ? await this.compactions.latest(input.resourceId, input.threadId)
+      : undefined;
+    let totalMessages = checkpoint && memory && input.threadId
+      ? await this.getStoredMessageTotal(memory, { resourceId: input.resourceId, threadId: input.threadId })
+      : undefined;
+    const memoryPolicyFor = () => resolvedContext
       ? resolveMemoryPolicy({
         agentMemory: resolvedContext.config.memory,
         threadMetadata: resolvedContext.threadMetadata,
+        tokenLimit: contextBudget.contextLimitTokens,
+        lastMessages: checkpoint?.compactedMessageCount !== undefined && totalMessages !== undefined
+          ? Math.max(1, totalMessages - checkpoint.compactedMessageCount)
+          : undefined,
       })
       : undefined;
+    let memoryPolicy = memoryPolicyFor();
+
+    let automaticCompaction: ThreadCompactionRecord | undefined;
+    if (input.threadId && memory && memoryPolicy && threadCompactionEnabled()) {
+      const snapshot = getThreadContextUsageSnapshot(input.threadId, input.resourceId);
+      const checkpointIsNewer = checkpoint?.completedAt &&
+        (!snapshot?.updatedAt || Date.parse(checkpoint.completedAt) > Date.parse(snapshot.updatedAt));
+      const usedTokens = checkpointIsNewer && checkpoint?.projectedTokens !== undefined
+        ? checkpoint.projectedTokens
+        : snapshot?.usedTokens ?? (await estimateMemoryContextTokens(memory, {
+          threadId: input.threadId,
+          resourceId: input.resourceId,
+          memoryConfig: memoryPolicy.options,
+        })) + (checkpoint?.summary ? Math.ceil(checkpoint.summary.length / 4) : 0);
+      const pendingTokens = estimatePendingMessageTokens(input.submittedUserMessages);
+      if (usedTokens + pendingTokens >= contextBudget.contextLimitTokens) {
+        const result = await this.compactChatThread({
+          resourceId: input.resourceId,
+          threadId: input.threadId,
+          model: selectedModel,
+          trigger: 'automatic',
+          abortSignal: input.abortSignal,
+        });
+        automaticCompaction = result.checkpoint;
+        if (!result.checkpoint) {
+          throw new ServiceError(
+            'operation_failed',
+            'The thread exceeds the selected model context limit and does not yet have a safe compaction boundary.',
+            409,
+            { reason: 'context_limit_exceeded' },
+          );
+        }
+        checkpoint = await this.compactions.latest(input.resourceId, input.threadId);
+        totalMessages = checkpoint
+          ? await this.getStoredMessageTotal(memory, { resourceId: input.resourceId, threadId: input.threadId })
+          : undefined;
+        memoryPolicy = memoryPolicyFor();
+        if ((checkpoint?.projectedTokens ?? contextBudget.contextLimitTokens) + pendingTokens >= contextBudget.contextLimitTokens) {
+          throw new ServiceError(
+            'operation_failed',
+            'Compaction could not reduce the thread below the selected model context limit.',
+            409,
+            { reason: 'context_limit_exceeded' },
+          );
+        }
+      }
+    }
+    if (checkpoint) putThreadCompactionContext(input.requestContext, { checkpoint, budget: contextBudget });
     const isProjectWorkspace = Boolean(
       resolvedContext?.threadMetadata?.mode === 'project' && resolvedContext.threadMetadata.workspaceId,
     );
@@ -648,8 +946,8 @@ export class MastraAgentService implements AgentService {
       callerSystem: params.system as Parameters<typeof buildChatSystemMessages>[0]['callerSystem'],
     });
 
-    const routedModel = routeSubscriptionModel(params.model);
-    const providerModel = routedModel ?? params.model;
+    const routedModel = routeSubscriptionModel(selectedModel);
+    const providerModel = routedModel ?? selectedModel;
     const requestHasReasoningEffort = hasOwn(params, 'reasoningEffort');
     const requestHasServiceTier = hasOwn(params, 'serviceTier');
     const reasoningEffort = normalizeOpenAIReasoningEffort(
@@ -680,6 +978,7 @@ export class MastraAgentService implements AgentService {
         serviceTier,
         threadId: input.threadId,
         resourceId: input.resourceId,
+        contextBudget,
       }),
       memory: isRecord(params.memory)
         ? {
@@ -689,6 +988,7 @@ export class MastraAgentService implements AgentService {
         }
         : params.memory,
       system,
+      automaticCompaction,
     };
   }
 
@@ -748,7 +1048,7 @@ export class MastraAgentService implements AgentService {
     const memory = agentMemoryFromRunRequest(input);
     const output = await agent.generate(messages as never, {
       ...(input.model ? { model: input.model } : {}),
-      ...(input.maxSteps ? { maxSteps: input.maxSteps } : { maxSteps: 1000 }),
+      maxSteps: clampAgentMaxSteps(input.maxSteps),
       ...(memory ? { memory } : {}),
       ...(abortSignal ? { abortSignal } : {}),
       ...(runId ? { runId } : {}),
@@ -859,6 +1159,31 @@ export class MastraAgentService implements AgentService {
     }, genericRunCleanupDelayMs);
   }
 
+  private async resolveContextBudget(modelId: string) {
+    try {
+      const model = await resolveModelOption(modelId);
+      return resolveModelContextBudget(model.id, model.contextWindow!);
+    } catch (error) {
+      throw new ServiceError(
+        'operation_failed',
+        error instanceof Error ? error.message : String(error),
+        400,
+        { reason: 'model_context_unavailable', modelId },
+      );
+    }
+  }
+
+  private async getStoredMessageTotal(memory: any, input: ChatThreadMessagesRequest) {
+    const result = await memory.recall({
+      threadId: input.threadId,
+      resourceId: input.resourceId,
+      page: 0,
+      perPage: 1,
+      orderBy: { field: 'createdAt', direction: 'ASC' },
+    });
+    return typeof result.total === 'number' ? result.total : result.messages?.length ?? 0;
+  }
+
   private async getMastra() {
     return typeof this.mastraProvider === 'function' ? await this.mastraProvider() : this.mastraProvider;
   }
@@ -895,6 +1220,68 @@ const routeSubscriptionModel = (model: unknown) => {
   if (!model.startsWith('openai/')) return model;
 
   return `chatgpt/codex/${model.slice('openai/'.length)}`;
+};
+
+export const threadCompactionEnabled = () => {
+  const value = process.env.WEAVE_THREAD_COMPACTION?.trim().toLowerCase();
+  return value === undefined || value === '' || (value !== '0' && value !== 'false');
+};
+
+const estimatePendingMessageTokens = (messages: unknown[] | undefined) => {
+  if (!messages?.length) return 0;
+  try {
+    return Math.ceil(JSON.stringify(messages).length / 4) + messages.length * 4;
+  } catch {
+    return 0;
+  }
+};
+
+const threadCompactionStreamEvents = (checkpoint: ThreadCompactionRecord) => {
+  const budget = {
+    modelId: checkpoint.conversationModel,
+    advertisedContextTokens: checkpoint.advertisedContextTokens,
+    contextLimitPercent: checkpoint.contextLimitPercent,
+    contextLimitTokens: checkpoint.contextLimitTokens,
+    recentTailTokens: checkpoint.recentTailTokens,
+    summaryOutputTokens: checkpoint.summaryOutputTokens,
+  };
+  return [
+    {
+      type: 'data-thread-compaction',
+      data: { phase: 'started', generation: checkpoint.generation, trigger: checkpoint.trigger, ...budget },
+    },
+    {
+      type: 'data-thread-compaction',
+      data: {
+        phase: 'completed',
+        generation: checkpoint.generation,
+        trigger: checkpoint.trigger,
+        projectedTokens: checkpoint.projectedTokens,
+        ...budget,
+      },
+    },
+  ];
+};
+
+const prependStreamValues = <T>(stream: ReadableStream<T>, values: T[]) => {
+  const reader = stream.getReader();
+  return new ReadableStream<T>({
+    start(controller) {
+      for (const value of values) controller.enqueue(value);
+    },
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
 };
 
 const hasOwn = (value: unknown, key: string) =>
@@ -1045,7 +1432,13 @@ export const extractSuspendedAskUserRunIdsFromWorkflowSnapshots = (rows: Array<R
 
 const buildProviderOptions = (
   providerOptions: unknown,
-  options: { reasoningEffort?: string; serviceTier?: string; threadId?: unknown; resourceId?: string },
+  options: {
+    reasoningEffort?: string;
+    serviceTier?: string;
+    threadId?: unknown;
+    resourceId?: string;
+    contextBudget?: ModelContextBudget;
+  },
 ) => {
   const base = providerOptions && typeof providerOptions === 'object' ? providerOptions as Record<string, unknown> : {};
   const openai = base.openai && typeof base.openai === 'object' ? base.openai as Record<string, unknown> : {};
@@ -1070,6 +1463,14 @@ const buildProviderOptions = (
         mastraContextUsage: {
           threadId: options.threadId,
           ...(options.resourceId ? { resourceId: options.resourceId } : {}),
+          ...(options.contextBudget
+            ? {
+              modelId: options.contextBudget.modelId,
+              advertisedContextTokens: options.contextBudget.advertisedContextTokens,
+              contextLimitPercent: options.contextBudget.contextLimitPercent,
+              maxTokens: options.contextBudget.contextLimitTokens,
+            }
+            : {}),
         },
       }
       : {}),

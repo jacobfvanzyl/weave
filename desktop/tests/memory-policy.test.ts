@@ -20,10 +20,12 @@ import { __chatRouteMemoryTest } from '../../server/src/modules/chat/routes/chat
 import { __chatStateContextUsageTest } from '../../server/src/modules/chat/routes/chat-state';
 import { getCodeToolModelOutputMaxChars } from '../../server/src/agent/mastra/tools/model-output';
 import {
+  normalizePortalResult,
   portalBashModelOutput,
   portalEditModelOutput,
   portalReadModelOutput,
 } from '../../server/src/agent/mastra/tools/portal-tools';
+import { imageAttachmentAdapter, inferImageMimeType } from '../../packages/client/src/lib/image-attachment-adapter';
 
 const noMemoryCapabilities = {
   semanticRecall: false,
@@ -69,7 +71,7 @@ describe('memory policy resolution', () => {
     });
     expect(policy.status.observationalMemory).toMatchObject({
       enabled: false,
-      reason: 'observational memory disabled by env',
+      reason: 'observational memory is disabled in Weave',
     });
   });
 
@@ -112,9 +114,9 @@ describe('memory policy resolution', () => {
     });
   });
 
-  it('adds observational memory when enabled and strips lastMessages', () => {
+  it('strips observational memory even when a caller asks to enable it', () => {
     const policy = resolveMemoryPolicy({
-      agentMemory: { lastMessages: 10 },
+      agentMemory: { lastMessages: 10, observationalMemory: { model: 'openai/gpt-5-mini' } },
       capabilities: {
         semanticRecall: false,
         observationalMemory: true,
@@ -122,46 +124,16 @@ describe('memory policy resolution', () => {
       },
     });
 
-    expect(policy.options.observationalMemory).toMatchObject({
-      model: 'openai/gpt-5-mini',
-      scope: 'thread',
-    });
+    expect(policy.options).toEqual({});
     expect(policy.status.observationalMemory).toEqual({
-      enabled: true,
-      configured: true,
+      enabled: false,
+      configured: false,
+      reason: 'observational memory is disabled in Weave',
     });
   });
 
-  it('enables observational memory by default with model fallback and env opt-out', () => {
-    expect(getMemoryCapabilities({} as NodeJS.ProcessEnv)).toEqual({
-      semanticRecall: true,
-      semanticRecallEmbeddingModel: 'ollama/nomic-embed-text',
-      semanticRecallEmbeddingConfig: {
-        kind: 'openai-compatible',
-        model: 'ollama/nomic-embed-text',
-        providerId: 'ollama',
-        modelId: 'nomic-embed-text',
-        url: 'http://127.0.0.1:11434/v1',
-        apiKey: 'ollama',
-      },
-      observationalMemory: true,
-      observationalMemoryModel: 'chatgpt/codex/gpt-5.4-mini',
-    });
-    expect(
-      getMemoryCapabilities({
-        WEAVE_DEFAULT_MODEL: 'openai/gpt-5.4',
-      } as NodeJS.ProcessEnv).observationalMemoryModel,
-    ).toBe('chatgpt/codex/gpt-5.4-mini');
-    expect(
-      getMemoryCapabilities({
-        WEAVE_DEFAULT_MODEL: 'openai/gpt-5.4',
-        WEAVE_OBSERVATIONAL_MEMORY_MODEL: 'openai/gpt-5-mini',
-      } as NodeJS.ProcessEnv).observationalMemoryModel,
-    ).toBe('openai/gpt-5-mini');
-    expect(getMemoryCapabilities({
-      WEAVE_OBSERVATIONAL_MEMORY: 'false',
-      WEAVE_OBSERVATIONAL_MEMORY_MODEL: 'openai/gpt-5-mini',
-    } as NodeJS.ProcessEnv)).toEqual({
+  it('keeps observational memory disabled regardless of legacy env settings', () => {
+    const expected = {
       semanticRecall: true,
       semanticRecallEmbeddingModel: 'ollama/nomic-embed-text',
       semanticRecallEmbeddingConfig: {
@@ -173,69 +145,18 @@ describe('memory policy resolution', () => {
         apiKey: 'ollama',
       },
       observationalMemory: false,
-    });
+    };
+
+    expect(getMemoryCapabilities({} as NodeJS.ProcessEnv)).toEqual(expected);
+    expect(getMemoryCapabilities({
+      WEAVE_OBSERVATIONAL_MEMORY: 'true',
+      WEAVE_OBSERVATIONAL_MEMORY_MODEL: 'openai/gpt-5-mini',
+    } as NodeJS.ProcessEnv)).toEqual(expected);
     expect(resolveObservationalMemoryConfig({
       semanticRecall: false,
       observationalMemory: true,
       observationalMemoryModel: 'chatgpt/codex/gpt-5.4-mini',
-    })).toEqual({
-      model: 'chatgpt/codex/gpt-5.4-mini',
-      scope: 'thread',
-      activateAfterIdle: '5m',
-      activateOnProviderChange: true,
-      temporalMarkers: true,
-      observation: {
-        providerOptions: {
-          openai: {
-            reasoningEffort: 'medium',
-          },
-        },
-      },
-      reflection: {
-        providerOptions: {
-          openai: {
-            reasoningEffort: 'medium',
-          },
-        },
-      },
-    });
-    expect(
-      resolveObservationalMemoryConfig({
-        semanticRecall: false,
-        observationalMemory: true,
-        observationalMemoryModel: 'openai/gpt-5.4-mini',
-      })?.observation,
-    ).toEqual({
-      providerOptions: {
-        openai: {
-          reasoningEffort: 'medium',
-        },
-      },
-    });
-    expect(
-      resolveObservationalMemoryConfig({
-        semanticRecall: false,
-        observationalMemory: true,
-        observationalMemoryModel: 'openai/gpt-5.5',
-      })?.observation,
-    ).toEqual({
-      providerOptions: {
-        openai: {
-          reasoningEffort: 'medium',
-        },
-      },
-    });
-    expect(resolveObservationalMemoryConfig({
-      semanticRecall: false,
-      observationalMemory: true,
-      observationalMemoryModel: 'openai/gpt-5-mini',
-    })).toEqual({
-      model: 'openai/gpt-5-mini',
-      scope: 'thread',
-      activateAfterIdle: '5m',
-      activateOnProviderChange: true,
-      temporalMarkers: true,
-    });
+    })).toBeUndefined();
   });
 
   it('defaults semantic recall to local Ollama embeddings', () => {
@@ -318,6 +239,24 @@ describe('memory policy resolution', () => {
 });
 
 describe('tool model output compaction', () => {
+  it('distinguishes ordinary command failure from malformed Portal transport output', () => {
+    expect(normalizePortalResult({ ok: false, exitCode: 1, stderr: 'tests failed' })).toEqual({
+      ok: false,
+      exitCode: 1,
+      stderr: 'tests failed',
+    });
+    expect(normalizePortalResult({ exitCode: 1 })).toMatchObject({
+      ok: false,
+      error: 'Portal returned a malformed result without an ok status',
+    });
+    expect(portalBashModelOutput({
+      ok: false,
+      command: 'fvm flutter analyze',
+      exitCode: 1,
+      stderr: '3 issues found',
+    }).includes('Portal returned')).toBe(false);
+  });
+
   it('resolves code tool model-output cap from defaults and env', () => {
     expect(getCodeToolModelOutputMaxChars({} as NodeJS.ProcessEnv)).toBe(12_000);
     expect(getCodeToolModelOutputMaxChars({
@@ -474,19 +413,19 @@ describe('tool model output compaction', () => {
   });
 
   it('resolves full tool-call retention from defaults and env', () => {
-    expect(getToolHistoryFullCalls({} as NodeJS.ProcessEnv)).toBe(16);
+    expect(getToolHistoryFullCalls({} as NodeJS.ProcessEnv)).toBe(8);
     expect(getToolHistoryFullCalls({ WEAVE_TOOL_HISTORY_FULL_CALLS: '8' } as NodeJS.ProcessEnv)).toBe(8);
-    expect(getToolHistoryFullCalls({ WEAVE_TOOL_HISTORY_FULL_CALLS: 'nope' } as NodeJS.ProcessEnv)).toBe(16);
+    expect(getToolHistoryFullCalls({ WEAVE_TOOL_HISTORY_FULL_CALLS: 'nope' } as NodeJS.ProcessEnv)).toBe(8);
   });
 
   it('resolves Mastra tool-call filtering step retention from defaults and env', () => {
-    expect(getToolHistoryFullSteps({} as NodeJS.ProcessEnv)).toBe(16);
+    expect(getToolHistoryFullSteps({} as NodeJS.ProcessEnv)).toBe(8);
     expect(getToolHistoryFullSteps({ WEAVE_TOOL_HISTORY_FULL_STEPS: '6' } as NodeJS.ProcessEnv)).toBe(6);
     expect(getToolHistoryFullSteps({ WEAVE_TOOL_HISTORY_FULL_CALLS: '8' } as NodeJS.ProcessEnv)).toBe(8);
     expect(getToolHistoryFullSteps({
       WEAVE_TOOL_HISTORY_FULL_STEPS: 'nope',
       WEAVE_TOOL_HISTORY_FULL_CALLS: 'also-nope',
-    } as NodeJS.ProcessEnv)).toBe(16);
+    } as NodeJS.ProcessEnv)).toBe(8);
   });
 
   it('uses Mastra ToolCallFilter to preserve compact model output while filtering raw tool invocations', async () => {
@@ -540,7 +479,7 @@ describe('tool model output compaction', () => {
     expect(JSON.stringify(result).includes('raw content that should not remain')).toBe(false);
   });
 
-  it('preserves the latest 16 individual tool call ids, including parallel calls', () => {
+  it('preserves the latest 8 individual tool call ids, including parallel calls', () => {
     const parallelIds = [1, 2, 3];
     const laterIds = Array.from({ length: 15 }, (_, index) => index + 4);
     const prompt = [
@@ -600,11 +539,14 @@ describe('tool model output compaction', () => {
     expect(toolResultParts.find((part) => part.toolCallId === 'call-2')?.output.value).toContain(
       'Compact tool result summary',
     );
-    expect(toolResultParts.find((part) => part.toolCallId === 'call-3')?.output).toEqual({
+    expect(toolResultParts.find((part) => part.toolCallId === 'call-3')?.output.value).toContain(
+      'Compact tool result summary',
+    );
+    expect(toolResultParts.find((part) => part.toolCallId === 'call-11')?.output).toEqual({
       type: 'text',
-      value: 'raw call-3',
+      value: 'raw call-11',
     });
-    expect(fullResultIds).toEqual(Array.from({ length: 16 }, (_, index) => `call-${index + 3}`));
+    expect(fullResultIds).toEqual(Array.from({ length: 8 }, (_, index) => `call-${index + 11}`));
   });
 
   it('keeps provider prompt tool-call and tool-output pairs when compacting', () => {
@@ -652,7 +594,7 @@ describe('tool model output compaction', () => {
     });
   });
 
-  it('summarizes proposal tool-call inputs without raw proposal bodies', () => {
+  it('drops proposal tool-call history before provider prompts', () => {
     const proposedContent = 'export const value = "after";\n';
     const prompt = [
       {
@@ -681,31 +623,39 @@ describe('tool model output compaction', () => {
     ];
 
     const compacted = compactToolHistoryPrompt(prompt as any, { preserveToolSteps: 0 }) as any[];
-    const input = compacted[0].content[0].input;
 
-    expect(compacted).toHaveLength(2);
-    expect(input).toMatchObject({
-      proposalPath: '.agents/proposals/demo.md',
-      path: 'src/example.ts',
-      contentChars: proposedContent.length,
-      descriptionChars: 'Update the exported value.'.length,
-    });
-    expect(input.contentHash).toMatch(/^[a-f0-9]{12}$/);
-    expect(input.descriptionHash).toMatch(/^[a-f0-9]{12}$/);
-    expect(input.content).toBeUndefined();
-    expect(input.description).toBeUndefined();
-    const compactedJson = JSON.stringify(compacted);
-    expect(compactedJson.includes(proposedContent)).toBe(false);
-    expect(compactedJson.includes('Update the exported value.')).toBe(false);
-    expect(compacted[1].content[0]).toMatchObject({
-      type: 'tool-result',
-      toolCallId: 'call-proposal',
-      toolName: 'proposal_write',
-    });
-    expect(compacted[1].content[0].output.value).toContain('Compact tool result summary');
+    expect(compacted).toEqual([]);
+    expect(JSON.stringify(compacted).includes(proposedContent)).toBe(false);
+    expect(JSON.stringify(compacted).includes('proposal_write')).toBe(false);
   });
 
-  it('compacts persisted tool-invocation proposal inputs and long read/bash bodies', () => {
+  it('drops generated proposal action messages while preserving ordinary user discussion', () => {
+    const prompt = [
+      {
+        role: 'user',
+        metadata: {
+          weaveDisplay: {
+            kind: 'proposal_implementation_request',
+          },
+        },
+        content: [{ type: 'text', text: 'Implement the approved proposal items from .agents/proposals/demo.md.' }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'text', text: 'Address review feedback for the proposal at .agents/proposals/demo.md.' }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'text', text: 'Can we discuss the proposal idea without invoking a workflow?' }],
+      },
+    ];
+
+    const compacted = compactToolHistoryPrompt(prompt as any, { preserveToolSteps: 0 }) as any[];
+
+    expect(compacted).toEqual([prompt[2]]);
+  });
+
+  it('drops persisted proposal tool invocations and still compacts long read/bash bodies', () => {
     const proposedContent = `${'proposed body\n'.repeat(600)}proposal tail`;
     const longContent = `${'patch body\n'.repeat(600)}secret tail`;
     const longStdout = `${'stdout patch body\n'.repeat(600)}stdout tail`;
@@ -768,24 +718,17 @@ describe('tool model output compaction', () => {
     ];
 
     const compacted = compactToolHistoryPrompt(prompt as any, { preserveToolCalls: 0 }) as any[];
-    const [proposalPart, proposalReadPart, readPart, bashPart] = compacted[0].content;
-    const proposalArgs = proposalPart.toolInvocation.args;
+    const [readPart, bashPart] = compacted[0].content;
     const compactedJson = JSON.stringify(compacted);
 
-    expect(proposalArgs).toMatchObject({
-      proposalPath: '.agents/proposals/demo.md',
-      path: 'src/example.ts',
-      contentChars: proposedContent.length,
-    });
-    expect(proposalArgs.content).toBeUndefined();
-    expect(proposalReadPart.toolInvocation).toMatchObject({ toolName: 'proposal_read', toolCallId: 'call-proposal-read' });
-    expect(proposalReadPart.toolInvocation.result.value).toContain('contentHash:');
     expect(readPart.toolInvocation).toMatchObject({ toolName: 'read', toolCallId: 'call-read' });
     expect(readPart.toolInvocation.result.value).toContain('Compact tool result summary');
     expect(readPart.toolInvocation.result.value).toContain('contentHash:');
     expect(bashPart.toolInvocation).toMatchObject({ toolName: 'bash', toolCallId: 'call-bash' });
     expect(bashPart.toolInvocation.result.value).toContain('stdoutHash:');
     expect(compactedJson.includes('proposal tail')).toBe(false);
+    expect(compactedJson.includes('proposal_write')).toBe(false);
+    expect(compactedJson.includes('proposal_read')).toBe(false);
     expect(compactedJson.includes('secret tail')).toBe(false);
     expect(compactedJson.includes('stdout tail')).toBe(false);
   });
@@ -1239,6 +1182,44 @@ describe('observational memory request shaping', () => {
         metadata: { attachmentId: 'att_current', attachmentUrlPath: '/attachments/att_current' },
       },
     ]);
+  });
+
+  it('accepts pasted PNG screenshots with an empty clipboard MIME type', async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    const file = new File([pngBytes], 'clipboard-image', { type: '' });
+
+    await expect(inferImageMimeType(file)).resolves.toBe('image/png');
+
+    const pending = await imageAttachmentAdapter.add({ file });
+    expect(pending).toMatchObject({
+      type: 'image',
+      name: 'clipboard-image',
+      contentType: 'image/png',
+      status: { type: 'requires-action', reason: 'composer-send' },
+    });
+
+    const complete = await imageAttachmentAdapter.send(pending as any);
+    expect(complete.content).toEqual([
+      expect.objectContaining({
+        type: 'file',
+        mimeType: 'image/png',
+        filename: 'clipboard-image',
+        data: expect.stringMatching(/^data:image\/png;base64,/),
+      }),
+    ]);
+  });
+
+  it('accepts pasted JPEG screenshots with an empty MIME type when the filename identifies the image', async () => {
+    const file = new File([new Uint8Array([0x00])], 'screenshot.jpeg', { type: '' });
+
+    await expect(inferImageMimeType(file)).resolves.toBe('image/jpeg');
+
+    const pending = await imageAttachmentAdapter.add({ file });
+    expect(pending).toMatchObject({
+      type: 'image',
+      name: 'screenshot.jpeg',
+      contentType: 'image/jpeg',
+    });
   });
 
   it('strips display-only reasoning and data parts before submitting history to Mastra', () => {

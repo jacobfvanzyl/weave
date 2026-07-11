@@ -62,13 +62,13 @@ export const PlanSidebar = ({ plan, onOpenPlan }: { plan?: ThreadPlan; onOpenPla
             ) : null}
           </div>
         </div>
-        {plan.path && onOpenPlan ? (
+        {plan.artifactPath && onOpenPlan ? (
           <Button
             size="icon-xs"
             variant="ghost"
             aria-label="Open plan artifact"
-            title={plan.path}
-            onClick={() => onOpenPlan(plan.path!)}
+            title={plan.artifactPath}
+            onClick={() => onOpenPlan(plan.artifactPath!)}
           >
             <FileText size={14} />
           </Button>

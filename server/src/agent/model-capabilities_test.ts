@@ -1,4 +1,6 @@
 import {
+  CHATGPT_CODEX_GPT_5_6_MODELS,
+  getOpenAIModelCapabilities,
   normalizeOpenAIReasoningEffort,
   normalizeOpenAIServiceTier,
 } from './model-capabilities.ts';
@@ -12,6 +14,21 @@ const assertEquals = (actual: unknown, expected: unknown, message?: string) => {
 Deno.test('OpenAI reasoning normalization keeps xhigh for current Codex models', () => {
   assertEquals(normalizeOpenAIReasoningEffort('xhigh', 'openai/gpt-5.5', { fallbackToDefault: true }), 'xhigh');
 });
+
+for (const { slug } of CHATGPT_CODEX_GPT_5_6_MODELS) {
+  Deno.test(`${slug} exposes subscription-native capabilities`, () => {
+    const capabilities = getOpenAIModelCapabilities(`openai/${slug}`);
+    assertEquals(capabilities.contextWindow, 372_000);
+    assertEquals(capabilities.defaultReasoningEffort, 'medium');
+    assertEquals(
+      capabilities.supportedReasoningEfforts.map((option) => option.effort).join(','),
+      'low,medium,high,xhigh,max',
+    );
+    assertEquals(capabilities.serviceTiers.map((tier) => tier.id).join(','), 'priority');
+    assertEquals(normalizeOpenAIReasoningEffort('max', `chatgpt/codex/${slug}`), 'max');
+    assertEquals(normalizeOpenAIServiceTier('fast', `openai/${slug}`), 'priority');
+  });
+}
 
 Deno.test('OpenAI reasoning normalization maps legacy fast/no-reasoning values to fastest supported effort', () => {
   assertEquals(normalizeOpenAIReasoningEffort('minimal', 'chatgpt/codex/gpt-5.5', { fallbackToDefault: true }), 'low');

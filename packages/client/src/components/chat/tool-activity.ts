@@ -7,15 +7,13 @@ export type ToolActivityPlanStep = {
 };
 
 export type ToolActivityPlan = {
-  id?: string;
   title?: string;
-  path?: string;
+  artifactPath?: string;
   status?: ToolActivityPlanStepStatus;
   plan: ToolActivityPlanStep[];
   completed: number;
   total: number;
   updatedAt: string;
-  contentHash?: string;
   isBusy: boolean;
 };
 
@@ -51,15 +49,13 @@ export type ToolActivityProposal = {
 };
 
 type PlanPayload = {
-  id?: string;
   title?: string;
-  path?: string;
+  artifactPath?: string;
   status?: ToolActivityPlanStepStatus;
   plan: ToolActivityPlanStep[];
   completed?: number;
   total?: number;
   updatedAt?: string;
-  contentHash?: string;
 };
 
 export type ToolActivityCall = {
@@ -280,24 +276,24 @@ const getPlanPayload = (result: unknown, args: unknown): PlanPayload | null => {
     completed: typeof record.completed === 'number' ? record.completed : undefined,
     total: typeof record.total === 'number' ? record.total : undefined,
     updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : undefined,
-    ...(typeof record.id === 'string' ? { id: record.id } : {}),
     ...(typeof record.title === 'string' ? { title: record.title } : {}),
-    ...(typeof record.path === 'string' ? { path: record.path } : {}),
+    ...(typeof record.artifactPath === 'string'
+      ? { artifactPath: record.artifactPath }
+      : typeof record.path === 'string'
+      ? { artifactPath: record.path }
+      : {}),
     ...(isPlanStepStatus(record.status) ? { status: record.status } : {}),
-    ...(typeof record.contentHash === 'string' ? { contentHash: record.contentHash } : {}),
   };
 };
 
 const toThreadPlan = (payload: PlanPayload, isBusy: boolean): ToolActivityPlan => ({
-  id: payload.id,
   title: payload.title,
-  path: payload.path,
+  artifactPath: payload.artifactPath,
   status: payload.status,
   plan: payload.plan,
   completed: payload.completed ?? payload.plan.filter(item => item.status === 'completed').length,
   total: payload.total ?? payload.plan.length,
   updatedAt: payload.updatedAt ?? new Date().toISOString(),
-  contentHash: payload.contentHash,
   isBusy,
 });
 
@@ -352,6 +348,7 @@ export const getToolChipDetail = (toolName: string, args: unknown) => {
   if (toolName === 'bash' && typeof record?.command === 'string') return record.command;
   if (['read', 'write', 'edit'].includes(toolName) && typeof record?.path === 'string') return record.path;
   if (isUpdatePlanTool(toolName)) {
+    if (typeof record?.artifactPath === 'string') return record.artifactPath;
     if (typeof record?.planPath === 'string') return record.planPath;
     if (typeof record?.title === 'string') return record.title;
   }
@@ -386,7 +383,11 @@ export const getToolResultText = (toolName: string, result: unknown, args?: unkn
     if (toolName === 'edit' && typeof record.replacements === 'number') return `Applied ${record.replacements} replacement${record.replacements === 1 ? '' : 's'}.`;
     if (typeof record.diff === 'string' && record.diff.trim()) return record.diff;
     if (typeof record.error === 'string') return record.error;
-    if (isUpdatePlanTool(toolName) && typeof record.path === 'string') return `Plan artifact updated: ${record.path}`;
+    if (isUpdatePlanTool(toolName)) {
+      if (typeof record.artifactPath === 'string') return `Plan linked: ${record.artifactPath}`;
+      if (typeof record.path === 'string') return `Plan artifact updated: ${record.path}`;
+      if (typeof record.title === 'string') return `Plan updated: ${record.title}`;
+    }
     if (isFileScopedProposalTool(toolName)) {
       const path = getProposalFilePath(toolName, args, result);
       if (path) {

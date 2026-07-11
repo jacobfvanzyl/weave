@@ -1,4 +1,5 @@
 import {
+  CHATGPT_CODEX_DEFAULT_MODEL_IDS,
   getOpenAIModelCapabilities,
   type OpenAIReasoningEffortOption,
   type OpenAIServiceTierOption,
@@ -28,6 +29,12 @@ type ModelsDevModel = {
   limit?: {
     context?: number;
   };
+};
+
+type ConfiguredModelOption = {
+  id: string;
+  label?: string;
+  contextWindow?: number;
 };
 
 type ModelsDevProvider = {
@@ -97,11 +104,28 @@ const contextWindowForModel = (id: string, catalog?: ModelsDevCatalog) => {
   return typeof context === 'number' && Number.isFinite(context) && context > 0 ? context : undefined;
 };
 
-const modelOption = (id: string, catalog?: ModelsDevCatalog, label?: string): ModelOption => {
+const configuredContextWindowFor = (item: ConfiguredModelOption) => {
+  if (!Object.prototype.hasOwnProperty.call(item, 'contextWindow')) return undefined;
+  if (typeof item.contextWindow !== 'number' || !Number.isFinite(item.contextWindow) || item.contextWindow <= 0) {
+    throw new Error(`WEAVE_MODEL_OPTIONS contextWindow for ${item.id} must be a positive number.`);
+  }
+  return item.contextWindow;
+};
+
+const modelOption = (
+  id: string,
+  catalog?: ModelsDevCatalog,
+  label?: string,
+  configuredContextWindow?: number,
+): ModelOption => {
   const parts = splitModelId(id);
   const provider = parts ? catalog?.[parts.providerId] : undefined;
-  const contextWindow = contextWindowForModel(id, catalog);
   const capabilities = getOpenAIModelCapabilities(id);
+  const explicitContextWindow = typeof configuredContextWindow === 'number' &&
+      Number.isFinite(configuredContextWindow) && configuredContextWindow > 0
+    ? configuredContextWindow
+    : undefined;
+  const contextWindow = explicitContextWindow ?? capabilities.contextWindow ?? contextWindowForModel(id, catalog);
   return {
     id,
     label: label ?? labelForModel(id, catalog),
@@ -130,7 +154,7 @@ const modelOption = (id: string, catalog?: ModelsDevCatalog, label?: string): Mo
 
 const parseModelOptions = (catalog?: ModelsDevCatalog): ModelOption[] => {
   const raw = process.env.WEAVE_MODEL_OPTIONS;
-  if (!raw?.trim()) return [];
+  if (!raw?.trim()) return CHATGPT_CODEX_DEFAULT_MODEL_IDS.map((id) => modelOption(id, catalog));
 
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -141,11 +165,12 @@ const parseModelOptions = (catalog?: ModelsDevCatalog): ModelOption[] => {
             ? modelOption(item, catalog)
             : item && typeof item === 'object' && typeof (item as Record<string, unknown>).id === 'string'
             ? modelOption(
-              (item as Record<string, string>).id,
+              (item as ConfiguredModelOption).id,
               catalog,
-              typeof (item as Record<string, unknown>).label === 'string'
-                ? (item as Record<string, string>).label
+              typeof (item as ConfiguredModelOption).label === 'string'
+                ? (item as ConfiguredModelOption).label
                 : undefined,
+              configuredContextWindowFor(item as ConfiguredModelOption),
             )
             : undefined
         )
@@ -159,7 +184,7 @@ const parseModelOptions = (catalog?: ModelsDevCatalog): ModelOption[] => {
 };
 
 export const getModelConfig = async (): Promise<ModelConfig> => {
-  const defaultModel = process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.5';
+  const defaultModel = process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.6-sol';
   let catalog: ModelsDevCatalog | undefined;
   try {
     catalog = await getModelsDevCatalog();
@@ -174,6 +199,14 @@ export const getModelConfig = async (): Promise<ModelConfig> => {
       ? options
       : [modelOption(defaultModel, catalog), ...options],
   };
+};
+
+export const resolveModelOption = async (modelId: string): Promise<ModelOption> => {
+  const config = await getModelConfig();
+  const option = config.options.find(candidate => candidate.id === modelId);
+  if (!option) throw new Error(`Selected model is not configured: ${modelId}`);
+  if (!option.contextWindow) throw new Error(`Model ${modelId} does not advertise a valid context window.`);
+  return option;
 };
 
 export const __modelOptionsTest = {

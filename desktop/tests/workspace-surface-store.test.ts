@@ -448,7 +448,7 @@ describe('workspace surface store', () => {
     expect(useWorkspaceSurfaceStore.getState().editorFollowRequest?.id).toBeGreaterThan(firstRequestId ?? 0);
   });
 
-  it('preserves the proposal file path when opening source from review', async () => {
+  it('keeps proposal review disabled while preserving normal editor follow behavior', async () => {
     const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
 
     useWorkspaceSurfaceStore.getState().openProposalReview('.agents/proposals/demo.md');
@@ -462,15 +462,55 @@ describe('workspace surface store', () => {
 
     expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
       editorSlotMode: 'editor',
-      activeProposalPath: '.agents/proposals/demo.md',
-      activeProposalFilePath: 'src/file.ts',
+      activeProposalPath: undefined,
+      activeProposalFilePath: undefined,
     });
 
     useWorkspaceSurfaceStore.getState().openProposalReview('.agents/proposals/demo.md', { filePath: 'src/file.ts' });
     expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
-      editorSlotMode: 'proposal_review',
-      activeProposalPath: '.agents/proposals/demo.md',
-      activeProposalFilePath: 'src/file.ts',
+      editorSlotMode: 'editor',
+      activeProposalPath: undefined,
+      activeProposalFilePath: undefined,
+    });
+  });
+
+  it('normalizes persisted proposal review layouts back to editor mode', async () => {
+    const { useWorkspaceSurfaceStore } = await loadFreshSurfaceStore(storage => {
+      storage.setItem('weave-surface', JSON.stringify({
+        state: {
+          threadId: 'thread-1',
+          activeSurface: { kind: 'thread', threadId: 'thread-1' },
+          paneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: false },
+          editorSlotMode: 'proposal_review',
+          activeProposalPath: '.agents/proposals/demo.md',
+          activeProposalFilePath: 'src/file.ts',
+          surfaceLayouts: {
+            'thread:thread-1': {
+              paneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: false },
+              editorSlotMode: 'proposal_review',
+              activeProposalPath: '.agents/proposals/demo.md',
+              activeProposalFilePath: 'src/file.ts',
+              maximizedPane: null,
+            },
+          },
+          terminalPaneColumnsByWorkspace: {},
+          maximizedPane: null,
+        },
+        version: 1,
+      }));
+    });
+
+    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
+      editorSlotMode: 'editor',
+      activeProposalPath: undefined,
+      activeProposalFilePath: undefined,
+      surfaceLayouts: {
+        'thread:thread-1': {
+          editorSlotMode: 'editor',
+          activeProposalPath: undefined,
+          activeProposalFilePath: undefined,
+        },
+      },
     });
   });
 });

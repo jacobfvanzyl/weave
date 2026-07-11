@@ -127,7 +127,7 @@ describe('chat-state Project/Workspace API client', () => {
       id: 'user-1',
       role: 'user',
       parts: [{ type: 'text', text: 'steer now' }],
-    })).resolves.toEqual({ ok: true, accepted: true, runId: 'run-1', messageId: 'msg-1' });
+    }, { runId: 'active-run-1' })).resolves.toEqual({ ok: true, accepted: true, runId: 'run-1', messageId: 'msg-1' });
 
     expect(fetchMock.mock.calls).toEqual([
       [
@@ -141,7 +141,9 @@ describe('chat-state Project/Workspace API client', () => {
               role: 'user',
               parts: [{ type: 'text', text: 'steer now' }],
             },
+            runId: 'active-run-1',
           }),
+          signal: expect.any(AbortSignal),
         },
       ],
     ]);
@@ -162,6 +164,51 @@ describe('chat-state Project/Workspace API client', () => {
       role: 'user',
       parts: [{ type: 'text', text: 'steer now' }],
     })).resolves.toEqual({ ok: false, reason: 'not_active', run });
+  });
+
+  it('returns stale_run when steering reaches a different active run', async () => {
+    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
+    const run = { active: true, status: 'running' as const, runId: 'next-run' };
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: false, reason: 'stale_run', run }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(sendThreadSteeringMessage('thread-1', {
+      id: 'user-1',
+      role: 'user',
+      parts: [{ type: 'text', text: 'steer now' }],
+    }, { runId: 'old-run' })).resolves.toEqual({ ok: false, reason: 'stale_run', run });
+  });
+
+  it('aborts steering requests that do not resolve promptly', async () => {
+    vi.useFakeTimers();
+    try {
+      configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
+      const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const error = new Error('aborted');
+            error.name = 'AbortError';
+            reject(error);
+          });
+        }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const request = sendThreadSteeringMessage('thread-1', {
+        id: 'user-1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'steer now' }],
+      }, { runId: 'active-run-1', timeoutMs: 10 });
+      const rejection = expect(request).rejects.toMatchObject({ name: 'AbortError' });
+
+      await vi.advanceTimersByTimeAsync(10);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('creates workspaces with separate display name and branch action', async () => {
@@ -435,7 +482,7 @@ describe('chat-state Project/Workspace API client', () => {
     })]);
   });
 
-  it('maps latest plan artifact metadata onto chat threads', async () => {
+  it('maps legacy plan artifact metadata onto lightweight thread plans', async () => {
     configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
       threads: [{
@@ -467,14 +514,12 @@ describe('chat-state Project/Workspace API client', () => {
 
     await expect(listServerThreads()).resolves.toEqual([expect.objectContaining({
       latestPlan: {
-        id: 'bright-river',
         title: 'Plan Artifact Overhaul',
-        path: '.agents/plans/bright-river.md',
+        artifactPath: '.agents/plans/bright-river.md',
         status: 'blocked',
         completed: 1,
         total: 2,
         updatedAt: '2026-06-18T12:00:00.000Z',
-        contentHash: 'abc123',
         plan: [
           { id: 'research', step: 'Research current plan tooling', status: 'completed' },
           { id: 'implement', step: 'Implement artifact-aware plan tools', status: 'blocked' },
@@ -734,9 +779,8 @@ describe('chat-state Project/Workspace API client', () => {
       createdAt: now,
       updatedAt: now,
       latestPlan: {
-        id: 'bright-river',
         title: 'Plan Artifact Overhaul',
-        path: '.agents/plans/bright-river.md',
+        artifactPath: '.agents/plans/bright-river.md',
         status: 'blocked',
         plan: [
           { id: 'research', step: 'Research current plan tooling', status: 'completed' },
@@ -745,13 +789,12 @@ describe('chat-state Project/Workspace API client', () => {
         completed: 1,
         total: 2,
         updatedAt: '2026-06-18T12:00:00.000Z',
-        contentHash: 'abc123',
       },
     }]);
 
     expect(useChatStore.getState().threadPlans['thread-1']).toMatchObject({
       title: 'Plan Artifact Overhaul',
-      path: '.agents/plans/bright-river.md',
+      artifactPath: '.agents/plans/bright-river.md',
       status: 'blocked',
       completed: 1,
       total: 2,

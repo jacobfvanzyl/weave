@@ -4,6 +4,9 @@ export type ThreadContextUsageSnapshot = {
   usedTokens: number;
   totalProcessedTokens?: number;
   maxTokens?: number;
+  modelId?: string;
+  advertisedContextTokens?: number;
+  contextLimitPercent?: number;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;

@@ -1,4 +1,4 @@
-const defaultToolHistoryFullSteps = 16;
+const defaultToolHistoryFullSteps = 8;
 
 const positiveInteger = (value: unknown) => {
   const number = typeof value === 'string' ? Number(value) : value;

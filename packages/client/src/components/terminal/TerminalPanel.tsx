@@ -3,7 +3,7 @@ import { LoaderCircle, Maximize2, Minimize2, Plus, TerminalSquare, X } from 'luc
 import { Button } from '../ui/button';
 import type { TerminalSessionKind, TerminalTransport } from '../../lib/terminal-types';
 import type { TerminalPaneColumn } from '../../stores/workspace-surface-store';
-import { GhosttyTerminalView, type GhosttyTerminalHandle } from './GhosttyTerminalView';
+import { XtermTerminalView, type TerminalRendererHandle } from './XtermTerminalView';
 import {
   getActiveTerminalPanelTab,
   getTerminalPanelTabLabel,
@@ -130,7 +130,7 @@ const TerminalSessionView = ({
   target,
   transport,
 }: TerminalSessionViewProps) => {
-  const terminalRef = useRef<GhosttyTerminalHandle | null>(null);
+  const terminalRef = useRef<TerminalRendererHandle | null>(null);
   const onExitRef = useRef(onExit);
   const onSessionActiveChangeRef = useRef(onSessionActiveChange);
   const isActiveRef = useRef(isActive);
@@ -392,7 +392,7 @@ const TerminalSessionView = ({
     >
       <div className={isTerminalReady ? 'h-full min-h-0 w-full opacity-100' : 'pointer-events-none h-full min-h-0 w-full opacity-0'}>
         {shouldConnect ? (
-          <GhosttyTerminalView
+          <XtermTerminalView
             key={tab.terminalId}
             ref={terminalRef}
             autoFocus={false}

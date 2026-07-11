@@ -13,6 +13,7 @@ import {
 import { getPortalConnection } from '../../../portal/registry';
 import { callerForOwner } from '../../../services/types';
 import { toolService } from '../../../services/tool-runtime';
+import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars } from './model-output';
 import { getThreadBinding, offlineMessage, resolvePortalForBinding } from './portal-tools';
 
@@ -86,8 +87,7 @@ const withOk = async (value: Promise<Record<string, unknown> & { ok?: boolean; e
 
 export const gitStatusTool = createTool({
   id: 'git_status',
-  description:
-    'Inspect structured Git status for the current Workspace. Prefer this over running `git status` through bash.',
+  description: toolDescription('git_status'),
   inputSchema: z.object({}),
   outputSchema: gitOutputSchema,
   execute: async (_input, context) => {
@@ -102,8 +102,7 @@ export const gitStatusTool = createTool({
 
 export const gitDiffTool = createTool({
   id: 'git_diff',
-  description:
-    'Read a Git diff for the current Workspace. Use staged=true for the index, ref for a comparison ref, and path to limit output.',
+  description: toolDescription('git_diff'),
   inputSchema: z.object({
     staged: z.boolean().optional(),
     ref: z.string().optional(),
@@ -123,7 +122,7 @@ export const gitDiffTool = createTool({
 
 export const gitLogTool = createTool({
   id: 'git_log',
-  description: 'Read structured Git commit history for the current Workspace.',
+  description: toolDescription('git_log'),
   inputSchema: z.object({
     limit: z.number().optional(),
     ref: z.string().optional(),
@@ -142,7 +141,7 @@ export const gitLogTool = createTool({
 
 export const gitShowTool = createTool({
   id: 'git_show',
-  description: 'Show a Git commit or ref for the current Workspace, including stat and patch.',
+  description: toolDescription('git_show'),
   inputSchema: z.object({
     ref: z.string().optional(),
   }),
@@ -160,7 +159,7 @@ export const gitShowTool = createTool({
 
 export const gitBranchTool = createTool({
   id: 'git_branch',
-  description: 'List local and remote branches for the current Git Project.',
+  description: toolDescription('git_branch'),
   inputSchema: z.object({}),
   outputSchema: gitOutputSchema,
   execute: async (_input, context) => {
@@ -175,11 +174,11 @@ export const gitBranchTool = createTool({
 
 export const gitSwitchTool = createTool({
   id: 'git_switch',
-  description: 'Switch the current Workspace to an existing branch, or create and switch to a new branch.',
+  description: toolDescription('git_switch'),
   inputSchema: z.object({
-    branch: z.string().describe('Branch name to switch to or create'),
-    create: z.boolean().optional().describe('Create the branch before switching'),
-    base: z.string().optional().describe('Optional base ref when create is true'),
+    branch: z.string().describe(toolInputDescription('git_switch', 'branch')),
+    create: z.boolean().optional().describe(toolInputDescription('git_switch', 'create')),
+    base: z.string().optional().describe(toolInputDescription('git_switch', 'base')),
   }),
   outputSchema: gitOutputSchema,
   execute: async (input, context) => {
@@ -200,7 +199,7 @@ export const gitSwitchTool = createTool({
 
 export const gitWorktreeTool = createTool({
   id: 'git_worktree',
-  description: 'List, create, or remove Git worktrees for the current Git Project.',
+  description: toolDescription('git_worktree'),
   inputSchema: z.object({
     operation: z.enum(['list', 'create', 'remove']),
     mode: z.enum(['newBranch', 'existingBranch', 'detached']).optional(),
@@ -209,9 +208,7 @@ export const gitWorktreeTool = createTool({
     base: z.string().optional(),
     path: z.string().optional(),
     force: z.boolean().optional(),
-    deleteLocalBranch: z.boolean().optional().describe(
-      'After removing a worktree, delete its local branch only if Git proves it is fully pushed to its upstream/same-name remote branch or fully merged into the default branch. Never force deletes.',
-    ),
+    deleteLocalBranch: z.boolean().optional().describe(toolInputDescription('git_worktree', 'deleteLocalBranch')),
   }),
   outputSchema: gitOutputSchema,
   execute: async (input, context) => {

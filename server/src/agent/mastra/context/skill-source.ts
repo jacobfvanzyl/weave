@@ -1,7 +1,12 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname as pathDirname, join, relative } from 'node:path';
-import { LocalSkillSource, type SkillSource, type SkillSourceEntry, type SkillSourceStat } from '@mastra/core/workspace';
-import { parseFrontmatter } from '../prompt-templates/frontmatter';
+import {
+  LocalSkillSource,
+  type SkillSource,
+  type SkillSourceEntry,
+  type SkillSourceStat,
+} from '@mastra/core/workspace';
+import { parseFrontmatter } from '../../../instructions/frontmatter';
 import type { ResolvedAgentContext, WeaveContextFile } from './resolver';
 
 const virtualSkillRoot = '__weave_context_skills__';
@@ -15,7 +20,7 @@ type VirtualSkillFile = {
 
 export type ResolvedSkillSummary = {
   name: string;
-  source: 'source' | 'global' | 'project';
+  source: 'source' | 'user' | 'project';
   path: string;
   description?: string;
 };
@@ -43,7 +48,10 @@ const findProjectRoot = (startPath: string) => {
   let packageRoot = startPath;
 
   while (pathDirname(currentPath) !== currentPath) {
-    if (existsSync(join(currentPath, 'server/package.json')) && existsSync(join(currentPath, 'packages')) && existsSync(join(currentPath, 'portal'))) {
+    if (
+      existsSync(join(currentPath, 'server/package.json')) && existsSync(join(currentPath, 'packages')) &&
+      existsSync(join(currentPath, 'portal'))
+    ) {
       return currentPath;
     }
 
@@ -113,31 +121,46 @@ const createRegistryId = () => `${Date.now().toString(36)}_${crypto.randomUUID()
 
 const normalizeSkillPath = (path: string) => trimSlashes(path);
 
-const addVirtualSkill = (
+const relativeSkillFilePath = (skillName: string, filePath: string) => {
+  const normalized = trimSlashes(filePath);
+  const parts = normalized.split('/');
+  const skillIndex = parts.lastIndexOf('skills');
+  if (skillIndex >= 0 && parts[skillIndex + 1] === skillName) {
+    return parts.slice(skillIndex + 2).join('/') || 'SKILL.md';
+  }
+  return basename(normalized) === 'SKILL.md' ? 'SKILL.md' : basename(normalized);
+};
+
+const addVirtualSkillGroup = (
   registry: RegisteredContextSkills,
   root: string,
-  file: WeaveContextFile,
-  source: 'global' | 'project',
+  files: WeaveContextFile[],
+  source: 'user' | 'project',
 ) => {
-  const skillName = skillNameFromContent(file.content, file.path);
+  const mainFile = files.find((file) => basename(file.path) === 'SKILL.md') ?? files[0];
+  if (!mainFile) return;
+  const skillName = skillNameFromContent(mainFile.content, mainFile.path);
   if (!skillName) return;
 
   const skillDir = `${root}/${skillName}`;
-  const skillFile = `${skillDir}/SKILL.md`;
-  const modifiedAt = file.updatedAt ? new Date(file.updatedAt) : new Date();
+  for (const file of files) {
+    const relativePath = relativeSkillFilePath(skillName, file.path);
+    const skillFile = `${skillDir}/${relativePath}`;
+    const modifiedAt = file.updatedAt ? new Date(file.updatedAt) : new Date();
+    registry.files.set(skillFile, {
+      path: skillFile,
+      content: file.content,
+      size: typeof file.size === 'number' ? file.size : new TextEncoder().encode(file.content).byteLength,
+      modifiedAt,
+    });
+  }
 
-  registry.files.set(skillFile, {
-    path: skillFile,
-    content: file.content,
-    size: typeof file.size === 'number' ? file.size : new TextEncoder().encode(file.content).byteLength,
-    modifiedAt,
-  });
   registry.skillsByName.set(skillName, {
     name: skillName,
     source,
-    path: file.path,
+    path: mainFile.path,
     workspacePath: skillDir,
-    description: skillDescriptionFromContent(file.content),
+    description: skillDescriptionFromContent(mainFile.content),
   });
 };
 
@@ -145,12 +168,19 @@ const addSnapshotSkills = (
   registry: RegisteredContextSkills,
   root: string,
   files: WeaveContextFile[] | undefined,
-  source: 'global' | 'project',
+  source: 'user' | 'project',
 ) => {
-  const skillFiles = files?.filter(file => file.kind === 'skill') ?? [];
+  const skillFiles = files?.filter((file) => file.kind === 'skill') ?? [];
   if (skillFiles.length === 0) return;
   registry.roots.push(root);
-  for (const file of skillFiles) addVirtualSkill(registry, root, file, source);
+  const bySkillName = new Map<string, WeaveContextFile[]>();
+  for (const file of skillFiles) {
+    const skillName = skillNameFromPath(file.path);
+    const group = bySkillName.get(skillName) ?? [];
+    group.push(file);
+    bySkillName.set(skillName, group);
+  }
+  for (const group of bySkillName.values()) addVirtualSkillGroup(registry, root, group, source);
 };
 
 const mergeSkillRecords = (...layers: RegisteredSkill[][]) => {
@@ -180,7 +210,7 @@ const createResolvedContextSkillRegistry = (resolved: ResolvedAgentContext) => {
     files: new Map(),
   };
 
-  addSnapshotSkills(registry, `${root}/global`, resolved.globalSnapshot?.files, 'global');
+  addSnapshotSkills(registry, `${root}/user`, resolved.userSnapshot?.files, 'user');
   addSnapshotSkills(registry, `${root}/project`, resolved.projectSnapshot?.files, 'project');
 
   return registry;
@@ -190,7 +220,7 @@ export const registerResolvedContextSkills = (resolved: ResolvedAgentContext) =>
   const registry = createResolvedContextSkillRegistry(resolved);
 
   registries.set(registry.id, registry);
-  return [...combinedSkillsByName(registry).values()].map(skill => skill.workspacePath);
+  return [...combinedSkillsByName(registry).values()].map((skill) => skill.workspacePath);
 };
 
 export const listResolvedContextSkillSummaries = (resolved: ResolvedAgentContext): ResolvedSkillSummary[] => {

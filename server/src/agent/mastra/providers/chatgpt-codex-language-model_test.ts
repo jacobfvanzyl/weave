@@ -77,9 +77,11 @@ Deno.test('createChatGPTCodexFetch injects fresh subscription headers', async ()
     method: 'POST',
     headers: {
       Authorization: 'Bearer stale-token',
+      originator: 'mage-hand',
+      'User-Agent': 'mage-hand',
       'OpenAI-Beta': 'stale',
     },
-    body: JSON.stringify({ model: 'gpt-5.4' }),
+    body: JSON.stringify({ model: 'gpt-5.6-luna' }),
   });
 
   assert(captured, 'expected fetch call to be captured');
@@ -87,8 +89,8 @@ Deno.test('createChatGPTCodexFetch injects fresh subscription headers', async ()
   assertEquals(request.url, 'https://example.com/responses');
   assertEquals(request.headers.get('Authorization'), 'Bearer fresh-token');
   assertEquals(request.headers.get('ChatGPT-Account-Id'), 'account-1');
-  assertEquals(request.headers.get('originator'), 'mage-hand');
-  assertEquals(request.headers.get('User-Agent'), 'mage-hand');
+  assertEquals(request.headers.get('originator'), 'codex_cli_rs');
+  assertEquals(request.headers.get('User-Agent'), 'codex_cli_rs');
   assertEquals(request.headers.get('OpenAI-Beta'), 'responses=experimental');
 });
 
@@ -142,10 +144,10 @@ Deno.test('createChatGPTCodexFetch inlines Weave-local image attachments only', 
   assertEquals(content[0].image_url, 'data:image/png;base64,AQID');
 });
 
-Deno.test('official OpenAI options pass through with subscription-required store false', async () => {
+Deno.test('GPT-5.6 max reasoning and Fast tier pass through with subscription-required store false', async () => {
   const requests: CapturedRequest[] = [];
   const model = createChatGPTCodexLanguageModel({
-    modelId: 'gpt-5.4',
+    modelId: 'gpt-5.6-sol',
     getCredentials: async () => ({ access: 'fresh-token', accountId: 'account-1' }),
     fetch: async (input, init) => {
       requests.push({
@@ -164,7 +166,7 @@ Deno.test('official OpenAI options pass through with subscription-required store
         store: true,
         textVerbosity: 'high',
         parallelToolCalls: false,
-        reasoningEffort: 'low',
+        reasoningEffort: 'max',
         serviceTier: 'priority',
       },
     },
@@ -179,7 +181,8 @@ Deno.test('official OpenAI options pass through with subscription-required store
   assertEquals(body.store, false);
   assertEquals((body.text as Record<string, unknown> | undefined)?.verbosity, 'high');
   assertEquals(body.parallel_tool_calls, false);
-  assertEquals((body.reasoning as Record<string, unknown> | undefined)?.effort, 'low');
+  assertEquals(body.model, 'gpt-5.6-sol');
+  assertEquals((body.reasoning as Record<string, unknown> | undefined)?.effort, 'max');
   assertEquals(body.service_tier, 'priority');
 });
 

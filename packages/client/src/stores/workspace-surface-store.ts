@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createClientAppPersistStorage, getClientAppStorageItem, getClientAppStorageKey } from '../lib/client-app';
 import { createClientId } from '../lib/client-id';
+import { proposalWorkflowEnabled } from '../lib/proposal-workflow';
 import { workspaceRefKey } from '../lib/thread-eligibility';
 
 export type ActiveSurface =
@@ -209,11 +210,12 @@ const normalizePersistedSurfaceLayout = (value: unknown): SurfaceLayout | undefi
   const normalizedPaneVisibility = maximizedPane && !isPaneOpen(paneVisibility, maximizedPane)
     ? setPaneOpen(paneVisibility, maximizedPane, true)
     : paneVisibility;
+  const editorSlotMode = proposalWorkflowEnabled && record.editorSlotMode === 'proposal_review' ? 'proposal_review' : 'editor';
   return {
     paneVisibility: normalizedPaneVisibility,
-    editorSlotMode: record.editorSlotMode === 'proposal_review' ? 'proposal_review' : 'editor',
-    activeProposalPath: typeof record.activeProposalPath === 'string' ? record.activeProposalPath : undefined,
-    activeProposalFilePath: typeof record.activeProposalFilePath === 'string' ? record.activeProposalFilePath : undefined,
+    editorSlotMode,
+    activeProposalPath: editorSlotMode === 'proposal_review' && typeof record.activeProposalPath === 'string' ? record.activeProposalPath : undefined,
+    activeProposalFilePath: editorSlotMode === 'proposal_review' && typeof record.activeProposalFilePath === 'string' ? record.activeProposalFilePath : undefined,
     maximizedPane,
     preMaximizePaneVisibility: maximizedPane
       ? normalizePersistedPaneVisibility(record.preMaximizePaneVisibility)
@@ -317,13 +319,18 @@ const normalizePersistedSurfaceState = (
   const normalizedPaneVisibility = maximizedPane && !isPaneOpen(paneVisibility, maximizedPane)
     ? setPaneOpen(paneVisibility, maximizedPane, true)
     : paneVisibility;
+  const editorSlotMode = proposalWorkflowEnabled && state.editorSlotMode === 'proposal_review'
+    ? 'proposal_review'
+    : proposalWorkflowEnabled
+    ? fallback.editorSlotMode
+    : 'editor';
   return {
     threadId,
     activeSurface: isPersistedActiveSurface(state.activeSurface) ? state.activeSurface : fallback.activeSurface,
     paneVisibility: normalizedPaneVisibility,
-    editorSlotMode: state.editorSlotMode === 'proposal_review' ? 'proposal_review' : fallback.editorSlotMode,
-    activeProposalPath: typeof state.activeProposalPath === 'string' ? state.activeProposalPath : fallback.activeProposalPath,
-    activeProposalFilePath: typeof state.activeProposalFilePath === 'string' ? state.activeProposalFilePath : fallback.activeProposalFilePath,
+    editorSlotMode,
+    activeProposalPath: editorSlotMode === 'proposal_review' && typeof state.activeProposalPath === 'string' ? state.activeProposalPath : undefined,
+    activeProposalFilePath: editorSlotMode === 'proposal_review' && typeof state.activeProposalFilePath === 'string' ? state.activeProposalFilePath : undefined,
     surfaceLayouts: normalizePersistedSurfaceLayouts(state.surfaceLayouts ?? fallback.surfaceLayouts),
     terminalPaneColumnsByWorkspace: normalizePersistedTerminalPaneColumns(
       state.terminalPaneColumnsByWorkspace ?? fallback.terminalPaneColumnsByWorkspace,
@@ -442,7 +449,7 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
               preMaximizePaneVisibility: undefined,
             }),
       openProposalReview: (proposalPath, options) =>
-        set(state => ({
+        set(state => proposalWorkflowEnabled ? ({
           activeProposalPath: proposalPath,
           activeProposalFilePath: options?.filePath ?? state.activeProposalFilePath,
           editorSlotMode: 'proposal_review',
@@ -455,7 +462,7 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
           ),
           maximizedPane: null,
           preMaximizePaneVisibility: undefined,
-        })),
+        }) : state),
       closeProposalReview: () =>
         set(state => ({
           editorSlotMode: 'editor',
@@ -547,8 +554,8 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
             id: editorFollowRequestId += 1,
           },
           editorSlotMode: 'editor',
-          activeProposalPath: state.editorSlotMode === 'proposal_review' ? state.activeProposalPath : undefined,
-          activeProposalFilePath: state.editorSlotMode === 'proposal_review' ? request.path : state.activeProposalFilePath,
+          activeProposalPath: proposalWorkflowEnabled && state.editorSlotMode === 'proposal_review' ? state.activeProposalPath : undefined,
+          activeProposalFilePath: proposalWorkflowEnabled && state.editorSlotMode === 'proposal_review' ? request.path : state.activeProposalFilePath,
           paneVisibility: setPaneOpen(
             state.maximizedPane && state.preMaximizePaneVisibility
               ? state.preMaximizePaneVisibility

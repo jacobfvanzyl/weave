@@ -11,7 +11,7 @@ import {
 } from '@assistant-ui/react';
 import type { ReasoningMessagePartProps, ToolCallMessagePartProps } from '@assistant-ui/react';
 import type { ThreadMessage } from '@assistant-ui/core';
-import type { Attachment, AttachmentAdapter, CompleteAttachment, PendingAttachment, ThreadUserMessagePart } from '@assistant-ui/core';
+import type { Attachment, ThreadUserMessagePart } from '@assistant-ui/core';
 import type { ChatTransport, UIMessage } from 'ai';
 import { useChat } from '@ai-sdk/react';
 import { AssistantChatTransport, useAISDKRuntime } from '@assistant-ui/react-ai-sdk';
@@ -22,8 +22,16 @@ import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Check, ChevronRight, Clipboard, Crosshair, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
 import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { cancelThreadRun, getThreadContextUsage, getThreadRunState, listServerMessages, type ContextUsage } from '../../lib/chat-state-api';
-import { sendSteeringMessageOrFallback } from '../../lib/chat-steering';
+import {
+  cancelThreadRun,
+  compactThread as requestThreadCompaction,
+  getThreadContextUsage,
+  getThreadRunState,
+  listServerMessages,
+  type ContextUsage,
+  type ThreadRunState,
+} from '../../lib/chat-state-api';
+import { sendSteeringMessageToActiveRun } from '../../lib/chat-steering';
 import { cn } from '../../lib/cn';
 import {
   abandonComposerDraftServerAck,
@@ -32,12 +40,18 @@ import {
   markComposerDraftAwaitingServerAck,
   saveComposerDraft,
 } from '../../lib/composer-drafts';
-import { fuzzyScore } from '../../lib/fuzzy';
 import { getChatGPTAuthStatus, startChatGPTLogin } from '../../lib/chatgpt-auth-api';
 import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, type ModelOption } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptResolutionContext, type PromptSummary } from '../../lib/prompts-api';
+import { proposalWorkflowEnabled } from '../../lib/proposal-workflow';
 import { canViewProposalReview } from '../../lib/proposal-review-state';
+import {
+  matchSlashCommands,
+  mergeSlashCommands,
+  slashCommandComposerText,
+  type SlashCommandMatch,
+} from '../../lib/slash-commands';
 import {
   getThreadCompactionDisplay,
   getThreadCompactionDisplayLabel,
@@ -91,9 +105,11 @@ import {
 } from './ask-user';
 import { buildProposalImplementationUserMessage, getProposalActionDisplay, getProposalActionDisplayLabel } from './proposal-implementation';
 import { getWorkedForLabel, getWorkingForLabel } from './turn-timing';
+import { completeImageAttachment, imageAttachmentAdapter } from '../../lib/image-attachment-adapter';
 
 const ThreadIdContext = createContext<string | null>(null);
 const StopThreadRunContext = createContext<(() => Promise<void>) | null>(null);
+const ActiveThreadRunContext = createContext<ThreadRunState | undefined>(undefined);
 type PendingAskUserResume = {
   mastraRunId: string;
   toolCallId: string;
@@ -122,6 +138,7 @@ const ThreadAutoCollapseContext = createContext<ThreadAutoCollapseContextValue>(
   expandCollapsedTurn: () => {},
   liveAssistantTurnIds: {},
 });
+const preserveCompletedTurnTimeline = true;
 const toolCallCache = new Map<string, Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result' | 'isError'>>();
 const openedProposalReviewPhases = new Set<string>();
 
@@ -150,55 +167,8 @@ const promptContextForThread = (threadId: string | null, thread: ChatThread | un
   workspaceId: thread?.workspaceId,
 });
 
-const readFileAsDataUrl = (file: File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener('load', () => {
-      if (typeof reader.result === 'string') resolve(reader.result);
-      else reject(new Error('Could not read image data'));
-    });
-    reader.addEventListener('error', () => reject(reader.error ?? new Error('Could not read image data')));
-    reader.readAsDataURL(file);
-  });
-
-const imageAttachmentAdapter: AttachmentAdapter = {
-  accept: 'image/*',
-  async add({ file }) {
-    if (!file.type.startsWith('image/')) throw new Error('Only image attachments are supported');
-    return {
-      id: crypto.randomUUID(),
-      type: 'image',
-      name: file.name || 'image',
-      file,
-      contentType: file.type,
-      content: [],
-      status: { type: 'requires-action', reason: 'composer-send' },
-    };
-  },
-  async send(attachment) {
-    return {
-      ...attachment,
-      status: { type: 'complete' },
-      content: [
-        {
-          type: 'file',
-          mimeType: attachment.contentType ?? 'image/png',
-          filename: attachment.name,
-          data: await readFileAsDataUrl(attachment.file),
-        },
-      ],
-    };
-  },
-  async remove() {},
-};
-
-const isCompleteAttachment = (attachment: Attachment): attachment is CompleteAttachment =>
-  attachment.status.type === 'complete';
-
 const completeComposerAttachment = async (attachment: Attachment) => {
-  if (isCompleteAttachment(attachment)) return attachment;
-  if (attachment.status.type === 'incomplete') throw new Error('Attachment upload did not complete');
-  return imageAttachmentAdapter.send(attachment as PendingAttachment);
+  return completeImageAttachment(attachment);
 };
 
 const toSteeringFilePart = (part: ThreadUserMessagePart): UIMessage['parts'][number] | null => {
@@ -385,7 +355,7 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
           } else if (effect.type === 'updatePlan') {
             const shouldAutoExpand = useChatStore.getState().runningThreadIds.includes(targetThreadId);
             useChatStore.getState().setThreadPlan(targetThreadId, effect.plan, { autoExpand: shouldAutoExpand });
-          } else if (effect.type === 'proposal') {
+          } else if (effect.type === 'proposal' && proposalWorkflowEnabled) {
             const shouldAutoExpand = useChatStore.getState().runningThreadIds.includes(targetThreadId);
             const proposalAccepted = useChatStore.getState().setThreadProposal(targetThreadId, effect.proposal, { autoExpand: shouldAutoExpand });
             if (proposalAccepted) {
@@ -1202,9 +1172,12 @@ const AssistantMessageContent = () => {
     previousAssistantStatusRef.current = currentStatus;
 
     if (!finishedLiveTurn) return;
+    const shouldAutoCollapseFinishedTurn =
+      !preserveCompletedTurnTimeline &&
+      getAutoCollapsedAssistantTextPartIndices(message.content, showReasoning).length > 0;
     finishAssistantTurnIfFollowing(
       message.id,
-      getAutoCollapsedAssistantTextPartIndices(message.content, showReasoning).length > 0,
+      shouldAutoCollapseFinishedTurn,
     );
   }, [finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning, message.content, message.id, message.role, message.status?.type, showReasoning]);
 
@@ -1226,7 +1199,7 @@ const AssistantMessageContent = () => {
       <AssistantToolSideEffects message={message} />
       {message.role === 'assistant' ? (
         <AssistantGroupedContent
-          autoCollapsed={Boolean(autoCollapsedTurnIds[message.id]) && !isAssistantStreaming}
+          autoCollapsed={!preserveCompletedTurnTimeline && Boolean(autoCollapsedTurnIds[message.id]) && !isAssistantStreaming}
           collapsedWorkLabel={collapsedWorkLabel}
           deferCodeHighlight={isAssistantStreaming}
           onExpandCollapsedTurn={() => expandCollapsedTurn(message.id)}
@@ -1368,10 +1341,12 @@ const fallbackReasoningOptions: ReasoningOption[] = [
   defaultFallbackReasoningOption,
   { value: 'high', label: 'High', detail: 'Deeper reasoning' },
   { value: 'xhigh', label: 'Extra High', detail: 'Extra reasoning depth' },
+  { value: 'max', label: 'Max', detail: 'Maximum reasoning depth' },
 ];
 
 const asReasoningEffort = (value: unknown): ReasoningEffort | undefined =>
-  value === 'none' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh'
+  value === 'none' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' ||
+    value === 'xhigh' || value === 'max'
     ? value
     : undefined;
 
@@ -1414,6 +1389,8 @@ const reasoningToneClassName = (value: ReasoningEffort | undefined) => {
       return 'text-peach hover:text-peach';
     case 'xhigh':
       return 'text-[var(--ctp-maroon)] hover:text-[var(--ctp-maroon)]';
+    case 'max':
+      return 'text-[var(--ctp-red)] hover:text-[var(--ctp-red)]';
     default:
       return 'text-muted-foreground hover:text-foreground';
   }
@@ -1588,6 +1565,10 @@ const FollowWritesToggle = ({ canFollowWrites }: { canFollowWrites: boolean }) =
 
 type ContextUsageStreamPayload = {
   tokens: number;
+  modelId?: string;
+  contextWindow?: number;
+  contextLimitPercent?: number;
+  contextLimitTokens?: number;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
@@ -1612,6 +1593,10 @@ const getContextUsageStreamPayload = (dataPart: unknown): ContextUsageStreamPayl
 
   return {
     tokens,
+    modelId: typeof data.modelId === 'string' ? data.modelId : undefined,
+    contextWindow: finiteNumberFrom(data.contextWindow),
+    contextLimitPercent: finiteNumberFrom(data.contextLimitPercent),
+    contextLimitTokens: finiteNumberFrom(data.contextLimitTokens),
     inputTokens: finiteNumberFrom(data.inputTokens),
     cachedInputTokens: finiteNumberFrom(data.cachedInputTokens),
     outputTokens: finiteNumberFrom(data.outputTokens),
@@ -1630,12 +1615,16 @@ const applyContextUsageStreamPayload = (
   queryClient.setQueriesData<ContextUsage>(
     { queryKey: ['thread-context-usage', resourceId, threadId] },
     previous => {
-      const contextWindow = previous?.contextWindow;
+      if (!previous) return previous;
+      const contextLimitTokens = payload.contextLimitTokens ?? previous.contextLimitTokens;
       return {
         ...(previous ?? {}),
+        modelId: payload.modelId ?? previous.modelId,
+        contextWindow: payload.contextWindow ?? previous.contextWindow,
+        contextLimitPercent: payload.contextLimitPercent ?? previous.contextLimitPercent,
+        contextLimitTokens,
         tokens: payload.tokens,
-        contextWindow,
-        percent: contextWindow ? Math.min(100, (payload.tokens / contextWindow) * 100) : undefined,
+        percent: contextLimitTokens ? Math.min(100, (payload.tokens / contextLimitTokens) * 100) : 0,
         source: payload.source,
         updatedAt: payload.updatedAt,
         totalProcessedTokens: payload.totalProcessedTokens,
@@ -1650,17 +1639,18 @@ const applyContextUsageStreamPayload = (
 const ContextUsageRing = ({ threadId }: { threadId: string | null }) => {
   const resourceId = useChatStore(state => state.resourceId);
   const selectedModel = useChatStore(state => state.selectedModel);
+  const queryClient = useQueryClient();
+  const [isCompacting, setIsCompacting] = useState(false);
   const { data: modelConfig } = useQuery({
     queryKey: ['models'],
     queryFn: fetchModelConfig,
     staleTime: 1000 * 60 * 5,
   });
   const activeModel = selectedModel || modelConfig?.defaultModel || '';
-  const contextWindow = modelConfig?.options.find(model => model.id === activeModel)?.contextWindow;
   const { data } = useQuery({
-    queryKey: ['thread-context-usage', resourceId, threadId, contextWindow],
-    queryFn: () => getThreadContextUsage(threadId!, contextWindow),
-    enabled: Boolean(threadId),
+    queryKey: ['thread-context-usage', resourceId, threadId, activeModel],
+    queryFn: () => getThreadContextUsage(threadId!, activeModel),
+    enabled: Boolean(threadId && activeModel),
     staleTime: 15_000,
   });
   const hasPercent = typeof data?.percent === 'number';
@@ -1673,10 +1663,31 @@ const ContextUsageRing = ({ threadId }: { threadId: string | null }) => {
   const tone = clamped >= 90 ? 'text-destructive' : clamped >= 70 ? 'text-peach' : 'text-muted-foreground';
   const tokenLabel = data?.source === 'provider' ? 'tokens' : 'estimated tokens';
 
+  const compact = async () => {
+    if (!threadId || !activeModel || isCompacting || !data?.compactionEnabled) return;
+    setIsCompacting(true);
+    try {
+      await requestThreadCompaction(threadId, activeModel);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+      ]);
+    } catch (error) {
+      console.error('[chat] thread compaction failed', error);
+    } finally {
+      setIsCompacting(false);
+    }
+  };
+
   return (
-    <div
+    <button
+      type="button"
+      onClick={() => void compact()}
+      disabled={!threadId || !activeModel || isCompacting || !data?.compactionEnabled}
       className={cn('relative flex h-9 w-9 shrink-0 items-center justify-center', tone)}
-      title={data?.contextWindow ? `${data.tokens} / ${data.contextWindow} ${tokenLabel}` : `${data?.tokens ?? 0} ${tokenLabel}`}
+      title={data?.contextWindow
+        ? `${data.tokens} / ${data.contextLimitTokens} effective ${tokenLabel} (${data.contextLimitPercent}% of ${data.contextWindow} advertised); click to compact`
+        : `${data?.tokens ?? 0} ${tokenLabel}`}
       aria-label={hasPercent ? `Context usage ${displayedPercent}%` : 'Context usage unavailable'}
     >
       <svg viewBox="0 0 32 32" className="absolute inset-0 h-9 w-9 -rotate-90">
@@ -1693,35 +1704,20 @@ const ContextUsageRing = ({ threadId }: { threadId: string | null }) => {
           strokeDashoffset={offset}
         />
       </svg>
-      <span className="text-[10px] font-semibold tabular-nums">{hasPercent ? displayedPercent : '--'}</span>
-    </div>
+      <span className="text-[10px] font-semibold tabular-nums">{isCompacting ? '…' : hasPercent ? displayedPercent : '--'}</span>
+    </button>
   );
 };
 
 const PromptSlashMenu = ({
-  prompts,
-  query,
+  matches,
   activeIndex,
   onSelect,
 }: {
-  prompts: PromptSummary[];
-  query: string;
+  matches: SlashCommandMatch[];
   activeIndex: number;
   onSelect: (prompt: PromptSummary) => void;
 }) => {
-  const matches = prompts
-    .map(prompt => ({
-      prompt,
-      score: Math.max(
-        fuzzyScore(query, prompt.name),
-        fuzzyScore(query, prompt.description),
-        ...prompt.tags.map(tag => fuzzyScore(query, tag)),
-      ),
-    }))
-    .filter(match => match.score > 0)
-    .sort((a, b) => b.score - a.score || a.prompt.name.localeCompare(b.prompt.name))
-    .slice(0, 8);
-
   if (matches.length === 0) return null;
 
   return (
@@ -1798,8 +1794,10 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   const aui = useAui();
   const threadId = useContext(ThreadIdContext);
   const stopActiveThreadRun = useContext(StopThreadRunContext);
+  const activeThreadRun = useContext(ActiveThreadRunContext);
   const queryClient = useQueryClient();
   const resourceId = useChatStore(state => state.resourceId);
+  const selectedModel = useChatStore(state => state.selectedModel);
   const composerRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const skippedInitialDraftWriteThreadRef = useRef<string | null>(null);
@@ -1814,6 +1812,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   const isThreadRunning = isLocalThreadRunning || Boolean(threadId && runningThreadIds.includes(threadId));
   const isRemovedWorkspaceThread = Boolean(thread?.removedWorkspace);
   const [isSteeringSending, setIsSteeringSending] = useState(false);
+  const [isCompacting, setIsCompacting] = useState(false);
   const [emptyPlaceholder] = useState(getRandomEmptyThreadPlaceholder);
   const [activeIndex, setActiveIndex] = useState(0);
   const slashMatch = /^\/([a-zA-Z0-9_-]*)$/.exec(composerText);
@@ -1831,20 +1830,17 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
     queryFn: getChatGPTAuthStatus,
     staleTime: 10_000,
   });
+  const { data: modelConfig } = useQuery({
+    queryKey: ['models'],
+    queryFn: fetchModelConfig,
+    staleTime: 1000 * 60 * 5,
+  });
+  const activeModel = selectedModel || modelConfig?.defaultModel || '';
   const isChatGPTConnected = chatgptAuth?.connected === true;
   const isSendActive = isChatGPTConnected && !isComposerEmpty && !isRemovedWorkspaceThread;
-  const knownPromptNames = useMemo(() => new Set(prompts.map(prompt => prompt.name)), [prompts]);
-  const promptMatches = prompts
-    .map(prompt => ({
-      prompt,
-      score: Math.max(
-        fuzzyScore(slashMatch?.[1] ?? '', prompt.name),
-        fuzzyScore(slashMatch?.[1] ?? '', prompt.description),
-        ...prompt.tags.map(tag => fuzzyScore(slashMatch?.[1] ?? '', tag)),
-      ),
-    }))
-    .filter(match => slashMatch && match.score > 0)
-    .sort((a, b) => b.score - a.score || a.prompt.name.localeCompare(b.prompt.name));
+  const slashCommands = useMemo(() => mergeSlashCommands(prompts), [prompts]);
+  const knownPromptNames = useMemo(() => new Set(slashCommands.map(command => command.name)), [slashCommands]);
+  const promptMatches = slashMatch ? matchSlashCommands(slashCommands, slashMatch[1] ?? '') : [];
 
   useEffect(() => {
     setActiveIndex(0);
@@ -1882,7 +1878,7 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   };
 
   const selectPrompt = (prompt: PromptSummary) => {
-    aui.composer().setText(`/${prompt.name} `);
+    aui.composer().setText(slashCommandComposerText(prompt));
     setActiveIndex(0);
   };
 
@@ -1907,21 +1903,27 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
           }
         : undefined;
       const message = await buildSteeringUserMessage(messageText, attachments, metadata);
-      const result = await sendSteeringMessageOrFallback(threadId, message, {
-        sendFallbackMessage: () => aui.composer().send(),
+      const result = await sendSteeringMessageToActiveRun(threadId, message, {
+        runId: activeThreadRun?.active === true ? activeThreadRun.runId : undefined,
       });
 
       if (!result.ok) {
+        abandonComposerDraftServerAck(threadId);
+        const currentText = aui.composer().getState().text;
+        saveComposerDraft(threadId, currentText.length > 0 ? currentText : originalText);
         return;
       }
 
-      confirmComposerDraftReceived(threadId);
       const currentComposer = aui.composer().getState();
       const sameAttachments =
         currentComposer.attachments.length === attachments.length &&
         currentComposer.attachments.every((attachment, index) => attachment.id === attachments[index]?.id);
       if (currentComposer.text === originalText && sameAttachments) {
+        confirmComposerDraftReceived(threadId);
         await aui.composer().reset();
+      } else {
+        abandonComposerDraftServerAck(threadId);
+        saveComposerDraft(threadId, currentComposer.text);
       }
 
       await Promise.all([
@@ -1937,9 +1939,37 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
     } finally {
       setIsSteeringSending(false);
     }
-  }, [aui, composerAttachments, composerText, isSendActive, isSteeringSending, promptContext, queryClient, resourceId, threadId]);
+  }, [activeThreadRun?.active, activeThreadRun?.runId, aui, composerAttachments, composerText, isSendActive, isSteeringSending, promptContext, queryClient, resourceId, threadId]);
+
+  const runLocalCompaction = useCallback(async () => {
+    if (!threadId || !activeModel || isCompacting || isThreadRunning) return;
+    const match = /^\/compact(?:\s+([\s\S]*))?$/i.exec(composerText.trim());
+    if (!match) return;
+    const originalText = composerText;
+    setIsCompacting(true);
+    try {
+      await requestThreadCompaction(threadId, activeModel, match[1]?.trim());
+      await aui.composer().reset();
+      confirmComposerDraftReceived(threadId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+      ]);
+    } catch (error) {
+      saveComposerDraft(threadId, originalText);
+      console.error('[chat] thread compaction failed', error);
+    } finally {
+      setIsCompacting(false);
+    }
+  }, [activeModel, aui, composerText, isCompacting, isThreadRunning, queryClient, resourceId, threadId]);
 
   const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = event => {
+    if (event.key === 'Enter' && !event.shiftKey && /^\/compact(?:\s|$)/i.test(composerText.trim())) {
+      event.preventDefault();
+      void runLocalCompaction();
+      return;
+    }
+
     if (slashMatch && promptMatches.length > 0) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
@@ -1966,6 +1996,11 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   };
 
   const handleComposerSubmit: React.FormEventHandler<HTMLFormElement> = event => {
+    if (/^\/compact(?:\s|$)/i.test(composerText.trim())) {
+      event.preventDefault();
+      void runLocalCompaction();
+      return;
+    }
     if (!isThreadRunning || !isSendActive) return;
     event.preventDefault();
     void sendSteeringMessage();
@@ -1979,12 +2014,14 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
   return (
     <ComposerPrimitive.Root
       ref={composerRef}
-      onSubmitCapture={markDraftAwaitingSend}
+      onSubmitCapture={() => {
+        if (!/^\/compact(?:\s|$)/i.test(composerText.trim())) markDraftAwaitingSend();
+      }}
       onSubmit={handleComposerSubmit}
       className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-border bg-card px-4 py-3 shadow-sm"
       data-weave-text-surface="true"
     >
-      {slashMatch && isChatGPTConnected ? <PromptSlashMenu prompts={prompts} query={slashMatch[1] ?? ''} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
+      {slashMatch && isChatGPTConnected ? <PromptSlashMenu matches={promptMatches} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
       <div className="mb-3 flex flex-wrap gap-2 empty:hidden">
         <ComposerImageAttachments />
       </div>
@@ -2272,6 +2309,7 @@ const Thread = ({
   }, [isRunning, messages, updateBottomFollowState]);
 
   useEffect(() => {
+    if (!proposalWorkflowEnabled) return undefined;
     if (pendingProposalImplementationRequest?.mode !== 'implement') return undefined;
     setIsFollowingBottom(true);
     let secondFrame: number | undefined;
@@ -2447,8 +2485,16 @@ const AssistantChatRuntime = ({
     experimental_throttle: 80,
     onData: dataPart => {
       const payload = getContextUsageStreamPayload(dataPart);
-      if (!payload) return;
-      applyContextUsageStreamPayload(queryClient, resourceId, threadId, payload);
+      if (payload) {
+        applyContextUsageStreamPayload(queryClient, resourceId, threadId, payload);
+        return;
+      }
+      if (
+        dataPart && typeof dataPart === 'object' &&
+        (dataPart as Record<string, unknown>).type === 'data-thread-compaction'
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] });
+      }
     },
     onFinish: async () => {
       markThreadCompleted(threadId);
@@ -2513,6 +2559,7 @@ const AssistantChatRuntime = ({
   useEffect(() => {
     const request = pendingProposalImplementationRequest;
     if (!request) return;
+    if (!proposalWorkflowEnabled) return;
     if (chat.status !== 'ready' || runState?.active === true) return;
     if (sendingProposalImplementationRequestRef.current === request.id) return;
 
@@ -2547,18 +2594,20 @@ const AssistantChatRuntime = ({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <StopThreadRunContext.Provider value={stopActiveThreadRun}>
-        <AskUserResponseContext.Provider value={{ respond: respondToAskUser }}>
-          <ThreadIdContext.Provider value={threadId}>
-            <ThreadRunningTracker threadId={threadId} />
-            <IdleActiveThreadRefresher threadId={threadId} />
-            <Thread
-              autoCollapseContext={autoCollapseContext}
-              activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
-              canFollowWrites={canFollowWrites}
-              setIsFollowingBottom={setIsFollowingBottom}
-            />
-          </ThreadIdContext.Provider>
-        </AskUserResponseContext.Provider>
+        <ActiveThreadRunContext.Provider value={runState}>
+          <AskUserResponseContext.Provider value={{ respond: respondToAskUser }}>
+            <ThreadIdContext.Provider value={threadId}>
+              <ThreadRunningTracker threadId={threadId} />
+              <IdleActiveThreadRefresher threadId={threadId} />
+              <Thread
+                autoCollapseContext={autoCollapseContext}
+                activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
+                canFollowWrites={canFollowWrites}
+                setIsFollowingBottom={setIsFollowingBottom}
+              />
+            </ThreadIdContext.Provider>
+          </AskUserResponseContext.Provider>
+        </ActiveThreadRunContext.Provider>
       </StopThreadRunContext.Provider>
     </AssistantRuntimeProvider>
   );

@@ -26,9 +26,13 @@ type ContextUsageTracking = {
   threadId: string;
   resourceId?: string;
   maxTokens?: number;
+  modelId?: string;
+  advertisedContextTokens?: number;
+  contextLimitPercent?: number;
 };
 
 const placeholderApiKey = 'chatgpt-subscription';
+const codexCompatibilityClient = 'codex_cli_rs';
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
@@ -56,6 +60,15 @@ const getContextUsageTracking = (options: { providerOptions?: unknown }): Contex
     resourceId: typeof tracking.resourceId === 'string' ? tracking.resourceId : undefined,
     maxTokens: typeof tracking.maxTokens === 'number' && Number.isFinite(tracking.maxTokens) && tracking.maxTokens > 0
       ? tracking.maxTokens
+      : undefined,
+    modelId: typeof tracking.modelId === 'string' ? tracking.modelId : undefined,
+    advertisedContextTokens: typeof tracking.advertisedContextTokens === 'number' &&
+        Number.isFinite(tracking.advertisedContextTokens) && tracking.advertisedContextTokens > 0
+      ? tracking.advertisedContextTokens
+      : undefined,
+    contextLimitPercent: typeof tracking.contextLimitPercent === 'number' &&
+        Number.isFinite(tracking.contextLimitPercent) && tracking.contextLimitPercent > 0
+      ? tracking.contextLimitPercent
       : undefined,
   };
 };
@@ -260,8 +273,8 @@ export const createChatGPTCodexFetch = ({
 
     headers.set('Authorization', `Bearer ${credentials.access}`);
     headers.set('ChatGPT-Account-Id', credentials.accountId ?? '');
-    headers.set('originator', 'mage-hand');
-    headers.set('User-Agent', 'mage-hand');
+    headers.set('originator', codexCompatibilityClient);
+    headers.set('User-Agent', codexCompatibilityClient);
     headers.set('OpenAI-Beta', 'responses=experimental');
 
     return innerFetch(input, {

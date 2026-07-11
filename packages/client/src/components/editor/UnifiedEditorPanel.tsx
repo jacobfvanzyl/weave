@@ -2666,7 +2666,10 @@ export const UnifiedEditorPanel = ({
                 autoFocus
                 placeholder={createPathDialogPlaceholder}
                 value={createPathDialog?.value ?? ''}
-                onChange={event => setCreatePathDialog(current => current ? { ...current, value: event.currentTarget.value } : current)}
+                onChange={event => {
+                  const value = event.currentTarget.value;
+                  setCreatePathDialog(current => current ? { ...current, value } : current);
+                }}
               />
             </DialogPanel>
             <DialogFooter>

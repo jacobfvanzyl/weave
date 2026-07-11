@@ -26,10 +26,11 @@ export type PromptResolutionContext = {
 const firstContentLine = (content: string) =>
   content
     .split('\n')
-    .map(line => line.trim())
+    .map((line) => line.trim())
     .find(Boolean) ?? '';
 
-const toStringArray = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+const toStringArray = (value: unknown) =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 
 const loadPrompt = async (dir: string, fileName: string): Promise<PromptTemplate | null> => {
   if (!fileName.endsWith('.md')) return null;
@@ -60,7 +61,7 @@ const promptNameFromPath = (filePath: string) => {
   return name.endsWith('.md') ? name.slice(0, -'.md'.length) : name;
 };
 
-const promptFromContextFile = (file: WeaveContextFile, source: 'global' | 'project'): PromptTemplate | undefined => {
+const promptFromContextFile = (file: WeaveContextFile, source: 'user' | 'project'): PromptTemplate | undefined => {
   const name = promptNameFromPath(file.path);
   if (!promptNamePattern.test(name)) return undefined;
 
@@ -101,7 +102,7 @@ const listAppPromptTemplates = async (): Promise<PromptTemplate[]> => {
 
   for (const dir of promptDirs) {
     const files = await readdir(dir).catch(() => []);
-    const prompts = await Promise.all(files.map(fileName => loadPrompt(dir, fileName)));
+    const prompts = await Promise.all(files.map((fileName) => loadPrompt(dir, fileName)));
     for (const prompt of prompts) {
       if (prompt) promptsByName.set(prompt.name, prompt);
     }
@@ -116,14 +117,14 @@ export const listPromptTemplates = async (context?: PromptResolutionContext): Pr
   const resolved = await getResolvedContext(context);
   if (!resolved) return appPrompts;
 
-  const promptsByName = new Map<string, PromptTemplate>(appPrompts.map(prompt => [prompt.name, prompt]));
+  const promptsByName = new Map<string, PromptTemplate>(appPrompts.map((prompt) => [prompt.name, prompt]));
 
-  for (const file of resolved.globalSnapshot?.files.filter(file => file.kind === 'prompt') ?? []) {
-    const prompt = promptFromContextFile(file, 'global');
+  for (const file of resolved.userSnapshot?.files.filter((file) => file.kind === 'prompt') ?? []) {
+    const prompt = promptFromContextFile(file, 'user');
     if (prompt) promptsByName.set(prompt.name, prompt);
   }
 
-  for (const file of resolved.projectSnapshot?.files.filter(file => file.kind === 'prompt') ?? []) {
+  for (const file of resolved.projectSnapshot?.files.filter((file) => file.kind === 'prompt') ?? []) {
     const prompt = promptFromContextFile(file, 'project');
     if (prompt) promptsByName.set(prompt.name, prompt);
   }
@@ -139,7 +140,7 @@ export const listPromptSummaries = async (context?: PromptResolutionContext): Pr
 export const getPromptTemplate = async (name: string, context?: PromptResolutionContext) => {
   if (!promptNamePattern.test(name)) return undefined;
   const prompts = await listPromptTemplates(context);
-  return prompts.find(prompt => prompt.name === name);
+  return prompts.find((prompt) => prompt.name === name);
 };
 
 export const expandPromptTemplate = async (name: string, argsText: string, context?: PromptResolutionContext) => {

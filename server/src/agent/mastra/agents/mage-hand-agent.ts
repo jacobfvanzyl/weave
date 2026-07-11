@@ -4,12 +4,14 @@ import { SkillSearchProcessor, ToolCallFilter } from '@mastra/core/processors';
 import { PgVector } from '@mastra/pg';
 import { Memory } from '@mastra/memory';
 import { CurrentTurnImageProcessor } from '../current-turn-image-processor';
+import { CompactToolHistoryProcessor } from '../compact-tool-history-processor';
+import { getAgentMaxSteps, RunQualityProcessor } from '../run-quality-processor';
 import {
   getMemoryCapabilities,
-  resolveObservationalMemoryConfig,
   type SemanticRecallEmbeddingConfig,
 } from '../memory-policy';
 import { RuntimeContextProcessor } from '../runtime-context-processor';
+import { ThreadCompactionProcessor } from '../../thread-compaction';
 import { getMastraPostgresConfig } from '../storage-config';
 import { getToolHistoryFullSteps } from '../tool-call-filter-policy';
 import { baseWorkspace } from '../workspace';
@@ -39,7 +41,6 @@ const createSemanticRecallEmbedder = (config: SemanticRecallEmbeddingConfig) => 
 const createSharedMemory = () => {
   const capabilities = getMemoryCapabilities();
   const embeddingConfig = capabilities.semanticRecall ? capabilities.semanticRecallEmbeddingConfig : undefined;
-  const observationalMemory = resolveObservationalMemoryConfig(capabilities);
 
   return new Memory({
     ...(embeddingConfig
@@ -49,11 +50,6 @@ const createSharedMemory = () => {
           ...getMastraPostgresConfig(),
         }),
         embedder: createSemanticRecallEmbedder(embeddingConfig),
-      }
-      : {}),
-    ...(observationalMemory
-      ? {
-        options: { observationalMemory },
       }
       : {}),
   });
@@ -88,17 +84,7 @@ const portalWorkspaceToolKeys = new Set(['read', 'write', 'edit', 'bash']);
 const editorWorkspaceToolKeys = new Set(['editor_context']);
 
 const gitWorkspaceToolKeys = new Set([
-  'writePlanTool',
   'updatePlanTool',
-  'proposal_start',
-  'proposal_read',
-  'proposal_write',
-  'proposal_edit',
-  'proposal_delete',
-  'proposal_discard',
-  'proposal_status',
-  'proposal_finalize',
-  'proposal_mark',
   'git_status',
   'git_diff',
   'git_log',
@@ -176,7 +162,10 @@ export const mageHandAgent = new Agent({
   tools: resolveTools,
   inputProcessors: [
     new CurrentTurnImageProcessor(),
+    new RunQualityProcessor({ maxSteps: getAgentMaxSteps() }),
+    new CompactToolHistoryProcessor(),
     new ToolCallFilter({ filterAfterToolSteps: getToolHistoryFullSteps(), preserveModelOutput: true }),
+    new ThreadCompactionProcessor(),
     new SkillSearchProcessor({
       workspace: baseWorkspace,
       search: { topK: 8, minScore: 0.1 },

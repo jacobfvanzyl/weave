@@ -1,6 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import Exa from 'exa-js';
 import { z } from 'zod';
+import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput } from './model-output';
 
 const getExaClient = () => {
@@ -46,17 +47,18 @@ const webResultsModelOutput = (heading: string, output: unknown) => {
 
 export const webSearchTool = createTool({
   id: 'webSearch',
-  description:
-    'Search the web with Exa for current or external information. Returns relevant results with URLs, snippets, optional summaries, and optional full text.',
+  description: toolDescription('webSearch'),
   inputSchema: z.object({
-    query: z.string().min(1).describe('Search query'),
-    maxResults: z.number().min(1).max(10).optional().describe('Maximum results to return'),
-    includeText: z.boolean().optional().describe('Include cleaned page text in each result'),
-    includeSummary: z.boolean().optional().describe('Include Exa-generated summaries in each result'),
-    includeHighlights: z.boolean().optional().describe('Include relevant highlights in each result'),
-    includeDomains: z.array(z.string()).optional().describe('Restrict search to these domains'),
-    excludeDomains: z.array(z.string()).optional().describe('Exclude these domains'),
-    timeRange: z.enum(['day', 'week', 'month', 'year']).optional().describe('Filter by recency'),
+    query: z.string().min(1).describe(toolInputDescription('webSearch', 'query')),
+    maxResults: z.number().min(1).max(10).optional().describe(toolInputDescription('webSearch', 'maxResults')),
+    includeText: z.boolean().optional().describe(toolInputDescription('webSearch', 'includeText')),
+    includeSummary: z.boolean().optional().describe(toolInputDescription('webSearch', 'includeSummary')),
+    includeHighlights: z.boolean().optional().describe(toolInputDescription('webSearch', 'includeHighlights')),
+    includeDomains: z.array(z.string()).optional().describe(toolInputDescription('webSearch', 'includeDomains')),
+    excludeDomains: z.array(z.string()).optional().describe(toolInputDescription('webSearch', 'excludeDomains')),
+    timeRange: z.enum(['day', 'week', 'month', 'year']).optional().describe(
+      toolInputDescription('webSearch', 'timeRange'),
+    ),
   }),
   outputSchema: z.object({
     query: z.string(),
@@ -110,11 +112,11 @@ export const webSearchTool = createTool({
 
 export const webExtractTool = createTool({
   id: 'webExtract',
-  description: 'Extract readable content from one or more URLs with Exa. Use after webSearch when full source content is needed.',
+  description: toolDescription('webExtract'),
   inputSchema: z.object({
-    urls: z.array(z.string()).min(1).max(10).describe('URLs to extract content from'),
-    includeSummary: z.boolean().optional().describe('Include Exa-generated summaries'),
-    includeHighlights: z.boolean().optional().describe('Include relevant highlights'),
+    urls: z.array(z.string()).min(1).max(10).describe(toolInputDescription('webExtract', 'urls')),
+    includeSummary: z.boolean().optional().describe(toolInputDescription('webExtract', 'includeSummary')),
+    includeHighlights: z.boolean().optional().describe(toolInputDescription('webExtract', 'includeHighlights')),
   }),
   outputSchema: z.object({
     results: z.array(

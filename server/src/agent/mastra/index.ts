@@ -3,13 +3,14 @@ import { PinoLogger } from '@mastra/loggers';
 import { PostgresStore } from '@mastra/pg';
 import { Observability, CloudExporter, SensitiveDataFilter } from '@mastra/observability';
 import { mageHandAgent } from './agents/mage-hand-agent';
+import { threadCompactionAgent } from './thread-compaction-agent';
 import { workspace } from './workspace';
 import { ChatGPTCodexGateway } from './providers/chatgpt-codex-gateway';
 import { getMastraPostgresConfig } from './storage-config';
 
 export const mastra = new Mastra({
   workspace,
-  agents: { mageHandAgent },
+  agents: { mageHandAgent, threadCompactionAgent },
   gateways: {
     chatgpt: new ChatGPTCodexGateway(),
   },

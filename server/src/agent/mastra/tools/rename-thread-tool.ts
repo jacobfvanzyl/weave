@@ -1,5 +1,6 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput } from './model-output';
 
 const maxTitleLength = 64;
@@ -13,9 +14,9 @@ const cleanTitle = (title: string) =>
 
 export const renameThreadTool = createTool({
   id: 'rename-thread',
-  description: 'Rename the current chat thread with a concise descriptive title. Use once early when the topic is clear, and call it again when the thread topic meaningfully changes from the current title.',
+  description: toolDescription('rename-thread'),
   inputSchema: z.object({
-    title: z.string().min(1).max(maxTitleLength).describe('Concise title for the current thread'),
+    title: z.string().min(1).max(maxTitleLength).describe(toolInputDescription('rename-thread', 'title')),
   }),
   outputSchema: z.object({
     title: z.string(),

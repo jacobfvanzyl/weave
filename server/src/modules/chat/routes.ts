@@ -1,5 +1,6 @@
 import { mountRoute } from '../../server/routes';
 import { registerAgentContribution } from '../../agent/contributions';
+import { contributionDescription } from '../../instructions/contribution-instructions';
 import type { ServerModule } from '../types';
 import { productProjectRoutes } from '../code/routes/projects';
 import { createChatRoutes } from './routes/chat';
@@ -15,10 +16,10 @@ const chatProjectPath = (path: string) =>
 registerAgentContribution({
   moduleId: 'chat',
   runtimeContextProviders: [
-    { id: 'chat.thread', description: 'Thread metadata, model, and run context.' },
+    { id: 'chat.thread', description: contributionDescription('chat.thread') },
   ],
   memoryPolicyHints: [
-    { id: 'chat.context-window', description: 'Context-window and compaction policy for chat runs.' },
+    { id: 'chat.context-window', description: contributionDescription('chat.context-window') },
   ],
 });
 

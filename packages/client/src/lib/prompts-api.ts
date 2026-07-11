@@ -13,7 +13,7 @@ export type PromptSummary = {
   description: string;
   argumentHint?: string;
   tags: string[];
-  source: 'app' | 'global' | 'project';
+  source: 'app' | 'user' | 'project';
   path?: string;
 };
 

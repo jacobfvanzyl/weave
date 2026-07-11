@@ -1,11 +1,15 @@
-import { isHiddenToolCall, isLeakedToolOutputText, toToolActivityCall } from './tool-activity';
-import { parseAskUserPart } from './ask-user';
-import { getThreadCompactionPartDisplay } from '../../lib/thread-compaction-display';
+import {
+  isHiddenToolCall,
+  isLeakedToolOutputText,
+  toToolActivityCall,
+} from "./tool-activity";
+import { parseAskUserPart } from "./ask-user";
+import { getThreadCompactionPartDisplay } from "../../lib/thread-compaction-display";
 
 export type AssistantContentRange =
-  | { type: 'part'; index: number }
-  | { type: 'reasoning'; indices: number[] }
-  | { type: 'tool-activity'; indices: number[] };
+  | { type: "part"; index: number }
+  | { type: "reasoning"; indices: number[] }
+  | { type: "tool-activity"; indices: number[] };
 
 export type AutoCollapsibleAssistantMessage = {
   id?: string;
@@ -15,51 +19,56 @@ export type AutoCollapsibleAssistantMessage = {
 };
 
 export const getPartType = (part: unknown) => {
-  if (!part || typeof part !== 'object') return '';
+  if (!part || typeof part !== "object") return "";
   const record = part as Record<string, unknown>;
-  return typeof record.type === 'string' ? record.type : '';
+  return typeof record.type === "string" ? record.type : "";
 };
 
 export const getReasoningText = (part: unknown) => {
-  if (!part || typeof part !== 'object') return '';
+  if (!part || typeof part !== "object") return "";
   const record = part as Record<string, unknown>;
-  return record.type === 'reasoning' && typeof record.text === 'string' ? record.text.trim() : '';
+  return record.type === "reasoning" && typeof record.text === "string"
+    ? record.text.trim()
+    : "";
 };
 
 export const getTextPartText = (part: unknown) => {
-  if (!part || typeof part !== 'object') return '';
+  if (!part || typeof part !== "object") return "";
   const record = part as Record<string, unknown>;
-  return record.type === 'text' && typeof record.text === 'string' ? record.text.trim() : '';
+  return record.type === "text" && typeof record.text === "string"
+    ? record.text.trim()
+    : "";
 };
 
 const isVisibleReasoningPart = (part: unknown) =>
-  getPartType(part) === 'reasoning' && getReasoningText(part).length > 0;
+  getPartType(part) === "reasoning" && getReasoningText(part).length > 0;
 
 const isVisibleTextPart = (part: unknown) =>
-  getPartType(part) === 'text'
-  && getTextPartText(part).length > 0
-  && !isLeakedToolOutputText(getTextPartText(part));
+  getPartType(part) === "text" &&
+  getTextPartText(part).length > 0 &&
+  !isLeakedToolOutputText(getTextPartText(part));
 
 const isVisibleToolOutputPart = (part: unknown) => {
   const call = toToolActivityCall(part);
   return call !== null && !isHiddenToolCall(call);
 };
 
-const isSubmittedAskUserPart = (part: unknown) => parseAskUserPart(part)?.status === 'submitted';
+const isSubmittedAskUserPart = (part: unknown) =>
+  parseAskUserPart(part)?.status === "submitted";
 
 export const isSteeredUserMessagePart = (part: unknown) => {
-  if (!part || typeof part !== 'object') return false;
+  if (!part || typeof part !== "object") return false;
   const record = part as Record<string, unknown>;
   return (
-    record.type === 'data-user-message' ||
-    (record.type === 'data' && record.name === 'user-message')
+    record.type === "data-user-message" ||
+    (record.type === "data" && record.name === "user-message")
   );
 };
 
 export const isVisibleNonReasoningOutputPart = (part: unknown) => {
   const type = getPartType(part);
-  if (type === 'reasoning') return false;
-  if (type === 'text') return isVisibleTextPart(part);
+  if (type === "reasoning") return false;
+  if (type === "text") return isVisibleTextPart(part);
   if (toToolActivityCall(part)) return isVisibleToolOutputPart(part);
   if (isSubmittedAskUserPart(part)) return true;
   if (isSteeredUserMessagePart(part)) return true;
@@ -67,46 +76,11 @@ export const isVisibleNonReasoningOutputPart = (part: unknown) => {
   return false;
 };
 
-const isVisibleAssistantOutputPart = (part: unknown, showReasoning: boolean) =>
-  (isVisibleNonReasoningOutputPart(part) && !isSteeredUserMessagePart(part)) ||
-  (showReasoning && isVisibleReasoningPart(part));
-
 export const getAutoCollapsedAssistantTextPartIndices = (
-  parts: readonly unknown[],
-  showReasoning: boolean,
+  _parts: readonly unknown[],
+  _showReasoning: boolean,
 ): number[] => {
-  let finalTextIndex = -1;
-
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index];
-    if (isVisibleTextPart(part)) {
-      finalTextIndex = index;
-      break;
-    }
-
-    if (isVisibleAssistantOutputPart(part, showReasoning)) return [];
-  }
-
-  if (finalTextIndex < 0) return [];
-  if (parts.slice(0, finalTextIndex).some(isSteeredUserMessagePart)) return [];
-
-  let firstFinalTextIndex = finalTextIndex;
-  for (let index = finalTextIndex - 1; index >= 0; index -= 1) {
-    if (!isVisibleTextPart(parts[index])) break;
-    firstFinalTextIndex = index;
-  }
-
-  const hasEarlierWork = parts
-    .slice(0, firstFinalTextIndex)
-    .some(part => isVisibleAssistantOutputPart(part, showReasoning));
-  if (!hasEarlierWork) return [];
-
-  const indices: number[] = [];
-  for (let index = firstFinalTextIndex; index <= finalTextIndex; index += 1) {
-    if (isVisibleTextPart(parts[index])) indices.push(index);
-  }
-
-  return indices;
+  return [];
 };
 
 export const getDefaultAutoCollapsedAssistantTurnIds = (
@@ -117,27 +91,42 @@ export const getDefaultAutoCollapsedAssistantTurnIds = (
   const ids: Record<string, true> = {};
 
   for (const message of messages) {
-    if (message.role !== 'assistant' || !message.id || message.status?.type === 'running') continue;
+    if (
+      message.role !== "assistant" || !message.id ||
+      message.status?.type === "running"
+    ) continue;
     if (expandedIds[message.id]) continue;
-    if (getAutoCollapsedAssistantTextPartIndices(message.parts ?? [], showReasoning).length === 0) continue;
+    if (
+      getAutoCollapsedAssistantTextPartIndices(
+        message.parts ?? [],
+        showReasoning,
+      ).length === 0
+    ) continue;
     ids[message.id] = true;
   }
 
   return ids;
 };
 
-export const getAssistantContentRanges = (parts: readonly unknown[], showReasoning: boolean): AssistantContentRange[] => {
+export const getAssistantContentRanges = (
+  parts: readonly unknown[],
+  showReasoning: boolean,
+): AssistantContentRange[] => {
   const ranges: AssistantContentRange[] = [];
   let reasoningIndices: number[] = [];
   let toolIndices: number[] = [];
 
   const flushReasoning = () => {
-    if (reasoningIndices.length > 0) ranges.push({ type: 'reasoning', indices: reasoningIndices });
+    if (reasoningIndices.length > 0) {
+      ranges.push({ type: "reasoning", indices: reasoningIndices });
+    }
     reasoningIndices = [];
   };
 
   const flushTools = () => {
-    if (toolIndices.length > 0) ranges.push({ type: 'tool-activity', indices: toolIndices });
+    if (toolIndices.length > 0) {
+      ranges.push({ type: "tool-activity", indices: toolIndices });
+    }
     toolIndices = [];
   };
 
@@ -162,7 +151,7 @@ export const getAssistantContentRanges = (parts: readonly unknown[], showReasoni
     if (isVisibleNonReasoningOutputPart(part)) {
       flushReasoning();
       flushTools();
-      ranges.push({ type: 'part', index });
+      ranges.push({ type: "part", index });
     }
   }
 

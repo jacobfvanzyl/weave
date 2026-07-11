@@ -1,6 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { requestClientTool, resolveClientToolHostForTarget } from '../../../client-tools/registry';
+import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars } from './model-output';
 import { getThreadBinding, offlineMessage } from './portal-tools';
 
@@ -116,9 +117,9 @@ const normalizeClientToolResult = (value: unknown, clientId: string): EditorCont
 
 export const editorContextTool = createTool({
   id: 'editor_context',
-  description: 'Read the live editor context from the connected Weave client for this Workspace. Use when the user asks about open buffers, unsaved editor content, current selection, visible code/notes, or Coppermind cells/canvas state.',
+  description: toolDescription('editor_context'),
   inputSchema: z.object({
-    mode: z.enum(['code', 'notes']).optional().describe('Optional editor mode to prefer. Defaults to the current Workspace context.'),
+    mode: z.enum(['code', 'notes']).optional().describe(toolInputDescription('editor_context', 'mode')),
   }),
   outputSchema: z.object({
     ok: z.boolean(),

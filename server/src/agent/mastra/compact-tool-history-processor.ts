@@ -5,6 +5,7 @@ import type {
 } from '@mastra/core/processors';
 import { hashText } from './tools/model-output';
 import { summarizeProposalToolInput } from './tools/proposal-tool-input-summary';
+import { getModelContextBudget } from '../context-budget';
 
 const compactToolHistoryPrefix = 'Compact tool result summary';
 const legacyCompactToolHistoryToolNames = [
@@ -61,6 +62,7 @@ const legacyCompactToolHistoryToolNames = [
 const legacyCompactToolHistoryFields = [
   'ok',
   'path',
+  'artifactPath',
   'command',
   'query',
   'results',
@@ -126,7 +128,7 @@ type CompactToolHistoryPart = {
   };
 };
 
-const defaultPreserveToolCalls = 16;
+const defaultPreserveToolCalls = 8;
 const tokensPerMessage = 3.8;
 const tokensPerConversation = 24;
 
@@ -179,6 +181,9 @@ const getToolInvocationCallId = (part: PromptPart) => {
 
 const hasToolCallPart = (message: PromptMessage) => getContentParts(message).some(part => isToolCallPart(part) || isToolInvocationPart(part));
 
+const normalizeToolName = (toolName: string) =>
+  toolName.startsWith('functions.') ? toolName.slice('functions.'.length) : toolName;
+
 const proposalToolNames = new Set([
   'proposal_start',
   'proposal_read',
@@ -190,6 +195,48 @@ const proposalToolNames = new Set([
   'proposal_finalize',
   'proposal_mark',
 ]);
+
+const isProposalToolName = (toolName: string) => proposalToolNames.has(normalizeToolName(toolName));
+
+const proposalActionDisplayKinds = new Set([
+  'proposal_review_feedback',
+  'proposal_implementation_request',
+]);
+
+const isProposalActionMetadataRecord = (metadata: unknown): metadata is Record<string, unknown> => {
+  if (!isRecord(metadata)) return false;
+
+  if (isRecord(metadata.weaveDisplay) && proposalActionDisplayKinds.has(String(metadata.weaveDisplay.kind))) {
+    return true;
+  }
+
+  return isRecord(metadata.proposalImplementation);
+};
+
+const isGeneratedProposalActionMetadata = (message: PromptMessage) =>
+  isProposalActionMetadataRecord(message.metadata) ||
+  (isRecord(message.metadata) && isProposalActionMetadataRecord(message.metadata.custom));
+
+const promptPartUserText = (part: PromptPart) => {
+  if (typeof part.text === 'string') return part.text;
+  if (typeof part.content === 'string') return part.content;
+  return '';
+};
+
+const promptMessageText = (message: PromptMessage) => {
+  if (typeof message.content === 'string') return message.content;
+  return getContentParts(message).map(promptPartUserText).join('');
+};
+
+const isLegacyGeneratedProposalActionText = (text: string) => {
+  const trimmed = text.trimStart();
+  return trimmed.startsWith('Address review feedback for the proposal at ') ||
+    trimmed.startsWith('Implement the approved proposal items from ');
+};
+
+const isGeneratedProposalActionMessage = (message: PromptMessage) =>
+  message.role === 'user' &&
+    (isGeneratedProposalActionMetadata(message) || isLegacyGeneratedProposalActionText(promptMessageText(message)));
 
 const textHashSummary = (value: unknown, prefix: string) => {
   if (typeof value !== 'string') return [];
@@ -257,7 +304,7 @@ const compactToolResultForPrompt = (toolName: string, output: unknown, args?: Re
       const summary = compactPortalReadResult(output);
       if (summary) return summary;
     }
-    if (toolName === 'proposal_read') {
+    if (normalizeToolName(toolName) === 'proposal_read') {
       const summary = compactProposalReadResult(output);
       if (summary) return summary;
     }
@@ -269,7 +316,7 @@ const compactToolResultForPrompt = (toolName: string, output: unknown, args?: Re
 
   const summary = toolResultOutputToText(output);
   if (!summary) return null;
-  if ((toolName === 'read' || toolName === 'bash' || toolName === 'proposal_read') && summary.length > 2_000) {
+  if ((toolName === 'read' || toolName === 'bash' || normalizeToolName(toolName) === 'proposal_read') && summary.length > 2_000) {
     return summaryLines([
       ['resultChars', summary.length],
       ['resultHash', hashText(summary)],
@@ -439,7 +486,7 @@ const compactToolResultPart = (part: PromptPart) => {
 };
 
 const compactToolCallPart = (part: PromptPart) => {
-  if (!proposalToolNames.has(getToolName(part))) return part;
+  if (!isProposalToolName(getToolName(part))) return part;
 
   const nextPart = {
     ...part,
@@ -457,7 +504,7 @@ const compactToolInvocationPart = (part: PromptPart, preserveToolCallIds: Set<st
   const args = isRecord(invocation.args) ? invocation.args : undefined;
   const nextInvocation = {
     ...invocation,
-    ...(proposalToolNames.has(toolName) && invocation.args !== undefined
+    ...(isProposalToolName(toolName) && invocation.args !== undefined
       ? { args: summarizeProposalToolInput(invocation.args) }
       : {}),
   };
@@ -489,6 +536,12 @@ const compactAssistantMessage = (message: PromptMessage, preserveToolCallIds: Se
   const nextContent = getContentParts(message).flatMap(part => {
     if (isCompactToolHistoryTextPart(part)) return [];
 
+    if (isToolCallPart(part) && isProposalToolName(getToolName(part))) return [];
+
+    if (isToolInvocationPart(part) && isProposalToolName(getToolInvocationName(part))) return [];
+
+    if (isToolResultPart(part) && isProposalToolName(getToolName(part))) return [];
+
     if (isToolCallPart(part)) return [compactToolCallPart(part)];
 
     if (isToolInvocationPart(part)) return [compactToolInvocationPart(part, preserveToolCallIds)];
@@ -511,6 +564,8 @@ const compactToolMessage = (message: PromptMessage, preserveToolCallIds: Set<str
   const nextContent = getContentParts(message).flatMap(part => {
     if (!isToolResultPart(part)) return [];
 
+    if (isProposalToolName(getToolName(part))) return [];
+
     const toolCallId = getToolCallId(part);
     if (toolCallId && preserveToolCallIds.has(toolCallId)) return [part];
 
@@ -532,6 +587,11 @@ export const compactToolHistoryPrompt = (
   let changed = false;
 
   const nextPrompt = prompt.flatMap(message => {
+    if (isGeneratedProposalActionMessage(message)) {
+      changed = true;
+      return [];
+    }
+
     if (!Array.isArray(message.content)) return [message];
 
     if (message.role === 'assistant') {
@@ -603,8 +663,9 @@ export class CompactToolHistoryProcessor implements Processor<'weave-compact-too
 
   processLLMRequest(args: ProcessLLMRequestArgs): ProcessLLMRequestResult {
     const compactedPrompt = compactToolHistoryPrompt(args.prompt as PromptMessage[], this.options);
+    const contextLimit = getModelContextBudget(args.requestContext)?.contextLimitTokens;
     return {
-      prompt: limitCompactToolHistoryPrompt(compactedPrompt, this.options.tokenLimit) as typeof args.prompt,
+      prompt: limitCompactToolHistoryPrompt(compactedPrompt, contextLimit ?? this.options.tokenLimit) as typeof args.prompt,
     };
   }
 }

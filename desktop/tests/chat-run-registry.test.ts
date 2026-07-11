@@ -128,7 +128,6 @@ describe('chat active run registry', () => {
 
   it('returns not_active when steering a thread without an active run', async () => {
     const routes = createChatRoutes({
-      hasActiveThreadRun: () => false,
       getChatRun: () => ({ active: false, status: 'idle' }),
     } as any);
     const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
@@ -152,6 +151,71 @@ describe('chat active run registry', () => {
         ok: false,
         reason: 'not_active',
         run: { active: false, status: 'idle' },
+      },
+      status: 409,
+    });
+  });
+
+  it('returns stale_run when a guarded steering request arrives after its run finished', async () => {
+    const routes = createChatRoutes({
+      getChatRun: () => ({ active: false, status: 'completed', runId: 'run-1' }),
+    } as any);
+    const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
+    const response = await steerRouteHandler(routes)({
+      get: (key: string) => (key === 'requestContext' ? { get: () => 'resource-1' } : undefined),
+      req: {
+        param: () => 'thread-1',
+        json: async () => ({
+          runId: 'run-1',
+          message: {
+            id: 'user-1',
+            role: 'user',
+            parts: [{ type: 'text', text: 'steer' }],
+          },
+        }),
+      },
+      json,
+    });
+
+    expect(response).toEqual({
+      body: {
+        ok: false,
+        reason: 'stale_run',
+        run: { active: false, status: 'completed', runId: 'run-1' },
+      },
+      status: 409,
+    });
+  });
+
+  it('returns stale_run when steering targets a superseded active run', async () => {
+    const sendChatMessage = vi.fn();
+    const routes = createChatRoutes({
+      getChatRun: () => ({ active: true, status: 'running', runId: 'run-2' }),
+      sendChatMessage,
+    } as any);
+    const json = vi.fn((body: unknown, status?: number) => ({ body, status }));
+    const response = await steerRouteHandler(routes)({
+      get: (key: string) => (key === 'requestContext' ? { get: () => 'resource-1' } : undefined),
+      req: {
+        param: () => 'thread-1',
+        json: async () => ({
+          runId: 'run-1',
+          message: {
+            id: 'user-1',
+            role: 'user',
+            parts: [{ type: 'text', text: 'steer' }],
+          },
+        }),
+      },
+      json,
+    });
+
+    expect(sendChatMessage).toHaveBeenCalledTimes(0);
+    expect(response).toEqual({
+      body: {
+        ok: false,
+        reason: 'stale_run',
+        run: { active: true, status: 'running', runId: 'run-2' },
       },
       status: 409,
     });
@@ -358,6 +422,7 @@ describe('chat active run registry', () => {
       req: {
         param: () => 'thread-1',
         json: async () => ({
+          runId: 'run-1',
           message: {
             id: 'user-1',
             role: 'user',
@@ -371,6 +436,7 @@ describe('chat active run registry', () => {
     expect(sendChatMessage).toHaveBeenCalledWith({
       resourceId: 'resource-1',
       threadId: 'thread-1',
+      activeThreadRunId: 'run-1',
       message: { contents: [{ type: 'text', text: 'steer' }] },
     });
     expect(response).toEqual({
@@ -485,6 +551,42 @@ describe('chat active run registry', () => {
       parts: [{ type: 'text', text: '/commit current work' }],
     };
     expect(__chatStateContextUsageTest.mergePendingSubmittedMessages([previous, persistedSameTurn], pending ? [pending] : [])).toEqual([previous, persistedSameTurn]);
+  });
+
+  it('prefers retained completed run UI when it preserves a richer assistant tool timeline', () => {
+    const user = {
+      id: 'user-1',
+      role: 'user',
+      parts: [{ type: 'text', text: 'Check the repo' }],
+    };
+    const persistedAssistant = {
+      id: 'assistant-db',
+      role: 'assistant',
+      status: { type: 'complete' },
+      parts: [{
+        type: 'text',
+        text: 'I will inspect the repo. I found the path and will check one file. Done.',
+      }],
+    };
+    const retainedRunAssistant = {
+      id: 'assistant-run',
+      role: 'assistant',
+      status: { type: 'complete' },
+      parts: [
+        { type: 'text', text: 'I will inspect the repo.' },
+        { type: 'tool-bash', toolCallId: 'call-1', input: { command: 'rg needle src' }, output: 'ok', state: 'output-available' },
+        { type: 'text', text: 'I found the path and will check one file.' },
+        { type: 'tool-read', toolCallId: 'read-1', input: { path: 'src/example.ts' }, output: 'ok', state: 'output-available' },
+        { type: 'text', text: 'Done.' },
+      ],
+    };
+
+    expect(
+      __chatStateContextUsageTest.mergeRetainedRunMessages(
+        [user, persistedAssistant],
+        [retainedRunAssistant],
+      ),
+    ).toEqual([user, retainedRunAssistant]);
   });
 
   it('anchors or suppresses pending ask_user response messages when merging hydrated chat state', () => {

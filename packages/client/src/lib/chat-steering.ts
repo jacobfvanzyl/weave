@@ -1,17 +1,19 @@
 import type { UIMessage } from 'ai';
-import { sendThreadSteeringMessage, type ThreadSteeringResult } from './chat-state-api';
+import { sendThreadSteeringMessage, type SendThreadSteeringMessageOptions, type ThreadSteeringResult } from './chat-state-api';
 
-type SendThreadSteeringMessage = (threadId: string, message: UIMessage) => Promise<ThreadSteeringResult>;
+type SendThreadSteeringMessage = (
+  threadId: string,
+  message: UIMessage,
+  options?: SendThreadSteeringMessageOptions,
+) => Promise<ThreadSteeringResult>;
 
-export const sendSteeringMessageOrFallback = async (
+export const sendSteeringMessageToActiveRun = async (
   threadId: string,
   message: UIMessage,
   options: {
     sendSteeringMessage?: SendThreadSteeringMessage;
-    sendFallbackMessage: () => void;
+    runId?: string;
   },
 ) => {
-  const result = await (options.sendSteeringMessage ?? sendThreadSteeringMessage)(threadId, message);
-  if (!result.ok) options.sendFallbackMessage();
-  return result;
+  return (options.sendSteeringMessage ?? sendThreadSteeringMessage)(threadId, message, { runId: options.runId });
 };

@@ -1,5 +1,16 @@
-export type OpenAIReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type OpenAIReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type OpenAIServiceTier = 'auto' | 'default' | 'flex' | 'priority';
+
+export const CHATGPT_CODEX_GPT_5_6_MODELS = [
+  { slug: 'gpt-5.6-sol', contextWindow: 372_000 },
+  { slug: 'gpt-5.6-terra', contextWindow: 372_000 },
+  { slug: 'gpt-5.6-luna', contextWindow: 372_000 },
+] as const;
+
+export const CHATGPT_CODEX_DEFAULT_MODEL_IDS = [
+  ...CHATGPT_CODEX_GPT_5_6_MODELS.map(({ slug }) => `openai/${slug}`),
+  'openai/gpt-5.5',
+];
 
 export type OpenAIReasoningEffortOption = {
   effort: OpenAIReasoningEffort;
@@ -18,6 +29,7 @@ export type OpenAIModelCapabilities = {
   defaultReasoningEffort?: OpenAIReasoningEffort;
   serviceTiers: OpenAIServiceTierOption[];
   defaultServiceTier?: OpenAIServiceTier | null;
+  contextWindow?: number;
 };
 
 const emptyCapabilities: OpenAIModelCapabilities = {
@@ -32,13 +44,23 @@ const reasoningLabels: Record<OpenAIReasoningEffort, string> = {
   medium: 'Medium',
   high: 'High',
   xhigh: 'Extra High',
+  max: 'Max',
 };
 
 const codexReasoningEfforts: OpenAIReasoningEffortOption[] = [
   { effort: 'low', label: reasoningLabels.low, description: 'Fast responses with lighter reasoning' },
-  { effort: 'medium', label: reasoningLabels.medium, description: 'Balances speed and reasoning depth for everyday tasks' },
+  {
+    effort: 'medium',
+    label: reasoningLabels.medium,
+    description: 'Balances speed and reasoning depth for everyday tasks',
+  },
   { effort: 'high', label: reasoningLabels.high, description: 'Greater reasoning depth for complex problems' },
   { effort: 'xhigh', label: reasoningLabels.xhigh, description: 'Extra high reasoning depth for complex problems' },
+];
+
+const gpt56ReasoningEfforts: OpenAIReasoningEffortOption[] = [
+  ...codexReasoningEfforts,
+  { effort: 'max', label: reasoningLabels.max, description: 'Maximum reasoning depth for the hardest problems' },
 ];
 
 const priorityServiceTier: OpenAIServiceTierOption = {
@@ -60,17 +82,20 @@ const codexReasoningModelSlugs = new Set([
   'gpt-5.4',
   'gpt-5.4-mini',
   'gpt-5.5',
+  ...CHATGPT_CODEX_GPT_5_6_MODELS.map(({ slug }) => slug),
 ]);
 
 const priorityServiceTierModelSlugs = new Set([
   'gpt-5.4',
   'gpt-5.5',
+  ...CHATGPT_CODEX_GPT_5_6_MODELS.map(({ slug }) => slug),
 ]);
 
-const reasoningEffortOrder: OpenAIReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const reasoningEffortOrder: OpenAIReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 const isReasoningEffort = (value: unknown): value is OpenAIReasoningEffort =>
-  value === 'none' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh';
+  value === 'none' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' ||
+  value === 'xhigh' || value === 'max';
 
 const modelSlug = (model: unknown) => {
   if (typeof model !== 'string') return undefined;
@@ -82,19 +107,21 @@ const modelSlug = (model: unknown) => {
 };
 
 const fastestSupportedReasoningEffort = (capabilities: OpenAIModelCapabilities) => {
-  const supported = new Set(capabilities.supportedReasoningEfforts.map(option => option.effort));
-  return reasoningEffortOrder.find(effort => supported.has(effort));
+  const supported = new Set(capabilities.supportedReasoningEfforts.map((option) => option.effort));
+  return reasoningEffortOrder.find((effort) => supported.has(effort));
 };
 
 export const getOpenAIModelCapabilities = (model: unknown): OpenAIModelCapabilities => {
   const slug = modelSlug(model);
   if (!slug || !codexReasoningModelSlugs.has(slug)) return emptyCapabilities;
+  const gpt56Model = CHATGPT_CODEX_GPT_5_6_MODELS.find((candidate) => candidate.slug === slug);
 
   return {
-    supportedReasoningEfforts: codexReasoningEfforts,
+    supportedReasoningEfforts: gpt56Model ? gpt56ReasoningEfforts : codexReasoningEfforts,
     defaultReasoningEffort: 'medium',
     serviceTiers: priorityServiceTierModelSlugs.has(slug) ? [priorityServiceTier] : [],
     defaultServiceTier: null,
+    ...(gpt56Model ? { contextWindow: gpt56Model.contextWindow } : {}),
   };
 };
 
@@ -106,7 +133,7 @@ export const normalizeOpenAIReasoningEffort = (
   const capabilities = getOpenAIModelCapabilities(model);
   if (capabilities.supportedReasoningEfforts.length === 0) return undefined;
 
-  const supported = new Set(capabilities.supportedReasoningEfforts.map(option => option.effort));
+  const supported = new Set(capabilities.supportedReasoningEfforts.map((option) => option.effort));
   const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
 
   if (!raw) return options.fallbackToDefault ? capabilities.defaultReasoningEffort : undefined;
@@ -122,5 +149,5 @@ export const normalizeOpenAIServiceTier = (value: unknown, model: unknown): Open
 
   const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
   const normalized = raw === 'fast' ? 'priority' : raw;
-  return capabilities.serviceTiers.some(tier => tier.id === normalized) ? normalized as OpenAIServiceTier : undefined;
+  return capabilities.serviceTiers.some((tier) => tier.id === normalized) ? normalized as OpenAIServiceTier : undefined;
 };

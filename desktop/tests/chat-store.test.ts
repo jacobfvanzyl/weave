@@ -50,6 +50,20 @@ const proposalFixture = (overrides: Partial<ThreadProposal> = {}): ThreadProposa
   ...overrides,
 });
 
+const planFixture = (overrides: Partial<ThreadPlan> = {}): ThreadPlan => ({
+  title: 'ExecPlan work',
+  artifactPath: '.agents/plans/demo.md',
+  status: 'in_progress',
+  plan: [
+    { id: 'research', step: 'Research current flow', status: 'completed' },
+    { id: 'implement', step: 'Implement the fix', status: 'in_progress' },
+  ],
+  completed: 1,
+  total: 2,
+  updatedAt: '2026-06-18T12:00:00.000Z',
+  ...overrides,
+});
+
 describe('chat store', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -116,6 +130,23 @@ describe('chat store', () => {
 
       expect(useChatStore.getState().reasoningEffort).toBe('low');
     }
+  });
+
+  it('preserves persisted max reasoning for GPT-5.6 models', async () => {
+    const { useChatStore } = await loadFreshChatStore(storage => {
+      storage.setItem('weave-chat', JSON.stringify({
+        state: {
+          selectedModel: 'openai/gpt-5.6-sol',
+          reasoningEffort: 'max',
+        },
+        version: 11,
+      }));
+    });
+
+    expect(useChatStore.getState()).toMatchObject({
+      selectedModel: 'openai/gpt-5.6-sol',
+      reasoningEffort: 'max',
+    });
   });
 
   it('queues and consumes proposal implementation requests without persisting them', async () => {
@@ -229,7 +260,6 @@ describe('chat store', () => {
       completed: 1,
       total: 2,
       updatedAt: '2026-06-18T12:00:00.000Z',
-      contentHash: 'pending',
     };
 
     useChatStore.getState().setThreadPlan('thread-1', basePlan);
@@ -240,7 +270,6 @@ describe('chat store', () => {
       status: 'completed',
       plan: basePlan.plan.map(item => ({ ...item, status: 'completed' })),
       completed: 2,
-      contentHash: 'complete',
     });
 
     expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(true);
@@ -251,7 +280,6 @@ describe('chat store', () => {
       status: 'completed',
       plan: basePlan.plan.map(item => ({ ...item, status: 'completed' })),
       completed: 2,
-      contentHash: 'complete',
     });
 
     expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
@@ -271,10 +299,114 @@ describe('chat store', () => {
       completed: 2,
       total: 2,
       updatedAt: '2026-06-18T12:00:00.000Z',
-      contentHash: 'complete',
     }, { autoExpand: false });
 
     expect(useChatStore.getState().guidedTaskExpandedByThread['thread-1']).toBe(false);
+  });
+
+  it('ignores older plan updates from replayed tool effects', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+
+    useChatStore.getState().setThreadPlan('thread-1', planFixture({
+      updatedAt: '2026-06-18T12:10:00.000Z',
+      plan: [
+        { id: 'research', step: 'Research current flow', status: 'completed' },
+        { id: 'implement', step: 'Implement the fix', status: 'completed' },
+      ],
+      completed: 2,
+      status: 'completed',
+    }));
+    useChatStore.getState().setThreadPlan('thread-1', planFixture({
+      updatedAt: '2026-06-18T12:05:00.000Z',
+      plan: [
+        { id: 'research', step: 'Research current flow', status: 'completed' },
+        { id: 'implement', step: 'Implement the fix', status: 'pending' },
+      ],
+      completed: 1,
+    }));
+
+    expect(useChatStore.getState().threadPlans['thread-1']).toMatchObject({
+      completed: 2,
+      status: 'completed',
+    });
+  });
+
+  it('accepts a newer complete plan replacement that clears the artifact association', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+
+    useChatStore.getState().setThreadPlan('thread-1', planFixture({
+      updatedAt: '2026-06-18T12:10:00.000Z',
+    }));
+    useChatStore.getState().setThreadPlan('thread-1', planFixture({
+      artifactPath: undefined,
+      updatedAt: '2026-06-18T12:20:00.000Z',
+      completed: 0,
+      plan: [
+        { id: 'research', step: 'Research current flow', status: 'pending' },
+        { id: 'implement', step: 'Implement the fix', status: 'pending' },
+      ],
+    }));
+
+    expect(useChatStore.getState().threadPlans['thread-1']).toMatchObject({
+      completed: 0,
+    });
+    expect(useChatStore.getState().threadPlans['thread-1']?.artifactPath).toBeUndefined();
+  });
+
+  it('keeps newer live plan state over stale server metadata hydration', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const now = '2026-06-18T12:30:00.000Z';
+
+    useChatStore.getState().setThreadPlan('thread-1', planFixture({
+      updatedAt: '2026-06-18T12:10:00.000Z',
+      completed: 2,
+      status: 'completed',
+      plan: [
+        { id: 'research', step: 'Research current flow', status: 'completed' },
+        { id: 'implement', step: 'Implement the fix', status: 'completed' },
+      ],
+    }));
+
+    useChatStore.getState().setServerThreads([{
+      id: 'thread-1',
+      title: 'Plan work',
+      createdAt: now,
+      updatedAt: now,
+      latestPlan: planFixture({
+        updatedAt: '2026-06-18T12:05:00.000Z',
+        completed: 1,
+      }),
+    }]);
+
+    expect(useChatStore.getState().threadPlans['thread-1']).toMatchObject({
+      completed: 2,
+      status: 'completed',
+    });
+  });
+
+  it('accepts newer plan metadata hydration with a different artifact association', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    const now = '2026-06-18T12:30:00.000Z';
+
+    useChatStore.getState().setThreadPlan('thread-1', planFixture({
+      artifactPath: '.agents/plans/old.md',
+      updatedAt: '2026-06-18T12:00:00.000Z',
+    }));
+
+    useChatStore.getState().setServerThreads([{
+      id: 'thread-1',
+      title: 'Plan work',
+      createdAt: now,
+      updatedAt: now,
+      latestPlan: planFixture({
+        artifactPath: '.agents/plans/new.md',
+        updatedAt: '2026-06-18T12:20:00.000Z',
+      }),
+    }]);
+
+    expect(useChatStore.getState().threadPlans['thread-1']).toMatchObject({
+      artifactPath: '.agents/plans/new.md',
+    });
   });
 
   it('does not expand the guided card for replayed proposal effects', async () => {

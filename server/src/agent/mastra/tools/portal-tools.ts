@@ -10,6 +10,7 @@ import {
   type NotesVaultResolverDependencies,
   resolveNotesVaultForThreadContext,
 } from '../../../modules/notes/storage/resolver';
+import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars, hashText } from './model-output';
 
 export const offlineMessage =
@@ -184,22 +185,31 @@ type PortalBashOutput = PortalBaseOutput & {
   stdout?: string;
   stderr?: string;
   exitCode?: number;
+  timedOut?: boolean;
+};
+
+export const normalizePortalResult = (result: unknown) => {
+  const record = result && typeof result === 'object' && !Array.isArray(result)
+    ? result as Record<string, unknown>
+    : {};
+  const hasExplicitStatus = typeof record.ok === 'boolean';
+  const ok = hasExplicitStatus ? record.ok as boolean : false;
+  const error = typeof record.error === 'string'
+    ? record.error
+    : hasExplicitStatus
+    ? undefined
+    : 'Portal returned a malformed result without an ok status';
+  return { ...record, ok, ...(error ? { error } : {}) };
 };
 
 const withPortalMetadata = <T extends PortalBaseOutput>(
   result: unknown,
   metadata: Omit<Partial<T>, 'ok' | 'error'>,
 ): T => {
-  const record = result && typeof result === 'object' && !Array.isArray(result)
-    ? result as Record<string, unknown>
-    : {};
-  const ok = typeof record.ok === 'boolean' ? record.ok : false;
-  const error = typeof record.error === 'string' ? record.error : ok ? undefined : 'Portal returned an invalid result';
+  const record = normalizePortalResult(result);
 
   return {
     ...record,
-    ok,
-    ...(error ? { error } : {}),
     ...metadata,
   } as T;
 };
@@ -348,6 +358,7 @@ export const portalBashModelOutput = (output: unknown, maxChars = getCodeToolMod
       ['ok', result.ok],
       ['command', result.command],
       ['exitCode', result.exitCode],
+      ['timedOut', result.timedOut],
       ['error', result.error],
     ],
     body,
@@ -414,6 +425,7 @@ const portalBashPayloadOutputSummary = ({ output }: { output?: unknown }) => {
     ok: result.ok,
     ...payloadTextSummary(result.command, 'command'),
     ...(typeof result.exitCode === 'number' ? { exitCode: result.exitCode } : {}),
+    ...(typeof result.timedOut === 'boolean' ? { timedOut: result.timedOut } : {}),
     ...(typeof result.error === 'string' ? { error: result.error } : {}),
     ...payloadTextSummary(result.stdout, 'stdout'),
     ...payloadTextSummary(result.stderr, 'stderr'),
@@ -500,12 +512,11 @@ const fileOperationModelOutput = (name: string, output: unknown) => {
 
 export const portalReadTool = createTool({
   id: 'read',
-  description:
-    'Read the contents of a file from the current Workspace through a connected Portal. Text output is truncated to 2000 lines or 50KB. Use offset/limit for large files. When you need the full file, continue with offset until complete.',
+  description: toolDescription('read'),
   inputSchema: z.object({
-    path: z.string().describe('Path to the file to read, relative to the Workspace root'),
-    offset: z.number().optional().describe('Line number to start reading from, 1-indexed'),
-    limit: z.number().optional().describe('Maximum number of lines to read'),
+    path: z.string().describe(toolInputDescription('read', 'path')),
+    offset: z.number().optional().describe(toolInputDescription('read', 'offset')),
+    limit: z.number().optional().describe(toolInputDescription('read', 'limit')),
   }),
   outputSchema: z.object({
     ...portalBaseOutputSchema,
@@ -525,11 +536,10 @@ export const portalReadTool = createTool({
 
 export const portalWriteTool = createTool({
   id: 'write',
-  description:
-    'Write content to a file in the current Workspace through a connected Portal. Creates the file if it does not exist, overwrites if it does. Automatically creates parent directories.',
+  description: toolDescription('write'),
   inputSchema: z.object({
-    path: z.string().describe('Path to write, relative to the Workspace root'),
-    content: z.string().describe('Full file content'),
+    path: z.string().describe(toolInputDescription('write', 'path')),
+    content: z.string().describe(toolInputDescription('write', 'content')),
   }),
   outputSchema: z.object({ ...portalBaseOutputSchema, bytes: z.number().optional() }),
   execute: async (input, context): Promise<PortalWriteOutput> =>
@@ -539,16 +549,13 @@ export const portalWriteTool = createTool({
 
 export const portalEditTool = createTool({
   id: 'edit',
-  description:
-    'Edit a single file in the current Workspace using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. Each edit is matched against the original file, not incrementally. If two changes affect nearby or overlapping lines, merge them into one edit.',
+  description: toolDescription('edit'),
   inputSchema: z.object({
-    path: z.string().describe('Path to edit, relative to the Workspace root'),
+    path: z.string().describe(toolInputDescription('edit', 'path')),
     edits: z.array(
       z.object({
-        oldText: z.string().describe(
-          'Exact text for one targeted replacement. Must be unique in the original file and non-overlapping with other edits.',
-        ),
-        newText: z.string().describe('Replacement text for this targeted edit.'),
+        oldText: z.string().describe(toolInputDescription('edit', 'edits[].oldText')),
+        newText: z.string().describe(toolInputDescription('edit', 'edits[].newText')),
       }).strict(),
     ).min(1),
   }),
@@ -564,17 +571,17 @@ export const portalEditTool = createTool({
 
 export const portalBashTool = createTool({
   id: 'bash',
-  description:
-    'Run a bash command in the current Workspace through a connected Portal. Prefer `fd`, `rg`, and `ls` for file discovery/search.',
+  description: toolDescription('bash'),
   inputSchema: z.object({
-    command: z.string().describe('Bash command to execute'),
-    timeout: z.number().optional().describe('Timeout in seconds'),
+    command: z.string().describe(toolInputDescription('bash', 'command')),
+    timeout: z.number().optional().describe(toolInputDescription('bash', 'timeout')),
   }),
   outputSchema: z.object({
     ...portalBaseOutputSchema,
     stdout: z.string().optional(),
     stderr: z.string().optional(),
     exitCode: z.number().optional(),
+    timedOut: z.boolean().optional(),
   }),
   execute: async (input, context): Promise<PortalBashOutput> =>
     withPortalMetadata<PortalBashOutput>(
@@ -587,10 +594,9 @@ export const portalBashTool = createTool({
 
 export const fileIndexTool = createTool({
   id: 'file_index',
-  description:
-    'Index the current Notes Project workspace. Returns Markdown and .cpr note metadata, wiki links, embeds, tags, attachments, and backlinks.',
+  description: toolDescription('file_index'),
   inputSchema: z.object({
-    path: z.string().optional().describe('Optional folder path relative to the workspace root'),
+    path: z.string().optional().describe(toolInputDescription('file_index', 'path')),
   }),
   outputSchema: z.object({
     ...portalBaseOutputSchema,
@@ -606,10 +612,9 @@ export const fileIndexTool = createTool({
 
 export const fileReadTool = createTool({
   id: 'file_read',
-  description:
-    'Read a Markdown, .cpr, Canvas JSON, JSON, or Excalidraw text file from the current Notes Project workspace.',
+  description: toolDescription('file_read'),
   inputSchema: z.object({
-    path: z.string().describe('Path to read, relative to the workspace root'),
+    path: z.string().describe(toolInputDescription('file_read', 'path')),
   }),
   outputSchema: z.object({
     ...portalBaseOutputSchema,
@@ -623,12 +628,11 @@ export const fileReadTool = createTool({
 
 export const fileWriteTool = createTool({
   id: 'file_write',
-  description:
-    'Write a Markdown, .cpr, Canvas JSON, JSON, or Excalidraw text file in the current Notes Project workspace. Creates parent folders as needed.',
+  description: toolDescription('file_write'),
   inputSchema: z.object({
-    path: z.string().describe('Path to write, relative to the workspace root'),
-    content: z.string().describe('Full file content'),
-    version: z.string().optional().describe('Optional optimistic file version returned by file_read'),
+    path: z.string().describe(toolInputDescription('file_write', 'path')),
+    content: z.string().describe(toolInputDescription('file_write', 'content')),
+    version: z.string().optional().describe(toolInputDescription('file_write', 'version')),
   }),
   outputSchema: z.object({ ...portalBaseOutputSchema, version: z.string().optional() }),
   execute: async (input, context): Promise<PortalBaseOutput> =>
@@ -638,9 +642,9 @@ export const fileWriteTool = createTool({
 
 export const fileMkdirTool = createTool({
   id: 'file_mkdir',
-  description: 'Create a folder in the current Notes Project workspace.',
+  description: toolDescription('file_mkdir'),
   inputSchema: z.object({
-    path: z.string().describe('Folder path to create, relative to the workspace root'),
+    path: z.string().describe(toolInputDescription('file_mkdir', 'path')),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
@@ -650,11 +654,11 @@ export const fileMkdirTool = createTool({
 
 export const fileMoveTool = createTool({
   id: 'file_move',
-  description: 'Rename or move a file or folder in the current Notes Project workspace.',
+  description: toolDescription('file_move'),
   inputSchema: z.object({
-    fromPath: z.string().describe('Existing path relative to the workspace root'),
-    toPath: z.string().describe('Destination path relative to the workspace root'),
-    overwrite: z.boolean().optional().describe('Whether to overwrite an existing destination'),
+    fromPath: z.string().describe(toolInputDescription('file_move', 'fromPath')),
+    toPath: z.string().describe(toolInputDescription('file_move', 'toPath')),
+    overwrite: z.boolean().optional().describe(toolInputDescription('file_move', 'overwrite')),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
@@ -664,10 +668,10 @@ export const fileMoveTool = createTool({
 
 export const fileDeleteTool = createTool({
   id: 'file_delete',
-  description: 'Delete a file or folder from the current Notes Project workspace.',
+  description: toolDescription('file_delete'),
   inputSchema: z.object({
-    path: z.string().describe('Path to delete, relative to the workspace root'),
-    recursive: z.boolean().optional().describe('Required for deleting non-empty folders'),
+    path: z.string().describe(toolInputDescription('file_delete', 'path')),
+    recursive: z.boolean().optional().describe(toolInputDescription('file_delete', 'recursive')),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>
@@ -677,11 +681,11 @@ export const fileDeleteTool = createTool({
 
 export const fileUploadTool = createTool({
   id: 'file_upload',
-  description: 'Upload a binary attachment into the current Notes Project workspace from base64-encoded content.',
+  description: toolDescription('file_upload'),
   inputSchema: z.object({
-    path: z.string().describe('Attachment path to write, relative to the workspace root'),
-    base64Content: z.string().describe('Base64-encoded file content'),
-    contentType: z.string().optional().describe('Optional MIME type for the attachment'),
+    path: z.string().describe(toolInputDescription('file_upload', 'path')),
+    base64Content: z.string().describe(toolInputDescription('file_upload', 'base64Content')),
+    contentType: z.string().optional().describe(toolInputDescription('file_upload', 'contentType')),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
   execute: async (input, context): Promise<PortalBaseOutput> =>

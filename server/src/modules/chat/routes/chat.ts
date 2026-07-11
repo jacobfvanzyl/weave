@@ -381,11 +381,22 @@ export const createChatRoutes = (
     handler: async (c) => {
       const resourceId = getResourceId(c);
       const threadId = c.req.param('threadId');
-      if (!service.hasActiveThreadRun(resourceId, threadId)) {
-        return c.json({ ok: false, reason: 'not_active', run: service.getChatRun(resourceId, threadId) }, 409);
+      const body = await c.req.json();
+      const requestedRunId = getString(body?.runId);
+      const run = service.getChatRun(resourceId, threadId);
+
+      if (!run.active) {
+        return c.json({
+          ok: false,
+          reason: requestedRunId ? 'stale_run' : 'not_active',
+          run,
+        }, 409);
       }
 
-      const body = await c.req.json();
+      if (requestedRunId && run.runId !== requestedRunId) {
+        return c.json({ ok: false, reason: 'stale_run', run }, 409);
+      }
+
       const submittedMessages = Array.isArray(body?.messages) ? body.messages : body?.message ? [body.message] : [];
       const normalizedMessages = sanitizeSubmittedMessagesForMastra(
         await normalizeMessageImageAttachments(
@@ -399,12 +410,16 @@ export const createChatRoutes = (
       const result = await service.sendChatMessage({
         resourceId,
         threadId,
+        activeThreadRunId: requestedRunId,
         message: toAgentMessageInput(submittedUserMessage),
       });
+      if (!result.accepted || !result.messageId) {
+        return c.json({ ok: false, reason: 'stale_run', run: service.getChatRun(resourceId, threadId) }, 409);
+      }
 
       return c.json({
         ok: true,
-        accepted: result.accepted,
+        accepted: true,
         runId: result.runId,
         messageId: result.messageId,
       });

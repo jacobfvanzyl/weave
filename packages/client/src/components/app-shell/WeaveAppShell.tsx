@@ -12,6 +12,7 @@ import {
   type ClientAppInputId,
 } from '../../lib/client-app';
 import { projectBelongsToProduct, productForProjectKind, type ProductId } from '../../lib/products';
+import { proposalWorkflowEnabled } from '../../lib/proposal-workflow';
 import { canViewProposalReview } from '../../lib/proposal-review-state';
 import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { workspaceRefKey } from '../../lib/thread-eligibility';
@@ -202,15 +203,17 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const activeSurfaceKey = activeSurface.kind === 'thread'
     ? `thread:${activeSurface.threadId}`
     : `workspace:${activeSurface.projectId}:${activeSurface.workspaceId}`;
-  const currentProposalReviewKey = activeProposalPath ? `${activeSurfaceKey}:proposal:${activeProposalPath}` : undefined;
+  const currentProposalReviewKey = proposalWorkflowEnabled && activeProposalPath ? `${activeSurfaceKey}:proposal:${activeProposalPath}` : undefined;
   const [validatedProposalReviewKey, setValidatedProposalReviewKey] = useState<string | undefined>();
   const canAutoShowActiveProposalReview = Boolean(
-    activeSurface.kind === 'thread'
+    proposalWorkflowEnabled
+      && activeSurface.kind === 'thread'
       && activeThreadProposal?.path === activeProposalPath
       && canViewProposalReview(activeThreadProposal),
   );
   const canBackToActiveProposalReview = Boolean(
-    editorSlotMode === 'editor'
+    proposalWorkflowEnabled
+      && editorSlotMode === 'editor'
       && activeProposalPath
       && activeThreadProposal?.path === activeProposalPath
       && canViewProposalReview(activeThreadProposal),
@@ -639,6 +642,12 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   }, [isFetched, projects, projectsQuery.isFetched, serverThreads, setServerThreads]);
 
   useEffect(() => {
+    if (!proposalWorkflowEnabled) {
+      if (editorSlotMode === 'proposal_review') closeProposalReview();
+      if (validatedProposalReviewKey) setValidatedProposalReviewKey(undefined);
+      return;
+    }
+
     if (editorSlotMode !== 'proposal_review' || !activeProposalPath || !currentProposalReviewKey) {
       if (validatedProposalReviewKey) setValidatedProposalReviewKey(undefined);
       return;
@@ -994,7 +1003,8 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     if (!showEditorPane || (!editorTarget && !notesTarget)) return null;
 
     if (
-      editorSlotMode === 'proposal_review'
+      proposalWorkflowEnabled
+      && editorSlotMode === 'proposal_review'
       && activeProposalPath
       && editorTarget
       && validatedProposalReviewKey === currentProposalReviewKey

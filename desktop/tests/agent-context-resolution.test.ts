@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 
 type SkillSummary = {
   name: string;
-  source: 'source' | 'global' | 'project';
+  source: 'source' | 'user' | 'project';
   path: string;
   description?: string;
 };
@@ -39,7 +39,7 @@ beforeAll(async () => {
   singletonAgentConfig = resolver.singletonAgentConfig;
 });
 
-const snapshot = (scope: 'global' | 'project', files: any[]) => ({
+const snapshot = (scope: 'user' | 'project', files: any[]) => ({
   scope,
   checkedAt: '2026-06-03T00:00:00.000Z',
   files,
@@ -58,7 +58,7 @@ const requestContextFor = (context?: any) => ({
 describe('singleton agent context', () => {
   it('uses the singleton hybrid config', () => {
     expect(__agentContextResolverTest.singletonAgentConfig).toBe(singletonAgentConfig);
-    expect(singletonAgentConfig.model).toBe(process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.5');
+    expect(singletonAgentConfig.model).toBe(process.env.WEAVE_DEFAULT_MODEL ?? 'openai/gpt-5.6-sol');
     expect(singletonAgentConfig.reasoningEffort).toBe('high');
     expect(singletonAgentConfig.serviceTier).toBeUndefined();
     expect(singletonAgentConfig.memory).toEqual({});
@@ -73,11 +73,11 @@ describe('singleton agent context', () => {
       "Prefer completing the user's request over explaining process.",
     );
     expect(singletonAgentConfig.instructions).toContain(
-      'If a tool fails, report the failure and give the next best path.',
+      'If a tool fails, inspect the concrete error before retrying.',
     );
     expect(singletonAgentConfig.instructions).toContain('Cite URLs when web tools are used.');
     expect(singletonAgentConfig.instructions).toContain(
-      'Keep progress visible during longer work. Send brief user-visible status updates between tool batches, before making file edits, and periodically during long-running implementation or verification turns. These updates should state what you are doing or what you just learned, then continue working without waiting for the user unless they asked you to pause.',
+      'Keep progress visible during longer work, but update only for a material finding, decision, completed checkpoint, changed risk, or roughly a minute of otherwise silent work.',
     );
   });
 
@@ -109,7 +109,7 @@ describe('context tool policy', () => {
     expect([...keys].sort()).toEqual(['ask_user', 'renameThreadTool', 'webExtract', 'webSearch']);
   });
 
-  it('adds Portal, Git, plan/proposal, and LSP tools for Git workspaces', () => {
+  it('adds Portal, Git, plan, and LSP tools for Git workspaces without proposal tools', () => {
     const keys = __mageHandAgentTest.toolKeysForContext(requestContextFor(resolvedContext({
       projectKind: 'git',
       threadMetadata: { mode: 'project', projectId: 'project-1', workspaceId: 'workspace-1' },
@@ -126,18 +126,11 @@ describe('context tool policy', () => {
       'git_branch',
       'git_worktree',
       'updatePlanTool',
-      'proposal_start',
-      'proposal_read',
-      'proposal_write',
-      'proposal_edit',
-      'proposal_delete',
-      'proposal_discard',
-      'proposal_status',
-      'proposal_finalize',
-      'proposal_mark',
       'code_diagnostics',
       'rename_preview',
     ]));
+    expect([...keys].filter((key) => key.startsWith('proposal_'))).toEqual([]);
+    expect(keys.has('writePlanTool')).toBe(false);
     expect(keys.has('file_read')).toBe(false);
   });
 
@@ -168,11 +161,11 @@ describe('context tool policy', () => {
 
 describe('context prompt resolution', () => {
   const context = resolvedContext({
-    globalSnapshot: snapshot('global', [
+    userSnapshot: snapshot('user', [
       {
         kind: 'prompt',
-        path: '.config/weave/prompts/ship.md',
-        content: '---\ndescription: Global ship\n---\nGlobal ship $ARGUMENTS\n',
+        path: 'users/owner-1/prompts/ship.md',
+        content: '---\ndescription: User ship\n---\nUser ship $ARGUMENTS\n',
       },
     ]),
     projectSnapshot: snapshot('project', [
@@ -197,7 +190,7 @@ describe('context prompt resolution', () => {
     }
   });
 
-  it('merges app, global, and project prompts with project precedence without profile filtering', async () => {
+  it('merges user and project prompts with project precedence without profile filtering', async () => {
     const summaries = await listPromptSummaries({ resolvedContext: context }) as Array<
       { name: string; source: string; description: string }
     >;
@@ -220,16 +213,16 @@ describe('context prompt resolution', () => {
 
 describe('context skill resolution', () => {
   const context = resolvedContext({
-    globalSnapshot: snapshot('global', [
+    userSnapshot: snapshot('user', [
       {
         kind: 'skill',
-        path: '.config/weave/skills/global-only/SKILL.md',
-        content: '---\nname: global-only\ndescription: Global only\n---\nGlobal only body\n',
+        path: 'users/owner-1/skills/user-only/SKILL.md',
+        content: '---\nname: user-only\ndescription: User only\n---\nUser only body\n',
       },
       {
         kind: 'skill',
-        path: '.config/weave/skills/shared/SKILL.md',
-        content: '---\nname: shared\ndescription: Global shared\n---\nGlobal shared body\n',
+        path: 'users/owner-1/skills/shared/SKILL.md',
+        content: '---\nname: shared\ndescription: User shared\n---\nUser shared body\n',
       },
     ]),
     projectSnapshot: snapshot('project', [
@@ -250,10 +243,15 @@ describe('context skill resolution', () => {
     const summaries = listResolvedContextSkillSummaries(context);
     expect(summaries).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        name: 'global-only',
-        source: 'global',
-        path: '.config/weave/skills/global-only/SKILL.md',
-        description: 'Global only',
+        name: 'execplans',
+        source: 'source',
+        path: 'skills/execplans/SKILL.md',
+      }),
+      expect.objectContaining({
+        name: 'user-only',
+        source: 'user',
+        path: 'users/owner-1/skills/user-only/SKILL.md',
+        description: 'User only',
       }),
       expect.objectContaining({
         name: 'shared',
@@ -268,18 +266,18 @@ describe('context skill resolution', () => {
         description: 'Project only',
       }),
     ]));
-    expect(summaries.some((skill) => skill.name === 'shared' && skill.source === 'global')).toBe(false);
+    expect(summaries.some((skill) => skill.name === 'shared' && skill.source === 'user')).toBe(false);
 
     const paths = registerResolvedContextSkills(context);
     expect(paths).toEqual(expect.arrayContaining([
-      expect.stringMatching(/\/global\/global-only$/),
+      expect.stringMatching(/\/user\/user-only$/),
       expect.stringMatching(/\/project\/shared$/),
       expect.stringMatching(/\/project\/project-only$/),
     ]));
     expect(paths.filter((path) => path.endsWith('/shared'))).toHaveLength(1);
   });
 
-  it('merges duplicate skill names with project over global over source precedence', () => {
+  it('merges duplicate skill names with project over user over source precedence', () => {
     const byName = __contextSkillSourceTest.mergeSkillRecords(
       [{
         name: 'shared',
@@ -290,10 +288,10 @@ describe('context skill resolution', () => {
       }],
       [{
         name: 'shared',
-        source: 'global',
-        path: '.config/weave/skills/shared/SKILL.md',
-        workspacePath: '__global/shared',
-        description: 'Global shared',
+        source: 'user',
+        path: 'users/owner-1/skills/shared/SKILL.md',
+        workspacePath: '__user/shared',
+        description: 'User shared',
       }],
       [{
         name: 'shared',

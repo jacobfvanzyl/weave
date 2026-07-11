@@ -5,6 +5,7 @@ import { attachmentIdFromReference, attachmentUrlPath } from '../../attachments/
 import { getAuthUserFromHeader } from '../../../agent/mastra/auth';
 import { isCompactToolHistoryTextPart } from '../../../agent/mastra/compact-tool-history-processor';
 import type { AgentService } from '../../../agent/service';
+import { threadCompactionDisplayMessage } from '../../../agent/thread-compaction';
 import {
   contextUsageRecallOptions,
   estimateContextTokens,
@@ -458,6 +459,99 @@ const mergePendingSubmittedMessages = (messages: UiChatMessage[], pendingMessage
   return merged;
 };
 
+const isUiToolPart = (part: Record<string, unknown>) => {
+  if (part.type === 'tool-call' || part.type === 'dynamic-tool') return true;
+  return typeof part.type === 'string' &&
+    part.type.startsWith('tool-') &&
+    !['tool-call', 'tool-invocation', 'tool-result'].includes(part.type);
+};
+
+const getUiTextPartText = (part: Record<string, unknown>) =>
+  part.type === 'text' && typeof part.text === 'string' ? part.text.trim() : '';
+
+const getUiReasoningPartText = (part: Record<string, unknown>) =>
+  part.type === 'reasoning' && typeof part.text === 'string' ? part.text.trim() : '';
+
+const isVisibleUiDataPart = (part: Record<string, unknown>) =>
+  part.type === 'data-ask-user' ||
+  part.type === 'data-user-message' ||
+  (part.type === 'data' && (part.name === 'ask-user' || part.name === 'user-message'));
+
+const normalizeStructureText = (value: string) => value.replace(/\s+/g, ' ').trim();
+
+const getAssistantStructureStats = (messages: UiChatMessage[]) => {
+  let assistantMessages = 0;
+  let visibleParts = 0;
+  let toolParts = 0;
+  const textParts: string[] = [];
+
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    assistantMessages += 1;
+
+    for (const part of message.parts) {
+      if (isUiToolPart(part)) {
+        toolParts += 1;
+        visibleParts += 1;
+        continue;
+      }
+
+      const text = getUiTextPartText(part) || getUiReasoningPartText(part);
+      if (text) {
+        visibleParts += 1;
+        textParts.push(text);
+        continue;
+      }
+
+      if (isVisibleUiDataPart(part)) visibleParts += 1;
+    }
+  }
+
+  return {
+    assistantMessages,
+    visibleParts,
+    toolParts,
+    text: normalizeStructureText(textParts.join(' ')),
+  };
+};
+
+const findLastAssistantMessageIndex = (messages: UiChatMessage[]) => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'assistant') return index;
+  }
+  return -1;
+};
+
+const hasCompatibleAssistantText = (persistedText: string, retainedText: string) =>
+  !persistedText || !retainedText || persistedText.includes(retainedText) || retainedText.includes(persistedText);
+
+const mergeRetainedRunMessages = (persistedMessages: UiChatMessage[], retainedRunMessages: UiChatMessage[]) => {
+  if (retainedRunMessages.length === 0) return persistedMessages;
+  if (retainedRunMessages.some(message => message.status?.type === 'running')) return persistedMessages;
+  if (retainedRunMessages.some(message => message.role !== 'assistant')) return persistedMessages;
+
+  const lastAssistantIndex = findLastAssistantMessageIndex(persistedMessages);
+  if (lastAssistantIndex < 0) return persistedMessages;
+
+  const persistedTail = persistedMessages.slice(lastAssistantIndex);
+  if (persistedTail.some(message => message.role !== 'assistant')) return persistedMessages;
+
+  const persistedStats = getAssistantStructureStats(persistedTail);
+  const retainedStats = getAssistantStructureStats(retainedRunMessages);
+  const retainedIsRicher =
+    retainedStats.toolParts > persistedStats.toolParts ||
+    retainedStats.visibleParts > persistedStats.visibleParts ||
+    retainedStats.assistantMessages > persistedStats.assistantMessages;
+
+  if (retainedStats.toolParts === 0 || !retainedIsRicher) return persistedMessages;
+  if (!hasCompatibleAssistantText(persistedStats.text, retainedStats.text)) return persistedMessages;
+
+  return [
+    ...persistedMessages.slice(0, lastAssistantIndex),
+    ...retainedRunMessages,
+  ];
+};
+
 const toPendingSubmittedMessage = (message: unknown, origin: string, index: number): UiChatMessage | null => {
   if (!message || typeof message !== 'object') return null;
 
@@ -532,7 +626,10 @@ const errorResponse = (c: any, error: unknown) => {
     ? (error as { status: number }).status
     : 500;
   console.error('[chat-state]', error);
-  return c.json({ error: message }, status);
+  const details = isRecord((error as { details?: unknown })?.details)
+    ? (error as { details: Record<string, unknown> }).details
+    : undefined;
+  return c.json({ error: message, ...(details ?? {}) }, status);
 };
 
 const unwiredAgentService = new Proxy({}, {
@@ -641,15 +738,38 @@ export const createChatStateRoutes = (service: AgentService) => [
       try {
         const resourceId = getResourceId(c);
         const threadId = c.req.param('threadId');
-        const queryContextWindow = Number(c.req.query('contextWindow'));
+        const modelId = nonEmptyString(c.req.query('model'));
+        if (!modelId) return c.json({ error: 'model is required' }, 400);
 
         return c.json(
           await service.getChatThreadContextUsage({
             threadId,
             resourceId,
-            queryContextWindow,
+            modelId,
           }),
         );
+      } catch (error) {
+        return errorResponse(c, error);
+      }
+    },
+  }),
+  defineRoute('/chat/threads/:threadId/compact', {
+    method: 'POST',
+    handler: async (c) => {
+      try {
+        const resourceId = getResourceId(c);
+        const threadId = c.req.param('threadId');
+        const body = await c.req.json();
+        const model = nonEmptyString(body?.model);
+        if (!model) return c.json({ error: 'model is required' }, 400);
+        const result = await service.compactChatThread({
+          resourceId,
+          threadId,
+          model,
+          instructions: nonEmptyString(body?.instructions),
+          abortSignal: c.req.raw.signal,
+        });
+        return c.json(result);
       } catch (error) {
         return errorResponse(c, error);
       }
@@ -663,26 +783,34 @@ export const createChatStateRoutes = (service: AgentService) => [
         const threadId = c.req.param('threadId');
 
         const origin = new URL(c.req.url).origin;
-        const [rawMessages, suspendedAskUserRunIds] = await Promise.all([
+        const [rawMessages, suspendedAskUserRunIds, compactions] = await Promise.all([
           service.getChatThreadMessages({ resourceId, threadId }),
           service.getChatSuspendedAskUserRunIds({ resourceId, threadId }),
+          service.listChatThreadCompactions({ resourceId, threadId }),
         ]);
         const completedAskToolCallIds = collectCompletedAskToolCallIds(rawMessages);
-        const persistedMessages = rawMessages
+        const persistedMessages: UiChatMessage[] = rawMessages
           .map((message: MastraDBMessage) =>
             toUiMessage(message, origin, completedAskToolCallIds, suspendedAskUserRunIds)
           );
+        for (const checkpoint of compactions) {
+          const marker = threadCompactionDisplayMessage(checkpoint) as UiChatMessage;
+          const index = persistedMessages.findIndex(message => message.id === checkpoint.compactedThroughMessageId);
+          persistedMessages.splice(index < 0 ? persistedMessages.length : index + 1, 0, marker);
+        }
         const pendingMessages = service.getChatSubmittedUserMessages(resourceId, threadId)
           .map((message, index) => toPendingSubmittedMessage(message, origin, index))
           .filter((message): message is UiChatMessage => message !== null);
-        const pendingRunMessages = service.getChatUiMessages(resourceId, threadId) as UiChatMessage[];
-        const shouldAppendRunMessages = pendingRunMessages.length > 0 &&
-          (pendingMessages.length > 0 || persistedMessages[persistedMessages.length - 1]?.role !== 'assistant');
+        const retainedRunMessages = service.getChatUiMessages(resourceId, threadId) as UiChatMessage[];
+        const messagesWithRetainedRun = mergeRetainedRunMessages(persistedMessages, retainedRunMessages);
+        const retainedRunMerged = messagesWithRetainedRun !== persistedMessages;
+        const shouldAppendRunMessages = retainedRunMessages.length > 0 && !retainedRunMerged &&
+          (pendingMessages.length > 0 || messagesWithRetainedRun[messagesWithRetainedRun.length - 1]?.role !== 'assistant');
 
         return c.json({
           messages: mergePendingSubmittedMessages(
-            persistedMessages,
-            shouldAppendRunMessages ? [...pendingMessages, ...pendingRunMessages] : pendingMessages,
+            messagesWithRetainedRun,
+            shouldAppendRunMessages ? [...pendingMessages, ...retainedRunMessages] : pendingMessages,
           ),
         });
       } catch (error) {
@@ -740,4 +868,5 @@ export const __chatStateContextUsageTest = {
   collectCompletedAskToolCallIds,
   toPendingSubmittedMessage,
   mergePendingSubmittedMessages,
+  mergeRetainedRunMessages,
 };

@@ -8,6 +8,7 @@ import {
   type PortalTmuxControlClientHandlers,
   type PortalTmuxController,
   type PortalTmuxWindowRecord,
+  resolveTmuxDefaultTerminal,
   startTerminalControlServer,
   type TerminalHostEvent,
   type TerminalWindowRecord,
@@ -23,6 +24,7 @@ class FakeControlClient implements PortalTmuxControlClient {
   closed = false;
   inputs: Array<{ paneId: string; data: string }> = [];
   resizes: Array<{ windowId: string; cols: number; rows: number }> = [];
+  continues: string[] = [];
 
   constructor(
     private readonly handlers: PortalTmuxControlClientHandlers,
@@ -41,12 +43,24 @@ class FakeControlClient implements PortalTmuxControlClient {
     this.onResize?.(resize);
   }
 
+  async continueOutput(paneId: string) {
+    this.continues.push(paneId);
+  }
+
   close() {
     this.closed = true;
   }
 
   emitOutput(paneId: string, data: string) {
     this.handlers.onOutput(paneId, data);
+  }
+
+  emitPause(paneId: string) {
+    this.handlers.onPause(paneId);
+  }
+
+  emitContinue(paneId: string) {
+    this.handlers.onContinue(paneId);
   }
 
   emitWindowClose(windowId: string) {
@@ -195,7 +209,7 @@ const withHost = async (
     outputBatchMs: 1,
     replayLimitBytes: 1024,
     replayCaptureSettleMs: 0,
-    env: { SHELL: '/bin/test-shell' },
+    env: { SHELL: '/bin/test-shell', WEAVE_PORTAL_TMUX_TERM: 'tmux-256color' },
     ...hostOptions,
   });
 
@@ -218,7 +232,7 @@ Deno.test('PortalTerminalHost creates deterministic tmux windows and restores th
       outputBatchMs: 1,
       replayLimitBytes: 1024,
       replayCaptureSettleMs: 0,
-      env: { SHELL: '/bin/test-shell' },
+      env: { SHELL: '/bin/test-shell', WEAVE_PORTAL_TMUX_TERM: 'tmux-256color' },
     });
 
   try {
@@ -314,7 +328,7 @@ Deno.test('PortalTerminalHost restores legacy general windows when portal identi
     },
     tmux,
     replayCaptureSettleMs: 0,
-    env: { SHELL: '/bin/test-shell' },
+    env: { SHELL: '/bin/test-shell', WEAVE_PORTAL_TMUX_TERM: 'tmux-256color' },
   });
 
   try {
@@ -356,7 +370,7 @@ Deno.test('PortalTerminalHost snapshot lists all tmux windows sorted by scope an
     config: {},
     tmux,
     replayCaptureSettleMs: 0,
-    env: { SHELL: '/bin/test-shell' },
+    env: { SHELL: '/bin/test-shell', WEAVE_PORTAL_TMUX_TERM: 'tmux-256color' },
   });
 
   try {
@@ -459,6 +473,7 @@ Deno.test('PortalTerminalHost routes input, resize, detach, close, and exit', as
     firstControlClient.emitOutput(tmux.windows[0].paneId, 'after detach');
     await delay(5);
     assertEquals(events.some((event) => event.type === 'output' && event.data === 'after detach'), false);
+    tmux.windows[0].capture = 'recaptured-after-detach';
 
     const reattachEvents: TerminalHostEvent[] = [];
     await host.handleClientMessage(
@@ -475,7 +490,7 @@ Deno.test('PortalTerminalHost routes input, resize, detach, close, and exit', as
       type: 'replay',
       terminalId: created.terminalId,
       workspaceId: undefined,
-      data: 'after detach',
+      data: 'recaptured-after-detach',
     });
     await host.handleClientMessage(
       'client-2',
@@ -492,6 +507,36 @@ Deno.test('PortalTerminalHost routes input, resize, detach, close, and exit', as
       signal: undefined,
     });
   }));
+
+Deno.test('PortalTerminalHost flushes queued output before continuing a paused tmux pane', async () =>
+  withHost(async ({ cwd, host, tmux }) => {
+    const events: TerminalHostEvent[] = [];
+    await host.handleClientMessage('client-1', {
+      type: 'create',
+      kind: 'general',
+      cwd,
+    }, (event) => events.push(event));
+    const created = events[0]?.type === 'created' ? events[0].window : undefined;
+    assertExists(created);
+
+    await host.handleClientMessage('client-1', {
+      type: 'start',
+      kind: 'general',
+      terminalId: created.terminalId,
+      cwd,
+    }, (event) => events.push(event));
+
+    const controlClient = tmux.controlClients[0];
+    assertExists(controlClient);
+    const paneId = tmux.windows[0].paneId;
+    controlClient.emitOutput(paneId, 'queued-heavy-output');
+    assertEquals(events.some((event) => event.type === 'output' && event.data === 'queued-heavy-output'), false);
+
+    controlClient.emitPause(paneId);
+
+    assertEquals(events.some((event) => event.type === 'output' && event.data === 'queued-heavy-output'), true);
+    assertEquals(controlClient.continues, [paneId]);
+  }, new FakeTmux(), { outputBatchMs: 1_000 }));
 
 Deno.test('PortalTerminalHost normalizes captured replay newlines for terminal rendering', async () =>
   withHost(async ({ cwd, host, tmux }) => {
@@ -593,7 +638,7 @@ Deno.test('PortalTerminalHost waits for resized pane redraw before capturing rep
   }, tmux, { replayCaptureSettleMs: 20 });
 });
 
-Deno.test('PortalTerminalHost reuses buffered replay instead of recapturing an active session', async () =>
+Deno.test('PortalTerminalHost recaptures active sessions after resizing instead of using buffered output', async () =>
   withHost(async ({ cwd, host, tmux }) => {
     const events: TerminalHostEvent[] = [];
     await host.handleClientMessage('client-1', {
@@ -631,8 +676,16 @@ Deno.test('PortalTerminalHost reuses buffered replay instead of recapturing an a
     }, (event) => reattachEvents.push(event));
 
     const replay = reattachEvents.find((event) => event.type === 'replay');
-    assertEquals(replay?.type === 'replay' ? replay.data : undefined, 'first-capture-live-output');
-    assertEquals(tmux.captures.map((capture) => capture.terminalId), [created.terminalId]);
+    assertEquals(replay?.type === 'replay' ? replay.data : undefined, 'second-capture');
+    assertEquals(tmux.captures.map((capture) => capture.terminalId), [
+      created.terminalId,
+      created.terminalId,
+    ]);
+    assertEquals(tmux.captures.at(-1)?.resizes.at(-1), {
+      windowId: window.windowId,
+      cols: 132,
+      rows: 40,
+    });
   }));
 
 Deno.test('PortalTerminalHost keeps idle tmux windows after all UI sessions detach', async () =>
@@ -688,7 +741,10 @@ Deno.test('PortalTerminalHost keeps idle tmux windows after all UI sessions deta
       }, (event) => reopenEvents.push(event));
       assertEquals(reopenEvents.some((event) => event.type === 'started' && event.terminalId === created.terminalId), true);
     }
-    assertEquals(tmux.captures.map((capture) => capture.terminalId), createdWindows.map((window) => window.terminalId));
+    assertEquals(tmux.captures.map((capture) => capture.terminalId), [
+      ...createdWindows.map((window) => window.terminalId),
+      ...createdWindows.map((window) => window.terminalId),
+    ]);
   }));
 
 Deno.test('TmuxTerminalController uses deterministic socket path and _weave session', async () => {
@@ -704,7 +760,11 @@ Deno.test('TmuxTerminalController uses deterministic socket path and _weave sess
     if (command === 'list-windows') return { ok: true, stdout: '', stderr: '', code: 0 };
     return { ok: true, stdout: '', stderr: '', code: 0 };
   };
-  const controller = new TmuxTerminalController({ portalHome, runner, env: { PATH: '/usr/bin:/bin', NO_COLOR: '1' } });
+  const controller = new TmuxTerminalController({
+    portalHome,
+    runner,
+    env: { PATH: '/usr/bin:/bin', NO_COLOR: '1', WEAVE_PORTAL_TMUX_TERM: 'tmux-256color' },
+  });
 
   try {
     await controller.listWindows(
@@ -732,13 +792,13 @@ Deno.test('TmuxTerminalController uses deterministic socket path and _weave sess
     assertEquals(config.includes('set-option -g base-index 0'), true);
     assertEquals(config.includes('unbind-key -aT root'), true);
     assertEquals(config.includes('unbind-key -aT prefix'), true);
-    assertEquals(config.includes('set-option -g default-terminal "xterm-256color"'), true);
-    assertEquals(config.includes('set-option -ga terminal-overrides ",xterm-256color:Tc"'), true);
+    assertEquals(config.includes('set-option -g default-terminal "tmux-256color"'), true);
+    assertEquals(config.includes('set-option -ga terminal-overrides ",tmux-256color:Tc"'), true);
     assertEquals(config.includes('set-option -g @catppuccin_flavor "mocha"'), true);
     assertEquals(config.includes('set-option -g @thm_peach "#fab387"'), true);
     assertEquals(config.includes('set-option -g pane-active-border-style "fg=#a6e3a1"'), true);
     assertEquals(config.includes('set-environment -gu NO_COLOR'), true);
-    assertEquals(config.includes('set-option -g @weave_config_version weave-tmux-config-v3'), true);
+    assertEquals(config.includes('set-option -g @weave_config_version weave-tmux-config-v4'), true);
     assertEquals(envs.every((env) => !('NO_COLOR' in env)), true);
     assertEquals(
       calls.some((args) => args.includes('new-session') && args.includes('-s') && args.includes('_weave')),
@@ -764,7 +824,11 @@ Deno.test('TmuxTerminalController recreates _weave when the cached tmux server d
     if (command === 'list-windows') return { ok: true, stdout: '', stderr: '', code: 0 };
     return { ok: true, stdout: '', stderr: '', code: 0 };
   };
-  const controller = new TmuxTerminalController({ portalHome, runner });
+  const controller = new TmuxTerminalController({
+    portalHome,
+    runner,
+    env: { WEAVE_PORTAL_TMUX_TERM: 'tmux-256color' },
+  });
 
   try {
     await controller.listAllWindows();
@@ -857,11 +921,15 @@ Deno.test('TmuxTerminalController preserves a marked existing _weave server and 
     calls.push(args);
     const command = args[4];
     if (command === 'has-session') return { ok: true, stdout: '', stderr: '', code: 0 };
-    if (command === 'show-option') return { ok: true, stdout: 'weave-tmux-config-v3\n', stderr: '', code: 0 };
+    if (command === 'show-option') return { ok: true, stdout: 'weave-tmux-config-v4\n', stderr: '', code: 0 };
     if (command === 'list-windows') return { ok: true, stdout: '', stderr: '', code: 0 };
     return { ok: true, stdout: '', stderr: '', code: 0 };
   };
-  const controller = new TmuxTerminalController({ portalHome, runner });
+  const controller = new TmuxTerminalController({
+    portalHome,
+    runner,
+    env: { WEAVE_PORTAL_TMUX_TERM: 'tmux-256color' },
+  });
 
   try {
     await controller.listWindows(
@@ -878,7 +946,7 @@ Deno.test('TmuxTerminalController preserves a marked existing _weave server and 
     assertEquals(calls.some((args) => args[4] === 'kill-server'), false);
     assertEquals(calls.some((args) => args[4] === 'new-session'), false);
     assertEquals(
-      calls.some((args) => args.includes('@weave_config_version') && args.includes('weave-tmux-config-v3')),
+      calls.some((args) => args.includes('@weave_config_version') && args.includes('weave-tmux-config-v4')),
       true,
     );
     assertEquals(
@@ -886,8 +954,8 @@ Deno.test('TmuxTerminalController preserves a marked existing _weave server and 
       true,
     );
     assertEquals(calls.some((args) => args.includes('prefix') && args.includes('None')), true);
-    assertEquals(calls.some((args) => args.includes('default-terminal') && args.includes('xterm-256color')), true);
-    assertEquals(calls.some((args) => args.includes('terminal-overrides') && args.includes('xterm-256color:Tc')), true);
+    assertEquals(calls.some((args) => args.includes('default-terminal') && args.includes('tmux-256color')), true);
+    assertEquals(calls.some((args) => args.includes('terminal-overrides') && args.includes(',tmux-256color:Tc')), true);
     assertEquals(calls.some((args) => args.includes('detach-on-destroy') && args.includes('on')), true);
     assertEquals(calls.some((args) => args.includes('base-index') && args.includes('0')), true);
     assertEquals(calls.some((args) => args.includes('@catppuccin_flavor') && args.includes('mocha')), true);
@@ -945,7 +1013,7 @@ Deno.test('TmuxTerminalController unsets NO_COLOR when launching pane shells', a
         scopeId,
       } as Parameters<PortalTmuxController['createWindow']>[0],
       {
-        env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', PROMPT_EOL_MARK: '' },
+        env: { TERM: 'tmux-256color', COLORTERM: 'truecolor', PROMPT_EOL_MARK: '' },
         shell: { file: '/bin/zsh', args: [] },
       },
     );
@@ -1118,6 +1186,7 @@ Deno.test('TmuxTerminalController opens a control-mode client for the durable _w
         start: async () => undefined,
         input: async () => undefined,
         resize: async () => undefined,
+        continueOutput: async () => undefined,
         close: () => undefined,
       };
     },
@@ -1126,6 +1195,8 @@ Deno.test('TmuxTerminalController opens a control-mode client for the durable _w
   try {
     await controller.openControlClient({
       onOutput: () => undefined,
+      onPause: () => undefined,
+      onContinue: () => undefined,
       onWindowClose: () => undefined,
       onExit: () => undefined,
       onError: () => undefined,
@@ -1134,6 +1205,8 @@ Deno.test('TmuxTerminalController opens a control-mode client for the durable _w
     assertExists(controlArgs);
     assertEquals(controlArgs.includes('-C'), true);
     assertEquals(controlArgs.includes('attach-session'), true);
+    assertEquals(controlArgs.includes('-f'), true);
+    assertEquals(controlArgs.includes('pause-after=1'), true);
     assertEquals(controlArgs.at(-1), '_weave');
     assertEquals(controlArgs.some((arg) => arg.includes('_weave_attach')), false);
     assertEquals(calls.some((args) => args[4] === 'link-window'), false);
@@ -1156,12 +1229,43 @@ Deno.test('tmux control parser decodes output, extended output, and window close
     paneId: '%2',
     data: 'hi\n',
   });
+  assertEquals(parseTmuxControlNotification('%pause %2'), { type: 'pause', paneId: '%2' });
+  assertEquals(parseTmuxControlNotification('%continue %2'), { type: 'continue', paneId: '%2' });
   assertEquals(parseTmuxControlNotification('%window-close @7'), { type: 'window-close', windowId: '@7' });
   assertEquals(parseTmuxControlNotification('%begin 1 2 0'), { type: 'other' });
 });
 
 Deno.test('terminal input is encoded as byte hex for send-keys -H', () => {
   assertEquals(encodeTerminalInputHex('abc\r\u001b[A'), ['61', '62', '63', '0d', '1b', '5b', '41']);
+  assertEquals(encodeTerminalInputHex('é\x1b[200~paste\x1b[201~'), [
+    'c3',
+    'a9',
+    '1b',
+    '5b',
+    '32',
+    '30',
+    '30',
+    '7e',
+    '70',
+    '61',
+    '73',
+    '74',
+    '65',
+    '1b',
+    '5b',
+    '32',
+    '30',
+    '31',
+    '7e',
+  ]);
+});
+
+Deno.test('resolveTmuxDefaultTerminal uses tmux-256color override and falls back without infocmp', async () => {
+  assertEquals(await resolveTmuxDefaultTerminal({ WEAVE_PORTAL_TMUX_TERM: 'tmux-256color' }), 'tmux-256color');
+  assertEquals(
+    await resolveTmuxDefaultTerminal({ WEAVE_PORTAL_TMUX_TERM: 'bad value', PATH: '/definitely/missing' }),
+    'screen-256color',
+  );
 });
 
 Deno.test('TmuxTerminalController reports a clear error when tmux is missing', async () => {
