@@ -189,11 +189,19 @@ describe('context prompt resolution', () => {
     ]),
   });
 
+  it('does not expose the removed bundled prompts', async () => {
+    await expect(listPromptSummaries()).resolves.toEqual([]);
+
+    for (const name of ['plan', 'review', 'summarize']) {
+      await expect(expandPromptTemplate(name, 'now')).resolves.toBeUndefined();
+    }
+  });
+
   it('merges app, global, and project prompts with project precedence without profile filtering', async () => {
     const summaries = await listPromptSummaries({ resolvedContext: context }) as Array<
       { name: string; source: string; description: string }
     >;
-    expect(summaries.map((prompt) => prompt.name)).toEqual(['plan', 'review', 'ship', 'summarize']);
+    expect(summaries.map((prompt) => prompt.name)).toEqual(['review', 'ship']);
     expect(summaries.find((prompt) => prompt.name === 'ship')).toEqual(expect.objectContaining({
       description: 'Project ship',
       source: 'project',

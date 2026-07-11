@@ -23,36 +23,6 @@ export type PromptResolutionContext = {
   resolvedContext?: ResolvedAgentContext;
 };
 
-const builtinPrompts: PromptTemplate[] = [
-  {
-    name: 'plan',
-    command: '/plan',
-    description: 'Make a concise implementation plan',
-    argumentHint: '<goal>',
-    tags: ['planning'],
-    content: 'Make a concise implementation plan for:\n\n$ARGUMENTS\n\nInclude:\n- affected files or systems\n- implementation steps\n- verification steps\n- open questions',
-    source: 'app',
-  },
-  {
-    name: 'review',
-    command: '/review',
-    description: 'Review text for risks, gaps, and next actions',
-    argumentHint: '[context]',
-    tags: ['review'],
-    content: 'Review this:\n\n$ARGUMENTS\n\nFocus on:\n- missing assumptions\n- edge cases\n- risks\n- next concrete action',
-    source: 'app',
-  },
-  {
-    name: 'summarize',
-    command: '/summarize',
-    description: 'Summarize content into key points and action items',
-    argumentHint: '[content]',
-    tags: ['summary'],
-    content: 'Summarize this:\n\n$ARGUMENTS\n\nReturn:\n- key points\n- decisions\n- action items',
-    source: 'app',
-  },
-];
-
 const firstContentLine = (content: string) =>
   content
     .split('\n')
@@ -127,7 +97,7 @@ const getResolvedContext = async (context?: PromptResolutionContext) => {
 const listAppPromptTemplates = async (): Promise<PromptTemplate[]> => {
   if (promptCache) return promptCache;
 
-  const promptsByName = new Map<string, PromptTemplate>(builtinPrompts.map(prompt => [prompt.name, prompt]));
+  const promptsByName = new Map<string, PromptTemplate>();
 
   for (const dir of promptDirs) {
     const files = await readdir(dir).catch(() => []);
