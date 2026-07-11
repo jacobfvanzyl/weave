@@ -206,6 +206,26 @@ describe('chat tool activity helpers', () => {
     expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([]);
   });
 
+  it('keeps completed thread compaction data as a visible assistant content boundary', () => {
+    const parts = [
+      { type: 'text', text: 'Acknowledged generation-two-1.' },
+      { type: 'text', text: 'Context manually compacted' },
+      {
+        type: 'data',
+        name: 'thread-compaction',
+        data: { phase: 'completed', trigger: 'manual', generation: 2 },
+      },
+      { type: 'text', text: 'Next assistant segment.' },
+    ];
+
+    expect(getAssistantContentRanges(parts, false)).toEqual([
+      { type: 'part', index: 0 },
+      { type: 'part', index: 1 },
+      { type: 'part', index: 2 },
+      { type: 'part', index: 3 },
+    ]);
+  });
+
   it('keeps submitted ask_user data as a visible assistant content boundary', () => {
     const askPart = {
       type: 'data-ask-user',

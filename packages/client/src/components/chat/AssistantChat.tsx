@@ -38,6 +38,13 @@ import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
 import { fetchModelConfig, getResolvedModelDisplayName, type ModelOption } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptResolutionContext, type PromptSummary } from '../../lib/prompts-api';
 import { canViewProposalReview } from '../../lib/proposal-review-state';
+import {
+  getThreadCompactionDisplay,
+  getThreadCompactionDisplayLabel,
+  getThreadCompactionPartDisplay,
+  isThreadCompactionFallbackText,
+  type ThreadCompactionDisplay,
+} from '../../lib/thread-compaction-display';
 import { useChatStore, type ChatThread, type ReasoningEffort, type ServiceTier } from '../../stores/chat-store';
 import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Badge } from '../ui/badge';
@@ -1070,6 +1077,16 @@ const CollapsedTurnWorkToggle = ({ label, onExpand }: { label: string; onExpand:
   </button>
 );
 
+const ThreadCompactionBoundary = ({ trigger }: ThreadCompactionDisplay) => (
+  <div className="my-3 flex w-full items-center gap-3" role="separator">
+    <div className="h-px min-w-4 flex-1 bg-border" />
+    <span className="shrink-0 text-xs font-medium text-muted-foreground">
+      {getThreadCompactionDisplayLabel(trigger)}
+    </span>
+    <div className="h-px min-w-4 flex-1 bg-border" />
+  </div>
+);
+
 const AssistantGroupedContent = ({
   deferCodeHighlight,
   autoCollapsed,
@@ -1119,6 +1136,11 @@ const AssistantGroupedContent = ({
         }
 
         const part = parts[range.index];
+        const threadCompactionDisplay = getThreadCompactionPartDisplay(part);
+        if (threadCompactionDisplay) {
+          return <ThreadCompactionBoundary key={range.index} {...threadCompactionDisplay} />;
+        }
+
         if (isSteeredUserMessagePart(part)) {
           return <SteeredUserMessageBoundary key={range.index} part={part} />;
         }
@@ -1139,7 +1161,9 @@ const AssistantGroupedContent = ({
         }
 
         if (getPartType(part) === 'text' && part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') {
-          return <MarkdownText key={range.index} text={(part as { text: string }).text} deferCodeHighlight={deferCodeHighlight} />;
+          const text = (part as { text: string }).text;
+          if (isThreadCompactionFallbackText(text, parts[range.index + 1])) return null;
+          return <MarkdownText key={range.index} text={text} deferCodeHighlight={deferCodeHighlight} />;
         }
 
         return <MessagePrimitive.PartByIndex key={range.index} index={range.index} components={assistantPartByIndexComponents} />;
@@ -1150,6 +1174,7 @@ const AssistantGroupedContent = ({
 
 const AssistantMessageContent = () => {
   const message = useMessage();
+  const threadCompactionDisplay = getThreadCompactionDisplay(message.metadata);
   const showReasoning = useChatStore(state => state.showReasoning);
   const {
     autoCollapsedTurnIds,
@@ -1185,6 +1210,15 @@ const AssistantMessageContent = () => {
 
   if (isEmptyAssistantMessage) {
     return <AssistantToolSideEffects message={message} />;
+  }
+
+  if (message.role === 'assistant' && threadCompactionDisplay) {
+    return (
+      <>
+        <AssistantToolSideEffects message={message} />
+        <ThreadCompactionBoundary {...threadCompactionDisplay} />
+      </>
+    );
   }
 
   return (

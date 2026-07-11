@@ -1,5 +1,6 @@
 import { isHiddenToolCall, isLeakedToolOutputText, toToolActivityCall } from './tool-activity';
 import { parseAskUserPart } from './ask-user';
+import { getThreadCompactionPartDisplay } from '../../lib/thread-compaction-display';
 
 export type AssistantContentRange =
   | { type: 'part'; index: number }
@@ -62,6 +63,7 @@ export const isVisibleNonReasoningOutputPart = (part: unknown) => {
   if (toToolActivityCall(part)) return isVisibleToolOutputPart(part);
   if (isSubmittedAskUserPart(part)) return true;
   if (isSteeredUserMessagePart(part)) return true;
+  if (getThreadCompactionPartDisplay(part)) return true;
   return false;
 };
 
