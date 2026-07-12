@@ -276,16 +276,19 @@ Deno.test("workspace Python environment preparation creates venv, installs ipyke
   const root = await Deno.realPath(
     await Deno.makeTempDir({ prefix: "weave-jupyter-env-" }),
   );
+  const portalHome = await Deno.makeTempDir({ prefix: "weave-jupyter-portal-home-" });
+  const env = {
+    HOME: "/Users/test",
+    PATH: "/usr/bin:/bin",
+    WEAVE_PORTAL_HOME: portalHome,
+  };
   const calls: CommandCall[] = [];
   try {
-    const expected = __jupyterTest.workspacePythonEnvironmentPaths(root, {
-      HOME: "/Users/test",
-      PATH: "/usr/bin:/bin",
-    });
+    const expected = __jupyterTest.workspacePythonEnvironmentPaths(root, env);
     const environment = await __jupyterTest.prepareWorkspacePythonEnvironment(
       root,
       {
-        env: { HOME: "/Users/test", PATH: "/usr/bin:/bin" },
+        env,
         commandRunner: async (command, args, options) => {
           calls.push({ command, args, cwd: options?.cwd, env: options?.env });
           if (
@@ -305,11 +308,13 @@ Deno.test("workspace Python environment preparation creates venv, installs ipyke
     );
 
     assertEquals(environment.venvPath, expected.venvPath);
+    assertEquals(environment.environmentPath, expected.environmentPath);
+    assertEquals(environment.venvPath.startsWith(root), false);
     assertEquals(
       calls.some((call) =>
         call.command === "uv" &&
         call.cwd === root &&
-        call.args.join(" ") === "venv --seed .venv"
+        call.args.join(" ") === `venv --seed ${expected.venvPath}`
       ),
       true,
     );
@@ -342,6 +347,7 @@ Deno.test("workspace Python environment preparation creates venv, installs ipyke
     assertStringIncludes(kernelspec.env.PATH, "/opt/homebrew/bin");
   } finally {
     await Deno.remove(root, { recursive: true });
+    await Deno.remove(portalHome, { recursive: true });
   }
 });
 
@@ -349,12 +355,15 @@ Deno.test("workspace Python environment preparation skips install when ipykernel
   const root = await Deno.realPath(
     await Deno.makeTempDir({ prefix: "weave-jupyter-env-present-" }),
   );
+  const portalHome = await Deno.makeTempDir({ prefix: "weave-jupyter-portal-home-present-" });
+  const env = { WEAVE_PORTAL_HOME: portalHome };
   const calls: CommandCall[] = [];
   try {
-    await Deno.mkdir(`${root}/.venv`, { recursive: true });
-    const expected = __jupyterTest.workspacePythonEnvironmentPaths(root);
+    const expected = __jupyterTest.workspacePythonEnvironmentPaths(root, env);
+    await Deno.mkdir(expected.venvPath, { recursive: true });
 
     await __jupyterTest.prepareWorkspacePythonEnvironment(root, {
+      env,
       commandRunner: async (command, args, options) => {
         calls.push({ command, args, cwd: options?.cwd, env: options?.env });
         if (command === "uv" && args[0] === "--version") {
@@ -381,6 +390,7 @@ Deno.test("workspace Python environment preparation skips install when ipykernel
     );
   } finally {
     await Deno.remove(root, { recursive: true });
+    await Deno.remove(portalHome, { recursive: true });
   }
 });
 
@@ -388,10 +398,13 @@ Deno.test("workspace Python environment preparation is serialized per root", asy
   const root = await Deno.realPath(
     await Deno.makeTempDir({ prefix: "weave-jupyter-env-serialized-" }),
   );
+  const portalHome = await Deno.makeTempDir({ prefix: "weave-jupyter-portal-home-serialized-" });
+  const env = { WEAVE_PORTAL_HOME: portalHome };
   let venvCalls = 0;
   try {
-    const expected = __jupyterTest.workspacePythonEnvironmentPaths(root);
+    const expected = __jupyterTest.workspacePythonEnvironmentPaths(root, env);
     const runtime = new __jupyterTest.LocalJupyterRuntime({}, {
+      env,
       commandRunner: async (command, args) => {
         if (command === "uv" && args[0] === "--version") {
           return successfulCommand;
@@ -418,6 +431,7 @@ Deno.test("workspace Python environment preparation is serialized per root", asy
     assertEquals(venvCalls, 1);
   } finally {
     await Deno.remove(root, { recursive: true });
+    await Deno.remove(portalHome, { recursive: true });
   }
 });
 
@@ -436,14 +450,14 @@ Deno.test("Jupyter workspace kernel env is used for server discovery and Python 
       JUPYTER_PATH: "/existing/jupyter",
     }),
     {
-      JUPYTER_PATH: "/workspace/.venv/share/jupyter:/existing/jupyter",
+      JUPYTER_PATH: `${environment.venvPath}/share/jupyter:/existing/jupyter`,
     },
   );
-  assertEquals(environment.kernelEnv.VIRTUAL_ENV, "/workspace/.venv");
+  assertEquals(environment.kernelEnv.VIRTUAL_ENV, environment.venvPath);
   assertEquals(environment.kernelEnv.PYTHONNOUSERSITE, "1");
   assertEquals(
     environment.kernelEnv.PATH,
-    "/workspace/.venv/bin:/usr/bin:/bin:/Users/test/.local/bin:/Users/test/.cargo/bin:/opt/homebrew/bin:/usr/local/bin",
+    `${environment.venvPath}/bin:/usr/bin:/bin:/Users/test/.local/bin:/Users/test/.cargo/bin:/opt/homebrew/bin:/usr/local/bin`,
   );
   assertEquals(
     __jupyterTest.selectJupyterKernelName({ language: "python" }),

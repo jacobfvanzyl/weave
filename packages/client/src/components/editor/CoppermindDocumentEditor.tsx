@@ -3048,7 +3048,10 @@ export const CoppermindDocumentEditor = forwardRef<
 
     const current = jupyterConnectionRef.current;
     if (
-      current && current.path === path && current.targetKey === jupyterTargetKey
+      current &&
+      current.path === path &&
+      current.targetKey === jupyterTargetKey &&
+      current.socket.isOpen()
     ) {
       return current.socket;
     }

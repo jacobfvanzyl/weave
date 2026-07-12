@@ -6,6 +6,7 @@ import {
   type PortalWorkspaceFileTarget,
   resolvePortalWorkspaceFileRoot,
 } from './workspace-files.ts';
+import { resolvePortalHome } from './lifecycle.ts';
 
 export type PortalJupyterTarget = PortalWorkspaceFileTarget;
 
@@ -187,6 +188,7 @@ type LocalJupyterServer = {
 
 type WorkspacePythonEnvironment = {
   binPath: string;
+  environmentPath: string;
   jupyterDataPath: string;
   kernelEnv: Record<string, string>;
   kernelName: string;
@@ -234,6 +236,7 @@ const workspacePythonKernelDisplayName = 'Coppermind Python';
 const websocketExecutionTimeoutMs = 10 * 60_000;
 const textDecoder = new TextDecoder();
 const pathDelimiter = Deno.build.os === 'windows' ? ';' : ':';
+const textEncoder = new TextEncoder();
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -402,17 +405,33 @@ const pathExists = async (
   }
 };
 
+const workspacePythonEnvironmentKey = (rootPath: string) => {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of textEncoder.encode(rootPath)) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, '0');
+};
+
 const workspacePythonEnvironmentPaths = (
   rootPath: string,
   env?: Record<string, string | undefined>,
 ): WorkspacePythonEnvironment => {
-  const venvPath = joinPath(rootPath, '.venv');
+  const environmentPath = joinPath(
+    resolvePortalHome(env),
+    'jupyter',
+    'environments',
+    workspacePythonEnvironmentKey(rootPath),
+  );
+  const venvPath = joinPath(environmentPath, '.venv');
   const binPath = Deno.build.os === 'windows' ? joinPath(venvPath, 'Scripts') : joinPath(venvPath, 'bin');
   const pythonPath = Deno.build.os === 'windows' ? joinPath(binPath, 'python.exe') : joinPath(binPath, 'python');
   const jupyterDataPath = joinPath(venvPath, 'share', 'jupyter');
   const kernelspecDir = joinPath(jupyterDataPath, 'kernels', workspacePythonKernelName);
   return {
     binPath,
+    environmentPath,
     jupyterDataPath,
     kernelEnv: {
       VIRTUAL_ENV: venvPath,
@@ -473,6 +492,7 @@ const prepareWorkspacePythonEnvironment = async (
   deps: WorkspacePythonEnvironmentDeps = {},
 ) => {
   const commandRunner = deps.commandRunner ?? defaultCommandRunner;
+  const mkdir = deps.mkdir ?? Deno.mkdir;
   const stat = deps.stat ?? Deno.stat;
   const environment = workspacePythonEnvironmentPaths(rootPath, deps.env);
 
@@ -484,10 +504,11 @@ const prepareWorkspacePythonEnvironment = async (
   );
 
   if (!await pathExists(environment.venvPath, stat)) {
+    await mkdir(environment.environmentPath, { recursive: true });
     await runRequired(
       commandRunner,
       resolvedUvCommand,
-      ['venv', '--seed', '.venv'],
+      ['venv', '--seed', environment.venvPath],
       { cwd: rootPath },
       'uv failed to create the Coppermind workspace Python environment.',
     );

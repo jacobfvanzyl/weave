@@ -207,6 +207,7 @@ export const createCoppermindJupyterSocket = (
 
   return {
     ready,
+    isOpen: () => !closed && socket.readyState === WebSocket.OPEN,
     execute: (input: { requestId: string; cellId: string; code: string }) =>
       send({
         type: 'execute',
