@@ -20,7 +20,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Check, ChevronRight, Clipboard, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
+import { Check, ChevronRight, Clipboard, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, PanelTopClose, PanelTopOpen, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
 import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelThreadRun,
@@ -92,6 +92,7 @@ import {
   type ToolActivityCall,
 } from './tool-activity';
 import { GuidedTaskCard } from './GuidedTaskCard';
+import { hasVisibleGuidedTask } from './guided-task-card-display';
 import { AskUserCard } from './AskUserCard';
 import {
   buildAskUserResponseMetadata,
@@ -118,6 +119,16 @@ type AskUserResponseContextValue = {
   respond: (part: AskUserPart, resume: AskUserResume) => Promise<void>;
 };
 const AskUserResponseContext = createContext<AskUserResponseContextValue | null>(null);
+type GuidedTaskVisibilityContextValue = {
+  hasGuidedTask: boolean;
+  isVisible: boolean;
+  toggle: () => void;
+};
+const GuidedTaskVisibilityContext = createContext<GuidedTaskVisibilityContextValue>({
+  hasGuidedTask: false,
+  isVisible: true,
+  toggle: () => {},
+});
 type AutoCollapsedTurnIds = Record<string, true>;
 type AutoCollapsedTurnStateProps = {
   autoCollapseContext: ThreadAutoCollapseContextValue;
@@ -1708,6 +1719,7 @@ const Composer = () => {
   const threadId = useContext(ThreadIdContext);
   const stopActiveThreadRun = useContext(StopThreadRunContext);
   const activeThreadRun = useContext(ActiveThreadRunContext);
+  const guidedTaskVisibility = useContext(GuidedTaskVisibilityContext);
   const queryClient = useQueryClient();
   const resourceId = useChatStore(state => state.resourceId);
   const selectedModel = useChatStore(state => state.selectedModel);
@@ -1973,7 +1985,7 @@ const Composer = () => {
         disabled={!isChatGPTConnected || isRemovedWorkspaceThread}
       />
       {isEmpty ? null : <ContextUsageBar threadId={threadId} />}
-      <div className={cn('flex min-w-0 flex-nowrap items-center gap-1', isEmpty ? 'mt-1' : 'mt-0')} data-weave-composer-controls>
+      <div className={cn('flex min-w-0 flex-nowrap items-center gap-1', isEmpty ? 'mt-1' : 'mt-2')} data-weave-composer-controls>
         <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-hidden">
           {isRemovedWorkspaceThread ? null : (
             <Menu>
@@ -2039,6 +2051,23 @@ const Composer = () => {
           <ModelSettingsPicker />
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {guidedTaskVisibility.hasGuidedTask ? (
+            <Button
+              type="button"
+              size="icon-lg"
+              variant="ghost"
+              className={cn(
+                'h-9 w-9 shrink-0 rounded-full text-muted-foreground',
+                !guidedTaskVisibility.isVisible && 'text-primary',
+              )}
+              aria-label={guidedTaskVisibility.isVisible ? 'Hide plan card' : 'Show plan card'}
+              title={guidedTaskVisibility.isVisible ? 'Hide plan card' : 'Show plan card'}
+              aria-pressed={guidedTaskVisibility.isVisible}
+              onClick={guidedTaskVisibility.toggle}
+            >
+              {guidedTaskVisibility.isVisible ? <PanelTopClose size={18} /> : <PanelTopOpen size={18} />}
+            </Button>
+          ) : null}
           {!isThreadRunning ? (
             isRemovedWorkspaceThread ? null : isChatGPTConnected ? (
               <ComposerPrimitive.Send
@@ -2386,6 +2415,8 @@ const Thread = ({
   const threadId = useContext(ThreadIdContext);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
   const pendingProposalImplementationRequest = useChatStore(state => threadId ? state.pendingProposalImplementationRequests[threadId] : undefined);
+  const guidedTaskPlan = useChatStore(state => threadId ? state.threadPlans[threadId] : undefined);
+  const guidedTaskProposal = useChatStore(state => threadId ? state.threadProposals[threadId] : undefined);
   const isRunning = useThread(state => state.isRunning);
   const messages = useThread(state => state.messages);
   const pendingAskUserPart = useMemo(() => getLatestPendingAskUserPart(messages), [messages]);
@@ -2393,6 +2424,18 @@ const Thread = ({
   const composerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
+  const [isGuidedTaskVisible, setIsGuidedTaskVisible] = useState(true);
+  const hasGuidedTask = hasVisibleGuidedTask(guidedTaskPlan, guidedTaskProposal);
+
+  useEffect(() => {
+    setIsGuidedTaskVisible(true);
+  }, [threadId]);
+
+  const guidedTaskVisibility = useMemo<GuidedTaskVisibilityContextValue>(() => ({
+    hasGuidedTask,
+    isVisible: isGuidedTaskVisible,
+    toggle: () => setIsGuidedTaskVisible(visible => !visible),
+  }), [hasGuidedTask, isGuidedTaskVisible]);
 
   const setViewportRef = useCallback((element: HTMLDivElement | null) => {
     viewportRef.current = element;
@@ -2443,31 +2486,33 @@ const Thread = ({
   }, [pendingProposalImplementationRequest?.id, pendingProposalImplementationRequest?.mode, setIsFollowingBottom]);
 
   return (
-    <ThreadAutoCollapseContext.Provider value={autoCollapseContext}>
-      <ThreadPrimitive.Root
-        className={cn('flex h-full flex-col bg-background', isEmptyIdleDraft && 'justify-center')}
-        style={{ '--composer-height': `${composerHeight}px` } as React.CSSProperties}
-      >
-        <ThreadPrimitive.Viewport
-          ref={setViewportRef}
-          className={cn('min-h-0 flex-1 overflow-y-auto', isEmptyIdleDraft && 'hidden')}
-          data-weave-thread-viewport
-          onScroll={updateBottomFollowState}
+    <GuidedTaskVisibilityContext.Provider value={guidedTaskVisibility}>
+      <ThreadAutoCollapseContext.Provider value={autoCollapseContext}>
+        <ThreadPrimitive.Root
+          className={cn('flex h-full flex-col bg-background', isEmptyIdleDraft && 'justify-center')}
+          style={{ '--composer-height': `${composerHeight}px` } as React.CSSProperties}
         >
-          <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
-          <RunningIndicatorTail startedAt={activeRunStartedAt} />
-        </ThreadPrimitive.Viewport>
-        <div
-          ref={composerRef}
-          className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}
-          data-weave-composer-dock
-        >
-          {threadId ? <GuidedTaskCard threadId={threadId} /> : null}
-          {pendingAskUserPart ? <PendingAskUserDock key={pendingAskUserPart.toolCallId} part={pendingAskUserPart} /> : null}
-          <Composer />
-        </div>
-      </ThreadPrimitive.Root>
-    </ThreadAutoCollapseContext.Provider>
+          <ThreadPrimitive.Viewport
+            ref={setViewportRef}
+            className={cn('min-h-0 flex-1 overflow-y-auto', isEmptyIdleDraft && 'hidden')}
+            data-weave-thread-viewport
+            onScroll={updateBottomFollowState}
+          >
+            <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
+            <RunningIndicatorTail startedAt={activeRunStartedAt} />
+          </ThreadPrimitive.Viewport>
+          <div
+            ref={composerRef}
+            className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}
+            data-weave-composer-dock
+          >
+            {threadId && isGuidedTaskVisible ? <GuidedTaskCard threadId={threadId} /> : null}
+            {pendingAskUserPart ? <PendingAskUserDock key={pendingAskUserPart.toolCallId} part={pendingAskUserPart} /> : null}
+            <Composer />
+          </div>
+        </ThreadPrimitive.Root>
+      </ThreadAutoCollapseContext.Provider>
+    </GuidedTaskVisibilityContext.Provider>
   );
 };
 
