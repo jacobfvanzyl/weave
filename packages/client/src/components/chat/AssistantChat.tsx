@@ -1978,7 +1978,7 @@ const Composer = () => {
         if (!/^\/compact(?:\s|$)/i.test(composerText.trim())) markDraftAwaitingSend();
       }}
       onSubmit={handleComposerSubmit}
-      className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-border bg-card px-4 py-3 shadow-sm"
+      className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-border bg-card px-4 py-2 shadow-sm"
       data-weave-text-surface="true"
     >
       {slashMatch && isChatGPTConnected ? <PromptSlashMenu matches={promptMatches} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
@@ -1997,7 +1997,7 @@ const Composer = () => {
         onKeyDown={handleKeyDown}
         disabled={!isChatGPTConnected || isRemovedWorkspaceThread}
       />
-      <div className="mt-5 flex min-w-0 flex-nowrap items-center gap-1" data-weave-composer-controls>
+      <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1" data-weave-composer-controls>
         <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-hidden">
           {isRemovedWorkspaceThread ? null : (
             <ComposerPrimitive.AddAttachment
@@ -2428,7 +2428,11 @@ const Thread = ({
           <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
           <RunningIndicatorTail startedAt={activeRunStartedAt} />
         </ThreadPrimitive.Viewport>
-        <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
+        <div
+          ref={composerRef}
+          className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}
+          data-weave-composer-dock
+        >
           {threadId ? <GuidedTaskCard threadId={threadId} /> : null}
           {pendingAskUserPart ? <PendingAskUserDock key={pendingAskUserPart.toolCallId} part={pendingAskUserPart} /> : null}
           <Composer />

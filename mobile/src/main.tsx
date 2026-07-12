@@ -6,6 +6,7 @@ import { Animation, StatusBar, Style } from '@capacitor/status-bar';
 import { MobileConnectionApp } from '@weave/client/app/mobile-connection';
 import { Providers } from '@weave/client/app/providers';
 import { getClientAppDefinition } from '@weave/client/lib/client-app';
+import { MobileKeyboardAssist } from './keyboard-assist';
 import { configureMobileNotifications } from './notifications';
 import { applyTheme, useThemeStore } from '@weave/client/stores/theme-store';
 import './styles.css';
@@ -26,7 +27,7 @@ const configureNativeShell = async () => {
     StatusBar.setStyle({ style: Style.Default }),
     StatusBar.setOverlaysWebView({ overlay: true }),
     StatusBar.hide({ animation: Animation.None }),
-    Keyboard.setResizeMode({ mode: KeyboardResize.Body }),
+    Keyboard.setResizeMode({ mode: KeyboardResize.None }),
     Keyboard.setStyle({ style: KeyboardStyle.Default }),
   ]);
 };
@@ -37,6 +38,7 @@ void configureNativeShell();
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <Providers>
+      <MobileKeyboardAssist />
       <MobileConnectionApp />
     </Providers>
   </React.StrictMode>,

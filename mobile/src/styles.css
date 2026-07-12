@@ -7,6 +7,14 @@
   background: var(--background);
 }
 
+:root[data-weave-runtime="mobile"] .weave-app-shell {
+  height: calc(100dvh - var(--weave-mobile-keyboard-height, 0px));
+}
+
+:root[data-weave-runtime="mobile"][data-weave-keyboard-visible="true"] [data-weave-composer-dock] {
+  padding-bottom: 0.75rem;
+}
+
 :root[data-weave-runtime="mobile"]
   .weave-appbar-center-content
   [data-weave-context-has-thread-title="true"] {
