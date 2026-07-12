@@ -65,7 +65,7 @@ import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
 import { CommandPanel } from '../ui/command';
-import { Menu, MenuGroupLabel, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubPopup, MenuSubTrigger, MenuTrigger } from '../ui/menu';
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubPopup, MenuSubTrigger, MenuTrigger } from '../ui/menu';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../ui/tooltip';
 import { CodeBlock, getChatCodeBlockRenderMode, shouldDeferCodeFenceHighlight } from './CodeBlock';
 import {
@@ -1579,11 +1579,9 @@ const applyContextUsageStreamPayload = (
   );
 };
 
-const ContextUsageRing = ({ threadId }: { threadId: string | null }) => {
+const ContextUsageBar = ({ threadId }: { threadId: string | null }) => {
   const resourceId = useChatStore(state => state.resourceId);
   const selectedModel = useChatStore(state => state.selectedModel);
-  const queryClient = useQueryClient();
-  const [isCompacting, setIsCompacting] = useState(false);
   const { data: modelConfig } = useQuery({
     queryKey: ['models'],
     queryFn: fetchModelConfig,
@@ -1600,55 +1598,27 @@ const ContextUsageRing = ({ threadId }: { threadId: string | null }) => {
   const rawPercent = data?.percent ?? 0;
   const clamped = Math.max(0, Math.min(100, rawPercent));
   const displayedPercent = String(Math.round(clamped));
-  const radius = 13;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference * (1 - clamped / 100);
-  const tone = clamped >= 90 ? 'text-destructive' : clamped >= 70 ? 'text-peach' : 'text-muted-foreground';
+  const tone = clamped >= 90 ? 'bg-destructive' : clamped >= 70 ? 'bg-peach' : 'bg-primary';
   const tokenLabel = data?.source === 'provider' ? 'tokens' : 'estimated tokens';
 
-  const compact = async () => {
-    if (!threadId || !activeModel || isCompacting || !data?.compactionEnabled) return;
-    setIsCompacting(true);
-    try {
-      await requestThreadCompaction(threadId, activeModel);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
-        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
-      ]);
-    } catch (error) {
-      console.error('[chat] thread compaction failed', error);
-    } finally {
-      setIsCompacting(false);
-    }
-  };
-
   return (
-    <button
-      type="button"
-      onClick={() => void compact()}
-      disabled={!threadId || !activeModel || isCompacting || !data?.compactionEnabled}
-      className={cn('relative flex h-9 w-9 shrink-0 items-center justify-center', tone)}
+    <div
+      className="relative -mx-4 mt-1 h-1 w-[calc(100%+2rem)] overflow-hidden bg-border/70"
       title={data?.contextWindow
-        ? `${data.tokens} / ${data.contextLimitTokens} effective ${tokenLabel} (${data.contextLimitPercent}% of ${data.contextWindow} advertised); click to compact`
+        ? `${data.tokens} / ${data.contextLimitTokens} effective ${tokenLabel} (${data.contextLimitPercent}% of ${data.contextWindow} advertised)`
         : `${data?.tokens ?? 0} ${tokenLabel}`}
+      role="progressbar"
       aria-label={hasPercent ? `Context usage ${displayedPercent}%` : 'Context usage unavailable'}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={hasPercent ? Math.round(clamped) : undefined}
+      data-weave-context-usage-bar
     >
-      <svg viewBox="0 0 32 32" className="absolute inset-0 h-9 w-9 -rotate-90">
-        <circle cx="16" cy="16" r={radius} fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="3" />
-        <circle
-          cx="16"
-          cy="16"
-          r={radius}
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeWidth="3"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-        />
-      </svg>
-      <span className="text-[10px] font-semibold tabular-nums">{isCompacting ? '…' : hasPercent ? displayedPercent : '--'}</span>
-    </button>
+      <span
+        className={cn('block h-full transition-[width,background-color] duration-300', tone)}
+        style={{ width: `${hasPercent ? clamped : 0}%` }}
+      />
+    </div>
   );
 };
 
@@ -1833,6 +1803,11 @@ const Composer = () => {
     setActiveIndex(0);
   };
 
+  const selectComposerCommand = (prompt: PromptSummary) => {
+    selectPrompt(prompt);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
   const sendSteeringMessage = useCallback(async () => {
     if (!threadId || isSteeringSending || !isSendActive) return;
 
@@ -1997,19 +1972,73 @@ const Composer = () => {
         onKeyDown={handleKeyDown}
         disabled={!isChatGPTConnected || isRemovedWorkspaceThread}
       />
-      <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1" data-weave-composer-controls>
+      {isEmpty ? null : <ContextUsageBar threadId={threadId} />}
+      <div className={cn('flex min-w-0 flex-nowrap items-center gap-1', isEmpty ? 'mt-1' : 'mt-0')} data-weave-composer-controls>
         <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-hidden">
           {isRemovedWorkspaceThread ? null : (
-            <ComposerPrimitive.AddAttachment
-              render={<Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Attach image" />}
-            >
-              <Plus size={18} strokeWidth={2.5} />
-            </ComposerPrimitive.AddAttachment>
+            <Menu>
+              <MenuTrigger
+                render={(
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-9 w-9 shrink-0 text-muted-foreground hover:!bg-transparent hover:!text-muted-foreground"
+                    aria-label="Open composer menu"
+                  />
+                )}
+              >
+                <Plus size={18} strokeWidth={2.5} />
+              </MenuTrigger>
+              <MenuPopup
+                anchor={composerRef}
+                side="top"
+                align="start"
+                sideOffset={12}
+                className="w-(--anchor-width) max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border-border bg-card text-card-foreground shadow-sm"
+                data-weave-composer-command-menu
+              >
+                <MenuGroup>
+                  <MenuGroupLabel className="px-3 py-2 text-sm font-medium">Add</MenuGroupLabel>
+                  <ComposerPrimitive.AddAttachment
+                    render={<MenuItem className="min-h-12 gap-3 rounded-md px-3 py-2" />}
+                  >
+                    <ImageIcon size={18} className="text-muted-foreground" />
+                    <span className="flex min-w-0 flex-1 flex-col items-start">
+                      <span className="text-sm font-medium text-foreground">Images</span>
+                      <span className="truncate text-xs text-muted-foreground">Attach images to your message</span>
+                    </span>
+                  </ComposerPrimitive.AddAttachment>
+                </MenuGroup>
+                {slashCommands.length > 0 ? (
+                  <>
+                    <MenuSeparator />
+                    <MenuGroup>
+                      <MenuGroupLabel className="px-3 py-2 text-sm font-medium">Commands</MenuGroupLabel>
+                      {slashCommands.slice(0, 8).map(command => (
+                        <MenuItem
+                          key={`${command.source}:${command.name}`}
+                          className="min-h-12 gap-3 rounded-md px-3 py-2"
+                          onClick={() => selectComposerCommand(command)}
+                        >
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted font-mono text-xs font-semibold text-primary">
+                            /
+                          </span>
+                          <span className="flex min-w-0 flex-1 flex-col items-start">
+                            <span className="text-sm font-medium text-foreground">{command.name}</span>
+                            <span className="w-full truncate text-xs text-muted-foreground">{command.description}</span>
+                          </span>
+                        </MenuItem>
+                      ))}
+                    </MenuGroup>
+                  </>
+                ) : null}
+              </MenuPopup>
+            </Menu>
           )}
           <ModelSettingsPicker />
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          {isEmpty ? null : <ContextUsageRing threadId={threadId} />}
           {!isThreadRunning ? (
             isRemovedWorkspaceThread ? null : isChatGPTConnected ? (
               <ComposerPrimitive.Send
