@@ -49,6 +49,23 @@ export const getAssistantRunTiming = (metadata: unknown): AssistantRunTiming | n
   return timing.startedAt || timing.durationMs !== undefined ? timing : null;
 };
 
+export const withAssistantRunTimingCustomMetadata = (metadata: unknown) => {
+  const timing = getAssistantRunTiming(metadata);
+  if (!timing) return metadata;
+
+  const record = isRecord(metadata) ? metadata : {};
+  const custom = isRecord(record.custom) ? record.custom : {};
+  if (isRecord(custom.weaveRunTiming)) return metadata;
+
+  return {
+    ...record,
+    custom: {
+      ...custom,
+      weaveRunTiming: timing,
+    },
+  };
+};
+
 const durationFromTimestamps = (startedAt: string | undefined, completedAt: string | undefined, nowMs?: number) => {
   if (!startedAt) return undefined;
   const startMs = Date.parse(startedAt);

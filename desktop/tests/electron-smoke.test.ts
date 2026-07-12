@@ -14,9 +14,42 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
   let server: ReturnType<typeof createServer> | undefined;
   let serverUrl = '';
   let userDataPath = '';
+  let scrollThreadMessages: Array<Record<string, unknown>> = [];
 
   beforeEach(async () => {
     const now = new Date().toISOString();
+    const longText = (label: string) => `${label} ${'Long rendered chat content keeps this regression thread scrollable. '.repeat(18)}`;
+    scrollThreadMessages = Array.from({ length: 12 }, (_, index) => ([
+      {
+        id: `scroll-user-${index}`,
+        role: 'user',
+        parts: [{ type: 'text', text: longText(`Question ${index + 1}.`) }],
+      },
+      {
+        id: `scroll-assistant-${index}`,
+        role: 'assistant',
+        status: { type: 'complete' },
+        parts: [{ type: 'text', text: longText(`Answer ${index + 1}.`) }],
+      },
+    ])).flat();
+    scrollThreadMessages.push(
+      {
+        id: 'scroll-user-timed',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Finish the historical timed task.' }],
+      },
+      {
+        id: 'scroll-assistant-timed',
+        role: 'assistant',
+        status: { type: 'complete' },
+        metadata: { weaveRunTiming: { status: 'completed', durationMs: 65_000 } },
+        parts: [
+          { type: 'text', text: 'Historical work details should start collapsed.' },
+          { type: 'tool-read', toolCallId: 'historical-read', input: { path: 'historical.ts' }, output: 'ok', state: 'output-available' },
+          { type: 'text', text: 'Historical final response.' },
+        ],
+      },
+    );
     const codeProject = {
       id: 'project-1',
       userId: 'smoke-user',
@@ -103,6 +136,12 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
       createdAt: now,
       updatedAt: now,
       metadata: { mode: 'project', projectId: 'notes-project', workspaceId: 'notes-workspace', sortOrder: 0 },
+    }, {
+      id: 'scroll-thread',
+      title: 'Scroll regression thread',
+      createdAt: now,
+      updatedAt: now,
+      metadata: { sortOrder: 1 },
     }];
     server = createServer((request, response) => {
       response.setHeader('access-control-allow-origin', '*');
@@ -167,6 +206,36 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
       if (request.url === '/chat/threads') {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify({ threads: smokeThreads }));
+        return;
+      }
+
+      const threadMessagesMatch = request.url?.match(/^\/chat\/threads\/([^/]+)\/messages$/);
+      if (threadMessagesMatch) {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          messages: decodeURIComponent(threadMessagesMatch[1]) === 'scroll-thread' ? scrollThreadMessages : [],
+        }));
+        return;
+      }
+
+      if (request.url?.match(/^\/chat\/runs\/[^/]+$/)) {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ run: { active: false, status: 'idle' } }));
+        return;
+      }
+
+      if (request.url?.match(/^\/chat\/threads\/[^/]+\/context-usage(?:\?|$)/)) {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          modelId: 'openai/gpt-5.5',
+          tokens: 0,
+          contextWindow: 128_000,
+          contextLimitPercent: 80,
+          contextLimitTokens: 102_400,
+          percent: 0,
+          compactionEnabled: true,
+          source: 'estimate',
+        }));
         return;
       }
 
@@ -488,5 +557,96 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
 
     expect(await page.evaluate(() => typeof window.require)).toBe('undefined');
     expect(await page.locator('body').evaluate(element => getComputedStyle(element).colorScheme)).toBe('dark');
+  }, 60_000);
+
+  it('keeps a scrolled chat anchor through persisted refresh and reapplies timed collapse on reopen', async () => {
+    app = await electron.launch({
+      args: [path.resolve(testDirectory, '../.vite/build/main.js')],
+      env: {
+        ...process.env,
+        WEAVE_DESKTOP_SERVER_URL: serverUrl,
+        WEAVE_DESKTOP_USER_DATA: userDataPath,
+        WEAVE_AUTH_TOKEN: '',
+      },
+    });
+
+    const page = await app.firstWindow();
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.setSize(1200, 800);
+    });
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.waitForLoadState('domcontentloaded');
+    await page.getByLabel('Auth token').waitFor({ timeout: 5_000 });
+    await page.getByLabel('Auth token').fill('test-token');
+    await page.getByRole('button', { name: 'Save' }).click();
+
+    const sidebar = page.locator('[data-weave-thread-sidebar]');
+    await sidebar.getByRole('button', { name: /^Scroll regression thread$/ }).click();
+    await playwrightExpect(page.getByText('Historical final response.')).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(page.getByRole('button', { name: 'Show hidden work for this turn' })).toContainText('Worked for 1m05s');
+    await playwrightExpect(page.getByText('Historical work details should start collapsed.')).toHaveCount(0);
+
+    const viewport = page.locator('[data-weave-active-thread="true"] [data-weave-thread-viewport]');
+    await viewport.evaluate(element => {
+      element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) * 0.45);
+      element.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForTimeout(500);
+    const anchorBefore = await viewport.evaluate(element => {
+      const viewportTop = element.getBoundingClientRect().top;
+      const message = Array.from(element.querySelectorAll<HTMLElement>('[data-message-id]'))
+        .find(candidate => candidate.getBoundingClientRect().bottom > viewportTop);
+      return {
+        atBottom: element.scrollHeight - element.scrollTop - element.clientHeight < 1,
+        id: message?.dataset.messageId,
+        offset: message ? message.getBoundingClientRect().top - viewportTop : undefined,
+      };
+    });
+    expect(anchorBefore.atBottom).toBe(false);
+    expect(anchorBefore.id).toBeTruthy();
+
+    scrollThreadMessages = [
+      ...scrollThreadMessages,
+      {
+        id: 'scroll-user-refetched',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Finish the refetched timed task.' }],
+      },
+      {
+        id: 'scroll-assistant-refetched',
+        role: 'assistant',
+        status: { type: 'complete' },
+        metadata: { weaveRunTiming: { status: 'completed', durationMs: 5_000 } },
+        parts: [
+          { type: 'text', text: 'Refetched work details must stay expanded while reading above.' },
+          { type: 'tool-read', toolCallId: 'refetched-read', input: { path: 'refetched.ts' }, output: 'ok', state: 'output-available' },
+          { type: 'text', text: 'Refetched completion marker.' },
+        ],
+      },
+    ];
+
+    await playwrightExpect(page.getByText('Refetched completion marker.')).toHaveCount(1, { timeout: 9_000 });
+    await playwrightExpect(page.getByText('Refetched work details must stay expanded while reading above.')).toHaveCount(1);
+    await playwrightExpect(page.getByText('Worked for 5s')).toHaveCount(0);
+
+    await page.waitForTimeout(500);
+    const anchorAfter = await viewport.evaluate(element => {
+      const viewportTop = element.getBoundingClientRect().top;
+      const message = Array.from(element.querySelectorAll<HTMLElement>('[data-message-id]'))
+        .find(candidate => candidate.getBoundingClientRect().bottom > viewportTop);
+      return {
+        atBottom: element.scrollHeight - element.scrollTop - element.clientHeight < 1,
+        id: message?.dataset.messageId,
+        offset: message ? message.getBoundingClientRect().top - viewportTop : undefined,
+      };
+    });
+    expect(anchorAfter.atBottom).toBe(false);
+    expect(anchorAfter.id).toBe(anchorBefore.id);
+    expect(Math.abs((anchorAfter.offset ?? 0) - (anchorBefore.offset ?? 0))).toBeLessThanOrEqual(1);
+
+    await sidebar.getByRole('button', { name: /^Loose thought$/ }).click();
+    await sidebar.getByRole('button', { name: /^Scroll regression thread$/ }).click();
+    await playwrightExpect(page.getByText('Worked for 5s')).toBeVisible({ timeout: 5_000 });
+    await playwrightExpect(page.getByText('Refetched work details must stay expanded while reading above.')).toHaveCount(0);
   }, 60_000);
 });

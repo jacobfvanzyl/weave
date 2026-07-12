@@ -4,6 +4,7 @@ import {
   toToolActivityCall,
 } from "./tool-activity";
 import { parseAskUserPart } from "./ask-user";
+import { getWorkedForLabel } from "./turn-timing";
 import { getThreadCompactionPartDisplay } from "../../lib/thread-compaction-display";
 
 export type AssistantContentRange =
@@ -16,6 +17,7 @@ export type AutoCollapsibleAssistantMessage = {
   role?: string;
   parts?: readonly unknown[];
   status?: { type?: string };
+  metadata?: unknown;
 };
 
 export const getPartType = (part: unknown) => {
@@ -77,10 +79,45 @@ export const isVisibleNonReasoningOutputPart = (part: unknown) => {
 };
 
 export const getAutoCollapsedAssistantTextPartIndices = (
-  _parts: readonly unknown[],
-  _showReasoning: boolean,
+  parts: readonly unknown[],
+  showReasoning: boolean,
 ): number[] => {
-  return [];
+  const isVisibleAssistantOutputPart = (part: unknown) =>
+    (isVisibleNonReasoningOutputPart(part) && !isSteeredUserMessagePart(part)) ||
+    (showReasoning && isVisibleReasoningPart(part));
+
+  let finalTextIndex = -1;
+
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (isVisibleTextPart(part)) {
+      finalTextIndex = index;
+      break;
+    }
+
+    if (isVisibleAssistantOutputPart(part)) return [];
+  }
+
+  if (finalTextIndex < 0) return [];
+  if (parts.slice(0, finalTextIndex).some(isSteeredUserMessagePart)) return [];
+
+  let firstFinalTextIndex = finalTextIndex;
+  for (let index = finalTextIndex - 1; index >= 0; index -= 1) {
+    if (!isVisibleTextPart(parts[index])) break;
+    firstFinalTextIndex = index;
+  }
+
+  const hasEarlierWork = parts
+    .slice(0, firstFinalTextIndex)
+    .some(isVisibleAssistantOutputPart);
+  if (!hasEarlierWork) return [];
+
+  const indices: number[] = [];
+  for (let index = firstFinalTextIndex; index <= finalTextIndex; index += 1) {
+    if (isVisibleTextPart(parts[index])) indices.push(index);
+  }
+
+  return indices;
 };
 
 export const getDefaultAutoCollapsedAssistantTurnIds = (
@@ -96,6 +133,7 @@ export const getDefaultAutoCollapsedAssistantTurnIds = (
       message.status?.type === "running"
     ) continue;
     if (expandedIds[message.id]) continue;
+    if (!getWorkedForLabel(message.metadata)) continue;
     if (
       getAutoCollapsedAssistantTextPartIndices(
         message.parts ?? [],

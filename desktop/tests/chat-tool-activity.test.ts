@@ -31,6 +31,7 @@ import {
   formatWorkDuration,
   getWorkedForLabel,
   getWorkingForLabel,
+  withAssistantRunTimingCustomMetadata,
 } from "../../packages/client/src/components/chat/turn-timing";
 
 describe("chat tool activity helpers", () => {
@@ -66,7 +67,29 @@ describe("chat tool activity helpers", () => {
     expect(
       getWorkedForLabel({ custom: { weaveRunTiming: { durationMs: 19_000 } } }),
     ).toBe("Worked for 19s");
+    expect(
+      getWorkedForLabel({ custom: { weaveRunTiming: { durationMs: 65_000 } } }),
+    ).toBe("Worked for 1m05s");
+    expect(
+      getWorkedForLabel({ custom: { weaveRunTiming: { durationMs: 3_665_000 } } }),
+    ).toBe("Worked for 1h01m");
     expect(getWorkedForLabel({})).toBeNull();
+  });
+
+  it("promotes legacy root timing metadata into assistant-ui custom metadata", () => {
+    const metadata = withAssistantRunTimingCustomMetadata({
+      weaveRunTiming: { status: "completed", durationMs: 65_000 },
+      source: "persisted",
+    });
+
+    expect(metadata).toEqual({
+      weaveRunTiming: { status: "completed", durationMs: 65_000 },
+      source: "persisted",
+      custom: {
+        weaveRunTiming: { status: "completed", durationMs: 65_000 },
+      },
+    });
+    expect(getWorkedForLabel(metadata)).toBe("Worked for 1m05s");
   });
 
   it("builds scoped proposal implementation instructions", () => {
@@ -324,7 +347,7 @@ describe("chat tool activity helpers", () => {
       { type: "part", index: 1 },
       { type: "part", index: 2 },
     ]);
-    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([]);
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([2]);
   });
 
   it("hides pending ask_user data from inline assistant content ranges", () => {
@@ -580,7 +603,7 @@ describe("chat tool activity helpers", () => {
     ]);
   });
 
-  it("keeps the full assistant timeline when a turn has earlier visible work", () => {
+  it("selects only trailing final text when an assistant turn has earlier visible work", () => {
     const parts = [
       { type: "reasoning", text: "I should inspect the repo." },
       {
@@ -597,8 +620,8 @@ describe("chat tool activity helpers", () => {
       { type: "tool-activity", indices: [1] },
       { type: "part", index: 2 },
     ]);
-    expect(getAutoCollapsedAssistantTextPartIndices(parts, true)).toEqual([]);
-    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([]);
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, true)).toEqual([2]);
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([2]);
   });
 
   it("keeps completed persisted dynamic tool summaries visible before final text", () => {
@@ -617,7 +640,7 @@ describe("chat tool activity helpers", () => {
       { type: "tool-activity", indices: [0] },
       { type: "part", index: 1 },
     ]);
-    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([]);
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([1]);
   });
 
   it("keeps multiple completed tool/text cycles represented as visible ranges", () => {
@@ -648,15 +671,16 @@ describe("chat tool activity helpers", () => {
       { type: "tool-activity", indices: [3] },
       { type: "part", index: 4 },
     ]);
-    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([]);
+    expect(getAutoCollapsedAssistantTextPartIndices(parts, false)).toEqual([4]);
   });
 
-  it("does not derive default auto-collapsed turns from completed assistant messages", () => {
+  it("derives default auto-collapsed turns only from timed completed assistant messages", () => {
     const messages = [
       {
         id: "assistant-1",
         role: "assistant",
         status: { type: "complete" },
+        metadata: { weaveRunTiming: { status: "completed", durationMs: 19_000 } },
         parts: [
           {
             type: "tool-bash",
@@ -678,6 +702,7 @@ describe("chat tool activity helpers", () => {
         id: "assistant-3",
         role: "assistant",
         status: { type: "running" },
+        metadata: { weaveRunTiming: { status: "running", startedAt: "2026-07-02T10:00:00.000Z" } },
         parts: [
           {
             type: "tool-bash",
@@ -691,14 +716,35 @@ describe("chat tool activity helpers", () => {
       },
     ];
 
-    expect(getDefaultAutoCollapsedAssistantTurnIds(messages, false)).toEqual(
-      {},
-    );
+    expect(getDefaultAutoCollapsedAssistantTurnIds(messages, false)).toEqual({
+      "assistant-1": true,
+    });
     expect(
       getDefaultAutoCollapsedAssistantTurnIds(messages, false, {
         "assistant-1": true,
       }),
     ).toEqual({});
+  });
+
+  it("keeps eligible completed turns expanded when timing metadata is missing", () => {
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      status: { type: "complete" },
+      parts: [
+        {
+          type: "tool-read",
+          toolCallId: "read-1",
+          input: { path: "a.ts" },
+          output: "ok",
+          state: "output-available",
+        },
+        { type: "text", text: "Done." },
+      ],
+    };
+
+    expect(getAutoCollapsedAssistantTextPartIndices(message.parts, false)).toEqual([1]);
+    expect(getDefaultAutoCollapsedAssistantTurnIds([message], false)).toEqual({});
   });
 
   it("does not auto-collapse plain text-only turns or turns without a final text response", () => {

@@ -6,3 +6,9 @@
 :root[data-weave-runtime="mobile"] body {
   background: var(--background);
 }
+
+:root[data-weave-runtime="mobile"]
+  .weave-appbar-center-content
+  [data-weave-context-has-thread-title="true"] {
+  display: none;
+}

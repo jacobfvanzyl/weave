@@ -96,7 +96,7 @@ describe('chat active run registry', () => {
       expect(__chatRunRegistryTest.uiMessages('resource-1', 'thread-1')).toEqual([
         expect.objectContaining({
           id: 'assistant-1',
-          metadata: {
+          metadata: expect.objectContaining({
             weaveRunTiming: {
               runId: run.runId,
               status: 'completed',
@@ -104,7 +104,16 @@ describe('chat active run registry', () => {
               completedAt: '2026-07-02T10:00:19.000Z',
               durationMs: 19_000,
             },
-          },
+            custom: {
+              weaveRunTiming: {
+                runId: run.runId,
+                status: 'completed',
+                startedAt: '2026-07-02T10:00:00.000Z',
+                completedAt: '2026-07-02T10:00:19.000Z',
+                durationMs: 19_000,
+              },
+            },
+          }),
         }),
       ]);
     } finally {

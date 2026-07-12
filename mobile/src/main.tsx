@@ -7,6 +7,7 @@ import { MobileConnectionApp } from '@weave/client/app/mobile-connection';
 import { Providers } from '@weave/client/app/providers';
 import { getClientAppDefinition } from '@weave/client/lib/client-app';
 import { configureMobileNotifications } from './notifications';
+import { applyTheme, useThemeStore } from '@weave/client/stores/theme-store';
 import './styles.css';
 
 const configureNativeShell = async () => {
@@ -14,6 +15,10 @@ const configureNativeShell = async () => {
   root.dataset.weaveClientApp = getClientAppDefinition().id;
   root.dataset.weaveRuntime = 'mobile';
   root.dataset.weavePlatform = Capacitor.getPlatform();
+
+  const themeMode = useThemeStore.getState().mode;
+  if (themeMode === 'system') useThemeStore.getState().setMode('dark');
+  else applyTheme(themeMode);
 
   if (!Capacitor.isNativePlatform()) return;
 

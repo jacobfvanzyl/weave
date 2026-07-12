@@ -512,15 +512,17 @@ export const buildRunTimingMetadata = (
   const startedAtMs = Date.parse(run.startedAt);
   const nowMs = now.getTime();
   const durationMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : undefined;
+  const weaveRunTiming = {
+    runId: run.runId,
+    status,
+    startedAt: run.startedAt,
+    ...(status !== 'running' ? { completedAt: nowIso } : {}),
+    ...(status !== 'running' && durationMs !== undefined ? { durationMs } : {}),
+  };
 
   return {
-    weaveRunTiming: {
-      runId: run.runId,
-      status,
-      startedAt: run.startedAt,
-      ...(status !== 'running' ? { completedAt: nowIso } : {}),
-      ...(status !== 'running' && durationMs !== undefined ? { durationMs } : {}),
-    },
+    weaveRunTiming,
+    custom: { weaveRunTiming },
   };
 };
 

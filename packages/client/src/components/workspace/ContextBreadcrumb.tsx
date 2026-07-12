@@ -22,6 +22,7 @@ export const ContextBreadcrumb = ({
         className,
       )}
       data-weave-context-breadcrumb
+      data-weave-context-has-thread-title={threadTitle ? 'true' : 'false'}
     >
       {projectName ? (
         <>

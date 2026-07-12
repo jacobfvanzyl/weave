@@ -8,7 +8,6 @@ import { AssistantChat } from './AssistantChat';
 type ChatPaneProps = {
   activeThreadId: string;
   breadcrumb?: ReactNode;
-  canFollowWrites: boolean;
   isMaximized: boolean;
   runningThreadIds: string[];
   surfaceRef: RefObject<HTMLDivElement | null>;
@@ -21,7 +20,6 @@ type ChatPaneProps = {
 export const ChatPane = ({
   activeThreadId,
   breadcrumb,
-  canFollowWrites,
   isMaximized,
   runningThreadIds,
   surfaceRef,
@@ -111,7 +109,7 @@ export const ChatPane = ({
               className={thread.id === activeThreadId ? 'absolute inset-0' : 'absolute inset-0 hidden'}
               data-weave-active-thread={thread.id === activeThreadId ? 'true' : 'false'}
             >
-              <AssistantChat canFollowWrites={thread.id === activeThreadId && canFollowWrites} threadId={thread.id} />
+              <AssistantChat threadId={thread.id} />
             </div>
           ))}
       </div>

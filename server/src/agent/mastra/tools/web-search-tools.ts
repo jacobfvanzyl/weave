@@ -1,5 +1,5 @@
 import { createTool } from '@mastra/core/tools';
-import Exa from 'exa-js';
+import { Exa } from 'exa-js';
 import { z } from 'zod';
 import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput } from './model-output';

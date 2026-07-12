@@ -218,7 +218,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       && activeThreadProposal?.path === activeProposalPath
       && canViewProposalReview(activeThreadProposal),
   );
-  const canFollowWrites = Boolean(editorTarget && activeThread?.workspaceId && activeSurface.kind === 'thread');
   const showChatPane = hasChatPaneTarget && paneVisibility.chatOpen;
   const isChatMaximized = maximizedPane === 'chat';
   const hasEditorPaneTarget = Boolean(editorTarget || notesTarget);
@@ -982,7 +981,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       surfaceRef={chatSurfaceRef}
       terminalSlot={showTerminalInChatPane ? renderTerminalPanel('pane') : undefined}
       threads={threads}
-      canFollowWrites={canFollowWrites}
       onClose={() => closePane('chat')}
       onMaximizeToggle={() => handleMainPaneMaximizeToggle('chat')}
     />

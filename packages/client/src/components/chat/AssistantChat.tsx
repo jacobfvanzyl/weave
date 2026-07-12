@@ -20,7 +20,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Check, ChevronRight, Clipboard, Crosshair, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
+import { Check, ChevronRight, Clipboard, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
 import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelThreadRun,
@@ -79,7 +79,6 @@ import {
 } from './assistant-content-ranges';
 import {
   getToolActivitySideEffect,
-  getToolActivityFollowTarget,
   getToolActivityStatus,
   getToolChipDetail,
   getToolResultText,
@@ -104,7 +103,7 @@ import {
   type AskUserResume,
 } from './ask-user';
 import { buildProposalImplementationUserMessage, getProposalActionDisplay, getProposalActionDisplayLabel } from './proposal-implementation';
-import { getWorkedForLabel, getWorkingForLabel } from './turn-timing';
+import { getWorkedForLabel, getWorkingForLabel, withAssistantRunTimingCustomMetadata } from './turn-timing';
 import { completeImageAttachment, imageAttachmentAdapter } from '../../lib/image-attachment-adapter';
 
 const ThreadIdContext = createContext<string | null>(null);
@@ -138,15 +137,8 @@ const ThreadAutoCollapseContext = createContext<ThreadAutoCollapseContextValue>(
   expandCollapsedTurn: () => {},
   liveAssistantTurnIds: {},
 });
-const preserveCompletedTurnTimeline = true;
 const toolCallCache = new Map<string, Pick<ToolCallMessagePartProps, 'toolName' | 'args' | 'result' | 'isError'>>();
 const openedProposalReviewPhases = new Set<string>();
-
-const areAutoCollapsedTurnIdsEqual = (left: AutoCollapsedTurnIds, right: AutoCollapsedTurnIds) => {
-  const leftIds = Object.keys(left);
-  const rightIds = Object.keys(right);
-  return leftIds.length === rightIds.length && leftIds.every(id => right[id]);
-};
 
 const useSecondTicker = (enabled: boolean) => {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -319,11 +311,8 @@ const cacheToolActivityCall = (call: ToolActivityCall) => {
 
 const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
   const threadId = useContext(ThreadIdContext);
-  const followWrites = useChatStore(state => state.followWrites);
-  const threadWorkspaceId = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.workspaceId);
   const activeThreadId = useWorkspaceSurfaceStore(state => state.threadId);
   const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
-  const requestEditorFollow = useWorkspaceSurfaceStore(state => state.requestEditorFollow);
   const openProposalReview = useWorkspaceSurfaceStore(state => state.openProposalReview);
   const appliedEffectsRef = useRef<Record<string, string>>({});
 
@@ -377,29 +366,8 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
           }
         }
       }
-
-      const followTarget = getToolActivityFollowTarget(call);
-      if (!followTarget || !followWrites || !threadId || !threadWorkspaceId) continue;
-      if (activeThreadId !== threadId || activeSurface.kind !== 'thread') continue;
-
-      const followKey = `${call.toolCallId}:followWrite`;
-      const followVersion = [
-        getToolActivityStatus(call),
-        getStableValueVersion(call.args),
-        getStableValueVersion(call.result),
-      ].join(':');
-      if (appliedEffectsRef.current[followKey] === followVersion) continue;
-      appliedEffectsRef.current[followKey] = followVersion;
-
-      requestEditorFollow({
-        threadId,
-        workspaceId: threadWorkspaceId,
-        path: followTarget.path,
-        line: followTarget.line,
-        toolCallId: followTarget.toolCallId,
-      });
     }
-  }, [activeSurface.kind, activeThreadId, followWrites, message.content, message.role, openProposalReview, requestEditorFollow, threadId, threadWorkspaceId]);
+  }, [activeSurface.kind, activeThreadId, message.content, message.role, openProposalReview, threadId]);
 
   return null;
 };
@@ -1155,7 +1123,7 @@ const AssistantMessageContent = () => {
   } = useContext(ThreadAutoCollapseContext);
   const isEmptyAssistantMessage = message.role === 'assistant' && !hasRenderableAssistantContent(message, showReasoning);
   const isAssistantStreaming = message.role === 'assistant' && message.status?.type === 'running';
-  const collapsedWorkLabel = getWorkedForLabel(message.metadata) ?? 'Show work';
+  const collapsedWorkLabel = getWorkedForLabel(message.metadata);
   const previousAssistantStatusRef = useRef(message.role === 'assistant' ? message.status?.type : undefined);
 
   useEffect(() => {
@@ -1173,13 +1141,13 @@ const AssistantMessageContent = () => {
 
     if (!finishedLiveTurn) return;
     const shouldAutoCollapseFinishedTurn =
-      !preserveCompletedTurnTimeline &&
+      collapsedWorkLabel !== null &&
       getAutoCollapsedAssistantTextPartIndices(message.content, showReasoning).length > 0;
     finishAssistantTurnIfFollowing(
       message.id,
       shouldAutoCollapseFinishedTurn,
     );
-  }, [finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning, message.content, message.id, message.role, message.status?.type, showReasoning]);
+  }, [collapsedWorkLabel, finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning, message.content, message.id, message.role, message.status?.type, showReasoning]);
 
   if (isEmptyAssistantMessage) {
     return <AssistantToolSideEffects message={message} />;
@@ -1199,8 +1167,8 @@ const AssistantMessageContent = () => {
       <AssistantToolSideEffects message={message} />
       {message.role === 'assistant' ? (
         <AssistantGroupedContent
-          autoCollapsed={!preserveCompletedTurnTimeline && Boolean(autoCollapsedTurnIds[message.id]) && !isAssistantStreaming}
-          collapsedWorkLabel={collapsedWorkLabel}
+          autoCollapsed={Boolean(autoCollapsedTurnIds[message.id]) && collapsedWorkLabel !== null && !isAssistantStreaming}
+          collapsedWorkLabel={collapsedWorkLabel ?? ''}
           deferCodeHighlight={isAssistantStreaming}
           onExpandCollapsedTurn={() => expandCollapsedTurn(message.id)}
         />
@@ -1452,7 +1420,7 @@ const ModelSettingsPicker = () => {
   }, [activeServiceTier, modelConfig, setServiceTier, supportsActiveServiceTier]);
 
   return (
-    <div className="model-picker min-w-0 shrink-0">
+    <div className="model-picker min-w-0 flex-1 sm:flex-none">
       <Menu>
         <MenuTrigger
           render={(
@@ -1463,7 +1431,7 @@ const ModelSettingsPicker = () => {
               disabled={disabled}
               variant="ghost"
               className={cn(
-                'h-9 min-w-0 max-w-44 justify-start px-2 hover:bg-muted sm:max-w-52',
+                'h-9 w-full min-w-0 justify-start px-2 hover:bg-muted sm:w-auto sm:max-w-52',
                 reasoningToneClassName(activeReasoningValue),
               )}
             >
@@ -1535,31 +1503,6 @@ const ModelSettingsPicker = () => {
         </MenuPopup>
       </Menu>
     </div>
-  );
-};
-
-const FollowWritesToggle = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
-  const followWrites = useChatStore(state => state.followWrites);
-  const setFollowWrites = useChatStore(state => state.setFollowWrites);
-
-  if (!canFollowWrites) return null;
-
-  return (
-    <Button
-      type="button"
-      size="icon"
-      variant="ghost"
-      aria-label={followWrites ? 'Disable follow writes' : 'Enable follow writes'}
-      aria-pressed={followWrites}
-      title={followWrites ? 'Disable follow writes' : 'Enable follow writes'}
-      onClick={() => setFollowWrites(!followWrites)}
-      className={cn(
-        'h-9 w-9 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground',
-        followWrites && 'text-primary hover:text-primary',
-      )}
-    >
-      <Crosshair size={16} />
-    </Button>
   );
 };
 
@@ -1790,7 +1733,7 @@ const SlashHighlightedInput = ({
   );
 };
 
-const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
+const Composer = () => {
   const aui = useAui();
   const threadId = useContext(ThreadIdContext);
   const stopActiveThreadRun = useContext(StopThreadRunContext);
@@ -2054,8 +1997,8 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
         onKeyDown={handleKeyDown}
         disabled={!isChatGPTConnected || isRemovedWorkspaceThread}
       />
-      <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+      <div className="mt-5 flex min-w-0 flex-nowrap items-center gap-1" data-weave-composer-controls>
+        <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-hidden">
           {isRemovedWorkspaceThread ? null : (
             <ComposerPrimitive.AddAttachment
               render={<Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Attach image" />}
@@ -2064,9 +2007,8 @@ const Composer = ({ canFollowWrites }: { canFollowWrites: boolean }) => {
             </ComposerPrimitive.AddAttachment>
           )}
           <ModelSettingsPicker />
-          <FollowWritesToggle canFollowWrites={canFollowWrites} />
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           {isEmpty ? null : <ContextUsageRing threadId={threadId} />}
           {!isThreadRunning ? (
             isRemovedWorkspaceThread ? null : isChatGPTConnected ? (
@@ -2253,13 +2195,125 @@ const getPartVersion = (part: UIMessage['parts'][number]) => {
 
 const getMessagesVersion = (messages: UIMessage[]) =>
   messages
-    .map(message => `${message.id}:${message.role}:${message.parts?.length ?? 0}:${message.parts?.map(getPartVersion).join(',') ?? ''}`)
+    .map(message => {
+      const messageRecord = message as UIMessage & { status?: unknown };
+      return [
+        message.id,
+        message.role,
+        getStableValueVersion(messageRecord.status),
+        getStableValueVersion(message.metadata),
+        message.parts?.length ?? 0,
+        message.parts?.map(getPartVersion).join(',') ?? '',
+      ].join(':');
+    })
     .join('|');
+
+const withAssistantUiCompatibleTimingMetadata = (messages: UIMessage[]) =>
+  messages.map(message => {
+    const metadata = withAssistantRunTimingCustomMetadata(message.metadata);
+    return metadata === message.metadata ? message : { ...message, metadata };
+  });
 
 const bottomFollowThresholdPx = 64;
 
 const isViewportAtBottom = (element: HTMLElement) =>
   element.scrollHeight - element.scrollTop - element.clientHeight <= bottomFollowThresholdPx;
+
+type ThreadViewportSnapshot = {
+  expectedLastMessageId?: string;
+  messageId?: string;
+  messageOffsetTop?: number;
+  scrollTop: number;
+};
+
+type ThreadViewportHandle = {
+  cancelPendingRestore?: () => void;
+  element: HTMLDivElement | null;
+};
+
+const captureThreadViewportSnapshot = (viewport: HTMLDivElement): ThreadViewportSnapshot => {
+  const viewportTop = viewport.getBoundingClientRect().top;
+  const visibleMessage = Array.from(viewport.querySelectorAll<HTMLElement>('[data-message-id]'))
+    .find(element => element.getBoundingClientRect().bottom > viewportTop);
+  const messageId = visibleMessage?.dataset.messageId;
+
+  return {
+    scrollTop: viewport.scrollTop,
+    ...(messageId && visibleMessage
+      ? {
+        messageId,
+        messageOffsetTop: visibleMessage.getBoundingClientRect().top - viewportTop,
+      }
+      : {}),
+  };
+};
+
+const restoreThreadViewportSnapshot = (viewport: HTMLDivElement, snapshot: ThreadViewportSnapshot) => {
+  if (snapshot.messageId && snapshot.messageOffsetTop !== undefined) {
+    const message = Array.from(viewport.querySelectorAll<HTMLElement>('[data-message-id]'))
+      .find(element => element.dataset.messageId === snapshot.messageId);
+    if (message) {
+      const viewportTop = viewport.getBoundingClientRect().top;
+      const nextOffsetTop = message.getBoundingClientRect().top - viewportTop;
+      viewport.scrollTop += nextOffsetTop - snapshot.messageOffsetTop;
+      return;
+    }
+  }
+
+  viewport.scrollTop = snapshot.scrollTop;
+};
+
+const beginThreadViewportSnapshotRestore = (
+  handle: ThreadViewportHandle,
+  snapshot: ThreadViewportSnapshot,
+) => {
+  handle.cancelPendingRestore?.();
+  const viewport = handle.element;
+  if (!viewport) return;
+
+  let animationFrame: number | undefined;
+  let completionTimer: number | undefined;
+  let fallbackTimer: number | undefined;
+  let completed = false;
+
+  const cleanup = () => {
+    if (completed) return;
+    completed = true;
+    if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+    if (completionTimer !== undefined) window.clearTimeout(completionTimer);
+    if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+    mutationObserver.disconnect();
+    resizeObserver.disconnect();
+    if (handle.cancelPendingRestore === cleanup) handle.cancelPendingRestore = undefined;
+  };
+
+  const restore = () => {
+    const currentViewport = handle.element;
+    if (!currentViewport) return false;
+    if (
+      snapshot.expectedLastMessageId &&
+      !Array.from(currentViewport.querySelectorAll<HTMLElement>('[data-message-id]'))
+        .some(message => message.dataset.messageId === snapshot.expectedLastMessageId)
+    ) return false;
+
+    restoreThreadViewportSnapshot(currentViewport, snapshot);
+    if (completionTimer === undefined) completionTimer = window.setTimeout(cleanup, 250);
+    return true;
+  };
+
+  const tick = () => {
+    if (completed) return;
+    restore();
+    animationFrame = window.requestAnimationFrame(tick);
+  };
+  const mutationObserver = new MutationObserver(restore);
+  const resizeObserver = new ResizeObserver(restore);
+  mutationObserver.observe(viewport, { childList: true, subtree: true });
+  resizeObserver.observe(viewport);
+  fallbackTimer = window.setTimeout(cleanup, 2_000);
+  handle.cancelPendingRestore = cleanup;
+  tick();
+};
 
 const getLatestPendingAskUserPart = (messages: readonly ThreadMessage[]) => {
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
@@ -2294,9 +2348,12 @@ const PendingAskUserDock = ({ part }: { part: AskUserPart }) => {
 const Thread = ({
   autoCollapseContext,
   activeRunStartedAt,
-  canFollowWrites,
   setIsFollowingBottom,
-}: AutoCollapsedTurnStateProps & { activeRunStartedAt: string | undefined; canFollowWrites: boolean }) => {
+  viewportHandle,
+}: AutoCollapsedTurnStateProps & {
+  activeRunStartedAt: string | undefined;
+  viewportHandle: React.MutableRefObject<ThreadViewportHandle>;
+}) => {
   const threadId = useContext(ThreadIdContext);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
   const pendingProposalImplementationRequest = useChatStore(state => threadId ? state.pendingProposalImplementationRequests[threadId] : undefined);
@@ -2307,6 +2364,11 @@ const Thread = ({
   const composerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
+
+  const setViewportRef = useCallback((element: HTMLDivElement | null) => {
+    viewportRef.current = element;
+    viewportHandle.current.element = element;
+  }, [viewportHandle]);
 
   const updateBottomFollowState = useCallback(() => {
     const viewport = viewportRef.current;
@@ -2358,8 +2420,9 @@ const Thread = ({
         style={{ '--composer-height': `${composerHeight}px` } as React.CSSProperties}
       >
         <ThreadPrimitive.Viewport
-          ref={viewportRef}
+          ref={setViewportRef}
           className={cn('min-h-0 flex-1 overflow-y-auto', isEmptyIdleDraft && 'hidden')}
+          data-weave-thread-viewport
           onScroll={updateBottomFollowState}
         >
           <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
@@ -2368,7 +2431,7 @@ const Thread = ({
         <div ref={composerRef} className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}>
           {threadId ? <GuidedTaskCard threadId={threadId} /> : null}
           {pendingAskUserPart ? <PendingAskUserDock key={pendingAskUserPart.toolCallId} part={pendingAskUserPart} /> : null}
-          <Composer canFollowWrites={canFollowWrites} />
+          <Composer />
         </div>
       </ThreadPrimitive.Root>
     </ThreadAutoCollapseContext.Provider>
@@ -2376,7 +2439,6 @@ const Thread = ({
 };
 
 type AssistantChatProps = {
-  canFollowWrites: boolean;
   threadId: string;
 };
 
@@ -2402,7 +2464,6 @@ const useDynamicChatTransport = <UI_MESSAGE extends UIMessage>(
 };
 
 const AssistantChatRuntime = ({
-  canFollowWrites,
   threadId,
   initialMessages,
   autoCollapseContext,
@@ -2420,6 +2481,7 @@ const AssistantChatRuntime = ({
   const resumeRunIdRef = useRef<string | undefined>(undefined);
   const pendingAskUserResumeRef = useRef<PendingAskUserResume | undefined>(undefined);
   const sendingProposalImplementationRequestRef = useRef<string | undefined>(undefined);
+  const viewportHandle = useRef<ThreadViewportHandle>({ element: null });
   const { data: modelConfig } = useQuery({
     queryKey: ['models'],
     queryFn: fetchModelConfig,
@@ -2500,11 +2562,15 @@ const AssistantChatRuntime = ({
     [chatApi, reasoningEffort, requestServiceTier, selectedModel, threadId],
   );
   const transport = useDynamicChatTransport(currentTransport);
+  const assistantUiInitialMessages = useMemo(
+    () => withAssistantUiCompatibleTimingMetadata(initialMessages),
+    [initialMessages],
+  );
 
   const chat = useChat({
     id: threadId,
     transport,
-    messages: initialMessages,
+    messages: assistantUiInitialMessages,
     resume: true,
     experimental_throttle: 80,
     onData: dataPart => {
@@ -2532,6 +2598,27 @@ const AssistantChatRuntime = ({
       await queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] });
     },
   });
+  const persistedMessagesVersion = useMemo(
+    () => getMessagesVersion(assistantUiInitialMessages),
+    [assistantUiInitialMessages],
+  );
+  const appliedPersistedMessagesVersionRef = useRef(persistedMessagesVersion);
+
+  useEffect(() => {
+    if (chat.status === 'submitted' || chat.status === 'streaming') return;
+    if (appliedPersistedMessagesVersionRef.current === persistedMessagesVersion) return;
+
+    const viewport = viewportHandle.current.element;
+    if (viewport && !isViewportAtBottom(viewport)) {
+      beginThreadViewportSnapshotRestore(viewportHandle.current, {
+        ...captureThreadViewportSnapshot(viewport),
+        expectedLastMessageId: assistantUiInitialMessages.at(-1)?.id,
+      });
+    }
+
+    appliedPersistedMessagesVersionRef.current = persistedMessagesVersion;
+    chat.setMessages(assistantUiInitialMessages);
+  }, [assistantUiInitialMessages, chat, chat.status, persistedMessagesVersion]);
 
   const stopActiveThreadRun = useCallback(async () => {
     resumeRunIdRef.current = runState?.runId ?? 'active';
@@ -2581,6 +2668,10 @@ const AssistantChatRuntime = ({
   if (transport instanceof AssistantChatTransport) transport.setRuntime(runtime);
 
   useEffect(() => {
+    return () => viewportHandle.current.cancelPendingRestore?.();
+  }, []);
+
+  useEffect(() => {
     const request = pendingProposalImplementationRequest;
     if (!request) return;
     if (!proposalWorkflowEnabled) return;
@@ -2626,8 +2717,8 @@ const AssistantChatRuntime = ({
               <Thread
                 autoCollapseContext={autoCollapseContext}
                 activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
-                canFollowWrites={canFollowWrites}
                 setIsFollowingBottom={setIsFollowingBottom}
+                viewportHandle={viewportHandle}
               />
             </ThreadIdContext.Provider>
           </AskUserResponseContext.Provider>
@@ -2637,7 +2728,7 @@ const AssistantChatRuntime = ({
   );
 };
 
-export const AssistantChat = ({ canFollowWrites, threadId }: AssistantChatProps) => {
+export const AssistantChat = ({ threadId }: AssistantChatProps) => {
   const resourceId = useChatStore(state => state.resourceId);
   const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
   const isRunning = useChatStore(state => state.runningThreadIds.includes(threadId));
@@ -2646,6 +2737,7 @@ export const AssistantChat = ({ canFollowWrites, threadId }: AssistantChatProps)
   const [expandedAutoCollapsedTurnIds, setExpandedAutoCollapsedTurnIds] = useState<AutoCollapsedTurnIds>({});
   const [liveAssistantTurnIds, setLiveAssistantTurnIds] = useState<AutoCollapsedTurnIds>({});
   const isFollowingBottomRef = useRef(true);
+  const initialPersistedAutoCollapsedTurnIdsRef = useRef<AutoCollapsedTurnIds | null>(null);
   const { data: initialMessages = [], isLoading } = useQuery({
     queryKey: ['thread-messages', resourceId, threadId],
     queryFn: () => listServerMessages(threadId),
@@ -2658,21 +2750,12 @@ export const AssistantChat = ({ canFollowWrites, threadId }: AssistantChatProps)
     setExpandedAutoCollapsedTurnIds({});
     setLiveAssistantTurnIds({});
     isFollowingBottomRef.current = true;
+    initialPersistedAutoCollapsedTurnIdsRef.current = null;
   }, [threadId]);
 
-  useEffect(() => {
-    const defaults = getDefaultAutoCollapsedAssistantTurnIds(initialMessages, showReasoning, expandedAutoCollapsedTurnIds);
-    setAutoCollapsedTurnIds(previous => {
-      const next: AutoCollapsedTurnIds = { ...previous };
-      for (const id of Object.keys(expandedAutoCollapsedTurnIds)) {
-        delete next[id];
-      }
-      for (const id of Object.keys(defaults)) {
-        next[id] = true;
-      }
-      return areAutoCollapsedTurnIdsEqual(previous, next) ? previous : next;
-    });
-  }, [expandedAutoCollapsedTurnIds, initialMessages, showReasoning]);
+  if (!isDraft && !isLoading && initialPersistedAutoCollapsedTurnIdsRef.current === null) {
+    initialPersistedAutoCollapsedTurnIdsRef.current = getDefaultAutoCollapsedAssistantTurnIds(initialMessages, showReasoning);
+  }
 
   const setIsFollowingBottom = useCallback((value: boolean) => {
     isFollowingBottomRef.current = value;
@@ -2690,7 +2773,11 @@ export const AssistantChat = ({ canFollowWrites, threadId }: AssistantChatProps)
       return next;
     });
 
-    if (!shouldCollapse || !isFollowingBottomRef.current) return;
+    if (!shouldCollapse) return;
+    if (!isFollowingBottomRef.current) {
+      setExpandedAutoCollapsedTurnIds(previous => previous[messageId] ? previous : { ...previous, [messageId]: true });
+      return;
+    }
     setExpandedAutoCollapsedTurnIds(previous => {
       if (!previous[messageId]) return previous;
       const next = { ...previous };
@@ -2710,23 +2797,28 @@ export const AssistantChat = ({ canFollowWrites, threadId }: AssistantChatProps)
     });
   }, []);
 
+  const effectiveAutoCollapsedTurnIds: AutoCollapsedTurnIds = {
+    ...(initialPersistedAutoCollapsedTurnIdsRef.current ?? {}),
+    ...autoCollapsedTurnIds,
+  };
+  for (const id of Object.keys(expandedAutoCollapsedTurnIds)) delete effectiveAutoCollapsedTurnIds[id];
+
   const autoCollapseContext = useMemo<ThreadAutoCollapseContextValue>(
     () => ({
-      autoCollapsedTurnIds,
+      autoCollapsedTurnIds: effectiveAutoCollapsedTurnIds,
       expandCollapsedTurn,
       finishAssistantTurnIfFollowing,
       liveAssistantTurnIds,
       markAssistantTurnRunning,
     }),
-    [autoCollapsedTurnIds, expandCollapsedTurn, finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning],
+    [effectiveAutoCollapsedTurnIds, expandCollapsedTurn, finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning],
   );
 
   if (!isDraft && isLoading && !isRunning) return <div className="h-full bg-background" />;
 
   return (
     <AssistantChatRuntime
-      key={`${threadId}:${getMessagesVersion(initialMessages)}`}
-      canFollowWrites={canFollowWrites}
+      key={threadId}
       threadId={threadId}
       initialMessages={initialMessages}
       autoCollapseContext={autoCollapseContext}
