@@ -17,7 +17,7 @@ export const AppTopBar = ({
   threadTitle,
   rightActions,
 }: AppTopBarProps) => (
-  <header className="relative z-20 grid h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border bg-background px-4">
+  <header className="weave-appbar relative z-20 grid h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border bg-background px-4">
     <div className="weave-appbar-left-actions flex min-w-0 items-center gap-2 justify-self-start">
       {leftActions}
     </div>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, Code2, MessageSquare, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
+import { Code2, MessageSquare, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
 import {
   getClientAppDefinition,
@@ -16,7 +16,6 @@ import { proposalWorkflowEnabled } from '../../lib/proposal-workflow';
 import { canViewProposalReview } from '../../lib/proposal-review-state';
 import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { workspaceRefKey } from '../../lib/thread-eligibility';
-import { sendTestNotification } from '../../lib/notifications/test-notification';
 import { useChatStore, type ChatThread } from '../../stores/chat-store';
 import { useAppShellStore } from '../../stores/app-shell-store';
 import { useProductStore } from '../../stores/product-store';
@@ -865,9 +864,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
         onMouseLeave: scheduleSidebarPreviewClose,
       }
     : {};
-  const handleTestNotification = useCallback(() => {
-    void sendTestNotification();
-  }, []);
   const renderSidebarToggleButton = () => (
     <Button
       size="icon"
@@ -877,17 +873,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       {...sidebarToggleHoverHandlers}
     >
       <PanelLeft size={18} />
-    </Button>
-  );
-  const renderTestNotificationButton = () => (
-    <Button
-      size="icon"
-      variant="ghost"
-      aria-label="Send test notification"
-      title="Send test notification"
-      onClick={handleTestNotification}
-    >
-      <Bell size={18} />
     </Button>
   );
   const renderGeneralTerminalButton = () => {
@@ -1058,7 +1043,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const headerLeftActions = shouldRenderHeaderLeftActions ? (
     <>
       {showHeaderSidebarToggle ? renderSidebarToggleButton() : null}
-      {showHeaderSidebarToggle ? renderTestNotificationButton() : null}
       {renderGeneralTerminalButton()}
     </>
   ) : undefined;
@@ -1099,6 +1083,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
           variant="ghost"
           aria-label={notesTarget ? (showEditorPane ? 'Hide notes' : 'Show notes') : (showEditorPane ? 'Hide editor' : 'Show editor')}
           data-active={showEditorPane ? 'true' : 'false'}
+          data-weave-project-code-pane-toggle={editorTarget ? 'true' : undefined}
           onClick={handleEditorPaneToggle}
         >
           {notesTarget ? <StickyNote size={18} /> : <Code2 size={18} />}
@@ -1179,7 +1164,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
           {...floatingLeftActionHoverHandlers}
         >
           {showHeaderSidebarToggle || showPinnedSidebarToggle ? renderSidebarToggleButton() : null}
-          {showHeaderSidebarToggle || showPinnedSidebarToggle ? renderTestNotificationButton() : null}
           {renderGeneralTerminalButton()}
         </div>
       ) : null}

@@ -604,7 +604,11 @@ export const TerminalPanel = ({
           </Button>
         </div>
         <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden px-3">
-          {breadcrumb ? <div className="min-w-0 max-w-full truncate">{breadcrumb}</div> : null}
+          {breadcrumb ? (
+            <div className="min-w-0 max-w-full truncate" data-weave-terminal-breadcrumb>
+              {breadcrumb}
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1 pr-3">
           {terminalColumn && onTerminalColumnToggle ? (

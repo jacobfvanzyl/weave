@@ -80,6 +80,7 @@ export const ChatPane = ({
           variant="ghost"
           aria-label={isMaximized ? 'Restore chat pane' : 'Maximize chat pane'}
           title={isMaximized ? 'Restore chat pane' : 'Maximize chat pane'}
+          data-weave-chat-pane-window-action
           onClick={onMaximizeToggle}
         >
           {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -90,6 +91,7 @@ export const ChatPane = ({
           variant="ghost"
           aria-label="Close chat pane"
           title="Close chat pane"
+          data-weave-chat-pane-window-action
           onClick={onClose}
         >
           <X size={14} />
