@@ -11,6 +11,8 @@ import {
   isPotentialCompactToolHistoryText,
 } from './mastra/compact-tool-history-processor';
 import { subscribeThreadContextUsage, type ThreadContextUsageSnapshot } from './mastra/context-usage';
+import type { ExecutionProfile } from './execution-policy';
+import type { AgentRunEventV1, AgentRunRecordV1, AgentRunRepository, AgentRunSafeCheckpointV1 } from './run-repository';
 
 const activeThreadRunCleanupDelayMs = 5 * 60 * 1000;
 
@@ -24,7 +26,13 @@ const bufferedAssistantEndTypes: Record<string, string> = {
   'reasoning-end': 'reasoning',
 };
 
-export type AgentThreadRunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'error';
+export type AgentThreadRunStatus =
+  | 'running'
+  | 'awaiting_approval'
+  | 'cancelling'
+  | 'completed'
+  | 'cancelled'
+  | 'error';
 
 type AgentThreadRunEvent =
   | { type: 'chunk'; chunk: unknown }
@@ -38,11 +46,19 @@ export type AgentThreadRun = {
   resourceId: string;
   threadId: string;
   runId: string;
+  mastraRunId: string;
+  executionProfile: ExecutionProfile;
+  model?: string;
+  requestContext?: unknown;
   status: AgentThreadRunStatus;
   startedAt: string;
   updatedAt: string;
   controller: AbortController;
   chunks: unknown[];
+  sequencedChunks: Array<{ sequence: number; chunk: unknown }>;
+  nextSequence: number;
+  persistenceChain: Promise<void>;
+  persistenceError?: unknown;
   submittedUserMessages: unknown[];
   listeners: Set<AgentThreadRunListener>;
   contextUsageUnsubscribe?: () => void;
@@ -116,9 +132,44 @@ type AgentRunCoordinatorOptions = {
   cleanupDelayMs?: number;
   subscribeContextUsage?: typeof subscribeThreadContextUsage;
   createPerf?: () => ChatRunPerf | undefined;
+  repository?: AgentRunRepository;
 };
 
 const activeThreadRunStatuses = new Set<AgentThreadRunStatus>(['running', 'cancelling']);
+const occupiedThreadRunStatuses = new Set<AgentThreadRunStatus>(['running', 'awaiting_approval', 'cancelling']);
+
+const toolApprovalChunk = (chunk: unknown) => {
+  const type = getStreamChunkType(chunk);
+  return type === 'tool-approval-request' || type === 'data-tool-call-approval' || type === 'tool-call-approval';
+};
+
+const checkpointForChunk = (chunk: unknown, sequence: number): AgentRunSafeCheckpointV1 | undefined => {
+  const type = getStreamChunkType(chunk);
+  const record = chunk && typeof chunk === 'object' ? chunk as Record<string, unknown> : undefined;
+  const data = record?.data && typeof record.data === 'object' ? record.data as Record<string, unknown> : undefined;
+  const toolCallId = typeof record?.toolCallId === 'string'
+    ? record.toolCallId
+    : typeof data?.toolCallId === 'string'
+    ? data.toolCallId
+    : undefined;
+  const boundary = toolApprovalChunk(chunk)
+    ? 'approval'
+    : type === 'tool-result' || type === 'tool-output-available' || type === 'tool-output-error'
+    ? 'tool_result'
+    : type === 'finish'
+    ? 'model'
+    : undefined;
+  return boundary
+    ? {
+      version: 1,
+      boundary,
+      sequence,
+      ...(toolCallId ? { toolCallId } : {}),
+      resumable: false,
+      recordedAt: new Date().toISOString(),
+    }
+    : undefined;
+};
 
 export const getStreamChunkType = (chunk: unknown) =>
   chunk && typeof chunk === 'object' && typeof (chunk as Record<string, unknown>).type === 'string'
@@ -570,8 +621,7 @@ type NormalizedAskUserAnswer = {
   customAnswer?: string;
 };
 
-const nonEmptyString = (value: unknown) =>
-  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+const nonEmptyString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
 const normalizeAskUserQuestions = (value: unknown): Array<Record<string, unknown>> | undefined => {
   if (!Array.isArray(value)) return undefined;
@@ -667,7 +717,9 @@ const normalizeAskUserSuspensionPart = (chunk: Record<string, unknown>) => {
       toolName: askUserToolName,
       questions,
       status: 'pending',
-      ...(nonEmptyString(suspendPayload?.requestedAt) ? { requestedAt: nonEmptyString(suspendPayload?.requestedAt) } : {}),
+      ...(nonEmptyString(suspendPayload?.requestedAt)
+        ? { requestedAt: nonEmptyString(suspendPayload?.requestedAt) }
+        : {}),
     },
   };
 };
@@ -679,11 +731,7 @@ export const normalizeAskUserSuspensionChunk = (chunk: unknown) => {
 
 const getAskUserToolInput = (chunk: Record<string, unknown>) => {
   if (chunk.toolName !== askUserToolName) return undefined;
-  const input = isRecord(chunk.input)
-    ? chunk.input
-    : isRecord(chunk.args)
-    ? chunk.args
-    : undefined;
+  const input = isRecord(chunk.input) ? chunk.input : isRecord(chunk.args) ? chunk.args : undefined;
   const questions = normalizeAskUserQuestions(input?.questions);
   const toolCallId = nonEmptyString(chunk.toolCallId);
   if (!toolCallId || !questions) return undefined;
@@ -1232,11 +1280,13 @@ export class AgentRunCoordinator {
   private readonly cleanupDelayMs: number;
   private readonly subscribeContextUsage: typeof subscribeThreadContextUsage;
   private readonly createPerf: () => ChatRunPerf | undefined;
+  private readonly repository?: AgentRunRepository;
 
   constructor(options: AgentRunCoordinatorOptions = {}) {
     this.cleanupDelayMs = options.cleanupDelayMs ?? activeThreadRunCleanupDelayMs;
     this.subscribeContextUsage = options.subscribeContextUsage ?? subscribeThreadContextUsage;
     this.createPerf = options.createPerf ?? createChatRunPerf;
+    this.repository = options.repository;
   }
 
   hasActiveThreadRun(resourceId: string | undefined, threadId: string | undefined) {
@@ -1250,7 +1300,7 @@ export class AgentRunCoordinator {
 
   getActiveThreadRun(resourceId: string | undefined, threadId: string | undefined) {
     const run = this.getThreadRun(resourceId, threadId);
-    return isActiveThreadRun(run) ? run : undefined;
+    return run && occupiedThreadRunStatuses.has(run.status) ? run : undefined;
   }
 
   getRunById(runId: string | undefined) {
@@ -1262,7 +1312,23 @@ export class AgentRunCoordinator {
     return toThreadRunSnapshot(this.getThreadRun(resourceId, threadId));
   }
 
-  createThreadRun(resourceId: string, threadId: string, submittedUserMessages: unknown[] = []) {
+  async flushPersistence(run: AgentThreadRun) {
+    await run.persistenceChain;
+    if (run.persistenceError) throw run.persistenceError;
+  }
+
+  createThreadRun(
+    resourceId: string,
+    threadId: string,
+    submittedUserMessages: unknown[] = [],
+    options: {
+      mastraRunId?: string;
+      executionProfile?: ExecutionProfile;
+      model?: string;
+      requestContext?: unknown;
+      metadata?: Record<string, unknown>;
+    } = {},
+  ) {
     const key = threadRunKey(resourceId, threadId);
     const previous = this.runs.get(key);
     if (previous?.cleanupTimer) clearTimeout(previous.cleanupTimer);
@@ -1274,11 +1340,18 @@ export class AgentRunCoordinator {
       resourceId,
       threadId,
       runId: crypto.randomUUID(),
+      mastraRunId: options.mastraRunId ?? crypto.randomUUID(),
+      executionProfile: options.executionProfile ?? 'workspace',
+      model: options.model,
+      requestContext: options.requestContext,
       status: 'running',
       startedAt: now,
       updatedAt: now,
       controller: new AbortController(),
       chunks: [],
+      sequencedChunks: [],
+      nextSequence: 0,
+      persistenceChain: Promise.resolve(),
       submittedUserMessages,
       listeners: new Set(),
       perf: this.createPerf(),
@@ -1287,19 +1360,102 @@ export class AgentRunCoordinator {
       this.appendChunk(run, toContextUsageChunk(snapshot));
     });
     this.runs.set(key, run);
+    if (this.repository) {
+      run.persistenceChain = this.repository.create({
+        runId: run.runId,
+        resourceId,
+        threadId,
+        mastraRunId: run.mastraRunId,
+        executionProfile: run.executionProfile,
+        model: run.model,
+        metadata: options.metadata,
+        startedAt: now,
+      }).then(() => undefined).catch((error) => {
+        run.persistenceError = error;
+        console.error('[chat] failed to persist agent run', { runId: run.runId, error });
+      });
+    }
+    return run;
+  }
+
+  restoreAwaitingApprovalRun(
+    record: AgentRunRecordV1,
+    events: AgentRunEventV1[],
+    options: { requestContext?: unknown; submittedUserMessages?: unknown[] } = {},
+  ) {
+    if (record.status !== 'awaiting_approval') {
+      throw new Error(`Agent run ${record.runId} is not awaiting approval.`);
+    }
+    const key = threadRunKey(record.resourceId, record.threadId);
+    const existing = this.runs.get(key);
+    if (existing) return existing;
+
+    const sequencedChunks = events
+      .filter((event) => event.runId === record.runId && event.sequence > 0)
+      .sort((left, right) => left.sequence - right.sequence)
+      .map((event) => ({ sequence: event.sequence, chunk: event.data }));
+    const run: AgentThreadRun = {
+      key,
+      resourceId: record.resourceId,
+      threadId: record.threadId,
+      runId: record.runId,
+      mastraRunId: record.mastraRunId,
+      executionProfile: record.executionProfile,
+      model: record.model,
+      requestContext: options.requestContext,
+      status: 'awaiting_approval',
+      startedAt: record.startedAt,
+      updatedAt: record.updatedAt,
+      controller: new AbortController(),
+      chunks: sequencedChunks.map((event) => event.chunk),
+      sequencedChunks,
+      nextSequence: Math.max(record.lastSequence, ...sequencedChunks.map((event) => event.sequence), 0),
+      persistenceChain: Promise.resolve(),
+      submittedUserMessages: options.submittedUserMessages ?? [],
+      listeners: new Set(),
+      perf: this.createPerf(),
+    };
+    this.runs.set(key, run);
     return run;
   }
 
   appendChunk(run: AgentThreadRun, chunk: unknown) {
-    if (this.runs.get(run.key) !== run || !activeThreadRunStatuses.has(run.status)) return;
+    if (
+      this.runs.get(run.key) !== run ||
+      (!activeThreadRunStatuses.has(run.status) && !(run.status === 'awaiting_approval' && toolApprovalChunk(chunk)))
+    ) return;
 
     const type = getStreamChunkType(chunk);
     recordChatRunPerfChunk(run, chunk, type);
     if (type === 'finish' || type === 'abort') run.terminalChunkType = type;
     run.chunks.push(chunk);
+    const sequence = ++run.nextSequence;
+    run.sequencedChunks.push({ sequence, chunk });
     run.updatedAt = new Date().toISOString();
 
+    if (this.repository) {
+      const checkpoint = checkpointForChunk(chunk, sequence);
+      run.persistenceChain = run.persistenceChain.then(() =>
+        this.repository!.appendEvent({
+          runId: run.runId,
+          sequence,
+          eventType: type ?? 'unknown',
+          data: chunk,
+          checkpoint,
+          ...(toolApprovalChunk(chunk) ? { status: 'awaiting_approval' as const } : {}),
+        })
+      ).catch((error) => {
+        run.persistenceError = error;
+        console.error('[chat] failed to persist agent run event', { runId: run.runId, sequence, error });
+        run.controller.abort(error);
+        queueMicrotask(() =>
+          this.settleRun(run, 'error', new Error('Agent run event persistence failed.', { cause: error }))
+        );
+      });
+    }
+
     for (const listener of run.listeners) listener({ type: 'chunk', chunk });
+    if (toolApprovalChunk(chunk)) run.status = 'awaiting_approval';
   }
 
   completeRun(run: AgentThreadRun) {
@@ -1308,7 +1464,7 @@ export class AgentRunCoordinator {
 
   settleRun(
     run: AgentThreadRun,
-    status: Exclude<AgentThreadRunStatus, 'running' | 'cancelling'>,
+    status: 'completed' | 'cancelled' | 'error',
     error?: unknown,
   ) {
     if (this.runs.get(run.key) !== run || !activeThreadRunStatuses.has(run.status)) return;
@@ -1341,14 +1497,25 @@ export class AgentRunCoordinator {
     for (const listener of run.listeners) listener(event);
     run.listeners.clear();
     this.scheduleThreadRunCleanup(run);
+    if (this.repository) {
+      const persistedStatus = status === 'error' ? 'failed' : status;
+      run.persistenceChain = run.persistenceChain.then(() =>
+        this.repository!.settle(run.runId, persistedStatus, run.error)
+      ).catch((persistenceError) => {
+        run.persistenceError = persistenceError;
+        console.error('[chat] failed to settle persisted agent run', { runId: run.runId, error: persistenceError });
+      });
+    }
   }
 
-  observeRun(run: AgentThreadRun) {
+  observeRun(run: AgentThreadRun, afterSequence = 0) {
     let listener: AgentThreadRunListener | undefined;
 
     return new ReadableStream<unknown>({
       start(controller) {
-        for (const chunk of run.chunks) controller.enqueue(chunk);
+        for (const event of run.sequencedChunks) {
+          if (event.sequence > afterSequence) controller.enqueue(event.chunk);
+        }
 
         if (!activeThreadRunStatuses.has(run.status)) {
           controller.close();
@@ -1402,6 +1569,13 @@ export class AgentRunCoordinator {
           }
         }
 
+        if (run.status === 'awaiting_approval') {
+          run.contextUsageUnsubscribe?.();
+          run.contextUsageUnsubscribe = undefined;
+          for (const listener of run.listeners) listener({ type: 'close' });
+          run.listeners.clear();
+          return;
+        }
         this.settleRun(run, run.terminalChunkType === 'abort' ? 'cancelled' : 'completed');
       } catch (error) {
         this.settleRun(run, run.controller.signal.aborted ? 'cancelled' : 'error', error);
@@ -1411,8 +1585,29 @@ export class AgentRunCoordinator {
     })();
   }
 
+  resumeRunPump(run: AgentThreadRun, stream: ReadableStream<unknown>) {
+    if (run.status !== 'awaiting_approval') return false;
+    run.status = 'running';
+    run.updatedAt = new Date().toISOString();
+    run.contextUsageUnsubscribe ??= this.subscribeContextUsage(run.threadId, run.resourceId, (snapshot) => {
+      this.appendChunk(run, toContextUsageChunk(snapshot));
+    });
+    if (this.repository) {
+      run.persistenceChain = run.persistenceChain.then(() => this.repository!.markRunning(run.runId)).catch((error) => {
+        run.persistenceError = error;
+        console.error('[chat] failed to mark persisted agent run resumed', { runId: run.runId, error });
+        run.controller.abort(error);
+        queueMicrotask(() =>
+          this.settleRun(run, 'error', new Error('Agent run resume persistence failed.', { cause: error }))
+        );
+      });
+    }
+    this.startRunPump(run, stream);
+    return true;
+  }
+
   cancelRun(run: AgentThreadRun) {
-    if (!activeThreadRunStatuses.has(run.status)) return false;
+    if (!occupiedThreadRunStatuses.has(run.status)) return false;
 
     run.status = 'cancelling';
     run.updatedAt = new Date().toISOString();

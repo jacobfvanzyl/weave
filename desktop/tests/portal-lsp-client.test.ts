@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { PortalLspClient } from '../src/main/portal-lsp-client';
-import type { PortalSupervisor } from '../src/main/portal-terminal-client';
+import type { PortalSupervisor } from '../src/main/portal-supervisor';
 
 const listen = (handler: (request: IncomingMessage, response: ServerResponse) => void) => {
   const server = createServer(handler);

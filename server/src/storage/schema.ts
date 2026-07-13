@@ -1,5 +1,17 @@
 import { sql } from 'drizzle-orm';
-import { check, doublePrecision, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique } from 'drizzle-orm/pg-core';
+import {
+  check,
+  doublePrecision,
+  index,
+  integer,
+  jsonb,
+  pgSchema,
+  primaryKey,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 
 export const weaveSchema = pgSchema('weave');
 
@@ -151,6 +163,58 @@ export const workflowRunEvents = weaveSchema.table(
     primaryKey({ columns: [table.ownerId, table.runId, table.sequence] }),
     unique('workflow_run_events_owner_run_event_id_idx').on(table.ownerId, table.runId, table.eventId),
     index('workflow_run_events_owner_run_created_idx').on(table.ownerId, table.runId, table.createdAt),
+  ],
+);
+
+export const agentRuns = weaveSchema.table(
+  'agent_runs',
+  {
+    runId: text('run_id').primaryKey(),
+    resourceId: text('resource_id').notNull(),
+    threadId: text('thread_id').notNull(),
+    mastraRunId: text('mastra_run_id').notNull(),
+    status: text('status').notNull(),
+    executionProfile: text('execution_profile').notNull(),
+    model: text('model'),
+    metadata: jsonb('metadata').notNull(),
+    safeCheckpoint: jsonb('safe_checkpoint'),
+    lastSequence: integer('last_sequence').notNull(),
+    error: text('error'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('agent_runs_resource_thread_active_idx').on(table.resourceId, table.threadId).where(
+      sql`${table.status} in ('running', 'awaiting_approval')`,
+    ),
+    index('agent_runs_resource_thread_updated_idx').on(table.resourceId, table.threadId, table.updatedAt),
+    check(
+      'agent_runs_status_check',
+      sql`${table.status} in ('running', 'awaiting_approval', 'completed', 'failed', 'cancelled', 'interrupted')`,
+    ),
+    check('agent_runs_execution_profile_check', sql`${table.executionProfile} in ('observe', 'workspace', 'host')`),
+  ],
+);
+
+export const agentRunEvents = weaveSchema.table(
+  'agent_run_events',
+  {
+    runId: text('run_id').notNull().references(() => agentRuns.runId, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    eventId: text('event_id').notNull(),
+    eventType: text('event_type').notNull(),
+    data: jsonb('data').notNull(),
+    idempotencyKey: text('idempotency_key'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.sequence] }),
+    unique('agent_run_events_run_event_id_idx').on(table.runId, table.eventId),
+    uniqueIndex('agent_run_events_idempotency_idx').on(table.runId, table.idempotencyKey).where(
+      sql`${table.idempotencyKey} is not null`,
+    ),
+    index('agent_run_events_run_created_idx').on(table.runId, table.createdAt),
   ],
 );
 

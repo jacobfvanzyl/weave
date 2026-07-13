@@ -1,6 +1,6 @@
 import type { WorkspaceFileTarget } from '../shared/workspace-file';
 import type { LspSessionInput, LspSessionResult } from '../shared/language-intelligence';
-import type { PortalSupervisor } from './portal-terminal-client';
+import type { PortalSupervisor } from './portal-supervisor';
 
 type LspResolvedTarget = {
   cwd: string;

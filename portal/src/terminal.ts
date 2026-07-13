@@ -2017,6 +2017,7 @@ export const startTerminalControlServer = (input: {
   port: number;
   token: string;
   metadata?: Record<string, unknown>;
+  getMetadata?: () => Record<string, unknown>;
   onShutdown?: () => void | Promise<void>;
 }) => {
   const assertToken = (request: Request) => {
@@ -2040,7 +2041,13 @@ export const startTerminalControlServer = (input: {
   server = Deno.serve({ hostname: input.hostname, port: input.port }, async (request) => {
     const url = new URL(request.url);
     if (!assertToken(request)) return new Response('unauthorized', { status: 401 });
-    if (url.pathname === '/health') return Response.json({ ok: true, ...(input.metadata ?? {}) });
+    if (url.pathname === '/health') {
+      return Response.json({
+        ok: true,
+        ...(input.metadata ?? {}),
+        ...(input.getMetadata?.() ?? {}),
+      });
+    }
     if (url.pathname === '/shutdown') {
       setTimeout(() => {
         void Promise.resolve(input.onShutdown?.()).finally(async () => {

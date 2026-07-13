@@ -16,6 +16,7 @@ import { toolService } from '../../../services/tool-runtime';
 import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars } from './model-output';
 import { getThreadBinding, offlineMessage, resolvePortalForBinding } from './portal-tools';
+import { toolNeedsApproval } from '../../execution-policy';
 
 const adaptersForCaller = (resourceId: string, threadId?: string) => ({
   getPortal: getPortalConnection,
@@ -181,6 +182,7 @@ export const gitSwitchTool = createTool({
     base: z.string().optional().describe(toolInputDescription('git_switch', 'base')),
   }),
   outputSchema: gitOutputSchema,
+  requireApproval: (_input, context) => toolNeedsApproval('git_switch', context?.requestContext),
   execute: async (input, context) => {
     const target = await getGitTarget(context);
     return {
@@ -211,6 +213,8 @@ export const gitWorktreeTool = createTool({
     deleteLocalBranch: z.boolean().optional().describe(toolInputDescription('git_worktree', 'deleteLocalBranch')),
   }),
   outputSchema: gitOutputSchema,
+  requireApproval: (input, context) =>
+    input.operation !== 'list' && toolNeedsApproval('git_worktree', context?.requestContext),
   execute: async (input, context) => {
     const target = await getGitTarget(context);
     if (input.operation === 'list') {

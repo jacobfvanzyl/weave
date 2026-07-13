@@ -1,16 +1,12 @@
-import { handleChatStream } from '@mastra/ai-sdk';
+import { handleChatStream, toAISdkStream } from '@mastra/ai-sdk';
 import type { AgentMessageInput, MastraDBMessage } from '@mastra/core/agent';
 import type { Mastra } from '@mastra/core/mastra';
 import { listAgentContributions } from './contributions';
-import {
-  putModelContextBudget,
-  resolveModelContextBudget,
-  type ModelContextBudget,
-} from './context-budget';
+import { type ModelContextBudget, putModelContextBudget, resolveModelContextBudget } from './context-budget';
 import { getThreadContextUsageSnapshot } from './mastra/context-usage';
 import { credentialOwnerHeaders } from './credential-owner';
 import { normalizeOpenAIReasoningEffort, normalizeOpenAIServiceTier } from './model-capabilities';
-import { getModelConfig, resolveModelOption, type ModelConfig } from './model-options';
+import { getModelConfig, type ModelConfig, resolveModelOption } from './model-options';
 import { buildChatSystemMessages } from './mastra/agents/instructions';
 import { expandPromptTemplate, listPromptSummaries } from './mastra/prompt-templates/registry';
 import {
@@ -21,8 +17,12 @@ import {
 } from './mastra/context/resolver';
 import { listResolvedContextSkillSummaries } from './mastra/context/skill-source';
 import { resolveMemoryPolicy } from './mastra/memory-policy';
-import { clampAgentMaxSteps, getAgentMaxSteps } from './mastra/run-quality-processor';
+import { clampAgentMaxSteps, getAgentMaxSteps } from './mastra/run-guard-processor';
 import { putChatRuntimeContext } from './mastra/runtime-context-processor';
+import { appendRunVerification, runVerificationSchema } from './mastra/run-verifier-agent';
+import { compactText, hashText } from './mastra/tools/model-output';
+import { normalizeExecutionProfile, putExecutionProfile, rememberToolApproval } from './execution-policy';
+import { type AgentRunRecordV1, type AgentRunRepository, agentRunRepository } from './run-repository';
 import {
   AgentRunCoordinator,
   type AgentThreadRun,
@@ -35,11 +35,12 @@ import {
 } from './run-coordinator';
 import { contextUsageRecallOptions, estimateMemoryContextTokens } from './context-token-estimate';
 import { type EventService, eventService as defaultEventService } from '../services/event-service';
-import { type JsonValue, type ServiceCaller, ServiceError } from '../services/types';
+import { callerForOwner, type JsonValue, type ServiceCaller, ServiceError } from '../services/types';
+import { toolService } from '../services/tool-runtime';
 import { getWeaveDb } from '../storage/postgres';
 import {
-  buildCompactionPrompt,
   batchCompactionMessages,
+  buildCompactionPrompt,
   compactionSourceFingerprint,
   estimateMessageTokens,
   putThreadCompactionContext,
@@ -48,13 +49,17 @@ import {
   validateCompactionSummary,
 } from './thread-compaction';
 import {
-  threadCompactionRepository,
-  type ThreadCompactionRepository,
   type ThreadCompactionRecord,
+  type ThreadCompactionRepository,
+  threadCompactionRepository,
   type ThreadCompactionTrigger,
 } from './thread-compaction-repository';
 
-export { contextUsageRecallOptions, estimateContextTokens, estimateMemoryContextTokens } from './context-token-estimate';
+export {
+  contextUsageRecallOptions,
+  estimateContextTokens,
+  estimateMemoryContextTokens,
+} from './context-token-estimate';
 
 export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'failed';
 
@@ -140,6 +145,18 @@ export type SendChatMessageResult = {
   runId?: string;
   messageId?: string;
   reason?: 'stale_run';
+};
+
+export type ToolApprovalDecision = 'approve' | 'deny';
+
+export type RespondToToolApprovalRequest = {
+  resourceId: string;
+  threadId: string;
+  runId: string;
+  toolCallId: string;
+  decision: ToolApprovalDecision;
+  rememberForRun?: boolean;
+  requestContext?: unknown;
 };
 
 export type ChatThreadRecord = {
@@ -250,6 +267,13 @@ export interface AgentService {
   runPrompt(input: AgentRunRequest): Promise<JsonValue>;
   startChatRun(input: StartChatRunRequest): Promise<StartChatRunResult>;
   observeChatRun(resourceId: string | undefined, threadId: string | undefined): ReadableStream<unknown> | undefined;
+  replayChatRun(
+    resourceId: string,
+    threadId: string,
+    afterSequence?: number,
+  ): Promise<ReadableStream<unknown> | undefined>;
+  getPersistedChatRun(resourceId: string, threadId: string): Promise<AgentRunRecordV1 | undefined>;
+  respondToToolApproval(input: RespondToToolApprovalRequest): Promise<StartChatRunResult>;
   getChatRun(resourceId: string | undefined, threadId: string | undefined): AgentThreadRunSnapshot;
   cancelChatRun(resourceId: string | undefined, threadId: string | undefined): AgentThreadRunSnapshot;
   sendChatMessage(input: SendChatMessageRequest): Promise<SendChatMessageResult>;
@@ -280,6 +304,7 @@ export class MastraAgentService implements AgentService {
     private readonly contextResolver: AgentContextResolver = resolveAgentContext,
     private readonly events: EventService = defaultEventService,
     private readonly compactions: ThreadCompactionRepository = threadCompactionRepository,
+    private readonly persistedRuns: AgentRunRepository = agentRunRepository,
   ) {}
 
   async listCapabilities() {
@@ -364,18 +389,59 @@ export class MastraAgentService implements AgentService {
   }
 
   async startChatRun(input: StartChatRunRequest): Promise<StartChatRunResult> {
-    if (input.threadId && this.runCoordinator.hasActiveThreadRun(input.resourceId, input.threadId)) {
+    let existingRun = input.threadId ? this.runCoordinator.getThreadRun(input.resourceId, input.threadId) : undefined;
+    if (!existingRun && input.threadId && containsToolApprovalResponse(input.params.messages)) {
+      const persisted = await this.persistedRuns.latest(input.resourceId, input.threadId);
+      if (!persisted || persisted.status !== 'awaiting_approval') {
+        throw new ServiceError('operation_failed', 'Tool approval belongs to a stale or unavailable run.', 409);
+      }
+      existingRun = this.runCoordinator.restoreAwaitingApprovalRun(
+        persisted,
+        await this.persistedRuns.events(persisted.runId),
+        {
+          requestContext: input.requestContext,
+          submittedUserMessages: input.submittedUserMessages,
+        },
+      );
+    }
+    if (existingRun && existingRun.status !== 'awaiting_approval') {
       throw new ServiceError('operation_failed', 'thread has an active stream', 409);
     }
 
     const prepared = await this.prepareChatRun(input);
     const mastra = await this.getMastra();
-    const run = input.threadId
-      ? this.runCoordinator.createThreadRun(input.resourceId, input.threadId, input.submittedUserMessages ?? [])
-      : undefined;
+    const { executionProfile: _executionProfile, verify: _verify, ...chatParams } = input.params;
+    const mastraRunId = existingRun?.mastraRunId ?? stringValue(input.params.runId) ?? crypto.randomUUID();
+    const callerTracingOptions = isRecord(chatParams.tracingOptions) ? chatParams.tracingOptions : {};
+    const callerTraceMetadata = isRecord(callerTracingOptions.metadata) ? callerTracingOptions.metadata : {};
+    const runMetadata = {
+      schemaVersion: 1,
+      agent: 'mage-hand',
+      harness: 'weave-mastra-v1',
+      model: prepared.routedModel,
+      executionProfile: prepared.executionProfile,
+      maxSteps: getAgentMaxSteps(),
+      promptHash: hashText(JSON.stringify(prepared.system)),
+      toolContractVersion: 1,
+      executionLimits: {
+        contextTokens: prepared.contextBudget.contextLimitTokens,
+        network: prepared.executionProfile === 'host' ? 'host' : 'denied',
+      },
+      skills: prepared.skillSummaries,
+    };
+    const run = existingRun ??
+      (input.threadId
+        ? this.runCoordinator.createThreadRun(input.resourceId, input.threadId, input.submittedUserMessages ?? [], {
+          mastraRunId,
+          executionProfile: prepared.executionProfile,
+          model: stringValue(input.params.model),
+          requestContext: input.requestContext,
+          metadata: runMetadata,
+        })
+        : undefined);
 
     try {
-      const mastraRunId = stringValue(input.params.runId) ?? crypto.randomUUID();
+      if (run && !existingRun) await this.runCoordinator.flushPersistence(run);
       const maxSteps = getAgentMaxSteps();
       const stream = await this.chatStreamHandler({
         mastra,
@@ -394,7 +460,7 @@ export class MastraAgentService implements AgentService {
           }
           : {}),
         params: {
-          ...input.params,
+          ...chatParams,
           maxSteps,
           runId: mastraRunId,
           ...(prepared.routedModel
@@ -404,23 +470,81 @@ export class MastraAgentService implements AgentService {
           memory: prepared.memory as never,
           system: prepared.system as never,
           requestContext: input.requestContext as never,
+          savePerStep: true,
           abortSignal: run?.controller.signal ?? input.abortSignal,
+          tracingOptions: {
+            ...callerTracingOptions,
+            metadata: {
+              ...callerTraceMetadata,
+              ...runMetadata,
+              ...(run ? { agentRunId: run.runId } : {}),
+              ...(input.threadId ? { threadId: input.threadId } : {}),
+            },
+            tags: [
+              ...new Set([
+                ...Array.isArray(callerTracingOptions.tags)
+                  ? callerTracingOptions.tags.filter((tag): tag is string => typeof tag === 'string')
+                  : [],
+                'weave-coding-agent',
+                `execution:${prepared.executionProfile}`,
+              ]),
+            ],
+          },
         } as never,
       });
 
       const modelStream = prepared.automaticCompaction
-        ? prependStreamValues(stream as ReadableStream<unknown>, threadCompactionStreamEvents(prepared.automaticCompaction))
+        ? prependStreamValues(
+          stream as ReadableStream<unknown>,
+          threadCompactionStreamEvents(prepared.automaticCompaction),
+        )
         : stream as ReadableStream<unknown>;
+      const verifiedStream = prepared.verificationEnabled && run
+        ? appendRunVerification(modelStream, {
+          requirements: input.submittedUserMessages ?? [],
+          verify: async (evidence) => {
+            try {
+              const repositoryEvidence = await collectRepositoryVerifierEvidence(
+                input.resourceId,
+                prepared.resolvedContext,
+              );
+              const verifier = await mastra.getAgent('runVerifierAgent');
+              if (!verifier) throw new Error('Run verifier agent is unavailable.');
+              const result = await verifier.generate(JSON.stringify({ ...evidence, repositoryEvidence }), {
+                maxSteps: 1,
+                requestContext: input.requestContext as never,
+                model: ownerScopedSubscriptionModel('chatgpt/codex/gpt-5.6-luna', input.resourceId),
+                structuredOutput: { schema: runVerificationSchema },
+              } as never);
+              return runVerificationSchema.parse(result.object);
+            } catch (error) {
+              return {
+                verdict: 'needs_evidence' as const,
+                summary: 'The independent verifier could not complete.',
+                missingEvidence: [error instanceof Error ? error.message : String(error)],
+                unresolvedRisks: [],
+                requestAnotherPhase: false,
+              };
+            }
+          },
+        })
+        : modelStream;
       const bufferedStream = bufferAssistantTextStream(
         filterCompactToolHistoryTextStream(
-          normalizeAskUserSuspensionStream(modelStream, { mastraRunId }),
+          normalizeAskUserSuspensionStream(verifiedStream, { mastraRunId }),
         ),
       );
       if (!run) {
         return { stream: bufferedStream, snapshot: { active: false, status: 'idle' } };
       }
 
-      this.runCoordinator.startRunPump(run, bufferedStream);
+      if (existingRun) {
+        if (!this.runCoordinator.resumeRunPump(run, bufferedStream)) {
+          throw new ServiceError('operation_failed', 'Agent run could not be resumed.', 409);
+        }
+      } else {
+        this.runCoordinator.startRunPump(run, bufferedStream);
+      }
       return {
         run,
         stream: this.runCoordinator.observeRun(run),
@@ -434,6 +558,93 @@ export class MastraAgentService implements AgentService {
 
   observeChatRun(resourceId: string | undefined, threadId: string | undefined) {
     return this.runCoordinator.observeActiveThreadRun(resourceId, threadId);
+  }
+
+  async replayChatRun(resourceId: string, threadId: string, afterSequence = 0) {
+    const inMemory = this.runCoordinator.getThreadRun(resourceId, threadId);
+    if (inMemory) return this.runCoordinator.observeRun(inMemory, afterSequence);
+
+    const persisted = await this.persistedRuns.latest(resourceId, threadId);
+    if (!persisted) return undefined;
+    if (persisted.status === 'running') await this.persistedRuns.interrupt(persisted.runId);
+    const events = await this.persistedRuns.events(persisted.runId, afterSequence);
+    return new ReadableStream<unknown>({
+      start(controller) {
+        for (const event of events) controller.enqueue(event.data);
+        controller.close();
+      },
+    });
+  }
+
+  getPersistedChatRun(resourceId: string, threadId: string) {
+    return this.persistedRuns.latest(resourceId, threadId);
+  }
+
+  async respondToToolApproval(input: RespondToToolApprovalRequest): Promise<StartChatRunResult> {
+    let run = this.runCoordinator.getThreadRun(input.resourceId, input.threadId);
+    if (!run) {
+      const persisted = await this.persistedRuns.latest(input.resourceId, input.threadId);
+      if (persisted?.runId === input.runId && persisted.status === 'awaiting_approval') {
+        run = this.runCoordinator.restoreAwaitingApprovalRun(
+          persisted,
+          await this.persistedRuns.events(persisted.runId),
+          { requestContext: input.requestContext },
+        );
+      }
+    }
+    if (!run || run.runId !== input.runId) {
+      throw new ServiceError('operation_failed', 'Agent run was not found or is stale.', 409);
+    }
+    if (run.status !== 'awaiting_approval') {
+      throw new ServiceError('operation_failed', 'Agent run is not awaiting tool approval.', 409);
+    }
+    if (input.rememberForRun && input.decision === 'approve') {
+      const approvalChunk = [...run.chunks].reverse().find((chunk) => {
+        if (!isRecord(chunk)) return false;
+        const data = isRecord(chunk.data) ? chunk.data : undefined;
+        return chunk.toolCallId === input.toolCallId || data?.toolCallId === input.toolCallId;
+      });
+      if (isRecord(approvalChunk)) {
+        const data = isRecord(approvalChunk.data) ? approvalChunk.data : undefined;
+        const toolName = stringValue(approvalChunk.toolName) ?? stringValue(data?.toolName);
+        if (toolName) rememberToolApproval(run.requestContext, toolName);
+      }
+    }
+
+    const mastra = await this.getMastra();
+    const agent = await mastra.getAgent('mageHandAgent');
+    if (!agent) throw new ServiceError('operation_failed', 'Agent was not found: mageHandAgent', 404);
+    const options = {
+      runId: run.mastraRunId,
+      toolCallId: input.toolCallId,
+      requestContext: run.requestContext as never,
+      maxSteps: getAgentMaxSteps(),
+    };
+    const output = input.decision === 'approve'
+      ? await agent.approveToolCall(options)
+      : await agent.declineToolCall(options);
+    const resumed = bufferAssistantTextStream(
+      filterCompactToolHistoryTextStream(
+        normalizeAskUserSuspensionStream(
+          toAISdkStream(output, {
+            from: 'agent',
+            version: 'v6',
+            sendReasoning: true,
+            messageMetadata: ({ part }: { part?: unknown }) => {
+              if (!isRecord(part)) return undefined;
+              if (part.type === 'start') return buildRunTimingMetadata(run, 'running');
+              if (part.type === 'finish') return buildRunTimingMetadata(run, 'completed');
+              return undefined;
+            },
+          }) as ReadableStream<unknown>,
+          { mastraRunId: run.mastraRunId },
+        ),
+      ),
+    );
+    if (!this.runCoordinator.resumeRunPump(run, resumed)) {
+      throw new ServiceError('operation_failed', 'Agent run could not be resumed.', 409);
+    }
+    return { run, stream: this.runCoordinator.observeRun(run), snapshot: toThreadRunSnapshot(run) };
   }
 
   getChatRun(resourceId: string | undefined, threadId: string | undefined) {
@@ -629,10 +840,10 @@ export class MastraAgentService implements AgentService {
     const tokens = checkpointIsNewer && completedCheckpoint.projectedTokens !== undefined
       ? completedCheckpoint.projectedTokens
       : snapshot?.usedTokens ?? (await estimateMemoryContextTokens(memory, {
-        threadId: input.threadId,
-        resourceId: input.resourceId,
-        memoryConfig: memoryPolicy.options,
-      })) + (completedCheckpoint?.summary ? Math.ceil(completedCheckpoint.summary.length / 4) : 0);
+            threadId: input.threadId,
+            resourceId: input.resourceId,
+            memoryConfig: memoryPolicy.options,
+          })) + (completedCheckpoint?.summary ? Math.ceil(completedCheckpoint.summary.length / 4) : 0);
 
     return {
       modelId: budget.modelId,
@@ -711,17 +922,20 @@ export class MastraAgentService implements AgentService {
     const sourceTokens = cut.source.reduce((total, message) => total + estimateMessageTokens(message), 0);
     if ((input.trigger ?? 'manual') === 'automatic') {
       const latestAttempt = await this.compactions.latest(input.resourceId, input.threadId, false);
-      const retryAt = latestAttempt?.status === 'failed'
-        ? Date.parse(latestAttempt.updatedAt) + 15 * 60 * 1000
-        : 0;
+      const retryAt = latestAttempt?.status === 'failed' ? Date.parse(latestAttempt.updatedAt) + 15 * 60 * 1000 : 0;
       const enoughNewContext = latestAttempt?.status !== 'failed' ||
         sourceTokens >= (latestAttempt.sourceTokens ?? 0) + conversationBudget.retryDeltaTokens;
       if (!enoughNewContext && Date.now() < retryAt) {
-        throw new ServiceError('operation_failed', 'Automatic compaction is cooling down after a failed attempt.', 409, {
-          reason: 'compaction_retry_throttled',
-          retryAt: new Date(retryAt).toISOString(),
-          retryDeltaTokens: conversationBudget.retryDeltaTokens,
-        });
+        throw new ServiceError(
+          'operation_failed',
+          'Automatic compaction is cooling down after a failed attempt.',
+          409,
+          {
+            reason: 'compaction_retry_throttled',
+            retryAt: new Date(retryAt).toISOString(),
+            retryDeltaTokens: conversationBudget.retryDeltaTokens,
+          },
+        );
       }
     }
 
@@ -754,19 +968,22 @@ export class MastraAgentService implements AgentService {
       const batches = batchCompactionMessages(cut.source, inputCapacity);
       let summary = previous?.summary;
       for (const batch of batches) {
-        const output = await agent.stream(buildCompactionPrompt({
-          previousSummary: summary,
-          transcript: serializeCompactionMessages(batch),
-          instructions: input.instructions,
-        }), {
-          model: ownerScopedSubscriptionModel(routeSubscriptionModel(compactionModel), input.resourceId),
-          maxOutputTokens: compactionBudget.summaryOutputTokens,
-          providerOptions: buildProviderOptions(undefined, {
-            reasoningEffort: 'medium',
+        const output = await agent.stream(
+          buildCompactionPrompt({
+            previousSummary: summary,
+            transcript: serializeCompactionMessages(batch),
+            instructions: input.instructions,
           }),
-          toolChoice: 'none',
-          ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
-        } as never);
+          {
+            model: ownerScopedSubscriptionModel(routeSubscriptionModel(compactionModel), input.resourceId),
+            maxOutputTokens: compactionBudget.summaryOutputTokens,
+            providerOptions: buildProviderOptions(undefined, {
+              reasoningEffort: 'medium',
+            }),
+            toolChoice: 'none',
+            ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+          } as never,
+        );
         summary = validateCompactionSummary(
           String(await (output as { text: Promise<unknown> }).text),
           compactionBudget.summaryOutputTokens,
@@ -861,12 +1078,15 @@ export class MastraAgentService implements AgentService {
   private async prepareChatRun(input: StartChatRunRequest) {
     const params = input.params;
     const mastra = await this.getMastra();
+    const executionProfile = normalizeExecutionProfile(params.executionProfile);
+    putExecutionProfile(input.requestContext, executionProfile);
     putChatRuntimeContext(input.requestContext, { now: new Date() });
     const resolvedContext = input.resourceId
       ? await this.contextResolver({ mastra, resourceId: input.resourceId, threadId: input.threadId })
       : undefined;
     if (resolvedContext) putAgentContext(input.requestContext, resolvedContext);
-    const selectedModel = stringValue(params.model) ?? resolvedContext?.config.model ?? (await getModelConfig()).defaultModel;
+    const selectedModel = stringValue(params.model) ?? resolvedContext?.config.model ??
+      (await getModelConfig()).defaultModel;
     const contextBudget = await this.resolveContextBudget(selectedModel);
     putModelContextBudget(input.requestContext, contextBudget);
 
@@ -877,16 +1097,17 @@ export class MastraAgentService implements AgentService {
     let totalMessages = checkpoint && memory && input.threadId
       ? await this.getStoredMessageTotal(memory, { resourceId: input.resourceId, threadId: input.threadId })
       : undefined;
-    const memoryPolicyFor = () => resolvedContext
-      ? resolveMemoryPolicy({
-        agentMemory: resolvedContext.config.memory,
-        threadMetadata: resolvedContext.threadMetadata,
-        tokenLimit: contextBudget.contextLimitTokens,
-        lastMessages: checkpoint?.compactedMessageCount !== undefined && totalMessages !== undefined
-          ? Math.max(1, totalMessages - checkpoint.compactedMessageCount)
-          : undefined,
-      })
-      : undefined;
+    const memoryPolicyFor = () =>
+      resolvedContext
+        ? resolveMemoryPolicy({
+          agentMemory: resolvedContext.config.memory,
+          threadMetadata: resolvedContext.threadMetadata,
+          tokenLimit: contextBudget.contextLimitTokens,
+          lastMessages: checkpoint?.compactedMessageCount !== undefined && totalMessages !== undefined
+            ? Math.max(1, totalMessages - checkpoint.compactedMessageCount)
+            : undefined,
+        })
+        : undefined;
     let memoryPolicy = memoryPolicyFor();
 
     let automaticCompaction: ThreadCompactionRecord | undefined;
@@ -897,10 +1118,10 @@ export class MastraAgentService implements AgentService {
       const usedTokens = checkpointIsNewer && checkpoint?.projectedTokens !== undefined
         ? checkpoint.projectedTokens
         : snapshot?.usedTokens ?? (await estimateMemoryContextTokens(memory, {
-          threadId: input.threadId,
-          resourceId: input.resourceId,
-          memoryConfig: memoryPolicy.options,
-        })) + (checkpoint?.summary ? Math.ceil(checkpoint.summary.length / 4) : 0);
+              threadId: input.threadId,
+              resourceId: input.resourceId,
+              memoryConfig: memoryPolicy.options,
+            })) + (checkpoint?.summary ? Math.ceil(checkpoint.summary.length / 4) : 0);
       const pendingTokens = estimatePendingMessageTokens(input.submittedUserMessages);
       if (usedTokens + pendingTokens >= contextBudget.contextLimitTokens) {
         const result = await this.compactChatThread({
@@ -924,7 +1145,10 @@ export class MastraAgentService implements AgentService {
           ? await this.getStoredMessageTotal(memory, { resourceId: input.resourceId, threadId: input.threadId })
           : undefined;
         memoryPolicy = memoryPolicyFor();
-        if ((checkpoint?.projectedTokens ?? contextBudget.contextLimitTokens) + pendingTokens >= contextBudget.contextLimitTokens) {
+        if (
+          (checkpoint?.projectedTokens ?? contextBudget.contextLimitTokens) + pendingTokens >=
+            contextBudget.contextLimitTokens
+        ) {
           throw new ServiceError(
             'operation_failed',
             'Compaction could not reduce the thread below the selected model context limit.',
@@ -943,11 +1167,12 @@ export class MastraAgentService implements AgentService {
     markGitWorkspaceContext(input.requestContext, isProjectWorkspace);
     markGitProjectContext(input.requestContext, isGitProject);
 
+    const skillSummaries = resolvedContext ? listResolvedContextSkillSummaries(resolvedContext) : [];
     const system = buildChatSystemMessages({
       includeGitInstructions: isGitProject,
       includeNotesInstructions: isNotesProject,
       agentFiles: resolvedContext?.agentFiles,
-      skillSummaries: resolvedContext ? listResolvedContextSkillSummaries(resolvedContext) : undefined,
+      skillSummaries,
       callerSystem: params.system as Parameters<typeof buildChatSystemMessages>[0]['callerSystem'],
     });
 
@@ -974,6 +1199,7 @@ export class MastraAgentService implements AgentService {
       resourceId: input.resourceId,
       memory: memoryPolicy?.status,
       chatgptSubscription: true,
+      executionProfile,
     });
 
     return {
@@ -994,6 +1220,11 @@ export class MastraAgentService implements AgentService {
         : params.memory,
       system,
       automaticCompaction,
+      executionProfile,
+      verificationEnabled: params.verify !== false && isGitProject,
+      skillSummaries,
+      resolvedContext,
+      contextBudget,
     };
   }
 
@@ -1204,13 +1435,53 @@ export class MastraAgentService implements AgentService {
   }
 }
 
-export const agentRunCoordinator = new AgentRunCoordinator();
+export const agentRunCoordinator = new AgentRunCoordinator({ repository: agentRunRepository });
 export const agentService = new MastraAgentService(loadDefaultMastra, agentRunCoordinator);
 
 const stringValue = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+const containsToolApprovalResponse = (value: unknown): boolean => {
+  if (Array.isArray(value)) return value.some(containsToolApprovalResponse);
+  if (!isRecord(value)) return false;
+  if (value.state === 'approval-responded' || value.type === 'tool-approval-response') return true;
+  return Object.values(value).some(containsToolApprovalResponse);
+};
+
+const collectRepositoryVerifierEvidence = async (resourceId: string, context: ResolvedAgentContext | undefined) => {
+  const projectId = stringValue(context?.threadMetadata?.projectId);
+  const workspaceId = stringValue(context?.threadMetadata?.workspaceId);
+  const workspacePath = stringValue(context?.workspace?.path) ?? context?.projectSnapshot?.workspacePath;
+  if (!context?.portalId || !projectId || !workspaceId || !workspacePath) return { available: false };
+  const target = {
+    portalId: context.portalId,
+    projectId,
+    workspaceId,
+    rootId: stringValue(context.project?.portalRootId),
+    repoPath: stringValue(context.project?.repoPath),
+    workspacePath,
+    executionProfile: 'observe' as const,
+  };
+  const request = (tool: string, args: unknown) =>
+    toolService.requestPortal({
+      caller: callerForOwner(resourceId, 'agent'),
+      target,
+      tool,
+      args,
+      timeoutMs: 15_000,
+    }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+  const [status, unstaged, staged] = await Promise.all([
+    request('portal.git.status', {}),
+    request('portal.git.diff', {}),
+    request('portal.git.diff', { staged: true }),
+  ]);
+  return {
+    available: true,
+    evidence: compactText(JSON.stringify({ status, unstaged, staged }), 60_000).text,
+  };
+};
 
 const markGitWorkspaceContext = (requestContext: any, value: boolean) => {
   requestContext?.set?.('gitWorkspace', value);
@@ -1490,7 +1761,11 @@ const buildProviderOptions = (
 const toGenericRunSnapshot = (run: AgentThreadRun): AgentRunSnapshot => ({
   runId: run.runId,
   agentId: 'mage-hand',
-  status: run.status === 'error' ? 'failed' : run.status === 'cancelling' ? 'running' : run.status,
+  status: run.status === 'error'
+    ? 'failed'
+    : run.status === 'cancelling' || run.status === 'awaiting_approval'
+    ? 'running'
+    : run.status,
   createdAt: run.startedAt,
   updatedAt: run.updatedAt,
   ...(run.error ? { error: run.error } : {}),

@@ -46,9 +46,12 @@ Default files:
 
 - `config.json`: login/server/root configuration.
 - `runtime.json`: local adoptable daemon runtime with pid, server URLs, and the local control endpoint.
+- `runtime.json.lock`: advisory daemon lock held for the lifetime of the active local runtime.
+- `desktop-daemon.log`: bounded output from a Portal launched by Desktop.
 
-`runtime.json` is written with mode `0600`. `portal status` masks local control
-tokens and Portal tokens.
+Runtime, configuration, lock, and Desktop log files are mode `0600`.
+`runtime.json` is replaced atomically and removed only by the daemon that wrote
+it. `portal status` masks local control tokens and Portal tokens.
 
 ## Local Control
 
@@ -56,7 +59,18 @@ tokens and Portal tokens.
 actual port/token to `runtime.json`. Desktop reads that runtime file, checks
 `/health` with the local token, and adopts the daemon when the server URLs match
 the current Desktop settings. If no compatible daemon is healthy, Desktop starts
-Portal itself with the same shared home.
+Portal itself with the same shared home. Development runs current
+`portal/src/main.ts`; packaged Desktop runs only the Portal executable bundled in
+its Resources directory. A packaged Desktop-launched Portal is detached and
+stays running when Desktop quits, so the next Desktop launch adopts the same
+runtime. In development, a Portal launched by Desktop is stopped when Desktop
+quits; an already-running Portal adopted by Desktop is left alone.
+
+Desktop reconciles the shared runtime after connection settings change and
+monitors local control for daemon loss. A homelab outage leaves the daemon in its
+normal WebSocket reconnect loop; an invalid Portal token is refreshed once through
+the saved server connection. Current local and remote connection state is exposed
+by authenticated local `/health` and shown beside Desktop connection settings.
 
 Use `--no-control` for remote/headless Portal runs that Desktop should not adopt.
 

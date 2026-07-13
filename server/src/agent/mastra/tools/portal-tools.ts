@@ -12,6 +12,7 @@ import {
 } from '../../../modules/notes/storage/resolver';
 import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars, hashText } from './model-output';
+import { getExecutionProfile, toolNeedsApproval } from '../../execution-policy';
 
 export const offlineMessage =
   'This thread is not bound to an active Workspace. Connect a Portal or choose a Project with an online Portal to use local tools.';
@@ -88,10 +89,12 @@ export const routePortalTool = async (tool: string, args: unknown, context: any,
   const binding = await getThreadBinding(context);
   const portalId = await resolvePortalForBinding(binding);
   if (!portalId) return { ok: false, error: offlineMessage };
+  const threadId = typeof context.agent?.threadId === 'string' ? context.agent.threadId : undefined;
+  const toolCallId = typeof context.agent?.toolCallId === 'string' ? context.agent.toolCallId : undefined;
 
   return toolService.requestPortal({
     caller: callerForOwner(binding.resourceId, 'agent', {
-      threadId: typeof context.agent?.threadId === 'string' ? context.agent.threadId : undefined,
+      threadId,
     }),
     target: {
       portalId,
@@ -100,10 +103,12 @@ export const routePortalTool = async (tool: string, args: unknown, context: any,
       rootId: binding.rootId,
       repoPath: binding.repoPath,
       workspacePath: binding.workspacePath,
+      executionProfile: getExecutionProfile(context.requestContext),
     },
     tool,
     args,
     timeoutMs,
+    idempotencyKey: threadId && toolCallId ? `${threadId}:${toolCallId}` : undefined,
   });
 };
 
@@ -186,6 +191,32 @@ type PortalBashOutput = PortalBaseOutput & {
   stderr?: string;
   exitCode?: number;
   timedOut?: boolean;
+  sandboxed?: boolean;
+  network?: 'denied' | 'host';
+  validation?: 'test' | 'typecheck' | 'lint' | 'build' | 'other';
+  outputChars?: number;
+  outputBytes?: number;
+  outputLines?: number;
+};
+
+type CommandSessionOutput = PortalBaseOutput & {
+  id?: string;
+  status?: string;
+  cwd?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  finishedAt?: string;
+  exitCode?: number;
+  timedOut?: boolean;
+  sandboxed?: boolean;
+  network?: 'denied' | 'host';
+  nextOffset?: number;
+  baseOffset?: number;
+  outputChars?: number;
+  outputBytes?: number;
+  outputLines?: number;
+  events?: Array<{ offset?: number; stream?: string; text?: string; at?: string }>;
+  validation?: 'test' | 'typecheck' | 'lint' | 'build' | 'other';
 };
 
 export const normalizePortalResult = (result: unknown) => {
@@ -359,12 +390,88 @@ export const portalBashModelOutput = (output: unknown, maxChars = getCodeToolMod
       ['command', result.command],
       ['exitCode', result.exitCode],
       ['timedOut', result.timedOut],
+      ['sandboxed', result.sandboxed],
+      ['network', result.network],
+      ['artifactHandle', result.artifactHandle],
+      ['omittedRanges', result.omittedRanges],
+      ['nextOffset', result.nextOffset],
+      ['outputChars', result.outputChars],
+      ['outputBytes', result.outputBytes],
+      ['outputLines', result.outputLines],
+      ['validation', result.validation],
       ['error', result.error],
     ],
     body,
     maxChars,
   );
 };
+
+const commandSessionModelOutput = (name: string, output: unknown, maxChars = getCodeToolModelOutputMaxChars()) => {
+  const result = output && typeof output === 'object' ? output as Record<string, any> : {};
+  const events = Array.isArray(result.events) ? result.events : [];
+  const body = events.map((event: Record<string, unknown>) => {
+    const stream = typeof event.stream === 'string' ? event.stream : 'output';
+    return typeof event.text === 'string' ? `[${stream}] ${event.text}` : '';
+  }).filter(Boolean).join('');
+  return formatToolModelOutput(
+    name,
+    [
+      ['ok', result.ok],
+      ['sessionId', result.id],
+      ['status', result.status],
+      ['cwd', result.cwd],
+      ['exitCode', result.exitCode],
+      ['timedOut', result.timedOut],
+      ['sandboxed', result.sandboxed],
+      ['network', result.network],
+      ['baseOffset', result.baseOffset],
+      ['nextOffset', result.nextOffset],
+      ['outputChars', result.outputChars],
+      ['outputBytes', result.outputBytes],
+      ['outputLines', result.outputLines],
+      ['artifactHandle', result.artifactHandle],
+      ['omittedRanges', result.omittedRanges],
+      ['hasMore', result.hasMore],
+      ['pty', result.pty],
+      ['validation', result.validation],
+      ['error', result.error],
+    ],
+    body,
+    maxChars,
+  );
+};
+
+const commandEventSchema = z.object({
+  offset: z.number(),
+  stream: z.enum(['stdout', 'stderr', 'system']),
+  text: z.string(),
+  at: z.string(),
+});
+
+const commandSessionOutputSchema = z.object({
+  ...portalBaseOutputSchema,
+  id: z.string().optional(),
+  status: z.enum(['running', 'completed', 'failed', 'timed_out', 'cancelled']).optional(),
+  cwd: z.string().optional(),
+  startedAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+  finishedAt: z.string().optional(),
+  exitCode: z.number().optional(),
+  timedOut: z.boolean().optional(),
+  sandboxed: z.boolean().optional(),
+  network: z.enum(['denied', 'host']).optional(),
+  nextOffset: z.number().optional(),
+  baseOffset: z.number().optional(),
+  outputChars: z.number().optional(),
+  outputBytes: z.number().optional(),
+  outputLines: z.number().optional(),
+  artifactHandle: z.string().optional(),
+  omittedRanges: z.array(z.object({ startOffset: z.number(), endOffset: z.number() })).optional(),
+  hasMore: z.boolean().optional(),
+  pty: z.boolean().optional(),
+  events: z.array(commandEventSchema).optional(),
+  validation: z.enum(['test', 'typecheck', 'lint', 'build', 'other']).optional(),
+});
 
 const payloadTextMaxInlineChars = 2_000;
 const payloadTextPreviewChars = 1_200;
@@ -544,6 +651,7 @@ export const portalWriteTool = createTool({
   outputSchema: z.object({ ...portalBaseOutputSchema, bytes: z.number().optional() }),
   execute: async (input, context): Promise<PortalWriteOutput> =>
     withPortalMetadata<PortalWriteOutput>(await routePortalTool('write', input, context), { path: input.path }),
+  requireApproval: (_input, context) => toolNeedsApproval('write', context?.requestContext),
   toModelOutput: portalWriteModelOutput,
 });
 
@@ -566,6 +674,7 @@ export const portalEditTool = createTool({
   }),
   execute: async (input, context): Promise<PortalEditOutput> =>
     withPortalMetadata<PortalEditOutput>(await routePortalTool('edit', input, context), { path: input.path }),
+  requireApproval: (_input, context) => toolNeedsApproval('edit', context?.requestContext),
   toModelOutput: portalEditModelOutput,
 });
 
@@ -575,6 +684,9 @@ export const portalBashTool = createTool({
   inputSchema: z.object({
     command: z.string().describe(toolInputDescription('bash', 'command')),
     timeout: z.number().optional().describe(toolInputDescription('bash', 'timeout')),
+    validation: z.enum(['test', 'typecheck', 'lint', 'build', 'other']).optional().describe(
+      toolInputDescription('bash', 'validation'),
+    ),
   }),
   outputSchema: z.object({
     ...portalBaseOutputSchema,
@@ -582,14 +694,87 @@ export const portalBashTool = createTool({
     stderr: z.string().optional(),
     exitCode: z.number().optional(),
     timedOut: z.boolean().optional(),
+    sandboxed: z.boolean().optional(),
+    network: z.enum(['denied', 'host']).optional(),
+    artifactHandle: z.string().optional(),
+    omittedRanges: z.array(z.object({ startOffset: z.number(), endOffset: z.number() })).optional(),
+    nextOffset: z.number().optional(),
+    outputChars: z.number().optional(),
+    outputBytes: z.number().optional(),
+    outputLines: z.number().optional(),
+    validation: z.enum(['test', 'typecheck', 'lint', 'build', 'other']).optional(),
   }),
   execute: async (input, context): Promise<PortalBashOutput> =>
     withPortalMetadata<PortalBashOutput>(
       await routePortalTool('bash', input, context, input.timeout ? input.timeout * 1000 + 1000 : undefined),
       { command: input.command },
     ),
+  requireApproval: (input, context) => toolNeedsApproval('bash', context?.requestContext, input),
   transform: portalBashPayloadTransform,
   toModelOutput: portalBashModelOutput,
+});
+
+export const execStartTool = createTool({
+  id: 'exec_start',
+  description: toolDescription('exec_start'),
+  inputSchema: z.object({
+    command: z.string().describe(toolInputDescription('exec_start', 'command')),
+    cwd: z.string().optional().describe(toolInputDescription('exec_start', 'cwd')),
+    timeout: z.number().optional().describe(toolInputDescription('exec_start', 'timeout')),
+    yieldMs: z.number().optional().describe(toolInputDescription('exec_start', 'yieldMs')),
+    pty: z.boolean().optional().describe(toolInputDescription('exec_start', 'pty')),
+    validation: z.enum(['test', 'typecheck', 'lint', 'build', 'other']).optional().describe(
+      toolInputDescription('exec_start', 'validation'),
+    ),
+  }),
+  outputSchema: commandSessionOutputSchema,
+  execute: async (input, context): Promise<CommandSessionOutput> =>
+    withPortalMetadata<CommandSessionOutput>(
+      await routePortalTool('exec_start', input, context, input.timeout ? input.timeout * 1000 + 2_000 : undefined),
+      { command: input.command },
+    ),
+  requireApproval: (input, context) => toolNeedsApproval('exec_start', context?.requestContext, input),
+  toModelOutput: (output) => commandSessionModelOutput('exec_start', output),
+});
+
+export const execPollTool = createTool({
+  id: 'exec_poll',
+  description: toolDescription('exec_poll'),
+  inputSchema: z.object({
+    sessionId: z.string().describe(toolInputDescription('exec_poll', 'sessionId')),
+    afterOffset: z.number().optional().describe(toolInputDescription('exec_poll', 'afterOffset')),
+    limit: z.number().int().positive().max(100_000).optional().describe(toolInputDescription('exec_poll', 'limit')),
+  }),
+  outputSchema: commandSessionOutputSchema,
+  execute: async (input, context): Promise<CommandSessionOutput> =>
+    normalizePortalResult(await routePortalTool('exec_poll', input, context)) as CommandSessionOutput,
+  toModelOutput: (output) => commandSessionModelOutput('exec_poll', output),
+});
+
+export const execWriteTool = createTool({
+  id: 'exec_write',
+  description: toolDescription('exec_write'),
+  inputSchema: z.object({
+    sessionId: z.string().describe(toolInputDescription('exec_write', 'sessionId')),
+    data: z.string().optional().describe(toolInputDescription('exec_write', 'data')),
+    close: z.boolean().optional().describe(toolInputDescription('exec_write', 'close')),
+  }),
+  outputSchema: commandSessionOutputSchema,
+  execute: async (input, context): Promise<CommandSessionOutput> =>
+    normalizePortalResult(await routePortalTool('exec_write', input, context)) as CommandSessionOutput,
+  requireApproval: (_input, context) => toolNeedsApproval('exec_write', context?.requestContext),
+  toModelOutput: (output) => commandSessionModelOutput('exec_write', output),
+});
+
+export const execStopTool = createTool({
+  id: 'exec_stop',
+  description: toolDescription('exec_stop'),
+  inputSchema: z.object({ sessionId: z.string().describe(toolInputDescription('exec_stop', 'sessionId')) }),
+  outputSchema: commandSessionOutputSchema,
+  execute: async (input, context): Promise<CommandSessionOutput> =>
+    normalizePortalResult(await routePortalTool('exec_stop', input, context)) as CommandSessionOutput,
+  requireApproval: (_input, context) => toolNeedsApproval('exec_stop', context?.requestContext),
+  toModelOutput: (output) => commandSessionModelOutput('exec_stop', output),
 });
 
 export const fileIndexTool = createTool({
@@ -635,6 +820,7 @@ export const fileWriteTool = createTool({
     version: z.string().optional().describe(toolInputDescription('file_write', 'version')),
   }),
   outputSchema: z.object({ ...portalBaseOutputSchema, version: z.string().optional() }),
+  requireApproval: (_input, context) => toolNeedsApproval('file_write', context?.requestContext),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('write', input, context), { path: input.path }),
   toModelOutput: (output) => fileOperationModelOutput('file_write', output),
@@ -647,6 +833,7 @@ export const fileMkdirTool = createTool({
     path: z.string().describe(toolInputDescription('file_mkdir', 'path')),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
+  requireApproval: (_input, context) => toolNeedsApproval('file_mkdir', context?.requestContext),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('mkdir', input, context), { path: input.path }),
   toModelOutput: (output) => fileOperationModelOutput('file_mkdir', output),
@@ -661,6 +848,7 @@ export const fileMoveTool = createTool({
     overwrite: z.boolean().optional().describe(toolInputDescription('file_move', 'overwrite')),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
+  requireApproval: (_input, context) => toolNeedsApproval('file_move', context?.requestContext),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('move', input, context), { path: input.toPath }),
   toModelOutput: (output) => fileOperationModelOutput('file_move', output),
@@ -674,6 +862,7 @@ export const fileDeleteTool = createTool({
     recursive: z.boolean().optional().describe(toolInputDescription('file_delete', 'recursive')),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
+  requireApproval: (_input, context) => toolNeedsApproval('file_delete', context?.requestContext),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('delete', input, context), { path: input.path }),
   toModelOutput: (output) => fileOperationModelOutput('file_delete', output),
@@ -688,6 +877,7 @@ export const fileUploadTool = createTool({
     contentType: z.string().optional().describe(toolInputDescription('file_upload', 'contentType')),
   }),
   outputSchema: z.object(portalBaseOutputSchema),
+  requireApproval: (_input, context) => toolNeedsApproval('file_upload', context?.requestContext),
   execute: async (input, context): Promise<PortalBaseOutput> =>
     withFileMetadata(await routeNotesFileTool('upload', input, context), { path: input.path }),
   toModelOutput: (output) => fileOperationModelOutput('file_upload', output),

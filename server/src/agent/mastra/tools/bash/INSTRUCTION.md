@@ -16,3 +16,8 @@ Bash command to execute.
 ### timeout
 
 Timeout in seconds.
+
+### validation
+
+Classify validation commands as test, typecheck, lint, build, or other so the run guard can track recovery without
+guessing from shell text.

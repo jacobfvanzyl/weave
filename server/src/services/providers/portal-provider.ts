@@ -15,6 +15,7 @@ export type PortalToolTarget = {
   rootId?: string;
   repoPath?: string;
   workspacePath?: string;
+  executionProfile?: 'observe' | 'workspace' | 'host';
 };
 
 export type ResolvedPortalToolTarget = PortalToolTarget & {
@@ -33,6 +34,11 @@ const jsonTargetToPortalTarget = (value: JsonValue): PortalToolTarget => {
     rootId: optionalString(value.rootId),
     repoPath: optionalString(value.repoPath),
     workspacePath: optionalString(value.workspacePath),
+    executionProfile: value.executionProfile === 'observe' || value.executionProfile === 'host'
+      ? value.executionProfile
+      : value.executionProfile === 'workspace'
+      ? 'workspace'
+      : undefined,
   };
 };
 
@@ -54,6 +60,7 @@ export const portalToolScope = (target: PortalToolTarget): ServiceScope =>
     ...(target.rootId ? { rootId: target.rootId } : {}),
     ...(target.repoPath ? { repoPath: target.repoPath } : {}),
     ...(target.workspacePath ? { workspacePath: target.workspacePath } : {}),
+    ...(target.executionProfile ? { executionProfile: target.executionProfile } : {}),
   });
 
 export class PortalProvider {
@@ -103,6 +110,7 @@ export class PortalProvider {
     toolId: string;
     args: unknown;
     timeoutMs?: number;
+    idempotencyKey?: string;
   }) {
     const target = this.resolveTarget(input.caller, input.scope);
     return requestPortalTool({
@@ -112,9 +120,11 @@ export class PortalProvider {
       rootId: target.rootId,
       repoPath: target.repoPath,
       workspacePath: target.workspacePath,
+      executionProfile: target.executionProfile,
       tool: input.toolId,
       args: input.args,
       timeoutMs: input.timeoutMs,
+      idempotencyKey: input.idempotencyKey,
     });
   }
 }

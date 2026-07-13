@@ -4,6 +4,7 @@ import type {
   DesktopConnectionSettings,
   DesktopConnectionTestResult,
   DesktopChatGPTAuthStatus,
+  DesktopPortalStatus,
   WeaveDesktopBridge,
 } from '../shared/desktop-api';
 import type {
@@ -55,6 +56,13 @@ const bridge: WeaveDesktopBridge = {
     ipcRenderer.invoke('connection:save-settings', input) as Promise<DesktopConnectionSettings>,
   testConnection: (input?: DesktopConnectionInput) =>
     ipcRenderer.invoke('connection:test', input) as Promise<DesktopConnectionTestResult>,
+  getPortalStatus: () => ipcRenderer.invoke('portal:get-status') as Promise<DesktopPortalStatus>,
+  retryPortal: () => unwrapIpcResult<DesktopPortalStatus>(ipcRenderer.invoke('portal:retry')),
+  onPortalStatus: listener => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, status: DesktopPortalStatus) => listener(status);
+    ipcRenderer.on('portal:status', wrappedListener);
+    return () => ipcRenderer.removeListener('portal:status', wrappedListener);
+  },
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<void>,
   connectChatGPT: () =>
     unwrapIpcResult<DesktopChatGPTAuthStatus>(ipcRenderer.invoke('chatgpt:connect')),

@@ -1,9 +1,10 @@
-import { assertEquals } from 'jsr:@std/assert@1.0.19';
+import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.19';
 import {
   discoverGlobalWeaveContext,
   discoverProjectWeaveContext,
   listGitBranchesTool,
   type ResolvedPortalConfig,
+  resolveWorkspacePath,
 } from './main.ts';
 import { resolveWindowStreamConfig } from './window.ts';
 
@@ -28,7 +29,7 @@ const runGit = async (cwd: string, args: string[]) => {
   if (!result.success) throw new Error(`git ${args.join(' ')} failed`);
 };
 
-Deno.test('Portal discovery reads ~/.config/weave prompts, skills, MCP, and config without profiles', async () => {
+Deno.test('Portal discovery reads ~/.config/weave prompts, skills, and config without advertising inert MCP', async () => {
   const previousHome = Deno.env.get('HOME');
   const home = await Deno.makeTempDir({ prefix: 'weave-global-context-' });
   try {
@@ -44,7 +45,6 @@ Deno.test('Portal discovery reads ~/.config/weave prompts, skills, MCP, and conf
     assertEquals(result.basePath, `${home}/.config/weave`);
     assertEquals(result.files.map((file) => `${file.kind}:${file.path}`).sort(), [
       'config:.config/weave/weave.config.json',
-      'mcp:.config/weave/mcp.json',
       'prompt:.config/weave/prompts/ship.md',
       'skill:.config/weave/skills/release/SKILL.md',
       'skill:.config/weave/skills/release/references/notes.md',
@@ -56,14 +56,16 @@ Deno.test('Portal discovery reads ~/.config/weave prompts, skills, MCP, and conf
   }
 });
 
-Deno.test('Portal project discovery reads only the selected workspace root', async () => {
+Deno.test('Portal project discovery resolves hierarchical AGENTS instructions through the selected workspace', async () => {
   const repo = await Deno.realPath(await Deno.makeTempDir({ prefix: 'weave-project-context-' }));
   const workspace = `${repo}/packages/app`;
   try {
     await Deno.mkdir(workspace, { recursive: true });
+    await runGit(repo, ['init']);
 
     await write(`${repo}/AGENTS.md`, 'root agents');
     await write(`${repo}/packages/AGENTS.md`, 'packages agents');
+    await write(`${repo}/packages/AGENTS.override.md`, 'packages override');
     await write(`${workspace}/AGENTS.md`, 'app agents');
     await write(`${repo}/.weave/prompts/root.md`, '# Root prompt\n');
     await write(`${repo}/packages/.weave/prompts/packages.md`, '# Packages prompt\n');
@@ -76,12 +78,50 @@ Deno.test('Portal project discovery reads only the selected workspace root', asy
     assertEquals(result.workspacePath, workspace);
     assertEquals(result.files.map((file) => `${file.kind}:${file.path}`).sort(), [
       'agents:AGENTS.md',
-      'mcp:.weave/mcp.json',
+      'agents:packages/AGENTS.md',
+      'agents:packages/AGENTS.override.md',
+      'agents:packages/app/AGENTS.md',
       'skill:.weave/skills/app/SKILL.md',
       'skill:.weave/skills/app/references/notes.md',
     ]);
+    assertEquals(result.diagnostics.instructionFiles, 4);
   } finally {
     await Deno.remove(repo, { recursive: true }).catch(() => undefined);
+  }
+});
+
+Deno.test('Portal path resolution rejects nonexistent parents outside the workspace without creating them', async () => {
+  const workspace = await Deno.realPath(await Deno.makeTempDir({ prefix: 'weave-path-workspace-' }));
+  const outside = await Deno.realPath(await Deno.makeTempDir({ prefix: 'weave-path-outside-' }));
+  const outsideParent = `${outside}/must-not-exist`;
+  try {
+    await assertRejects(
+      () => resolveWorkspacePath(portalConfig, { workspacePath: workspace }, `${outsideParent}/file.txt`, false),
+      Error,
+      'escapes Project mount',
+    );
+    assertEquals(await Deno.stat(outsideParent).catch(() => undefined), undefined);
+  } finally {
+    await Deno.remove(workspace, { recursive: true }).catch(() => undefined);
+    await Deno.remove(outside, { recursive: true }).catch(() => undefined);
+  }
+});
+
+Deno.test('Portal path resolution rejects symlinked parents without creating outside directories', async () => {
+  const workspace = await Deno.realPath(await Deno.makeTempDir({ prefix: 'weave-path-workspace-' }));
+  const outside = await Deno.realPath(await Deno.makeTempDir({ prefix: 'weave-path-outside-' }));
+  const outsideParent = `${outside}/must-not-exist`;
+  try {
+    await Deno.symlink(outside, `${workspace}/escape`);
+    await assertRejects(
+      () => resolveWorkspacePath(portalConfig, { workspacePath: workspace }, 'escape/must-not-exist/file.txt', false),
+      Error,
+      'escapes Project mount',
+    );
+    assertEquals(await Deno.stat(outsideParent).catch(() => undefined), undefined);
+  } finally {
+    await Deno.remove(workspace, { recursive: true }).catch(() => undefined);
+    await Deno.remove(outside, { recursive: true }).catch(() => undefined);
   }
 });
 

@@ -21,7 +21,7 @@ import type {
   WorkspaceFileWriteInput,
   WorkspaceFileWriteResult,
 } from '../shared/workspace-file';
-import type { PortalSupervisor } from './portal-terminal-client';
+import type { PortalSupervisor } from './portal-supervisor';
 
 type WorkspaceFileResolvedTarget = {
   cwd: string;
@@ -200,6 +200,10 @@ export class PortalWorkspaceFileClient {
     for (const [subscriptionId, connection] of this.watchConnections) {
       if (connection.webContents.id === webContentsId) this.closeWatchConnection(subscriptionId);
     }
+  }
+
+  dispose() {
+    for (const subscriptionId of this.watchConnections.keys()) this.closeWatchConnection(subscriptionId);
   }
 
   private async resolveTarget(target: WorkspaceFileTarget): Promise<WorkspaceFileTarget> {

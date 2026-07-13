@@ -8,6 +8,7 @@ desktop/out
 desktop/.electron-signed-dev/
 portal/native/window-stream-native/build/
 .weave-perf/
+.weave-evals/
 .mastra
 .env.development
 .env

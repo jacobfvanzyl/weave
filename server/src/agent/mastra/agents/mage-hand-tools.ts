@@ -11,10 +11,10 @@ import {
   gitWorktreeTool,
 } from '../tools/git-tools';
 import {
-  portalBashTool,
-  portalEditTool,
-  portalReadTool,
-  portalWriteTool,
+  execPollTool,
+  execStartTool,
+  execStopTool,
+  execWriteTool,
   fileDeleteTool,
   fileIndexTool,
   fileMkdirTool,
@@ -22,6 +22,10 @@ import {
   fileReadTool,
   fileUploadTool,
   fileWriteTool,
+  portalBashTool,
+  portalEditTool,
+  portalReadTool,
+  portalWriteTool,
 } from '../tools/portal-tools';
 import {
   codeActionPreviewTool,
@@ -38,10 +42,12 @@ import {
 } from '../tools/language-intelligence-tools';
 import { editorContextTool } from '../tools/editor-context-tools';
 import { askUserTool } from '../tools/ask-user-tool';
+import { viewAttachmentTool } from '../tools/view-attachment-tool';
 
 export const mageHandTools = {
   renameThreadTool,
   ask_user: askUserTool,
+  view_attachment: viewAttachmentTool,
   updatePlanTool,
   webSearch: webSearchTool,
   webExtract: webExtractTool,
@@ -50,6 +56,10 @@ export const mageHandTools = {
   write: portalWriteTool,
   edit: portalEditTool,
   bash: portalBashTool,
+  exec_start: execStartTool,
+  exec_poll: execPollTool,
+  exec_write: execWriteTool,
+  exec_stop: execStopTool,
   git_status: gitStatusTool,
   git_diff: gitDiffTool,
   git_log: gitLogTool,

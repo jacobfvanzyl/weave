@@ -5,11 +5,9 @@ import { PgVector } from '@mastra/pg';
 import { Memory } from '@mastra/memory';
 import { CurrentTurnImageProcessor } from '../current-turn-image-processor';
 import { CompactToolHistoryProcessor } from '../compact-tool-history-processor';
-import { getAgentMaxSteps, RunQualityProcessor } from '../run-quality-processor';
-import {
-  getMemoryCapabilities,
-  type SemanticRecallEmbeddingConfig,
-} from '../memory-policy';
+import { getAgentMaxSteps, RunGuardProcessor } from '../run-guard-processor';
+import { toolAllowed } from '../../execution-policy';
+import { getMemoryCapabilities, type SemanticRecallEmbeddingConfig } from '../memory-policy';
 import { RuntimeContextProcessor } from '../runtime-context-processor';
 import { ThreadCompactionProcessor } from '../../thread-compaction';
 import { getMastraPostgresConfig } from '../storage-config';
@@ -77,9 +75,18 @@ const resolveOpenAIProviderOptions = (requestContext: any) => {
     : undefined;
 };
 
-const baseToolKeys = new Set(['renameThreadTool', 'ask_user', 'webSearch', 'webExtract']);
+const baseToolKeys = new Set(['renameThreadTool', 'ask_user', 'view_attachment', 'webSearch', 'webExtract']);
 
-const portalWorkspaceToolKeys = new Set(['read', 'write', 'edit', 'bash']);
+const portalWorkspaceToolKeys = new Set([
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'exec_start',
+  'exec_poll',
+  'exec_write',
+  'exec_stop',
+]);
 
 const editorWorkspaceToolKeys = new Set(['editor_context']);
 
@@ -138,7 +145,7 @@ const toolKeysForContext = (requestContext: any) => {
     }
   }
 
-  return keys;
+  return new Set([...keys].filter((key) => toolAllowed(key, requestContext)));
 };
 
 const resolveTools = ({ requestContext }: { requestContext: any }) => {
@@ -162,7 +169,7 @@ export const mageHandAgent = new Agent({
   tools: resolveTools,
   inputProcessors: [
     new CurrentTurnImageProcessor(),
-    new RunQualityProcessor({ maxSteps: getAgentMaxSteps() }),
+    new RunGuardProcessor({ maxSteps: getAgentMaxSteps() }),
     new CompactToolHistoryProcessor(),
     new ToolCallFilter({ filterAfterToolSteps: getToolHistoryFullSteps(), preserveModelOutput: true }),
     new ThreadCompactionProcessor(),

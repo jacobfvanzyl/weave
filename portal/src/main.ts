@@ -15,6 +15,7 @@ import {
   type WindowStreamConfig,
 } from './window.ts';
 import { logPortalPerfEvent, startPortalPerfSampler } from './perf.ts';
+import { installBoundedConsoleLog } from './bounded-log.ts';
 import {
   checkPortalRuntimeHealth,
   getPortalConfigPath,
@@ -26,6 +27,7 @@ import {
   removePortalRuntime,
   resolvePortalHome,
   runtimeMatchesServer,
+  tryAcquirePortalRuntimeLock,
   writePortalRuntime,
 } from './lifecycle.ts';
 import {
@@ -41,12 +43,16 @@ import {
   listGitBranches,
   listGitWorktrees,
   pullGitUpstream,
-  readAgentsMd,
   removeGitWorktree,
   runGit,
   switchGitWorktree,
   validateGitWorktree,
 } from './git.ts';
+import { assertToolAllowed, normalizeExecutionProfile } from './execution-policy.ts';
+import { commandSessions } from './command-sessions.ts';
+import { IdempotentExecutionCache } from './idempotency.ts';
+
+const portalToolExecutions = new IdempotentExecutionCache<unknown>();
 
 export type { GitBranchOption } from './git.ts';
 
@@ -105,6 +111,7 @@ const requiredControlCapabilities = [
   'lsp',
   'terminal.tmux-source-of-truth',
   'terminal.tmux-control-mode',
+  'command-sessions',
 ];
 const macWindowCapabilities = [
   'portal.window.list',
@@ -461,9 +468,6 @@ const collectWeaveDirectory = async (
     if (config) files.push(config);
   }
 
-  const mcp = await readWeaveContextFile(`${dir}/mcp.json`, `${contextPrefix}/mcp.json`, 'mcp');
-  if (mcp) files.push(mcp);
-
   files.push(
     ...await collectTextFiles(`${dir}/prompts`, `${contextPrefix}/prompts`, 'prompt', {
       extensions: ['.md'],
@@ -479,9 +483,28 @@ const collectWeaveDirectory = async (
 
 const collectRootAgentInstructions = async (workspaceRoot: string) => {
   const root = await Deno.realPath(workspaceRoot);
+  const gitRoot = await runGit(root, ['rev-parse', '--show-toplevel']).catch(() => root);
+  const normalizedGitRoot = normalizePath(gitRoot);
+  const directories = [normalizedGitRoot];
+  if (root !== normalizedGitRoot && root.startsWith(`${normalizedGitRoot}/`)) {
+    let current = normalizedGitRoot;
+    for (const segment of root.slice(normalizedGitRoot.length + 1).split('/').filter(Boolean)) {
+      current = `${current}/${segment}`;
+      directories.push(current);
+    }
+  } else if (root !== normalizedGitRoot) {
+    directories.push(root);
+  }
+
   const files: WeaveContextFile[] = [];
-  const file = await readWeaveContextFile(`${root}/AGENTS.md`, 'AGENTS.md', 'agents');
-  if (file) files.push(file);
+  for (const directory of directories) {
+    const prefix = relativePath(normalizedGitRoot, directory);
+    for (const name of ['AGENTS.md', 'AGENTS.override.md']) {
+      const contextPath = prefix ? `${prefix}/${name}` : name;
+      const file = await readWeaveContextFile(`${directory}/${name}`, contextPath, 'agents');
+      if (file) files.push(file);
+    }
+  }
   return files;
 };
 
@@ -504,7 +527,7 @@ const resolveWorkspaceRoot = async (config: ResolvedPortalConfig, request: Recor
   return root;
 };
 
-const resolveWorkspacePath = async (
+export const resolveWorkspacePath = async (
   config: ResolvedPortalConfig,
   request: Record<string, unknown>,
   path: string,
@@ -520,10 +543,19 @@ const resolveWorkspacePath = async (
   }
 
   const parentPath = getParentPath(candidatePath);
-  const realParent = await Deno.realPath(parentPath).catch(async () => {
-    await Deno.mkdir(parentPath, { recursive: true });
-    return await Deno.realPath(parentPath);
-  });
+  if (candidatePath !== root && !candidatePath.startsWith(`${root}/`)) throw new Error('Path escapes Project mount');
+  let existingParent = parentPath;
+  while (!(await Deno.stat(existingParent).catch(() => undefined))) {
+    const next = getParentPath(existingParent);
+    if (next === existingParent) throw new Error('Path has no existing parent');
+    existingParent = next;
+  }
+  const realExistingParent = await Deno.realPath(existingParent);
+  if (realExistingParent !== root && !realExistingParent.startsWith(`${root}/`)) {
+    throw new Error('Path escapes Project mount');
+  }
+  await Deno.mkdir(parentPath, { recursive: true });
+  const realParent = await Deno.realPath(parentPath);
   const candidate = normalizePath(`${realParent}/${candidatePath.slice(parentPath.length + 1)}`);
   if (candidate !== root && !candidate.startsWith(`${root}/`)) throw new Error('Path escapes Project mount');
   return { root, candidate };
@@ -580,9 +612,11 @@ const readAgentInstructionsTool = async (config: ResolvedPortalConfig, request: 
   const rootId = typeof args?.rootId === 'string' ? args.rootId : 'default';
   const path = typeof args?.path === 'string' ? args.path : '';
   const { target } = await resolveRootPath(config, rootId, path);
-  const root = await runGit(target, ['rev-parse', '--show-toplevel']);
-  const agentInstructions = await readAgentsMd(root).catch(() => undefined);
-  return { ok: true, agentInstructions };
+  const files = await collectRootAgentInstructions(target);
+  const agentInstructions = files.length
+    ? files.map((file) => `# ${file.path}\n\n${file.content}`).join('\n\n')
+    : undefined;
+  return { ok: true, agentInstructions, files };
 };
 
 const collectProjectWeaveDirectory = async (workspaceRoot: string) => {
@@ -604,7 +638,18 @@ export const discoverProjectWeaveContext = async (config: ResolvedPortalConfig, 
     collectRootAgentInstructions(workspaceRoot),
     collectProjectWeaveDirectory(workspaceRoot),
   ]);
-  return { basePath: workspaceRoot, workspacePath: workspaceRoot, files: [...agents, ...weaveFiles] };
+  const files = [...agents, ...weaveFiles];
+  return {
+    basePath: workspaceRoot,
+    workspacePath: workspaceRoot,
+    files,
+    diagnostics: {
+      instructionFiles: agents.length,
+      instructionBytes: agents.reduce((total, file) => total + (file.size ?? file.content.length), 0),
+      truncatedFiles: files.filter((file) => (file.size ?? 0) > file.content.length).map((file) => file.path),
+      precedence: 'git-root-to-workspace; AGENTS.override.md follows AGENTS.md at each level',
+    },
+  };
 };
 
 export const discoverWeaveContextTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
@@ -993,33 +1038,94 @@ const bashTool = async (config: ResolvedPortalConfig, request: Record<string, un
   if (typeof args?.command !== 'string' || !args.command.trim()) throw new Error('Missing command');
 
   const root = await resolveWorkspaceRoot(config, request);
+  const profile = normalizeExecutionProfile(request.executionProfile);
   const timeoutMs = typeof args.timeout === 'number' && args.timeout > 0 ? Math.floor(args.timeout * 1000) : 30_000;
-  const command = new Deno.Command('bash', {
+  const started = await commandSessions.start({
+    workspaceRoot: root,
     cwd: root,
-    args: ['-lc', args.command],
-    stdout: 'piped',
-    stderr: 'piped',
+    command: args.command,
+    profile,
+    timeoutMs,
+    yieldMs: 0,
+    validation: args.validation === 'test' || args.validation === 'typecheck' || args.validation === 'lint' ||
+        args.validation === 'build' || args.validation === 'other'
+      ? args.validation
+      : undefined,
   });
-  const child = command.spawn();
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill('SIGTERM');
-  }, timeoutMs);
+  const output = started.status === 'running' ? await commandSessions.wait(root, started.id) : started;
+  return {
+    ok: output.status === 'completed',
+    stdout: output.events.filter((event) => event.stream === 'stdout').map((event) => event.text).join(''),
+    stderr: output.events.filter((event) => event.stream !== 'stdout').map((event) => event.text).join(''),
+    exitCode: output.exitCode,
+    timedOut: output.timedOut,
+    sandboxed: output.sandboxed,
+    network: output.network,
+    artifactHandle: output.artifactHandle,
+    omittedRanges: output.omittedRanges,
+    nextOffset: output.nextOffset,
+    outputChars: output.outputChars,
+    outputBytes: output.outputBytes,
+    outputLines: output.outputLines,
+    ...(output.validation ? { validation: output.validation } : {}),
+    ...(output.timedOut ? { error: `Command timed out after ${timeoutMs}ms` } : {}),
+  };
+};
 
-  try {
-    const output = await child.output();
+const commandSessionTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+  action: 'start' | 'poll' | 'write' | 'stop',
+) => {
+  const args = isRecord(request.args) ? request.args : {};
+  const root = await resolveWorkspaceRoot(config, request);
+  if (action === 'start') {
+    if (typeof args.command !== 'string' || !args.command.trim()) throw new Error('command is required');
+    const cwd = typeof args.cwd === 'string' && args.cwd.trim()
+      ? (await resolveWorkspacePath(config, request, args.cwd.trim())).candidate
+      : root;
     return {
-      ok: output.success,
-      stdout: new TextDecoder().decode(output.stdout),
-      stderr: new TextDecoder().decode(output.stderr),
-      exitCode: output.code,
-      timedOut,
-      ...(timedOut ? { error: `Command timed out after ${timeoutMs}ms` } : {}),
+      ok: true,
+      ...await commandSessions.start({
+        workspaceRoot: root,
+        cwd,
+        command: args.command,
+        profile: normalizeExecutionProfile(request.executionProfile),
+        timeoutMs: typeof args.timeout === 'number' && args.timeout > 0 ? Math.floor(args.timeout * 1000) : undefined,
+        yieldMs: typeof args.yieldMs === 'number' && args.yieldMs >= 0 ? Math.floor(args.yieldMs) : undefined,
+        pty: args.pty === true,
+        validation: args.validation === 'test' || args.validation === 'typecheck' || args.validation === 'lint' ||
+            args.validation === 'build' || args.validation === 'other'
+          ? args.validation
+          : undefined,
+      }),
     };
-  } finally {
-    clearTimeout(timeout);
   }
+  const sessionId = typeof args.sessionId === 'string' ? args.sessionId : '';
+  if (!sessionId) throw new Error('sessionId is required');
+  if (action === 'poll') {
+    return {
+      ok: true,
+      ...await commandSessions.poll(
+        root,
+        sessionId,
+        typeof args.afterOffset === 'number' ? args.afterOffset : undefined,
+        typeof args.limit === 'number' ? args.limit : undefined,
+      ),
+    };
+  }
+  if (action === 'write') {
+    return {
+      ok: true,
+      ...await commandSessions.write(
+        root,
+        sessionId,
+        typeof args.data === 'string' ? args.data : '',
+        args.close === true,
+      ),
+    };
+  }
+  return { ok: true, ...commandSessions.stop(root, sessionId) };
 };
 
 const workspaceFileTargetFromRequest = (request: Record<string, unknown>): PortalWorkspaceFileTarget => ({
@@ -1044,93 +1150,132 @@ const handleToolCall = async (
   ws: WebSocket,
   request: Record<string, unknown>,
 ) => {
+  const executionProfile = normalizeExecutionProfile(request.executionProfile);
   const id = typeof request.id === 'string' ? request.id : undefined;
   if (!id) return;
 
   try {
-    const result = request.tool === 'read'
-      ? await readFileTool(config, request)
-      : request.tool === 'write'
-      ? await writeFileTool(config, request)
-      : request.tool === 'edit'
-      ? await editFileTool(config, request)
-      : request.tool === 'bash'
-      ? await bashTool(config, request)
-      : request.tool === 'portal.fs.list'
-      ? await workspaceFileHost.list(workspaceFileInputFromToolCall(request))
-      : request.tool === 'portal.fs.read'
-      ? await workspaceFileHost.read(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['read']>[0])
-      : request.tool === 'portal.fs.hash'
-      ? await workspaceFileHost.hash(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['hash']>[0])
-      : request.tool === 'portal.fs.diffPreview'
-      ? await workspaceFileHost.diffPreview(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['diffPreview']>[0])
-      : request.tool === 'portal.fs.write'
-      ? await workspaceFileHost.write(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['write']>[0])
-      : request.tool === 'portal.fs.mkdir'
-      ? await workspaceFileHost.mkdir(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['mkdir']>[0])
-      : request.tool === 'portal.fs.move'
-      ? await workspaceFileHost.move(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['move']>[0])
-      : request.tool === 'portal.fs.delete'
-      ? await workspaceFileHost.delete(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['delete']>[0])
-      : request.tool === 'portal.fs.index'
-      ? await workspaceFileHost.index(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['index']>[0])
-      : request.tool === 'portal.fs.upload'
-      ? await workspaceFileHost.upload(workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['upload']>[0])
-      : request.tool === 'portal.lsp.session'
-      ? await lspHost.createSession(workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['createSession']>[0])
-      : request.tool === 'portal.lsp.query'
-      ? await lspHost.query(workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['query']>[0])
-      : request.tool === 'portal.jupyter.status'
-      ? await jupyterHost.status(workspaceFileInputFromToolCall(request))
-      : request.tool === 'portal.jupyter.kernelspecs'
-      ? await jupyterHost.kernelspecs(workspaceFileInputFromToolCall(request))
-      : request.tool === 'portal.jupyter.session'
-      ? await jupyterHost.createSession(workspaceFileInputFromToolCall(request) as Parameters<PortalJupyterHost['createSession']>[0])
-      : request.tool === 'portal.window.list'
-      ? await windowHost.list()
-      : request.tool === 'portal.applications.list'
-      ? await windowHost.listApplications()
-      : request.tool === 'portal.applications.open'
-      ? await windowHost.openApplication({
-        applicationId: isRecord(request.args) ? optionalString(request.args.applicationId) : undefined,
-      })
-      : request.tool === 'portal.fs.browse'
-      ? await listRootTool(config, request)
-      : request.tool === 'portal.fs.pathStat'
-      ? await pathStatTool(config, request)
-      : request.tool === 'portal.git.inspect'
-      ? await inspectGitTool(config, request)
-      : request.tool === 'portal.agentInstructions.read'
-      ? await readAgentInstructionsTool(config, request)
-      : request.tool === 'portal.context.discover'
-      ? await discoverWeaveContextTool(config, request)
-      : request.tool === 'portal.git.worktree.create'
-      ? await gitWorktreeCreateTool(config, request)
-      : request.tool === 'portal.git.worktree.list'
-      ? await gitWorktreeListTool(config, request)
-      : request.tool === 'portal.git.branches.list'
-      ? await listGitBranchesTool(config, request)
-      : request.tool === 'portal.git.worktree.switch'
-      ? await gitWorktreeSwitchTool(config, request)
-      : request.tool === 'portal.git.worktree.remove'
-      ? await gitWorktreeRemoveTool(config, request)
-      : request.tool === 'portal.git.worktree.branch-cleanup'
-      ? await gitWorktreeBranchCleanupTool(config, request)
-      : request.tool === 'portal.git.worktree.validate'
-      ? await gitWorktreeValidateTool(config, request)
-      : request.tool === 'portal.git.status'
-      ? await gitStatusTool(config, request)
-      : request.tool === 'portal.git.fetch'
-      ? await gitFetchTool(config, request)
-      : request.tool === 'portal.git.pull'
-      ? await gitPullTool(config, request)
-      : request.tool === 'portal.git.diff'
-      ? await gitDiffTool(config, request)
-      : request.tool === 'portal.git.log'
-      ? await gitLogTool(config, request)
-      : request.tool === 'portal.git.show'
-      ? await gitShowTool(config, request)
+    assertToolAllowed(request.tool, executionProfile);
+    const idempotencyKey = typeof request.idempotencyKey === 'string' && request.idempotencyKey.length <= 512
+      ? request.idempotencyKey
       : undefined;
+    const result = await portalToolExecutions.execute(
+      idempotencyKey,
+      async () =>
+        request.tool === 'read'
+          ? await readFileTool(config, request)
+          : request.tool === 'write'
+          ? await writeFileTool(config, request)
+          : request.tool === 'edit'
+          ? await editFileTool(config, request)
+          : request.tool === 'bash'
+          ? await bashTool(config, request)
+          : request.tool === 'exec_start'
+          ? await commandSessionTool(config, request, 'start')
+          : request.tool === 'exec_poll'
+          ? await commandSessionTool(config, request, 'poll')
+          : request.tool === 'exec_write'
+          ? await commandSessionTool(config, request, 'write')
+          : request.tool === 'exec_stop'
+          ? await commandSessionTool(config, request, 'stop')
+          : request.tool === 'portal.fs.list'
+          ? await workspaceFileHost.list(workspaceFileInputFromToolCall(request))
+          : request.tool === 'portal.fs.read'
+          ? await workspaceFileHost.read(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['read']>[0],
+          )
+          : request.tool === 'portal.fs.hash'
+          ? await workspaceFileHost.hash(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['hash']>[0],
+          )
+          : request.tool === 'portal.fs.diffPreview'
+          ? await workspaceFileHost.diffPreview(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['diffPreview']>[0],
+          )
+          : request.tool === 'portal.fs.write'
+          ? await workspaceFileHost.write(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['write']>[0],
+          )
+          : request.tool === 'portal.fs.mkdir'
+          ? await workspaceFileHost.mkdir(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['mkdir']>[0],
+          )
+          : request.tool === 'portal.fs.move'
+          ? await workspaceFileHost.move(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['move']>[0],
+          )
+          : request.tool === 'portal.fs.delete'
+          ? await workspaceFileHost.delete(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['delete']>[0],
+          )
+          : request.tool === 'portal.fs.index'
+          ? await workspaceFileHost.index(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['index']>[0],
+          )
+          : request.tool === 'portal.fs.upload'
+          ? await workspaceFileHost.upload(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['upload']>[0],
+          )
+          : request.tool === 'portal.lsp.session'
+          ? await lspHost.createSession(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['createSession']>[0],
+          )
+          : request.tool === 'portal.lsp.query'
+          ? await lspHost.query(workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['query']>[0])
+          : request.tool === 'portal.jupyter.status'
+          ? await jupyterHost.status(workspaceFileInputFromToolCall(request))
+          : request.tool === 'portal.jupyter.kernelspecs'
+          ? await jupyterHost.kernelspecs(workspaceFileInputFromToolCall(request))
+          : request.tool === 'portal.jupyter.session'
+          ? await jupyterHost.createSession(
+            workspaceFileInputFromToolCall(request) as Parameters<PortalJupyterHost['createSession']>[0],
+          )
+          : request.tool === 'portal.window.list'
+          ? await windowHost.list()
+          : request.tool === 'portal.applications.list'
+          ? await windowHost.listApplications()
+          : request.tool === 'portal.applications.open'
+          ? await windowHost.openApplication({
+            applicationId: isRecord(request.args) ? optionalString(request.args.applicationId) : undefined,
+          })
+          : request.tool === 'portal.fs.browse'
+          ? await listRootTool(config, request)
+          : request.tool === 'portal.fs.pathStat'
+          ? await pathStatTool(config, request)
+          : request.tool === 'portal.git.inspect'
+          ? await inspectGitTool(config, request)
+          : request.tool === 'portal.agentInstructions.read'
+          ? await readAgentInstructionsTool(config, request)
+          : request.tool === 'portal.context.discover'
+          ? await discoverWeaveContextTool(config, request)
+          : request.tool === 'portal.git.worktree.create'
+          ? await gitWorktreeCreateTool(config, request)
+          : request.tool === 'portal.git.worktree.list'
+          ? await gitWorktreeListTool(config, request)
+          : request.tool === 'portal.git.branches.list'
+          ? await listGitBranchesTool(config, request)
+          : request.tool === 'portal.git.worktree.switch'
+          ? await gitWorktreeSwitchTool(config, request)
+          : request.tool === 'portal.git.worktree.remove'
+          ? await gitWorktreeRemoveTool(config, request)
+          : request.tool === 'portal.git.worktree.branch-cleanup'
+          ? await gitWorktreeBranchCleanupTool(config, request)
+          : request.tool === 'portal.git.worktree.validate'
+          ? await gitWorktreeValidateTool(config, request)
+          : request.tool === 'portal.git.status'
+          ? await gitStatusTool(config, request)
+          : request.tool === 'portal.git.fetch'
+          ? await gitFetchTool(config, request)
+          : request.tool === 'portal.git.pull'
+          ? await gitPullTool(config, request)
+          : request.tool === 'portal.git.diff'
+          ? await gitDiffTool(config, request)
+          : request.tool === 'portal.git.log'
+          ? await gitLogTool(config, request)
+          : request.tool === 'portal.git.show'
+          ? await gitShowTool(config, request)
+          : undefined,
+    );
     if (!result) throw new Error(`Unsupported tool: ${String(request.tool)}`);
     ws.send(JSON.stringify({ id, type: 'tool.result', ...result }));
   } catch (error) {
@@ -1205,6 +1350,49 @@ const shutdownRuntime = async (runtime: PortalRuntimeFile | undefined) => {
   await fetch(url).catch(() => undefined);
 };
 
+const waitForRuntimeShutdown = async (runtime: PortalRuntimeFile, timeoutMs = 5_000) => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!(await checkPortalRuntimeHealth(runtime)).ok) return;
+    await sleep(100);
+  }
+  throw new Error(`Timed out waiting for Portal daemon ${runtime.pid} to stop.`);
+};
+
+const acquireDaemonRuntime = async (
+  runtimePath: string,
+  httpServerUrl: string,
+  wsServerUrl: string,
+  timeoutMs = 10_000,
+) => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const lock = await tryAcquirePortalRuntimeLock(runtimePath);
+    if (lock) return { lock };
+
+    const runtime = await readPortalRuntime(runtimePath);
+    const health = await checkPortalRuntimeHealth(runtime);
+    if (runtime && health.ok) {
+      if (!runtimeMatchesServer(runtime, httpServerUrl, wsServerUrl)) {
+        throw new Error(`Portal daemon is already running for a different server: ${runtimePath}`);
+      }
+      if (!hasRequiredControlCapabilities(health.body)) {
+        throw new Error(`Portal daemon is running without required local-control capabilities: ${runtimePath}`);
+      }
+      return { existingRuntime: runtime };
+    }
+
+    await sleep(100);
+  }
+  throw new Error(`Timed out waiting for the Portal runtime lock: ${runtimePath}.lock`);
+};
+
+type PortalRemoteConnectionUpdate = {
+  state: 'connecting' | 'connected' | 'reconnecting' | 'rejected';
+  error?: string;
+  connectedAt?: string;
+};
+
 const connectOnce = (
   config: ResolvedPortalConfig,
   terminalHost: PortalTerminalHost,
@@ -1213,6 +1401,7 @@ const connectOnce = (
   jupyterHost: PortalJupyterHost,
   windowHost: PortalWindowHost,
   onSocket?: (ws: WebSocket) => void,
+  onConnectionUpdate?: (update: PortalRemoteConnectionUpdate) => void,
 ) =>
   new Promise<void>((resolve, reject) => {
     const url = new URL('/portals/connect', config.wsServerUrl);
@@ -1222,6 +1411,7 @@ const connectOnce = (
     const ws = new WebSocket(url);
     onSocket?.(ws);
     let accepted = false;
+    let rejected = false;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
 
     const cleanup = () => {
@@ -1240,6 +1430,7 @@ const connectOnce = (
 
       if (message.type === 'portal.accepted') {
         accepted = true;
+        onConnectionUpdate?.({ state: 'connected', connectedAt: new Date().toISOString() });
         logPortalPerfEvent('socket_accepted', { origin: url.origin });
         ws.send(JSON.stringify({
           type: 'portal.hello',
@@ -1255,8 +1446,11 @@ const connectOnce = (
       }
 
       if (message.type === 'portal.rejected') {
+        rejected = true;
+        const error = typeof message.error === 'string' ? message.error : 'Portal rejected';
+        onConnectionUpdate?.({ state: 'rejected', error });
         cleanup();
-        reject(new Error(typeof message.error === 'string' ? message.error : 'Portal rejected'));
+        reject(new Error(error));
         ws.close();
       }
 
@@ -1269,7 +1463,9 @@ const connectOnce = (
 
       if (isWorkspaceFileWatchClientEnvelope(message)) {
         void workspaceFileHost.handleClientMessage(message.clientId, message.message, (watchEvent) => {
-          ws.send(JSON.stringify({ type: 'workspace-file.watch.event', clientId: message.clientId, event: watchEvent }));
+          ws.send(
+            JSON.stringify({ type: 'workspace-file.watch.event', clientId: message.clientId, event: watchEvent }),
+          );
         });
         return;
       }
@@ -1303,6 +1499,7 @@ const connectOnce = (
     ws.onerror = () => {
       cleanup();
       if (!accepted) {
+        onConnectionUpdate?.({ state: 'reconnecting', error: 'WebSocket connection failed' });
         logPortalPerfEvent('socket_error', { origin: url.origin, accepted });
         reject(new Error('WebSocket connection failed'));
       }
@@ -1316,6 +1513,12 @@ const connectOnce = (
       lspHost.detachClientsByPrefix('relay-lsp:');
       jupyterHost.detachClientsByPrefix('relay-jupyter:');
       console.log(`Socket closed: ${event.code} ${event.reason}`.trim());
+      if (!rejected) {
+        onConnectionUpdate?.({
+          state: 'reconnecting',
+          error: event.reason || (accepted ? 'Portal server connection closed' : 'Portal server connection failed'),
+        });
+      }
       logPortalPerfEvent('socket_close', {
         origin: url.origin,
         accepted,
@@ -1336,171 +1539,221 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   config.wsServerUrl = normalizeWsUrl(stringFlag(flags, 'ws-server') ?? config.wsServerUrl);
   config.name = stringFlag(flags, 'name') ?? config.name;
   const noControl = flags['no-control'] === true;
-  const existingRuntime = noControl ? undefined : await readPortalRuntime(runtimePath);
-
-  if (existingRuntime) {
-    const existingHealth = await checkPortalRuntimeHealth(existingRuntime);
-    if (existingHealth.ok) {
-      if (runtimeMatchesServer(existingRuntime, config.httpServerUrl, config.wsServerUrl)) {
-        if (hasRequiredControlCapabilities(existingHealth.body)) {
-          console.log(`Portal daemon already running: ${existingRuntime.portalId}`);
-          console.log(`Runtime: ${runtimePath}`);
-          return;
-        }
-        await shutdownRuntime(existingRuntime);
-        await removePortalRuntime(runtimePath).catch(() => undefined);
-      } else {
-        throw new Error(
-          `Portal daemon is already running for a different server. Run "portal stop" first: ${runtimePath}`,
-        );
-      }
-    }
-    await removePortalRuntime(runtimePath).catch(() => undefined);
+  const runtimeOwnership = noControl
+    ? undefined
+    : await acquireDaemonRuntime(runtimePath, config.httpServerUrl, config.wsServerUrl);
+  if (runtimeOwnership?.existingRuntime) {
+    console.log(`Portal daemon already running: ${runtimeOwnership.existingRuntime.portalId}`);
+    console.log(`Runtime: ${runtimePath}`);
+    return;
   }
+  const runtimeLock = runtimeOwnership?.lock;
 
-  const terminalHost = new PortalTerminalHost({ config });
-  const workspaceFileHost = new PortalWorkspaceFileHost({ config });
-  const lspHost = new PortalLspHost({ config });
-  const jupyterHost = new PortalJupyterHost({ config });
-  const windowHost = new PortalWindowHost({ config });
-  const controlToken = noControl ? undefined : stringFlag(flags, 'control-token') ?? crypto.randomUUID();
-  const controlPort = noControl ? undefined : numberFlag(flags, 'control-port') ?? 0;
-  const controlHost = stringFlag(flags, 'control-host') ?? '127.0.0.1';
-  let activeSocket: WebSocket | undefined;
-  let stopping = false;
-  let runtimeInterval: ReturnType<typeof setInterval> | undefined;
-  let controlServer: Deno.HttpServer<Deno.NetAddr> | undefined;
-  let runtime: PortalRuntimeFile | undefined;
-  let cleanupPromise: Promise<void> | undefined;
-  let stopFallbackTimer: ReturnType<typeof setTimeout> | undefined;
-  const controlCapabilities = await getControlCapabilities(windowStream);
-  let retryMs = 1_000;
-  const perfSampler = startPortalPerfSampler({
-    sample: () => ({
-      portal: {
-        portalId: config.portalId,
-        stopping,
-        retryMs,
-        activeSocket: activeSocket
-          ? {
+  try {
+    const existingRuntime = noControl ? undefined : await readPortalRuntime(runtimePath);
+
+    if (existingRuntime) {
+      const existingHealth = await checkPortalRuntimeHealth(existingRuntime);
+      if (existingHealth.ok) {
+        if (runtimeMatchesServer(existingRuntime, config.httpServerUrl, config.wsServerUrl)) {
+          if (hasRequiredControlCapabilities(existingHealth.body)) {
+            console.log(`Portal daemon already running: ${existingRuntime.portalId}`);
+            console.log(`Runtime: ${runtimePath}`);
+            return;
+          }
+          await shutdownRuntime(existingRuntime);
+          await waitForRuntimeShutdown(existingRuntime);
+          await removePortalRuntime(runtimePath, existingRuntime).catch(() => undefined);
+        } else {
+          throw new Error(
+            `Portal daemon is already running for a different server. Run "portal stop" first: ${runtimePath}`,
+          );
+        }
+      }
+      await removePortalRuntime(runtimePath, existingRuntime).catch(() => undefined);
+    }
+
+    const terminalHost = new PortalTerminalHost({ config });
+    const workspaceFileHost = new PortalWorkspaceFileHost({ config });
+    const lspHost = new PortalLspHost({ config });
+    const jupyterHost = new PortalJupyterHost({ config });
+    const windowHost = new PortalWindowHost({ config });
+    const controlToken = noControl ? undefined : stringFlag(flags, 'control-token') ?? crypto.randomUUID();
+    const controlPort = noControl ? undefined : numberFlag(flags, 'control-port') ?? 0;
+    const controlHost = stringFlag(flags, 'control-host') ?? '127.0.0.1';
+    let activeSocket: WebSocket | undefined;
+    let remoteConnectionState: PortalRemoteConnectionUpdate['state'] = 'connecting';
+    let remoteConnectionError: string | undefined;
+    let remoteConnectedAt: string | undefined;
+    let stopping = false;
+    let runtimeInterval: ReturnType<typeof setInterval> | undefined;
+    let controlServer: Deno.HttpServer<Deno.NetAddr> | undefined;
+    let runtime: PortalRuntimeFile | undefined;
+    let runtimeWritePromise = Promise.resolve();
+    let cleanupPromise: Promise<void> | undefined;
+    let stopFallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    const controlCapabilities = await getControlCapabilities(windowStream);
+    let retryMs = 1_000;
+    const perfSampler = startPortalPerfSampler({
+      sample: () => ({
+        portal: {
+          portalId: config.portalId,
+          stopping,
+          retryMs,
+          remoteConnectionState,
+          remoteConnectionError,
+          remoteConnectedAt,
+          activeSocket: activeSocket
+            ? {
               readyState: activeSocket.readyState,
               bufferedAmount: activeSocket.bufferedAmount,
             }
-          : undefined,
-        control: {
-          enabled: Boolean(controlToken && controlPort !== undefined),
-          host: controlHost,
-          port: runtime?.controlPort,
-          capabilityCount: controlCapabilities.length,
+            : undefined,
+          control: {
+            enabled: Boolean(controlToken && controlPort !== undefined),
+            host: controlHost,
+            port: runtime?.controlPort,
+            capabilityCount: controlCapabilities.length,
+          },
         },
-      },
-      terminal: terminalHost.getPerfSnapshot(),
-      lsp: lspHost.getPerfSnapshot(),
-    }),
-  });
+        terminal: terminalHost.getPerfSnapshot(),
+        lsp: lspHost.getPerfSnapshot(),
+      }),
+    });
 
-  const cleanup = async () => {
-    if (cleanupPromise) return await cleanupPromise;
-    cleanupPromise = (async () => {
-      if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
-      perfSampler.stop();
-      terminalHost.dispose();
-      workspaceFileHost.dispose();
-      await lspHost.dispose();
-      await jupyterHost.dispose();
-      windowHost.dispose();
+    const cleanup = async () => {
+      if (cleanupPromise) return await cleanupPromise;
+      cleanupPromise = (async () => {
+        if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
+        perfSampler.stop();
+        terminalHost.dispose();
+        workspaceFileHost.dispose();
+        await lspHost.dispose();
+        await jupyterHost.dispose();
+        windowHost.dispose();
+        activeSocket?.close();
+        if (controlServer) await controlServer.shutdown().catch(() => undefined);
+        await runtimeWritePromise;
+        if (runtime) await removePortalRuntime(runtimePath, runtime).catch(() => undefined);
+        await runtimeLock?.release();
+      })();
+      return await cleanupPromise;
+    };
+
+    const requestStop = () => {
+      if (stopping) return;
+      stopping = true;
       activeSocket?.close();
-      if (controlServer) await controlServer.shutdown().catch(() => undefined);
-      await removePortalRuntime(runtimePath).catch(() => undefined);
-    })();
-    return await cleanupPromise;
-  };
+      stopFallbackTimer = setTimeout(() => {
+        void cleanup().finally(() => Deno.exit(0));
+      }, 2_000);
+    };
 
-  const requestStop = () => {
-    if (stopping) return;
-    stopping = true;
-    activeSocket?.close();
-    stopFallbackTimer = setTimeout(() => {
-      void cleanup().finally(() => Deno.exit(0));
-    }, 2_000);
-  };
-
-  console.log(`Portal daemon: ${config.portalId}`);
-  console.log(`WebSocket: ${config.wsServerUrl}`);
-  if (controlToken && controlPort !== undefined) {
-    controlServer = startTerminalControlServer({
-      host: terminalHost,
-      workspaceFiles: workspaceFileHost,
-      lsp: lspHost,
-      hostname: controlHost,
-      port: controlPort,
-      token: controlToken,
-      metadata: {
+    console.log(`Portal daemon: ${config.portalId}`);
+    console.log(`WebSocket: ${config.wsServerUrl}`);
+    if (controlToken && controlPort !== undefined) {
+      controlServer = startTerminalControlServer({
+        host: terminalHost,
+        workspaceFiles: workspaceFileHost,
+        lsp: lspHost,
+        hostname: controlHost,
+        port: controlPort,
+        token: controlToken,
+        metadata: {
+          portalId: config.portalId,
+          configPath,
+          httpServerUrl: config.httpServerUrl,
+          wsServerUrl: config.wsServerUrl,
+          runtimePath,
+          controlCapabilities,
+          localControlReady: true,
+        },
+        getMetadata: () => ({
+          remoteConnectionState,
+          ...(remoteConnectionError ? { remoteConnectionError } : {}),
+          ...(remoteConnectedAt ? { remoteConnectedAt } : {}),
+        }),
+        onShutdown: requestStop,
+      });
+      const actualControlPort = controlServer.addr.port;
+      const now = new Date().toISOString();
+      runtime = {
+        version: 1,
+        pid: Deno.pid,
         portalId: config.portalId,
         configPath,
         httpServerUrl: config.httpServerUrl,
         wsServerUrl: config.wsServerUrl,
-        runtimePath,
+        controlHost,
+        controlPort: actualControlPort,
+        controlToken,
         controlCapabilities,
-      },
-      onShutdown: requestStop,
-    });
-    const actualControlPort = controlServer.addr.port;
-    const now = new Date().toISOString();
-    runtime = {
-      version: 1,
-      pid: Deno.pid,
-      portalId: config.portalId,
-      configPath,
-      httpServerUrl: config.httpServerUrl,
-      wsServerUrl: config.wsServerUrl,
-      controlHost,
-      controlPort: actualControlPort,
-      controlToken,
-      controlCapabilities,
-      startedAt: now,
-      updatedAt: now,
-    };
-    await writePortalRuntime(runtimePath, runtime);
-    runtimeInterval = setInterval(() => {
-      if (!runtime) return;
-      runtime.updatedAt = new Date().toISOString();
-      void writePortalRuntime(runtimePath, runtime).catch(() => undefined);
-    }, 15_000);
-    console.log(`Portal home: ${resolvePortalHome()}`);
-    console.log(`Config: ${configPath}`);
-    console.log(`Runtime: ${runtimePath}`);
-    console.log(`Local control: http://${controlHost}:${actualControlPort}`);
-  } else {
-    console.log('Local control: disabled');
-  }
-
-  try {
-    Deno.addSignalListener('SIGINT', requestStop);
-    Deno.addSignalListener('SIGTERM', requestStop);
-  } catch {
-    // Signal listeners are best-effort for compiled and non-POSIX runtimes.
-  }
-
-  while (!stopping) {
-    try {
-      await connectOnce(config, terminalHost, workspaceFileHost, lspHost, jupyterHost, windowHost, (ws) => {
-        activeSocket = ws;
-      });
-      retryMs = 1_000;
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
+        startedAt: now,
+        updatedAt: now,
+      };
+      await writePortalRuntime(runtimePath, runtime);
+      runtimeInterval = setInterval(() => {
+        if (!runtime) return;
+        const nextRuntime = { ...runtime, updatedAt: new Date().toISOString() };
+        runtime = nextRuntime;
+        runtimeWritePromise = runtimeWritePromise.then(() => writePortalRuntime(runtimePath, nextRuntime)).catch(
+          () => undefined,
+        );
+      }, 15_000);
+      console.log(`Portal home: ${resolvePortalHome()}`);
+      console.log(`Config: ${configPath}`);
+      console.log(`Runtime: ${runtimePath}`);
+      console.log(`Local control: http://${controlHost}:${actualControlPort}`);
+    } else {
+      console.log('Local control: disabled');
     }
 
-    if (stopping) break;
-    console.log(`Reconnecting in ${retryMs}ms`);
-    const sleepStartedAt = Date.now();
-    while (!stopping && Date.now() - sleepStartedAt < retryMs) await sleep(Math.min(250, retryMs));
-    retryMs = Math.min(retryMs * 2, 30_000);
-  }
+    try {
+      Deno.addSignalListener('SIGINT', requestStop);
+      Deno.addSignalListener('SIGTERM', requestStop);
+    } catch {
+      // Signal listeners are best-effort for compiled and non-POSIX runtimes.
+    }
 
-  if (stopFallbackTimer !== undefined) clearTimeout(stopFallbackTimer);
-  await cleanup();
+    while (!stopping) {
+      try {
+        remoteConnectionState = remoteConnectedAt ? 'reconnecting' : 'connecting';
+        await connectOnce(
+          config,
+          terminalHost,
+          workspaceFileHost,
+          lspHost,
+          jupyterHost,
+          windowHost,
+          (ws) => {
+            activeSocket = ws;
+          },
+          (update) => {
+            remoteConnectionState = update.state;
+            remoteConnectionError = update.error;
+            if (update.connectedAt) remoteConnectedAt = update.connectedAt;
+          },
+        );
+        retryMs = 1_000;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        remoteConnectionState = message.toLowerCase().includes('invalid portal token') ? 'rejected' : 'reconnecting';
+        remoteConnectionError = message;
+        console.error(message);
+      }
+
+      if (stopping) break;
+      console.log(`Reconnecting in ${retryMs}ms`);
+      const sleepStartedAt = Date.now();
+      while (!stopping && Date.now() - sleepStartedAt < retryMs) await sleep(Math.min(250, retryMs));
+      retryMs = Math.min(retryMs * 2, 30_000);
+    }
+
+    if (stopFallbackTimer !== undefined) clearTimeout(stopFallbackTimer);
+    await cleanup();
+  } finally {
+    await runtimeLock?.release();
+  }
 };
 
 const addRoot = async (flags: Record<string, string | boolean>) => {
@@ -1589,6 +1842,7 @@ Commands:
   root --path /path/to/code [--id default] [--name Code] [--config ~/.config/weave/portal/config.json]
   mount --project project_x --path /path/to/repo [--config ~/.config/weave/portal/config.json]
   daemon [--config ~/.config/weave/portal/config.json] [--ws-server ws://localhost:4112] [--control-port 0] [--control-token token] [--no-control]
+         [--log-file ~/.config/weave/portal/desktop-daemon.log] [--log-max-bytes 1000000]
          [--window-stream-backend native-webrtc] [--window-stream-codec h264|hevc]
          [--window-stream-profile balanced|quality|performance|low-bandwidth|custom]
          [--window-stream-max-fps 60] [--window-stream-max-dimension 1920] [--window-stream-bitrate-mbps 20]
@@ -1600,6 +1854,14 @@ Commands:
 
 const main = async () => {
   const { command, flags } = parseArgs(Deno.args);
+
+  if (!command || command === 'daemon') {
+    const logPath = stringFlag(flags, 'log-file');
+    if (logPath) {
+      await ensureParentDir(logPath);
+      installBoundedConsoleLog(logPath, numberFlag(flags, 'log-max-bytes') ?? 1_000_000);
+    }
+  }
 
   if (command === 'login') return login(flags);
   if (!command || command === 'daemon') return daemon(flags);

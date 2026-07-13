@@ -16,11 +16,13 @@ Return Markdown with exactly these headings:
 # Decisions and constraints
 # Completed outcomes
 # Current repository and runtime state
+# Validation state
 # Remaining work and blockers
 # Important identifiers and references
 # Failures and work not to repeat
 
 Merge the previous checkpoint with the new transcript segment. Preserve concrete file paths, commands, test results,
+validation failures and later recoveries, visual attachment ids and re-view references,
 user corrections, decisions and their rationale, unfinished work, and explicit statements about commits, migrations,
 deployments, or external writes. Never invent completion. Never include hidden reasoning or credentials. Be concise but
 complete enough for another agent to resume without repeating finished or failed work.`,

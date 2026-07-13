@@ -20,9 +20,13 @@ type PortalSocket = {
 };
 
 const connections = new Map<string, PortalConnection & { ws: PortalSocket }>();
-const pendingRequests = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
+const pendingRequests = new Map<
+  string,
+  { resolve: (value: unknown) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> }
+>();
 
-const publicConnection = ({ ws: _ws, ...connection }: PortalConnection & { ws: PortalSocket }): PortalConnection => connection;
+const publicConnection = ({ ws: _ws, ...connection }: PortalConnection & { ws: PortalSocket }): PortalConnection =>
+  connection;
 const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -39,7 +43,7 @@ const isSameOrChildPath = (path: string | undefined, root: string | undefined) =
 
 const portalConnectionsForUser = (userId: string) =>
   [...connections.values()]
-    .filter(connection => connection.userId === userId)
+    .filter((connection) => connection.userId === userId)
     .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
 
 export const listPortalConnections = (userId?: string) =>
@@ -59,8 +63,9 @@ export const sendPortalMessage = (portalId: string, message: unknown) => {
 };
 
 export const findPortalForProject = (userId: string, projectId: string) =>
-  portalConnectionsForUser(userId).find(connection =>
-    connection.userId === userId && connection.mounts.some((mount: any) => mount?.projectId === projectId && typeof mount?.localPath === 'string'),
+  portalConnectionsForUser(userId).find((connection) =>
+    connection.userId === userId &&
+    connection.mounts.some((mount: any) => mount?.projectId === projectId && typeof mount?.localPath === 'string')
   );
 
 export const resolvePortalForTarget = (input: {
@@ -76,8 +81,8 @@ export const resolvePortalForTarget = (input: {
 
   const workspacePath = normalizePath(input.workspacePath);
   const pathMatches = workspacePath
-    ? candidates.filter(connection => {
-      const mounted = connection.mounts.some(mount => {
+    ? candidates.filter((connection) => {
+      const mounted = connection.mounts.some((mount) => {
         if (!isRecord(mount)) return false;
         const localPath = normalizePath(mount.localPath);
         if (!localPath) return false;
@@ -85,7 +90,7 @@ export const resolvePortalForTarget = (input: {
       });
       if (mounted) return true;
 
-      return connection.roots.some(root => {
+      return connection.roots.some((root) => {
         if (!isRecord(root)) return false;
         return isSameOrChildPath(workspacePath, normalizePath(root.path));
       });
@@ -94,20 +99,22 @@ export const resolvePortalForTarget = (input: {
   if (pathMatches.length) return publicConnection(pathMatches[0]);
 
   if (input.rootId) {
-    const rootMatch = candidates.find(connection =>
-      connection.roots.some(root => isRecord(root) && root.id === input.rootId),
+    const rootMatch = candidates.find((connection) =>
+      connection.roots.some((root) => isRecord(root) && root.id === input.rootId)
     );
     if (rootMatch) return publicConnection(rootMatch);
   }
 
   if (input.projectId) {
-    const projectMatch = candidates.find(connection =>
-      connection.mounts.some(mount => isRecord(mount) && mount.projectId === input.projectId && typeof mount.localPath === 'string'),
+    const projectMatch = candidates.find((connection) =>
+      connection.mounts.some((mount) =>
+        isRecord(mount) && mount.projectId === input.projectId && typeof mount.localPath === 'string'
+      )
     );
     if (projectMatch) return publicConnection(projectMatch);
   }
 
-  const hinted = input.portalId ? candidates.find(connection => connection.portalId === input.portalId) : undefined;
+  const hinted = input.portalId ? candidates.find((connection) => connection.portalId === input.portalId) : undefined;
   return publicConnection(hinted ?? candidates[0]);
 };
 
@@ -128,9 +135,11 @@ export const requestPortalTool = async (input: {
   rootId?: string;
   repoPath?: string;
   workspacePath?: string;
+  executionProfile?: 'observe' | 'workspace' | 'host';
   tool: string;
   args: unknown;
   timeoutMs?: number;
+  idempotencyKey?: string;
 }) => {
   const connection = connections.get(input.portalId);
   if (!connection) throw new Error('Portal is offline');
@@ -145,6 +154,8 @@ export const requestPortalTool = async (input: {
     rootId: input.rootId,
     repoPath: input.repoPath,
     workspacePath: input.workspacePath,
+    executionProfile: input.executionProfile,
+    idempotencyKey: input.idempotencyKey,
     tool: input.tool,
     args: input.args,
   };

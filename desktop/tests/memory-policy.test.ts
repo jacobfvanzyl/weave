@@ -18,7 +18,7 @@ import {
 import { getToolHistoryFullSteps } from '../../server/src/agent/mastra/tool-call-filter-policy';
 import { __chatRouteMemoryTest } from '../../server/src/modules/chat/routes/chat';
 import { __chatStateContextUsageTest } from '../../server/src/modules/chat/routes/chat-state';
-import { getCodeToolModelOutputMaxChars } from '../../server/src/agent/mastra/tools/model-output';
+import { compactText, getCodeToolModelOutputMaxChars } from '../../server/src/agent/mastra/tools/model-output';
 import {
   normalizePortalResult,
   portalBashModelOutput,
@@ -279,7 +279,7 @@ describe('tool model output compaction', () => {
     expect(output).toContain('truncated: true');
     expect(output).toContain('contentHash:');
     expect(output.startsWith('read\n')).toBe(true);
-    expect(modelOutputBody(output)).toBe(rawContent.slice(0, 12_000));
+    expect(modelOutputBody(output)).toBe(compactText(rawContent, 12_000).text);
   });
 
   it('keeps bash output up to the code-tool cap before truncating', () => {
@@ -296,7 +296,7 @@ describe('tool model output compaction', () => {
     expect(output).toContain(`contentChars: ${rawBody.length}`);
     expect(output).toContain('truncated: true');
     expect(output).toContain('contentHash:');
-    expect(modelOutputBody(output)).toBe(rawBody.slice(0, 12_000));
+    expect(modelOutputBody(output)).toBe(compactText(rawBody, 12_000).text);
   });
 
   it('summarizes edit diffs for model output without dumping unchanged context', () => {
@@ -1029,7 +1029,7 @@ describe('current-turn image prompt shaping', () => {
   const imagePart = { type: 'file', mediaType: 'image/png', data: 'data:image/png;base64,aGVsbG8=' };
   const pdfPart = { type: 'file', mediaType: 'application/pdf', data: 'data:application/pdf;base64,cGRm' };
 
-  it('strips historical user images while preserving historical text', () => {
+  it('replaces historical user images with durable references while preserving historical text', () => {
     const processor = new CurrentTurnImageProcessor();
     const prompt = [
       { role: 'user', content: [{ type: 'text', text: 'Earlier text' }, imagePart] },
@@ -1040,7 +1040,10 @@ describe('current-turn image prompt shaping', () => {
     const result = processor.processLLMRequest({ prompt, stepNumber: 0 } as any) as any;
 
     expect(countImageParts(result.prompt)).toBe(0);
-    expect(result.prompt[0].content).toEqual([{ type: 'text', text: 'Earlier text' }]);
+    expect(result.prompt[0].content).toEqual([
+      { type: 'text', text: 'Earlier text' },
+      { type: 'text', text: '[Image attachment image is available in the persisted thread, but has no durable attachment id.]' },
+    ]);
     expect(result.prompt.at(-1)).toEqual({ role: 'user', content: [{ type: 'text', text: 'Current text' }] });
     expect(prompt[0].content).toContain(imagePart);
   });
@@ -1066,7 +1069,7 @@ describe('current-turn image prompt shaping', () => {
     ]);
   });
 
-  it('strips the latest user image on tool-continuation model calls', () => {
+  it('replaces the latest user image on tool-continuation model calls', () => {
     const processor = new CurrentTurnImageProcessor();
     const prompt = [
       { role: 'user', content: [{ type: 'text', text: 'Look at this' }, imagePart] },
@@ -1077,7 +1080,13 @@ describe('current-turn image prompt shaping', () => {
     const result = processor.processLLMRequest({ prompt, stepNumber: 1 } as any) as any;
 
     expect(countImageParts(result.prompt)).toBe(0);
-    expect(result.prompt[0]).toEqual({ role: 'user', content: [{ type: 'text', text: 'Look at this' }] });
+    expect(result.prompt[0]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Look at this' },
+        { type: 'text', text: '[Image attachment image is available in the persisted thread, but has no durable attachment id.]' },
+      ],
+    });
     expect(result.prompt.slice(1)).toEqual(prompt.slice(1));
   });
 
@@ -1094,7 +1103,11 @@ describe('current-turn image prompt shaping', () => {
 
     const result = processor.processLLMRequest({ prompt, stepNumber: 0 } as any) as any;
 
-    expect(result.prompt[0].content).toEqual([{ type: 'text', text: 'Earlier text' }, pdfPart]);
+    expect(result.prompt[0].content).toEqual([
+      { type: 'text', text: 'Earlier text' },
+      pdfPart,
+      { type: 'text', text: '[Image attachment image is available in the persisted thread, but has no durable attachment id.]' },
+    ]);
     expect(result.prompt[1]).toEqual(prompt[1]);
     expect(result.prompt[2]).toEqual(prompt[2]);
   });

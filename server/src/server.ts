@@ -14,10 +14,12 @@ import { requireWeaveDatabaseUrl } from './storage/database-url';
 import { getContextBudgetPercentages } from './agent/context-budget';
 import { assertCredentialEncryptionConfigured } from './agent/credentials/chatgpt-credential-repository';
 import { isAllowedCorsOrigin } from './server/cors-origin';
+import { agentRunRepository } from './agent/run-repository';
 
 requireWeaveDatabaseUrl();
 getContextBudgetPercentages();
 assertCredentialEncryptionConfigured();
+await agentRunRepository.interruptActiveRuns();
 
 const port = Number(process.env.PORT ?? process.env.WEAVE_SERVER_PORT ?? 4111);
 const auth = loadOwnerAuthConfig();

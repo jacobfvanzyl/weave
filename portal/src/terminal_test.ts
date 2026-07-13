@@ -1305,12 +1305,17 @@ Deno.test('TmuxTerminalController reports a clear error when tmux is missing', a
 Deno.test('local terminal control requires auth and shuts down', async () =>
   withHost(async ({ host }) => {
     let shutdownCalled = false;
+    let remoteConnectionState = 'connecting';
     const server = startTerminalControlServer({
       host,
       hostname: '127.0.0.1',
       port: 0,
       token: 'test-token',
       metadata: { portalId: 'portal_test' },
+      getMetadata: () => ({
+        remoteConnectionState,
+        remoteConnectionError: remoteConnectionState === 'reconnecting' ? 'server unreachable' : undefined,
+      }),
       onShutdown: () => {
         shutdownCalled = true;
       },
@@ -1321,7 +1326,20 @@ Deno.test('local terminal control requires auth and shuts down', async () =>
       assertEquals((await fetch(`${baseUrl}/health`)).status, 401);
       const health = await fetch(`${baseUrl}/health?token=test-token`);
       assertEquals(health.status, 200);
-      assertEquals(await health.json(), { ok: true, portalId: 'portal_test' });
+      assertEquals(await health.json(), {
+        ok: true,
+        portalId: 'portal_test',
+        remoteConnectionState: 'connecting',
+      });
+
+      remoteConnectionState = 'reconnecting';
+      const reconnectingHealth = await fetch(`${baseUrl}/health?token=test-token`);
+      assertEquals(await reconnectingHealth.json(), {
+        ok: true,
+        portalId: 'portal_test',
+        remoteConnectionState: 'reconnecting',
+        remoteConnectionError: 'server unreachable',
+      });
 
       const shutdown = await fetch(`${baseUrl}/shutdown?token=test-token`, { method: 'POST' });
       assertEquals(shutdown.status, 200);

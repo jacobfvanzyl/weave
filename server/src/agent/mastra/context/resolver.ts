@@ -5,6 +5,7 @@ import { portalToolScope, type PortalToolTarget } from '../../../services/provid
 import { toolService } from '../../../services/tool-runtime';
 import { callerForOwner, ServiceError } from '../../../services/types';
 import { registerResolvedContextSkills } from './skill-source';
+import type { ExecutionProfile } from '../../execution-policy';
 
 export type WeaveContextFileKind = 'config' | 'mcp' | 'prompt' | 'skill' | 'agents';
 
@@ -31,6 +32,7 @@ export type AgentRuntimeConfig = {
   reasoningEffort: string;
   serviceTier?: string;
   memory: Record<string, unknown>;
+  executionProfile?: ExecutionProfile;
 };
 
 export type RuntimeProjectContext = {
@@ -74,6 +76,7 @@ export const singletonAgentConfig: AgentRuntimeConfig = {
   reasoningEffort: 'high',
   serviceTier: undefined,
   memory: {},
+  executionProfile: 'workspace',
 };
 
 const userSnapshots = new Map<string, WeaveContextSnapshot>();

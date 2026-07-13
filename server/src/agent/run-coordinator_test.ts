@@ -5,6 +5,7 @@ import {
   filterCompactToolHistoryTextStream,
   normalizeAskUserSuspensionStream,
 } from './run-coordinator.ts';
+import type { AgentRunEventV1, AgentRunRecordV1 } from './run-repository.ts';
 
 const assert: (condition: unknown, message: string) => asserts condition = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -129,6 +130,18 @@ Deno.test('AgentRunCoordinator creates active run snapshots and submitted messag
   } finally {
     coordinator.clearForTests();
   }
+});
+
+Deno.test('AgentRunCoordinator surfaces a run-record persistence failure before execution starts', async () => {
+  const coordinator = new AgentRunCoordinator({
+    repository: {
+      create: async () => {
+        throw new Error('database unavailable');
+      },
+    } as any,
+  });
+  const run = coordinator.createThreadRun('resource-1', 'thread-1');
+  await assertRejects(() => coordinator.flushPersistence(run), 'database unavailable');
 });
 
 Deno.test('AgentRunCoordinator keeps only one current run per resource/thread key', () => {
@@ -659,7 +672,8 @@ Deno.test('filterCompactToolHistoryTextStream suppresses leaked proposal functio
         controller.enqueue({
           type: 'text-delta',
           id: 'text-1',
-          delta: 'functions.proposal_read({"proposalPath":".agents/proposals/demo.md","path":"src/file.ts","offset":1,"limit":140})',
+          delta:
+            'functions.proposal_read({"proposalPath":".agents/proposals/demo.md","path":"src/file.ts","offset":1,"limit":140})',
         });
         controller.enqueue({ type: 'text-end', id: 'text-1' });
         controller.enqueue({ type: 'finish' });
@@ -767,4 +781,48 @@ Deno.test('AgentRunCoordinator pump flushes buffered assistant text before abort
   } finally {
     coordinator.clearForTests();
   }
+});
+
+Deno.test('AgentRunCoordinator restores an approval checkpoint without replaying a tool', () => {
+  const { coordinator } = createTestCoordinator();
+  const record: AgentRunRecordV1 = {
+    version: 1,
+    runId: 'run-restored',
+    resourceId: 'resource-1',
+    threadId: 'thread-restored',
+    mastraRunId: 'mastra-restored',
+    status: 'awaiting_approval',
+    executionProfile: 'host',
+    metadata: {},
+    lastSequence: 2,
+    startedAt: '2026-07-13T00:00:00.000Z',
+    createdAt: '2026-07-13T00:00:00.000Z',
+    updatedAt: '2026-07-13T00:00:01.000Z',
+  };
+  const events: AgentRunEventV1[] = [
+    {
+      version: 1,
+      runId: record.runId,
+      sequence: 1,
+      eventId: 'event-1',
+      eventType: 'tool-input-available',
+      data: { type: 'tool-input-available', toolCallId: 'tool-1', toolName: 'bash' },
+      createdAt: record.startedAt,
+    },
+    {
+      version: 1,
+      runId: record.runId,
+      sequence: 2,
+      eventId: 'event-2',
+      eventType: 'tool-approval-request',
+      data: { type: 'tool-approval-request', toolCallId: 'tool-1' },
+      createdAt: record.updatedAt,
+    },
+  ];
+
+  const run = coordinator.restoreAwaitingApprovalRun(record, events, { requestContext: { restored: true } });
+  assertEquals(run.status, 'awaiting_approval');
+  assertEquals(run.nextSequence, 2);
+  assertEquals(run.chunks, events.map((event) => event.data));
+  assertEquals(coordinator.getThreadRun('resource-1', 'thread-restored'), run);
 });

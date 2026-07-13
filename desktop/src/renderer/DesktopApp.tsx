@@ -6,6 +6,7 @@ import type { ConnectionAdapter } from '@weave/client/lib/connection-types';
 import type {
   DesktopConnectionSettings,
 } from '../shared/desktop-api';
+import { PortalStatusIndicator } from './PortalStatusIndicator';
 
 export const DesktopApp = ({ initialSettings }: { initialSettings: DesktopConnectionSettings }) => {
   const adapter = useMemo<ConnectionAdapter>(
@@ -26,8 +27,14 @@ export const DesktopApp = ({ initialSettings }: { initialSettings: DesktopConnec
         shellClassName="weave-desktop-shell"
         settingsButtonClassName="h-8 w-8 text-muted-foreground hover:text-foreground"
         tokenStorageDescription="Tokens are encrypted by the main process when available."
+        connectionDetails={<PortalStatusIndicator />}
         renderConnected={connectionSettingsButton => (
-          <WeaveAppShell connectionSettingsButton={connectionSettingsButton} />
+          <WeaveAppShell connectionSettingsButton={(
+            <>
+              <PortalStatusIndicator compact />
+              {connectionSettingsButton}
+            </>
+          )} />
         )}
       />
     </Providers>

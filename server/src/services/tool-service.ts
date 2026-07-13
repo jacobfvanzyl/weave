@@ -11,6 +11,7 @@ export type ToolInvocation = {
   scope: ServiceScope;
   input: unknown;
   timeoutMs?: number;
+  idempotencyKey?: string;
   grants?: ServiceGrant[];
 };
 
@@ -25,6 +26,7 @@ export interface ToolService {
     tool: string;
     args: unknown;
     timeoutMs?: number;
+    idempotencyKey?: string;
     grants?: ServiceGrant[];
   }): Promise<unknown>;
   portalToolRequester(caller: ServiceCaller, target?: PortalToolTarget): (input: {
@@ -99,6 +101,7 @@ export class DefaultToolService implements ToolService {
         toolId: input.toolId,
         args: input.input,
         timeoutMs: input.timeoutMs,
+        idempotencyKey: input.idempotencyKey,
       }) as T;
       audit.push(serviceAudit({
         service: 'tool',
@@ -138,6 +141,7 @@ export class DefaultToolService implements ToolService {
     tool: string;
     args: unknown;
     timeoutMs?: number;
+    idempotencyKey?: string;
     grants?: ServiceGrant[];
   }) {
     return this.invoke({
@@ -146,6 +150,7 @@ export class DefaultToolService implements ToolService {
       scope: input.scope ?? portalToolScope(input.target ?? {}),
       input: input.args,
       timeoutMs: input.timeoutMs,
+      idempotencyKey: input.idempotencyKey,
       grants: input.grants,
     });
   }

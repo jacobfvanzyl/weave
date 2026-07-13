@@ -25,7 +25,9 @@ export const compactText = (value: unknown, maxChars = defaultMaxChars) => {
   }
 
   return {
-    text: text.slice(0, maxChars),
+    text: `${text.slice(0, Math.floor(maxChars * 0.6))}\n\n... ${text.length - maxChars} characters omitted ...\n\n${
+      text.slice(text.length - Math.ceil(maxChars * 0.4))
+    }`,
     chars: text.length,
     hash: hashText(text),
     truncated: true,
@@ -37,13 +39,24 @@ const lines = (items: Array<[string, unknown]>) =>
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
     .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
 
-export const formatToolModelOutput = (heading: string, fields: Array<[string, unknown]>, body?: unknown, maxChars = defaultMaxChars) => {
+export const formatToolModelOutput = (
+  heading: string,
+  fields: Array<[string, unknown]>,
+  body?: unknown,
+  maxChars = defaultMaxChars,
+) => {
   const compact = compactText(body, maxChars);
-  const header = [heading, ...lines(fields), ...(compact.chars ? [
-    `contentChars: ${compact.chars}`,
-    `contentHash: ${compact.hash}`,
-    ...(compact.truncated ? ['truncated: true'] : []),
-  ] : [])];
+  const header = [
+    heading,
+    ...lines(fields),
+    ...(compact.chars
+      ? [
+        `contentChars: ${compact.chars}`,
+        `contentHash: ${compact.hash}`,
+        ...(compact.truncated ? ['truncated: true'] : []),
+      ]
+      : []),
+  ];
 
   return compact.text ? `${header.join('\n')}\n\n${compact.text}` : header.join('\n');
 };

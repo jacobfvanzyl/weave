@@ -9,6 +9,7 @@ const summary = [
   '# Decisions and constraints',
   '# Completed outcomes',
   '# Current repository and runtime state',
+  '# Validation state',
   '# Remaining work and blockers',
   '# Important identifiers and references',
   '# Failures and work not to repeat',

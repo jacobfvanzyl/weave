@@ -32,7 +32,8 @@ import {
   parseTerminalStartInput,
   parseTerminalTargetInput,
 } from './terminal-input';
-import { PortalSupervisor, PortalTerminalClient } from './portal-terminal-client';
+import { PortalSupervisor } from './portal-supervisor';
+import { PortalTerminalClient } from './portal-terminal-client';
 import { startDesktopPerfSampler } from './perf';
 import { ChatGPTLoginBroker } from './chatgpt-login';
 import {
@@ -232,30 +233,45 @@ const resolveTerminalTarget = async (input: TerminalTargetInput) =>
 
 const resolveWorkspaceFileWorkspace = (target: WorkspaceFileTarget) => resolveGitWorkspace(target, 'workspace-file');
 
-const getPortalTerminalClient = () => {
+const getPortalSupervisor = () => {
   if (!settingsStore) throw new Error('Connection settings store is not initialized.');
   if (!portalSupervisor) {
     portalSupervisor = new PortalSupervisor({
       settingsStore,
       homePath: app.getPath('home'),
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+    });
+    portalSupervisor.subscribe(status => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.webContents.isDestroyed()) window.webContents.send('portal:status', status);
+      }
     });
   }
-  if (!portalTerminalClient) portalTerminalClient = new PortalTerminalClient(portalSupervisor);
+  return portalSupervisor;
+};
+
+const resetPortalClients = () => {
+  portalTerminalClient?.dispose();
+  portalWorkspaceFileClient?.dispose();
+  portalTerminalClient = undefined;
+  portalWorkspaceFileClient = undefined;
+  portalLspClient = undefined;
+};
+
+const getPortalTerminalClient = () => {
+  const supervisor = getPortalSupervisor();
+  if (!portalTerminalClient) portalTerminalClient = new PortalTerminalClient(supervisor);
 
   return portalTerminalClient;
 };
 
 const getPortalWorkspaceFileClient = () => {
-  if (!settingsStore) throw new Error('Connection settings store is not initialized.');
-  if (!portalSupervisor) {
-    portalSupervisor = new PortalSupervisor({
-      settingsStore,
-      homePath: app.getPath('home'),
-    });
-  }
+  const supervisor = getPortalSupervisor();
   if (!portalWorkspaceFileClient) {
     portalWorkspaceFileClient = new PortalWorkspaceFileClient({
-      supervisor: portalSupervisor,
+      supervisor,
       resolveWorkspace: resolveWorkspaceFileWorkspace,
     });
   }
@@ -264,16 +280,10 @@ const getPortalWorkspaceFileClient = () => {
 };
 
 const getPortalLspClient = () => {
-  if (!settingsStore) throw new Error('Connection settings store is not initialized.');
-  if (!portalSupervisor) {
-    portalSupervisor = new PortalSupervisor({
-      settingsStore,
-      homePath: app.getPath('home'),
-    });
-  }
+  const supervisor = getPortalSupervisor();
   if (!portalLspClient) {
     portalLspClient = new PortalLspClient({
-      supervisor: portalSupervisor,
+      supervisor,
       resolveWorkspace: resolveWorkspaceFileWorkspace,
     });
   }
@@ -283,12 +293,20 @@ const getPortalLspClient = () => {
 
 const registerIpcHandlers = () => {
   ipcMain.handle('connection:get-settings', () => getSettingsStore().getSettings());
-  ipcMain.handle('connection:save-settings', (_event, input: unknown) =>
-    getSettingsStore().saveSettings(parseDesktopConnectionInput(input)),
-  );
+  ipcMain.handle('connection:save-settings', (_event, input: unknown) => {
+    const settings = getSettingsStore().saveSettings(parseDesktopConnectionInput(input));
+    resetPortalClients();
+    void getPortalSupervisor().reconcile({ refreshPortalToken: true }).catch(error => console.error('[portal]', error));
+    return settings;
+  });
   ipcMain.handle('connection:test', (_event, input?: unknown) =>
     testConnection(input === undefined ? undefined : parseDesktopConnectionInput(input)),
   );
+  ipcMain.handle('portal:get-status', () => getPortalSupervisor().getStatus());
+  ipcMain.handle('portal:retry', () => handleIpcResult(async () => {
+    await getPortalSupervisor().retry();
+    return getPortalSupervisor().getStatus();
+  }));
   ipcMain.handle('shell:open-external', (_event, url: string) => openExternal(url));
   ipcMain.handle('chatgpt:connect', () => handleIpcResult(() => getChatGPTLoginBroker().connect()));
   ipcMain.handle('terminal:snapshot', () => getPortalTerminalClient().snapshot());
@@ -438,6 +456,7 @@ app.whenReady().then(() => {
 
   installAuthHeaderInjection();
   registerIpcHandlers();
+  getPortalSupervisor().startMonitoring();
   if (devAppIconPath && process.platform === 'darwin') app.dock?.setIcon(devAppIconPath);
   createWindow();
   desktopPerfSampler = startDesktopPerfSampler({
@@ -467,5 +486,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   desktopPerfSampler?.stop();
   chatGPTLoginBroker?.dispose();
-  portalTerminalClient?.dispose();
+  resetPortalClients();
+  portalSupervisor?.dispose();
 });

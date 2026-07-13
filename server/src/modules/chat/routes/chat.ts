@@ -259,6 +259,16 @@ const sanitizeSubmittedMessagesForMastra = (messages: unknown) => {
 
 const latestUserMessageOnly = (messages: unknown) => {
   if (!Array.isArray(messages) || messages.length <= 1) return messages;
+  const last = messages[messages.length - 1];
+  if (last && typeof last === 'object') {
+    const record = last as Record<string, unknown>;
+    const hasApprovalResponse = record.role === 'assistant' && Array.isArray(record.parts) &&
+      record.parts.some((part) => {
+        if (!part || typeof part !== 'object') return false;
+        return (part as Record<string, unknown>).state === 'approval-responded';
+      });
+    if (hasApprovalResponse) return [last];
+  }
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index] as Record<string, unknown> | undefined;
     if (message && typeof message === 'object' && message.role === 'user') return [message];
@@ -354,7 +364,15 @@ export const createChatRoutes = (
     handler: async (c) => {
       const resourceId = getResourceId(c);
       const threadId = c.req.param('threadId');
-      const stream = service.observeChatRun(resourceId, threadId);
+      const afterSequenceValue = Number(
+        typeof c.req.query === 'function' ? c.req.query('afterSequence') ?? 0 : 0,
+      );
+      const afterSequence = Number.isSafeInteger(afterSequenceValue) && afterSequenceValue >= 0
+        ? afterSequenceValue
+        : 0;
+      const stream = typeof service.replayChatRun === 'function'
+        ? await service.replayChatRun(resourceId, threadId, afterSequence)
+        : service.observeChatRun(resourceId, threadId);
       if (!stream) return new Response(null, { status: 204 });
 
       return toSseResponse(stream);
@@ -365,7 +383,52 @@ export const createChatRoutes = (
     handler: async (c) => {
       const resourceId = getResourceId(c);
       const threadId = c.req.param('threadId');
-      return c.json({ run: service.getChatRun(resourceId, threadId) });
+      const run = service.getChatRun(resourceId, threadId);
+      const persisted = run.status === 'idle' ? await service.getPersistedChatRun(resourceId, threadId) : undefined;
+      return c.json({ run, persisted });
+    },
+  }),
+  defineRoute('/chat/runs/:threadId/resume', {
+    method: 'POST',
+    handler: async (c) => {
+      const resourceId = getResourceId(c);
+      const threadId = c.req.param('threadId');
+      const body = await c.req.json().catch(() => ({}));
+      const persisted = await service.getPersistedChatRun(resourceId, threadId);
+      if (!persisted || (getString(body?.runId) && persisted.runId !== getString(body.runId))) {
+        return c.json({ ok: false, reason: 'stale_run' }, 409);
+      }
+      if (persisted.status === 'awaiting_approval') {
+        return c.json({ ok: false, reason: 'tool_approval_required', run: persisted }, 409);
+      }
+      return c.json({
+        ok: false,
+        reason: persisted.status === 'interrupted' ? 'safe_automatic_resume_unavailable' : 'not_interrupted',
+        run: persisted,
+      }, 409);
+    },
+  }),
+  defineRoute('/chat/runs/:threadId/tool-approvals/:toolCallId', {
+    method: 'POST',
+    handler: async (c) => {
+      const resourceId = getResourceId(c);
+      const threadId = c.req.param('threadId');
+      const toolCallId = c.req.param('toolCallId');
+      const body = await c.req.json();
+      const runId = getString(body?.runId);
+      const decision = body?.decision === 'approve' || body?.decision === 'deny' ? body.decision : undefined;
+      if (!runId || !decision) return c.json({ error: 'runId and decision are required' }, 400);
+
+      const resumed = await service.respondToToolApproval({
+        resourceId,
+        threadId,
+        runId,
+        toolCallId,
+        decision,
+        rememberForRun: body?.rememberForRun === true,
+        requestContext: c.get('requestContext'),
+      });
+      return toSseResponse(resumed.stream);
     },
   }),
   defineRoute('/chat/runs/:threadId/cancel', {
@@ -440,7 +503,13 @@ export const createChatRoutes = (
         }),
       );
 
-      if (typeof threadId === 'string' && service.hasActiveThreadRun(resourceId, threadId)) {
+      const currentRun = typeof threadId === 'string' && typeof service.getChatRun === 'function'
+        ? service.getChatRun(resourceId, threadId)
+        : undefined;
+      if (
+        typeof threadId === 'string' && service.hasActiveThreadRun(resourceId, threadId) &&
+        currentRun?.status !== 'awaiting_approval'
+      ) {
         return c.json({ error: 'thread has an active stream' }, 409);
       }
 

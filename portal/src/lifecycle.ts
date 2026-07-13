@@ -20,6 +20,13 @@ export type PortalRuntimeHealth = {
   error?: string;
 };
 
+export type PortalRuntimeIdentity = Pick<PortalRuntimeFile, 'pid' | 'startedAt' | 'controlToken'>;
+
+export type PortalRuntimeLock = {
+  path: string;
+  release: () => Promise<void>;
+};
+
 const joinPath = (...parts: string[]) => {
   const joined = parts
     .filter(Boolean)
@@ -53,6 +60,8 @@ export const getPortalConfigPath = (env?: Record<string, string | undefined>) =>
 export const getPortalRuntimePath = (env?: Record<string, string | undefined>) =>
   joinPath(resolvePortalHome(env), 'runtime.json');
 
+export const getPortalRuntimeLockPath = (runtimePath = getPortalRuntimePath()) => `${runtimePath}.lock`;
+
 export const ensureParentDir = async (path: string) => {
   const slashIndex = path.lastIndexOf('/');
   if (slashIndex <= 0) return;
@@ -81,14 +90,71 @@ export const readPortalRuntime = async (path = getPortalRuntimePath()): Promise<
 
 export const writePortalRuntime = async (path: string, runtime: PortalRuntimeFile) => {
   await ensureParentDir(path);
-  await Deno.writeTextFile(path, `${JSON.stringify(runtime, null, 2)}\n`, { mode: 0o600 });
-  await Deno.chmod(path, 0o600).catch(() => undefined);
+  const temporaryPath = `${path}.${Deno.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    await Deno.writeTextFile(temporaryPath, `${JSON.stringify(runtime, null, 2)}\n`, {
+      createNew: true,
+      mode: 0o600,
+    });
+    await Deno.chmod(temporaryPath, 0o600).catch(() => undefined);
+    await Deno.rename(temporaryPath, path);
+  } finally {
+    await Deno.remove(temporaryPath).catch((error) => {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    });
+  }
 };
 
-export const removePortalRuntime = async (path = getPortalRuntimePath()) => {
+const runtimeMatchesIdentity = (
+  runtime: PortalRuntimeFile | undefined,
+  expected: PortalRuntimeIdentity,
+) =>
+  Boolean(
+    runtime &&
+      runtime.pid === expected.pid &&
+      runtime.startedAt === expected.startedAt &&
+      runtime.controlToken === expected.controlToken,
+  );
+
+export const removePortalRuntime = async (
+  path = getPortalRuntimePath(),
+  expected?: PortalRuntimeIdentity,
+) => {
+  if (expected && !runtimeMatchesIdentity(await readPortalRuntime(path), expected)) return false;
   await Deno.remove(path).catch((error) => {
     if (!(error instanceof Deno.errors.NotFound)) throw error;
   });
+  return true;
+};
+
+export const tryAcquirePortalRuntimeLock = async (
+  runtimePath = getPortalRuntimePath(),
+): Promise<PortalRuntimeLock | undefined> => {
+  const path = getPortalRuntimeLockPath(runtimePath);
+  await ensureParentDir(path);
+  const file = await Deno.open(path, {
+    create: true,
+    read: true,
+    write: true,
+    mode: 0o600,
+  });
+  await Deno.chmod(path, 0o600).catch(() => undefined);
+  const acquired = await file.tryLock(true).catch(() => false);
+  if (!acquired) {
+    file.close();
+    return undefined;
+  }
+
+  let released = false;
+  return {
+    path,
+    release: async () => {
+      if (released) return;
+      released = true;
+      await file.unlock().catch(() => undefined);
+      file.close();
+    },
+  };
 };
 
 export const maskSecret = (value: string | undefined) => {

@@ -1,9 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import net from 'node:net';
-import os from 'node:os';
-import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
 import type {
   TerminalHostEvent,
   TerminalStartInput,
@@ -11,50 +6,12 @@ import type {
   TerminalTargetInput,
   TerminalWindowRecord,
 } from '../shared/terminal';
-import type { ConnectionSettingsStore } from './settings-store';
+import type { PortalSupervisor } from './portal-supervisor';
 
 export type TerminalWebContents = {
   id: number;
   isDestroyed: () => boolean;
   send: (channel: string, event: TerminalHostEvent) => void;
-};
-
-type PortalConfig = {
-  httpServerUrl?: string;
-  wsServerUrl?: string;
-  portalId?: string;
-  portal?: {
-    portalId?: string;
-    portalToken?: string;
-    name?: string;
-    roots?: Array<{ id: string; name: string; path: string }>;
-  };
-};
-
-type PortalTokenResponse = {
-  portalId?: string;
-  token?: string;
-};
-
-type PortalRuntimeFile = {
-  version?: number;
-  pid?: number;
-  portalId?: string;
-  configPath?: string;
-  httpServerUrl?: string;
-  wsServerUrl?: string;
-  controlHost?: string;
-  controlPort?: number;
-  controlToken?: string;
-  controlCapabilities?: string[];
-  startedAt?: string;
-  updatedAt?: string;
-};
-
-type PortalHealthBody = {
-  httpServerUrl?: string;
-  wsServerUrl?: string;
-  controlCapabilities?: unknown;
 };
 
 type LocalTerminalConnection = {
@@ -66,325 +23,23 @@ type LocalTerminalConnection = {
     resolve: (value: TerminalStartResult) => void;
     reject: (error: Error) => void;
   };
-  pendingRequests: Map<string, {
-    resolve: (value: TerminalWindowRecord[] | TerminalWindowRecord) => void;
-    reject: (error: Error) => void;
-  }>;
-};
-
-type PortalSupervisorOptions = {
-  settingsStore: ConnectionSettingsStore;
-  homePath: string;
+  pendingRequests: Map<
+    string,
+    {
+      resolve: (value: TerminalWindowRecord[] | TerminalWindowRecord) => void;
+      reject: (error: Error) => void;
+    }
+  >;
 };
 
 const terminalEventChannel = 'terminal:event';
-const defaultPortalWsPort = '4112';
-const requiredControlCapabilities = [
-  'terminal',
-  'workspace-files',
-  'workspace-files.watch',
-  'lsp',
-  'terminal.tmux-source-of-truth',
-  'terminal.tmux-control-mode',
-];
-const desktopPortalLaunchDisabledMessage =
-  'Desktop Portal auto-launch is disabled. Start Portal separately with "deno task portal:dev" or set WEAVE_PORTAL_COMMAND to opt into a custom Portal launcher.';
-
-const getAvailablePort = () => new Promise<number>((resolve, reject) => {
-  const server = net.createServer();
-  server.on('error', reject);
-  server.listen(0, '127.0.0.1', () => {
-    const address = server.address();
-    if (!address || typeof address === 'string') {
-      server.close(() => reject(new Error('Could not reserve a Portal control port.')));
-      return;
-    }
-    const { port } = address;
-    server.close(error => error ? reject(error) : resolve(port));
-  });
-});
-
-const toPortalWsUrl = (mastraUrl: string) => {
-  const explicit = process.env.WEAVE_PORTAL_WS_URL?.trim();
-  if (explicit) return explicit.replace(/\/+$/, '');
-
-  const url = new URL(mastraUrl);
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  url.port = process.env.WEAVE_PORTAL_WS_PORT ?? defaultPortalWsPort;
-  url.pathname = '';
-  url.search = '';
-  url.hash = '';
-  return url.toString().replace(/\/+$/, '');
-};
-
-const normalizeHttpUrl = (value: string) => value.replace(/\/+$/, '');
-const normalizeWsUrl = (value: string) => value.replace(/\/+$/, '');
-
-const resolvePortalHome = () => {
-  const explicit = process.env.WEAVE_PORTAL_HOME?.trim();
-  if (explicit) return explicit;
-  const configHome = process.env.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), '.config');
-  return path.join(configHome, 'weave', 'portal');
-};
-
-const readJsonFile = async <T>(filePath: string): Promise<T | undefined> => {
-  try {
-    return JSON.parse(await readFile(filePath, 'utf8')) as T;
-  } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return undefined;
-    return undefined;
-  }
-};
-
-const writeJsonFile = async (filePath: string, value: unknown) => {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-};
-
-const splitExtraArgs = (value: string | undefined) => value?.split(/\s+/).filter(Boolean) ?? [];
-
-const hasRequiredControlCapabilities = (body: PortalHealthBody | undefined) => {
-  const capabilities = body?.controlCapabilities;
-  if (!Array.isArray(capabilities)) return false;
-  return requiredControlCapabilities.every(capability => capabilities.includes(capability));
-};
-
-export class PortalSupervisor {
-  private readonly settingsStore: ConnectionSettingsStore;
-  private readonly homePath: string;
-  private readonly portalHome: string;
-  private readonly configPath: string;
-  private readonly runtimePath: string;
-  private controlHost = '127.0.0.1';
-  private controlPort?: number;
-  private controlToken?: string;
-  private process?: ChildProcess;
-  private started?: Promise<void>;
-
-  constructor(options: PortalSupervisorOptions) {
-    this.settingsStore = options.settingsStore;
-    this.homePath = options.homePath;
-    this.portalHome = resolvePortalHome();
-    this.configPath = path.join(this.portalHome, 'config.json');
-    this.runtimePath = path.join(this.portalHome, 'runtime.json');
-  }
-
-  async ensureStarted() {
-    await this.ensureStartedOnce();
-    if (!(await this.isHealthy())) {
-      this.resetControlState();
-      await this.ensureStartedOnce();
-    }
-    if (!this.controlPort || !this.controlToken) throw new Error('Portal control server is not initialized.');
-    const httpUrl = `http://${this.controlHost}:${this.controlPort}`;
-    return {
-      httpUrl,
-      url: `ws://${this.controlHost}:${this.controlPort}/terminal?token=${encodeURIComponent(this.controlToken)}`,
-      token: this.controlToken,
-    };
-  }
-
-  private async ensureStartedOnce() {
-    if (!this.started) {
-      this.started = this.start().catch(error => {
-        this.started = undefined;
-        throw error;
-      });
-    }
-    await this.started;
-  }
-
-  private resetControlState() {
-    if (this.process && this.process.exitCode === null) {
-      this.process.kill();
-    }
-    this.process = undefined;
-    this.started = undefined;
-    this.controlHost = '127.0.0.1';
-    this.controlPort = undefined;
-    this.controlToken = undefined;
-  }
-
-  private async start() {
-    const settings = this.settingsStore.getSettings();
-    const httpServerUrl = normalizeHttpUrl(settings.mastraUrl);
-    const wsServerUrl = toPortalWsUrl(httpServerUrl);
-    await this.ensurePortalConfig(httpServerUrl, wsServerUrl);
-
-    if (await this.tryAdoptRuntime(httpServerUrl, wsServerUrl)) return;
-
-    if (await this.isHealthy()) return;
-
-    this.controlHost = '127.0.0.1';
-    this.controlPort ??= await getAvailablePort();
-    this.controlToken ??= randomBytes(24).toString('hex');
-    const command = this.getPortalCommand();
-    const portalEnv = {
-      ...process.env,
-      WEAVE_PORTAL_HOME: this.portalHome,
-    };
-
-    this.process = spawn(command.file, [
-      ...command.args,
-      'daemon',
-      '--config',
-      this.configPath,
-      '--ws-server',
-      wsServerUrl,
-      '--control-host',
-      '127.0.0.1',
-      '--control-port',
-      String(this.controlPort),
-      '--control-token',
-      this.controlToken,
-    ], {
-      env: portalEnv,
-      stdio: 'ignore',
-      detached: false,
-    });
-
-    this.process.once('exit', () => {
-      this.process = undefined;
-      this.started = undefined;
-    });
-
-    await this.waitUntilHealthy();
-  }
-
-  private async ensurePortalConfig(httpServerUrl: string, wsServerUrl: string) {
-    const existing = await readJsonFile<PortalConfig>(this.configPath);
-    if (
-      existing?.httpServerUrl === httpServerUrl
-      && existing.wsServerUrl === wsServerUrl
-      && existing.portal?.portalId
-      && existing.portal.portalToken
-    ) {
-      return;
-    }
-
-    const authToken = this.settingsStore.getAuthToken();
-    if (!authToken) throw new Error('Portal requires a saved auth token before terminals can start.');
-
-    const response = await fetch(`${httpServerUrl}/portal/token`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${authToken}` },
-    });
-    if (!response.ok) throw new Error(`Portal token request failed: ${response.status} ${await response.text()}`);
-    const body = await response.json() as PortalTokenResponse;
-    if (!body.portalId || !body.token) throw new Error('Portal token response missing portalId/token.');
-
-    await writeJsonFile(this.configPath, {
-      ...existing,
-      httpServerUrl,
-      wsServerUrl,
-      portalId: body.portalId,
-      portal: {
-        ...(existing?.portal ?? {}),
-        portalId: body.portalId,
-        portalToken: body.token,
-        name: `${os.hostname()} Desktop`,
-        roots: [{ id: 'default', name: 'Home', path: this.homePath }],
-      },
-    });
-  }
-
-  private getPortalCommand() {
-    const configuredCommand = process.env.WEAVE_PORTAL_COMMAND?.trim();
-    if (!configuredCommand) throw new Error(desktopPortalLaunchDisabledMessage);
-    return {
-      file: configuredCommand,
-      args: splitExtraArgs(process.env.WEAVE_PORTAL_ARGS),
-    };
-  }
-
-  private async isHealthy() {
-    if (!this.controlPort || !this.controlToken) return false;
-    try {
-      const body = await this.getHealthBody(this.controlHost, this.controlPort, this.controlToken);
-      return hasRequiredControlCapabilities(body);
-    } catch {
-      return false;
-    }
-  }
-
-  private async getHealthBody(host: string, port: number, token: string) {
-    const response = await fetch(`http://${host}:${port}/health?token=${encodeURIComponent(token)}`);
-    if (!response.ok) return undefined;
-    return await response.json().catch(() => undefined) as PortalHealthBody | undefined;
-  }
-
-  private async shutdownRuntime(runtime: PortalRuntimeFile) {
-    if (!runtime.controlHost || !runtime.controlPort || !runtime.controlToken) return;
-    await fetch(`http://${runtime.controlHost}:${runtime.controlPort}/shutdown?token=${encodeURIComponent(runtime.controlToken)}`)
-      .catch(() => undefined);
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-
-  private async tryAdoptRuntime(httpServerUrl: string, wsServerUrl: string) {
-    const runtime = await readJsonFile<PortalRuntimeFile>(this.runtimePath);
-    if (
-      runtime?.version !== 1 ||
-      !runtime.controlHost ||
-      !runtime.controlPort ||
-      !runtime.controlToken ||
-      normalizeHttpUrl(runtime.httpServerUrl ?? '') !== httpServerUrl ||
-      normalizeWsUrl(runtime.wsServerUrl ?? '') !== wsServerUrl
-    ) {
-      return false;
-    }
-
-    try {
-      const body = await this.getHealthBody(runtime.controlHost, runtime.controlPort, runtime.controlToken);
-      if (!body) return false;
-      if (typeof body?.httpServerUrl === 'string' && normalizeHttpUrl(body.httpServerUrl) !== httpServerUrl) {
-        return false;
-      }
-      if (typeof body?.wsServerUrl === 'string' && normalizeWsUrl(body.wsServerUrl) !== wsServerUrl) {
-        return false;
-      }
-      if (!hasRequiredControlCapabilities(body)) {
-        await this.shutdownRuntime(runtime);
-        return false;
-      }
-
-      this.controlHost = runtime.controlHost;
-      this.controlPort = runtime.controlPort;
-      this.controlToken = runtime.controlToken;
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private async waitUntilHealthy() {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < 10_000) {
-      if (await this.isHealthy()) return;
-      if (this.process?.exitCode !== null) throw new Error('Portal exited before local terminal control became available.');
-      await new Promise(resolve => setTimeout(resolve, 150));
-    }
-    throw new Error('Timed out waiting for Portal local terminal control.');
-  }
-
-  getPerfSnapshot() {
-    return {
-      portalHome: this.portalHome,
-      runtimePath: this.runtimePath,
-      controlHost: this.controlHost,
-      controlPort: this.controlPort,
-      controlReady: Boolean(this.controlPort && this.controlToken),
-      processPid: this.process?.pid,
-      processExitCode: this.process?.exitCode,
-      processSignalCode: this.process?.signalCode,
-      startInFlight: Boolean(this.started),
-    };
-  }
-}
 
 export class PortalTerminalClient {
   private readonly supervisor: PortalSupervisor;
   private readonly connections = new Map<string, LocalTerminalConnection>();
+  private readonly connectionsInFlight = new Map<string, Promise<LocalTerminalConnection>>();
   private requestCounter = 0;
+  private disposed = false;
 
   constructor(supervisor: PortalSupervisor) {
     this.supervisor = supervisor;
@@ -480,6 +135,7 @@ export class PortalTerminalClient {
   }
 
   dispose() {
+    this.disposed = true;
     for (const connection of this.connections.values()) {
       connection.socket.close();
     }
@@ -492,8 +148,8 @@ export class PortalTerminalClient {
       connectionCount: connections.length,
       subscriberCount: connections.reduce((count, connection) => count + connection.subscribers.size, 0),
       pendingRequestCount: connections.reduce((count, connection) => count + connection.pendingRequests.size, 0),
-      pendingStartCount: connections.filter((connection) => Boolean(connection.pendingStart)).length,
-      connections: connections.map((connection) => ({
+      pendingStartCount: connections.filter(connection => Boolean(connection.pendingStart)).length,
+      connections: connections.map(connection => ({
         terminalId: connection.terminalId,
         readyState: connection.socket.readyState,
         bufferedAmount: connection.socket.bufferedAmount,
@@ -505,9 +161,23 @@ export class PortalTerminalClient {
   }
 
   private async getConnection(terminalId: string) {
+    if (this.disposed) throw new Error('Portal terminal client was disposed during runtime reconciliation.');
     const existing = this.connections.get(terminalId);
     if (existing && existing.socket.readyState === WebSocket.OPEN) return existing;
 
+    const inFlight = this.connectionsInFlight.get(terminalId);
+    if (inFlight) return await inFlight;
+
+    const creating = this.createConnection(terminalId);
+    this.connectionsInFlight.set(terminalId, creating);
+    try {
+      return await creating;
+    } finally {
+      if (this.connectionsInFlight.get(terminalId) === creating) this.connectionsInFlight.delete(terminalId);
+    }
+  }
+
+  private async createConnection(terminalId: string) {
     const control = await this.supervisor.ensureStarted();
     const socket = new WebSocket(control.url);
     const connection: LocalTerminalConnection = {
@@ -537,12 +207,19 @@ export class PortalTerminalClient {
       };
     });
 
+    if (this.disposed) {
+      socket.close();
+      throw new Error('Portal terminal client was disposed during runtime reconciliation.');
+    }
+
     this.connections.set(terminalId, connection);
     return connection;
   }
 
   private send(connection: LocalTerminalConnection, message: { type: string; [key: string]: unknown }) {
-    if (connection.socket.readyState !== WebSocket.OPEN) throw new Error('Portal local terminal WebSocket is not open.');
+    if (connection.socket.readyState !== WebSocket.OPEN) {
+      throw new Error('Portal local terminal WebSocket is not open.');
+    }
     connection.socket.send(JSON.stringify({ type: 'terminal.client', clientId: connection.clientId, message }));
   }
 

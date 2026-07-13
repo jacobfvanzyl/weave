@@ -1,8 +1,4 @@
-import type {
-  ProcessLLMRequestArgs,
-  ProcessLLMRequestResult,
-  Processor,
-} from '@mastra/core/processors';
+import type { ProcessLLMRequestArgs, ProcessLLMRequestResult, Processor } from '@mastra/core/processors';
 
 type PromptMessage = Record<string, unknown> & {
   role?: unknown;
@@ -18,11 +14,7 @@ const getContentParts = (message: PromptMessage): PromptPart[] =>
   Array.isArray(message.content) ? message.content.filter(isRecord) : [];
 
 const partMediaType = (part: PromptPart) =>
-  typeof part.mediaType === 'string'
-    ? part.mediaType
-    : typeof part.mimeType === 'string'
-      ? part.mimeType
-      : undefined;
+  typeof part.mediaType === 'string' ? part.mediaType : typeof part.mimeType === 'string' ? part.mimeType : undefined;
 
 const isImagePart = (part: PromptPart) => {
   if (part.type === 'image' || part.type === 'input_image') return true;
@@ -30,11 +22,30 @@ const isImagePart = (part: PromptPart) => {
   return partMediaType(part)?.startsWith('image/') ?? false;
 };
 
-const stripImageParts = (message: PromptMessage) => {
+const imageReference = (part: PromptPart) => {
+  const value = typeof part.image === 'string'
+    ? part.image
+    : typeof part.url === 'string'
+    ? part.url
+    : typeof part.data === 'string'
+    ? part.data
+    : undefined;
+  const match = value?.match(/(?:weave\.local\/attachments\/|\/attachments\/)([A-Za-z0-9_-]+)/);
+  const attachmentId = match?.[1];
+  const name = typeof part.filename === 'string' ? part.filename : 'image';
+  return {
+    type: 'text',
+    text: attachmentId
+      ? `[Image attachment ${name}; id=${attachmentId}. Call view_attachment with this id to inspect it again.]`
+      : `[Image attachment ${name} is available in the persisted thread, but has no durable attachment id.]`,
+  };
+};
+
+const replaceImagePartsWithReferences = (message: PromptMessage) => {
   const parts = getContentParts(message);
   if (!parts.some(isImagePart)) return { message, removed: false };
 
-  const content = parts.filter(part => !isImagePart(part));
+  const content = parts.map((part) => isImagePart(part) ? imageReference(part) : part);
   return {
     message: { ...message, content },
     removed: true,
@@ -71,7 +82,7 @@ export const stripHistoricalImagePrompt = (
     const shouldStripImages = index < latestUserIndex || (index === latestUserIndex && stripLatestUser);
     if (!shouldStripImages) return [message];
 
-    const result = stripImageParts(message);
+    const result = replaceImagePartsWithReferences(message);
     changed ||= result.removed;
     if (isEmptyUserMessage(result.message)) {
       changed = true;
