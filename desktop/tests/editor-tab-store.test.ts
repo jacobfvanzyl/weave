@@ -31,6 +31,7 @@ const loadFreshEditorTabStore = async (seed?: (storage: Storage) => void) => {
   vi.stubGlobal('localStorage', storage);
   vi.stubGlobal('window', { localStorage: storage });
   const module = await import('../../packages/client/src/stores/editor-tab-store');
+  await module.useEditorTabStore.persist.rehydrate();
   return { storage, ...module };
 };
 
@@ -155,12 +156,12 @@ describe('editor tab store', () => {
     const secondTargetKey = getEditorTabTargetKey('code', 'project-1', 'workspace-2');
 
     expect(useEditorTabStore.getState().explorerVisibleByTarget[firstTargetKey] ?? defaultEditorExplorerVisible)
-      .toBe(true);
+      .toBe(true,);
 
     useEditorTabStore.getState().setExplorerVisible(firstTargetKey, false);
     expect(useEditorTabStore.getState().explorerVisibleByTarget[firstTargetKey]).toBe(false);
     expect(useEditorTabStore.getState().explorerVisibleByTarget[secondTargetKey] ?? defaultEditorExplorerVisible)
-      .toBe(true);
+      .toBe(true,);
 
     const persisted = storage.getItem('weave-editor-tabs');
     expect(persisted).toBeTruthy();
@@ -179,7 +180,7 @@ describe('editor tab store', () => {
         { id: tabId('Sketch.excalidraw'), path: 'Sketch.excalidraw' },
       ],
     };
-    const { useEditorTabStore } = await loadFreshEditorTabStore(storage => {
+    const { useEditorTabStore } = await loadFreshEditorTabStore((storage) => {
       storage.setItem('weave-editor-tabs', JSON.stringify({
         state: {
           editorTabsByTarget: {
@@ -187,7 +188,7 @@ describe('editor tab store', () => {
           },
         },
         version: 0,
-      }));
+      }),);
     });
 
     const rehydratedTab = useEditorTabStore.getState().editorTabsByTarget[targetKey]?.tabs[0];
@@ -196,5 +197,41 @@ describe('editor tab store', () => {
     expect(Object.prototype.hasOwnProperty.call(rehydratedTab, 'content')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(rehydratedTab, 'version')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(rehydratedTab, 'dirty')).toBe(false);
+  });
+
+  it('persists explorer details, cells sidebar state, and document-local views per target', async () => {
+    const { storage, useEditorTabStore, getEditorTabTargetKey, getEditorDocumentViewKey } =
+      await loadFreshEditorTabStore();
+    const targetKey = getEditorTabTargetKey('notes', 'project-1', 'workspace-1');
+    const documentKey = getEditorDocumentViewKey(targetKey, 'Daily.cpr');
+
+    useEditorTabStore.getState().setExplorerTab(targetKey, 'properties');
+    useEditorTabStore.getState().setExpandedPaths(targetKey, ['', 'Journal', 'Journal/2026']);
+    useEditorTabStore.getState().setSelectedPath(targetKey, 'Journal/2026/July.md');
+    useEditorTabStore.getState().setCoppermindCellsSidebarOpen(targetKey, false);
+    useEditorTabStore.getState().setDocumentView(documentKey, {
+      kind: 'coppermind',
+      mode: 'edgeless',
+      activeSectionId: 'section-2',
+      canvas: { centerX: 10, centerY: 20, zoom: 1.5 },
+});
+
+    expect(useEditorTabStore.getState()).toMatchObject({
+      explorerTabByTarget: { [targetKey]: 'properties' },
+      expandedPathsByTarget: { [targetKey]: ['', 'Journal', 'Journal/2026'] },
+      selectedPathByTarget: { [targetKey]: 'Journal/2026/July.md' },
+      coppermindCellsSidebarOpenByTarget: { [targetKey]: false },
+      documentViewsByKey: {
+        [documentKey]: {
+          kind: 'coppermind',
+          mode: 'edgeless',
+          activeSectionId: 'section-2',
+          canvas: { centerX: 10, centerY: 20, zoom: 1.5 },
+        },
+      },
+    });
+    expect(
+      JSON.parse(storage.getItem('weave-editor-tabs') ?? '{}').state.documentViewsByKey[documentKey],
+    ).toMatchObject({ mode: 'edgeless', activeSectionId: 'section-2' });
   });
 });

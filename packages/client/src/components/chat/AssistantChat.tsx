@@ -12,23 +12,23 @@ import {
 import type { ReasoningMessagePartProps, ToolCallMessagePartProps } from '@assistant-ui/react';
 import type { ThreadMessage } from '@assistant-ui/core';
 import type { Attachment, ThreadUserMessagePart } from '@assistant-ui/core';
-import type { ChatTransport, UIMessage } from 'ai';
+import { type ChatTransport, lastAssistantMessageIsCompleteWithApprovalResponses, type UIMessage } from 'ai';
 import { useChat } from '@ai-sdk/react';
 import { AssistantChatTransport, useAISDKRuntime } from '@assistant-ui/react-ai-sdk';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Check, ChevronRight, Clipboard, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, PanelTopClose, PanelTopOpen, Plus, Search, Send, Square, SquareTerminal, X, Zap } from 'lucide-react';
-import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, ChevronRight, Clipboard, GitPullRequestArrow, ImageIcon, KeyRound, Loader2, PanelTopClose, PanelTopOpen, Plus, Search, Send, Square, SquareTerminal, X, Zap, } from 'lucide-react';
+import { createContext, isValidElement, memo, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState, } from 'react';
 import {
   cancelThreadRun,
   compactThread as requestThreadCompaction,
+  type ContextUsage,
   getThreadContextUsage,
   getThreadRunState,
   listServerMessages,
-  type ContextUsage,
   type ThreadRunState,
 } from '../../lib/chat-state-api';
 import { sendSteeringMessageToActiveRun } from '../../lib/chat-steering';
@@ -59,18 +59,21 @@ import {
   isThreadCompactionFallbackText,
   type ThreadCompactionDisplay,
 } from '../../lib/thread-compaction-display';
-import { useChatStore, type ChatThread, type ReasoningEffort, type ServiceTier } from '../../stores/chat-store';
+import {
+  type ChatThread, type ExecutionProfile, type ReasoningEffort, type ServiceTier,
+  useChatStore, } from '../../stores/chat-store';
+import { useClientSessionViewStore } from '../../stores/client-session-view-store';
 import { useWorkspaceSurfaceStore } from '../../stores/workspace-surface-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '../ui/collapsible';
 import { CommandPanel } from '../ui/command';
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubPopup, MenuSubTrigger, MenuTrigger } from '../ui/menu';
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubPopup, MenuSubTrigger, MenuTrigger, } from '../ui/menu';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../ui/tooltip';
 import { CodeBlock, getChatCodeBlockRenderMode, shouldDeferCodeFenceHighlight } from './CodeBlock';
 import {
-  getAutoCollapsedAssistantTextPartIndices,
   getAssistantContentRanges,
+  getAutoCollapsedAssistantTextPartIndices,
   getDefaultAutoCollapsedAssistantTurnIds,
   getPartType,
   getReasoningText,
@@ -88,24 +91,27 @@ import {
   isUpdatePlanTool,
   shouldRenderToolActivityChildren,
   summarizeToolActivity,
-  toToolActivityCall,
   type ToolActivityCall,
+  toToolActivityCall,
 } from './tool-activity';
 import { GuidedTaskCard } from './GuidedTaskCard';
 import { hasVisibleGuidedTask } from './guided-task-card-display';
 import { AskUserCard } from './AskUserCard';
 import {
-  buildAskUserResponseMetadata,
-  buildAskUserResponseText,
-  parseAskUserResponseMetadata,
-  parseAskUserPart,
   type AskUserPart,
   type AskUserQuestion,
   type AskUserResume,
+  buildAskUserResponseMetadata,
+  buildAskUserResponseText,
+  parseAskUserPart,
+  parseAskUserResponseMetadata,
 } from './ask-user';
-import { buildProposalImplementationUserMessage, getProposalActionDisplay, getProposalActionDisplayLabel } from './proposal-implementation';
+import { buildProposalImplementationUserMessage, getProposalActionDisplay, getProposalActionDisplayLabel, } from './proposal-implementation';
 import { getWorkedForLabel, getWorkingForLabel, withAssistantRunTimingCustomMetadata } from './turn-timing';
 import { completeImageAttachment, imageAttachmentAdapter } from '../../lib/image-attachment-adapter';
+import { getLatestPendingToolApproval, type ToolApprovalPart } from './tool-approval';
+import { ChatRenderErrorBoundary } from './ChatRenderErrorBoundary';
+import { shouldApplyPersistedMessageSnapshot } from './persisted-message-reconciliation';
 
 const ThreadIdContext = createContext<string | null>(null);
 const StopThreadRunContext = createContext<(() => Promise<void>) | null>(null);
@@ -119,6 +125,10 @@ type AskUserResponseContextValue = {
   respond: (part: AskUserPart, resume: AskUserResume) => Promise<void>;
 };
 const AskUserResponseContext = createContext<AskUserResponseContextValue | null>(null);
+const ToolApprovalResponseContext = createContext<{
+  pending: ToolApprovalPart | null;
+  respond: (part: ToolApprovalPart, approved: boolean) => Promise<void>;
+} | null>(null);
 type GuidedTaskVisibilityContextValue = {
   hasGuidedTask: boolean;
   isVisible: boolean;
@@ -212,7 +222,8 @@ const buildSteeringUserMessage = async (
     }
   }
 
-  if (parts.length === 0) throw new Error('Cannot send an empty steering message');
+  if (parts.length === 0) { throw new Error('Cannot send an empty steering message');
+  }
 
   return {
     id: crypto.randomUUID(),
@@ -223,7 +234,7 @@ const buildSteeringUserMessage = async (
 };
 
 const Reasoning = ({ text }: ReasoningMessagePartProps) => {
-  const showReasoning = useChatStore(state => state.showReasoning);
+  const showReasoning = useChatStore((state) => state.showReasoning);
   if (!showReasoning) return null;
 
   return (
@@ -234,12 +245,12 @@ const Reasoning = ({ text }: ReasoningMessagePartProps) => {
 };
 
 const ToolCall = (props: ToolCallMessagePartProps) => {
-  const showToolCalls = useChatStore(state => state.showToolCalls);
+  const showToolCalls = useChatStore((state) => state.showToolCalls);
   const cached = toolCallCache.get(props.toolCallId);
   const display = isDegradedToolCall(props) && cached ? { ...props, ...cached } : props;
   const rawStatus = display.status.type;
   const displayStatus = display.result !== undefined
-    ? (display.isError ? 'error' : 'complete')
+    ?display.isError ? 'error' : 'complete'
     : rawStatus === 'incomplete'
       ? 'running'
       : rawStatus;
@@ -269,7 +280,7 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
   return (
     <Collapsible
       open={isOpen}
-      onOpenChange={open => setIsOpen(open)}
+      onOpenChange={(open) => setIsOpen(open)}
       className="my-2 max-w-full overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-xs"
     >
       <CollapsibleTrigger className="flex min-w-0 cursor-pointer select-none items-center gap-2 font-medium text-muted-foreground">
@@ -289,7 +300,7 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
               size="xs"
               variant="ghost"
               type="button"
-              onClick={async event => {
+              onClick={async ( event) => {
                 event.preventDefault();
                 await navigator.clipboard.writeText(resultText);
                 setIsResultCopied(true);
@@ -300,7 +311,7 @@ const ToolCall = (props: ToolCallMessagePartProps) => {
               {isResultCopied ? 'Copied' : 'Copy'}
             </Button>
           </div>
-          <pre className={cn('max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-[11px] leading-4', display.isError ? 'text-destructive' : 'text-foreground')}>
+          <pre className={cn('max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-[11px] leading-4', display.isError ? 'text-destructive' : 'text-foreground',)}>
             {resultText}
           </pre>
         </CollapsiblePanel>
@@ -322,9 +333,9 @@ const cacheToolActivityCall = (call: ToolActivityCall) => {
 
 const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
   const threadId = useContext(ThreadIdContext);
-  const activeThreadId = useWorkspaceSurfaceStore(state => state.threadId);
-  const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
-  const openProposalReview = useWorkspaceSurfaceStore(state => state.openProposalReview);
+  const activeThreadId = useWorkspaceSurfaceStore((state) => state.threadId);
+  const activeSurface = useWorkspaceSurfaceStore((state) => state.activeSurface);
+  const openProposalReview = useWorkspaceSurfaceStore((state) => state.openProposalReview);
   const appliedEffectsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
@@ -349,12 +360,12 @@ const AssistantToolSideEffects = ({ message }: { message: ThreadMessage }) => {
 
           const targetThreadId = threadId ?? useWorkspaceSurfaceStore.getState().threadId;
           if (effect.type === 'renameThread') {
-            useChatStore.setState(state => ({
-              threads: state.threads.map(thread => (thread.id === targetThreadId ? { ...thread, title: effect.title } : thread)),
+            useChatStore.setState((state) => ({
+              threads: state.threads.map((thread) =>thread.id === targetThreadId ? { ...thread, title: effect.title } : thread,),
             }));
           } else if (effect.type === 'updatePlan') {
             const shouldAutoExpand = useChatStore.getState().runningThreadIds.includes(targetThreadId);
-            useChatStore.getState().setThreadPlan(targetThreadId, effect.plan, { autoExpand: shouldAutoExpand });
+            useChatStore.getState().setThreadPlan(targetThreadId, effect.plan, { autoExpand: shouldAutoExpand, });
           } else if (effect.type === 'proposal' && proposalWorkflowEnabled) {
             const shouldAutoExpand = useChatStore.getState().runningThreadIds.includes(targetThreadId);
             const proposalAccepted = useChatStore.getState().setThreadProposal(targetThreadId, effect.proposal, { autoExpand: shouldAutoExpand });
@@ -412,7 +423,7 @@ const getMessageText = (message: UIMessage) =>
     ?.filter((part): part is { type: 'text'; text: string } =>
       Boolean(part.type === 'text' && 'text' in part && typeof part.text === 'string'),
     )
-    .map(part => part.text)
+    .map((part) => part.text)
     .join('') ?? '';
 
 const withLastUserText = (messages: UIMessage[], text: string, metadata: Record<string, unknown>) => {
@@ -429,14 +440,17 @@ const withLastUserText = (messages: UIMessage[], text: string, metadata: Record<
   const message = nextMessages[index];
   nextMessages[index] = {
     ...message,
-    metadata: { ...(typeof message.metadata === 'object' && message.metadata ? message.metadata : {}), ...metadata },
-    parts: message.parts?.map(part => part.type === 'text' ? { ...part, text } : part),
+    metadata: { ...(typeof message.metadata === 'object' && message.metadata ? message.metadata : {}), ...metadata, },
+    parts: message.parts?.map((part) => ( part.type === 'text' ? { ...part, text } : part)),
   };
   return nextMessages;
 };
 
 const latestUserMessageOnly = (messages: UIMessage[]) => {
   if (messages.length <= 1) return messages;
+  if (lastAssistantMessageIsCompleteWithApprovalResponses({ messages })) {
+    return [messages[messages.length - 1]];
+  }
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index]?.role === 'user') return [messages[index]];
   }
@@ -476,15 +490,18 @@ const MarkdownImage = ({ alt, src }: { alt?: string; src?: string }) => {
 };
 
 const getMarkdownNodeText = (node: ReactNode): string => {
-  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (node === null || node === undefined || typeof node === 'boolean') { return '';
+  }
   if (typeof node === 'string' || typeof node === 'number') return String(node);
   if (Array.isArray(node)) return node.map(getMarkdownNodeText).join('');
-  if (isValidElement<{ children?: ReactNode }>(node)) return getMarkdownNodeText(node.props.children);
+  if (isValidElement<{ children?: ReactNode }>(node)) { return getMarkdownNodeText(node.props.children);
+  }
   return '';
 };
 
 const getMarkdownCodeClassName = (node: ReactNode): string | undefined => {
-  if (node === null || node === undefined || typeof node === 'boolean') return undefined;
+  if (node === null || node === undefined || typeof node === 'boolean') { return undefined;
+  }
   if (Array.isArray(node)) {
     for (const child of node) {
       const className = getMarkdownCodeClassName(child);
@@ -535,8 +552,9 @@ const MarkdownPre = ({
   const copyText = useMemo(() => getMarkdownNodeText(children).replace(/\n$/, ''), [children]);
 
   useEffect(() => () => {
-    if (resetCopiedRef.current !== null) window.clearTimeout(resetCopiedRef.current);
-  }, []);
+    if (resetCopiedRef.current !== null) { window.clearTimeout(resetCopiedRef.current);
+  }
+    }, [],);
 
   const copyCode = useCallback(async () => {
     if (!copyText) return;
@@ -545,7 +563,8 @@ const MarkdownPre = ({
     if (!didCopy) return;
 
     setIsCopied(true);
-    if (resetCopiedRef.current !== null) window.clearTimeout(resetCopiedRef.current);
+    if (resetCopiedRef.current !== null) { window.clearTimeout(resetCopiedRef.current);
+    }
     resetCopiedRef.current = window.setTimeout(() => {
       setIsCopied(false);
       resetCopiedRef.current = null;
@@ -616,15 +635,20 @@ const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string;
         h1: ({ children }) => <h1 className="mb-3 mt-5 text-2xl font-bold leading-tight first:mt-0">{children}</h1>,
         h2: ({ children }) => <h2 className="mb-3 mt-5 text-xl font-bold leading-tight first:mt-0">{children}</h2>,
         h3: ({ children }) => <h3 className="mb-2 mt-4 text-lg font-semibold leading-tight first:mt-0">{children}</h3>,
-        h4: ({ children }) => <h4 className="mb-2 mt-4 text-base font-semibold leading-tight first:mt-0">{children}</h4>,
-        p: ({ children }) => <p className="my-3 leading-[var(--weave-chat-line-height)] first:mt-0 last:mb-0">{children}</p>,
-        ul: ({ children, className }) => <ul className={cn('my-3 list-disc space-y-1 pl-6', className?.includes('contains-task-list') && 'list-none pl-0')}>{children}</ul>,
+        h4: ({ children }) => ( <h4 className="mb-2 mt-4 text-base font-semibold leading-tight first:mt-0">{children}</h4>
+        ),
+        p: ({ children }) => ( <p className="my-3 leading-[var(--weave-chat-line-height)] first:mt-0 last:mb-0">{children}</p>
+        ),
+        ul: ({ children, className }) => ( <ul className={cn('my-3 list-disc space-y-1 pl-6', className?.includes('contains-task-list') && 'list-none pl-0',)}>{children}</ul>
+        ),
         ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-6">{children}</ol>,
-        li: ({ children, className }) => <li className={cn('pl-1 leading-[var(--weave-chat-line-height)] marker:text-muted-foreground', className?.includes('task-list-item') && 'flex items-start gap-2 pl-0')}>{children}</li>,
+        li: ({ children, className }) => ( <li className={cn('pl-1 leading-[var(--weave-chat-line-height)] marker:text-muted-foreground', className?.includes('task-list-item') && 'flex items-start gap-2 pl-0',)}>{children}</li>
+        ),
         strong: ({ children }) => <strong className="font-bold text-inherit">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
         del: ({ children }) => <del className="text-muted-foreground line-through">{children}</del>,
-        a: ({ children, href }) => <a href={href} className="break-all text-primary underline underline-offset-2" target="_blank" rel="noreferrer">{children}</a>,
+        a: ({ children, href }) => ( <a href={href} className="break-all text-primary underline underline-offset-2" target="_blank" rel="noreferrer">{children}</a>
+        ),
         code: ({ children, className, node }) =>
           getChatCodeBlockRenderMode(className) !== 'plain' ? (
             <CodeBlock
@@ -647,15 +671,18 @@ const MarkdownText = memo(({ text, deferCodeHighlight = false }: { text: string;
             </MarkdownPre>
           );
         },
-        blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
-        table: ({ children }) => <div className="my-3 max-w-full overflow-x-auto"><table className="w-full border-collapse text-left text-xs">{children}</table></div>,
+        blockquote: ({ children }) => ( <blockquote className="my-3 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>
+        ),
+        table: ({ children }) => ( <div className="my-3 max-w-full overflow-x-auto"><table className="w-full border-collapse text-left text-xs">{children}</table></div>
+        ),
         thead: ({ children }) => <thead className="border-b border-border bg-muted">{children}</thead>,
         tbody: ({ children }) => <tbody className="divide-y divide-border">{children}</tbody>,
-        th: ({ children }) => <th className="border border-border px-3 py-2 font-semibold text-foreground">{children}</th>,
+        th: ({ children }) => ( <th className="border border-border px-3 py-2 font-semibold text-foreground">{children}</th>
+        ),
         td: ({ children }) => <td className="border border-border px-3 py-2 align-top">{children}</td>,
         hr: () => <hr className="my-5 border-border" />,
         img: ({ alt, src }) => <MarkdownImage alt={alt} src={src} />,
-        input: props => <input {...props} className="mt-1 h-4 w-4 shrink-0 accent-primary" readOnly />,
+        input: ( props) => <input {...props} className="mt-1 h-4 w-4 shrink-0 accent-primary" readOnly />,
       }}
     >
       {text}
@@ -678,7 +705,7 @@ const RunningIndicator = ({ startedAt }: { startedAt: string | undefined }) => {
 };
 
 const RunningIndicatorTail = ({ startedAt }: { startedAt: string | undefined }) => {
-  const isRunning = useThread(state => state.isRunning);
+  const isRunning = useThread((state) => state.isRunning);
   if (!isRunning) return null;
 
   return (
@@ -693,9 +720,9 @@ const RunningIndicatorTail = ({ startedAt }: { startedAt: string | undefined }) 
 };
 
 const getAttachmentImageUrl = (attachment: unknown) => {
-  const record = attachment && typeof attachment === 'object' ? attachment as Record<string, unknown> : {};
+  const record = attachment && typeof attachment === 'object' ? ( attachment as Record<string, unknown>) : {};
   const content = Array.isArray(record.content) ? record.content : [];
-  const firstImagePart = content.find(part => {
+  const firstImagePart = content.find((part) => {
     if (!part || typeof part !== 'object') return false;
     const partRecord = part as Record<string, unknown>;
     const mediaType = typeof partRecord.mediaType === 'string'
@@ -714,7 +741,7 @@ const getAttachmentImageUrl = (attachment: unknown) => {
 };
 
 const ImageAttachmentPreview = ({ attachment, removable = false }: { attachment: unknown; removable?: boolean }) => {
-  const record = attachment && typeof attachment === 'object' ? attachment as Record<string, unknown> : {};
+  const record = attachment && typeof attachment === 'object' ? ( attachment as Record<string, unknown>) : {};
   const file = typeof File !== 'undefined' && record.file instanceof File ? record.file : undefined;
   const [objectUrl, setObjectUrl] = useState<string | undefined>();
   const [fetchedUrl, setFetchedUrl] = useState<string | undefined>();
@@ -742,11 +769,12 @@ const ImageAttachmentPreview = ({ attachment, removable = false }: { attachment:
     let cancelled = false;
     let localUrl: string | undefined;
     void fetch(attachmentImageUrl, { headers: getAuthHeaders() })
-      .then(response => {
-        if (!response.ok) throw new Error(`Attachment fetch failed: ${response.status}`);
+      .then((response) => {
+        if (!response.ok) { throw new Error(`Attachment fetch failed: ${response.status}`);
+        }
         return response.blob();
       })
-      .then(blob => {
+      .then((blob) => {
         if (cancelled) return;
         localUrl = URL.createObjectURL(blob);
         setFetchedUrl(localUrl);
@@ -800,14 +828,15 @@ type SteeredUserMessageFile = {
 };
 
 const asObjectRecord = (value: unknown): Record<string, unknown> | undefined =>
-  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  value && typeof value === 'object' && !Array.isArray(value) ? ( value as Record<string, unknown>) : undefined;
 
-const getStringValue = (value: unknown) => typeof value === 'string' && value.length > 0 ? value : undefined;
+const getStringValue = (value: unknown) => ( typeof value === 'string' && value.length > 0 ? value : undefined);
 
 const getSteeredUserMessageData = (part: unknown) => {
   const record = asObjectRecord(part);
   if (!record) return undefined;
-  if (record.type === 'data' && record.name === 'user-message') return asObjectRecord(record.data);
+  if (record.type === 'data' && record.name === 'user-message') { return asObjectRecord(record.data);
+  }
   if (record.type === 'data-user-message') return asObjectRecord(record.data);
   return undefined;
 };
@@ -837,7 +866,8 @@ const getSteeredUserMessageContent = (part: unknown) => {
     for (const entry of data.contents) {
       const record = asObjectRecord(entry);
       if (!record) continue;
-      if (record.type === 'text' && typeof record.text === 'string') textParts.push(record.text);
+      if (record.type === 'text' && typeof record.text === 'string') { textParts.push(record.text);
+      }
       if (record.type === 'file') collectFile(record);
     }
   }
@@ -871,8 +901,9 @@ const SteeredUserMessageBoundary = ({ part }: { part: unknown }) => {
 
 const hasRenderableAssistantContent = (message: ThreadMessage, showReasoning: boolean) => {
   if (message.role !== 'assistant') return true;
-  return message.content.some(part => {
-    if (part.type === 'text' && typeof part.text === 'string') return part.text.trim().length > 0;
+  return message.content.some((part) => {
+    if (part.type === 'text' && typeof part.text === 'string') { return part.text.trim().length > 0;
+    }
     if (part.type === 'reasoning' && showReasoning && typeof part.text === 'string') return part.text.trim().length > 0;
     if (isSteeredUserMessagePart(part)) return true;
     return part.type.startsWith('tool-') || part.type === 'tool-call';
@@ -886,28 +917,28 @@ type ToolActivityGroupProps = {
 
 const ToolActivityGroup = ({ indices, children }: ToolActivityGroupProps) => {
   const message = useMessage();
-  const parts = useAuiState(state => state.message.parts);
-  const showToolCalls = useChatStore(state => state.showToolCalls);
+  const parts = useAuiState((state) => state.message.parts);
+  const showToolCalls = useChatStore((state) => state.showToolCalls);
   const firstIndex = indices[0] ?? 0;
   const groupId = `${message.id}:${firstIndex}`;
-  const storedCollapsed = useChatStore(state => state.toolActivityCollapsed[groupId]);
-  const setToolActivityCollapsed = useChatStore(state => state.setToolActivityCollapsed);
+  const storedCollapsed = useClientSessionViewStore((state) => state.toolActivityCollapsed[groupId]);
+  const setToolActivityCollapsed = useChatStore((state) => state.setToolActivityCollapsed);
 
   const calls = useMemo(
-    () => indices.map(index => toToolActivityCall(parts[index])).filter((call): call is ToolActivityCall => call !== null),
+    () => indices.map((index) => toToolActivityCall(parts[index])).filter((call): call is ToolActivityCall => call !== null),
     [indices, parts],
   );
-  const visibleCalls = useMemo(() => calls.filter(call => !isHiddenToolCall(call)), [calls]);
+  const visibleCalls = useMemo(() => calls.filter((call) => !isHiddenToolCall(call)), [calls]);
 
   if (!showToolCalls || visibleCalls.length === 0) {
     return null;
   }
 
-  const isBusy = visibleCalls.some(call => !['complete', 'error'].includes(getToolActivityStatus(call)));
+  const isBusy = visibleCalls.some((call) => !['complete', 'error'].includes(getToolActivityStatus(call)));
   const defaultCollapsed = true;
   const isCollapsed = storedCollapsed ?? defaultCollapsed;
   const summary = summarizeToolActivity(visibleCalls);
-  const SummaryIcon = visibleCalls.some(call => call.toolName === 'bash') && !visibleCalls.some(call => ['read', 'webSearch', 'webExtract'].includes(call.toolName))
+  const SummaryIcon = visibleCalls.some((call) => call.toolName === 'bash') && !visibleCalls.some((call) => ['read', 'webSearch', 'webExtract'].includes(call.toolName))
     ? SquareTerminal
     : Search;
   const renderChildren = shouldRenderToolActivityChildren(showToolCalls, visibleCalls.length, isCollapsed);
@@ -957,15 +988,15 @@ const getDedupedReasoningGroupText = (parts: readonly unknown[], indices: readon
   return sections.join('\n\n');
 };
 
-const ReasoningTextBlock = ({ text, deferCodeHighlight, className }: { text: string; deferCodeHighlight: boolean; className?: string }) => (
+const ReasoningTextBlock = ({ text, deferCodeHighlight, className, }: { text: string; deferCodeHighlight: boolean; className?: string; }) => (
   <div className={cn('min-w-0 max-w-full text-muted-foreground/80', className)}>
     <MarkdownText text={text} deferCodeHighlight={deferCodeHighlight} />
   </div>
 );
 
 const ReasoningGroup = ({ indices, deferCodeHighlight }: ReasoningGroupProps) => {
-  const parts = useAuiState(state => state.message.parts);
-  const showReasoning = useChatStore(state => state.showReasoning);
+  const parts = useAuiState((state) => state.message.parts);
+  const showReasoning = useChatStore((state) => state.showReasoning);
   const [isManuallyOpen, setIsManuallyOpen] = useState(false);
   const text = useMemo(() => getDedupedReasoningGroupText(parts, indices), [indices, parts]);
   const lastIndex = indices[indices.length - 1] ?? -1;
@@ -990,12 +1021,13 @@ const ReasoningGroup = ({ indices, deferCodeHighlight }: ReasoningGroupProps) =>
         type="button"
         className="group flex max-w-full items-center gap-2 text-left text-xs font-medium text-muted-foreground/70 transition-colors hover:text-muted-foreground"
         aria-expanded={isManuallyOpen}
-        onClick={() => setIsManuallyOpen(open => !open)}
+        onClick={() => setIsManuallyOpen((open) => !open)}
       >
         <ChevronRight size={13} className={cn('shrink-0 transition-transform', isManuallyOpen && 'rotate-90')} />
         <span>Reasoning</span>
       </button>
-      {isManuallyOpen ? <ReasoningTextBlock className="mt-2" text={text} deferCodeHighlight={deferCodeHighlight} /> : null}
+      {isManuallyOpen ? ( <ReasoningTextBlock className="mt-2" text={text} deferCodeHighlight={deferCodeHighlight} />
+      ) : null}
     </div>
   );
 };
@@ -1008,7 +1040,7 @@ const assistantPartByIndexComponents = {
 
 const ToolActivityGroupChildren = ({ indices }: { indices: readonly number[] }) => (
   <>
-    {indices.map(index => (
+    {indices.map((index) => (
       <MessagePrimitive.PartByIndex key={index} index={index} components={assistantPartByIndexComponents} />
     ))}
   </>
@@ -1047,10 +1079,10 @@ const AssistantGroupedContent = ({
   collapsedWorkLabel: string;
   onExpandCollapsedTurn: () => void;
 }) => {
-  const parts = useAuiState(state => state.message.parts);
-  const showReasoning = useChatStore(state => state.showReasoning);
+  const parts = useAuiState((state) => state.message.parts);
+  const showReasoning = useChatStore((state) => state.showReasoning);
   const autoCollapsedTextIndices = useMemo(
-    () => autoCollapsed ? getAutoCollapsedAssistantTextPartIndices(parts, showReasoning) : [],
+    () => ( autoCollapsed ? getAutoCollapsedAssistantTextPartIndices(parts, showReasoning) : []),
     [autoCollapsed, parts, showReasoning],
   );
   const ranges = useMemo(() => getAssistantContentRanges(parts, showReasoning), [parts, showReasoning]);
@@ -1059,10 +1091,11 @@ const AssistantGroupedContent = ({
     return (
       <>
         <CollapsedTurnWorkToggle label={collapsedWorkLabel} onExpand={onExpandCollapsedTurn} />
-        {autoCollapsedTextIndices.map(index => {
+        {autoCollapsedTextIndices.map((index) => {
           const part = parts[index];
           return getPartType(part) === 'text' && part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string'
-            ? <MarkdownText key={index} text={(part as { text: string }).text} deferCodeHighlight={deferCodeHighlight} />
+            ? ( <MarkdownText key={index} text={(part as { text: string }).text} deferCodeHighlight={deferCodeHighlight} />
+          )
             : null;
         })}
       </>
@@ -1071,9 +1104,10 @@ const AssistantGroupedContent = ({
 
   return (
     <>
-      {ranges.map(range => {
+      {ranges.map((range) => {
         if (range.type === 'reasoning') {
-          return <ReasoningGroup key={`reasoning-${range.indices[0] ?? 0}`} indices={range.indices} deferCodeHighlight={deferCodeHighlight} />;
+          return ( <ReasoningGroup key={`reasoning-${range.indices[0] ?? 0}`} indices={range.indices} deferCodeHighlight={deferCodeHighlight} />
+          );
         }
 
         if (range.type === 'tool-activity') {
@@ -1115,7 +1149,8 @@ const AssistantGroupedContent = ({
           return <MarkdownText key={range.index} text={text} deferCodeHighlight={deferCodeHighlight} />;
         }
 
-        return <MessagePrimitive.PartByIndex key={range.index} index={range.index} components={assistantPartByIndexComponents} />;
+        return ( <MessagePrimitive.PartByIndex key={range.index} index={range.index} components={assistantPartByIndexComponents} />
+        );
       })}
     </>
   );
@@ -1124,7 +1159,7 @@ const AssistantGroupedContent = ({
 const AssistantMessageContent = () => {
   const message = useMessage();
   const threadCompactionDisplay = getThreadCompactionDisplay(message.metadata);
-  const showReasoning = useChatStore(state => state.showReasoning);
+  const showReasoning = useChatStore((state) => state.showReasoning);
   const {
     autoCollapsedTurnIds,
     expandCollapsedTurn,
@@ -1156,9 +1191,9 @@ const AssistantMessageContent = () => {
       getAutoCollapsedAssistantTextPartIndices(message.content, showReasoning).length > 0;
     finishAssistantTurnIfFollowing(
       message.id,
-      shouldAutoCollapseFinishedTurn,
+      shouldAutoCollapseFinishedTurn
     );
-  }, [collapsedWorkLabel, finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning, message.content, message.id, message.role, message.status?.type, showReasoning]);
+  }, [collapsedWorkLabel, finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning, message.content, message.id, message.role, message.status?.type, showReasoning,]);
 
   if (isEmptyAssistantMessage) {
     return <AssistantToolSideEffects message={message} />;
@@ -1184,13 +1219,13 @@ const AssistantMessageContent = () => {
           onExpandCollapsedTurn={() => expandCollapsedTurn(message.id)}
         />
       ) : (
-        <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
+        <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall }, }} />
       )}
     </>
   );
 };
 
-const ProposalActionUserBubble = ({ kind }: { kind: 'proposal_review_feedback' | 'proposal_implementation_request' }) => {
+const ProposalActionUserBubble = ({ kind, }: { kind: 'proposal_review_feedback' | 'proposal_implementation_request'; }) => {
   const isFeedback = kind === 'proposal_review_feedback';
   const label = getProposalActionDisplayLabel({ kind });
 
@@ -1217,7 +1252,7 @@ const getThreadMessageText = (message: ThreadMessage) =>
     .filter((part): part is { type: 'text'; text: string } =>
       part.type === 'text' && 'text' in part && typeof part.text === 'string',
     )
-    .map(part => part.text)
+    .map((part) => part.text)
     .join('');
 
 const findAskUserQuestionsByToolCallId = (
@@ -1257,7 +1292,7 @@ const getAskUserResponseDisplay = (metadata: unknown, messages: readonly ThreadM
 
 const UserMessageContent = () => {
   const message = useMessage();
-  const messages = useThread(state => state.messages);
+  const messages = useThread((state) => state.messages);
   const proposalActionDisplay = getProposalActionDisplay(message.metadata, getThreadMessageText(message));
   const askUserResponseDisplay = useMemo(
     () => getAskUserResponseDisplay(message.metadata, messages),
@@ -1281,7 +1316,7 @@ const UserMessageContent = () => {
 
   return (
     <div className="chat-message-bubble min-w-0 max-w-[78%] rounded-lg border border-mauve bg-mauve px-3.5 py-2 text-[length:var(--weave-chat-text-size)] leading-[var(--weave-chat-line-height)] text-primary-foreground">
-      <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall } }} />
+      <MessagePrimitive.Content components={{ Text: MarkdownText, Reasoning, tools: { Override: ToolCall }, }} />
       <div className="mt-3 flex flex-wrap gap-2 empty:hidden">
         <MessageImageAttachments />
       </div>
@@ -1312,9 +1347,9 @@ const ThreadMessage = () => (
   </MessagePrimitive.Root>
 );
 
-type ReasoningOption = { value: ReasoningEffort; label: string; detail?: string };
+type ReasoningOption = { value: ReasoningEffort; label: string; detail?: string; };
 
-const defaultFallbackReasoningOption: ReasoningOption = { value: 'medium', label: 'Medium', detail: 'Balanced reasoning' };
+const defaultFallbackReasoningOption: ReasoningOption = { value: 'medium', label: 'Medium', detail: 'Balanced reasoning', };
 const fallbackReasoningOptions: ReasoningOption[] = [
   { value: 'low', label: 'Low', detail: 'Light reasoning' },
   defaultFallbackReasoningOption,
@@ -1338,13 +1373,13 @@ const activeModelId = (selectedModel: string, modelConfig: Awaited<ReturnType<ty
   selectedModel || modelConfig?.defaultModel || '';
 
 const activeModelOption = (modelId: string, modelOptions: ModelOption[]) =>
-  modelOptions.find(model => model.id === modelId);
+  modelOptions.find((model) => model.id === modelId);
 
 const reasoningOptionsForModel = (model: ModelOption | undefined, isLoaded: boolean): ReasoningOption[] => {
   if (!model) return isLoaded ? [] : fallbackReasoningOptions;
 
   const options = model?.supportedReasoningEfforts
-    ?.map(option => {
+    ?.map((option) => {
       const value = asReasoningEffort(option.effort);
       return value
         ? {
@@ -1375,17 +1410,19 @@ const reasoningToneClassName = (value: ReasoningEffort | undefined) => {
   }
 };
 
-const reasoningMenuLabel = (option: ReasoningOption) =>
-  option.value === 'low' ? 'Light' : option.label;
+const reasoningMenuLabel = (option: ReasoningOption) => (
+  option.value === 'low' ? 'Light' : option.label);
 
 const ModelSettingsPicker = () => {
-  const isRunning = useThread(state => state.isRunning);
-  const selectedModel = useChatStore(state => state.selectedModel);
-  const setSelectedModel = useChatStore(state => state.setSelectedModel);
-  const reasoningEffort = useChatStore(state => state.reasoningEffort);
-  const setReasoningEffort = useChatStore(state => state.setReasoningEffort);
-  const serviceTier = useChatStore(state => state.serviceTier);
-  const setServiceTier = useChatStore(state => state.setServiceTier);
+  const isRunning = useThread((state) => state.isRunning);
+  const selectedModel = useChatStore((state) => state.selectedModel);
+  const setSelectedModel = useChatStore((state) => state.setSelectedModel);
+  const reasoningEffort = useChatStore((state) => state.reasoningEffort);
+  const setReasoningEffort = useChatStore((state) => state.setReasoningEffort);
+  const serviceTier = useChatStore((state) => state.serviceTier);
+  const setServiceTier = useChatStore((state) => state.setServiceTier);
+  const executionProfile = useChatStore((state) => state.executionProfile);
+  const setExecutionProfile = useChatStore((state) => state.setExecutionProfile);
   const { data: modelConfig } = useQuery({
     queryKey: ['models'],
     queryFn: fetchModelConfig,
@@ -1396,17 +1433,17 @@ const ModelSettingsPicker = () => {
   const model = activeModelOption(activeModel, modelOptions);
   const reasoningOptions = useMemo(() => reasoningOptionsForModel(model, Boolean(modelConfig)), [model, modelConfig]);
   const defaultReasoningEffort = asReasoningEffort(model?.defaultReasoningEffort)
-    ?? reasoningOptions.find(option => option.value === 'medium')?.value
+    ?? reasoningOptions.find((option) => option.value === 'medium')?.value
     ?? reasoningOptions[0]?.value
     ?? 'medium';
-  const active = reasoningOptions.find(option => option.value === reasoningEffort)
-    ?? reasoningOptions.find(option => option.value === defaultReasoningEffort)
+  const active = reasoningOptions.find((option) => option.value === reasoningEffort)
+    ?? reasoningOptions.find((option) => option.value === defaultReasoningEffort)
     ?? reasoningOptions[0]
     ?? defaultFallbackReasoningOption;
   const activeReasoningValue = reasoningOptions.length > 0 ? active.value : undefined;
   const activeServiceTier = serviceTier ? asServiceTier(serviceTier) : undefined;
-  const priorityTier = model?.serviceTiers?.find(tier => tier.id === 'priority');
-  const supportsActiveServiceTier = Boolean(activeServiceTier && model?.serviceTiers?.some(tier => tier.id === activeServiceTier));
+  const priorityTier = model?.serviceTiers?.find((tier) => tier.id === 'priority');
+  const supportsActiveServiceTier = Boolean(activeServiceTier && model?.serviceTiers?.some((tier) => tier.id === activeServiceTier),);
   const fastEnabled = activeServiceTier === 'priority' && supportsActiveServiceTier;
   const disabled = isRunning || modelOptions.length === 0;
   const modelLabel = activeModel ? getResolvedModelDisplayName(activeModel, modelOptions) : 'Model';
@@ -1414,27 +1451,32 @@ const ModelSettingsPicker = () => {
     modelLabel,
     reasoningOptions.length > 0 ? `Reasoning: ${reasoningMenuLabel(active)}` : undefined,
     priorityTier ? `Speed: ${fastEnabled ? priorityTier.name : 'Standard'}` : undefined,
+    `Execution: ${
+      executionProfile === 'observe' ? 'Plan / observe' : executionProfile === 'host' ? 'Host' : 'Workspace'
+    }`,
   ].filter(Boolean);
 
   useEffect(() => {
-    if (!selectedModel && modelConfig?.defaultModel) setSelectedModel(modelConfig.defaultModel);
+    if (!selectedModel && modelConfig?.defaultModel) { setSelectedModel(modelConfig.defaultModel);
+    }
   }, [modelConfig?.defaultModel, selectedModel, setSelectedModel]);
 
   useEffect(() => {
-    if (reasoningOptions.length > 0 && !reasoningOptions.some(option => option.value === reasoningEffort)) {
+    if (reasoningOptions.length > 0 && !reasoningOptions.some((option) => option.value === reasoningEffort)) {
       setReasoningEffort(defaultReasoningEffort);
     }
   }, [defaultReasoningEffort, reasoningEffort, reasoningOptions, setReasoningEffort]);
 
   useEffect(() => {
-    if (activeServiceTier && modelConfig && !supportsActiveServiceTier) setServiceTier(null);
+    if (activeServiceTier && modelConfig && !supportsActiveServiceTier) { setServiceTier(null);
+    }
   }, [activeServiceTier, modelConfig, setServiceTier, supportsActiveServiceTier]);
 
   return (
     <div className="model-picker min-w-0 flex-1 sm:flex-none">
       <Menu>
         <MenuTrigger
-          render={(
+          render={
             <Button
               type="button"
               aria-label="Model, reasoning, and speed"
@@ -1448,23 +1490,22 @@ const ModelSettingsPicker = () => {
             >
               {fastEnabled ? <Zap size={16} className="shrink-0" /> : null}
               <span className="min-w-0 truncate">{modelLabel}</span>
-            </Button>
-          )}
+            </Button>}
         />
         <MenuPopup align="start" sideOffset={4} className="w-64 sm:w-72">
           {reasoningOptions.length > 0 ? (
             <>
               <MenuRadioGroup
                 value={active.value}
-                onValueChange={value => {
+                onValueChange={(value) => {
                   const next = asReasoningEffort(value);
-                  if (next && reasoningOptions.some(option => option.value === next)) {
+                  if (next && reasoningOptions.some((option) => option.value === next)) {
                     setReasoningEffort(next);
                   }
                 }}
               >
                 <MenuGroupLabel>Reasoning</MenuGroupLabel>
-                {reasoningOptions.map(option => (
+                {reasoningOptions.map((option) => (
                   <MenuRadioItem key={option.value} value={option.value} indicatorPosition="end">
                     <span className="truncate">{reasoningMenuLabel(option)}</span>
                   </MenuRadioItem>
@@ -1478,8 +1519,8 @@ const ModelSettingsPicker = () => {
               <span className="min-w-0 truncate">{modelLabel}</span>
             </MenuSubTrigger>
             <MenuSubPopup className="w-72">
-              <MenuRadioGroup value={activeModel} onValueChange={value => setSelectedModel(value)}>
-                {modelOptions.map(option => (
+              <MenuRadioGroup value={activeModel} onValueChange={(value) => setSelectedModel(value)}>
+                {modelOptions.map((option) => (
                   <MenuRadioItem key={option.id} value={option.id} indicatorPosition="end" className="min-h-10">
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate">{option.label}</span>
@@ -1496,7 +1537,7 @@ const ModelSettingsPicker = () => {
               <MenuSubPopup className="w-64">
                 <MenuRadioGroup
                   value={fastEnabled ? 'priority' : 'standard'}
-                  onValueChange={value => setServiceTier(value === 'priority' ? 'priority' : null)}
+                  onValueChange={(value) => setServiceTier(value === 'priority' ? 'priority' : null)}
                 >
                   <MenuRadioItem value="standard" indicatorPosition="end">
                     <span className="truncate">Standard</span>
@@ -1511,6 +1552,38 @@ const ModelSettingsPicker = () => {
               </MenuSubPopup>
             </MenuSub>
           ) : null}
+        <MenuSub>
+            <MenuSubTrigger>Execution</MenuSubTrigger>
+            <MenuSubPopup className="w-72">
+              <MenuRadioGroup
+                value={executionProfile}
+                onValueChange={(value) => {
+                  if (value === 'observe' || value === 'workspace' || value === 'host') {
+                    setExecutionProfile(value as ExecutionProfile);
+                  }
+                }}
+              >
+                <MenuRadioItem value="workspace" indicatorPosition="end">
+                  <span className="flex min-w-0 flex-col">
+                    <span>Workspace</span>
+                    <span className="text-xs text-muted-foreground">Sandboxed coding, no network</span>
+                  </span>
+                </MenuRadioItem>
+                <MenuRadioItem value="observe" indicatorPosition="end">
+                  <span className="flex min-w-0 flex-col">
+                    <span>Plan / observe</span>
+                    <span className="text-xs text-muted-foreground">Read-only tools, no shell or writes</span>
+                  </span>
+                </MenuRadioItem>
+                <MenuRadioItem value="host" indicatorPosition="end">
+                  <span className="flex min-w-0 flex-col">
+                    <span>Host</span>
+                    <span className="text-xs text-muted-foreground">Unrestricted; mutations require approval</span>
+                  </span>
+                </MenuRadioItem>
+              </MenuRadioGroup>
+            </MenuSubPopup>
+          </MenuSub>
         </MenuPopup>
       </Menu>
     </div>
@@ -1531,8 +1604,8 @@ type ContextUsageStreamPayload = {
   source: 'provider';
 };
 
-const finiteNumberFrom = (value: unknown) =>
-  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+const finiteNumberFrom = (value: unknown) => (
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
 const getContextUsageStreamPayload = (dataPart: unknown): ContextUsageStreamPayload | null => {
   if (!dataPart || typeof dataPart !== 'object') return null;
@@ -1540,7 +1613,7 @@ const getContextUsageStreamPayload = (dataPart: unknown): ContextUsageStreamPayl
   if (record.type !== 'data-context-usage') return null;
 
   const data = record.data && typeof record.data === 'object'
-    ? record.data as Record<string, unknown>
+    ? ( record.data as Record<string, unknown>)
     : undefined;
   const tokens = finiteNumberFrom(data?.tokens);
   if (!data || tokens === undefined || data.source !== 'provider') return null;
@@ -1567,8 +1640,8 @@ const applyContextUsageStreamPayload = (
   payload: ContextUsageStreamPayload,
 ) => {
   queryClient.setQueriesData<ContextUsage>(
-    { queryKey: ['thread-context-usage', resourceId, threadId] },
-    previous => {
+    { queryKey: ['thread-context-usage', resourceId, threadId] }, (
+    previous) => {
       if (!previous) return previous;
       const contextLimitTokens = payload.contextLimitTokens ?? previous.contextLimitTokens;
       return {
@@ -1586,13 +1659,13 @@ const applyContextUsageStreamPayload = (
         cachedInputTokens: payload.cachedInputTokens,
         outputTokens: payload.outputTokens,
       };
-    },
+    }
   );
 };
 
 const ContextUsageBar = ({ threadId }: { threadId: string | null }) => {
-  const resourceId = useChatStore(state => state.resourceId);
-  const selectedModel = useChatStore(state => state.selectedModel);
+  const resourceId = useChatStore((state) => state.resourceId);
+  const selectedModel = useChatStore((state) => state.selectedModel);
   const { data: modelConfig } = useQuery({
     queryKey: ['models'],
     queryFn: fetchModelConfig,
@@ -1651,7 +1724,7 @@ const PromptSlashMenu = ({
           key={prompt.name}
           type="button"
           variant="ghost"
-          onMouseDown={event => {
+          onMouseDown={(event) => {
             event.preventDefault();
             onSelect(prompt);
           }}
@@ -1661,7 +1734,8 @@ const PromptSlashMenu = ({
           )}
         >
           <span className="w-28 shrink-0 font-medium text-foreground">/{prompt.name}</span>
-          {prompt.argumentHint ? <span className="shrink-0 text-xs text-muted-foreground">{prompt.argumentHint}</span> : null}
+          {prompt.argumentHint ? ( <span className="shrink-0 text-xs text-muted-foreground">{prompt.argumentHint}</span>
+          ) : null}
           <span className="min-w-0 truncate">— {prompt.description}</span>
         </Button>
       ))}
@@ -1721,19 +1795,19 @@ const Composer = () => {
   const activeThreadRun = useContext(ActiveThreadRunContext);
   const guidedTaskVisibility = useContext(GuidedTaskVisibilityContext);
   const queryClient = useQueryClient();
-  const resourceId = useChatStore(state => state.resourceId);
-  const selectedModel = useChatStore(state => state.selectedModel);
+  const resourceId = useChatStore((state) => state.resourceId);
+  const selectedModel = useChatStore((state) => state.selectedModel);
   const composerRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const skippedInitialDraftWriteThreadRef = useRef<string | null>(null);
   const composerTextRef = useRef('');
-  const isEmpty = useThread(state => state.messages.length === 0 && !state.isLoading);
-  const isLocalThreadRunning = useThread(state => state.isRunning);
-  const composerText = useAuiState(state => state.composer.text);
-  const isComposerEmpty = useAuiState(state => state.composer.isEmpty);
-  const composerAttachments = useAuiState(state => state.composer.attachments);
-  const runningThreadIds = useChatStore(state => state.runningThreadIds);
-  const thread = useChatStore(state => state.threads.find(item => item.id === threadId));
+  const isEmpty = useThread((state) => state.messages.length === 0 && !state.isLoading);
+  const isLocalThreadRunning = useThread((state) => state.isRunning);
+  const composerText = useAuiState((state) => state.composer.text);
+  const isComposerEmpty = useAuiState((state) => state.composer.isEmpty);
+  const composerAttachments = useAuiState((state) => state.composer.attachments);
+  const runningThreadIds = useChatStore((state) => state.runningThreadIds);
+  const thread = useChatStore((state) => state.threads.find((item) => item.id === threadId));
   const isThreadRunning = isLocalThreadRunning || Boolean(threadId && runningThreadIds.includes(threadId));
   const isRemovedWorkspaceThread = Boolean(thread?.removedWorkspace);
   const [isSteeringSending, setIsSteeringSending] = useState(false);
@@ -1748,7 +1822,7 @@ const Composer = () => {
     [threadId, thread?.projectId, thread?.workspaceId],
   );
   const { data: prompts = [] } = useQuery({
-    queryKey: ['prompts', promptContext.threadId ?? null, promptContext.projectId ?? null, promptContext.workspaceId ?? null],
+    queryKey: ['prompts', promptContext.threadId ?? null, promptContext.projectId ?? null, promptContext.workspaceId ?? null,],
     queryFn: () => listPrompts(promptContext),
     staleTime: 1000 * 60,
   });
@@ -1768,7 +1842,7 @@ const Composer = () => {
   const canStartChatGPTLogin = canConnectChatGPT();
   const isSendActive = isChatGPTConnected && !isComposerEmpty && !isRemovedWorkspaceThread;
   const slashCommands = useMemo(() => mergeSlashCommands(prompts), [prompts]);
-  const knownPromptNames = useMemo(() => new Set(slashCommands.map(command => command.name)), [slashCommands]);
+  const knownPromptNames = useMemo(() => new Set(slashCommands.map((command) => command.name)), [slashCommands]);
   const promptMatches = slashMatch ? matchSlashCommands(slashCommands, slashMatch[1] ?? '') : [];
 
   useEffect(() => {
@@ -1865,9 +1939,9 @@ const Composer = () => {
       }
 
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId], }),
         queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId], }),
       ]);
     } catch (error) {
       abandonComposerDraftServerAck(threadId);
@@ -1877,7 +1951,7 @@ const Composer = () => {
     } finally {
       setIsSteeringSending(false);
     }
-  }, [activeThreadRun?.active, activeThreadRun?.runId, aui, composerAttachments, composerText, isSendActive, isSteeringSending, promptContext, queryClient, resourceId, threadId]);
+  }, [activeThreadRun?.active, activeThreadRun?.runId, aui, composerAttachments, composerText, isSendActive, isSteeringSending, promptContext, queryClient, resourceId, threadId,]);
 
   const runLocalCompaction = useCallback(async () => {
     if (!threadId || !activeModel || isCompacting || isThreadRunning) return;
@@ -1890,8 +1964,8 @@ const Composer = () => {
       await aui.composer().reset();
       confirmComposerDraftReceived(threadId);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
-        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId], }),
+        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId], }),
       ]);
     } catch (error) {
       saveComposerDraft(threadId, originalText);
@@ -1901,7 +1975,7 @@ const Composer = () => {
     }
   }, [activeModel, aui, composerText, isCompacting, isThreadRunning, queryClient, resourceId, threadId]);
 
-  const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = event => {
+  const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = ( event) => {
     if (event.key === 'Enter' && !event.shiftKey && /^\/compact(?:\s|$)/i.test(composerText.trim())) {
       event.preventDefault();
       void runLocalCompaction();
@@ -1911,11 +1985,11 @@ const Composer = () => {
     if (slashMatch && promptMatches.length > 0) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
-        setActiveIndex(index => (index + 1) % Math.min(promptMatches.length, 8));
+        setActiveIndex((index) => (index + 1) % Math.min(promptMatches.length, 8));
         return;
       } else if (event.key === 'ArrowUp') {
         event.preventDefault();
-        setActiveIndex(index => (index - 1 + Math.min(promptMatches.length, 8)) % Math.min(promptMatches.length, 8));
+        setActiveIndex((index) => (index - 1 + Math.min(promptMatches.length, 8)) % Math.min(promptMatches.length, 8));
         return;
       } else if (event.key === 'Tab' || event.key === 'Enter') {
         event.preventDefault();
@@ -1933,7 +2007,7 @@ const Composer = () => {
     }
   };
 
-  const handleComposerSubmit: React.FormEventHandler<HTMLFormElement> = event => {
+  const handleComposerSubmit: React.FormEventHandler<HTMLFormElement> = ( event) => {
     if (/^\/compact(?:\s|$)/i.test(composerText.trim())) {
       event.preventDefault();
       void runLocalCompaction();
@@ -1950,7 +2024,7 @@ const Composer = () => {
     setChatgptLoginError(undefined);
     try {
       await connectChatGPT();
-      await queryClient.invalidateQueries({ queryKey: ['chatgpt-auth-status'] });
+      await queryClient.invalidateQueries({ queryKey: ['chatgpt-auth-status'], });
     } catch (error) {
       setChatgptLoginError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1968,7 +2042,8 @@ const Composer = () => {
       className="relative mx-auto w-full max-w-[var(--weave-chat-content-max-width)] rounded-xl border border-border bg-card px-4 py-2 shadow-sm"
       data-weave-text-surface="true"
     >
-      {slashMatch && isChatGPTConnected ? <PromptSlashMenu matches={promptMatches} activeIndex={activeIndex} onSelect={selectPrompt} /> : null}
+      {slashMatch && isChatGPTConnected ? ( <PromptSlashMenu matches={promptMatches} activeIndex={activeIndex} onSelect={selectPrompt} />
+      ) : null}
       <div className="mb-3 flex flex-wrap gap-2 empty:hidden">
         <ComposerImageAttachments />
       </div>
@@ -1978,7 +2053,7 @@ const Composer = () => {
         placeholder={isRemovedWorkspaceThread
           ? 'Workspace removed; transcript is read-only'
           : isChatGPTConnected
-          ? (isEmpty ? emptyPlaceholder : 'Ask for follow-up changes or attach images')
+          ?isEmpty ? emptyPlaceholder : 'Ask for follow-up changes or attach images'
           : 'Connect ChatGPT to start chatting'}
         knownPromptNames={knownPromptNames}
         onKeyDown={handleKeyDown}
@@ -1990,15 +2065,14 @@ const Composer = () => {
           {isRemovedWorkspaceThread ? null : (
             <Menu>
               <MenuTrigger
-                render={(
+                render={
                   <Button
                     type="button"
                     size="icon"
                     variant="ghost"
                     className="h-9 w-9 shrink-0 text-muted-foreground hover:!bg-transparent hover:!text-muted-foreground"
                     aria-label="Open composer menu"
-                  />
-                )}
+                  />}
               >
                 <Plus size={18} strokeWidth={2.5} />
               </MenuTrigger>
@@ -2027,7 +2101,7 @@ const Composer = () => {
                     <MenuSeparator />
                     <MenuGroup>
                       <MenuGroupLabel className="px-3 py-2 text-sm font-medium">Commands</MenuGroupLabel>
-                      {slashCommands.slice(0, 8).map(command => (
+                      {slashCommands.slice(0, 8).map((command) => (
                         <MenuItem
                           key={`${command.source}:${command.name}`}
                           className="min-h-12 gap-3 rounded-md px-3 py-2"
@@ -2071,7 +2145,7 @@ const Composer = () => {
           {!isThreadRunning ? (
             isRemovedWorkspaceThread ? null : isChatGPTConnected ? (
               <ComposerPrimitive.Send
-                render={(
+                render={
                   <Button
                     size="icon-lg"
                     variant={isSendActive ? 'default' : 'ghost'}
@@ -2081,8 +2155,7 @@ const Composer = () => {
                         ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
                         : 'text-primary',
                     )}
-                  />
-                )}
+                  />}
               >
                 <Send size={20} />
               </ComposerPrimitive.Send>
@@ -2140,12 +2213,12 @@ const Composer = () => {
 const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
   const queryClient = useQueryClient();
   const wasRunning = useRef(false);
-  const resourceId = useChatStore(state => state.resourceId);
-  const isLocalRunning = useThread(state => state.isRunning);
-  const activeThreadId = useWorkspaceSurfaceStore(state => state.threadId);
-  const setThreadRunning = useChatStore(state => state.setThreadRunning);
-  const markThreadCompleted = useChatStore(state => state.markThreadCompleted);
-  const clearThreadCompleted = useChatStore(state => state.clearThreadCompleted);
+  const resourceId = useChatStore((state) => state.resourceId);
+  const isLocalRunning = useThread((state) => state.isRunning);
+  const activeThreadId = useWorkspaceSurfaceStore((state) => state.threadId);
+  const setThreadRunning = useChatStore((state) => state.setThreadRunning);
+  const markThreadCompleted = useChatStore((state) => state.markThreadCompleted);
+  const clearThreadCompleted = useChatStore((state) => state.clearThreadCompleted);
   const { data: runState } = useQuery({
     queryKey: ['thread-run', resourceId, threadId],
     queryFn: () => getThreadRunState(threadId),
@@ -2160,9 +2233,9 @@ const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
     if (wasRunning.current && !isRunning) {
       markThreadCompleted(threadId);
       void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId], }),
         queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId], }),
       ]);
     }
 
@@ -2182,10 +2255,10 @@ const ThreadRunningTracker = ({ threadId }: { threadId: string }) => {
 
 const IdleActiveThreadRefresher = ({ threadId }: { threadId: string }) => {
   const queryClient = useQueryClient();
-  const resourceId = useChatStore(state => state.resourceId);
-  const activeThreadId = useWorkspaceSurfaceStore(state => state.threadId);
-  const isLocalRunning = useThread(state => state.isRunning);
-  const composerText = useAuiState(state => state.composer.text);
+  const resourceId = useChatStore((state) => state.resourceId);
+  const activeThreadId = useWorkspaceSurfaceStore((state) => state.threadId);
+  const isLocalRunning = useThread((state) => state.isRunning);
+  const composerText = useAuiState((state) => state.composer.text);
   const [isComposerIdle, setIsComposerIdle] = useState(true);
 
   useEffect(() => {
@@ -2204,9 +2277,9 @@ const IdleActiveThreadRefresher = ({ threadId }: { threadId: string }) => {
 
     const refresh = async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId], }),
         ...(!isLocalRunning
-          ? [queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] })]
+          ? [queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId], }),]
           : []),
         queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
       ]);
@@ -2222,7 +2295,7 @@ const IdleActiveThreadRefresher = ({ threadId }: { threadId: string }) => {
 const hashString = (value: string) => {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
-    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0;
+    hash = ( Math.imul(31, hash) + value.charCodeAt(index)) | 0;
   }
   return `${value.length}:${hash.toString(36)}`;
 };
@@ -2253,7 +2326,7 @@ const getPartVersion = (part: UIMessage['parts'][number]) => {
 
 const getMessagesVersion = (messages: UIMessage[]) =>
   messages
-    .map(message => {
+    .map((message) => {
       const messageRecord = message as UIMessage & { status?: unknown };
       return [
         message.id,
@@ -2267,12 +2340,14 @@ const getMessagesVersion = (messages: UIMessage[]) =>
     .join('|');
 
 const withAssistantUiCompatibleTimingMetadata = (messages: UIMessage[]) =>
-  messages.map(message => {
+  messages.map((message) => {
     const metadata = withAssistantRunTimingCustomMetadata(message.metadata);
     return metadata === message.metadata ? message : { ...message, metadata };
   });
 
 const bottomFollowThresholdPx = 64;
+const emptyInitialMessages: UIMessage[] = [];
+const emptyExpandedAssistantTurnIds: string[] = [];
 
 const isViewportAtBottom = (element: HTMLElement) =>
   element.scrollHeight - element.scrollTop - element.clientHeight <= bottomFollowThresholdPx;
@@ -2292,7 +2367,8 @@ type ThreadViewportHandle = {
 const captureThreadViewportSnapshot = (viewport: HTMLDivElement): ThreadViewportSnapshot => {
   const viewportTop = viewport.getBoundingClientRect().top;
   const visibleMessage = Array.from(viewport.querySelectorAll<HTMLElement>('[data-message-id]'))
-    .find(element => element.getBoundingClientRect().bottom > viewportTop);
+    .find(
+    (element) => element.getBoundingClientRect().bottom > viewportTop,);
   const messageId = visibleMessage?.dataset.messageId;
 
   return {
@@ -2309,7 +2385,8 @@ const captureThreadViewportSnapshot = (viewport: HTMLDivElement): ThreadViewport
 const restoreThreadViewportSnapshot = (viewport: HTMLDivElement, snapshot: ThreadViewportSnapshot) => {
   if (snapshot.messageId && snapshot.messageOffsetTop !== undefined) {
     const message = Array.from(viewport.querySelectorAll<HTMLElement>('[data-message-id]'))
-      .find(element => element.dataset.messageId === snapshot.messageId);
+      .find(
+      (element) => element.dataset.messageId === snapshot.messageId,);
     if (message) {
       const viewportTop = viewport.getBoundingClientRect().top;
       const nextOffsetTop = message.getBoundingClientRect().top - viewportTop;
@@ -2323,7 +2400,7 @@ const restoreThreadViewportSnapshot = (viewport: HTMLDivElement, snapshot: Threa
 
 const beginThreadViewportSnapshotRestore = (
   handle: ThreadViewportHandle,
-  snapshot: ThreadViewportSnapshot,
+  snapshot: ThreadViewportSnapshot
 ) => {
   handle.cancelPendingRestore?.();
   const viewport = handle.element;
@@ -2337,12 +2414,14 @@ const beginThreadViewportSnapshotRestore = (
   const cleanup = () => {
     if (completed) return;
     completed = true;
-    if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+    if (animationFrame !== undefined) { window.cancelAnimationFrame(animationFrame);
+    }
     if (completionTimer !== undefined) window.clearTimeout(completionTimer);
     if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
     mutationObserver.disconnect();
     resizeObserver.disconnect();
-    if (handle.cancelPendingRestore === cleanup) handle.cancelPendingRestore = undefined;
+    if (handle.cancelPendingRestore === cleanup) { handle.cancelPendingRestore = undefined;
+    }
   };
 
   const restore = () => {
@@ -2351,11 +2430,13 @@ const beginThreadViewportSnapshotRestore = (
     if (
       snapshot.expectedLastMessageId &&
       !Array.from(currentViewport.querySelectorAll<HTMLElement>('[data-message-id]'))
-        .some(message => message.dataset.messageId === snapshot.expectedLastMessageId)
+        .some(
+        (message) => message.dataset.messageId === snapshot.expectedLastMessageId,)
     ) return false;
 
     restoreThreadViewportSnapshot(currentViewport, snapshot);
-    if (completionTimer === undefined) completionTimer = window.setTimeout(cleanup, 250);
+    if (completionTimer === undefined) { completionTimer = window.setTimeout(cleanup, 250);
+    }
     return true;
   };
 
@@ -2396,10 +2477,57 @@ const PendingAskUserDock = ({ part }: { part: AskUserPart }) => {
       placement="dock"
       disabled={!askUserResponse}
       onRespond={async (askPart, resumeData) => {
-        if (!askUserResponse) throw new Error('Ask response handler is not available.');
+        if (!askUserResponse) { throw new Error('Ask response handler is not available.');
+        }
         await askUserResponse.respond(askPart, resumeData);
       }}
     />
+  );
+};
+
+const PendingToolApprovalDock = ({ part }: { part: ToolApprovalPart }) => {
+  const approval = useContext(ToolApprovalResponseContext);
+  const [submitting, setSubmitting] = useState<'approve' | 'deny' | null>(null);
+  const detail = getToolChipDetail(part.toolName, part.input);
+  const respond = async (approved: boolean) => {
+    if (!approval) return;
+    setSubmitting(approved ? 'approve' : 'deny');
+    try {
+      await approval.respond(part, approved);
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  return (
+    <div className="mb-3 rounded-lg border border-warning/50 bg-warning/5 p-3 text-sm" data-weave-tool-approval>
+      <div className="font-medium text-foreground">Approve {part.toolName}?</div>
+      {detail ? <div className="mt-1 truncate text-xs text-muted-foreground">{detail}</div> : null}
+      <div className="mt-3 flex gap-2">
+        <Button type="button" size="sm" disabled={Boolean(submitting)} onClick={() => void respond(true)}>
+          {submitting === 'approve' ? (
+            <Loader2 size={13} className="mr-1 animate-spin" />
+          ) : (
+            <Check size={13} className="mr-1" />
+          )}
+          Approve
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={Boolean(submitting)}
+          onClick={() => void respond(false)}
+        >
+          {submitting === 'deny' ? (
+            <Loader2 size={13} className="mr-1 animate-spin" />
+          ) : (
+            <X size={13} className="mr-1" />
+          )}
+          Deny
+        </Button>
+      </div>
+    </div>
   );
 };
 
@@ -2413,40 +2541,111 @@ const Thread = ({
   viewportHandle: React.MutableRefObject<ThreadViewportHandle>;
 }) => {
   const threadId = useContext(ThreadIdContext);
-  const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
-  const pendingProposalImplementationRequest = useChatStore(state => threadId ? state.pendingProposalImplementationRequests[threadId] : undefined);
-  const guidedTaskPlan = useChatStore(state => threadId ? state.threadPlans[threadId] : undefined);
-  const guidedTaskProposal = useChatStore(state => threadId ? state.threadProposals[threadId] : undefined);
-  const isRunning = useThread(state => state.isRunning);
-  const messages = useThread(state => state.messages);
+  const isDraft = useChatStore((state) => state.threads.find((thread) => thread.id === threadId)?.draft === true);
+  const pendingProposalImplementationRequest = useChatStore((state) => threadId ? state.pendingProposalImplementationRequests[threadId] : undefined,);
+  const guidedTaskPlan = useChatStore((state) => ( threadId ? state.threadPlans[threadId] : undefined));
+  const guidedTaskProposal = useChatStore((state) => ( threadId ? state.threadProposals[threadId] : undefined));
+  const isRunning = useThread((state) => state.isRunning);
+  const messages = useThread((state) => state.messages);
   const pendingAskUserPart = useMemo(() => getLatestPendingAskUserPart(messages), [messages]);
+  const toolApproval = useContext(ToolApprovalResponseContext);
   const isEmptyIdleDraft = isDraft && !isRunning && messages.length === 0;
   const composerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
   const [isGuidedTaskVisible, setIsGuidedTaskVisible] = useState(true);
+  const savedViewport = useClientSessionViewStore((state) =>
+    threadId ? state.chatViewportByThread[threadId] : undefined,
+  );
+  const setSavedViewport = useClientSessionViewStore((state) => state.setChatViewport);
+  const viewportSaveTimerRef = useRef<number | undefined>(undefined);
+  const didRestoreViewportRef = useRef(false);
   const hasGuidedTask = hasVisibleGuidedTask(guidedTaskPlan, guidedTaskProposal);
 
   useEffect(() => {
     setIsGuidedTaskVisible(true);
+    didRestoreViewportRef.current = false;
   }, [threadId]);
 
   const guidedTaskVisibility = useMemo<GuidedTaskVisibilityContextValue>(() => ({
     hasGuidedTask,
     isVisible: isGuidedTaskVisible,
-    toggle: () => setIsGuidedTaskVisible(visible => !visible),
-  }), [hasGuidedTask, isGuidedTaskVisible]);
+    toggle: () => setIsGuidedTaskVisible((visible) => !visible),
+  }), [hasGuidedTask, isGuidedTaskVisible],);
 
   const setViewportRef = useCallback((element: HTMLDivElement | null) => {
     viewportRef.current = element;
     viewportHandle.current.element = element;
-  }, [viewportHandle]);
+  }, [viewportHandle],
+  );
+
+  const persistViewport = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !threadId) return;
+    const snapshot = captureThreadViewportSnapshot(viewport);
+    setSavedViewport(threadId, {
+      messageId: snapshot.messageId,
+      topOffset: snapshot.messageOffsetTop ?? snapshot.scrollTop,
+      followBottom: isViewportAtBottom(viewport),
+    });
+  }, [setSavedViewport, threadId]);
 
   const updateBottomFollowState = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
     setIsFollowingBottom(isViewportAtBottom(viewport));
-  }, [setIsFollowingBottom]);
+    if (viewportSaveTimerRef.current !== undefined) {
+      window.clearTimeout(viewportSaveTimerRef.current);
+    }
+    viewportSaveTimerRef.current = window.setTimeout(() => {
+      viewportSaveTimerRef.current = undefined;
+      persistViewport();
+    }, 250);
+  }, [persistViewport,setIsFollowingBottom]);
+
+  useEffect(() => {
+    if (didRestoreViewportRef.current || !savedViewport || !viewportRef.current) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      if (savedViewport.followBottom) {
+        viewport.scrollTop = viewport.scrollHeight;
+      } else if (savedViewport.messageId) {
+        const message = Array.from(viewport.querySelectorAll<HTMLElement>('[data-message-id]')).find(
+          (element) => element.dataset.messageId === savedViewport.messageId,
+        );
+        if (message) {
+          viewport.scrollTop +=
+            message.getBoundingClientRect().top - viewport.getBoundingClientRect().top - savedViewport.topOffset;
+        } else {
+          viewport.scrollTop = viewport.scrollHeight;
+        }
+      }
+      didRestoreViewportRef.current = true;
+      setIsFollowingBottom(isViewportAtBottom(viewport));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, savedViewport, setIsFollowingBottom]);
+
+  useEffect(() => {
+    const flushViewport = () => {
+      if (viewportSaveTimerRef.current !== undefined) {
+        window.clearTimeout(viewportSaveTimerRef.current);
+        viewportSaveTimerRef.current = undefined;
+      }
+      persistViewport();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushViewport();
+    };
+    window.addEventListener('pagehide', flushViewport);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', flushViewport);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      flushViewport();
+    };
+  }, [persistViewport]);
 
   useEffect(() => {
     const composer = composerRef.current;
@@ -2468,7 +2667,8 @@ const Thread = ({
 
   useEffect(() => {
     if (!proposalWorkflowEnabled) return undefined;
-    if (pendingProposalImplementationRequest?.mode !== 'implement') return undefined;
+    if (pendingProposalImplementationRequest?.mode !== 'implement') { return undefined;
+    }
     setIsFollowingBottom(true);
     let secondFrame: number | undefined;
     const firstFrame = window.requestAnimationFrame(() => {
@@ -2490,7 +2690,7 @@ const Thread = ({
       <ThreadAutoCollapseContext.Provider value={autoCollapseContext}>
         <ThreadPrimitive.Root
           className={cn('flex h-full flex-col bg-background', isEmptyIdleDraft && 'justify-center')}
-          style={{ '--composer-height': `${composerHeight}px` } as React.CSSProperties}
+          style={{ '--composer-height': `${composerHeight}px`, } as React.CSSProperties}
         >
           <ThreadPrimitive.Viewport
             ref={setViewportRef}
@@ -2498,16 +2698,20 @@ const Thread = ({
             data-weave-thread-viewport
             onScroll={updateBottomFollowState}
           >
-            <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage }} />
+            <ThreadPrimitive.Messages components={{ UserMessage: ThreadMessage, AssistantMessage: ThreadMessage, }} />
             <RunningIndicatorTail startedAt={activeRunStartedAt} />
           </ThreadPrimitive.Viewport>
           <div
             ref={composerRef}
-            className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4')}
+            className={cn('shrink-0 bg-background p-4 pb-[calc(1rem+var(--weave-safe-area-bottom))]', isEmptyIdleDraft && 'w-full pb-4',)}
             data-weave-composer-dock
           >
             {threadId && isGuidedTaskVisible ? <GuidedTaskCard threadId={threadId} /> : null}
-            {pendingAskUserPart ? <PendingAskUserDock key={pendingAskUserPart.toolCallId} part={pendingAskUserPart} /> : null}
+            {pendingAskUserPart ? ( <PendingAskUserDock key={pendingAskUserPart.toolCallId} part={pendingAskUserPart} />
+            ) : null}
+            {toolApproval?.pending ? (
+              <PendingToolApprovalDock key={toolApproval.pending.approvalId} part={toolApproval.pending} />
+            ) : null}
             <Composer />
           </div>
         </ThreadPrimitive.Root>
@@ -2548,13 +2752,15 @@ const AssistantChatRuntime = ({
   setIsFollowingBottom,
 }: AssistantChatProps & { initialMessages: UIMessage[] } & AutoCollapsedTurnStateProps) => {
   const queryClient = useQueryClient();
-  const resourceId = useChatStore(state => state.resourceId);
-  const selectedModel = useChatStore(state => state.selectedModel);
-  const reasoningEffort = useChatStore(state => state.reasoningEffort);
-  const serviceTier = useChatStore(state => state.serviceTier);
-  const pendingProposalImplementationRequest = useChatStore(state => state.pendingProposalImplementationRequests[threadId]);
-  const consumeProposalImplementationRequest = useChatStore(state => state.consumeProposalImplementationRequest);
-  const markThreadCompleted = useChatStore(state => state.markThreadCompleted);
+  const resourceId = useChatStore((state) => state.resourceId);
+  const selectedModel = useChatStore((state) => state.selectedModel);
+  const reasoningEffort = useChatStore((state) => state.reasoningEffort);
+  const serviceTier = useChatStore((state) => state.serviceTier);
+  const executionProfile = useChatStore((state) => state.executionProfile);
+  const pendingProposalImplementationRequest = useChatStore(
+    (state) => state.pendingProposalImplementationRequests[threadId],);
+  const consumeProposalImplementationRequest = useChatStore((state) => state.consumeProposalImplementationRequest);
+  const markThreadCompleted = useChatStore((state) => state.markThreadCompleted);
   const chatApi = getChatUrl();
   const resumeRunIdRef = useRef<string | undefined>(undefined);
   const pendingAskUserResumeRef = useRef<PendingAskUserResume | undefined>(undefined);
@@ -2568,7 +2774,7 @@ const AssistantChatRuntime = ({
   const modelOptions = modelConfig?.options ?? [];
   const activeModel = activeModelId(selectedModel, modelConfig);
   const model = activeModelOption(activeModel, modelOptions);
-  const requestServiceTier = serviceTier && model?.serviceTiers?.some(tier => tier.id === serviceTier) ? serviceTier : null;
+  const requestServiceTier = serviceTier && model?.serviceTiers?.some((tier) => tier.id === serviceTier) ? serviceTier : null;
   const { data: runState } = useQuery({
     queryKey: ['thread-run', resourceId, threadId],
     queryFn: () => getThreadRunState(threadId),
@@ -2596,13 +2802,14 @@ const AssistantChatRuntime = ({
         },
         async prepareSendMessagesRequest({ messages }) {
           const askResume = pendingAskUserResumeRef.current;
-          const firstUserText = messages.find(message => message.role === 'user') ? getMessageText(messages.find(message => message.role === 'user')!).trim() : '';
-          const lastUserText = getMessageText([...messages].reverse().find(message => message.role === 'user') ?? messages[messages.length - 1]).trim();
+          const firstUserText = messages.find((message) => message.role === 'user') ? getMessageText(messages.find((message) => message.role === 'user')!).trim() : '';
+          const lastUserText = getMessageText([...messages].reverse().find((message) => message.role === 'user') ?? messages[messages.length - 1],).trim();
           const slashCommand = parseSlashCommand(lastUserText);
           const threadTitle = firstUserText?.slice(0, 64);
-          const threadBeforePersist = useChatStore.getState().threads.find(thread => thread.id === threadId);
+          const threadBeforePersist = useChatStore.getState().threads.find((thread) => thread.id === threadId);
           const promptContext = promptContextForThread(threadId, threadBeforePersist);
-          if (!askResume) markComposerDraftAwaitingServerAck(threadId, lastUserText);
+          if (!askResume) { markComposerDraftAwaitingServerAck(threadId, lastUserText);
+          }
           await useChatStore.getState().ensureThreadPersisted(threadId, threadTitle);
           useChatStore.getState().touchThread(threadId, threadTitle, true);
 
@@ -2617,6 +2824,7 @@ const AssistantChatRuntime = ({
             messages: latestUserMessageOnly(requestMessages),
             ...(selectedModel ? { model: selectedModel } : {}),
             reasoningEffort,
+            executionProfile,
             ...(requestServiceTier ? { serviceTier: requestServiceTier } : {}),
             memory: {
               thread: threadId,
@@ -2637,7 +2845,7 @@ const AssistantChatRuntime = ({
           };
         },
       }),
-    [chatApi, reasoningEffort, requestServiceTier, selectedModel, threadId],
+    [chatApi, executionProfile, reasoningEffort, requestServiceTier, selectedModel, threadId],
   );
   const transport = useDynamicChatTransport(currentTransport);
   const assistantUiInitialMessages = useMemo(
@@ -2650,8 +2858,9 @@ const AssistantChatRuntime = ({
     transport,
     messages: assistantUiInitialMessages,
     resume: true,
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
     experimental_throttle: 80,
-    onData: dataPart => {
+    onData: ( dataPart) => {
       const payload = getContextUsageStreamPayload(dataPart);
       if (payload) {
         applyContextUsageStreamPayload(queryClient, resourceId, threadId, payload);
@@ -2661,21 +2870,22 @@ const AssistantChatRuntime = ({
         dataPart && typeof dataPart === 'object' &&
         (dataPart as Record<string, unknown>).type === 'data-thread-compaction'
       ) {
-        void queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] });
+        void queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId], });
       }
     },
     onFinish: async () => {
       markThreadCompleted(threadId);
-      await queryClient.invalidateQueries({ queryKey: ['threads', resourceId] });
-      await queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] });
-      await queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] });
-      await queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] });
+      await queryClient.invalidateQueries({ queryKey: ['threads', resourceId], });
+      await queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId], });
+      await queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId], });
+      await queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId], });
     },
-    onError: async error => {
+    onError: async ( error) => {
       console.error('[chat] stream failed', error);
-      await queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] });
+      await queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId], });
     },
   });
+  const pendingToolApproval = useMemo(() => getLatestPendingToolApproval(chat.messages), [chat.messages]);
   const persistedMessagesVersion = useMemo(
     () => getMessagesVersion(assistantUiInitialMessages),
     [assistantUiInitialMessages],
@@ -2685,6 +2895,7 @@ const AssistantChatRuntime = ({
   useEffect(() => {
     if (chat.status === 'submitted' || chat.status === 'streaming') return;
     if (appliedPersistedMessagesVersionRef.current === persistedMessagesVersion) return;
+    if (!shouldApplyPersistedMessageSnapshot(chat.messages, assistantUiInitialMessages)) return;
 
     const viewport = viewportHandle.current.element;
     if (viewport && !isViewportAtBottom(viewport)) {
@@ -2711,10 +2922,10 @@ const AssistantChatRuntime = ({
     } finally {
       chat.stop();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId] }),
-        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId], }),
+        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId], }),
         queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
-        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId] }),
+        queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId], }),
       ]);
     }
   }, [chat, queryClient, resourceId, runState?.runId, threadId]);
@@ -2737,13 +2948,25 @@ const AssistantChatRuntime = ({
       }
       throw error;
     }
-  }, [chat]);
+  }, [chat],
+  );
+
+  const respondToToolApproval = useCallback(
+    async (part: ToolApprovalPart, approved: boolean) => {
+      await chat.addToolApprovalResponse({
+        id: part.approvalId,
+        approved,
+        options: { headers: getAuthHeaders() },
+      });
+    },
+    [chat],);
 
   const runtime = useAISDKRuntime(chat, {
     adapters: { attachments: imageAttachmentAdapter },
   });
 
-  if (transport instanceof AssistantChatTransport) transport.setRuntime(runtime);
+  if (transport instanceof AssistantChatTransport) { transport.setRuntime(runtime);
+  }
 
   useEffect(() => {
     return () => viewportHandle.current.cancelPendingRestore?.();
@@ -2759,7 +2982,7 @@ const AssistantChatRuntime = ({
     sendingProposalImplementationRequestRef.current = request.id;
     void chat.sendMessage(buildProposalImplementationUserMessage(request)).then(() => {
       consumeProposalImplementationRequest(threadId, request.id);
-    }).catch(error => {
+    }).catch((error) => {
       console.error('[chat] failed to start proposal implementation', error);
     }).finally(() => {
       if (sendingProposalImplementationRequestRef.current === request.id) {
@@ -2778,7 +3001,7 @@ const AssistantChatRuntime = ({
     if (chat.status !== 'ready' || resumeRunIdRef.current === runId) return;
 
     resumeRunIdRef.current = runId;
-    void chat.resumeStream().catch(error => {
+    void chat.resumeStream().catch((error) => {
       resumeRunIdRef.current = undefined;
       console.error('[chat] failed to resume active thread run', error);
     });
@@ -2789,7 +3012,13 @@ const AssistantChatRuntime = ({
       <StopThreadRunContext.Provider value={stopActiveThreadRun}>
         <ActiveThreadRunContext.Provider value={runState}>
           <AskUserResponseContext.Provider value={{ respond: respondToAskUser }}>
-            <ThreadIdContext.Provider value={threadId}>
+            <ToolApprovalResponseContext.Provider
+              value={{
+                pending: pendingToolApproval,
+                respond: respondToToolApproval,
+              }}
+            >
+              <ThreadIdContext.Provider value={threadId}>
               <ThreadRunningTracker threadId={threadId} />
               <IdleActiveThreadRefresher threadId={threadId} />
               <Thread
@@ -2799,6 +3028,7 @@ const AssistantChatRuntime = ({
                 viewportHandle={viewportHandle}
               />
             </ThreadIdContext.Provider>
+          </ToolApprovalResponseContext.Provider>
           </AskUserResponseContext.Provider>
         </ActiveThreadRunContext.Provider>
       </StopThreadRunContext.Provider>
@@ -2807,32 +3037,52 @@ const AssistantChatRuntime = ({
 };
 
 export const AssistantChat = ({ threadId }: AssistantChatProps) => {
-  const resourceId = useChatStore(state => state.resourceId);
-  const isDraft = useChatStore(state => state.threads.find(thread => thread.id === threadId)?.draft === true);
-  const isRunning = useChatStore(state => state.runningThreadIds.includes(threadId));
-  const showReasoning = useChatStore(state => state.showReasoning);
+  const resourceId = useChatStore((state) => state.resourceId);
+  const isDraft = useChatStore((state) => state.threads.find((thread) => thread.id === threadId)?.draft === true);
+  const isRunning = useChatStore((state) => state.runningThreadIds.includes(threadId));
+  const showReasoning = useChatStore((state) => state.showReasoning);
+  const persistedExpandedAssistantTurnIds = useClientSessionViewStore(
+    (state) => state.expandedAssistantTurnIdsByThread[threadId] ?? emptyExpandedAssistantTurnIds,
+  );
+  const setPersistedExpandedAssistantTurnIds = useClientSessionViewStore((state) => state.setExpandedAssistantTurnIds);
   const [autoCollapsedTurnIds, setAutoCollapsedTurnIds] = useState<AutoCollapsedTurnIds>({});
-  const [expandedAutoCollapsedTurnIds, setExpandedAutoCollapsedTurnIds] = useState<AutoCollapsedTurnIds>({});
+  const [expandedAutoCollapsedTurnIds, setExpandedAutoCollapsedTurnIds] = useState<AutoCollapsedTurnIds>(() =>
+    Object.fromEntries(persistedExpandedAssistantTurnIds.map((id) => [id, true])),);
   const [liveAssistantTurnIds, setLiveAssistantTurnIds] = useState<AutoCollapsedTurnIds>({});
   const isFollowingBottomRef = useRef(true);
   const initialPersistedAutoCollapsedTurnIdsRef = useRef<AutoCollapsedTurnIds | null>(null);
-  const { data: initialMessages = [], isLoading } = useQuery({
+  const { data: queriedInitialMessages, isLoading } = useQuery({
     queryKey: ['thread-messages', resourceId, threadId],
     queryFn: () => listServerMessages(threadId),
     enabled: !isDraft,
     staleTime: 0,
   });
+  const initialMessages = queriedInitialMessages ?? emptyInitialMessages;
 
   useEffect(() => {
     setAutoCollapsedTurnIds({});
-    setExpandedAutoCollapsedTurnIds({});
+    setExpandedAutoCollapsedTurnIds(Object.fromEntries(persistedExpandedAssistantTurnIds.map((id) => [id, true])));
     setLiveAssistantTurnIds({});
     isFollowingBottomRef.current = true;
     initialPersistedAutoCollapsedTurnIdsRef.current = null;
   }, [threadId]);
 
+  useEffect(() => {
+    if (isLoading) return;
+    const messageIds = new Set(initialMessages.map((message) => message.id));
+    const validExpandedIds = persistedExpandedAssistantTurnIds.filter((id) => messageIds.has(id));
+    setPersistedExpandedAssistantTurnIds(threadId, validExpandedIds);
+    setExpandedAutoCollapsedTurnIds((current) => {
+      const currentIds = Object.keys(current);
+      if (currentIds.length === validExpandedIds.length && currentIds.every((id) => validExpandedIds.includes(id))) {
+        return current;
+      }
+      return Object.fromEntries(validExpandedIds.map((id) => [id, true]));
+    });
+  }, [initialMessages, isLoading, persistedExpandedAssistantTurnIds, setPersistedExpandedAssistantTurnIds,threadId]);
+
   if (!isDraft && !isLoading && initialPersistedAutoCollapsedTurnIdsRef.current === null) {
-    initialPersistedAutoCollapsedTurnIdsRef.current = getDefaultAutoCollapsedAssistantTurnIds(initialMessages, showReasoning);
+    initialPersistedAutoCollapsedTurnIdsRef.current = getDefaultAutoCollapsedAssistantTurnIds(initialMessages, showReasoning,);
   }
 
   const setIsFollowingBottom = useCallback((value: boolean) => {
@@ -2840,11 +3090,11 @@ export const AssistantChat = ({ threadId }: AssistantChatProps) => {
   }, []);
 
   const markAssistantTurnRunning = useCallback((messageId: string) => {
-    setLiveAssistantTurnIds(previous => previous[messageId] ? previous : { ...previous, [messageId]: true });
+    setLiveAssistantTurnIds((previous) => ( previous[messageId] ? previous : { ...previous, [messageId]: true }));
   }, []);
 
   const finishAssistantTurnIfFollowing = useCallback((messageId: string, shouldCollapse: boolean) => {
-    setLiveAssistantTurnIds(previous => {
+    setLiveAssistantTurnIds((previous) => {
       if (!previous[messageId]) return previous;
       const next = { ...previous };
       delete next[messageId];
@@ -2853,33 +3103,39 @@ export const AssistantChat = ({ threadId }: AssistantChatProps) => {
 
     if (!shouldCollapse) return;
     if (!isFollowingBottomRef.current) {
-      setExpandedAutoCollapsedTurnIds(previous => previous[messageId] ? previous : { ...previous, [messageId]: true });
+      setExpandedAutoCollapsedTurnIds((previous) => previous[messageId] ? previous : { ...previous, [messageId]: true },);
       return;
     }
-    setExpandedAutoCollapsedTurnIds(previous => {
+    setExpandedAutoCollapsedTurnIds((previous) => {
       if (!previous[messageId]) return previous;
       const next = { ...previous };
       delete next[messageId];
       return next;
     });
-    setAutoCollapsedTurnIds(previous => previous[messageId] ? previous : { ...previous, [messageId]: true });
+    setAutoCollapsedTurnIds((previous) => ( previous[messageId] ? previous : { ...previous, [messageId]: true }));
   }, []);
 
   const expandCollapsedTurn = useCallback((messageId: string) => {
-    setExpandedAutoCollapsedTurnIds(previous => previous[messageId] ? previous : { ...previous, [messageId]: true });
-    setAutoCollapsedTurnIds(previous => {
+    setExpandedAutoCollapsedTurnIds((previous) => {
+        if ( previous[messageId]) return previous;
+        const next : AutoCollapsedTurnIds = { ...previous, [messageId]: true };
+        setPersistedExpandedAssistantTurnIds(threadId, Object.keys(next));
+        return next;
+      });
+    setAutoCollapsedTurnIds((previous) => {
       if (!previous[messageId]) return previous;
       const next = { ...previous };
       delete next[messageId];
       return next;
     });
-  }, []);
+  }, [setPersistedExpandedAssistantTurnIds, threadId],);
 
   const effectiveAutoCollapsedTurnIds: AutoCollapsedTurnIds = {
     ...(initialPersistedAutoCollapsedTurnIdsRef.current ?? {}),
     ...autoCollapsedTurnIds,
   };
-  for (const id of Object.keys(expandedAutoCollapsedTurnIds)) delete effectiveAutoCollapsedTurnIds[id];
+  for (const id of Object.keys(expandedAutoCollapsedTurnIds)) { delete effectiveAutoCollapsedTurnIds[id];
+  }
 
   const autoCollapseContext = useMemo<ThreadAutoCollapseContextValue>(
     () => ({
@@ -2889,12 +3145,14 @@ export const AssistantChat = ({ threadId }: AssistantChatProps) => {
       liveAssistantTurnIds,
       markAssistantTurnRunning,
     }),
-    [effectiveAutoCollapsedTurnIds, expandCollapsedTurn, finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning],
+    [effectiveAutoCollapsedTurnIds, expandCollapsedTurn, finishAssistantTurnIfFollowing, liveAssistantTurnIds, markAssistantTurnRunning,],
   );
 
-  if (!isDraft && isLoading && !isRunning) return <div className="h-full bg-background" />;
+  if (!isDraft && isLoading && !isRunning) { return <div className="h-full bg-background" />;
+  }
 
   return (
+    <ChatRenderErrorBoundary resetKey={`${threadId}:${getMessagesVersion(initialMessages)}`}>
     <AssistantChatRuntime
       key={threadId}
       threadId={threadId}
@@ -2902,5 +3160,6 @@ export const AssistantChat = ({ threadId }: AssistantChatProps) => {
       autoCollapseContext={autoCollapseContext}
       setIsFollowingBottom={setIsFollowingBottom}
     />
+    </ChatRenderErrorBoundary>
   );
 };

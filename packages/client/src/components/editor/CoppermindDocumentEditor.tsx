@@ -131,7 +131,11 @@ import {
   coppermindPageCellPaddingPx,
   coppermindPageEndScrollPaddingPx,
 } from "../../lib/coppermind-layout";
-import { getClientAppStorageItem, setClientAppStorageItem } from "../../lib/client-app";
+import {
+  getClientAppStorageItem,
+  getClientAppStorageKey,
+} from "../../lib/client-app";
+import { claimLegacyClientSessionValue } from "../../lib/client-session";
 import { cn } from "../../lib/cn";
 import type { EditorTarget } from "../../lib/editor-types";
 import {
@@ -150,7 +154,15 @@ export type CoppermindDocumentEditorProps = {
   path?: string;
   target?: EditorTarget;
   value: string;
+  viewState?: CoppermindLocalViewState;
   onChange: (value: string) => void;
+  onViewStateChange?: (viewState: CoppermindLocalViewState) => void;
+};
+
+export type CoppermindLocalViewState = {
+  mode: CoppermindDocMode;
+  activeSectionId?: string;
+  canvas?: { centerX: number; centerY: number; zoom: number };
 };
 
 export type CoppermindDocumentEditorHandle = {
@@ -673,8 +685,8 @@ const coppermindBlockSuiteStyles = `
 
 `;
 
-const getElementFromNode = (node: Node | null) => (
-  node instanceof Element ? node : node?.parentElement ?? null
+const getElementFromNode = (node: Node | null,) => (
+  node instanceof Element ? node : ( node?.parentElement ?? null)
 );
 
 const getClosestSectionElement = (
@@ -685,11 +697,10 @@ const getClosestSectionElement = (
   return note && root.contains(note) ? note : undefined;
 };
 
-const getBlockElementId = (element: CoppermindBlockElement | undefined) => (
+const getBlockElementId = (element: CoppermindBlockElement | undefined) =>
   element?.dataset.blockId ??
     element?.getAttribute("data-block-id") ??
-    element?.model?.id
-);
+    element?.model?.id;
 
 let blockSuiteElementsRegistered = false;
 
@@ -717,15 +728,14 @@ const registerBlockSuiteElements = () => {
   blockSuiteElementsRegistered = true;
 };
 
-const normalizeMode = (mode: unknown): CoppermindEditorMode => (
+const normalizeMode = (mode: unknown,): CoppermindEditorMode => (
   mode === "edgeless" ? "edgeless" : "page"
 );
 
-const getErrorMessage = (error: unknown) => (
+const getErrorMessage = (error: unknown) =>
   error instanceof Error
     ? error.message
-    : "Unable to open this Coppermind document."
-);
+    : "Unable to open this Coppermind document.";
 
 const normalizeCanvasToolId = (
   toolType: string | undefined,
@@ -756,8 +766,8 @@ const shapeStrokeFromFill = (fillColor: string) => {
 
 const coppermindSectionDragDataType = "application/x-coppermind-section-id";
 
-const isSectionDragEvent = (event: DragEvent<HTMLElement>) => (
-  Array.from(event.dataTransfer.types).includes(coppermindSectionDragDataType)
+const isSectionDragEvent = (event: DragEvent<HTMLElement>) =>
+  Array.from(event.dataTransfer.types).includes(coppermindSectionDragDataType
 );
 
 type CoppermindInkStackGroup = {
@@ -765,9 +775,8 @@ type CoppermindInkStackGroup = {
   stacked: boolean;
 };
 
-const isStackableInkSection = (section: CoppermindBlockSuiteSection) => (
-  section.kind === "ink" && section.stackState !== "unstacked"
-);
+const isStackableInkSection = (section: CoppermindBlockSuiteSection) =>
+  section.kind === "ink" && section.stackState !== "unstacked";
 
 const getInkRuns = (sections: CoppermindBlockSuiteSection[]) => {
   const groups: CoppermindInkStackGroup[] = [];
@@ -798,13 +807,12 @@ const getInkRuns = (sections: CoppermindBlockSuiteSection[]) => {
 const findInkRunForSection = (
   sections: CoppermindBlockSuiteSection[],
   sectionId: string | undefined,
-) => (
+) =>
   sectionId
     ? getInkRuns(sections).find((group) =>
       group.sections.some((section) => section.id === sectionId)
     )
-    : undefined
-);
+    : undefined;
 
 const findStackedInkRunForSection = (
   sections: CoppermindBlockSuiteSection[],
@@ -914,11 +922,10 @@ const createCanvasApi = (
     selection?.clear?.();
     selection?.clearLast?.();
   };
-  const clampZoom = (zoom: number, viewport: CoppermindCanvasViewport) => (
+  const clampZoom = (zoom: number, viewport: CoppermindCanvasViewport) =>
     Math.min(
       viewport.ZOOM_MAX ?? canvasZoomMax,
       Math.max(viewport.ZOOM_MIN ?? canvasZoomMin, zoom),
-    )
   );
   const getCenter = (viewport: CoppermindCanvasViewport): [number, number] => [
     viewport.centerX ?? viewport.center?.x ?? 0,
@@ -1017,7 +1024,7 @@ const createCanvasApi = (
       currentViewport.setViewport(
         nextZoom,
         [x + width / 2, nextCenterY],
-        true,
+        true
       );
     },
     getViewportSnapshot,
@@ -1044,8 +1051,8 @@ const createCanvasApi = (
       if (!options?.editing) {
         currentViewport.setViewport(
           currentViewport.zoom,
-          [x + w / 2, y + h / 2],
-          true,
+          [x + w / 2, y + h / 2,],
+          true
         );
       }
 
@@ -1100,7 +1107,7 @@ const getCanvasToolState = (
   const props = editPropsStore.lastProps$.value;
   const currentTool = controller.currentToolOption$.value;
   const shapeName = currentTool.type === "shape"
-    ? currentTool.shapeName ?? ShapeType.Rect
+    ? ( currentTool.shapeName ?? ShapeType.Rect)
     : ShapeType.Rect;
   const shapeProps = props[`shape:${shapeName}`];
 
@@ -1188,12 +1195,12 @@ const ColorSwatch = ({
 const LineWidthButton = ({
   active,
   onClick,
-  width,
+  width
 }: {
   active: boolean;
   onClick: () => void;
   width: LineWidth;
-}) => (
+},) => (
   <button
     type="button"
     aria-label={`${width}px line width`}
@@ -1746,15 +1753,14 @@ const BlockSuiteEditorMount = ({
       return undefined;
     };
 
-    const isNativeSelectionInBlockText = () => (
-      getNativeSelectionElements().some((element) => (
+    const isNativeSelectionInBlockText = () =>
+      getNativeSelectionElements().some((element) =>
         Boolean(element.closest("rich-text, .inline-editor"))
-      ))
-    );
+      );
 
-    const isCanvasCellNativeLayerInput = () => (
+    const isCanvasCellNativeLayerInput = () =>
       suppressCanvasCellTextInput ||
-      (Boolean(getNativeSelectionNote()) && !isNativeSelectionInBlockText())
+      (Boolean(getNativeSelectionNote()) && !isNativeSelectionInBlockText()
     );
 
     const clearNativeSelectionNoteLayerText = () => {
@@ -1816,7 +1822,7 @@ const BlockSuiteEditorMount = ({
       note: HTMLElement,
       clientX: number,
       clientY: number,
-    ) => (
+    ) =>
       [...note.querySelectorAll<HTMLElement>(
         `rich-text, .inline-editor, ${coppermindCodeCellElementName}`,
       )].some((element) => {
@@ -1830,7 +1836,7 @@ const BlockSuiteEditorMount = ({
           clientY >= rect.top - hitSlop &&
           clientY <= rect.bottom + hitSlop
         );
-      })
+      },
     );
     const clearCanvasCellTextSelectionSoon = (note: HTMLElement) => {
       const noteId = getBlockElementId(note as CoppermindBlockElement);
@@ -2183,7 +2189,7 @@ const CoppermindSortableSectionItem = ({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id });
+  } = useSortable({ id, });
 
   return (
     <div
@@ -2529,9 +2535,9 @@ const CoppermindModeToggle = ({
 const sectionPreviewMaxChars = 700;
 
 const compactPreviewText = (value: string) => value.replace(/\s+/g, " ").trim();
-const findSectionElement = (root: HTMLElement | null, sectionId: string) => (
+const findSectionElement = (root: HTMLElement | null, sectionId: string) =>
   Array.from(root?.querySelectorAll<HTMLElement>("[data-block-id]") ?? [])
-    .find((element) => element.dataset.blockId === sectionId)
+    .find((element) => element.dataset.blockId === sectionId,
 );
 
 const coppermindPageActiveSectionStorageKeyPrefix =
@@ -2544,28 +2550,21 @@ const getCoppermindPageActiveSectionStorageKey = (
   const normalizedPath = path?.trim();
   if (!normalizedPath) return undefined;
   return `${coppermindPageActiveSectionStorageKeyPrefix}:${
-    JSON.stringify({ path: normalizedPath, target: target ?? null })
+    JSON.stringify({
+      path: normalizedPath,
+      target: target ?? null,
+    })
   }`;
 };
 
 const readCoppermindPageActiveSectionId = (storageKey: string | undefined) => {
   if (!storageKey) return undefined;
   try {
-    return getClientAppStorageItem(storageKey) ?? undefined;
+    getClientAppStorageItem(storageKey);
+    return claimLegacyClientSessionValue(getClientAppStorageKey(storageKey)) ??
+      undefined;
   } catch {
     return undefined;
-  }
-};
-
-const writeCoppermindPageActiveSectionId = (
-  storageKey: string | undefined,
-  sectionId: string,
-) => {
-  if (!storageKey) return;
-  try {
-    setClientAppStorageItem(storageKey, sectionId);
-  } catch {
-    // Storage persistence is best effort; in-memory selection still applies.
   }
 };
 
@@ -2580,8 +2579,10 @@ export const CoppermindDocumentEditor = forwardRef<
   path,
   target,
   value,
+      viewState,
   onChange,
-}, ref) => {
+      onViewStateChange,
+}, ref,) => {
   const [mode, setMode] = useState<CoppermindEditorMode>("page");
   const [loadedState, setLoadedState] = useState<LoadedCoppermindState>({
     status: "loading",
@@ -2600,6 +2601,7 @@ export const CoppermindDocumentEditor = forwardRef<
   >(undefined);
   const [sections, setSections] = useState<CoppermindBlockSuiteSection[]>([]);
   const onChangeRef = useRef(onChange);
+    const onViewStateChangeRef = useRef(onViewStateChange);
   const loadedDocumentRef = useRef<CoppermindDocument | undefined>(undefined);
   const loadedRuntimeRef = useRef<CoppermindBlockSuiteRuntime | undefined>(
     undefined,
@@ -2620,7 +2622,7 @@ export const CoppermindDocumentEditor = forwardRef<
   });
   const sectionsRef = useRef<CoppermindBlockSuiteSection[]>([]);
   const jupyterConnectionRef = useRef<CoppermindJupyterConnection | undefined>(
-    undefined,
+    undefined
   );
   const jupyterConnectionPromiseRef = useRef<
     Promise<CoppermindJupyterSocket> | undefined
@@ -2681,7 +2683,7 @@ export const CoppermindDocumentEditor = forwardRef<
     loadedState.status,
     mode,
     sections,
-  ]);
+  ],);
 
   const clearPageInkInputSection = useCallback(() => {
     pageInkInputSectionIdRef.current = undefined;
@@ -2691,12 +2693,16 @@ export const CoppermindDocumentEditor = forwardRef<
     onChangeRef.current = onChange;
   }, [onChange]);
 
+    useEffect(() => {
+      onViewStateChangeRef.current = onViewStateChange;
+    }, [onViewStateChange]);
+
   useEffect(() => () => {
     jupyterConnectionPromiseRef.current = undefined;
     jupyterConnectionRef.current?.socket.close();
     jupyterConnectionRef.current = undefined;
     pendingCodeExecutionsRef.current.clear();
-  }, [jupyterTargetKey, path]);
+  }, [jupyterTargetKey, path],);
 
   useEffect(() => {
     modeRef.current = mode;
@@ -2719,14 +2725,14 @@ export const CoppermindDocumentEditor = forwardRef<
       document,
       nextSnapshot,
       {
-        lastMode: modeRef.current,
+        lastMode: document.ui.lastMode,
         now: new Date(),
       },
     );
     const nextValue = serializeCoppermindDocument(nextDocument);
 
     loadedDocumentRef.current = nextDocument;
-    setLoadedState((current) => (
+    setLoadedState((current,) => (
       current.status === "ready"
         ? { ...current, document: nextDocument }
         : current
@@ -2836,7 +2842,7 @@ export const CoppermindDocumentEditor = forwardRef<
 
     if (!sectionId) return;
     setActiveSectionId(
-      (current) => (current === sectionId ? current : sectionId),
+      (current,) => (current === sectionId ? current : sectionId)
     );
   }, []);
 
@@ -2857,7 +2863,7 @@ export const CoppermindDocumentEditor = forwardRef<
         const selectedIds = placedStackSections.length > 1
           ? placedStackSections.map((item) => item.id)
           : [targetSection.id];
-        setActiveSectionId(stackedGroup?.sections[0]?.id ?? targetSection.id);
+        setActiveSectionId(stackedGroup?.sections[0]?.id ?? targetSection.id,);
         canvasApi?.locateSection(
           targetSection.id,
           targetSection.placement.xywh,
@@ -2871,7 +2877,7 @@ export const CoppermindDocumentEditor = forwardRef<
 
     setActiveSectionId(sectionId);
     window.requestAnimationFrame(() => markActiveSection(sectionId, true));
-  }, [canvasApi, clearPageInkInputSection, markActiveSection, mode, sections]);
+  }, [canvasApi, clearPageInkInputSection, markActiveSection, mode, sections],);
 
   const addSection = useCallback((kind: "blocks" | "ink" | "code") => {
     const runtime = loadedRuntimeRef.current;
@@ -2886,7 +2892,7 @@ export const CoppermindDocumentEditor = forwardRef<
     refreshSections({ anchorSectionId: sectionId });
     setActiveSectionId(sectionId);
     window.requestAnimationFrame(() => markActiveSection(sectionId, true));
-  }, [clearPageInkInputSection, markActiveSection, refreshSections]);
+  }, [clearPageInkInputSection, markActiveSection, refreshSections],);
 
   const addBlocksSection = useCallback(() => {
     addSection("blocks");
@@ -2919,7 +2925,7 @@ export const CoppermindDocumentEditor = forwardRef<
     window.requestAnimationFrame(() =>
       canvasApi.locateSection(sectionId, xywh, { editing: true })
     );
-  }, [canvasApi, clearPageInkInputSection, refreshSections]);
+  }, [canvasApi, clearPageInkInputSection, refreshSections],);
 
   const addBlocksSectionToCanvas = useCallback(() => {
     addSectionToCanvas("blocks");
@@ -2935,14 +2941,14 @@ export const CoppermindDocumentEditor = forwardRef<
 
   const dispatchCodeCellExecutionEvent = useCallback((
     blockId: string,
-    event: CoppermindJupyterEvent,
+    event: CoppermindJupyterEvent
   ) => {
     const root = shellRef.current;
     const element = Array.from(
       root?.querySelectorAll<HTMLElement>(coppermindCodeCellElementName) ?? [],
     )
       .find((item) =>
-        item.getAttribute("data-coppermind-code-cell-block-id") === blockId
+        item.getAttribute("data-coppermind-code-cell-block-id") === blockId,
       );
     element?.dispatchEvent(
       new CustomEvent<CoppermindJupyterEvent>(
@@ -2952,7 +2958,7 @@ export const CoppermindDocumentEditor = forwardRef<
         },
       ),
     );
-  }, []);
+  }, [],);
 
   const commitPendingCodeExecution = useCallback((
     blockId: string,
@@ -2972,7 +2978,7 @@ export const CoppermindDocumentEditor = forwardRef<
       outputsData: serializeCoppermindCodeCellOutputs(pending.outputs),
     });
     refreshSections();
-  }, [refreshSections]);
+  }, [refreshSections],);
 
   const handleCoppermindJupyterEvent = useCallback(
     (event: CoppermindJupyterEvent) => {
@@ -2987,7 +2993,7 @@ export const CoppermindDocumentEditor = forwardRef<
           executionCount: null,
           outputs: [],
           requestId: "requestId" in event
-            ? event.requestId ?? `jupyter:${crypto.randomUUID()}`
+            ? ( event.requestId ?? `jupyter:${crypto.randomUUID()}`)
             : `jupyter:${crypto.randomUUID()}`,
           status: null,
         };
@@ -3123,7 +3129,7 @@ export const CoppermindDocumentEditor = forwardRef<
       refreshSections({ anchorSectionId: sectionId });
       setActiveSectionId(sectionId);
       window.requestAnimationFrame(() =>
-        canvasApiRef.current?.locateSection(sectionId, xywh, { editing: true })
+        canvasApiRef.current?.locateSection(sectionId, xywh, { editing: true, })
       );
       return;
     }
@@ -3132,14 +3138,14 @@ export const CoppermindDocumentEditor = forwardRef<
     refreshSections({ anchorSectionId: sectionId });
     setActiveSectionId(sectionId);
     window.requestAnimationFrame(() => markActiveSection(sectionId, true));
-  }, [markActiveSection, refreshSections, selectSection]);
+  }, [markActiveSection, refreshSections, selectSection],);
 
   const runCodeCell = useCallback(
     async (detail: CoppermindCodeCellRunDetail) => {
       const runtime = loadedRuntimeRef.current;
       if (!runtime) return;
 
-      const codeBlock = getCoppermindCodeCellBlock(runtime.doc, detail.blockId);
+      const codeBlock = getCoppermindCodeCellBlock(runtime.doc, detail.blockId,);
       if (!codeBlock) return;
 
       const requestId = `cell:${detail.blockId}:${crypto.randomUUID()}`;
@@ -3227,7 +3233,7 @@ export const CoppermindDocumentEditor = forwardRef<
 
     deleteCoppermindBlockSuiteSection(runtime.doc, section.id);
     refreshSections();
-  }, [refreshSections]);
+  }, [refreshSections],);
 
   const handleCanvasApiChange = useCallback(
     (api: CoppermindCanvasApi | undefined) => {
@@ -3236,9 +3242,14 @@ export const CoppermindDocumentEditor = forwardRef<
       if (!api) {
         canvasEditViewportSessionRef.current = undefined;
         canvasSelectionStateRef.current = { editing: false, selectedIds: [] };
-      }
+      } else if (viewState?.canvas) {
+          api.restoreViewport({
+            center: [viewState.canvas.centerX, viewState.canvas.centerY],
+            zoom: viewState.canvas.zoom,
+          });
+        }
     },
-    [],
+    [viewState?.canvas],
   );
 
   const handleCanvasViewportChange = useCallback(
@@ -3266,7 +3277,7 @@ export const CoppermindDocumentEditor = forwardRef<
       };
     }
     api.focusSectionForEditing(xywh);
-  }, []);
+  }, [],);
 
   const restoreCanvasEditViewportSession = useCallback(() => {
     const api = canvasApiRef.current;
@@ -3282,19 +3293,17 @@ export const CoppermindDocumentEditor = forwardRef<
       canvasSelectionStateRef.current = selectionState;
       const selectedIdSet = new Set(selectionState.selectedIds);
       const selectedStackGroup = getInkRuns(sectionsRef.current).find(
-        (group) => (
+        (group) =>
           group.stacked &&
-          group.sections.some((section) => (
+          group.sections.some((section) =>
             section.placement.state === "placed" &&
             selectedIdSet.has(section.id)
-          ))
         ),
       );
       if (selectedStackGroup) {
         const placedStackIds = selectedStackGroup.sections.flatMap(
-          (section) => (
+          (section,) =>
             section.placement.state === "placed" ? [section.id] : []
-          ),
         );
         const selectionMatchesStack =
           placedStackIds.length === selectionState.selectedIds.length &&
@@ -3307,9 +3316,8 @@ export const CoppermindDocumentEditor = forwardRef<
         return;
       }
 
-      const selectedSection = sectionsRef.current.find((section) => (
-        section.placement.state === "placed" && selectedIdSet.has(section.id)
-      ));
+      const selectedSection = sectionsRef.current.find((section) =>
+        section.placement.state === "placed" && selectedIdSet.has(section.id),);
       const selectedPlacement = selectedSection?.placement;
       setActiveSectionId(selectedSection?.id);
       const api = canvasApiRef.current;
@@ -3355,17 +3363,15 @@ export const CoppermindDocumentEditor = forwardRef<
     if (!selectionState.editing) return;
 
     const selectedIdSet = new Set(selectionState.selectedIds);
-    const selectedStackGroup = getInkRuns(sectionsRef.current).find((group) => (
+    const selectedStackGroup = getInkRuns(sectionsRef.current).find((group) =>
       group.stacked &&
-      group.sections.some((section) => (
+      group.sections.some((section) =>
         section.placement.state === "placed" && selectedIdSet.has(section.id)
-      ))
-    ));
+      ),);
     if (selectedStackGroup) return;
 
-    const selectedSection = sectionsRef.current.find((section) => (
-      section.placement.state === "placed" && selectedIdSet.has(section.id)
-    ));
+    const selectedSection = sectionsRef.current.find((section) =>
+      section.placement.state === "placed" && selectedIdSet.has(section.id),);
     if (!selectedSection || selectedSection.placement.state !== "placed") {
       return;
     }
@@ -3400,17 +3406,17 @@ export const CoppermindDocumentEditor = forwardRef<
         sectionsRef.current,
         section.id,
       );
-      const placedStackIds = nextStack?.sections.flatMap((item) => (
+      const placedStackIds = nextStack?.sections.flatMap((item,) => (
         item.placement.state === "placed" ? [item.id] : []
       )) ?? [];
       if (nextSection?.placement.state === "placed") {
-        canvasApi?.locateSection(nextSection.id, nextSection.placement.xywh);
+        canvasApi?.locateSection(nextSection.id, nextSection.placement.xywh,);
       }
       if (placedStackIds.length > 1) {
         canvasApi?.selectSections(placedStackIds);
       }
     });
-  }, [canvasApi, refreshSections]);
+  }, [canvasApi, refreshSections],);
 
   const placeSectionInNextCanvasSlot = useCallback(
     (section: CoppermindBlockSuiteSection) => {
@@ -3473,13 +3479,13 @@ export const CoppermindDocumentEditor = forwardRef<
   const setActiveInkRunStackState = useCallback(
     (stackState: "auto" | "unstacked") => {
       const runtime = loadedRuntimeRef.current;
-      const group = findInkRunForSection(sectionsRef.current, activeSectionId);
+      const group = findInkRunForSection(sectionsRef.current, activeSectionId,);
       if (!runtime || !group || group.sections.length < 2) return;
 
       let changed = false;
       for (const section of group.sections) {
         changed =
-          setCoppermindInkCellStackState(runtime.doc, section.id, stackState) ||
+          setCoppermindInkCellStackState(runtime.doc, section.id, stackState,) ||
           changed;
       }
       if (!changed) return;
@@ -3493,7 +3499,7 @@ export const CoppermindDocumentEditor = forwardRef<
             sectionsRef.current,
             anchorSectionId,
           );
-          const placedIds = nextGroup?.sections.flatMap((section) => (
+          const placedIds = nextGroup?.sections.flatMap((section,) => (
             section.placement.state === "placed" ? [section.id] : []
           )) ?? [];
           if (placedIds.length > 1) {
@@ -3513,17 +3519,17 @@ export const CoppermindDocumentEditor = forwardRef<
       return;
     }
     refreshSections();
-  }, [refreshSections]);
+  }, [refreshSections],);
 
   const dragSectionFromSidebar = useCallback((
     section: CoppermindBlockSuiteSection,
-    event: DragEvent<HTMLElement>,
+    event: DragEvent<HTMLElement>
   ) => {
     if (section.placement.state !== "unplaced") return;
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData(coppermindSectionDragDataType, section.id);
     event.dataTransfer.setData("text/plain", section.title);
-  }, []);
+  }, [],);
 
   const handleCanvasDragOver = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
@@ -3538,7 +3544,7 @@ export const CoppermindDocumentEditor = forwardRef<
     if (!canvasApi || !isSectionDragEvent(event)) return;
     event.preventDefault();
 
-    const sectionId = event.dataTransfer.getData(coppermindSectionDragDataType);
+    const sectionId = event.dataTransfer.getData(coppermindSectionDragDataType,);
     const section = sections.find((item) => item.id === sectionId);
     if (!section || section.placement.state !== "unplaced") return;
 
@@ -3551,7 +3557,7 @@ export const CoppermindDocumentEditor = forwardRef<
       section,
       createCoppermindSectionXYWHAtTopLeft(point.x, point.y),
     );
-  }, [canvasApi, placeSectionWithXYWH, sections]);
+  }, [canvasApi, placeSectionWithXYWH, sections],);
 
   useEffect(() => {
     if (value === lastSerializedRef.current) return;
@@ -3589,7 +3595,7 @@ export const CoppermindDocumentEditor = forwardRef<
       return;
     }
 
-    const nextMode = normalizeMode(nextDocument.ui.lastMode);
+    const nextMode = viewState?.mode ?? normalizeMode(nextDocument.ui.lastMode);
     setMode(nextMode);
     setLoadedState({ status: "loading" });
 
@@ -3610,7 +3616,7 @@ export const CoppermindDocumentEditor = forwardRef<
         });
         const nextSections = getCoppermindBlockSuiteSections(runtime.doc);
         const persistedActiveSectionId = nextMode === "page"
-          ? readCoppermindPageActiveSectionId(pageActiveSectionStorageKey)
+          ? (viewState?.activeSectionId ?? readCoppermindPageActiveSectionId(pageActiveSectionStorageKey))
           : undefined;
         const nextActiveSectionId =
           persistedActiveSectionId &&
@@ -3636,7 +3642,7 @@ export const CoppermindDocumentEditor = forwardRef<
     disposeCoppermindBlockSuiteRuntime(loadedRuntimeRef.current);
     loadedRuntimeRef.current = undefined;
     loadedDocumentRef.current = undefined;
-  }, []);
+  }, [],);
 
   useEffect(() => {
     if (focusRequest === 0) return;
@@ -3644,7 +3650,7 @@ export const CoppermindDocumentEditor = forwardRef<
       mode === "page" ? "page-editor" : "edgeless-editor",
     );
     const fallbackEditor = shellRef.current?.querySelector<HTMLTextAreaElement>(
-      "textarea",
+      "textarea"
     );
     (editor ?? fallbackEditor)?.focus({ preventScroll: true });
   }, [focusRequest, mode]);
@@ -3680,9 +3686,20 @@ export const CoppermindDocumentEditor = forwardRef<
 
   useEffect(() => {
     if (loadedState.status !== "ready") return;
-    if (loadedDocumentRef.current?.ui.lastMode === mode) return;
-    emitCurrentDocument();
-  }, [emitCurrentDocument, loadedState.status, mode]);
+      const viewport = canvasApiRef.current?.getViewportSnapshot();
+      onViewStateChangeRef.current?.({ mode,
+        activeSectionId,
+        ...(viewport
+          ? {
+            canvas: {
+              centerX: viewport.center[0],
+              centerY: viewport.center[1],
+              zoom: viewport.zoom,
+            },
+          }
+          : {}),
+      });
+  }, [activeSectionId, canvasViewport, loadedState.status, mode]);
 
   useEffect(() => {
     if (loadedState.status !== "ready") return;
@@ -3690,31 +3707,9 @@ export const CoppermindDocumentEditor = forwardRef<
   }, [loadedState.status, mode, refreshSections]);
 
   useEffect(() => {
-    if (
-      loadedState.status !== "ready" ||
-      mode !== "page" ||
-      !activeSectionId ||
-      !sections.some((section) => section.id === activeSectionId)
-    ) {
-      return;
-    }
-
-    writeCoppermindPageActiveSectionId(
-      pageActiveSectionStorageKey,
-      activeSectionId,
-    );
-  }, [
-    activeSectionId,
-    loadedState.status,
-    mode,
-    pageActiveSectionStorageKey,
-    sections,
-  ]);
-
-  useEffect(() => {
     if (mode !== "page" || loadedState.status !== "ready") return;
     window.requestAnimationFrame(() => markActiveSection(activeSectionId));
-  }, [activeSectionId, loadedState.status, markActiveSection, mode, sections]);
+  }, [activeSectionId, loadedState.status, markActiveSection, mode, sections,]);
 
   useEffect(() => {
     if (loadedState.status !== "ready") return;
@@ -3735,7 +3730,7 @@ export const CoppermindDocumentEditor = forwardRef<
       });
     };
 
-    root.addEventListener("coppermind-code-cell-run", handleCodeCellRun, true);
+    root.addEventListener("coppermind-code-cell-run", handleCodeCellRun, true,);
     return () => {
       root.removeEventListener(
         "coppermind-code-cell-run",
@@ -3761,7 +3756,7 @@ export const CoppermindDocumentEditor = forwardRef<
     ) => {
       pageInkInputSectionIdRef.current = sectionId;
       setActiveSectionId(
-        (current) => (current === sectionId ? current : sectionId),
+        (current,) => (current === sectionId ? current : sectionId)
       );
       markActiveSection(sectionId, shouldScroll);
     };
@@ -3820,7 +3815,7 @@ export const CoppermindDocumentEditor = forwardRef<
       root.ownerDocument.getSelection()?.removeAllRanges();
       clearPageInkInputSection();
       setActiveSectionId(
-        (current) => (current === sectionId ? current : sectionId),
+        (current,) => (current === sectionId ? current : sectionId)
       );
       markActiveSection(sectionId);
     };
@@ -3884,7 +3879,7 @@ export const CoppermindDocumentEditor = forwardRef<
       icon: activeInkRun.stacked ? Ungroup : Group,
       label: activeInkRun.stacked ? "Unstack ink cells" : "Restack ink cells",
       onClick: () =>
-        setActiveInkRunStackState(activeInkRun.stacked ? "unstacked" : "auto"),
+        setActiveInkRunStackState(activeInkRun.stacked ? "unstacked" : "auto",),
     }
     : undefined;
 
@@ -3990,6 +3985,6 @@ export const CoppermindDocumentEditor = forwardRef<
       </div>
     </div>
   );
-});
+},);
 
 CoppermindDocumentEditor.displayName = "CoppermindDocumentEditor";

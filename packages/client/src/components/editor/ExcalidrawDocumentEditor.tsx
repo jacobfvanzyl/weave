@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, type ComponentProps, type CSSProperties } from 'react';
-import { CaptureUpdateAction, Excalidraw, restore as restoreExcalidrawData, serializeAsJSON as serializeExcalidrawAsJSON } from '@excalidraw/excalidraw';
+import { type ComponentProps, type CSSProperties, useCallback, useEffect, useMemo, useRef } from 'react';
+import { CaptureUpdateAction, Excalidraw, restore as restoreExcalidrawData, serializeAsJSON as serializeExcalidrawAsJSON, } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import { editorCanvasBackgroundColor } from './CodeMirrorEditor';
-import { ExcalidrawCanvasControls, type ExcalidrawCanvasAppState } from './ExcalidrawCanvasControls';
+import { type ExcalidrawCanvasAppState, ExcalidrawCanvasControls } from './ExcalidrawCanvasControls';
 import { ExcalidrawPencilToolOverlay } from './ExcalidrawPencilToolOverlay';
 import { configureExcalidrawAssetPath } from '../../lib/excalidraw-assets';
 import { useApplePencilExcalidrawControls } from './useApplePencilExcalidrawControls';
@@ -20,7 +20,9 @@ export type ExcalidrawDocumentEditorProps = {
   theme: 'light' | 'dark';
   value: string;
   version: string;
+  viewState?: { scrollX: number; scrollY: number; zoom: number };
   onChange: (value: string) => void;
+  onViewStateChange?: (viewState: { scrollX: number; scrollY: number; zoom: number }) => void;
 };
 
 const excalidrawDarkFilteredEditorBackgroundColor = '#eeeeff';
@@ -28,7 +30,8 @@ const excalidrawDarkFilteredEditorBackgroundColor = '#eeeeff';
 const isDefaultExcalidrawBackground = (value: unknown) => {
   if (typeof value !== 'string') return true;
   const normalized = value.trim().toLowerCase();
-  return !normalized || normalized === '#fff' || normalized === '#ffffff' || normalized === 'white' || normalized === 'transparent';
+  return ( !normalized || normalized === '#fff' || normalized === '#ffffff' || normalized === 'white' || normalized === 'transparent'
+  );
 };
 
 const getExcalidrawAppStateWithEditorBackground = (appState: unknown) => {
@@ -42,13 +45,11 @@ const getExcalidrawAppStateWithEditorBackground = (appState: unknown) => {
   return appStateRecord;
 };
 
-const isEditorCanvasBackground = (value: unknown) => (
-  typeof value === 'string' && value.trim().toLowerCase() === editorCanvasBackgroundColor
-);
+const isEditorCanvasBackground = (value: unknown) =>
+  typeof value === 'string' && value.trim().toLowerCase() === editorCanvasBackgroundColor;
 
-const isDarkFilteredEditorCanvasBackground = (value: unknown) => (
-  typeof value === 'string' && value.trim().toLowerCase() === excalidrawDarkFilteredEditorBackgroundColor
-);
+const isDarkFilteredEditorCanvasBackground = (value: unknown) =>
+  typeof value === 'string' && value.trim().toLowerCase() === excalidrawDarkFilteredEditorBackgroundColor;
 
 const getExcalidrawRuntimeAppState = (appState: RestoredExcalidrawData['appState'], theme: 'light' | 'dark') => {
   const runtimeAppState = { ...appState };
@@ -70,25 +71,25 @@ export const createEmptyExcalidrawFile = () => serializeExcalidrawAsJSON(
   [],
   { viewBackgroundColor: editorCanvasBackgroundColor },
   {},
-  'local',
+  'local'
 );
 
 const parseExcalidrawStoredData = (content: string): RestoredExcalidrawData => {
   try {
-    const parsed = content ? JSON.parse(content) as Record<string, unknown> : {};
-    const elements = Array.isArray(parsed.elements) ? parsed.elements as any : [];
+    const parsed = content ? ( JSON.parse(content) as Record<string, unknown>) : {};
+    const elements = Array.isArray(parsed.elements) ? ( parsed.elements as any) : [];
     return restoreExcalidrawData(
       {
         elements,
         appState: getExcalidrawAppStateWithEditorBackground(parsed.appState) as any,
-        files: parsed.files && typeof parsed.files === 'object' ? parsed.files as any : {},
+        files: parsed.files && typeof parsed.files === 'object' ? ( parsed.files as any) : {},
       },
       { viewBackgroundColor: editorCanvasBackgroundColor },
       null,
     );
   } catch {
     return restoreExcalidrawData(
-      { elements: [], appState: { viewBackgroundColor: editorCanvasBackgroundColor }, files: {} },
+      { elements: [], appState: { viewBackgroundColor: editorCanvasBackgroundColor }, files: {}, },
       { viewBackgroundColor: editorCanvasBackgroundColor },
       null,
     );
@@ -103,12 +104,11 @@ const parseExcalidrawInitialData = (content: string, theme: 'light' | 'dark'): R
   };
 };
 
-const serializeExcalidrawScene = ([elements, appState, files]: Parameters<ExcalidrawChangeHandler>) => (
-  serializeExcalidrawAsJSON(elements, getExcalidrawStoredAppState(appState), files, 'local')
-);
+const serializeExcalidrawScene = ([elements, appState, files]: Parameters<ExcalidrawChangeHandler>) =>
+  serializeExcalidrawAsJSON(elements, getExcalidrawStoredAppState(appState), files, 'local');
 
-const serializeRestoredExcalidrawData = (data: RestoredExcalidrawData) => (
-  serializeExcalidrawAsJSON(data.elements, getExcalidrawStoredAppState(data.appState), data.files, 'local')
+const serializeRestoredExcalidrawData = (data: RestoredExcalidrawData) =>
+  serializeExcalidrawAsJSON(data.elements, getExcalidrawStoredAppState(data.appState), data.files, 'local'
 );
 
 export function normalizeExcalidrawContent(content: string) {
@@ -122,19 +122,41 @@ export const ExcalidrawDocumentEditor = ({
   theme,
   value,
   version,
+  viewState,
   onChange,
+  onViewStateChange,
 }: ExcalidrawDocumentEditorProps) => {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const skippedInitialChangeKeyRef = useRef<string | undefined>(undefined);
   const resizeFrameRef = useRef<number | undefined>(undefined);
   const resizeTimeoutRef = useRef<number | undefined>(undefined);
+  const viewSaveTimeoutRef = useRef<number | undefined>(undefined);
+  const pendingViewStateRef = useRef<{ scrollX: number; scrollY: number; zoom: number } | undefined>(undefined);
+  const onViewStateChangeRef = useRef(onViewStateChange);
   const bufferKey = `${path}:${version}`;
+
+  useEffect(() => {
+    onViewStateChangeRef.current = onViewStateChange;
+  }, [onViewStateChange]);
+
+  const flushViewState = useCallback(() => {
+    if (viewSaveTimeoutRef.current !== undefined) {
+      window.clearTimeout(viewSaveTimeoutRef.current);
+      viewSaveTimeoutRef.current = undefined;
+    }
+    const pendingViewState = pendingViewStateRef.current;
+    if (!pendingViewState) return;
+    pendingViewStateRef.current = undefined;
+    onViewStateChangeRef.current?.(pendingViewState);
+  }, []);
 
   const scheduleResize = useCallback(() => {
     if (typeof window === 'undefined') return;
-    if (resizeFrameRef.current !== undefined) window.cancelAnimationFrame(resizeFrameRef.current);
-    if (resizeTimeoutRef.current !== undefined) window.clearTimeout(resizeTimeoutRef.current);
+    if (resizeFrameRef.current !== undefined) { window.cancelAnimationFrame(resizeFrameRef.current);
+    }
+    if (resizeTimeoutRef.current !== undefined) { window.clearTimeout(resizeTimeoutRef.current);
+    }
 
     const notifyResize = () => window.dispatchEvent(new Event('resize'));
     resizeFrameRef.current = window.requestAnimationFrame(() => {
@@ -154,17 +176,43 @@ export const ExcalidrawDocumentEditor = ({
 
   const handleApi = useCallback((api: ExcalidrawImperativeAPI) => {
     apiRef.current = api;
+      if (viewState) {
+        api.updateScene({
+          appState: {
+            scrollX: viewState.scrollX,
+            scrollY: viewState.scrollY,
+            zoom: { value: viewState.zoom },
+          } as any,
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+      }
     scheduleResize();
-  }, [scheduleResize]);
+  }, [scheduleResize, viewState],);
 
   const handleChange = useCallback((...snapshot: Parameters<ExcalidrawChangeHandler>) => {
+      const appState = snapshot[1] as unknown as Record<string, unknown>;
+      if (onViewStateChangeRef.current) {
+        if (viewSaveTimeoutRef.current !== undefined) {
+          window.clearTimeout(viewSaveTimeoutRef.current);
+        }
+        const zoom =
+          appState.zoom && typeof appState.zoom === 'object'
+            ? (appState.zoom as Record<string, unknown>).value
+            : appState.zoom;
+        pendingViewStateRef.current = {
+          scrollX: typeof appState.scrollX === 'number' ? appState.scrollX : 0,
+          scrollY: typeof appState.scrollY === 'number' ? appState.scrollY : 0,
+          zoom: typeof zoom === 'number' ? zoom : 1,
+        };
+        viewSaveTimeoutRef.current = window.setTimeout(flushViewState, 250);
+      }
     const serializedScene = serializeExcalidrawScene(snapshot);
     if (skippedInitialChangeKeyRef.current !== bufferKey) {
       skippedInitialChangeKeyRef.current = bufferKey;
       if (serializedScene === initialSerialized) return;
     }
     onChange(serializedScene);
-  }, [bufferKey, initialSerialized, onChange]);
+  }, [bufferKey, flushViewState, initialSerialized, onChange],);
 
   const handleAppStateChange = useCallback((appState: ExcalidrawCanvasAppState) => {
     const api = apiRef.current;
@@ -177,7 +225,7 @@ export const ExcalidrawDocumentEditor = ({
       'local',
     );
     onChange(serializedScene);
-  }, [onChange]);
+  }, [onChange],);
 
   const renderTopRightUI = useCallback<ExcalidrawTopRightRenderer>((_isMobile, appState) => (
     <ExcalidrawCanvasControls
@@ -185,7 +233,7 @@ export const ExcalidrawDocumentEditor = ({
       appState={appState}
       onAppStateChange={handleAppStateChange}
     />
-  ), [handleAppStateChange]);
+  ), [handleAppStateChange],);
 
   useEffect(() => {
     configureExcalidrawAssetPath();
@@ -203,6 +251,18 @@ export const ExcalidrawDocumentEditor = ({
   }, [isExpanded, path, scheduleResize]);
 
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushViewState();
+    };
+    window.addEventListener('pagehide', flushViewState);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', flushViewState);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [flushViewState]);
+
+  useEffect(() => {
     if (focusRequest === 0) return;
     const animationFrame = window.requestAnimationFrame(() => {
       const fallbackTarget = surfaceRef.current;
@@ -215,9 +275,15 @@ export const ExcalidrawDocumentEditor = ({
 
   useEffect(() => () => {
     if (typeof window === 'undefined') return;
-    if (resizeFrameRef.current !== undefined) window.cancelAnimationFrame(resizeFrameRef.current);
-    if (resizeTimeoutRef.current !== undefined) window.clearTimeout(resizeTimeoutRef.current);
-  }, []);
+    if (resizeFrameRef.current !== undefined) { window.cancelAnimationFrame(resizeFrameRef.current);
+      }
+    if (resizeTimeoutRef.current !== undefined) { window.clearTimeout(resizeTimeoutRef.current);
+  }
+      if (viewSaveTimeoutRef.current !== undefined) {
+        window.clearTimeout(viewSaveTimeoutRef.current);
+      }
+      flushViewState();
+    }, [flushViewState],);
 
   return (
     <div
@@ -226,7 +292,7 @@ export const ExcalidrawDocumentEditor = ({
       data-weave-editor-excalidraw
       data-weave-pencil-input-active={applePencilControls.isPencilInputActive ? 'true' : undefined}
       data-weave-pencil-active={applePencilControls.isPencilChromeHidden ? 'true' : undefined}
-      style={{ '--weave-excalidraw-background': editorCanvasBackgroundColor } as CSSProperties}
+      style={{ '--weave-excalidraw-background': editorCanvasBackgroundColor, } as CSSProperties}
     >
       <Excalidraw
         autoFocus
@@ -245,4 +311,3 @@ export const ExcalidrawDocumentEditor = ({
     </div>
   );
 };
-

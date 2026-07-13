@@ -1,26 +1,29 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, MessageSquare, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
 import { listServerThreads } from '../../lib/chat-state-api';
 import {
+  type ClientAppDefinition,
+  type ClientAppInputId,
   getClientAppDefinition,
   getClientAppNavigationProducts,
   getClientAppProductLabel,
   isProductAllowedForClientApp,
   sanitizeProductForClientApp,
-  type ClientAppDefinition,
-  type ClientAppInputId,
 } from '../../lib/client-app';
-import { projectBelongsToProduct, productForProjectKind, type ProductId } from '../../lib/products';
+import { productForProjectKind, type ProductId, projectBelongsToProduct } from '../../lib/products';
 import { proposalWorkflowEnabled } from '../../lib/proposal-workflow';
 import { canViewProposalReview } from '../../lib/proposal-review-state';
 import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
 import { workspaceRefKey } from '../../lib/thread-eligibility';
-import { useChatStore, type ChatThread } from '../../stores/chat-store';
+import { type ChatThread, useChatStore } from '../../stores/chat-store';
 import { useAppShellStore } from '../../stores/app-shell-store';
+import { useClientSessionViewStore } from '../../stores/client-session-view-store';
+import { getEditorTabTargetKey, useEditorTabStore } from '../../stores/editor-tab-store';
 import { useProductStore } from '../../stores/product-store';
 import { generalTerminalId, useTerminalStore } from '../../stores/terminal-store';
-import { defaultTerminalPaneColumn, useWorkspaceSurfaceStore, type MainPane } from '../../stores/workspace-surface-store';
+import { defaultTerminalPaneColumn,
+  type MainPane, useWorkspaceSurfaceStore, } from '../../stores/workspace-surface-store';
 import { Button } from '../ui/button';
 import { ShortcutProvider } from '../shortcuts';
 import { AppSidebarHost } from './AppSidebarHost';
@@ -36,7 +39,6 @@ import type { TerminalPanelTab, TerminalPanelTabsChange, TerminalPanelTarget } f
 import { createTerminalLayoutSyncKey } from '../terminal/terminal-resize-sync';
 import type { TerminalTargetInput, TerminalTransport, TerminalWindowRecord } from '../../lib/terminal-types';
 import { NotificationHost } from '../notifications/NotificationHost';
-import { shouldCloseUnavailableTerminalPane } from './terminal-pane-availability';
 import { ContextBreadcrumb } from '../workspace/ContextBreadcrumb';
 import { WorkspaceMainContent } from '../workspace/WorkspaceMainContent';
 import {
@@ -89,7 +91,8 @@ const isTerminalWindowForTarget = (window: TerminalWindowRecord, target: Termina
   }
 
   if (target.portalId && window.portalId && window.portalId !== target.portalId) return false;
-  if (target.rootId && window.rootId && window.rootId !== target.rootId) return false;
+  if (target.rootId && window.rootId && window.rootId !== target.rootId) { return false;
+  }
   return true;
 };
 
@@ -110,34 +113,37 @@ type WeaveAppShellProps = {
 
 export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsButton }: WeaveAppShellProps = {}) => {
   const clientApp = useMemo(() => getClientAppDefinition(clientAppInput), [clientAppInput]);
-  const resourceId = useChatStore(state => state.resourceId);
-  const threadId = useWorkspaceSurfaceStore(state => state.threadId);
-  const activeSurface = useWorkspaceSurfaceStore(state => state.activeSurface);
-  const selectWorkspaceSurface = useWorkspaceSurfaceStore(state => state.selectWorkspace);
-  const threads = useChatStore(state => state.threads);
-  const runningThreadIds = useChatStore(state => state.runningThreadIds);
-  const setServerThreads = useChatStore(state => state.setServerThreads);
-  const newThread = useChatStore(state => state.newThread);
-  const selectThreadSurface = useChatStore(state => state.selectThread);
-  const paneVisibility = useWorkspaceSurfaceStore(state => state.paneVisibility);
-  const maximizedPane = useWorkspaceSurfaceStore(state => state.maximizedPane);
-  const editorFollowRequest = useWorkspaceSurfaceStore(state => state.editorFollowRequest);
-  const editorSlotMode = useWorkspaceSurfaceStore(state => state.editorSlotMode);
-  const activeProposalPath = useWorkspaceSurfaceStore(state => state.activeProposalPath);
-  const activeProposalFilePath = useWorkspaceSurfaceStore(state => state.activeProposalFilePath);
-  const openPane = useWorkspaceSurfaceStore(state => state.openPane);
-  const openProposalReview = useWorkspaceSurfaceStore(state => state.openProposalReview);
-  const closePane = useWorkspaceSurfaceStore(state => state.closePane);
-  const closeProposalReview = useWorkspaceSurfaceStore(state => state.closeProposalReview);
-  const requestEditorFollow = useWorkspaceSurfaceStore(state => state.requestEditorFollow);
-  const togglePane = useWorkspaceSurfaceStore(state => state.togglePane);
-  const toggleMaximizedPane = useWorkspaceSurfaceStore(state => state.toggleMaximizedPane);
-  const restoreMaximizedPane = useWorkspaceSurfaceStore(state => state.restoreMaximizedPane);
-  const terminalPaneColumnsByWorkspace = useWorkspaceSurfaceStore(state => state.terminalPaneColumnsByWorkspace);
-  const toggleTerminalPaneColumn = useWorkspaceSurfaceStore(state => state.toggleTerminalPaneColumn);
+  const resourceId = useChatStore((state) => state.resourceId);
+  const threadId = useWorkspaceSurfaceStore((state) => state.threadId);
+  const activeSurface = useWorkspaceSurfaceStore((state) => state.activeSurface);
+  const selectWorkspaceSurface = useWorkspaceSurfaceStore((state) => state.selectWorkspace);
+  const threads = useChatStore((state) => state.threads);
+  const runningThreadIds = useChatStore((state) => state.runningThreadIds);
+  const setServerThreads = useChatStore((state) => state.setServerThreads);
+  const reconcileEditorTargets = useEditorTabStore((state) => state.reconcileTargets);
+  const reconcileTerminalTargets = useTerminalStore((state) => state.reconcileWorkspaceTargets);
+  const reconcileSessionProjects = useClientSessionViewStore((state) => state.reconcileProjects);
+  const newThread = useChatStore((state) => state.newThread);
+  const selectThreadSurface = useChatStore((state) => state.selectThread);
+  const paneVisibility = useWorkspaceSurfaceStore((state) => state.paneVisibility);
+  const maximizedPane = useWorkspaceSurfaceStore((state) => state.maximizedPane);
+  const editorFollowRequest = useWorkspaceSurfaceStore((state) => state.editorFollowRequest);
+  const editorSlotMode = useWorkspaceSurfaceStore((state) => state.editorSlotMode);
+  const activeProposalPath = useWorkspaceSurfaceStore((state) => state.activeProposalPath);
+  const activeProposalFilePath = useWorkspaceSurfaceStore((state) => state.activeProposalFilePath);
+  const openPane = useWorkspaceSurfaceStore((state) => state.openPane);
+  const openProposalReview = useWorkspaceSurfaceStore((state) => state.openProposalReview);
+  const closePane = useWorkspaceSurfaceStore((state) => state.closePane);
+  const closeProposalReview = useWorkspaceSurfaceStore((state) => state.closeProposalReview);
+  const requestEditorFollow = useWorkspaceSurfaceStore((state) => state.requestEditorFollow);
+  const togglePane = useWorkspaceSurfaceStore((state) => state.togglePane);
+  const toggleMaximizedPane = useWorkspaceSurfaceStore((state) => state.toggleMaximizedPane);
+  const restoreMaximizedPane = useWorkspaceSurfaceStore((state) => state.restoreMaximizedPane);
+  const terminalPaneColumnsByWorkspace = useWorkspaceSurfaceStore((state) => state.terminalPaneColumnsByWorkspace);
+  const toggleTerminalPaneColumn = useWorkspaceSurfaceStore((state) => state.toggleTerminalPaneColumn);
   const queryClient = useQueryClient();
-  const storedActiveProduct = useProductStore(state => state.activeProduct);
-  const setActiveProduct = useProductStore(state => state.setActiveProduct);
+  const storedActiveProduct = useProductStore((state) => state.activeProduct);
+  const setActiveProduct = useProductStore((state) => state.setActiveProduct);
   const activeProduct = sanitizeProductForClientApp(storedActiveProduct, clientApp);
   const { editorMinimumMeasureRef, editorMinimumWidthPx, pageRef, pageWidth } = useMainPaneMetrics();
   const sidebarSurfaceRef = useRef<HTMLElement | null>(null);
@@ -159,22 +165,22 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     projects,
     projectsQuery,
   } = workspaceTargets;
-  const hasInitializedThreads = useChatStore(state => state.hasInitializedThreads);
-  const activeThreadProposal = useChatStore(state => state.threadProposals[activeThreadId]);
-  const projectById = useMemo(() => new Map(projects.map(project => [project.id, project])), [projects]);
+  const hasInitializedThreads = useChatStore((state) => state.hasInitializedThreads);
+  const activeThreadProposal = useChatStore((state) => state.threadProposals[activeThreadId]);
+  const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const productForProjectId = useCallback((projectId: string): ProductId | undefined => {
     const project = projectById.get(projectId);
     return project ? productForProjectKind(project.projectKind) : undefined;
-  }, [projectById]);
+  }, [projectById],);
   const productForThread = useCallback((thread: ChatThread | undefined): ProductId | undefined => {
     if (!thread) return undefined;
     if (!thread.projectId || thread.adHoc) return 'chat';
     return productForProjectId(thread.projectId);
-  }, [productForProjectId]);
+  }, [productForProjectId],);
   const activeSurfaceProduct = activeSurface.kind === 'workspace'
     ? productForProjectId(activeSurface.projectId)
     : productForThread(activeThread);
-  const hasLoadedSurfaceContext = hasInitializedThreads && projectsQuery.isFetched;
+  const hasLoadedSurfaceContext = hasInitializedThreads && projectsQuery.isSuccess;
   const isActiveSurfaceSupported = activeSurfaceProduct
     ? isProductAllowedForClientApp(activeSurfaceProduct, clientApp)
     : !hasLoadedSurfaceContext;
@@ -192,11 +198,12 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const hasCodeSurfaceContext = isActiveSurfaceSupported && activeSurfaceProduct === 'code';
   const editorTarget = hasCodeSurfaceContext ? workspaceTargets.editorTarget : undefined;
   const notesTarget = isActiveSurfaceSupported && activeSurfaceProduct === 'notes' ? workspaceTargets.notesTarget : undefined;
+  const isNotesSurface = activeSurfaceProduct === 'notes';
   const rawGeneralTerminalTarget = workspaceTargets.generalTerminalTarget;
-  const generalTerminalTarget = useMemo(() => rawGeneralTerminalTarget ? ({
+  const generalTerminalTarget = useMemo(() => rawGeneralTerminalTarget ?{
     ...rawGeneralTerminalTarget,
     title: `${clientApp.displayName} Terminal`,
-  }) : undefined, [clientApp.displayName, rawGeneralTerminalTarget]);
+  } : undefined, [clientApp.displayName, rawGeneralTerminalTarget],);
   const terminalTarget = hasCodeSurfaceContext ? workspaceTargets.terminalTarget : undefined;
   const showGlobalTerminalButton = true;
   const activeSurfaceKey = activeSurface.kind === 'thread'
@@ -219,18 +226,22 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   );
   const showChatPane = hasChatPaneTarget && paneVisibility.chatOpen;
   const isChatMaximized = maximizedPane === 'chat';
-  const hasEditorPaneTarget = Boolean(editorTarget || notesTarget);
+  const hasEditorPaneTarget = Boolean(
+    hasCodeSurfaceContext ? workspaceTargets.activeGitWorkspaceTarget : workspaceTargets.activeNotesWorkspaceTarget,);
   const showEditorPane = hasEditorPaneTarget && paneVisibility.editorOpen;
   const isEditorMaximized = maximizedPane === 'editor';
-  const hasTerminalPaneTarget = Boolean(terminalTarget);
+  const hasWorkspaceTerminalContext = Boolean(
+    hasCodeSurfaceContext && workspaceTargets.activeProjectId && workspaceTargets.activeWorkspaceId,);
+  const hasTerminalPaneTarget = hasWorkspaceTerminalContext;
   const showTerminalPane = hasTerminalPaneTarget && paneVisibility.terminalOpen;
   const isTerminalMaximized = maximizedPane === 'terminal';
   const isTerminalOnlyPane = showTerminalPane && !showChatPane && !showEditorPane;
   const isTerminalEffectivelyMaximized = isTerminalMaximized || isTerminalOnlyPane;
   const canToggleTerminalMaximized = isTerminalMaximized || showChatPane || showEditorPane;
-  const terminalWorkspaceRef = terminalTarget ? workspaceRefKey(terminalTarget.projectId, terminalTarget.workspaceId) : undefined;
+  const terminalWorkspaceRef =
+    workspaceTargets.activeProjectId && workspaceTargets.activeWorkspaceId ? workspaceRefKey(workspaceTargets.activeProjectId, workspaceTargets.activeWorkspaceId) : undefined;
   const terminalPaneColumn = terminalWorkspaceRef
-    ? terminalPaneColumnsByWorkspace[terminalWorkspaceRef] ?? defaultTerminalPaneColumn
+    ? ( terminalPaneColumnsByWorkspace[terminalWorkspaceRef] ?? defaultTerminalPaneColumn)
     : defaultTerminalPaneColumn;
   const canToggleTerminalPaneColumn = Boolean(showTerminalPane && showChatPane && showEditorPane && terminalTarget);
   const visibleMainPaneMinimumWidthPx = (showChatPane ? chatContentMaxWidthPx : 0)
@@ -273,32 +284,31 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     : breadcrumbPane === 'editor'
       ? editorBreadcrumb
       : undefined;
-  const sideEditorTargetKey = editorTarget ? `code:${editorTarget.workspaceId}` : notesTarget ? `notes:${notesTarget.workspaceId}` : undefined;
-  const terminalWorkspaceId = terminalTarget?.workspaceId;
-  const terminalTargetKey = terminalTarget?.terminalId;
-  const hasWorkspaceTerminalContext = Boolean(workspaceTargets.activeProjectId && workspaceTargets.activeWorkspaceId);
+  const sideEditorTargetKey = workspaceTargets.activeWorkspaceId ? `${activeSurfaceProduct === 'notes' ? 'notes' : 'code'}:${workspaceTargets.activeWorkspaceId}` : undefined;
+  const terminalWorkspaceId = workspaceTargets.activeWorkspaceId;
+  const terminalTargetKey = terminalTarget?.terminalId ?? terminalWorkspaceId;
   const terminalTransport = useMemo<TerminalTransport | undefined>(() => createTerminalTransport(), []);
   const [terminalSyncingTargets, setTerminalSyncingTargets] = useState<Set<string>>(() => new Set());
   const [terminalSyncErrors, setTerminalSyncErrors] = useState<Record<string, string | undefined>>({});
   const terminalSyncSequenceRef = useRef(0);
   const latestTerminalSyncByTargetRef = useRef<Map<string, number>>(new Map());
-  const generalTerminalTabs = useTerminalStore(state => state.generalTerminalTabs);
-  const setGeneralTerminalTabs = useTerminalStore(state => state.setGeneralTerminalTabs);
-  const setGeneralTerminalWindows = useTerminalStore(state => state.setGeneralTerminalWindows);
-  const refreshGeneralTerminalWindowMetadata = useTerminalStore(state => state.refreshGeneralTerminalWindowMetadata);
-  const activeGeneralTerminalTabId = useTerminalStore(state => state.activeGeneralTerminalTabId);
-  const setActiveGeneralTerminalTabId = useTerminalStore(state => state.setActiveGeneralTerminalTabId);
-  const terminalTabsByTarget = useTerminalStore(state => state.terminalTabsByTarget);
-  const setTerminalTabs = useTerminalStore(state => state.setTerminalTabs);
-  const setTerminalWindows = useTerminalStore(state => state.setTerminalWindows);
-  const refreshWorkspaceTerminalWindowMetadata = useTerminalStore(state => state.refreshTerminalWindowMetadata);
-  const setTerminalSnapshotWindows = useTerminalStore(state => state.setTerminalSnapshotWindows);
-  const activeTerminalTabByTarget = useTerminalStore(state => state.activeTerminalTabByTarget);
-  const setActiveTerminalTab = useTerminalStore(state => state.setActiveTerminalTab);
-  const isWindowStreamOpen = useAppShellStore(state => state.isWindowStreamOpen);
-  const setWindowStreamOpen = useAppShellStore(state => state.setWindowStreamOpen);
-  const isWindowStreamActive = useAppShellStore(state => state.isWindowStreamActive);
-  const setWindowStreamActive = useAppShellStore(state => state.setWindowStreamActive);
+  const generalTerminalTabs = useTerminalStore((state) => state.generalTerminalTabs);
+  const setGeneralTerminalTabs = useTerminalStore((state) => state.setGeneralTerminalTabs);
+  const setGeneralTerminalWindows = useTerminalStore((state) => state.setGeneralTerminalWindows);
+  const refreshGeneralTerminalWindowMetadata = useTerminalStore((state) => state.refreshGeneralTerminalWindowMetadata);
+  const activeGeneralTerminalTabId = useTerminalStore((state) => state.activeGeneralTerminalTabId);
+  const setActiveGeneralTerminalTabId = useTerminalStore((state) => state.setActiveGeneralTerminalTabId);
+  const terminalTabsByTarget = useTerminalStore((state) => state.terminalTabsByTarget);
+  const setTerminalTabs = useTerminalStore((state) => state.setTerminalTabs);
+  const setTerminalWindows = useTerminalStore((state) => state.setTerminalWindows);
+  const refreshWorkspaceTerminalWindowMetadata = useTerminalStore((state) => state.refreshTerminalWindowMetadata);
+  const setTerminalSnapshotWindows = useTerminalStore((state) => state.setTerminalSnapshotWindows);
+  const activeTerminalTabByTarget = useTerminalStore((state) => state.activeTerminalTabByTarget);
+  const setActiveTerminalTab = useTerminalStore((state) => state.setActiveTerminalTab);
+  const isWindowStreamOpen = useAppShellStore((state) => state.isWindowStreamOpen);
+  const setWindowStreamOpen = useAppShellStore((state) => state.setWindowStreamOpen);
+  const isWindowStreamActive = useAppShellStore((state) => state.isWindowStreamActive);
+  const setWindowStreamActive = useAppShellStore((state) => state.setWindowStreamActive);
   useEffect(() => {
     if (isWindowStreamOpen) setWindowStreamOpen(false);
     if (isWindowStreamActive) setWindowStreamActive(false);
@@ -342,22 +352,21 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     toggleGeneralTerminal,
     toggleSidebar,
   } = windowSurfaces;
-  const terminalTabs = terminalTargetKey ? terminalTabsByTarget[terminalTargetKey] ?? [] : [];
+  const terminalTabs = terminalTargetKey ? ( terminalTabsByTarget[terminalTargetKey] ?? []) : [];
   const activeTerminalTabId = terminalTargetKey
-    ? activeTerminalTabByTarget[terminalTargetKey] ?? terminalTabs[0]?.id
+    ? ( activeTerminalTabByTarget[terminalTargetKey] ?? terminalTabs[0]?.id)
     : undefined;
-  const generalTerminalSyncTarget = useMemo<TerminalPanelTarget | undefined>(() => generalTerminalTarget ? ({
+  const generalTerminalSyncTarget = useMemo<TerminalPanelTarget | undefined>(() => generalTerminalTarget ?{
     kind: 'general',
     terminalId: generalTerminalId,
     portalId: generalTerminalTarget.portalId,
     rootId: generalTerminalTarget.rootId,
     title: generalTerminalTarget.title,
-  }) : undefined, [
+  } : undefined, [
     generalTerminalTarget?.portalId,
     generalTerminalTarget?.rootId,
-    generalTerminalTarget?.title,
-  ]);
-  const workspaceTerminalSyncTarget = useMemo<TerminalPanelTarget | undefined>(() => terminalTarget ? ({
+    generalTerminalTarget?.title],);
+  const workspaceTerminalSyncTarget = useMemo<TerminalPanelTarget | undefined>(() => terminalTarget ?{
     kind: 'workspace',
     terminalId: terminalTarget.terminalId,
     projectId: terminalTarget.projectId,
@@ -367,7 +376,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     repoPath: terminalTarget.repoPath,
     workspacePath: terminalTarget.workspacePath,
     title: terminalTarget.title,
-  }) : undefined, [
+  } : undefined, [
     terminalTarget?.portalId,
     terminalTarget?.projectId,
     terminalTarget?.repoPath,
@@ -376,7 +385,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     terminalTarget?.title,
     terminalTarget?.workspaceId,
     terminalTarget?.workspacePath,
-  ]);
+  ],);
   const generalSyncKey = terminalSyncKey(generalTerminalSyncTarget);
   const workspaceSyncKey = terminalSyncKey(workspaceTerminalSyncTarget);
   const isGeneralTerminalSyncing = generalSyncKey ? terminalSyncingTargets.has(generalSyncKey) : false;
@@ -386,15 +395,15 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const handleTerminalTabsChange = useCallback((tabsChange: TerminalPanelTabsChange) => {
     if (!terminalTargetKey) return;
     setTerminalTabs(terminalTargetKey, tabsChange);
-  }, [setTerminalTabs, terminalTargetKey]);
+  }, [setTerminalTabs, terminalTargetKey],);
 
   const handleActiveTerminalTabChange = useCallback((tabId: string) => {
     if (!terminalTargetKey) return;
     setActiveTerminalTab(terminalTargetKey, tabId);
-  }, [setActiveTerminalTab, terminalTargetKey]);
+  }, [setActiveTerminalTab, terminalTargetKey],);
 
   const setTerminalTargetSyncing = useCallback((key: string, isSyncing: boolean) => {
-    setTerminalSyncingTargets(current => {
+    setTerminalSyncingTargets((current) => {
       const next = new Set(current);
       if (isSyncing) next.add(key);
       else next.delete(key);
@@ -403,7 +412,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   }, []);
 
   const setTerminalTargetError = useCallback((key: string, error?: string) => {
-    setTerminalSyncErrors(current => {
+    setTerminalSyncErrors((current) => {
       if (current[key] === error) return current;
       return { ...current, [key]: error };
     });
@@ -417,7 +426,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   }, []);
 
   const isLatestTerminalSync = useCallback((key: string, sequence: number) =>
-    latestTerminalSyncByTargetRef.current.get(key) === sequence, []);
+    latestTerminalSyncByTargetRef.current.get(key) === sequence, [],);
 
   const applyTerminalWindows = useCallback((target: TerminalPanelTarget, windows: TerminalWindowRecord[]) => {
     if (target.kind === 'general') {
@@ -425,7 +434,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       return;
     }
     setTerminalWindows(target.terminalId, windows);
-  }, [setGeneralTerminalWindows, setTerminalWindows]);
+  }, [setGeneralTerminalWindows, setTerminalWindows],);
 
   const refreshTerminalWindowMetadata = useCallback((target: TerminalPanelTarget, windows: TerminalWindowRecord[]) => {
     if (target.kind === 'general') {
@@ -433,7 +442,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       return;
     }
     refreshWorkspaceTerminalWindowMetadata(target.terminalId, windows);
-  }, [refreshGeneralTerminalWindowMetadata, refreshWorkspaceTerminalWindowMetadata]);
+  }, [refreshGeneralTerminalWindowMetadata, refreshWorkspaceTerminalWindowMetadata],);
 
   const refreshTerminalSnapshotWindows = useCallback(async () => {
     if (!terminalTransport || !isDesktopTerminalTransportAvailable()) return;
@@ -445,12 +454,14 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   }, [setTerminalSnapshotWindows, terminalTransport]);
 
   const listTerminalWindowsForTarget = useCallback(async (target: TerminalPanelTarget) => {
-    if (!terminalTransport) throw new Error('Terminal transport is unavailable in this client.');
+    if (!terminalTransport) { throw new Error('Terminal transport is unavailable in this client.');
+      }
     const input = terminalTargetInput(target);
     const windows = await terminalTransport.snapshot(input);
-    if (isDesktopTerminalTransportAvailable()) setTerminalSnapshotWindows(windows);
-    return windows.filter(window => isTerminalWindowForTarget(window, target));
-  }, [setTerminalSnapshotWindows, terminalTransport]);
+    if (isDesktopTerminalTransportAvailable()) { setTerminalSnapshotWindows(windows);
+      }
+    return windows.filter((window) => isTerminalWindowForTarget(window, target));
+  }, [setTerminalSnapshotWindows, terminalTransport],);
 
   const refreshTerminalProcessNames = useCallback(async (target: TerminalPanelTarget | undefined) => {
     if (!target) return;
@@ -464,11 +475,11 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     } catch {
       // Process-name refresh is opportunistic; visible sync paths surface errors.
     }
-  }, [listTerminalWindowsForTarget, refreshTerminalWindowMetadata]);
+  }, [listTerminalWindowsForTarget, refreshTerminalWindowMetadata],);
 
   const syncTerminalTarget = useCallback(async (
     target: TerminalPanelTarget | undefined,
-    options: { ensure?: boolean; preferredActiveTabId?: string; requiredWindow?: TerminalWindowRecord } = {},
+    options: { ensure?: boolean; preferredActiveTabId?: string; requiredWindow?: TerminalWindowRecord; } = {},
   ) => {
     if (!target) return [];
     const key = terminalSyncKey(target);
@@ -477,26 +488,28 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     setTerminalTargetSyncing(key, true);
     setTerminalTargetError(key, undefined);
     try {
-      if (!terminalTransport) throw new Error('Terminal transport is unavailable in this client.');
+      if (!terminalTransport) { throw new Error('Terminal transport is unavailable in this client.');
+        }
       let windows = await listTerminalWindowsForTarget(target);
       if (options.ensure && windows.length === 0) {
         const created = await terminalTransport.create(terminalTargetInput(target));
         windows = await listTerminalWindowsForTarget(target);
-        if (!windows.some(window => window.terminalId === created.terminalId)) windows = [created];
+        if (!windows.some((window) => window.terminalId === created.terminalId)) windows = [created];
       }
       const requiredWindow = options.requiredWindow;
       if (
         requiredWindow
         && isTerminalWindowForTarget(requiredWindow, target)
-        && !windows.some(window => window.terminalId === requiredWindow.terminalId)
+        && !windows.some((window) => window.terminalId === requiredWindow.terminalId)
       ) {
         windows = [...windows, requiredWindow];
       }
       if (!isLatestTerminalSync(key, sequence)) return undefined;
       applyTerminalWindows(target, windows);
       const preferredActiveTabId = options.preferredActiveTabId;
-      if (preferredActiveTabId && windows.some(window => window.terminalId === preferredActiveTabId)) {
-        if (target.kind === 'general') setActiveGeneralTerminalTabId(preferredActiveTabId);
+      if (preferredActiveTabId && windows.some((window) => window.terminalId === preferredActiveTabId)) {
+        if (target.kind === 'general') { setActiveGeneralTerminalTabId(preferredActiveTabId);
+          }
         else setActiveTerminalTab(target.terminalId, preferredActiveTabId);
       }
       return windows;
@@ -507,7 +520,8 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       }
       return undefined;
     } finally {
-      if (isLatestTerminalSync(key, sequence)) setTerminalTargetSyncing(key, false);
+      if (isLatestTerminalSync(key, sequence)) { setTerminalTargetSyncing(key, false);
+        }
     }
   }, [
     applyTerminalWindows,
@@ -519,7 +533,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     setTerminalTargetError,
     setTerminalTargetSyncing,
     terminalTransport,
-  ]);
+  ],);
 
   const addTerminalTabForTarget = useCallback(async (target: TerminalPanelTarget | undefined) => {
     if (!target || !terminalTransport) return;
@@ -531,7 +545,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     }
     try {
       const created = await terminalTransport.create(terminalTargetInput(target));
-      await syncTerminalTarget(target, { preferredActiveTabId: created.terminalId, requiredWindow: created });
+      await syncTerminalTarget(target, { preferredActiveTabId: created.terminalId, requiredWindow: created, });
     } catch (error) {
       if (key && sequence !== undefined && isLatestTerminalSync(key, sequence)) {
         setTerminalTargetError(key, error instanceof Error ? error.message : String(error));
@@ -546,12 +560,12 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     setTerminalTargetSyncing,
     syncTerminalTarget,
     terminalTransport,
-  ]);
+  ],);
 
   const closeTerminalTabForTarget = useCallback(async (
     target: TerminalPanelTarget | undefined,
     tab: TerminalPanelTab,
-    onEmpty: () => void,
+    onEmpty: () => void
   ) => {
     if (!target || !terminalTransport) return;
     const key = terminalSyncKey(target);
@@ -572,26 +586,25 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     setTerminalTargetError,
     setTerminalTargetSyncing,
     syncTerminalTarget,
-    terminalTransport,
-  ]);
+    terminalTransport],);
 
   const handleTerminalExitForTarget = useCallback(async (
     target: TerminalPanelTarget | undefined,
-    onEmpty: () => void,
+    onEmpty: () => void
   ) => {
     if (!target) return;
     const windows = await syncTerminalTarget(target);
     if (windows?.length === 0) onEmpty();
-  }, [syncTerminalTarget]);
+  }, [syncTerminalTarget],);
 
   useEffect(() => {
     if (!generalTerminalSyncTarget) return;
-    void syncTerminalTarget(generalTerminalSyncTarget, { ensure: isGeneralTerminalOpen });
+    void syncTerminalTarget(generalTerminalSyncTarget, { ensure: isGeneralTerminalOpen, });
   }, [generalSyncKey, generalTerminalSyncTarget, isGeneralTerminalOpen, syncTerminalTarget]);
 
   useEffect(() => {
     if (!workspaceTerminalSyncTarget) return;
-    void syncTerminalTarget(workspaceTerminalSyncTarget, { ensure: showTerminalPane });
+    void syncTerminalTarget(workspaceTerminalSyncTarget, { ensure: showTerminalPane, });
   }, [showTerminalPane, syncTerminalTarget, workspaceSyncKey, workspaceTerminalSyncTarget]);
 
   useEffect(() => {
@@ -599,7 +612,8 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   }, [refreshTerminalSnapshotWindows]);
 
   useEffect(() => {
-    if (!terminalTransport || !isDesktopTerminalTransportAvailable()) return undefined;
+    if (!terminalTransport || !isDesktopTerminalTransportAvailable()) { return undefined;
+    }
     const interval = window.setInterval(() => {
       void refreshTerminalSnapshotWindows();
     }, terminalSnapshotRefreshMs);
@@ -607,9 +621,11 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   }, [refreshTerminalSnapshotWindows, terminalTransport]);
 
   useEffect(() => {
-    if (!terminalTransport || !isDesktopTerminalTransportAvailable()) return undefined;
-    return terminalTransport.subscribe(event => {
-      if (event.type === 'created' || event.type === 'exit') void refreshTerminalSnapshotWindows();
+    if (!terminalTransport || !isDesktopTerminalTransportAvailable()) { return undefined;
+    }
+    return terminalTransport.subscribe((event) => {
+      if (event.type === 'created' || event.type === 'exit') { void refreshTerminalSnapshotWindows();
+      }
     });
   }, [refreshTerminalSnapshotWindows, terminalTransport]);
 
@@ -628,16 +644,34 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     }, terminalProcessRefreshMs);
     return () => window.clearInterval(interval);
   }, [refreshTerminalProcessNames, showTerminalPane, workspaceSyncKey, workspaceTerminalSyncTarget]);
-  const { data: queriedServerThreads, isFetched } = useQuery({
+  const { data: queriedServerThreads, isSuccess: areThreadsLoaded } = useQuery({
     queryKey: ['threads', resourceId],
     queryFn: () => listServerThreads(),
   });
   const serverThreads = queriedServerThreads ?? emptyServerThreads;
 
   useEffect(() => {
-    if (!isFetched || !projectsQuery.isFetched) return;
+    if (!areThreadsLoaded || !projectsQuery.isSuccess) return;
     setServerThreads(serverThreads, projects);
-  }, [isFetched, projects, projectsQuery.isFetched, serverThreads, setServerThreads]);
+  }, [areThreadsLoaded, projects, projectsQuery.isSuccess, serverThreads, setServerThreads]);
+
+  useEffect(() => {
+    if (!projectsQuery.isSuccess) return;
+    const editorTargetKeys = new Set<string>();
+    const workspaceIds = new Set<string>();
+    const projectIds = new Set(projects.map((project) => project.id));
+    for (const project of projects) {
+      const product = productForProjectKind(project.projectKind);
+      if (product !== 'code' && product !== 'notes') continue;
+      for (const workspace of project.workspaces) {
+        workspaceIds.add(workspace.id);
+        editorTargetKeys.add(getEditorTabTargetKey(product, project.id, workspace.id));
+      }
+    }
+    reconcileEditorTargets(editorTargetKeys);
+    reconcileTerminalTargets(workspaceIds);
+    reconcileSessionProjects(projectIds);
+  }, [projects, projectsQuery.isSuccess, reconcileEditorTargets, reconcileSessionProjects, reconcileTerminalTargets]);
 
   useEffect(() => {
     if (!proposalWorkflowEnabled) {
@@ -674,13 +708,14 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   }, [activeProduct, setActiveProduct, storedActiveProduct]);
 
   useEffect(() => {
-    if (!isFetched || !projectsQuery.isFetched) return;
+    if (!areThreadsLoaded || !projectsQuery.isSuccess) return;
 
     if (isActiveSurfaceSupported) return;
 
     if (activeProduct === 'code' || activeProduct === 'notes') {
-      const nextProject = projects.find(project =>
-        projectBelongsToProduct(project, activeProduct) && project.workspaces.length > 0
+      const nextProject = projects.find(
+        (project) =>
+        projectBelongsToProduct(project, activeProduct) && project.workspaces.length > 0,
       );
       const nextWorkspace = nextProject?.workspaces[0];
       if (nextProject && nextWorkspace) {
@@ -689,7 +724,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       }
     }
 
-    const nextThread = threads.find(thread => {
+    const nextThread = threads.find((thread) => {
       const product = productForThread(thread);
       return thread.archived !== true && product !== undefined && isProductAllowedForClientApp(product, clientApp);
     });
@@ -703,11 +738,11 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     activeProduct,
     clientApp,
     isActiveSurfaceSupported,
-    isFetched,
+    areThreadsLoaded,
     newThread,
     productForThread,
     projects,
-    projectsQuery.isFetched,
+    projectsQuery.isSuccess,
     selectThreadSurface,
     selectWorkspaceSurface,
     threads,
@@ -716,7 +751,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const focusSidebar = useCallback(() => {
     window.requestAnimationFrame(() => {
       const sidebar = sidebarSurfaceRef.current;
-      const firstControl = sidebar?.querySelector<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+      const firstControl = sidebar?.querySelector<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',);
       (firstControl ?? sidebar)?.focus();
     });
   }, []);
@@ -747,11 +782,12 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     void newThread(projectId, workspaceId)
       .then(() => queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }))
       .then(() => focusChat());
-  }, [activeProduct, activeSurface, activeSurfaceProduct, activeThread, clientApp, focusChat, newThread, productForThread, queryClient, resourceId]);
+  }, [activeProduct, activeSurface, activeSurfaceProduct, activeThread, clientApp, focusChat, newThread, productForThread, queryClient, resourceId,]);
   const handleGeneralTerminalToggle = useCallback(() => {
     const shouldFocusAfterOpen = !isGeneralTerminalOpen;
     toggleGeneralTerminal();
-    if (shouldFocusAfterOpen) window.requestAnimationFrame(focusGeneralTerminal);
+    if (shouldFocusAfterOpen) { window.requestAnimationFrame(focusGeneralTerminal);
+    }
   }, [focusGeneralTerminal, isGeneralTerminalOpen, toggleGeneralTerminal]);
 
   const handleChatPaneToggle = useCallback(() => {
@@ -783,7 +819,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     if (pane === 'chat') window.requestAnimationFrame(focusChat);
     else if (pane === 'editor') window.requestAnimationFrame(focusEditor);
     else window.requestAnimationFrame(focusTerminal);
-  }, [focusChat, focusEditor, focusTerminal, hasChatPaneTarget, hasEditorPaneTarget, hasTerminalPaneTarget, toggleMaximizedPane]);
+  }, [focusChat, focusEditor, focusTerminal, hasChatPaneTarget, hasEditorPaneTarget, hasTerminalPaneTarget, toggleMaximizedPane,],);
 
   const handleTerminalPaneColumnToggle = useCallback(() => {
     if (!terminalTarget || !canToggleTerminalPaneColumn) return;
@@ -822,27 +858,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   useEffect(() => {
     if (activeSurface.kind !== 'workspace' || !sideEditorTargetKey || !showEditorPane) return;
     focusEditor();
-  }, [activeSurface, focusEditor, showEditorPane, sideEditorTargetKey]);
-
-  useEffect(() => {
-    if (!shouldCloseUnavailableTerminalPane({
-      hasTerminalPaneTarget,
-      hasWorkspaceTerminalContext: hasCodeSurfaceContext && hasWorkspaceTerminalContext,
-      isPortalsFetched: workspaceTargets.portalsQuery.isFetched,
-      isProjectsFetched: projectsQuery.isFetched,
-      terminalOpen: paneVisibility.terminalOpen,
-    })) {
-      return;
-    }
-    closePane('terminal');
-  }, [
-    closePane,
-    hasCodeSurfaceContext,
-    hasTerminalPaneTarget,
-    hasWorkspaceTerminalContext,
-    paneVisibility.terminalOpen,
-    projectsQuery.isFetched,
-    workspaceTargets.portalsQuery.isFetched,
+  }, [activeSurface, focusEditor, showEditorPane, sideEditorTargetKey
   ]);
   const isSidebarSurfaceVisible = isSidebarOpen || showSidebarPreview;
   const hasFloatingLeftAction = showHeaderSidebarToggle || showPinnedSidebarToggle || showGlobalTerminalButton;
@@ -883,7 +899,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       <Button
         className={[
           isOpen ? 'bg-accent' : '',
-          isAvailable && isGeneralTerminalActive ? 'text-foreground' : '',
+          isAvailable && isGeneralTerminalActive ? 'text-foreground' : ''
         ].filter(Boolean).join(' ')}
         size="icon"
         variant="ghost"
@@ -904,7 +920,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
 
     return (
       <nav className="weave-product-rail flex min-w-0 max-w-full items-center gap-1 overflow-hidden rounded-md text-base font-semibold" aria-label={`${clientApp.displayName} sections`}>
-        {products.map(product => {
+        {products.map((product) => {
           const label = getClientAppProductLabel(clientApp, product);
           return (
             <button
@@ -931,6 +947,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const renderAppBarCenterContent = () => renderProductNavigation() ?? appBarBreadcrumb;
 
   const renderTerminalPanel = (variant: 'pane' | 'main') => showTerminalPane ? (
+      terminalTarget ? (
     <TerminalPaneHost
       activeTabId={activeTerminalTabId}
       breadcrumb={breadcrumbPane === 'terminal' && variant === 'main' ? contextBreadcrumb : undefined}
@@ -942,7 +959,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       layoutSyncKey={terminalLayoutSyncKey}
       onActiveTabIdChange={handleActiveTerminalTabChange}
       onAddTab={() => void addTerminalTabForTarget(workspaceTerminalSyncTarget)}
-      onCloseTab={tab => void closeTerminalTabForTarget(workspaceTerminalSyncTarget, tab, () => closePane('terminal'))}
+      onCloseTab={(tab) => void closeTerminalTabForTarget(workspaceTerminalSyncTarget, tab, () => closePane('terminal'))}
       onExit={() => void handleTerminalExitForTarget(workspaceTerminalSyncTarget, () => closePane('terminal'))}
       onHide={() => closePane('terminal')}
       onMaximizeToggle={() => handleMainPaneMaximizeToggle('terminal')}
@@ -956,6 +973,16 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       onTerminalColumnToggle={canToggleTerminalPaneColumn ? handleTerminalPaneColumnToggle : undefined}
       variant={variant}
     />
+      ) : (
+        <div
+          className="grid min-h-0 flex-1 place-items-center bg-background text-sm text-muted-foreground"
+          data-weave-terminal-unavailable
+        >
+          <div className="max-w-sm text-center">
+            Terminal unavailable. Weave will reconnect this pane when the workspace Portal returns.
+          </div>
+        </div>
+      )
   ) : null;
 
   const renderChatPane = () => showChatPane ? (
@@ -983,7 +1010,25 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   ) : null;
 
   const renderEditorPane = () => {
-    if (!showEditorPane || (!editorTarget && !notesTarget)) return null;
+    if (!showEditorPane) return null;
+
+    if (!editorTarget && !notesTarget) {
+      return (
+        <div
+          key="editor-unavailable"
+          className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
+          data-weave-editor-unavailable
+        >
+          <div className="grid min-h-0 flex-1 place-items-center bg-background text-sm text-muted-foreground">
+            <div className="max-w-sm text-center">
+              {activeSurfaceProduct === 'notes' ? 'Notes vault' : 'Editor'} unavailable. Weave will restore it when the
+              workspace Portal returns.
+            </div>
+          </div>
+          {showTerminalInEditorPane ? renderTerminalPanel('pane') : null}
+        </div>
+      );
+    }
 
     if (
       proposalWorkflowEnabled
@@ -1002,7 +1047,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
           terminalSlot={showTerminalInEditorPane ? renderTerminalPanel('pane') : undefined}
           selectedFilePath={activeProposalFilePath}
           onClose={closeProposalReview}
-          onOpenSource={path => {
+          onOpenSource={(path) => {
             if (!activeThread?.workspaceId) return;
             requestEditorFollow({
               threadId: activeThreadId,
@@ -1012,7 +1057,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
               toolCallId: 'proposal-review',
             });
           }}
-          onExpandedChange={nextExpanded => {
+          onExpandedChange={(nextExpanded) => {
             if (nextExpanded) handleMainPaneMaximizeToggle('editor');
             else restoreMaximizedPane();
           }}
@@ -1030,8 +1075,8 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
         terminalSlot={showTerminalInEditorPane ? renderTerminalPanel('pane') : undefined}
         onClose={() => closePane('editor')}
         proposalBackFilePath={canBackToActiveProposalReview ? activeProposalFilePath : undefined}
-        onBackToProposalPreview={canBackToActiveProposalReview && activeProposalPath ? path => openProposalReview(activeProposalPath, { filePath: path }) : undefined}
-        onExpandedChange={nextExpanded => {
+        onBackToProposalPreview={canBackToActiveProposalReview && activeProposalPath ? ( path) => openProposalReview(activeProposalPath, { filePath: path }) : undefined}
+        onExpandedChange={(nextExpanded) => {
           if (nextExpanded) handleMainPaneMaximizeToggle('editor');
           else restoreMaximizedPane();
         }}
@@ -1060,11 +1105,11 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
           <MessageSquare size={18} />
         </Button>
       ) : null}
-      {terminalTarget ? (
+      {hasTerminalPaneTarget ? (
         <Button
           className={[
             showTerminalPane ? 'bg-accent' : '',
-            hasActiveTerminal ? 'text-foreground' : '',
+            hasActiveTerminal ? 'text-foreground' : ''
           ].filter(Boolean).join(' ')}
           size="icon"
           variant="ghost"
@@ -1076,17 +1121,17 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
           <TerminalTabCountBadge count={terminalTabs.length} />
         </Button>
       ) : null}
-      {editorTarget || notesTarget ? (
+      {hasEditorPaneTarget ? (
         <Button
           className={showEditorPane ? 'bg-accent' : ''}
           size="icon"
           variant="ghost"
-          aria-label={notesTarget ? (showEditorPane ? 'Hide notes' : 'Show notes') : (showEditorPane ? 'Hide editor' : 'Show editor')}
+          aria-label={isNotesSurface ?showEditorPane ? 'Hide notes' : 'Show notes' :showEditorPane ? 'Hide editor' : 'Show editor'}
           data-active={showEditorPane ? 'true' : 'false'}
           data-weave-project-code-pane-toggle={editorTarget ? 'true' : undefined}
           onClick={handleEditorPaneToggle}
         >
-          {notesTarget ? <StickyNote size={18} /> : <Code2 size={18} />}
+          {isNotesSurface ? <StickyNote size={18} /> : <Code2 size={18} />}
         </Button>
       ) : null}
     </>
@@ -1116,7 +1161,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
               openPane('editor');
               window.requestAnimationFrame(focusEditor);
             }}>
-              {notesTarget ? <StickyNote size={14} /> : <Code2 size={14} />}
+              {isNotesSurface ? <StickyNote size={14} /> : <Code2 size={14} />}
               Open Editor
             </Button>
           ) : null}
@@ -1187,7 +1232,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
         isSyncing={isGeneralTerminalSyncing}
         onActiveTabIdChange={setActiveGeneralTerminalTabId}
         onAddTab={() => void addTerminalTabForTarget(generalTerminalSyncTarget)}
-        onCloseTab={tab => void closeTerminalTabForTarget(generalTerminalSyncTarget, tab, hideGeneralTerminal)}
+        onCloseTab={(tab) => void closeTerminalTabForTarget(generalTerminalSyncTarget, tab, hideGeneralTerminal)}
         onExit={() => void handleTerminalExitForTarget(generalTerminalSyncTarget, hideGeneralTerminal)}
         onHide={hideGeneralTerminal}
         onSessionActiveChange={handleGeneralTerminalSessionActiveChange}

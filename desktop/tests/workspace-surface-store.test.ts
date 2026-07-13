@@ -31,7 +31,9 @@ const loadFreshSurfaceStore = async (seed?: (storage: Storage) => void) => {
   seed?.(storage);
   vi.stubGlobal('localStorage', storage);
   vi.stubGlobal('window', { localStorage: storage });
-  return import('../../packages/client/src/stores/workspace-surface-store');
+  const module = await import('../../packages/client/src/stores/workspace-surface-store');
+  await module.useWorkspaceSurfaceStore.persist.rehydrate();
+  return module;
 };
 
 describe('workspace surface store', () => {

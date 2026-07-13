@@ -25,22 +25,22 @@ export const useShellLayout = ({
   terminalWorkspaceId,
   visibleMainPaneMinimumWidthPx,
 }: ShellLayoutInput) => {
-  const isSidebarPinnedOpen = useAppShellStore(state => state.isSidebarPinnedOpen);
-  const isSidebarPreviewOpen = useAppShellStore(state => state.isSidebarPreviewOpen);
-  const isGeneralTerminalOpen = useAppShellStore(state => state.isGeneralTerminalOpen);
-  const isGeneralTerminalActive = useAppShellStore(state => state.isGeneralTerminalActive);
-  const editorFocusRequest = useAppShellStore(state => state.editorFocusRequest);
-  const terminalFocusRequest = useAppShellStore(state => state.terminalFocusRequest);
-  const generalTerminalFocusRequest = useAppShellStore(state => state.generalTerminalFocusRequest);
-  const setSidebarPinnedOpen = useAppShellStore(state => state.setSidebarPinnedOpen);
-  const setSidebarPreviewOpen = useAppShellStore(state => state.setSidebarPreviewOpen);
-  const setGeneralTerminalOpen = useAppShellStore(state => state.setGeneralTerminalOpen);
-  const setGeneralTerminalActive = useAppShellStore(state => state.setGeneralTerminalActive);
-  const requestEditorFocus = useAppShellStore(state => state.requestEditorFocus);
-  const requestTerminalFocus = useAppShellStore(state => state.requestTerminalFocus);
-  const requestGeneralTerminalFocus = useAppShellStore(state => state.requestGeneralTerminalFocus);
-  const activeTerminalWorkspaceIds = useTerminalStore(state => state.activeTerminalWorkspaceIds);
-  const setWorkspaceTerminalActive = useTerminalStore(state => state.setWorkspaceTerminalActive);
+  const isSidebarPinnedOpen = useAppShellStore((state) => state.isSidebarPinnedOpen);
+  const isSidebarPreviewOpen = useAppShellStore((state) => state.isSidebarPreviewOpen);
+  const isGeneralTerminalOpen = useAppShellStore((state) => state.isGeneralTerminalOpen);
+  const isGeneralTerminalActive = useAppShellStore((state) => state.isGeneralTerminalActive);
+  const editorFocusRequest = useAppShellStore((state) => state.editorFocusRequest);
+  const terminalFocusRequest = useAppShellStore((state) => state.terminalFocusRequest);
+  const generalTerminalFocusRequest = useAppShellStore((state) => state.generalTerminalFocusRequest);
+  const setSidebarPinnedOpen = useAppShellStore((state) => state.setSidebarPinnedOpen);
+  const setSidebarPreviewOpen = useAppShellStore((state) => state.setSidebarPreviewOpen);
+  const setGeneralTerminalOpen = useAppShellStore((state) => state.setGeneralTerminalOpen);
+  const setGeneralTerminalActive = useAppShellStore((state) => state.setGeneralTerminalActive);
+  const requestEditorFocus = useAppShellStore((state) => state.requestEditorFocus);
+  const requestTerminalFocus = useAppShellStore((state) => state.requestTerminalFocus);
+  const requestGeneralTerminalFocus = useAppShellStore((state) => state.requestGeneralTerminalFocus);
+  const activeTerminalWorkspaceIds = useTerminalStore((state) => state.activeTerminalWorkspaceIds);
+  const setWorkspaceTerminalActive = useTerminalStore((state) => state.setWorkspaceTerminalActive);
   const sidebarPreviewCloseTimeoutRef = useRef<number | undefined>(undefined);
   const workspaceWidthWithPinnedSidebar = Math.max(0, pageWidth - threadSidebarWidthPx);
   const canPinSidebarWithMainPanes = !isPortraitViewport
@@ -61,10 +61,9 @@ export const useShellLayout = ({
 
   useEffect(() => {
     if (!hasGeneralTerminalTarget) {
-      setGeneralTerminalOpen(false);
       setGeneralTerminalActive(false);
     }
-  }, [hasGeneralTerminalTarget, setGeneralTerminalActive, setGeneralTerminalOpen]);
+  }, [hasGeneralTerminalTarget, setGeneralTerminalActive]);
 
   useEffect(() => {
     if (!hasEditorTarget) return;
@@ -74,7 +73,7 @@ export const useShellLayout = ({
     if (sidebarPreviewCloseTimeoutRef.current !== undefined) {
       window.clearTimeout(sidebarPreviewCloseTimeoutRef.current);
     }
-  }, []);
+  }, [],);
 
   const clearSidebarPreviewCloseTimeout = useCallback(() => {
     if (sidebarPreviewCloseTimeoutRef.current === undefined) return;
@@ -104,7 +103,6 @@ export const useShellLayout = ({
   const toggleSidebar = useCallback(() => {
     clearSidebarPreviewCloseTimeout();
     if (isPortraitViewport) {
-      setSidebarPinnedOpen(false);
       setSidebarPreviewOpen(!isSidebarPreviewOpen);
       return;
     }
@@ -123,7 +121,6 @@ export const useShellLayout = ({
     isPortraitViewport,
     isSidebarPinnedOpen,
     isSidebarPreviewOpen,
-    setSidebarPinnedOpen,
     setSidebarPreviewOpen,
   ]);
 
@@ -161,11 +158,11 @@ export const useShellLayout = ({
   const handleTerminalSessionActiveChange = useCallback((isActive: boolean) => {
     if (!terminalWorkspaceId) return;
     setWorkspaceTerminalActive(terminalWorkspaceId, isActive);
-  }, [setWorkspaceTerminalActive, terminalWorkspaceId]);
+  }, [setWorkspaceTerminalActive, terminalWorkspaceId],);
 
   const handleGeneralTerminalSessionActiveChange = useCallback((isActive: boolean) => {
     setGeneralTerminalActive(isActive);
-  }, [setGeneralTerminalActive]);
+  }, [setGeneralTerminalActive],);
 
   return {
     closeSidebar,

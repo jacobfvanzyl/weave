@@ -1,5 +1,15 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { TerminalPanelTab, TerminalPanelTabsChange } from '../components/terminal/TerminalPanel';
+import { getClientAppStorageKey } from '../lib/client-app';
+import {
+  claimLegacyClientSessionStorage,
+  type ClientSessionIdentity,
+  createClientSessionPersistStorage,
+  getClientSessionStorageKey,
+  readClientSessionStorageValue,
+  restoreClientSessionStorageValue,
+} from '../lib/client-session';
 import type { TerminalWindowRecord } from '../lib/terminal-types';
 
 export const generalTerminalId = 'weave-general-terminal';
@@ -10,7 +20,7 @@ const sortedUniqueTerminalWindows = (windows: TerminalWindowRecord[]) => {
   const seenTerminalIds = new Set<string>();
   return [...windows]
     .sort((left, right) => left.slot - right.slot || left.terminalId.localeCompare(right.terminalId))
-    .filter(window => {
+    .filter((window) => {
       if (seenTerminalIds.has(window.terminalId)) return false;
       seenTerminalIds.add(window.terminalId);
       return true;
@@ -18,7 +28,7 @@ const sortedUniqueTerminalWindows = (windows: TerminalWindowRecord[]) => {
 };
 
 const activeTabAfterReplace = (activeTabId: string | undefined, tabs: TerminalPanelTab[]) =>
-  tabs.some(tab => tab.id === activeTabId) ? activeTabId : tabs[0]?.id;
+  tabs.some((tab) => tab.id === activeTabId) ? activeTabId : tabs[0]?.id;
 
 const getWorkspaceTerminalWindowCounts = (windows: TerminalWindowRecord[]) => {
   const counts: Record<string, number | undefined> = {};
@@ -53,8 +63,8 @@ export const createTerminalPanelTabsFromWindows = (
   windows: TerminalWindowRecord[],
   currentTabs: TerminalPanelTab[] = [],
 ) => {
-  const currentTabsById = new Map(currentTabs.map(tab => [tab.id, tab]));
-  return sortedUniqueTerminalWindows(windows).map(window => {
+  const currentTabsById = new Map(currentTabs.map((tab) => [tab.id, tab]));
+  return sortedUniqueTerminalWindows(windows).map((window) => {
     const nextTab = createTerminalPanelTab(baseTerminalId, window.slot, window);
     const currentTab = currentTabsById.get(nextTab.id);
     if (!currentTab) return nextTab;
@@ -109,11 +119,11 @@ export const createTerminalPanelTab = (
 
 const refreshTerminalPanelTabMetadata = (
   tabs: TerminalPanelTab[],
-  windows: TerminalWindowRecord[],
+  windows: TerminalWindowRecord[]
 ) => {
-  const windowsByTerminalId = new Map(windows.map(window => [window.terminalId, window]));
+  const windowsByTerminalId = new Map(windows.map((window) => [window.terminalId, window]));
   let didChange = false;
-  const nextTabs = tabs.map(tab => {
+  const nextTabs = tabs.map((tab) => {
     const window = windowsByTerminalId.get(tab.terminalId);
     if (!window) return tab;
     const nextTab = {
@@ -152,53 +162,79 @@ type TerminalStoreState = {
   setTerminalWindows: (targetKey: string, windows: TerminalWindowRecord[]) => void;
   refreshTerminalWindowMetadata: (targetKey: string, windows: TerminalWindowRecord[]) => void;
   setWorkspaceTerminalActive: (workspaceId: string, isActive: boolean) => void;
-};
-
-export const useTerminalStore = create<TerminalStoreState>()(set => ({
+  reconcileWorkspaceTargets: (workspaceIds: ReadonlySet<string>) => void;
+}; const initialTerminalStoreState =() => ({
   activeGeneralTerminalTabId: getPrimaryTerminalTabId(generalTerminalId),
   generalTerminalTabs: [],
   activeTerminalTabByTarget: {},
   terminalTabsByTarget: {},
-  activeTerminalWorkspaceIds: new Set(),
+  activeTerminalWorkspaceIds: new Set<string>(),
   workspaceTerminalWindowCounts: {},
-  setActiveGeneralTerminalTabId: activeGeneralTerminalTabId => set({ activeGeneralTerminalTabId }),
-  setGeneralTerminalTabs: tabs =>
-    set(state => {
+});
+
+const normalizePersistedTerminalState = (value: unknown) => {
+  const state = value && typeof value === 'object' ? (value as Partial<TerminalStoreState>) : {};
+  const activeTerminalTabByTarget =
+    state.activeTerminalTabByTarget &&
+      typeof state.activeTerminalTabByTarget === 'object' &&
+      !Array.isArray(state.activeTerminalTabByTarget)
+      ? Object.fromEntries(
+          Object.entries(state.activeTerminalTabByTarget).filter(
+            (entry): entry is [string, string] => Boolean(entry[0]) && typeof entry[1] === 'string',
+          ),
+        )
+      : {};
+  return {
+    activeGeneralTerminalTabId:
+      typeof state.activeGeneralTerminalTabId === 'string' && state.activeGeneralTerminalTabId
+        ? state.activeGeneralTerminalTabId
+        : getPrimaryTerminalTabId(generalTerminalId),
+    activeTerminalTabByTarget,
+  };
+};
+
+export const useTerminalStore = create<TerminalStoreState>()(
+  persist(
+    (set) => ({
+      ...initialTerminalStoreState(),
+  setActiveGeneralTerminalTabId: ( activeGeneralTerminalTabId) => set({ activeGeneralTerminalTabId }),
+  setGeneralTerminalTabs: ( tabs) =>
+    set((state) => {
       const nextTabs = typeof tabs === 'function' ? tabs(state.generalTerminalTabs) : tabs;
       return nextTabs === state.generalTerminalTabs ? state : { generalTerminalTabs: nextTabs };
     }),
-  setGeneralTerminalWindows: windows =>
-    set(state => {
+  setGeneralTerminalWindows: ( windows) =>
+    set((state) => {
       const nextTabs = createTerminalPanelTabsFromWindows(generalTerminalId, windows, state.generalTerminalTabs);
       const activeGeneralTerminalTabId = activeTabAfterReplace(state.activeGeneralTerminalTabId, nextTabs)
         ?? state.activeGeneralTerminalTabId;
       return { generalTerminalTabs: nextTabs, activeGeneralTerminalTabId };
     }),
-  refreshGeneralTerminalWindowMetadata: windows =>
-    set(state => {
+  refreshGeneralTerminalWindowMetadata: ( windows) =>
+    set((state) => {
       const nextTabs = refreshTerminalPanelTabMetadata(state.generalTerminalTabs, windows);
       return nextTabs === state.generalTerminalTabs ? state : { generalTerminalTabs: nextTabs };
     }),
-  setTerminalSnapshotWindows: windows =>
-    set({ workspaceTerminalWindowCounts: getWorkspaceTerminalWindowCounts(windows) }),
+  setTerminalSnapshotWindows: ( windows) =>
+    set({ workspaceTerminalWindowCounts: getWorkspaceTerminalWindowCounts(windows), }),
   setActiveTerminalTab: (targetKey, tabId) =>
-    set(state => ({
-      activeTerminalTabByTarget: { ...state.activeTerminalTabByTarget, [targetKey]: tabId },
+    set((state) => ({
+      activeTerminalTabByTarget: { ...state.activeTerminalTabByTarget, [targetKey]: tabId, },
     })),
   setTerminalTabs: (targetKey, tabs) =>
-    set(state => {
+    set((state) => {
       const currentTabs = state.terminalTabsByTarget[targetKey] ?? [];
       const nextTabs = typeof tabs === 'function' ? tabs(currentTabs) : tabs;
       if (nextTabs === currentTabs) return state;
       return {
-        terminalTabsByTarget: { ...state.terminalTabsByTarget, [targetKey]: nextTabs },
+        terminalTabsByTarget: { ...state.terminalTabsByTarget, [targetKey]: nextTabs, },
       };
     }),
   setTerminalWindows: (targetKey, windows) =>
-    set(state => {
-      const nextTabs = createTerminalPanelTabsFromWindows(targetKey, windows, state.terminalTabsByTarget[targetKey] ?? []);
+    set((state) => {
+      const nextTabs = createTerminalPanelTabsFromWindows(targetKey, windows, state.terminalTabsByTarget[targetKey] ?? [],);
       const activeTerminalTabId = activeTabAfterReplace(state.activeTerminalTabByTarget[targetKey], nextTabs);
-      const workspaceId = windows.find(window => window.kind === 'workspace' && window.workspaceId)?.workspaceId ?? targetKey;
+      const workspaceId = windows.find((window) => window.kind === 'workspace' && window.workspaceId)?.workspaceId ?? targetKey;
       return {
         activeTerminalTabByTarget: {
           ...state.activeTerminalTabByTarget,
@@ -216,7 +252,7 @@ export const useTerminalStore = create<TerminalStoreState>()(set => ({
       };
     }),
   refreshTerminalWindowMetadata: (targetKey, windows) =>
-    set(state => {
+    set((state) => {
       const currentTabs = state.terminalTabsByTarget[targetKey] ?? [];
       const nextTabs = refreshTerminalPanelTabMetadata(currentTabs, windows);
       if (nextTabs === currentTabs) return state;
@@ -228,13 +264,70 @@ export const useTerminalStore = create<TerminalStoreState>()(set => ({
       };
     }),
   setWorkspaceTerminalActive: (workspaceId, isActive) =>
-    set(state => {
+    set((state) => {
       const next = new Set(state.activeTerminalWorkspaceIds);
       if (isActive) next.add(workspaceId);
       else next.delete(workspaceId);
-      if (next.size === state.activeTerminalWorkspaceIds.size && [...next].every(id => state.activeTerminalWorkspaceIds.has(id))) {
+      if (next.size === state.activeTerminalWorkspaceIds.size && [...next].every((id) => state.activeTerminalWorkspaceIds.has(id))) {
         return state;
       }
       return { activeTerminalWorkspaceIds: next };
     }),
-}));
+      reconcileWorkspaceTargets: (workspaceIds) =>
+        set((state) => {
+          if (
+            Object.keys(state.activeTerminalTabByTarget).every((targetKey) => workspaceIds.has(targetKey)) &&
+            Object.keys(state.terminalTabsByTarget).every((targetKey) => workspaceIds.has(targetKey)) &&
+            Array.from(state.activeTerminalWorkspaceIds).every((workspaceId) => workspaceIds.has(workspaceId)) &&
+            Object.keys(state.workspaceTerminalWindowCounts).every((workspaceId) => workspaceIds.has(workspaceId))
+          ) {
+            return state;
+          }
+          return {
+          activeTerminalTabByTarget: Object.fromEntries(
+            Object.entries(state.activeTerminalTabByTarget).filter(([targetKey]) => workspaceIds.has(targetKey)),
+          ),
+          terminalTabsByTarget: Object.fromEntries(
+            Object.entries(state.terminalTabsByTarget).filter(([targetKey]) => workspaceIds.has(targetKey)),
+          ),
+          activeTerminalWorkspaceIds: new Set(
+            Array.from(state.activeTerminalWorkspaceIds).filter((workspaceId) => workspaceIds.has(workspaceId)),
+          ),
+          workspaceTerminalWindowCounts: Object.fromEntries(
+            Object.entries(state.workspaceTerminalWindowCounts).filter(([workspaceId]) =>
+              workspaceIds.has(workspaceId),
+            ),
+          ),
+          };
+        }),
+    }),
+    {
+      name: getClientAppStorageKey('weave-terminal-view'),
+      version: 1,
+      skipHydration: true,
+      storage: createClientSessionPersistStorage(),
+      migrate: normalizePersistedTerminalState,
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...normalizePersistedTerminalState(persistedState),
+      }),
+      partialize: (state) => ({
+        activeGeneralTerminalTabId: state.activeGeneralTerminalTabId,
+        activeTerminalTabByTarget: state.activeTerminalTabByTarget,
+      }),
+    },
+  ),
+);
+
+export const activateTerminalSession = async (identity: ClientSessionIdentity) => {
+  const name = getClientSessionStorageKey('weave-terminal-view', identity);
+  claimLegacyClientSessionStorage(name, [getClientAppStorageKey('weave-terminal-view')]);
+  const persistedState = readClientSessionStorageValue(name);
+  useTerminalStore.persist.setOptions({
+    name,
+    storage: createClientSessionPersistStorage(),
+  });
+  useTerminalStore.setState(initialTerminalStoreState());
+  restoreClientSessionStorageValue(name, persistedState);
+  await useTerminalStore.persist.rehydrate();
+};

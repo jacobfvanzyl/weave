@@ -1,6 +1,8 @@
 import { ConnectionApp } from '../components/connection/ConnectionApp';
 import { WeaveAppShell } from '../components/app-shell/WeaveAppShell';
-import { clientAppDefinitions, getClientAppDefinition, type ClientAppDefinition, type ClientAppInputId } from '../lib/client-app';
+import {
+  type ClientAppDefinition, clientAppDefinitions,
+  type ClientAppInputId, getClientAppDefinition, } from '../lib/client-app';
 import { createMobileConnectionAdapter } from '../lib/mobile-connection-adapter';
 
 const mobileConnectionAdapter = createMobileConnectionAdapter();
@@ -14,9 +16,10 @@ export const ClientAppMobileConnectionApp = ({ clientApp }: MobileConnectionAppP
   return (
   <ConnectionApp
     adapter={mobileConnectionAdapter}
+      clientApp={app.id}
     settingsButtonClassName="h-8 w-8 text-muted-foreground hover:text-foreground"
     tokenStorageDescription="Saved in this iOS app's Preferences storage."
-    renderConnected={connectionSettingsButton => (
+    renderConnected={(connectionSettingsButton) => (
       <WeaveAppShell clientApp={app} connectionSettingsButton={connectionSettingsButton} />
     )}
   />
@@ -27,9 +30,8 @@ export const MobileConnectionApp = ClientAppMobileConnectionApp;
 
 export const WeaveMobileConnectionApp = ClientAppMobileConnectionApp;
 
-export const FlareMobileConnectionApp = () => (
-  <ClientAppMobileConnectionApp clientApp={clientAppDefinitions.flare} />
-);
+export const FlareMobileConnectionApp = () =>
+  <ClientAppMobileConnectionApp clientApp={clientAppDefinitions.flare} />;
 
 export const CoppermindMobileConnectionApp = () => (
   <ClientAppMobileConnectionApp clientApp={clientAppDefinitions.coppermind} />

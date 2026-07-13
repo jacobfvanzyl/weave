@@ -1,7 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState, } from 'react';
+import {
+  closestCenter, DndContext,
+  type DragEndEvent, MouseSensor, TouchSensor, useSensor, useSensors, } from '@dnd-kit/core';
 import { restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
-import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
   Brain,
@@ -34,12 +41,12 @@ import { cn } from '../../lib/cn';
 import {
   applyCoppermindAutosaveResult,
   coppermindAutosaveDebounceMs,
+  type CoppermindAutosaveSnapshot,
   createCoppermindAutosaveSnapshot,
   doesCoppermindWatchEventTouchPath,
   getCoppermindAutosaveWatchDirectories,
   isCoppermindAutosaveStaleVersionError,
   shouldAutosaveCoppermindBuffer,
-  type CoppermindAutosaveSnapshot,
 } from '../../lib/coppermind-autosave';
 import { createEmptyCoppermindDocumentContent, normalizeCoppermindDocumentPath } from '../../lib/coppermind-document';
 import {
@@ -49,20 +56,23 @@ import {
   isEditorPathOpenable,
   resolveEditorDocumentKind,
 } from '../../lib/editor-document-kind';
-import { getClientAppStorageItem, setClientAppStorageItem } from '../../lib/client-app';
-import { createWorkspaceFileBackend, type WorkspaceFileAttachment, type WorkspaceFileIndexResult, type WorkspaceFileNote } from '../../lib/workspace-file-backend';
-import type { EditorEntry, EditorMode, EditorTarget, EditorWatchSubscription, EditorWriteResult, OpenBuffer } from '../../lib/editor-types';
-import { defaultEditorExplorerVisible, getEditorTabTargetKey, getEditorTabId, useEditorTabStore, type EditorTab } from '../../stores/editor-tab-store';
+import { createWorkspaceFileBackend, type WorkspaceFileAttachment, type WorkspaceFileIndexResult, type WorkspaceFileNote, } from '../../lib/workspace-file-backend';
+import type { EditorEntry, EditorMode, EditorTarget, EditorWatchSubscription, EditorWriteResult, OpenBuffer, } from '../../lib/editor-types';
+import { defaultEditorExplorerVisible,
+  type EditorTab,
+  getEditorDocumentViewKey, getEditorTabId,
+  getEditorTabTargetKey, useEditorTabStore, } from '../../stores/editor-tab-store';
 import type { EditorFollowRequest } from '../../stores/workspace-surface-store';
 import { getResolvedTheme, useThemeStore } from '../../stores/theme-store';
-import { useLiveEditorContextStore, type LiveEditorContextRequest } from '../../stores/live-editor-context-store';
+import { type LiveEditorContextRequest, useLiveEditorContextStore } from '../../stores/live-editor-context-store';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
-import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../ui/dialog';
+import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, } from '../ui/dialog';
 import { Input } from '../ui/input';
 import { CodeMirrorEditor, type CodeMirrorEditorHandle, type VimMode } from './CodeMirrorEditor';
-import { CoppermindDocumentEditor, type CoppermindDocumentEditorHandle } from './CoppermindDocumentEditor';
-import { createEmptyExcalidrawFile, ExcalidrawDocumentEditor, normalizeExcalidrawContent } from './ExcalidrawDocumentEditor';
+import { CoppermindDocumentEditor, type CoppermindDocumentEditorHandle,
+  type CoppermindLocalViewState, } from './CoppermindDocumentEditor';
+import { createEmptyExcalidrawFile, ExcalidrawDocumentEditor, normalizeExcalidrawContent, } from './ExcalidrawDocumentEditor';
 
 export type UnifiedEditorTarget = EditorTarget & {
   projectName: string;
@@ -107,24 +117,6 @@ type CoppermindAutosaveRuntimeState = {
 
 type CoppermindAutosaveStatus = 'pending' | 'saving' | 'paused' | 'error';
 
-const coppermindCellsSidebarStorageKey = 'weave.editor.coppermind-cells-sidebar-open.v1';
-
-const readCoppermindCellsSidebarOpen = () => {
-  try {
-    return getClientAppStorageItem(coppermindCellsSidebarStorageKey) !== 'false';
-  } catch {
-    return true;
-  }
-};
-
-const writeCoppermindCellsSidebarOpen = (open: boolean) => {
-  try {
-    setClientAppStorageItem(coppermindCellsSidebarStorageKey, open ? 'true' : 'false');
-  } catch {
-    // Storage persistence is best effort; the in-memory toggle still applies.
-  }
-};
-
 type SaveBufferSnapshotInput = {
   buffer: EditorBuffer;
   snapshot: CoppermindAutosaveSnapshot;
@@ -145,10 +137,9 @@ type TreeNode = {
   mtimeMs?: number;
 };
 
-const toErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
-const getDocumentKind = (mode: EditorMode, path: string | undefined) => (
-  path ? resolveEditorDocumentKind({ mode, path }) : undefined
-);
+const toErrorMessage = (error: unknown) => ( error instanceof Error ? error.message : String(error));
+const getDocumentKind = (mode: EditorMode, path: string | undefined) =>
+  path ? resolveEditorDocumentKind({ mode, path }) : undefined;
 const getParentPath = (path: string) => path.split('/').filter(Boolean).slice(0, -1).join('/');
 const getBasename = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 const getFileExtension = (path: string) => {
@@ -156,7 +147,7 @@ const getFileExtension = (path: string) => {
   return match?.[1] ?? '';
 };
 const normalizeRelativePath = (value: string) => value.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
-const joinRelativePath = (directoryPath: string, name: string) => directoryPath ? `${directoryPath}/${name}` : name;
+const joinRelativePath = (directoryPath: string, name: string) => ( directoryPath ? `${directoryPath}/${name}` : name);
 const normalizeMarkdownPath = (value: string) => {
   const path = normalizeRelativePath(value);
   if (!path) return '';
@@ -180,7 +171,8 @@ const normalizeRenameFileName = (value: string, currentPath: string, mode: Edito
 
 const getRenameDisplayName = (path: string, mode: EditorMode) => {
   const kind = getDocumentKind(mode, path);
-  if (kind === 'markdown' || kind === 'excalidraw' || kind === 'coppermind') return getEditorDocumentLabel(path, mode);
+  if (kind === 'markdown' || kind === 'excalidraw' || kind === 'coppermind') { return getEditorDocumentLabel(path, mode);
+  }
   return getBasename(path);
 };
 
@@ -194,16 +186,15 @@ const isPointerAtExplorerEdge = (
   rect: DOMRect,
   verticalSlopPx = 0,
   horizontalSlopPx = explorerBorderHoverWidthPx,
-) => (
+) =>
   clientY >= rect.top - verticalSlopPx &&
   clientY <= rect.bottom + verticalSlopPx &&
-  clientX >= rect.right - horizontalSlopPx
-);
-const isElementInDocument = (target: EventTarget | null, ownerDocument: Document) => (
-  target instanceof Element && ownerDocument.documentElement.contains(target)
+  clientX >= rect.right - horizontalSlopPx;
+const isElementInDocument = (target: EventTarget | null, ownerDocument: Document) =>
+  target instanceof Element && ownerDocument.documentElement.contains(target
 );
 const didPointerLeaveNearExplorerWindowEdge = (
-  event: { clientX: number; clientY: number; relatedTarget: EventTarget | null },
+  event: { clientX: number; clientY: number; relatedTarget: EventTarget | null; },
   hostElement: HTMLElement,
 ) => {
   const rect = hostElement.getBoundingClientRect();
@@ -233,7 +224,7 @@ const hashText = (value: string) => {
 };
 
 const createLoadedBuffer = (
-  file: { path: string; content: string; version: string; size?: number; mtimeMs?: number },
+  file: { path: string; content: string; version: string; size?: number; mtimeMs?: number; },
   mediaType?: string,
 ): EditorBuffer => {
   const content = mediaType === 'excalidraw' ? normalizeExcalidrawContent(file.content) : file.content;
@@ -277,7 +268,7 @@ const editorModeIndicatorStyles: Record<VimMode, { label: string; foreground: st
   insert: { label: 'INSERT', foreground: '#1e1e2e', background: '#a6e3a1' },
   visual: { label: 'VISUAL', foreground: '#1e1e2e', background: '#cba6f7' },
   visualLine: { label: 'V-LINE', foreground: '#1e1e2e', background: '#cba6f7' },
-  visualBlock: { label: 'V-BLOCK', foreground: '#1e1e2e', background: '#cba6f7' },
+  visualBlock: { label: 'V-BLOCK', foreground: '#1e1e2e', background: '#cba6f7', },
   replace: { label: 'REPLACE', foreground: '#1e1e2e', background: '#f38ba8' },
   command: { label: 'COMMAND', foreground: '#1e1e2e', background: '#fab387' },
   terminal: { label: 'TERMINAL', foreground: '#1e1e2e', background: '#a6e3a1' },
@@ -292,14 +283,14 @@ const createRootNode = (name: string): TreeNode => ({
 });
 
 const isIgnoredExplorerPath = (path: string) =>
-  path.split('/').filter(Boolean).some(part => part === '.obsidian' || part === '.DS_Store');
+  path.split('/').filter(Boolean).some((part) => part === '.obsidian' || part === '.DS_Store');
 
 const ensureDirectory = (root: TreeNode, directoryPath: string) => {
   let current = root;
   let currentPath = '';
   for (const part of directoryPath.split('/').filter(Boolean)) {
     currentPath = currentPath ? `${currentPath}/${part}` : part;
-    let child = current.children.find(item => item.path === currentPath && item.type === 'directory');
+    let child = current.children.find((item) => item.path === currentPath && item.type === 'directory');
     if (!child) {
       child = {
         id: `directory:${currentPath}`,
@@ -319,7 +310,7 @@ const insertPath = (root: TreeNode, path: string, type: TreeNode['type'], data: 
   const parts = path.split('/').filter(Boolean);
   if (parts.length === 0) return root;
   const parent = ensureDirectory(root, parts.slice(0, -1).join('/'));
-  const existing = parent.children.find(item => item.path === path);
+  const existing = parent.children.find((item) => item.path === path);
   if (existing) {
     Object.assign(existing, data, { type });
     return existing;
@@ -344,7 +335,7 @@ const sortTree = (node: TreeNode) => {
       if (left.type === 'file') return -1;
       if (right.type === 'file') return 1;
     }
-    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base', });
   });
   node.children.forEach(sortTree);
   return node;
@@ -352,8 +343,17 @@ const sortTree = (node: TreeNode) => {
 
 const collectTreePaths = (node: TreeNode, paths = new Set<string>()) => {
   if (node.path) paths.add(node.path.toLowerCase());
-  node.children.forEach(child => collectTreePaths(child, paths));
+  node.children.forEach((child) => collectTreePaths(child, paths));
   return paths;
+};
+
+const findTreeNodeByPath = (node: TreeNode, path: string): TreeNode | undefined => {
+  if (node.path === path) return node;
+  for (const child of node.children) {
+    const match = findTreeNodeByPath(child, path);
+    if (match) return match;
+  }
+  return undefined;
 };
 
 const createUniquePath = (directoryPath: string, baseName: string, extension: string, existingPaths: Set<string>) => {
@@ -368,10 +368,10 @@ const createUniquePath = (directoryPath: string, baseName: string, extension: st
 
 const buildCodeTree = (directories: Record<string, EditorEntry[]>, rootName: string) => {
   const root = createRootNode(rootName);
-  Object.keys(directories).forEach(path => {
+  Object.keys(directories).forEach((path) => {
     if (!isIgnoredExplorerPath(path)) ensureDirectory(root, path);
   });
-  Object.values(directories).flat().forEach(entry => {
+  Object.values(directories).flat().forEach((entry) => {
     if (isIgnoredExplorerPath(entry.path)) return;
     insertPath(root, entry.path, entry.type, {
       entry,
@@ -409,12 +409,12 @@ const filterTree = (node: TreeNode, query: string, isRoot = false): TreeNode | u
   const lowerQuery = query.trim().toLowerCase();
   if (!lowerQuery) return node;
   const children = node.children
-    .map(child => filterTree(child, query))
+    .map((child) => filterTree(child, query))
     .filter((child): child is TreeNode => Boolean(child));
   const matches = node.name.toLowerCase().includes(lowerQuery)
     || node.path.toLowerCase().includes(lowerQuery)
     || node.note?.title.toLowerCase().includes(lowerQuery)
-    || node.note?.tags.some(tag => tag.toLowerCase().includes(lowerQuery));
+    || node.note?.tags.some((tag) => tag.toLowerCase().includes(lowerQuery));
   if (isRoot || matches || children.length > 0) return { ...node, children };
   return undefined;
 };
@@ -426,7 +426,7 @@ const formatBytes = (value: number | undefined) => {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const formatDate = (value: number | undefined) => value === undefined ? 'Unknown' : new Date(value).toLocaleString();
+const formatDate = (value: number | undefined) => ( value === undefined ? 'Unknown' : new Date(value).toLocaleString());
 
 const PropertyRow = ({ label, children }: { label: string; children: ReactNode }) => (
   <div className="grid gap-1">
@@ -466,7 +466,7 @@ const SortableEditorTab = ({
   renameInput,
   tab,
 }: SortableEditorTabProps) => {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id, });
   const { role: _sortableRole, ...sortableAttributes } = attributes;
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -492,7 +492,7 @@ const SortableEditorTab = ({
           className="grid h-full w-8 shrink-0 place-items-center border-r border-border/70 text-muted-foreground hover:bg-muted hover:text-foreground"
           aria-label={`Back to preview for ${label}`}
           title="Back to preview"
-          onClick={event => {
+          onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
             onBackToPreview();
@@ -513,7 +513,7 @@ const SortableEditorTab = ({
           title={tab.path}
           style={{ touchAction: 'none' }}
           onClick={onSelect}
-          onDoubleClick={event => {
+          onDoubleClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
             if (tab.isPreview) onPin();
@@ -544,7 +544,7 @@ const SortableEditorTab = ({
           type="button"
           className="grid h-7 w-7 shrink-0 place-items-center text-muted-foreground hover:text-foreground"
           aria-label={`Close ${label}`}
-          onClick={event => {
+          onClick={(event) => {
             event.stopPropagation();
             onClose();
           }}
@@ -555,6 +555,9 @@ const SortableEditorTab = ({
     </div>
   );
 };
+
+const emptyEditorTabs: EditorTab[] = [];
+const defaultExpandedEditorPaths = [''];
 
 export const UnifiedEditorPanel = ({
   breadcrumb,
@@ -568,7 +571,7 @@ export const UnifiedEditorPanel = ({
   onBackToProposalPreview,
   target,
 }: UnifiedEditorPanelProps) => {
-  const workspaceFileBackend = useMemo(() => createWorkspaceFileBackend({ preferDesktopBridge: mode === 'code' }), [mode]);
+  const workspaceFileBackend = useMemo(() => createWorkspaceFileBackend({ preferDesktopBridge: mode === 'code' }), [mode],);
   const editorTarget = useMemo<EditorTarget>(() => ({
     projectId: target.projectId,
     workspaceId: target.workspaceId,
@@ -576,24 +579,39 @@ export const UnifiedEditorPanel = ({
     rootId: target.rootId,
     repoPath: target.repoPath,
     workspacePath: target.workspacePath,
-  }), [target.portalId, target.projectId, target.repoPath, target.rootId, target.workspaceId, target.workspacePath]);
-  const editorTabTargetKey = useMemo(() => (
-    getEditorTabTargetKey(mode, target.projectId, target.workspaceId)
-  ), [mode, target.projectId, target.workspaceId]);
-  const editorTabSet = useEditorTabStore(state => state.editorTabsByTarget[editorTabTargetKey]);
-  const editorTabs = editorTabSet?.tabs ?? [];
+  }), [target.portalId, target.projectId, target.repoPath, target.rootId, target.workspaceId, target.workspacePath],);
+  const editorTabTargetKey = useMemo(() =>
+    getEditorTabTargetKey(mode, target.projectId, target.workspaceId
+  ), [mode, target.projectId, target.workspaceId],);
+  const editorTabSet = useEditorTabStore((state) => state.editorTabsByTarget[editorTabTargetKey]);
+  const editorTabs = editorTabSet?.tabs ?? emptyEditorTabs;
   const activeEditorTabId = editorTabSet?.activeTabId;
-  const isExplorerVisible = useEditorTabStore(state => state.explorerVisibleByTarget[editorTabTargetKey] ?? defaultEditorExplorerVisible);
-  const closePersistedEditorTab = useEditorTabStore(state => state.closeEditorTab);
-  const openPersistedEditorTab = useEditorTabStore(state => state.openEditorTab);
-  const pinPersistedEditorTab = useEditorTabStore(state => state.pinEditorTab);
-  const renamePersistedEditorTab = useEditorTabStore(state => state.renameEditorTab);
-  const reorderEditorTabs = useEditorTabStore(state => state.reorderEditorTabs);
-  const setActiveEditorTab = useEditorTabStore(state => state.setActiveEditorTab);
-  const setExplorerVisible = useEditorTabStore(state => state.setExplorerVisible);
-  const setPersistedEditorTabs = useEditorTabStore(state => state.setEditorTabs);
-  const registerLiveEditorContextCollector = useLiveEditorContextStore(state => state.registerCollector);
-  const resolvedTheme = getResolvedTheme(useThemeStore(state => state.mode));
+  const isExplorerVisible = useEditorTabStore(
+    (state) => state.explorerVisibleByTarget[editorTabTargetKey] ?? defaultEditorExplorerVisible,
+  );
+  const persistedExplorerTab = useEditorTabStore(
+    (state) => state.explorerTabByTarget[editorTabTargetKey] ?? 'explorer',
+  );
+  const persistedExpandedPaths = useEditorTabStore(
+    (state) => state.expandedPathsByTarget[editorTabTargetKey] ?? defaultExpandedEditorPaths,
+  );
+  const persistedSelectedPath = useEditorTabStore((state) => state.selectedPathByTarget[editorTabTargetKey]);
+  const persistedCoppermindCellsSidebarOpen = useEditorTabStore(
+    (state) => state.coppermindCellsSidebarOpenByTarget[editorTabTargetKey] ?? true,);
+  const closePersistedEditorTab = useEditorTabStore((state) => state.closeEditorTab);
+  const openPersistedEditorTab = useEditorTabStore((state) => state.openEditorTab);
+  const pinPersistedEditorTab = useEditorTabStore((state) => state.pinEditorTab);
+  const renamePersistedEditorTab = useEditorTabStore((state) => state.renameEditorTab);
+  const reorderEditorTabs = useEditorTabStore((state) => state.reorderEditorTabs);
+  const setActiveEditorTab = useEditorTabStore((state) => state.setActiveEditorTab);
+  const setExplorerVisible = useEditorTabStore((state) => state.setExplorerVisible);
+  const setPersistedExplorerTab = useEditorTabStore((state) => state.setExplorerTab);
+  const setPersistedExpandedPaths = useEditorTabStore((state) => state.setExpandedPaths);
+  const setPersistedSelectedPath = useEditorTabStore((state) => state.setSelectedPath);
+  const setPersistedCoppermindCellsSidebarOpen = useEditorTabStore((state) => state.setCoppermindCellsSidebarOpen);
+  const setPersistedEditorTabs = useEditorTabStore((state) => state.setEditorTabs);
+  const registerLiveEditorContextCollector = useLiveEditorContextStore((state) => state.registerCollector);
+  const resolvedTheme = getResolvedTheme(useThemeStore((state) => state.mode));
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const coppermindEditorRef = useRef<CoppermindDocumentEditorHandle | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -604,22 +622,23 @@ export const UnifiedEditorPanel = ({
   const renameCancelRef = useRef(false);
   const explorerBorderHoverRef = useRef(false);
   const explorerWindowEdgeHoldRef = useRef(false);
-  const expandedPathsRef = useRef<Set<string>>(new Set(['']));
+  const expandedPathsRef = useRef<Set<string>>(new Set(persistedExpandedPaths));
+  const visualPersistenceTargetRef = useRef(editorTabTargetKey);
   const editorWatchSubscriptionRef = useRef<EditorWatchSubscription | undefined>(undefined);
   const coppermindAutosaveStatesRef = useRef(new Map<string, CoppermindAutosaveRuntimeState>());
   const coppermindAutosaveWatchSubscriptionRef = useRef<EditorWatchSubscription | undefined>(undefined);
-  const coppermindAutosaveRecentWritesRef = useRef(new Map<string, { content: string; expiresAt: number; version: string }>());
+  const coppermindAutosaveRecentWritesRef = useRef(new Map<string, { content: string; expiresAt: number; version: string }>(),);
   const refreshCodeDirectoriesRef = useRef<(paths: string[]) => Promise<void>>(async () => undefined);
   const pendingRevealRef = useRef<{ requestId: number; path: string; line: number } | undefined>(
-    undefined,
+    undefined
   );
   const handledFollowRequestIdRef = useRef<number | undefined>(undefined);
   const editorBodyRef = useRef<HTMLDivElement | null>(null);
   const buffersByTabIdRef = useRef<Record<string, EditorBuffer | undefined>>({});
   const editorTabsRef = useRef<EditorTab[]>([]);
-  const [activeTab, setActiveTab] = useState<ExplorerTab>('explorer');
+  const [activeTab, setActiveTab] = useState<ExplorerTab>(persistedExplorerTab);
   const [query, setQuery] = useState('');
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(['']));
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(persistedExpandedPaths));
   const [codeDirectories, setCodeDirectories] = useState<Record<string, EditorEntry[]>>({});
   const [vaultIndex, setVaultIndex] = useState<WorkspaceFileIndexResult>();
   const [selectedNode, setSelectedNode] = useState<TreeNode>();
@@ -629,18 +648,24 @@ export const UnifiedEditorPanel = ({
   const [isExplorerLoading, setIsExplorerLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [coppermindAutosaveStatusByTabId, setCoppermindAutosaveStatusByTabId] = useState<Record<string, CoppermindAutosaveStatus | undefined>>({});
+  const [coppermindAutosaveStatusByTabId, setCoppermindAutosaveStatusByTabId] = useState<Record<string, CoppermindAutosaveStatus | undefined>
+  >({});
   const [isExplorerSlideOverOpen, setIsExplorerSlideOverOpen] = useState(false);
-  const [isCoppermindCellsSidebarOpen, setIsCoppermindCellsSidebarOpen] = useState(readCoppermindCellsSidebarOpen);
+  const [isCoppermindCellsSidebarOpen, setIsCoppermindCellsSidebarOpen] = useState(persistedCoppermindCellsSidebarOpen);
   const [isCoppermindCellsSidebarPreviewOpen, setIsCoppermindCellsSidebarPreviewOpen] = useState(false);
   const [vimMode, setVimMode] = useState<VimMode>('normal');
   const [createPathDialog, setCreatePathDialog] = useState<CreatePathDialogState>();
   const [renameState, setRenameState] = useState<RenameState>();
   const [bufferFocusRequest, setBufferFocusRequest] = useState(0);
   const [editorGutterWidth, setEditorGutterWidth] = useState(56);
-  const activeEditorTab = editorTabs.find(tab => tab.id === activeEditorTabId) ?? editorTabs[0];
+  const activeEditorTab = editorTabs.find((tab) => tab.id === activeEditorTabId) ?? editorTabs[0];
   const openBuffer = activeEditorTab ? buffersByTabId[activeEditorTab.id] : undefined;
   const activePath = openBuffer?.path ?? activeEditorTab?.path;
+  const activeDocumentViewKey = activePath ? getEditorDocumentViewKey(editorTabTargetKey, activePath) : undefined;
+  const activeDocumentView = useEditorTabStore((state) =>
+    activeDocumentViewKey ? state.documentViewsByKey[activeDocumentViewKey] : undefined,
+  );
+  const setDocumentView = useEditorTabStore((state) => state.setDocumentView);
   const content = openBuffer?.value ?? '';
   const isDirty = getBufferDirty(openBuffer);
   const hasDirtyBuffers = Object.values(buffersByTabId).some(getBufferDirty);
@@ -651,7 +676,7 @@ export const UnifiedEditorPanel = ({
   const isExplorerOverlayVisible = isExplorerLockedOpen || isExplorerSlideOverVisible;
   const editorPanelStyle = useMemo(() => ({
     '--weave-editor-gutter-width': `${Math.max(44, editorGutterWidth)}px`,
-  }) as CSSProperties, [editorGutterWidth]);
+  }) as CSSProperties, [editorGutterWidth],);
   const isExplorerActive = isExplorerOverlayVisible;
   const hasBreadcrumb = Boolean(breadcrumb);
   const modeIndicator = editorModeIndicatorStyles[vimMode];
@@ -667,12 +692,12 @@ export const UnifiedEditorPanel = ({
     ? 'save error'
     : isFileLoading ? 'loading' : undefined;
   const activeNote = activePath
-    ? vaultIndex?.notes.find(note => note.path === activePath)
+    ? vaultIndex?.notes.find((note) => note.path === activePath)
     : selectedNode?.note;
   const activeAttachment = activePath
-    ? vaultIndex?.attachments.find(attachment => attachment.path === activePath)
+    ? vaultIndex?.attachments.find((attachment) => attachment.path === activePath)
     : selectedNode?.attachment;
-  const activeBacklinks = activeNote ? vaultIndex?.backlinks[activeNote.path] ?? [] : [];
+  const activeBacklinks = activeNote ? ( vaultIndex?.backlinks[activeNote.path] ?? []) : [];
   const activeDocumentKind = getDocumentKind(mode, openBuffer?.path);
   const isCodeMirrorOpen = Boolean(openBuffer && (activeDocumentKind === 'code' || activeDocumentKind === 'markdown'));
   const isCoppermindOpen = Boolean(openBuffer && activeDocumentKind === 'coppermind');
@@ -682,35 +707,33 @@ export const UnifiedEditorPanel = ({
     ? 'Collapse cells sidebar'
     : isCoppermindCellsSidebarPreviewOpen ? 'Keep cells sidebar open' : 'Expand cells sidebar';
 
-  const tree = useMemo(() => (
+  const tree = useMemo(() =>
     mode === 'code'
       ? buildCodeTree(codeDirectories, target.workspaceName)
-      : buildNotesTree(vaultIndex, target.projectName)
-  ), [codeDirectories, mode, target.projectName, target.workspaceName, vaultIndex]);
+      : buildNotesTree(vaultIndex, target.projectName), [codeDirectories, mode, target.projectName, target.workspaceName, vaultIndex],);
   const visibleTree = useMemo(() => filterTree(tree, query, true) ?? tree, [query, tree]);
   const existingExplorerPaths = useMemo(() => collectTreePaths(tree), [tree]);
-  const noteSuggestions = useMemo(() => (vaultIndex?.notes ?? []).map(note => ({
+  const noteSuggestions = useMemo(() => (vaultIndex?.notes ?? []).map((note) => ({
     target: note.path.replace(/\.(md|markdown|cpr)$/i, ''),
     label: getEditorDocumentLabel(note.path, mode),
     detail: note.title && note.title !== getEditorDocumentLabel(note.path, mode) ? `${note.path} · ${note.title}` : note.path,
-  })), [mode, vaultIndex?.notes]);
-  const coppermindAutosaveWatchDirectories = useMemo(() => (
+  })), [mode, vaultIndex?.notes],);
+  const coppermindAutosaveWatchDirectories = useMemo(() =>
     mode === 'notes'
       ? getCoppermindAutosaveWatchDirectories(
         Object.values(buffersByTabId)
           .filter((buffer): buffer is EditorBuffer => Boolean(buffer))
-          .map(buffer => buffer.path),
+          .map((buffer) => buffer.path),
       )
-      : []
-  ), [buffersByTabId, mode]);
+      : [], [buffersByTabId, mode],);
   const coppermindAutosaveWatchDirectoryKey = JSON.stringify(coppermindAutosaveWatchDirectories);
   const editorTabSensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 5 }, }),
   );
 
   const setCoppermindAutosaveStatus = useCallback((tabId: string, status: CoppermindAutosaveStatus | undefined) => {
-    setCoppermindAutosaveStatusByTabId(current => {
+    setCoppermindAutosaveStatusByTabId((current) => {
       if (current[tabId] === status) return current;
       const next = { ...current };
       if (status) next[tabId] = status;
@@ -739,7 +762,7 @@ export const UnifiedEditorPanel = ({
     clearCoppermindAutosaveTimer(tabId);
     coppermindAutosaveStatesRef.current.delete(tabId);
     setCoppermindAutosaveStatus(tabId, undefined);
-  }, [clearCoppermindAutosaveTimer, setCoppermindAutosaveStatus]);
+  }, [clearCoppermindAutosaveTimer, setCoppermindAutosaveStatus],);
 
   const pauseCoppermindAutosaveForConflict = useCallback((tabId: string, message: string) => {
     const state = getCoppermindAutosaveState(tabId);
@@ -748,18 +771,16 @@ export const UnifiedEditorPanel = ({
     state.paused = true;
     setCoppermindAutosaveStatus(tabId, 'paused');
     setError(message);
-  }, [clearCoppermindAutosaveTimer, getCoppermindAutosaveState, setCoppermindAutosaveStatus]);
+  }, [clearCoppermindAutosaveTimer, getCoppermindAutosaveState, setCoppermindAutosaveStatus],);
 
-  const confirmDiscardBuffer = useCallback((buffer: EditorBuffer | undefined, label = 'this file') => (
-    !getBufferDirty(buffer) || window.confirm(`Discard unsaved changes to ${label}?`)
-  ), []);
+  const confirmDiscardBuffer = useCallback((buffer: EditorBuffer | undefined, label = 'this file') =>
+    !getBufferDirty(buffer) || window.confirm(`Discard unsaved changes to ${label}?`), [],);
 
-  const confirmDiscardAllDirty = useCallback(() => (
-    !hasDirtyBuffers || window.confirm('Discard unsaved editor changes?')
-  ), [hasDirtyBuffers]);
+  const confirmDiscardAllDirty = useCallback(() =>
+    !hasDirtyBuffers || window.confirm('Discard unsaved editor changes?'), [hasDirtyBuffers],);
 
   const updateBuffer = useCallback((tabId: string, updater: (buffer: EditorBuffer) => EditorBuffer) => {
-    setBuffersByTabId(current => {
+    setBuffersByTabId((current) => {
       const buffer = current[tabId];
       if (!buffer) return current;
       const nextBuffer = updater(buffer);
@@ -770,25 +791,25 @@ export const UnifiedEditorPanel = ({
 
   const clearEditorTabState = useCallback((tabId: string) => {
     clearCoppermindAutosaveState(tabId);
-    setBuffersByTabId(current => {
+    setBuffersByTabId((current) => {
       if (!current[tabId]) return current;
       const next = { ...current };
       delete next[tabId];
       return next;
     });
-    setFailedBufferTabIds(current => {
+    setFailedBufferTabIds((current) => {
       if (!current.has(tabId)) return current;
       const next = new Set(current);
       next.delete(tabId);
       return next;
     });
-  }, [clearCoppermindAutosaveState]);
+  }, [clearCoppermindAutosaveState],);
 
   const clearEditorTabStates = useCallback((tabIds: string[]) => {
     if (tabIds.length === 0) return;
     const tabIdSet = new Set(tabIds);
     for (const tabId of tabIdSet) clearCoppermindAutosaveState(tabId);
-    setBuffersByTabId(current => {
+    setBuffersByTabId((current) => {
       let didChange = false;
       const next = { ...current };
       for (const tabId of tabIdSet) {
@@ -798,7 +819,7 @@ export const UnifiedEditorPanel = ({
       }
       return didChange ? next : current;
     });
-    setFailedBufferTabIds(current => {
+    setFailedBufferTabIds((current) => {
       let didChange = false;
       const next = new Set(current);
       for (const tabId of tabIdSet) {
@@ -807,13 +828,13 @@ export const UnifiedEditorPanel = ({
       }
       return didChange ? next : current;
     });
-  }, [clearCoppermindAutosaveState]);
+  }, [clearCoppermindAutosaveState],);
 
   const closePreviewEditorTab = useCallback((tab: EditorTab | undefined) => {
     if (!tab?.isPreview) return;
     closePersistedEditorTab(editorTabTargetKey, tab.id);
     clearEditorTabState(tab.id);
-  }, [clearEditorTabState, closePersistedEditorTab, editorTabTargetKey]);
+  }, [clearEditorTabState, closePersistedEditorTab, editorTabTargetKey],);
 
   const setActiveBufferValue = useCallback((value: string) => {
     if (!activeEditorTab) return;
@@ -821,10 +842,10 @@ export const UnifiedEditorPanel = ({
     if (activeEditorTab.isPreview && currentBuffer && value !== currentBuffer.value) {
       pinPersistedEditorTab(editorTabTargetKey, activeEditorTab.id);
     }
-    updateBuffer(activeEditorTab.id, buffer => (
+    updateBuffer(activeEditorTab.id, ( buffer) => (
       value === buffer.value ? buffer : withBufferValue(buffer, value)
     ));
-  }, [activeEditorTab, buffersByTabId, editorTabTargetKey, pinPersistedEditorTab, updateBuffer]);
+  }, [activeEditorTab, buffersByTabId, editorTabTargetKey, pinPersistedEditorTab, updateBuffer],);
 
   const focusEditorSurface = useCallback(() => {
     editorRef.current?.focus();
@@ -850,7 +871,8 @@ export const UnifiedEditorPanel = ({
   }, []);
 
   const clearCoppermindCellsSidebarPreviewCloseTimeout = useCallback(() => {
-    if (coppermindCellsSidebarPreviewCloseTimeoutRef.current === undefined) return;
+    if (coppermindCellsSidebarPreviewCloseTimeoutRef.current === undefined) { return;
+    }
     window.clearTimeout(coppermindCellsSidebarPreviewCloseTimeoutRef.current);
     coppermindCellsSidebarPreviewCloseTimeoutRef.current = undefined;
   }, []);
@@ -874,8 +896,10 @@ export const UnifiedEditorPanel = ({
   }, [canUseExplorerSlideOver, clearExplorerSlideOverCloseTimeout]);
 
   const collectLiveEditorContext = useCallback((request: LiveEditorContextRequest = {}) => {
-    if (request.projectId && request.projectId !== target.projectId) return undefined;
-    if (request.workspaceId && request.workspaceId !== target.workspaceId) return undefined;
+    if (request.projectId && request.projectId !== target.projectId) { return undefined;
+      }
+    if (request.workspaceId && request.workspaceId !== target.workspaceId) { return undefined;
+      }
     if (request.mode && request.mode !== mode) return undefined;
 
     const activeBuffer = openBuffer
@@ -905,7 +929,7 @@ export const UnifiedEditorPanel = ({
       activeTabId: activeEditorTab?.id,
       ...(activeBuffer ? { activeBuffer } : {}),
       mode,
-      openTabs: editorTabs.map(tab => {
+      openTabs: editorTabs.map((tab) => {
         const buffer = buffersByTabId[tab.id];
         return {
           active: tab.id === activeEditorTab?.id,
@@ -936,11 +960,11 @@ export const UnifiedEditorPanel = ({
     target.projectName,
     target.workspaceId,
     target.workspaceName,
-  ]);
+  ],);
 
-  useEffect(() => (
-    registerLiveEditorContextCollector(editorTabTargetKey, collectLiveEditorContext)
-  ), [collectLiveEditorContext, editorTabTargetKey, registerLiveEditorContextCollector]);
+  useEffect(() =>
+    registerLiveEditorContextCollector(editorTabTargetKey, collectLiveEditorContext
+  ), [collectLiveEditorContext, editorTabTargetKey, registerLiveEditorContextCollector],);
 
   const scheduleExplorerSlideOverClose = useCallback(() => {
     if (!canUseExplorerSlideOver) return;
@@ -976,12 +1000,12 @@ export const UnifiedEditorPanel = ({
   const toggleCoppermindCellsSidebar = useCallback(() => {
     clearCoppermindCellsSidebarPreviewCloseTimeout();
     setIsCoppermindCellsSidebarPreviewOpen(false);
-    setIsCoppermindCellsSidebarOpen(current => {
+    setIsCoppermindCellsSidebarOpen((current) => {
       const next = !current;
-      writeCoppermindCellsSidebarOpen(next);
+      setPersistedCoppermindCellsSidebarOpen(editorTabTargetKey,next);
       return next;
     });
-  }, [clearCoppermindCellsSidebarPreviewCloseTimeout]);
+  }, [clearCoppermindCellsSidebarPreviewCloseTimeout, editorTabTargetKey, setPersistedCoppermindCellsSidebarOpen]);
 
   const holdExplorerSlideOverForWindowEdgeExit = useCallback(() => {
     if (!canUseExplorerSlideOver) return;
@@ -1020,7 +1044,7 @@ export const UnifiedEditorPanel = ({
     if (!explorerBorderHoverRef.current) return;
     explorerBorderHoverRef.current = false;
     scheduleExplorerSlideOverClose();
-  }, [canUseExplorerSlideOver, openExplorerSlideOver, scheduleExplorerSlideOverClose]);
+  }, [canUseExplorerSlideOver, openExplorerSlideOver, scheduleExplorerSlideOverClose],);
 
   const handleExplorerHoverMouseLeave = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (!canUseExplorerSlideOver) return;
@@ -1031,11 +1055,11 @@ export const UnifiedEditorPanel = ({
     }
     explorerBorderHoverRef.current = false;
     scheduleExplorerSlideOverClose();
-  }, [canUseExplorerSlideOver, holdExplorerSlideOverForWindowEdgeExit, scheduleExplorerSlideOverClose]);
+  }, [canUseExplorerSlideOver, holdExplorerSlideOverForWindowEdgeExit, scheduleExplorerSlideOverClose],);
 
   const handleEditorBodyMouseLeave = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     handleExplorerHoverMouseLeave(event);
-  }, [handleExplorerHoverMouseLeave]);
+  }, [handleExplorerHoverMouseLeave],);
 
   useEffect(() => {
     if (!canUseExplorerSlideOver) return undefined;
@@ -1118,7 +1142,7 @@ export const UnifiedEditorPanel = ({
     setError(undefined);
     renameCancelRef.current = false;
     setRenameState({ path, value: getRenameDisplayName(path, mode), origin });
-  }, [clearPendingFileOpen, mode]);
+  }, [clearPendingFileOpen, mode],);
 
   const refreshVaultIndex = useCallback(async () => {
     setIsExplorerLoading(true);
@@ -1137,30 +1161,30 @@ export const UnifiedEditorPanel = ({
     setError(undefined);
     try {
       const result = await workspaceFileBackend.list(editorTarget, path);
-      setCodeDirectories(current => ({ ...current, [result.path]: result.entries }));
+      setCodeDirectories((current) => ({ ...current, [result.path]: result.entries, }));
     } catch (loadError) {
       setError(toErrorMessage(loadError));
     } finally {
       setIsExplorerLoading(false);
     }
-  }, [workspaceFileBackend, editorTarget]);
+  }, [workspaceFileBackend, editorTarget],);
 
   const refreshCodeDirectories = useCallback(async (paths: string[]) => {
     const uniquePaths = [...new Set(paths.length ? paths : [''])];
-    const results = await Promise.all(uniquePaths.map(async path => {
+    const results = await Promise.all(uniquePaths.map(async ( path) => {
       try {
-        return { ok: true as const, result: await workspaceFileBackend.list(editorTarget, path) };
+        return { ok: true as const, result: await workspaceFileBackend.list(editorTarget, path), };
       } catch (refreshError) {
         return { ok: false as const, path, error: refreshError };
       }
-    }));
-    const rootFailure = results.find(result => !result.ok && result.path === '');
+    }),);
+    const rootFailure = results.find((result) => !result.ok && result.path === '');
     if (rootFailure && !rootFailure.ok) throw rootFailure.error;
 
     const failedPaths = results
       .filter((result): result is { ok: false; path: string; error: unknown } => !result.ok)
-      .map(result => result.path);
-    setCodeDirectories(current => {
+      .map((result) => result.path);
+    setCodeDirectories((current) => {
       const next = { ...current };
       for (const result of results) {
         if (result.ok) next[result.result.path] = result.result.entries;
@@ -1174,7 +1198,7 @@ export const UnifiedEditorPanel = ({
       return next;
     });
     if (failedPaths.length > 0) {
-      setExpandedPaths(current => {
+      setExpandedPaths((current) => {
         const next = new Set(current);
         for (const path of failedPaths) {
           next.delete(path);
@@ -1184,12 +1208,12 @@ export const UnifiedEditorPanel = ({
         }
         return next;
       });
-      setSelectedNode(current => {
+      setSelectedNode((current) => {
         if (!current) return current;
-        return failedPaths.some(path => current.path === path || current.path.startsWith(`${path}/`)) ? undefined : current;
+        return failedPaths.some((path) => current.path === path || current.path.startsWith(`${path}/`)) ? undefined : current;
       });
     }
-  }, [workspaceFileBackend, editorTarget]);
+  }, [workspaceFileBackend, editorTarget],);
 
   const refreshExplorer = useCallback(async () => {
     setIsExplorerLoading(true);
@@ -1211,11 +1235,12 @@ export const UnifiedEditorPanel = ({
   const applySavedBufferSnapshot = useCallback((
     tabId: string,
     snapshot: CoppermindAutosaveSnapshot,
-    result: EditorWriteResult,
+    result: EditorWriteResult
   ) => {
     const nextTabId = getEditorTabId(editorTabTargetKey, result.path);
-    if (result.path !== snapshot.path) renamePersistedEditorTab(editorTabTargetKey, snapshot.path, result.path);
-    setBuffersByTabId(current => {
+    if (result.path !== snapshot.path) { renamePersistedEditorTab(editorTabTargetKey, snapshot.path, result.path);
+      }
+    setBuffersByTabId((current) => {
       const currentBuffer = current[tabId];
       if (!currentBuffer) return current;
       const nextBuffer = applyCoppermindAutosaveResult(currentBuffer, snapshot, result);
@@ -1229,7 +1254,7 @@ export const UnifiedEditorPanel = ({
         coppermindAutosaveStatesRef.current.delete(tabId);
         coppermindAutosaveStatesRef.current.set(nextTabId, state);
       }
-      setCoppermindAutosaveStatusByTabId(current => {
+      setCoppermindAutosaveStatusByTabId((current) => {
         if (!current[tabId]) return current;
         const next = { ...current, [nextTabId]: current[tabId] };
         delete next[tabId];
@@ -1237,12 +1262,12 @@ export const UnifiedEditorPanel = ({
       });
     }
     return nextTabId;
-  }, [editorTabTargetKey, renamePersistedEditorTab]);
+  }, [editorTabTargetKey, renamePersistedEditorTab],);
 
   const saveBufferSnapshot = useCallback(async ({
     buffer,
     snapshot,
-    tabId,
+    tabId
   }: SaveBufferSnapshotInput) => {
     const result = await workspaceFileBackend.write(editorTarget, snapshot.path, snapshot.value, snapshot.version);
     const nextTabId = applySavedBufferSnapshot(tabId, snapshot, result);
@@ -1259,31 +1284,34 @@ export const UnifiedEditorPanel = ({
     }
     await refreshExplorer();
     return nextTabId;
-  }, [applySavedBufferSnapshot, editorTarget, refreshExplorer, setCoppermindAutosaveStatus, workspaceFileBackend]);
+  }, [applySavedBufferSnapshot, editorTarget, refreshExplorer, setCoppermindAutosaveStatus, workspaceFileBackend],);
 
   const loadFile = useCallback(async (path: string, options: { focusEditor?: boolean; preview?: boolean } = {}) => {
     if (!isEditorPathOpenable(mode, path)) return false;
 
     const shouldPreview = options.preview ?? true;
-    const existingTab = editorTabs.find(tab => tab.path === path);
+    const existingTab = editorTabs.find((tab) => tab.path === path);
     const previewTabIdsToClose = editorTabs
-      .filter(tab => tab.isPreview && tab.path !== path)
-      .map(tab => tab.id);
+      .filter((tab) => tab.isPreview && tab.path !== path)
+      .map((tab) => tab.id);
     if (existingTab && buffersByTabId[existingTab.id]) {
-      if (activeEditorTab?.id !== existingTab.id) closePreviewEditorTab(activeEditorTab);
+      if (activeEditorTab?.id !== existingTab.id) { closePreviewEditorTab(activeEditorTab);
+        }
       setActiveEditorTab(editorTabTargetKey, existingTab.id);
-      if (options.focusEditor ?? true) setBufferFocusRequest(request => request + 1);
+      if (options.focusEditor ?? true) { setBufferFocusRequest((request) => request + 1);
+        }
       return true;
     }
 
-    const tab = existingTab ?? openPersistedEditorTab(editorTabTargetKey, path, { preview: shouldPreview });
+    const tab = existingTab ?? openPersistedEditorTab(editorTabTargetKey, path, { preview: shouldPreview, });
     if (existingTab) {
-      if (activeEditorTab?.id !== existingTab.id) closePreviewEditorTab(activeEditorTab);
+      if (activeEditorTab?.id !== existingTab.id) { closePreviewEditorTab(activeEditorTab);
+        }
       setActiveEditorTab(editorTabTargetKey, existingTab.id);
     } else {
       clearEditorTabStates(previewTabIdsToClose);
     }
-    setFailedBufferTabIds(current => {
+    setFailedBufferTabIds((current) => {
       if (!current.has(tab.id)) return current;
       const next = new Set(current);
       next.delete(tab.id);
@@ -1297,25 +1325,30 @@ export const UnifiedEditorPanel = ({
       const loadedBuffer = createLoadedBuffer(file, mediaType);
       const loadedTab = file.path === tab.path
         ? tab
-        : openPersistedEditorTab(editorTabTargetKey, file.path, { preview: tab.isPreview });
-      setBuffersByTabId(current => {
+        : openPersistedEditorTab(editorTabTargetKey, file.path, { preview: tab.isPreview, });
+      setBuffersByTabId((current) => {
         const next = { ...current, [loadedTab.id]: loadedBuffer };
         if (loadedTab.id !== tab.id) delete next[tab.id];
         return next;
       });
-      setFailedBufferTabIds(current => {
-        if (!current.has(loadedTab.id) && !current.has(tab.id)) return current;
+      setFailedBufferTabIds((current) => {
+        if (!current.has(loadedTab.id) && !current.has(tab.id)) { return current;
+          }
         const next = new Set(current);
         next.delete(loadedTab.id);
         next.delete(tab.id);
         return next;
       });
-      if (options.focusEditor ?? true) setBufferFocusRequest(request => request + 1);
+      if (options.focusEditor ?? true) { setBufferFocusRequest((request) => request + 1);
+        }
       return true;
     } catch (loadError) {
-      setError(toErrorMessage(loadError));
-      setFailedBufferTabIds(current => new Set(current).add(tab.id));
-      if (!existingTab) closePersistedEditorTab(editorTabTargetKey, tab.id);
+        const message =toErrorMessage(loadError);
+        setError(message);
+      setFailedBufferTabIds((current) => new Set(current).add(tab.id));
+      if (!existingTab || /not found|enoent/i.test(message)) { closePersistedEditorTab(editorTabTargetKey, tab.id);
+          setDocumentView(getEditorDocumentViewKey(editorTabTargetKey, tab.path), undefined);
+        }
       return false;
     } finally {
       setIsFileLoading(false);
@@ -1333,13 +1366,15 @@ export const UnifiedEditorPanel = ({
     mode,
     openPersistedEditorTab,
     setActiveEditorTab,
+      setDocumentView,
     workspaceFileBackend,
     editorTarget,
-  ]);
+  ],);
 
   const runCoppermindAutosave = useCallback(async (tabId: string) => {
     const state = coppermindAutosaveStatesRef.current.get(tabId);
-    if (!state || state.inFlight || state.paused || !state.latestSnapshot) return;
+    if (!state || state.inFlight || state.paused || !state.latestSnapshot) { return;
+      }
     const snapshot = state.latestSnapshot;
     const buffer = buffersByTabIdRef.current[tabId];
     if (!buffer || !shouldAutosaveCoppermindBuffer(buffer)) {
@@ -1370,28 +1405,42 @@ export const UnifiedEditorPanel = ({
       const nextState = coppermindAutosaveStatesRef.current.get(tabId);
       if (nextState) {
         nextState.inFlight = false;
-        if (nextState.latestSnapshot === snapshot) nextState.latestSnapshot = undefined;
+        if (nextState.latestSnapshot === snapshot) { nextState.latestSnapshot = undefined;
+          }
       }
     }
   }, [
     clearCoppermindAutosaveState,
     pauseCoppermindAutosaveForConflict,
     saveBufferSnapshot,
-    setCoppermindAutosaveStatus,
-  ]);
+    setCoppermindAutosaveStatus],);
 
   useEffect(() => () => {
     if (typeof window === 'undefined') return;
-    if (fileOpenClickTimeoutRef.current !== undefined) window.clearTimeout(fileOpenClickTimeoutRef.current);
+    if (fileOpenClickTimeoutRef.current !== undefined) { window.clearTimeout(fileOpenClickTimeoutRef.current);
+      }
     for (const state of coppermindAutosaveStatesRef.current.values()) {
       if (state.timer !== undefined) window.clearTimeout(state.timer);
     }
     coppermindAutosaveStatesRef.current.clear();
-  }, []);
+  }, [],);
 
   useEffect(() => {
     expandedPathsRef.current = expandedPaths;
-  }, [expandedPaths]);
+    if (visualPersistenceTargetRef.current !== editorTabTargetKey) return;
+    setPersistedExpandedPaths(editorTabTargetKey, Array.from(expandedPaths));
+  }, [editorTabTargetKey,expandedPaths, setPersistedExpandedPaths]);
+
+  useEffect(() => {
+    if (visualPersistenceTargetRef.current !== editorTabTargetKey) return;
+    setPersistedExplorerTab(editorTabTargetKey, activeTab);
+  }, [activeTab, editorTabTargetKey, setPersistedExplorerTab]);
+
+  useEffect(() => {
+    if (visualPersistenceTargetRef.current !== editorTabTargetKey) return;
+    if (!selectedNode && persistedSelectedPath && !findTreeNodeByPath(tree, persistedSelectedPath)) return;
+    setPersistedSelectedPath(editorTabTargetKey, selectedNode?.path);
+  }, [editorTabTargetKey, persistedSelectedPath, selectedNode, setPersistedSelectedPath, tree]);
 
   useEffect(() => {
     buffersByTabIdRef.current = buffersByTabId;
@@ -1402,18 +1451,52 @@ export const UnifiedEditorPanel = ({
   }, [editorTabs]);
 
   useEffect(() => {
-    refreshCodeDirectoriesRef.current = async paths => {
+    if (!openBuffer || !activeDocumentViewKey) return undefined;
+    const documentKind = getDocumentKind(mode, openBuffer.path);
+    if (documentKind !== 'code' && documentKind !== 'markdown') {
+      return undefined;
+    }
+    const capture = () => {
+      const snapshot = editorRef.current?.getSnapshot();
+      if (!snapshot?.selection) return;
+      setDocumentView(activeDocumentViewKey, {
+        kind: 'text',
+        version: openBuffer.version,
+        anchor: snapshot.selection.from,
+        head: snapshot.selection.to,
+        topLine: snapshot.visibleRange?.fromLine ?? snapshot.selection.fromLine,
+      });
+    };
+    const interval = window.setInterval(capture, 500);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') capture();
+    };
+    window.addEventListener('pagehide', capture);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('pagehide', capture);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      capture();
+    };
+  }, [activeDocumentViewKey, mode, openBuffer?.path, openBuffer?.version, setDocumentView]);
+
+  useEffect(() => {
+    refreshCodeDirectoriesRef.current = async ( paths) => {
       await refreshCodeDirectories(paths);
     };
   }, [refreshCodeDirectories]);
 
   useEffect(() => {
+    visualPersistenceTargetRef.current = editorTabTargetKey;
     clearPendingFileOpen();
     setQuery('');
-    setExpandedPaths(new Set(['']));
+    setActiveTab(persistedExplorerTab);
+    setExpandedPaths(new Set(persistedExpandedPaths));
     setCodeDirectories({});
     setVaultIndex(undefined);
     setSelectedNode(undefined);
+    setIsCoppermindCellsSidebarOpen(persistedCoppermindCellsSidebarOpen);
     for (const tabId of Array.from(coppermindAutosaveStatesRef.current.keys())) {
       clearCoppermindAutosaveState(tabId);
     }
@@ -1423,7 +1506,15 @@ export const UnifiedEditorPanel = ({
     setError(undefined);
     setVimMode('normal');
     setBufferFocusRequest(0);
-  }, [clearCoppermindAutosaveState, clearPendingFileOpen, mode, target.projectId, target.workspaceId]);
+  }, [clearCoppermindAutosaveState, clearPendingFileOpen,
+    editorTabTargetKey, mode, target.projectId, target.workspaceId,
+  ]);
+
+  useEffect(() => {
+    if (!persistedSelectedPath) return;
+    const restoredNode = findTreeNodeByPath(tree, persistedSelectedPath);
+    if (restoredNode) setSelectedNode(restoredNode);
+  }, [persistedSelectedPath, tree]);
 
   useEffect(() => {
     if (activeEditorTabId || editorTabs.length === 0) return;
@@ -1448,25 +1539,25 @@ export const UnifiedEditorPanel = ({
   useEffect(() => {
     if (mode !== 'code' || !workspaceFileBackend.watch) return undefined;
     let cancelled = false;
-    void workspaceFileBackend.watch(editorTarget, Array.from(expandedPathsRef.current), event => {
+    void workspaceFileBackend.watch(editorTarget, Array.from(expandedPathsRef.current), ( event) => {
       const expanded = expandedPathsRef.current;
       const refreshPaths = event.rescan
         ? Array.from(expanded)
-        : event.affectedDirectories.filter(path => expanded.has(path));
+        : event.affectedDirectories.filter((path) => expanded.has(path));
       if (refreshPaths.length === 0) return;
-      void refreshCodeDirectoriesRef.current(refreshPaths).catch(refreshError => {
+      void refreshCodeDirectoriesRef.current(refreshPaths).catch((refreshError) => {
         setError(toErrorMessage(refreshError));
       });
-    }).then(subscription => {
+    }).then((subscription) => {
       if (cancelled) {
         subscription.close();
         return;
       }
       editorWatchSubscriptionRef.current = subscription;
-      void subscription.update(Array.from(expandedPathsRef.current)).catch(watchError => {
+      void subscription.update(Array.from(expandedPathsRef.current)).catch((watchError) => {
         setError(toErrorMessage(watchError));
       });
-    }).catch(watchError => {
+    }).catch((watchError) => {
       if (!cancelled) setError(toErrorMessage(watchError));
     });
 
@@ -1479,7 +1570,7 @@ export const UnifiedEditorPanel = ({
 
   useEffect(() => {
     if (mode !== 'code') return;
-    void editorWatchSubscriptionRef.current?.update(Array.from(expandedPaths)).catch(watchError => {
+    void editorWatchSubscriptionRef.current?.update(Array.from(expandedPaths)).catch((watchError) => {
       setError(toErrorMessage(watchError));
     });
   }, [expandedPaths, mode]);
@@ -1496,8 +1587,9 @@ export const UnifiedEditorPanel = ({
         const mediaType = getEditorDocumentMediaType(getDocumentKind(mode, file.path));
         const nextBuffer = createLoadedBuffer(file, mediaType);
         const nextTabId = getEditorTabId(editorTabTargetKey, file.path);
-        if (file.path !== buffer.path) renamePersistedEditorTab(editorTabTargetKey, buffer.path, file.path);
-        setBuffersByTabId(current => {
+        if (file.path !== buffer.path) { renamePersistedEditorTab(editorTabTargetKey, buffer.path, file.path);
+        }
+        setBuffersByTabId((current) => {
           const currentBuffer = current[tabId];
           if (!currentBuffer || currentBuffer.path !== buffer.path || getBufferDirty(currentBuffer)) return current;
           if (
@@ -1539,17 +1631,19 @@ export const UnifiedEditorPanel = ({
       }
     };
 
-    void workspaceFileBackend.watch(editorTarget, watchDirectories, event => {
+    void workspaceFileBackend.watch(editorTarget, watchDirectories, ( event) => {
       const now = Date.now();
       for (const [path, recentWrite] of coppermindAutosaveRecentWritesRef.current.entries()) {
-        if (recentWrite.expiresAt <= now) coppermindAutosaveRecentWritesRef.current.delete(path);
+        if (recentWrite.expiresAt <= now) { coppermindAutosaveRecentWritesRef.current.delete(path);
+          }
       }
 
       const tabs = editorTabsRef.current;
       const buffers = buffersByTabIdRef.current;
       for (const tab of tabs) {
         const buffer = buffers[tab.id];
-        if (!buffer || !doesCoppermindWatchEventTouchPath(event, buffer.path)) continue;
+        if (!buffer || !doesCoppermindWatchEventTouchPath(event, buffer.path)) { continue;
+          }
         if (coppermindAutosaveStatesRef.current.get(tab.id)?.inFlight) continue;
         if (getBufferDirty(buffer)) {
           void verifyDirtyCoppermindWatchEvent(tab.id, buffer);
@@ -1557,13 +1651,13 @@ export const UnifiedEditorPanel = ({
         }
         void reloadCleanCoppermindBuffer(tab.id, buffer);
       }
-    }).then(subscription => {
+    }).then((subscription) => {
       if (cancelled) {
         subscription.close();
         return;
       }
       coppermindAutosaveWatchSubscriptionRef.current = subscription;
-    }).catch(watchError => {
+    }).catch((watchError) => {
       if (!cancelled) setError(toErrorMessage(watchError));
     });
 
@@ -1585,7 +1679,7 @@ export const UnifiedEditorPanel = ({
   useEffect(() => {
     if (mode !== 'notes') return;
 
-    const openTabIds = new Set(editorTabs.map(tab => tab.id));
+    const openTabIds = new Set(editorTabs.map((tab) => tab.id));
     for (const tabId of Array.from(coppermindAutosaveStatesRef.current.keys())) {
       if (!openTabIds.has(tabId)) clearCoppermindAutosaveState(tabId);
     }
@@ -1641,7 +1735,7 @@ export const UnifiedEditorPanel = ({
   useEffect(() => {
     if (focusRequest === 0) return undefined;
     if (!isCodeMirrorOpen) {
-      setBufferFocusRequest(request => request + 1);
+      setBufferFocusRequest((request) => request + 1);
       return undefined;
     }
     const animationFrame = window.requestAnimationFrame(focusEditorSurface);
@@ -1670,7 +1764,7 @@ export const UnifiedEditorPanel = ({
 
     const requestedLine = Number.isFinite(followRequest.line) ? Math.floor(followRequest.line) : 1;
     const line = Math.max(1, requestedLine);
-    pendingRevealRef.current = { requestId: followRequest.id, path: followRequest.path, line };
+    pendingRevealRef.current = { requestId: followRequest.id, path: followRequest.path, line, };
 
     if (openBuffer?.path === followRequest.path) {
       const cancelReveal = revealLineWithoutFocus(line);
@@ -1678,7 +1772,7 @@ export const UnifiedEditorPanel = ({
       return cancelReveal;
     }
 
-    void loadFile(followRequest.path, { focusEditor: false }).then(loaded => {
+    void loadFile(followRequest.path, { focusEditor: false }).then((loaded) => {
       if (!loaded && pendingRevealRef.current?.requestId === followRequest.id) {
         pendingRevealRef.current = undefined;
       }
@@ -1687,7 +1781,8 @@ export const UnifiedEditorPanel = ({
 
   useEffect(() => {
     const pendingReveal = pendingRevealRef.current;
-    if (!pendingReveal || openBuffer?.path !== pendingReveal.path) return undefined;
+    if (!pendingReveal || openBuffer?.path !== pendingReveal.path) { return undefined;
+    }
 
     let secondFrame: number | undefined;
     const firstFrame = window.requestAnimationFrame(() => {
@@ -1712,17 +1807,18 @@ export const UnifiedEditorPanel = ({
   useEffect(() => () => clearExplorerSlideOverCloseTimeout(), [clearExplorerSlideOverCloseTimeout]);
 
   const toggleDirectory = useCallback((path: string) => {
-    setExpandedPaths(current => {
+    setExpandedPaths((current) => {
       const next = new Set(current);
       if (next.has(path)) {
         if (path) next.delete(path);
       } else {
         next.add(path);
-        if (mode === 'code' && codeDirectories[path] === undefined) void loadCodeDirectory(path);
+        if (mode === 'code' && codeDirectories[path] === undefined) { void loadCodeDirectory(path);
+          }
       }
       return next;
     });
-  }, [codeDirectories, loadCodeDirectory, mode]);
+  }, [codeDirectories, loadCodeDirectory, mode],);
 
   const handleNodeClick = useCallback((node: TreeNode, clickDetail = 1) => {
     setSelectedNode(node);
@@ -1744,12 +1840,12 @@ export const UnifiedEditorPanel = ({
         closeExplorerAfterFileOpen();
       }, explorerFileOpenSingleClickDelayMs);
     }
-  }, [clearPendingFileOpen, closeExplorerAfterFileOpen, loadFile, mode, startRename, toggleDirectory]);
+  }, [clearPendingFileOpen, closeExplorerAfterFileOpen, loadFile, mode, startRename, toggleDirectory],);
 
   const handleNodeDoubleClick = useCallback((node: TreeNode) => {
     if (node.type !== 'file' || !isEditorPathOpenable(mode, node.path)) return;
     startRename(node.path, 'explorer');
-  }, [mode, startRename]);
+  }, [mode, startRename],);
 
   const handleSave = useCallback(async () => {
     if (!openBuffer || !activeEditorTab || !isDirty) return;
@@ -1761,7 +1857,7 @@ export const UnifiedEditorPanel = ({
     setIsSaving(true);
     setError(undefined);
     try {
-      await saveBufferSnapshot({ buffer: openBuffer, snapshot, tabId: activeEditorTab.id });
+      await saveBufferSnapshot({ buffer: openBuffer, snapshot, tabId: activeEditorTab.id, });
     } catch (saveError) {
       setError(toErrorMessage(saveError));
       if (openBuffer.mediaType === 'coppermind' && isCoppermindAutosaveStaleVersionError(saveError)) {
@@ -1792,20 +1888,21 @@ export const UnifiedEditorPanel = ({
       const mediaType = getEditorDocumentMediaType(getDocumentKind(mode, file.path));
       const nextBuffer = createLoadedBuffer(file, mediaType);
       const nextTabId = getEditorTabId(editorTabTargetKey, file.path);
-      if (file.path !== openBuffer.path) renamePersistedEditorTab(editorTabTargetKey, openBuffer.path, file.path);
-      setBuffersByTabId(current => {
+      if (file.path !== openBuffer.path) { renamePersistedEditorTab(editorTabTargetKey, openBuffer.path, file.path);
+      }
+      setBuffersByTabId((current) => {
         const next = { ...current, [nextTabId]: nextBuffer };
         if (nextTabId !== activeEditorTab.id) delete next[activeEditorTab.id];
         return next;
       });
       clearCoppermindAutosaveState(activeEditorTab.id);
-      setBufferFocusRequest(request => request + 1);
+      setBufferFocusRequest((request) => request + 1);
     } catch (reloadError) {
       setError(toErrorMessage(reloadError));
     } finally {
       setIsFileLoading(false);
     }
-  }, [activeEditorTab, clearCoppermindAutosaveState, workspaceFileBackend, confirmDiscardBuffer, editorTabTargetKey, editorTarget, mode, openBuffer, renamePersistedEditorTab]);
+  }, [activeEditorTab, clearCoppermindAutosaveState, workspaceFileBackend, confirmDiscardBuffer, editorTabTargetKey, editorTarget, mode, openBuffer, renamePersistedEditorTab,]);
 
   const cancelRename = useCallback(() => {
     renameCancelRef.current = true;
@@ -1837,7 +1934,7 @@ export const UnifiedEditorPanel = ({
     setError(undefined);
     renameCommitInFlightRef.current = true;
     try {
-      const sourceTab = editorTabs.find(tab => tab.path === sourcePath);
+      const sourceTab = editorTabs.find((tab) => tab.path === sourcePath);
       const sourceBuffer = sourceTab ? buffersByTabId[sourceTab.id] : undefined;
       await workspaceFileBackend.move(editorTarget, sourcePath, targetPath);
 
@@ -1848,7 +1945,7 @@ export const UnifiedEditorPanel = ({
           renamePersistedEditorTab(editorTabTargetKey, sourcePath, targetPath);
           const mediaType = getEditorDocumentMediaType(getDocumentKind(mode, targetPath));
           if (sourceBuffer && getBufferDirty(sourceBuffer)) {
-            setBuffersByTabId(current => {
+            setBuffersByTabId((current) => {
               const next = {
                 ...current,
                 [targetTabId]: {
@@ -1863,7 +1960,7 @@ export const UnifiedEditorPanel = ({
             });
           } else {
             const file = await workspaceFileBackend.read(editorTarget, targetPath);
-            setBuffersByTabId(current => {
+            setBuffersByTabId((current) => {
               const next = {
                 ...current,
                 [targetTabId]: createLoadedBuffer(file, mediaType),
@@ -1874,7 +1971,7 @@ export const UnifiedEditorPanel = ({
           }
         } else {
           closePersistedEditorTab(editorTabTargetKey, sourceTab.id);
-          setBuffersByTabId(current => {
+          setBuffersByTabId((current) => {
             const next = { ...current };
             delete next[sourceTab.id];
             return next;
@@ -1883,13 +1980,13 @@ export const UnifiedEditorPanel = ({
       } else if (openBuffer?.path === sourcePath && isEditorPathOpenable(mode, targetPath)) {
           const file = await workspaceFileBackend.read(editorTarget, targetPath);
           const tab = openPersistedEditorTab(editorTabTargetKey, file.path);
-          setBuffersByTabId(current => ({
+          setBuffersByTabId((current) => ({
             ...current,
             [tab.id]: createLoadedBuffer(file, getEditorDocumentMediaType(getDocumentKind(mode, file.path))),
           }));
       }
 
-      setExpandedPaths(current => new Set([...current, getParentPath(targetPath)]));
+      setExpandedPaths((current) => new Set([...current, getParentPath(targetPath)]));
       renameCancelRef.current = true;
       setRenameState(undefined);
       await refreshExplorer();
@@ -1929,11 +2026,11 @@ export const UnifiedEditorPanel = ({
     try {
       const result = await workspaceFileBackend.write(editorTarget, path, nextContent);
       const previewTabIdsToClose = editorTabs
-        .filter(tab => tab.isPreview && tab.path !== result.path)
-        .map(tab => tab.id);
+        .filter((tab) => tab.isPreview && tab.path !== result.path)
+        .map((tab) => tab.id);
       const tab = openPersistedEditorTab(editorTabTargetKey, result.path);
       clearEditorTabStates(previewTabIdsToClose);
-      setBuffersByTabId(current => ({
+      setBuffersByTabId((current) => ({
         ...current,
         [tab.id]: createLoadedBuffer({
           path: result.path,
@@ -1941,10 +2038,10 @@ export const UnifiedEditorPanel = ({
           version: result.version,
           size: result.size,
           mtimeMs: result.mtimeMs,
-        }, getEditorDocumentMediaType(getDocumentKind(mode, result.path))),
+        }, getEditorDocumentMediaType(getDocumentKind(mode, result.path)),),
       }));
-      setBufferFocusRequest(request => request + 1);
-      setExpandedPaths(current => new Set([...current, getParentPath(result.path)]));
+      setBufferFocusRequest((request) => request + 1);
+      setExpandedPaths((current) => new Set([...current, getParentPath(result.path)]));
       closeExplorerSlideOver();
       await refreshExplorer();
       return true;
@@ -1952,7 +2049,7 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(createError));
       return false;
     }
-  }, [clearEditorTabStates, closeExplorerSlideOver, workspaceFileBackend, editorTabTargetKey, editorTabs, editorTarget, mode, openPersistedEditorTab, refreshExplorer]);
+  }, [clearEditorTabStates, closeExplorerSlideOver, workspaceFileBackend, editorTabTargetKey, editorTabs, editorTarget, mode, openPersistedEditorTab, refreshExplorer,],);
 
   const createDrawing = useCallback(async (rawPath: string) => {
     const path = normalizeRelativePath(rawPath);
@@ -1964,11 +2061,11 @@ export const UnifiedEditorPanel = ({
     try {
       const result = await workspaceFileBackend.write(editorTarget, drawingPath, drawingContent);
       const previewTabIdsToClose = editorTabs
-        .filter(tab => tab.isPreview && tab.path !== result.path)
-        .map(tab => tab.id);
+        .filter((tab) => tab.isPreview && tab.path !== result.path)
+        .map((tab) => tab.id);
       const tab = openPersistedEditorTab(editorTabTargetKey, result.path);
       clearEditorTabStates(previewTabIdsToClose);
-      setBuffersByTabId(current => ({
+      setBuffersByTabId((current) => ({
         ...current,
         [tab.id]: createLoadedBuffer({
           path: result.path,
@@ -1976,10 +2073,10 @@ export const UnifiedEditorPanel = ({
           version: result.version,
           size: result.size,
           mtimeMs: result.mtimeMs,
-        }, 'excalidraw'),
+        }, 'excalidraw',),
       }));
-      setBufferFocusRequest(request => request + 1);
-      setExpandedPaths(current => new Set([...current, getParentPath(result.path)]));
+      setBufferFocusRequest((request) => request + 1);
+      setExpandedPaths((current) => new Set([...current, getParentPath(result.path)]));
       closeExplorerSlideOver();
       await refreshExplorer();
       return true;
@@ -1987,7 +2084,7 @@ export const UnifiedEditorPanel = ({
       setError(toErrorMessage(createError));
       return false;
     }
-  }, [clearEditorTabStates, closeExplorerSlideOver, editorTabTargetKey, editorTabs, openPersistedEditorTab, refreshExplorer, workspaceFileBackend, editorTarget]);
+  }, [clearEditorTabStates, closeExplorerSlideOver, editorTabTargetKey, editorTabs, openPersistedEditorTab, refreshExplorer, workspaceFileBackend, editorTarget,],);
 
   const getSelectedCreateDirectory = useCallback(() => {
     if (!selectedNode) return '';
@@ -2013,14 +2110,14 @@ export const UnifiedEditorPanel = ({
     setError(undefined);
     try {
       await workspaceFileBackend.mkdir(editorTarget, path);
-      setExpandedPaths(current => new Set([...current, getParentPath(path)]));
+      setExpandedPaths((current) => new Set([...current, getParentPath(path)]));
       await refreshExplorer();
       return true;
     } catch (folderError) {
       setError(toErrorMessage(folderError));
       return false;
     }
-  }, [workspaceFileBackend, editorTarget, refreshExplorer]);
+  }, [workspaceFileBackend, editorTarget, refreshExplorer],);
 
   const submitCreatePathDialog = useCallback(async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
@@ -2033,7 +2130,7 @@ export const UnifiedEditorPanel = ({
         ? await createDrawing(value)
         : await createFolder(value);
     if (created) setCreatePathDialog(undefined);
-  }, [createDrawing, createFile, createFolder, createPathDialog]);
+  }, [createDrawing, createFile, createFolder, createPathDialog],);
 
   const deleteSelected = useCallback(async () => {
     const sourcePath = selectedNode?.path || activePath;
@@ -2041,19 +2138,20 @@ export const UnifiedEditorPanel = ({
     clearPendingFileOpen();
     const isDirectory = selectedNode?.type === 'directory';
     if (!window.confirm(`Delete ${sourcePath}${isDirectory ? ' and everything inside it' : ''}?`)) return;
-    const affectedTabs = editorTabs.filter(tab => tab.path === sourcePath || (isDirectory && tab.path.startsWith(`${sourcePath}/`)));
-    const hasDirtyAffectedTab = affectedTabs.some(tab => getBufferDirty(buffersByTabId[tab.id]));
-    if (hasDirtyAffectedTab && !window.confirm(`Discard unsaved changes in ${affectedTabs.length === 1 ? affectedTabs[0].path : 'deleted files'}?`)) return;
+    const affectedTabs = editorTabs.filter(
+      (tab) => tab.path === sourcePath || (isDirectory && tab.path.startsWith(`${sourcePath}/`)),);
+    const hasDirtyAffectedTab = affectedTabs.some((tab) => getBufferDirty(buffersByTabId[tab.id]));
+    if (hasDirtyAffectedTab && !window.confirm(`Discard unsaved changes in ${affectedTabs.length === 1 ? affectedTabs[0].path : 'deleted files'}?`,)) return;
     setError(undefined);
     try {
       await workspaceFileBackend.delete(editorTarget, sourcePath, isDirectory);
       setSelectedNode(undefined);
       if (affectedTabs.length > 0) {
-        const affectedTabIds = new Set(affectedTabs.map(tab => tab.id));
-        setPersistedEditorTabs(editorTabTargetKey, currentTabs => currentTabs.filter(tab => !affectedTabIds.has(tab.id)));
-        setBuffersByTabId(current => {
+        const affectedTabIds = new Set(affectedTabs.map((tab) => tab.id));
+        setPersistedEditorTabs(editorTabTargetKey, ( currentTabs) => currentTabs.filter((tab) => !affectedTabIds.has(tab.id)),);
+        setBuffersByTabId((current) => {
           const next = { ...current };
-          affectedTabIds.forEach(tabId => {
+          affectedTabIds.forEach((tabId) => {
             delete next[tabId];
           });
           return next;
@@ -2085,7 +2183,7 @@ export const UnifiedEditorPanel = ({
     const reader = new FileReader();
     reader.onload = async () => {
       const result = typeof reader.result === 'string' ? reader.result : '';
-      const base64Content = result.includes(',') ? result.split(',').pop() ?? '' : result;
+      const base64Content = result.includes(',') ? ( result.split(',').pop() ?? '') : result;
       setError(undefined);
       try {
         await workspaceFileBackend.upload(editorTarget, path, base64Content, file.type || undefined);
@@ -2097,28 +2195,28 @@ export const UnifiedEditorPanel = ({
       }
     };
     reader.readAsDataURL(file);
-  }, [mode, refreshExplorer, workspaceFileBackend, editorTarget]);
+  }, [mode, refreshExplorer, workspaceFileBackend, editorTarget],);
 
   const openWikiLink = useCallback((targetPath: string) => {
     const normalized = /\.(md|markdown)$/i.test(targetPath) ? targetPath : `${targetPath}.md`;
     void loadFile(normalized);
-  }, [loadFile]);
+  }, [loadFile],);
 
   const handleRenameChange = useCallback((value: string) => {
-    setRenameState(current => current ? { ...current, value } : current);
+    setRenameState((current) => ( current ? { ...current, value } : current));
   }, []);
 
   const renderRenameInput = (className?: string) => (
     <input
       autoFocus
-      className={cn('h-6 min-w-0 rounded-sm border border-border bg-background px-1 text-xs font-semibold text-foreground outline-none focus:border-primary', className)}
+      className={cn('h-6 min-w-0 rounded-sm border border-border bg-background px-1 text-xs font-semibold text-foreground outline-none focus:border-primary', className,)}
       value={renameState?.value ?? ''}
       onBlur={() => void commitRename()}
-      onChange={event => handleRenameChange(event.currentTarget.value)}
-      onClick={event => event.stopPropagation()}
-      onDoubleClick={event => event.stopPropagation()}
-      onFocus={event => event.currentTarget.select()}
-      onKeyDown={event => {
+      onChange={(event) => handleRenameChange(event.currentTarget.value)}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
           void commitRename();
@@ -2129,7 +2227,7 @@ export const UnifiedEditorPanel = ({
           cancelRename();
         }
       }}
-      onMouseDown={event => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
     />
   );
 
@@ -2139,7 +2237,7 @@ export const UnifiedEditorPanel = ({
     const isActive = activePath === node.path || selectedNode?.path === node.path;
     const isDirectory = node.type === 'directory';
     const isRenaming = !isDirectory && renameState?.origin === 'explorer' && renameState.path === node.path;
-    if (isRoot) return node.children.map(child => renderTreeNode(child, 0));
+    if (isRoot) return node.children.map((child) => renderTreeNode(child, 0));
 
     const rowClassName = cn(
       'group flex h-8 w-full min-w-0 items-center gap-1.5 rounded-sm pr-2 text-left text-xs text-foreground transition-colors hover:bg-accent',
@@ -2148,7 +2246,9 @@ export const UnifiedEditorPanel = ({
     const rowStyle = { paddingLeft: 8 + depth * 14 };
     const rowKind = getDocumentKind(mode, node.path);
     const rowIcon = isDirectory ? (
-      isExpandedNode ? <FolderOpen size={14} className="shrink-0 text-muted-foreground" /> : <Folder size={14} className="shrink-0 text-muted-foreground" />
+      isExpandedNode ? ( <FolderOpen size={14} className="shrink-0 text-muted-foreground" />
+      ) : ( <Folder size={14} className="shrink-0 text-muted-foreground" />
+      )
     ) : rowKind === 'excalidraw' ? (
       <PencilRuler size={14} className="shrink-0 text-muted-foreground" />
     ) : rowKind === 'coppermind' ? (
@@ -2173,15 +2273,17 @@ export const UnifiedEditorPanel = ({
             className={rowClassName}
             style={rowStyle}
             title={node.path}
-            onClick={event => handleNodeClick(node, event.detail)}
-            onDoubleClick={event => {
+            onClick={(event) => handleNodeClick(node, event.detail)}
+            onDoubleClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
               handleNodeDoubleClick(node);
             }}
           >
             {isDirectory ? (
-              isExpandedNode ? <ChevronDown size={13} className="shrink-0 text-muted-foreground" /> : <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
+              isExpandedNode ? ( <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
+              ) : ( <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
+              )
             ) : (
               <span className="w-[13px] shrink-0" />
             )}
@@ -2192,7 +2294,7 @@ export const UnifiedEditorPanel = ({
         {isDirectory && isExpandedNode && node.children.length > 0 ? (
           <div className="relative before:absolute before:bottom-1 before:left-2 before:top-1 before:w-px before:bg-border/60">
             <div style={{ marginLeft: 0 }}>
-              {node.children.map(child => renderTreeNode(child, depth + 1))}
+              {node.children.map((child) => renderTreeNode(child, depth + 1))}
             </div>
           </div>
         ) : null}
@@ -2224,47 +2326,56 @@ export const UnifiedEditorPanel = ({
           <>
             <PropertyRow label="Tags">
               <div className="flex flex-wrap gap-1">
-                {activeNote.tags.length ? activeNote.tags.map(tag => <Badge key={tag} variant="secondary">#{tag}</Badge>) : <span className="text-muted-foreground">None</span>}
+                {activeNote.tags.length ? ( activeNote.tags.map((tag) => ( <Badge key={tag} variant="secondary">#{tag}</Badge>))
+                ) : ( <span className="text-muted-foreground">None</span>
+                )}
               </div>
             </PropertyRow>
             <PropertyRow label="Properties">
               <div className="space-y-1">
-                {Object.entries(activeNote.properties).length ? Object.entries(activeNote.properties).map(([key, value]) => (
+                {Object.entries(activeNote.properties).length ? ( Object.entries(activeNote.properties).map(([key, value]) => (
                   <div key={key} className="grid grid-cols-[5rem_minmax(0,1fr)] gap-2">
                     <span className="truncate text-muted-foreground">{key}</span>
                     <span className="truncate">{value}</span>
                   </div>
-                )) : <span className="text-muted-foreground">None</span>}
+                ))
+                ) : ( <span className="text-muted-foreground">None</span>
+                )}
               </div>
             </PropertyRow>
             <PropertyRow label="Links">
               <div className="space-y-1">
-                {activeNote.links.length ? activeNote.links.map(link => (
+                {activeNote.links.length ? ( activeNote.links.map((link) => (
                   <button key={link} className="block max-w-full truncate text-left text-primary hover:underline" onClick={() => openWikiLink(link)}>
                     {link}
                   </button>
-                )) : <span className="text-muted-foreground">None</span>}
+                ))
+                ) : ( <span className="text-muted-foreground">None</span>
+                )}
               </div>
             </PropertyRow>
             <PropertyRow label="Backlinks">
               <div className="space-y-1">
-                {activeBacklinks.length ? activeBacklinks.map(link => (
+                {activeBacklinks.length ? ( activeBacklinks.map((link) => (
                   <button key={link} className="block max-w-full truncate text-left text-primary hover:underline" onClick={() => void loadFile(link)}>
                     {link}
                   </button>
-                )) : <span className="text-muted-foreground">None</span>}
+                ))
+                ) : ( <span className="text-muted-foreground">None</span>
+                )}
               </div>
             </PropertyRow>
             <PropertyRow label="Headings">
               <div className="space-y-1">
-                {activeNote.headings.length ? activeNote.headings.map(heading => <div key={heading} className="truncate">{heading}</div>) : <span className="text-muted-foreground">None</span>}
+                {activeNote.headings.length ? ( activeNote.headings.map((heading) => ( <div key={heading} className="truncate">{heading}</div>))
+                ) : ( <span className="text-muted-foreground">None</span>
+                )}
               </div>
             </PropertyRow>
           </>
         ) : null}
-        {activeAttachment ? (
-          <PropertyRow label="Attachment Type">{activeAttachment.mediaType}</PropertyRow>
-        ) : null}
+        {activeAttachment ?
+          <PropertyRow label="Attachment Type">{activeAttachment.mediaType}</PropertyRow> : null}
       </div>
     );
   };
@@ -2276,6 +2387,7 @@ export const UnifiedEditorPanel = ({
 
     const documentKind = getDocumentKind(mode, openBuffer.path);
     if (documentKind === 'excalidraw') {
+      const excalidrawView = activeDocumentView?.kind === 'excalidraw' ? activeDocumentView : undefined;
       return (
         <ExcalidrawDocumentEditor
           focusRequest={bufferFocusRequest}
@@ -2284,12 +2396,29 @@ export const UnifiedEditorPanel = ({
           theme={resolvedTheme}
           value={openBuffer.value}
           version={openBuffer.version}
+          viewState={excalidrawView}
           onChange={setActiveBufferValue}
+          onViewStateChange={(viewState) => {
+            if (activeDocumentViewKey) {
+              setDocumentView(activeDocumentViewKey, {
+                kind: 'excalidraw',
+                ...viewState,
+              });
+            }
+          }}
         />
       );
     }
 
     if (documentKind === 'coppermind') {
+      const coppermindView: CoppermindLocalViewState | undefined =
+        activeDocumentView?.kind === 'coppermind'
+          ? {
+              mode: activeDocumentView.mode,
+              activeSectionId: activeDocumentView.activeSectionId,
+              canvas: activeDocumentView.canvas,
+            }
+          : undefined;
       return (
         <CoppermindDocumentEditor
           ref={coppermindEditorRef}
@@ -2300,7 +2429,16 @@ export const UnifiedEditorPanel = ({
           path={openBuffer.path}
           target={editorTarget}
           value={openBuffer.value}
+          viewState={coppermindView}
           onChange={setActiveBufferValue}
+          onViewStateChange={(viewState) => {
+            if (activeDocumentViewKey) {
+              setDocumentView(activeDocumentViewKey, {
+                kind: 'coppermind',
+                ...viewState,
+              });
+            }
+          }}
         />
       );
     }
@@ -2313,6 +2451,7 @@ export const UnifiedEditorPanel = ({
         path={openBuffer.path}
         languageIntelligenceTarget={mode === 'code' ? editorTarget : undefined}
         value={content}
+        initialViewState={activeDocumentView?.kind === 'text' ? activeDocumentView : undefined}
         wikiLinkSuggestions={noteSuggestions}
         onChange={setActiveBufferValue}
         onGutterWidthChange={setEditorGutterWidth}
@@ -2327,24 +2466,24 @@ export const UnifiedEditorPanel = ({
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     reorderEditorTabs(editorTabTargetKey, String(active.id), String(over.id));
-  }, [editorTabTargetKey, reorderEditorTabs]);
+  }, [editorTabTargetKey, reorderEditorTabs],);
 
   const selectEditorTab = useCallback((tab: EditorTab) => {
     if (activeEditorTab?.id !== tab.id) closePreviewEditorTab(activeEditorTab);
     setActiveEditorTab(editorTabTargetKey, tab.id);
-    if (buffersByTabId[tab.id]) setBufferFocusRequest(request => request + 1);
-  }, [activeEditorTab, buffersByTabId, closePreviewEditorTab, editorTabTargetKey, setActiveEditorTab]);
+    if (buffersByTabId[tab.id]) setBufferFocusRequest((request) => request + 1);
+  }, [activeEditorTab, buffersByTabId, closePreviewEditorTab, editorTabTargetKey, setActiveEditorTab],);
 
   const closeEditorTab = useCallback((tab: EditorTab) => {
     const buffer = buffersByTabId[tab.id];
     if (!confirmDiscardBuffer(buffer, tab.path)) return;
     closePersistedEditorTab(editorTabTargetKey, tab.id);
     clearEditorTabState(tab.id);
-  }, [buffersByTabId, clearEditorTabState, closePersistedEditorTab, confirmDiscardBuffer, editorTabTargetKey]);
+  }, [buffersByTabId, clearEditorTabState, closePersistedEditorTab, confirmDiscardBuffer, editorTabTargetKey],);
 
   const pinEditorTab = useCallback((tab: EditorTab) => {
     pinPersistedEditorTab(editorTabTargetKey, tab.id);
-  }, [editorTabTargetKey, pinPersistedEditorTab]);
+  }, [editorTabTargetKey, pinPersistedEditorTab],);
 
   const renderEditorTabs = () => (
     <DndContext
@@ -2353,20 +2492,24 @@ export const UnifiedEditorPanel = ({
       sensors={editorTabSensors}
       onDragEnd={handleEditorTabDragEnd}
     >
-      <SortableContext items={editorTabs.map(tab => tab.id)} strategy={horizontalListSortingStrategy}>
-        {editorTabs.map(tab => {
+      <SortableContext items={editorTabs.map((tab) => tab.id)} strategy={horizontalListSortingStrategy}>
+        {editorTabs.map((tab) => {
           const isSelected = tab.id === activeEditorTab?.id;
           const tabBuffer = buffersByTabId[tab.id];
           const label = getEditorDocumentLabel(tab.path, mode);
           const isRenaming = renameState?.origin === 'tab' && renameState.path === tab.path;
           const tabKind = getDocumentKind(mode, tab.path);
           const icon = tabKind === 'excalidraw'
-            ? <PencilRuler size={12} className="text-muted-foreground" />
+            ? ( <PencilRuler size={12} className="text-muted-foreground" />
+            )
             : tabKind === 'coppermind'
-              ? <Brain size={12} className="text-muted-foreground" />
+              ? ( <Brain size={12} className="text-muted-foreground" />
+            )
             : tabKind === 'markdown'
-              ? <StickyNote size={12} className="text-muted-foreground" />
-              : <FileIcon size={12} className="text-muted-foreground" />;
+              ? ( <StickyNote size={12} className="text-muted-foreground" />
+            )
+              : ( <FileIcon size={12} className="text-muted-foreground" />
+            );
           return (
             <SortableEditorTab
               key={tab.id}
@@ -2464,7 +2607,7 @@ export const UnifiedEditorPanel = ({
                   <Button size="icon-xs" variant="ghost" aria-label="Upload attachment" title="Upload attachment" onClick={() => uploadInputRef.current?.click()}>
                     <ImagePlus size={14} />
                   </Button>
-                  <input ref={uploadInputRef} className="hidden" type="file" onChange={event => void uploadAttachment(event.currentTarget.files?.[0])} />
+                  <input ref={uploadInputRef} className="hidden" type="file" onChange={(event) => void uploadAttachment(event.currentTarget.files?.[0])} />
                 </>
               ) : null}
               <div className="min-w-0 flex-1" />
@@ -2486,17 +2629,17 @@ export const UnifiedEditorPanel = ({
                   className="h-6 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
                   placeholder="Search"
                   value={query}
-                  onChange={event => setQuery(event.target.value)}
+                  onChange={(event) => setQuery(event.target.value)}
                 />
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-1">
-              {visibleTree.children.length > 0 ? renderTreeNode(visibleTree, -1) : (
+              {visibleTree.children.length > 0 ? ( renderTreeNode(visibleTree, -1)) : (
                 <div className="px-2 py-3 text-xs text-muted-foreground">No files</div>
               )}
             </div>
           </>
-        ) : renderProperties()}
+        ) : ( renderProperties())}
       </aside>
     );
   };
@@ -2535,7 +2678,9 @@ export const UnifiedEditorPanel = ({
       >
         <div className="flex h-10 shrink-0 items-center border-b border-border" data-weave-editor-titlebar data-weave-editor-tab-bar>
           <div className="flex h-full shrink-0 items-center justify-center border-r border-border" style={{ width: 'var(--weave-editor-gutter-width)' }}>
-            {mode === 'notes' ? <StickyNote size={15} className="shrink-0 text-muted-foreground" /> : <Code2 size={15} className="shrink-0 text-muted-foreground" />}
+            {mode === 'notes' ? ( <StickyNote size={15} className="shrink-0 text-muted-foreground" />
+            ) : ( <Code2 size={15} className="shrink-0 text-muted-foreground" />
+            )}
           </div>
           <div
             className={cn(
@@ -2553,7 +2698,8 @@ export const UnifiedEditorPanel = ({
             </div>
           ) : null}
           <div className="flex shrink-0 items-center gap-1 pr-3">
-            {statusLabel ? <span className="self-center shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span> : null}
+            {statusLabel ? ( <span className="self-center shrink-0 text-[11px] text-muted-foreground">{statusLabel}</span>
+            ) : null}
             <Button size="icon-xs" variant="ghost" aria-label="Save buffer" title="Save buffer" disabled={!openBuffer || !isDirty || isActiveSaveInProgress} onClick={() => void handleSave()}>
               <Save size={14} />
             </Button>
@@ -2599,14 +2745,14 @@ export const UnifiedEditorPanel = ({
               />
               <div
                 className="pointer-events-none absolute bottom-0 top-0 w-px bg-border"
-                style={{ left: 'calc(var(--weave-editor-gutter-width) - 2px)' }}
+                style={{ left: 'calc(var(--weave-editor-gutter-width) - 2px)', }}
                 aria-hidden="true"
               />
             </>
           ) : null}
           <div
             className="pointer-events-none absolute right-0 top-0 h-px bg-border"
-            style={{ left: isCodeMirrorOpen ? 'calc(var(--weave-editor-gutter-width) - 1px)' : 0 }}
+            style={{ left: isCodeMirrorOpen ? 'calc(var(--weave-editor-gutter-width) - 1px)' : 0, }}
             aria-hidden="true"
           />
           <div className="flex h-full min-w-0 flex-1 items-center gap-2 px-3">
@@ -2651,11 +2797,11 @@ export const UnifiedEditorPanel = ({
           </div>
         </div>
       </section>
-      <Dialog open={Boolean(createPathDialog)} onOpenChange={open => {
+      <Dialog open={Boolean(createPathDialog)} onOpenChange={(open) => {
         if (!open) setCreatePathDialog(undefined);
       }}>
         <DialogPopup className="max-w-sm" showCloseButton={false}>
-          <form className="flex min-h-0 flex-col" onSubmit={event => void submitCreatePathDialog(event)}>
+          <form className="flex min-h-0 flex-col" onSubmit={(event) => void submitCreatePathDialog(event)}>
             <DialogHeader>
               <DialogTitle>{createPathDialogTitle}</DialogTitle>
               <DialogDescription>{createPathDialogDescription}</DialogDescription>
@@ -2666,9 +2812,9 @@ export const UnifiedEditorPanel = ({
                 autoFocus
                 placeholder={createPathDialogPlaceholder}
                 value={createPathDialog?.value ?? ''}
-                onChange={event => {
+                onChange={(event) => {
                   const value = event.currentTarget.value;
-                  setCreatePathDialog(current => current ? { ...current, value } : current);
+                  setCreatePathDialog((current) => ( current ? { ...current, value } : current));
                 }}
               />
             </DialogPanel>

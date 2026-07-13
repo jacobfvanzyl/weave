@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { CheckCircle2, KeyRound, Loader2, Server, Trash2, Wifi } from 'lucide-react';
 import type { ConnectionInput, ConnectionSettings, ConnectionStatus, ConnectionTestResult } from '../../lib/connection-types';
 import { Button } from '../ui/button';
@@ -11,6 +11,7 @@ type ConnectionFormProps = {
   error?: string;
   compact?: boolean;
   tokenStorageDescription?: string;
+  connectionDetails?: ReactNode;
   onCancel?: () => void;
   onSave: (input: ConnectionInput) => Promise<ConnectionTestResult>;
   onTest: (input?: ConnectionInput) => Promise<ConnectionTestResult>;
@@ -28,6 +29,7 @@ const ConnectionForm = ({
   error,
   compact = false,
   tokenStorageDescription = 'Stored tokens are reused for future requests.',
+  connectionDetails,
   onCancel,
   onSave,
   onTest,
@@ -116,6 +118,7 @@ const ConnectionForm = ({
             {clearToken ? 'Stored token will be removed.' : tokenStorageDescription}
           </div>
         </div>
+        {connectionDetails}
       </div>
 
       <div className="min-h-5 text-sm">

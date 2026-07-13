@@ -50,6 +50,7 @@ type CodeMirrorEditorProps = {
   languageIntelligenceTarget?: EditorTarget;
   value: string;
   readOnly?: boolean;
+  initialViewState?: { anchor: number; head: number; topLine: number };
   wikiLinkSuggestions?: WikiLinkSuggestion[];
   onChange: (value: string) => void;
   onGutterWidthChange?: (width: number) => void;
@@ -104,13 +105,14 @@ export const CodeMirrorEditor = forwardRef<
   languageIntelligenceTarget,
   value,
   readOnly,
+      initialViewState,
   wikiLinkSuggestions = [],
   onChange,
   onGutterWidthChange,
   onOpenWikiLink,
   onSave,
   onVimModeChange,
-}, ref) => {
+}, ref,) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -160,13 +162,14 @@ export const CodeMirrorEditor = forwardRef<
               !lowerQuery ||
               suggestion.target.toLowerCase().includes(lowerQuery) ||
               suggestion.label.toLowerCase().includes(lowerQuery) ||
-              suggestion.detail?.toLowerCase().includes(lowerQuery)
+              suggestion.detail?.toLowerCase().includes(lowerQuery),
             )
             .slice(0, 50);
         },
         resolve: async (target) => {
           const suggestion = findSuggestion(target);
-          if (!suggestion) return { target, label: target, status: "missing" };
+          if (!suggestion) { return { target, label: target, status: "missing" };
+            }
           return {
             target: suggestion.target,
             label: suggestion.label,
@@ -188,7 +191,7 @@ export const CodeMirrorEditor = forwardRef<
       if (!view) return undefined;
       const selection = view.state.selection.main;
       return {
-        selection: createTextRangeSnapshot(view, selection.from, selection.to),
+        selection: createTextRangeSnapshot(view, selection.from, selection.to,),
         visibleRange: getVisibleRangeSnapshot(view),
       };
     },
@@ -203,11 +206,11 @@ export const CodeMirrorEditor = forwardRef<
       const targetLine = view.state.doc.line(lineNumber);
       view.dispatch({
         ...(options.focus ? { selection: { anchor: targetLine.from } } : {}),
-        effects: EditorView.scrollIntoView(targetLine.from, { y: "center" }),
+        effects: EditorView.scrollIntoView(targetLine.from, { y: "center", }),
       });
       if (options.focus) view.focus();
     },
-  }), []);
+  }), [],);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -243,7 +246,7 @@ export const CodeMirrorEditor = forwardRef<
         onSaveRef.current?.();
         return true;
       },
-    }]);
+    },]);
     const updateListener = EditorView.updateListener.of(
       (update: ViewUpdate) => {
         if (!update.docChanged || isSyncingRef.current) return;
@@ -252,6 +255,17 @@ export const CodeMirrorEditor = forwardRef<
     );
     const view = new EditorView({
       doc: value,
+        ...(initialViewState
+          ? {
+            selection: {
+              anchor: Math.max(
+                0,
+                Math.min(value.length, initialViewState.anchor),
+              ),
+              head: Math.max(0, Math.min(value.length, initialViewState.head)),
+            },
+          }
+          : {}),
       parent: container,
       extensions: [
         createWeaveVimExtension(),
@@ -270,6 +284,20 @@ export const CodeMirrorEditor = forwardRef<
     });
 
     viewRef.current = view;
+      if (initialViewState) {
+        const topLine = Math.max(
+          1,
+          Math.min(view.state.doc.lines, initialViewState.topLine),
+        );
+        view.dispatch({
+          effects: EditorView.scrollIntoView(
+            view.state.doc.line(topLine).from,
+            {
+              y: "start",
+            },
+          ),
+        });
+      }
 
     const gutter = view.dom.querySelector<HTMLElement>(".cm-gutters");
     const reportGutterWidth = () => {
@@ -380,9 +408,9 @@ export const CodeMirrorEditor = forwardRef<
         pendingTransport?.close();
         if (!disposed) {
           console.info(
-            `Language intelligence unavailable for ${path}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+              `Language intelligence unavailable for ${path}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
           );
         }
       }
@@ -416,6 +444,6 @@ export const CodeMirrorEditor = forwardRef<
       data-weave-text-surface="true"
     />
   );
-});
+},);
 
 CodeMirrorEditor.displayName = "CodeMirrorEditor";

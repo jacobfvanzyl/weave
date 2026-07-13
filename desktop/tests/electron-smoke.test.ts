@@ -362,6 +362,7 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         ...process.env,
         WEAVE_DESKTOP_SERVER_URL: serverUrl,
         WEAVE_DESKTOP_USER_DATA: userDataPath,
+        WEAVE_PORTAL_HOME: path.join(userDataPath, 'portal'),
         WEAVE_AUTH_TOKEN: '',
       },
     });
@@ -566,6 +567,7 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
         ...process.env,
         WEAVE_DESKTOP_SERVER_URL: serverUrl,
         WEAVE_DESKTOP_USER_DATA: userDataPath,
+        WEAVE_PORTAL_HOME: path.join(userDataPath, 'portal'),
         WEAVE_AUTH_TOKEN: '',
       },
     });
@@ -649,4 +651,82 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await playwrightExpect(page.getByText('Worked for 5s')).toBeVisible({ timeout: 5_000 });
     await playwrightExpect(page.getByText('Refetched work details must stay expanded while reading above.')).toHaveCount(0);
   }, 60_000);
+
+  it('reloads isolated iPad Notes, Mac Code, and iPhone root-thread sessions', async () => {
+    const launchProfile = async (profile: string, width: number, height: number) => {
+      app = await electron.launch({
+        args: [path.resolve(testDirectory, '../.vite/build/main.js')],
+        env: {
+          ...process.env,
+          WEAVE_DESKTOP_SERVER_URL: serverUrl,
+          WEAVE_DESKTOP_USER_DATA: path.join(userDataPath, profile),
+          WEAVE_PORTAL_HOME: path.join(userDataPath, profile, 'portal'),
+          WEAVE_AUTH_TOKEN: '',
+        },
+      });
+      const page = await app.firstWindow();
+      await app.evaluate(({ BrowserWindow }, size) => {
+        BrowserWindow.getAllWindows()[0]?.setSize(size.width, size.height);
+      }, { width, height });
+      await page.setViewportSize({ width, height });
+      await page.waitForLoadState('domcontentloaded');
+      const authToken = page.getByLabel('Auth token');
+      try {
+        await authToken.waitFor({ timeout: 1_500 });
+        await authToken.fill('test-token');
+        await page.getByRole('button', { name: 'Save' }).click();
+      } catch {
+        // The profile already retained its connection credentials.
+      }
+      await page.locator('header').first().waitFor({ timeout: 5_000 });
+      return page;
+    };
+    const closeProfile = async () => {
+      await app?.close();
+      app = undefined;
+    };
+    const openSidebar = async (page: Awaited<ReturnType<typeof launchProfile>>) => {
+      const sidebar = page.locator('[data-weave-thread-sidebar]');
+      if (!(await sidebar.isVisible())) {
+        await page.getByRole('button', { name: 'Show sidebar' }).first().click();
+        await sidebar.waitFor({ timeout: 5_000 });
+      }
+      return sidebar;
+    };
+
+    let page = await launchProfile('ipad-notes', 820, 1180);
+    let sidebar = await openSidebar(page);
+    await sidebar.getByRole('button', { name: 'Select Smoke Notes', exact: true }).click({ force: true });
+    await playwrightExpect(page.locator('header').first()).toContainText('Smoke Notes');
+    await closeProfile();
+
+    page = await launchProfile('mac-code', 1440, 900);
+    sidebar = await openSidebar(page);
+    await sidebar.getByRole('button', { name: /main/ }).first().click({ force: true });
+    await playwrightExpect(page.locator('header').first()).toContainText('Smoke Code');
+    await playwrightExpect(page.locator('header').first().getByRole('button', { name: 'Hide chat' })).toHaveCount(0);
+    await closeProfile();
+
+    page = await launchProfile('iphone-thread', 430, 900);
+    sidebar = await openSidebar(page);
+    await sidebar.getByRole('button', { name: /^Loose thought$/ }).click({ force: true });
+    await playwrightExpect(page.locator('header').first()).toContainText('Loose thought');
+    await closeProfile();
+
+    page = await launchProfile('ipad-notes', 820, 1180);
+    await playwrightExpect(page.locator('header').first()).toContainText('Smoke Notes', { timeout: 5_000 });
+    await playwrightExpect(page.locator('header').first().getByRole('button', { name: 'Hide notes' })).toBeVisible();
+    await closeProfile();
+
+    page = await launchProfile('mac-code', 1440, 900);
+    await playwrightExpect(page.locator('header').first()).toContainText('Smoke Code', { timeout: 5_000 });
+    await playwrightExpect(page.locator('header').first().getByRole('button', { name: 'Hide editor' })).toBeVisible();
+    await playwrightExpect(page.locator('header').first().getByRole('button', { name: 'Hide chat' })).toHaveCount(0);
+    await closeProfile();
+
+    page = await launchProfile('iphone-thread', 430, 900);
+    await playwrightExpect(page.locator('header').first()).toContainText('Loose thought', { timeout: 5_000 });
+    await playwrightExpect(page.locator('[data-weave-active-thread="true"] textarea')).toBeVisible();
+    await playwrightExpect(page.locator('header').first().getByRole('button', { name: 'Hide editor' })).toHaveCount(0);
+  }, 90_000);
 });

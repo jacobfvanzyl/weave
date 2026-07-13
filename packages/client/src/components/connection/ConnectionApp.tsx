@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { ServerCog } from 'lucide-react';
+import { type ClientAppInputId, getBuildClientAppId } from '../../lib/client-app';
+import { activateClientSessionStores } from '../../lib/client-session-activation';
+import { createClientSessionIdentity } from '../../lib/client-session';
 import type {
   ConnectionAdapter,
   ConnectionInput,
@@ -24,7 +27,41 @@ type ConnectionAppProps = {
   shellClassName?: string;
   settingsButtonClassName?: string;
   tokenStorageDescription?: string;
+  connectionDetails?: ReactNode;
+  clientApp?: ClientAppInputId;
   renderConnected?: (settingsButton: ReactNode) => ReactNode;
+};
+
+const ClientSessionBoundary = ({
+  children,
+  identity,
+}: {
+  children: ReactNode;
+  identity: ReturnType<typeof createClientSessionIdentity>;
+}) => {
+  const identityKey = `${identity.clientAppId}:${identity.serverUrl}:${identity.ownerId}`;
+  const [readyIdentityKey, setReadyIdentityKey] = useState<string>();
+
+  useEffect(() => {
+    let cancelled = false;
+    setReadyIdentityKey(undefined);
+    void activateClientSessionStores(identity).then((didActivate) => {
+      if (!cancelled && didActivate) setReadyIdentityKey(identityKey);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [identityKey]);
+
+  if (readyIdentityKey !== identityKey) {
+    return (
+      <div className="grid h-dvh place-items-center bg-background text-sm text-muted-foreground">
+        Restoring session...
+      </div>
+    );
+  }
+
+  return children;
 };
 
 export const ConnectionApp = ({
@@ -33,12 +70,16 @@ export const ConnectionApp = ({
   shellClassName = 'relative h-dvh overflow-hidden',
   settingsButtonClassName = 'fixed right-16 top-3 z-40',
   tokenStorageDescription,
+  connectionDetails,
+  clientApp = getBuildClientAppId(),
   renderConnected,
 }: ConnectionAppProps) => {
   const [settings, setSettings] = useState(initialSettings ?? fallbackSettings);
   const [status, setStatus] = useState<ConnectionStatus>('checking');
   const [error, setError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const [connectedUser, setConnectedUser] = useState<{ id: string; name: string }>();
 
   const applySettings = useCallback((nextSettings: ConnectionSettings) => {
     setSettings(nextSettings);
@@ -47,21 +88,24 @@ export const ConnectionApp = ({
       authToken: adapter.getClientAuthToken?.() ?? null,
     });
     queryClient.clear();
-  }, [adapter]);
+  }, [adapter],);
 
   const testConnection = useCallback(async (input?: ConnectionInput) => {
     const result = await adapter.testConnection(input);
     if (result.ok) setError(undefined);
     else setError(result.error);
     return result;
-  }, [adapter]);
+  }, [adapter],);
 
   const saveConnection = useCallback(async (input: ConnectionInput): Promise<ConnectionTestResult> => {
+      setStatus('checking');
+      setConnectedUser(undefined);
     const nextSettings = await adapter.saveSettings(input);
     applySettings(nextSettings);
     const result = await adapter.testConnection();
 
     if (result.ok) {
+        setConnectedUser(result.user);
       setStatus('connected');
       setError(undefined);
       setSettingsOpen(false);
@@ -71,7 +115,7 @@ export const ConnectionApp = ({
     }
 
     return result;
-  }, [adapter, applySettings]);
+  }, [adapter, applySettings],);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,14 +130,17 @@ export const ConnectionApp = ({
         if (cancelled) return;
 
         if (result.ok) {
+          setConnectedUser(result.user);
           setStatus('connected');
           setError(undefined);
         } else {
+          setConnectedUser(undefined);
           setStatus('disconnected');
           setError(result.error);
         }
       } catch (error) {
         if (cancelled) return;
+        setConnectedUser(undefined);
         setStatus('disconnected');
         setError(error instanceof Error ? error.message : 'Connection failed.');
       }
@@ -112,10 +159,11 @@ export const ConnectionApp = ({
       status,
       error,
       tokenStorageDescription,
+      connectionDetails,
       onSave: saveConnection,
       onTest: testConnection,
     }),
-    [error, saveConnection, settings, status, testConnection, tokenStorageDescription],
+    [connectionDetails,error, saveConnection, settings, status, testConnection, tokenStorageDescription],
   );
 
   if (status === 'checking') {
@@ -129,6 +177,14 @@ export const ConnectionApp = ({
   if (status === 'disconnected') {
     return <ConnectionScreen {...connectionProps} />;
   }
+
+  if (!connectedUser) {
+    return (
+      <div className="grid h-dvh place-items-center bg-background text-sm text-muted-foreground">Connecting...</div>
+    );
+  }
+
+  const sessionIdentity = createClientSessionIdentity(clientApp, settings.mastraUrl, connectedUser.id);
 
   const settingsButton = (
     <Button
@@ -144,14 +200,16 @@ export const ConnectionApp = ({
 
   return (
     <>
-      <div className={shellClassName}>
+      <ClientSessionBoundary identity={sessionIdentity}>
+        <div className={shellClassName}>
         {renderConnected?.(settingsButton) ?? (
           <>
-            <WeaveAppShell />
+            <WeaveAppShell clientApp={clientApp} />
             {settingsButton}
           </>
         )}
       </div>
+      </ClientSessionBoundary>
       <ConnectionDialog
         {...connectionProps}
         open={settingsOpen}
