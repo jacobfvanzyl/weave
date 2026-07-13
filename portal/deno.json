@@ -1,17 +1,17 @@
 {
+  "imports": {
+    "zod": "npm:zod@4.4.3"
+  },
   "tasks": {
     "check": "deno check src/main.ts",
-    "native": "deno run --allow-run --allow-env --allow-read scripts/build-native.ts",
-    "test": "deno task native && deno test --allow-net --allow-read --allow-write --allow-env --allow-run src/*_test.ts",
-    "dev": "deno task native && deno run --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts daemon",
-    "perf": "deno task native && WEAVE_PERF_LOG=1 WEAVE_PERF_DIR=../.weave-perf deno run --allow-net --allow-read --allow-write --allow-env --allow-run --allow-sys --cpu-prof --cpu-prof-dir=../.weave-perf/profiles/portal --cpu-prof-md --cpu-prof-flamegraph src/main.ts daemon",
-    "perf:inspect": "deno task native && WEAVE_PERF_LOG=1 WEAVE_PERF_DIR=../.weave-perf deno run --allow-net --allow-read --allow-write --allow-env --allow-run --allow-sys --inspect=127.0.0.1:9230 src/main.ts daemon",
+    "test": "deno test --allow-net --allow-read --allow-write --allow-env --allow-run src/*_test.ts",
+    "dev": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts daemon",
+    "perf": "WEAVE_PERF_LOG=1 WEAVE_PERF_DIR=../.weave-perf deno run --allow-net --allow-read --allow-write --allow-env --allow-run --allow-sys --cpu-prof --cpu-prof-dir=../.weave-perf/profiles/portal --cpu-prof-md --cpu-prof-flamegraph src/main.ts daemon",
+    "perf:inspect": "WEAVE_PERF_LOG=1 WEAVE_PERF_DIR=../.weave-perf deno run --allow-net --allow-read --allow-write --allow-env --allow-run --allow-sys --inspect=127.0.0.1:9230 src/main.ts daemon",
     "daemon": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts daemon",
     "login": "deno run --env-file=../server/.env --allow-net --allow-read --allow-write --allow-env src/main.ts login",
     "build": "deno run --allow-run --allow-env --allow-read --allow-write scripts/build.ts",
-    "window-stream-native:smoke": "node scripts/window-stream-native-smoke.mjs",
-    "window-stream-native:benchmark": "node scripts/window-stream-native-benchmark.mjs",
-    "start": "dist/portal daemon",
+    "start": "dist/portal start",
     "status": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts status",
     "stop": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts stop",
     "install": "deno task build && deno run --allow-read --allow-write --allow-env --allow-run scripts/install.ts"

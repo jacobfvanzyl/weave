@@ -1,146 +1,50 @@
-import { getAuthHeaders } from '../mastra-client';
-import { weaveRoutes } from '../weave-routes';
+import { addRpcSubscription, onRpcNotification, rpcRequest } from '../mastra-client';
 import { parseWeaveNotificationEvent, type WeaveNotificationEvent } from './types';
-
-type SseMessage = {
-  id?: string;
-  event?: string;
-  data: string;
-};
+import { RpcRemoteError, rpcErrorCode } from '@weave/protocol';
 
 type NotificationStreamOptions = {
   onEvent: (event: WeaveNotificationEvent) => void;
-  retryMs?: number;
 };
 
-const createSseParser = (onMessage: (message: SseMessage) => void) => {
-  let buffer = '';
-
-  const parseBlock = (block: string) => {
-    const message: { id?: string; event?: string; data: string[] } = { data: [] };
-    for (const rawLine of block.split(/\r?\n/)) {
-      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-      if (!line || line.startsWith(':')) continue;
-      const separatorIndex = line.indexOf(':');
-      const field = separatorIndex === -1 ? line : line.slice(0, separatorIndex);
-      const rawValue = separatorIndex === -1 ? '' : line.slice(separatorIndex + 1);
-      const value = rawValue.startsWith(' ') ? rawValue.slice(1) : rawValue;
-
-      if (field === 'id') message.id = value;
-      else if (field === 'event') message.event = value;
-      else if (field === 'data') message.data.push(value);
-    }
-
-    if (message.data.length > 0) onMessage({ ...message, data: message.data.join('\n') });
-  };
-
-  return {
-    feed(chunk: string) {
-      buffer += chunk;
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() ?? '';
-      for (const block of blocks) parseBlock(block);
-    },
-    flush() {
-      if (!buffer.trim()) return;
-      parseBlock(buffer);
-      buffer = '';
-    },
-  };
+type NotificationSubscriptionResult = {
+  subscriptionId?: unknown;
 };
 
-export const parseNotificationSseChunk = (chunk: string) => {
-  const messages: SseMessage[] = [];
-  const parser = createSseParser(message => messages.push(message));
-  parser.feed(chunk);
-  parser.flush();
-  return messages;
-};
-
-const readNotificationStream = async (
-  response: Response,
-  onMessage: (message: SseMessage) => void,
-  signal: AbortSignal,
-) => {
-  if (!response.body) throw new Error('Notification stream response did not include a body.');
-
-  const parser = createSseParser(onMessage);
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-
-  try {
-    while (!signal.aborted) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      parser.feed(value);
-    }
-    parser.flush();
-  } finally {
-    reader.releaseLock();
-  }
-};
-
-export const connectServerNotificationStream = ({ onEvent, retryMs = 3_000 }: NotificationStreamOptions) => {
-  const controller = new AbortController();
+export const connectServerNotificationStream = ({ onEvent }: NotificationStreamOptions) => {
   let lastSequence = 0;
-  let retryTimer: ReturnType<typeof setTimeout> | undefined;
-  let resolveRetry: (() => void) | undefined;
+  let subscriptionId: string | undefined;
 
-  const connect = async () => {
-    const params = lastSequence > 0 ? new URLSearchParams({ after: String(lastSequence) }) : undefined;
-    const response = await fetch(weaveRoutes.notifications.events(params), {
-      headers: {
-        ...getAuthHeaders(),
-        Accept: 'text/event-stream',
-      },
-      signal: controller.signal,
-    });
+  const detachEvents = onRpcNotification('notification.event', raw => {
+    if (!raw || typeof raw !== 'object') return;
+    const event = raw as { subscriptionId?: unknown; sequence?: unknown; event?: unknown };
+    if (subscriptionId && event.subscriptionId !== subscriptionId) return;
+    const sequence = Number(event.sequence);
+    if (!Number.isSafeInteger(sequence) || sequence <= lastSequence) return;
+    const parsed = parseWeaveNotificationEvent(event.event);
+    if (!parsed) return;
+    lastSequence = sequence;
+    onEvent(parsed);
+  });
 
-    if (!response.ok) throw new Error(`Notification stream failed: HTTP ${response.status}`);
-
-    await readNotificationStream(response, message => {
-      const parsedSequence = Number(message.id);
-      if (Number.isInteger(parsedSequence) && parsedSequence > lastSequence) lastSequence = parsedSequence;
-      if (message.event && message.event !== 'notification') return;
-      try {
-        const event = parseWeaveNotificationEvent(JSON.parse(message.data) as unknown);
-        if (event) onEvent(event);
-      } catch {
-        // Ignore malformed stream payloads.
-      }
-    }, controller.signal);
-  };
-
-  const loop = async () => {
-    while (!controller.signal.aborted) {
-      try {
-        await connect();
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        console.warn('[notifications] server stream disconnected', error);
-      }
-
-      await new Promise<void>(resolve => {
-        if (controller.signal.aborted) {
-          resolve();
-          return;
-        }
-        resolveRetry = resolve;
-        retryTimer = setTimeout(() => {
-          retryTimer = undefined;
-          resolveRetry = undefined;
-          resolve();
-        }, retryMs);
-      });
-    }
-  };
-
-  void loop();
+  const detachSubscription = addRpcSubscription(
+    'notifications',
+    'notification.subscribe',
+    () => ({ afterSequence: lastSequence }),
+    raw => {
+      const result = raw && typeof raw === 'object' ? raw as NotificationSubscriptionResult : {};
+      subscriptionId = typeof result.subscriptionId === 'string' ? result.subscriptionId : undefined;
+    },
+    async error => {
+      if (!(error instanceof RpcRemoteError) || error.code !== rpcErrorCode.resumeGap) return;
+      lastSequence = 0;
+      const result = await rpcRequest<NotificationSubscriptionResult>('notification.subscribe', { afterSequence: 0 });
+      subscriptionId = typeof result.subscriptionId === 'string' ? result.subscriptionId : undefined;
+    },
+  );
 
   return () => {
-    if (retryTimer) clearTimeout(retryTimer);
-    resolveRetry?.();
-    retryTimer = undefined;
-    resolveRetry = undefined;
-    controller.abort();
+    detachEvents();
+    detachSubscription();
+    if (subscriptionId) void rpcRequest('notification.unsubscribe', { subscriptionId }).catch(() => undefined);
   };
 };

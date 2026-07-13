@@ -54,6 +54,10 @@ import {
   threadCompactionRepository,
   type ThreadCompactionTrigger,
 } from './thread-compaction-repository';
+import { chatGPTCodexAuthService } from './mastra/providers/chatgpt-codex-auth';
+
+export const hashChatSystemPrompt = (system: unknown) =>
+  hashText(JSON.stringify(system ?? null));
 
 export {
   contextUsageRecallOptions,
@@ -257,6 +261,9 @@ export interface AgentService {
   listModels(): Promise<ModelConfig>;
   listPromptTemplates(context: PromptContextInput): Promise<unknown>;
   expandPrompt(name: string, args: string, context: PromptContextInput): Promise<string | undefined>;
+  getChatGPTAuthStatus(ownerId: string): Promise<unknown>;
+  startChatGPTBrowserLogin(ownerId: string): unknown;
+  completeChatGPTBrowserLogin(input: { ownerId: string; code: string; state: string }): Promise<unknown>;
   resolveContext(context: PromptContextInput): Promise<ResolvedAgentContext>;
   putResolvedContext(requestContext: unknown, resolved: ResolvedAgentContext): void;
   startRun(input: AgentRunRequest): Promise<AgentRunSnapshot>;
@@ -272,6 +279,11 @@ export interface AgentService {
     threadId: string,
     afterSequence?: number,
   ): Promise<ReadableStream<unknown> | undefined>;
+  replaySequencedChatRun(
+    resourceId: string,
+    threadId: string,
+    afterSequence?: number,
+  ): Promise<ReadableStream<{ sequence: number; chunk: unknown }> | undefined>;
   getPersistedChatRun(resourceId: string, threadId: string): Promise<AgentRunRecordV1 | undefined>;
   respondToToolApproval(input: RespondToToolApprovalRequest): Promise<StartChatRunResult>;
   getChatRun(resourceId: string | undefined, threadId: string | undefined): AgentThreadRunSnapshot;
@@ -331,6 +343,18 @@ export class MastraAgentService implements AgentService {
 
   async listPromptTemplates(context: PromptContextInput) {
     return listPromptSummaries(await this.promptContext(context));
+  }
+
+  getChatGPTAuthStatus(ownerId: string) {
+    return chatGPTCodexAuthService.getAuthStatus(ownerId);
+  }
+
+  startChatGPTBrowserLogin(ownerId: string) {
+    return chatGPTCodexAuthService.startBrowserLogin(ownerId);
+  }
+
+  completeChatGPTBrowserLogin(input: { ownerId: string; code: string; state: string }) {
+    return chatGPTCodexAuthService.completeBrowserLogin(input);
   }
 
   async expandPrompt(name: string, args: string, context: PromptContextInput) {
@@ -421,7 +445,7 @@ export class MastraAgentService implements AgentService {
       model: prepared.routedModel,
       executionProfile: prepared.executionProfile,
       maxSteps: getAgentMaxSteps(),
-      promptHash: hashText(JSON.stringify(prepared.system)),
+      promptHash: hashChatSystemPrompt(prepared.system),
       toolContractVersion: 1,
       executionLimits: {
         contextTokens: prepared.contextBudget.contextLimitTokens,
@@ -571,6 +595,22 @@ export class MastraAgentService implements AgentService {
     return new ReadableStream<unknown>({
       start(controller) {
         for (const event of events) controller.enqueue(event.data);
+        controller.close();
+      },
+    });
+  }
+
+  async replaySequencedChatRun(resourceId: string, threadId: string, afterSequence = 0) {
+    const inMemory = this.runCoordinator.getThreadRun(resourceId, threadId);
+    if (inMemory) return this.runCoordinator.observeSequencedRun(inMemory, afterSequence);
+
+    const persisted = await this.persistedRuns.latest(resourceId, threadId);
+    if (!persisted) return undefined;
+    if (persisted.status === 'running') await this.persistedRuns.interrupt(persisted.runId);
+    const events = await this.persistedRuns.events(persisted.runId, afterSequence);
+    return new ReadableStream<{ sequence: number; chunk: unknown }>({
+      start(controller) {
+        for (const event of events) controller.enqueue({ sequence: event.sequence, chunk: event.data });
         controller.close();
       },
     });

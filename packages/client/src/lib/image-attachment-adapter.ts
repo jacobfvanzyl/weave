@@ -1,4 +1,5 @@
 import type { Attachment, AttachmentAdapter, CompleteAttachment, PendingAttachment } from '@assistant-ui/core';
+import { uploadImageAttachment } from './binary-transfers';
 
 const imageMimeTypesByExtension: Record<string, string> = {
   '.bmp': 'image/bmp',
@@ -7,15 +8,6 @@ const imageMimeTypesByExtension: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.webp': 'image/webp',
-};
-
-const bytesToBase64 = (bytes: Uint8Array) => {
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
 };
 
 const fileExtension = (name: string) => {
@@ -63,11 +55,6 @@ export const inferImageMimeType = async (file: File) => {
   return inferImageMimeTypeFromBytes(header);
 };
 
-export const readImageFileAsDataUrl = async (file: File, mimeType: string) => {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  return `data:${mimeType};base64,${bytesToBase64(bytes)}`;
-};
-
 const isCompleteAttachment = (attachment: Attachment): attachment is CompleteAttachment =>
   attachment.status.type === 'complete';
 
@@ -88,6 +75,7 @@ export const imageAttachmentAdapter: AttachmentAdapter = {
   },
   async send(attachment) {
     const mimeType = attachment.contentType ?? await inferImageMimeType(attachment.file) ?? 'image/png';
+    const stored = await uploadImageAttachment(attachment.file, mimeType);
     return {
       ...attachment,
       contentType: mimeType,
@@ -97,7 +85,8 @@ export const imageAttachmentAdapter: AttachmentAdapter = {
           type: 'file',
           mimeType,
           filename: attachment.name,
-          data: await readImageFileAsDataUrl(attachment.file, mimeType),
+          data: stored.urlPath,
+          metadata: { attachmentId: stored.id },
         },
       ],
     };

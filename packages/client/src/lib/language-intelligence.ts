@@ -1,8 +1,7 @@
 import type { Transport } from '@codemirror/lsp-client';
 import type { EditorTarget } from './editor-types';
 import { detectLanguagePackLspId } from './language-packs/core';
-import { getAuthHeaders } from './mastra-client';
-import { weaveRoutes } from './weave-routes';
+import { onRpcConnectionState, onRpcNotification, rpcRequest } from './mastra-client';
 
 export type LspSessionStatus = 'ready' | 'missing' | 'disabled' | 'unsupported' | 'error';
 
@@ -26,60 +25,16 @@ export type LspSessionResult = {
   args?: string[];
   capabilities?: unknown;
   error?: string;
-  token?: string;
-  portalId?: string;
-  wsUrl: string;
 };
 
-type DesktopLspBridge = {
-  lspCreateSession: (target: EditorTarget, path: string, languageId?: string, serverId?: string) => Promise<LspSessionResult>;
-};
+type LspHostEvent =
+  | (LspSessionResult & { type: 'ready' })
+  | { type: 'jsonrpc'; sessionId: string; message: string }
+  | { type: 'error'; sessionId?: string; error: string };
 
-type WindowWithDesktopLsp = Window & {
-  weaveDesktop?: Partial<DesktopLspBridge>;
-};
+const sessionInputs = new Map<string, LspSessionInput>();
 
-type LspEventEnvelope = {
-  type: 'lsp.event';
-  clientId?: string;
-  event?: {
-    type?: string;
-    sessionId?: string;
-    status?: LspSessionStatus;
-    message?: string;
-    error?: string;
-  };
-};
-
-export const detectEditorLanguageId = (path: string) =>
-  detectLanguagePackLspId(path);
-
-const getDesktopBridge = () => {
-  if (typeof window === 'undefined') return undefined;
-  const bridge = (window as WindowWithDesktopLsp).weaveDesktop;
-  return typeof bridge?.lspCreateSession === 'function' ? bridge as DesktopLspBridge : undefined;
-};
-
-const requestWebLspSession = async (input: LspSessionInput) => {
-  const response = await fetch(weaveRoutes.code.lspSession(), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(input),
-  });
-  const text = await response.text();
-  const parsed = text
-    ? (() => {
-      try {
-        return JSON.parse(text) as { error?: string } & LspSessionResult;
-      } catch {
-        return undefined;
-      }
-    })()
-    : undefined;
-  if (!response.ok) throw new Error(parsed?.error || text || `LSP session request failed: HTTP ${response.status}`);
-  if (!parsed) throw new Error('LSP session response was empty.');
-  return parsed;
-};
+export const detectEditorLanguageId = (path: string) => detectLanguagePackLspId(path);
 
 export const createLspSession = async (input: LspSessionInput) => {
   const languageId = input.languageId ?? detectEditorLanguageId(input.path);
@@ -89,37 +44,22 @@ export const createLspSession = async (input: LspSessionInput) => {
       sessionId: '',
       status: 'unsupported',
       languageId,
-      wsUrl: '',
       error: 'Unsupported file type.',
     } satisfies LspSessionResult;
   }
-
   const request = { ...input, languageId };
-  const bridge = getDesktopBridge();
-  return bridge
-    ? await bridge.lspCreateSession(request.target, request.path, request.languageId, request.serverId)
-    : await requestWebLspSession(request);
+  const result = await rpcRequest<LspSessionResult>('lsp.session.create', request);
+  if (result.sessionId) sessionInputs.set(result.sessionId, request);
+  return result;
 };
 
-const sessionWsUrl = (session: LspSessionResult) => {
-  const url = new URL(session.wsUrl, window.location.href);
-  if (session.token && !url.searchParams.has('token')) url.searchParams.set('token', session.token);
-  return url.toString();
-};
-
-const parseEnvelope = (data: unknown): LspEventEnvelope | undefined => {
-  try {
-    const parsed = typeof data === 'string' ? JSON.parse(data) : undefined;
-    return parsed && typeof parsed === 'object' ? parsed as LspEventEnvelope : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-export const createLspWebSocketTransport = (session: LspSessionResult) => {
+export const createLspRpcTransport = (session: LspSessionResult) => {
   const handlers = new Set<(message: string) => void>();
-  const socket = new WebSocket(sessionWsUrl(session));
+  const input = sessionInputs.get(session.sessionId);
+  let activeSession = session;
+  const initializationMessages: string[] = [];
   let closed = false;
+  let disconnected = false;
   let readyResolve: (() => void) | undefined;
   let readyReject: ((error: Error) => void) | undefined;
   const ready = new Promise<void>((resolve, reject) => {
@@ -127,30 +67,20 @@ export const createLspWebSocketTransport = (session: LspSessionResult) => {
     readyReject = reject;
   });
 
-  socket.addEventListener('open', () => {
-    socket.send(JSON.stringify({ type: 'start', sessionId: session.sessionId }));
-  });
-
-  socket.addEventListener('message', (event) => {
-    const envelope = parseEnvelope(event.data);
-    if (envelope?.type !== 'lsp.event') return;
-    const lspEvent = envelope.event;
-    if (!lspEvent) return;
-
-    if (lspEvent.type === 'ready') {
+  const detachNotification = onRpcNotification('lsp.event', raw => {
+    const envelope = raw && typeof raw === 'object'
+      ? raw as { sessionId?: string; event?: LspHostEvent }
+      : undefined;
+    if (envelope?.sessionId !== activeSession.sessionId || !envelope.event) return;
+    const event = envelope.event;
+    if (event.type === 'ready') {
       readyResolve?.();
       readyResolve = undefined;
       readyReject = undefined;
-      return;
-    }
-
-    if (lspEvent.type === 'jsonrpc' && typeof lspEvent.message === 'string') {
-      for (const handler of handlers) handler(lspEvent.message);
-      return;
-    }
-
-    if (lspEvent.type === 'error') {
-      const error = new Error(lspEvent.error || 'Language server connection failed.');
+    } else if (event.type === 'jsonrpc') {
+      for (const handler of handlers) handler(event.message);
+    } else if (event.type === 'error') {
+      const error = new Error(event.error);
       readyReject?.(error);
       readyResolve = undefined;
       readyReject = undefined;
@@ -158,16 +88,51 @@ export const createLspWebSocketTransport = (session: LspSessionResult) => {
     }
   });
 
-  socket.addEventListener('error', () => {
-    readyReject?.(new Error('Language server WebSocket failed.'));
-    readyResolve = undefined;
-    readyReject = undefined;
+  const start = () => input
+    ? rpcRequest('lsp.session.start', { ...input, sessionId: activeSession.sessionId })
+    : Promise.reject(new Error('LSP session target is unavailable.'));
+  void start().catch(error => readyReject?.(error instanceof Error ? error : new Error(String(error))));
+  const detachState = onRpcConnectionState(state => {
+    if (state !== 'connected') {
+      disconnected = true;
+      return;
+    }
+    if (!disconnected || closed || !input) return;
+    disconnected = false;
+    void createLspSession(input).then(async recreated => {
+      activeSession = recreated;
+      await start();
+      for (const message of initializationMessages) {
+        await rpcRequest('lsp.session.send', { ...input, sessionId: activeSession.sessionId, message });
+      }
+    }).catch(error => console.warn(error instanceof Error ? error.message : String(error)));
   });
 
   const transport: Transport = {
     send(message: string) {
-      if (closed || socket.readyState !== WebSocket.OPEN) return;
-      socket.send(JSON.stringify({ type: 'jsonrpc', sessionId: session.sessionId, message }));
+      if (closed || !input) return;
+      try {
+        const parsed = JSON.parse(message) as { method?: unknown };
+        if (
+          parsed.method === 'initialize' || parsed.method === 'initialized' ||
+          parsed.method === 'textDocument/didOpen'
+        ) {
+          const index = initializationMessages.findIndex(existing => {
+            try {
+              return (JSON.parse(existing) as { method?: unknown }).method === parsed.method;
+            } catch {
+              return false;
+            }
+          });
+          if (index >= 0) initializationMessages[index] = message;
+          else initializationMessages.push(message);
+        }
+      } catch {
+        // Inner LSP messages are opaque to the transport unless they are valid JSON-RPC.
+      }
+      void rpcRequest('lsp.session.send', { ...input, sessionId: activeSession.sessionId, message }).catch(error => {
+        console.warn(error instanceof Error ? error.message : String(error));
+      });
     },
     subscribe(handler: (message: string) => void) {
       handlers.add(handler);
@@ -183,11 +148,11 @@ export const createLspWebSocketTransport = (session: LspSessionResult) => {
     close: () => {
       if (closed) return;
       closed = true;
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'detach', sessionId: session.sessionId }));
-      }
-      socket.close();
+      detachNotification();
+      detachState();
       handlers.clear();
+      sessionInputs.delete(activeSession.sessionId);
+      if (input) void rpcRequest('lsp.session.close', { ...input, sessionId: activeSession.sessionId }).catch(() => undefined);
     },
   };
 };

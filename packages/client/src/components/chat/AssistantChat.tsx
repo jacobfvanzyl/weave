@@ -41,7 +41,7 @@ import {
   saveComposerDraft,
 } from '../../lib/composer-drafts';
 import { canConnectChatGPT, connectChatGPT, getChatGPTAuthStatus } from '../../lib/chatgpt-auth-api';
-import { getAuthHeaders, getChatUrl } from '../../lib/mastra-client';
+import { RpcAssistantChatTransport } from '../../lib/rpc-chat-transport';
 import { fetchModelConfig, getResolvedModelDisplayName, type ModelOption } from '../../lib/models';
 import { expandPrompt, listPrompts, type PromptResolutionContext, type PromptSummary } from '../../lib/prompts-api';
 import { proposalWorkflowEnabled } from '../../lib/proposal-workflow';
@@ -109,6 +109,7 @@ import {
 import { buildProposalImplementationUserMessage, getProposalActionDisplay, getProposalActionDisplayLabel, } from './proposal-implementation';
 import { getWorkedForLabel, getWorkingForLabel, withAssistantRunTimingCustomMetadata } from './turn-timing';
 import { completeImageAttachment, imageAttachmentAdapter } from '../../lib/image-attachment-adapter';
+import { getAttachmentObjectUrl } from '../../lib/binary-transfers';
 import { getLatestPendingToolApproval, type ToolApprovalPart } from './tool-approval';
 import { ChatRenderErrorBoundary } from './ChatRenderErrorBoundary';
 import { shouldApplyPersistedMessageSnapshot } from './persisted-message-reconciliation';
@@ -767,17 +768,10 @@ const ImageAttachmentPreview = ({ attachment, removable = false }: { attachment:
     }
 
     let cancelled = false;
-    let localUrl: string | undefined;
-    void fetch(attachmentImageUrl, { headers: getAuthHeaders() })
-      .then((response) => {
-        if (!response.ok) { throw new Error(`Attachment fetch failed: ${response.status}`);
-        }
-        return response.blob();
-      })
-      .then((blob) => {
+    void getAttachmentObjectUrl(attachmentImageUrl)
+      .then((url) => {
         if (cancelled) return;
-        localUrl = URL.createObjectURL(blob);
-        setFetchedUrl(localUrl);
+        setFetchedUrl(url);
       })
       .catch(() => {
         if (!cancelled) setFetchedUrl(undefined);
@@ -785,7 +779,6 @@ const ImageAttachmentPreview = ({ attachment, removable = false }: { attachment:
 
     return () => {
       cancelled = true;
-      if (localUrl) URL.revokeObjectURL(localUrl);
     };
   }, [attachmentImageUrl]);
 
@@ -2761,7 +2754,6 @@ const AssistantChatRuntime = ({
     (state) => state.pendingProposalImplementationRequests[threadId],);
   const consumeProposalImplementationRequest = useChatStore((state) => state.consumeProposalImplementationRequest);
   const markThreadCompleted = useChatStore((state) => state.markThreadCompleted);
-  const chatApi = getChatUrl();
   const resumeRunIdRef = useRef<string | undefined>(undefined);
   const pendingAskUserResumeRef = useRef<PendingAskUserResume | undefined>(undefined);
   const sendingProposalImplementationRequestRef = useRef<string | undefined>(undefined);
@@ -2784,22 +2776,8 @@ const AssistantChatRuntime = ({
 
   const currentTransport = useMemo(
     () =>
-      new AssistantChatTransport({
-        api: chatApi,
-        async fetch(input, init) {
-          const response = await globalThis.fetch(input, init);
-          const method = init?.method?.toUpperCase() ?? 'GET';
-          if (method === 'POST' && response.ok && response.body) {
-            confirmComposerDraftReceived(threadId);
-          }
-          return response;
-        },
-        async prepareReconnectToStreamRequest({ id }) {
-          return {
-            api: `${chatApi}/${id}/stream`,
-            headers: getAuthHeaders(),
-          };
-        },
+      new RpcAssistantChatTransport({
+        onRunStarted: () => confirmComposerDraftReceived(threadId),
         async prepareSendMessagesRequest({ messages }) {
           const askResume = pendingAskUserResumeRef.current;
           const firstUserText = messages.find((message) => message.role === 'user') ? getMessageText(messages.find((message) => message.role === 'user')!).trim() : '';
@@ -2840,12 +2818,11 @@ const AssistantChatRuntime = ({
           if (askResume) pendingAskUserResumeRef.current = undefined;
 
           return {
-            headers: getAuthHeaders(),
             body,
           };
         },
       }),
-    [chatApi, executionProfile, reasoningEffort, requestServiceTier, selectedModel, threadId],
+    [executionProfile, reasoningEffort, requestServiceTier, selectedModel, threadId],
   );
   const transport = useDynamicChatTransport(currentTransport);
   const assistantUiInitialMessages = useMemo(
@@ -2956,7 +2933,6 @@ const AssistantChatRuntime = ({
       await chat.addToolApprovalResponse({
         id: part.approvalId,
         approved,
-        options: { headers: getAuthHeaders() },
       });
     },
     [chat],);

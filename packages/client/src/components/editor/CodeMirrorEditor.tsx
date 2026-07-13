@@ -37,7 +37,7 @@ import {
 } from "../../lib/codemirror-theme";
 import {
   createLspSession,
-  createLspWebSocketTransport,
+  createLspRpcTransport,
   detectEditorLanguageId,
 } from "../../lib/language-intelligence";
 
@@ -352,7 +352,7 @@ export const CodeMirrorEditor = forwardRef<
     let disposed = false;
     let cleanup: (() => void) | undefined;
     let pendingTransport:
-      | ReturnType<typeof createLspWebSocketTransport>
+      | ReturnType<typeof createLspRpcTransport>
       | undefined;
 
     void (async () => {
@@ -374,7 +374,7 @@ export const CodeMirrorEditor = forwardRef<
           return;
         }
 
-        const socketTransport = createLspWebSocketTransport(session);
+        const socketTransport = createLspRpcTransport(session);
         pendingTransport = socketTransport;
         await socketTransport.ready;
         if (disposed) {

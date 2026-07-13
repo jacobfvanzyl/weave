@@ -3,7 +3,12 @@ import type { EventService } from '../services/event-service';
 import { eventService as defaultEventService } from '../services/event-service';
 import { cancelDbosWorkflowExecution, getDbosWorkflowStatus, startDbosWorkflowExecution } from './dbos-runtime';
 import { validateWorkflowDefinition, type WorkflowDefinition, type WorkflowRunInput } from './definition';
-import { createWorkflowRunnerEventRecorder, recordWorkflowRunEvent, workflowRunEventId } from './events';
+import {
+  createWorkflowRunnerEventRecorder,
+  recordWorkflowRunEvent,
+  subscribePersistedWorkflowRunEvents,
+  workflowRunEventId,
+} from './events';
 import { executeWorkflowDefinition, type WorkflowRunnerEventHandler } from './runner';
 import {
   type StoredWorkflowDefinition,
@@ -133,6 +138,51 @@ export class WorkflowControlService {
     const run = await this.getRun(ownerId, runId);
     if (!run) throw new WorkflowControlError('not_found', 'Workflow run was not found.', 404);
     return this.repository.listRunEvents(ownerId, runId, options);
+  }
+
+  async observeRunEvents(ownerId: string, runId: string, afterSequence = 0) {
+    const run = await this.getRun(ownerId, runId);
+    if (!run) throw new WorkflowControlError('not_found', 'Workflow run was not found.', 404);
+    let detach: () => void = () => {};
+    return new ReadableStream<WorkflowRunEventRecord>({
+      start: async controller => {
+        let lastSequence = afterSequence;
+        let catchingUp = true;
+        const buffered: WorkflowRunEventRecord[] = [];
+        detach = subscribePersistedWorkflowRunEvents(ownerId, runId, event => {
+          if (event.sequence <= lastSequence) return;
+          if (catchingUp) buffered.push(event);
+          else {
+            lastSequence = event.sequence;
+            controller.enqueue(event);
+          }
+        });
+        try {
+          while (true) {
+            const events = await this.repository.listRunEvents(ownerId, runId, {
+              afterSequence: lastSequence,
+              limit: 500,
+            });
+            for (const event of events) {
+              if (event.sequence <= lastSequence) continue;
+              lastSequence = event.sequence;
+              controller.enqueue(event);
+            }
+            if (events.length < 500) break;
+          }
+          catchingUp = false;
+          for (const event of buffered.sort((left, right) => left.sequence - right.sequence)) {
+            if (event.sequence <= lastSequence) continue;
+            lastSequence = event.sequence;
+            controller.enqueue(event);
+          }
+        } catch (error) {
+          detach();
+          controller.error(error);
+        }
+      },
+      cancel: () => detach(),
+    });
   }
 
   async startRun(input: {

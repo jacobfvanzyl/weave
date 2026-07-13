@@ -1,7 +1,7 @@
 import { DefaultWorkflowServiceRuntime, type WorkflowServiceContext } from './service-runtime.ts';
 import type { AgentRunRequest, AgentService } from '../agent/index.ts';
 import type { AttachmentPayload } from '../modules/attachments/storage.ts';
-import type { EventService, ResourceService, SessionService, ToolService } from '../services/index.ts';
+import type { EventService, ResourceService, ToolService } from '../services/index.ts';
 import { type ServiceCaller, serviceLocatorScope, serviceResourceScope, serviceScopeNone } from '../services/types.ts';
 
 const assertEquals = (actual: unknown, expected: unknown, message?: string) => {
@@ -37,14 +37,12 @@ const baseContext = (grants: WorkflowServiceContext['grants']): WorkflowServiceC
 const createRuntime = (deps: {
   agents?: Partial<AgentService>;
   tools?: Partial<ToolService>;
-  sessions?: Partial<SessionService>;
   resources?: Partial<ResourceService>;
   events?: Partial<EventService>;
 }) =>
   new DefaultWorkflowServiceRuntime(
     deps.agents as AgentService,
     deps.tools as ToolService,
-    deps.sessions as SessionService,
     deps.resources as ResourceService,
     deps.events as EventService,
   );
@@ -138,31 +136,6 @@ Deno.test('WorkflowServiceRuntime invokes tools with explicit scope grants', asy
   assertEquals((captured as { caller?: ServiceCaller }).caller?.kind, 'workflow');
   assertEquals((captured as { scope?: unknown }).scope, scope);
   assertEquals((captured as { grants?: unknown }).grants, context.grants);
-});
-
-Deno.test('WorkflowServiceRuntime gates session operations before delegation', async () => {
-  const scope = serviceLocatorScope('portal-target', { portalId: 'portal-1' });
-  let invoked = false;
-  const runtime = createRuntime({
-    sessions: {
-      issueTerminalToken: async () => {
-        invoked = true;
-        return { token: 'token', target: {} as never };
-      },
-    },
-  });
-
-  await assertRejects(
-    () => runtime.issueTerminalToken(baseContext([]), { kind: 'workspace', scope }),
-    'not granted',
-  );
-  assertEquals(invoked, false);
-
-  const granted = await runtime.issueTerminalToken(
-    baseContext([{ service: 'session', operation: 'portal.terminal.issue', scope }]),
-    { kind: 'workspace', scope },
-  );
-  assertEquals(granted.token, 'token');
 });
 
 Deno.test('WorkflowServiceRuntime routes resources and events through workflow callers', async () => {

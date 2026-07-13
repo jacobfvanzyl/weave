@@ -29,7 +29,7 @@ deno task check # Deno-check the server entrypoint
 | `src/owner`            | Single-owner auth and request context.                                                                                                   |
 | `src/agent`            | Agent core service, contribution boundary, Agent HTTP routes, and private Mastra implementation.                                         |
 | `src/agent/mastra`     | Private Mastra implementation for the singular Weave Agent.                                                                              |
-| `src/portal`           | Portal core service, HTTP routes, registry, realtime server, and relay primitives.                                                       |
+| `src/portal`           | Portal token store, RPC peer registry, target resolution, and Portal services.                                                           |
 | `src/server`           | Shared server types, route helpers, and compatibility alias registration.                                                                |
 
 ### Top-level files

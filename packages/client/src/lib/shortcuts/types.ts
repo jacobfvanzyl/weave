@@ -22,7 +22,7 @@ export type ShortcutHotkey = Hotkey;
 export type ShortcutSequence = readonly Hotkey[];
 
 export type ShortcutBindingKind = 'hotkey' | 'sequence';
-export type ShortcutScope = 'app' | 'window-stream';
+export type ShortcutScope = 'app';
 
 export type ShortcutBinding = {
   commandId: ShortcutCommandId;

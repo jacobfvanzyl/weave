@@ -1,5 +1,5 @@
+import { onRpcConnectionState, onRpcNotification, rpcRequest } from './mastra-client';
 import type {
-  TerminalClientMessage,
   TerminalHostEvent,
   TerminalStartInput,
   TerminalStartResult,
@@ -7,289 +7,132 @@ import type {
   TerminalTransport,
   TerminalWindowRecord,
 } from './terminal-types';
-import { getAuthHeaders } from './mastra-client';
-import { weaveRoutes } from './weave-routes';
 
-type DesktopTerminalBridge = {
-  terminalSnapshot: () => Promise<TerminalWindowRecord[]>;
-  terminalList: (input: TerminalTargetInput) => Promise<TerminalWindowRecord[]>;
-  terminalCreate: (input: TerminalTargetInput) => Promise<TerminalWindowRecord>;
-  terminalStart: (input: TerminalStartInput) => Promise<TerminalStartResult>;
-  terminalInput: (terminalId: string, data: string) => Promise<void>;
-  terminalResize: (terminalId: string, cols: number, rows: number) => Promise<void>;
-  terminalClose: (terminalId: string, input?: TerminalTargetInput) => Promise<void>;
-  terminalDetach: (terminalId: string) => Promise<void>;
-  onTerminalEvent: (listener: (event: TerminalHostEvent) => void) => () => void;
-};
-
-type WindowWithDesktopTerminal = Window & {
-  weaveDesktop?: Partial<DesktopTerminalBridge>;
-};
-
-const getDesktopBridge = () => {
-  if (typeof window === 'undefined') return undefined;
-  const bridge = (window as WindowWithDesktopTerminal).weaveDesktop;
-  if (
-    typeof bridge?.terminalStart !== 'function'
-    || typeof bridge.terminalSnapshot !== 'function'
-    || typeof bridge.terminalList !== 'function'
-    || typeof bridge.terminalCreate !== 'function'
-    || typeof bridge.terminalInput !== 'function'
-    || typeof bridge.terminalResize !== 'function'
-    || typeof bridge.terminalClose !== 'function'
-    || typeof bridge.terminalDetach !== 'function'
-    || typeof bridge.onTerminalEvent !== 'function'
-  ) {
-    return undefined;
-  }
-
-  return bridge as DesktopTerminalBridge;
-};
-
-export const isDesktopTerminalTransportAvailable = () => Boolean(getDesktopBridge());
-
-export const isWebTerminalTransportAvailable = () =>
-  typeof window !== 'undefined' && typeof window.WebSocket === 'function' && typeof window.fetch === 'function';
-
-export const isTerminalTransportAvailable = () =>
-  isDesktopTerminalTransportAvailable() || isWebTerminalTransportAvailable();
-
-export const createDesktopTerminalTransport = (): TerminalTransport | undefined => {
-  const bridge = getDesktopBridge();
-  if (!bridge) return undefined;
-
-  return {
-    snapshot: () => bridge.terminalSnapshot(),
-    list: input => bridge.terminalList(input),
-    create: input => bridge.terminalCreate(input),
-    start: input => bridge.terminalStart(input),
-    input: (terminalId, data) => bridge.terminalInput(terminalId, data),
-    resize: (terminalId, cols, rows) => bridge.terminalResize(terminalId, cols, rows),
-    close: (terminalId, input) => bridge.terminalClose(terminalId, input),
-    detach: terminalId => bridge.terminalDetach(terminalId),
-    subscribe: listener => bridge.onTerminalEvent(listener),
-  };
-};
-
-type TerminalTokenResponse = {
-  token: string;
-  wsUrl: string;
-};
-
-type PendingStart = {
-  resolve: (value: TerminalStartResult) => void;
+type PendingRequest = {
+  resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 };
 
-type PendingTerminalRequest = {
-  resolve: (value: TerminalWindowRecord[] | TerminalWindowRecord) => void;
-  reject: (error: Error) => void;
-};
+const targetKey = (input: TerminalTargetInput) => [
+  input.kind,
+  input.portalId ?? '',
+  input.rootId ?? '',
+  input.projectId ?? '',
+  input.workspaceId ?? '',
+  input.workspacePath ?? '',
+  input.cwd ?? '',
+].join(':');
 
-type WebTerminalConnection = {
-  send: (message: TerminalClientMessage) => void;
-  list: (input: TerminalTargetInput) => Promise<TerminalWindowRecord[]>;
-  create: (input: TerminalTargetInput) => Promise<TerminalWindowRecord>;
-  start: (input: TerminalStartInput) => Promise<TerminalStartResult>;
-  closeSocket: () => void;
-};
+let requestCounter = 0;
+const nextRequestId = () => `terminal_${++requestCounter}`;
 
-let terminalRequestCounter = 0;
+export const isDesktopTerminalTransportAvailable = () => false;
+export const isWebTerminalTransportAvailable = () => true;
+export const isTerminalTransportAvailable = () => true;
+export const createDesktopTerminalTransport = (): TerminalTransport | undefined => undefined;
 
-const nextTerminalRequestId = () => {
-  terminalRequestCounter += 1;
-  return `terminal-${terminalRequestCounter.toString(36)}`;
-};
+export const createWebTerminalTransport = (): TerminalTransport => {
+  const listeners = new Set<(event: TerminalHostEvent) => void>();
+  const pending = new Map<string, PendingRequest>();
+  const terminalTargets = new Map<string, TerminalStartInput>();
 
-const parseJson = async <T>(response: Response): Promise<T> => {
-  if (!response.ok) throw new Error(await response.text());
-  return response.json() as Promise<T>;
-};
-
-const requestTerminalToken = async (input: TerminalTargetInput) =>
-  parseJson<TerminalTokenResponse>(
-    await fetch(weaveRoutes.code.terminalToken(), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(input),
-    }),
-  );
-
-const createWebTerminalConnection = async (
-  input: TerminalTargetInput,
-  emit: (event: TerminalHostEvent) => void,
-  onClosed: () => void,
-): Promise<WebTerminalConnection> => {
-  const token = await requestTerminalToken(input);
-  const url = new URL(token.wsUrl);
-  url.searchParams.set('token', token.token);
-
-  const socket = new WebSocket(url);
-  let pendingStart: PendingStart | undefined;
-  const pendingRequests = new Map<string, PendingTerminalRequest>();
-  let accepted = false;
-
-  const opened = new Promise<void>((resolve, reject) => {
-    socket.onopen = () => undefined;
-    socket.onerror = () => {
-      reject(new Error('Terminal WebSocket connection failed.'));
-    };
-    socket.onmessage = event => {
-      const message = JSON.parse(String(event.data)) as TerminalHostEvent | { type?: string };
-      if (message.type === 'terminal.accepted') {
-        accepted = true;
-        resolve();
-        return;
-      }
-
-      const terminalEvent = message as TerminalHostEvent;
-      if (terminalEvent.type === 'windows' && terminalEvent.requestId) {
-        pendingRequests.get(terminalEvent.requestId)?.resolve(terminalEvent.windows);
-        pendingRequests.delete(terminalEvent.requestId);
-        return;
-      }
-
-      if (terminalEvent.type === 'created' && terminalEvent.requestId) {
-        pendingRequests.get(terminalEvent.requestId)?.resolve(terminalEvent.window);
-        pendingRequests.delete(terminalEvent.requestId);
-        return;
-      }
-
-      if (terminalEvent.type === 'error' && terminalEvent.requestId) {
-        pendingRequests.get(terminalEvent.requestId)?.reject(new Error(terminalEvent.error));
-        pendingRequests.delete(terminalEvent.requestId);
-        return;
-      }
-
-      if (terminalEvent.type === 'started') {
-        pendingStart?.resolve({ sessionId: terminalEvent.sessionId, cwd: terminalEvent.cwd });
-        pendingStart = undefined;
-    } else if (terminalEvent.type === 'error' && pendingStart && terminalEvent.terminalId === input.terminalId) {
-        pendingStart.reject(new Error(terminalEvent.error));
-        pendingStart = undefined;
-      }
-      emit(terminalEvent);
-    };
-    socket.onclose = () => {
-      if (!accepted) reject(new Error('Terminal WebSocket closed before it was accepted.'));
-      pendingStart?.reject(new Error('Terminal WebSocket closed.'));
-      pendingStart = undefined;
-      for (const pending of pendingRequests.values()) pending.reject(new Error('Terminal WebSocket closed.'));
-      pendingRequests.clear();
-      onClosed();
-    };
+  const detachNotification = onRpcNotification('terminal.event', raw => {
+    const envelope = raw && typeof raw === 'object' ? raw as { event?: TerminalHostEvent } : undefined;
+    const event = envelope?.event;
+    if (!event) return;
+    const requestId = 'requestId' in event ? event.requestId : undefined;
+    if (event.type === 'windows' && requestId) {
+      pending.get(requestId)?.resolve(event.windows);
+      pending.delete(requestId);
+    } else if (event.type === 'created' && requestId) {
+      pending.get(requestId)?.resolve(event.window);
+      pending.delete(requestId);
+    } else if (event.type === 'started') {
+      pending.get(`start:${event.terminalId}`)?.resolve({ sessionId: event.sessionId, cwd: event.cwd });
+      pending.delete(`start:${event.terminalId}`);
+    } else if (event.type === 'error') {
+      const key = requestId ? requestId : `start:${event.terminalId}`;
+      pending.get(key)?.reject(new Error(event.error));
+      pending.delete(key);
+    }
+    for (const listener of listeners) listener(event);
   });
 
-  await opened;
+  const detachConnection = onRpcConnectionState(state => {
+    if (state !== 'connected') return;
+    for (const input of terminalTargets.values()) {
+      void rpcRequest('terminal.attach', { ...input, sessionId: input.terminalId }).catch(() => undefined);
+    }
+  });
 
-  const send = (message: TerminalClientMessage) => {
-    if (socket.readyState !== WebSocket.OPEN) throw new Error('Terminal WebSocket is not open.');
-    socket.send(JSON.stringify(message));
-  };
-
-  return {
-    send,
-    list: nextInput => new Promise<TerminalWindowRecord[]>((resolve, reject) => {
-      const requestId = nextTerminalRequestId();
-      pendingRequests.set(requestId, {
-        resolve: value => resolve(value as TerminalWindowRecord[]),
-        reject,
+  const requestEvent = <T>(key: string, call: () => Promise<unknown>) =>
+    new Promise<T>((resolve, reject) => {
+      pending.set(key, { resolve: value => resolve(value as T), reject });
+      void call().catch(error => {
+        pending.delete(key);
+        reject(error instanceof Error ? error : new Error(String(error)));
       });
-      send({ type: 'list', requestId, ...nextInput });
-    }),
-    create: nextInput => new Promise<TerminalWindowRecord>((resolve, reject) => {
-      const requestId = nextTerminalRequestId();
-      pendingRequests.set(requestId, {
-        resolve: value => resolve(value as TerminalWindowRecord),
-        reject,
-      });
-      send({ type: 'create', requestId, ...nextInput });
-    }),
-    start: nextInput => new Promise<TerminalStartResult>((resolve, reject) => {
-      pendingStart = { resolve, reject };
-      send({ type: 'start', ...nextInput });
-    }),
-    closeSocket: () => socket.close(),
-  };
-};
-
-export const createWebTerminalTransport = (): TerminalTransport | undefined => {
-  if (!isWebTerminalTransportAvailable()) return undefined;
-
-  const listeners = new Set<(event: TerminalHostEvent) => void>();
-  const connections = new Map<string, WebTerminalConnection>();
-  const emit = (event: TerminalHostEvent) => {
-    for (const listener of listeners) listener(event);
-  };
-
-  const getTargetConnectionKey = (input: TerminalTargetInput) => [
-    input.kind,
-    input.portalId ?? '',
-    input.rootId ?? '',
-    input.projectId ?? '',
-    input.workspaceId ?? '',
-    input.workspacePath ?? '',
-    input.cwd ?? '',
-  ].join(':');
-
-  const getConnection = async (input: TerminalTargetInput, connectionKey: string) => {
-    const existing = connections.get(connectionKey);
-    if (existing) return existing;
-
-    const connection = await createWebTerminalConnection(input, emit, () => {
-      connections.delete(connectionKey);
     });
-    connections.set(connectionKey, connection);
-    return connection;
-  };
 
-  const sendToTerminal = async (terminalId: string, message: TerminalClientMessage) => {
-    const connection = connections.get(terminalId);
-    if (!connection) return;
-    connection.send(message);
+  const list = (input: TerminalTargetInput) => {
+    const requestId = nextRequestId();
+    return requestEvent<TerminalWindowRecord[]>(requestId, () => rpcRequest('terminal.list', {
+      ...input,
+      sessionId: `target:${targetKey(input)}`,
+      requestId,
+    }));
   };
 
   return {
-    snapshot: async input => {
-      if (!input) return [];
-      const connection = await getConnection(input, getTargetConnectionKey(input));
-      return connection.list(input);
+    snapshot: input => input ? list(input) : Promise.resolve([]),
+    list,
+    create: input => {
+      const requestId = nextRequestId();
+      return requestEvent<TerminalWindowRecord>(requestId, () => rpcRequest('terminal.create', {
+        ...input,
+        sessionId: `target:${targetKey(input)}`,
+        requestId,
+      }));
     },
-    list: async input => {
-      const connection = await getConnection(input, getTargetConnectionKey(input));
-      return connection.list(input);
+    start: input => {
+      terminalTargets.set(input.terminalId, input);
+      return requestEvent<TerminalStartResult>(`start:${input.terminalId}`, () =>
+        rpcRequest('terminal.attach', { ...input, sessionId: input.terminalId })
+      );
     },
-    create: async input => {
-      const connection = await getConnection(input, getTargetConnectionKey(input));
-      return connection.create(input);
+    input: async (terminalId, data) => {
+      const target = terminalTargets.get(terminalId);
+      if (!target) return;
+      await rpcRequest('terminal.input', { ...target, sessionId: terminalId, terminalId, data });
     },
-    start: async input => {
-      const connection = await getConnection(input, input.terminalId);
-      return connection.start(input);
+    resize: async (terminalId, cols, rows) => {
+      const target = terminalTargets.get(terminalId);
+      if (!target) return;
+      await rpcRequest('terminal.resize', { ...target, sessionId: terminalId, terminalId, cols, rows });
     },
-    input: (terminalId, data) => sendToTerminal(terminalId, { type: 'input', terminalId, data }),
-    resize: (terminalId, cols, rows) => sendToTerminal(terminalId, { type: 'resize', terminalId, cols, rows }),
     close: async (terminalId, input) => {
-      const connection = input
-        ? await getConnection(input, getTargetConnectionKey(input))
-        : connections.get(terminalId);
-      if (!connection) return;
-      connection.send({ type: 'close', terminalId });
-      const terminalConnection = connections.get(terminalId);
-      if (terminalConnection && terminalConnection !== connection) terminalConnection.closeSocket();
-      if (terminalConnection) connections.delete(terminalId);
+      const target = terminalTargets.get(terminalId) ?? input;
+      if (!target) return;
+      await rpcRequest('terminal.close', { ...target, sessionId: terminalId, terminalId });
+      terminalTargets.delete(terminalId);
     },
     detach: async terminalId => {
-      await sendToTerminal(terminalId, { type: 'detach', terminalId });
-      connections.get(terminalId)?.closeSocket();
-      connections.delete(terminalId);
+      const target = terminalTargets.get(terminalId);
+      if (!target) return;
+      await rpcRequest('terminal.detach', { ...target, sessionId: terminalId, terminalId });
+      terminalTargets.delete(terminalId);
     },
     subscribe: listener => {
       listeners.add(listener);
-      return () => listeners.delete(listener);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0 && terminalTargets.size === 0) {
+          detachNotification();
+          detachConnection();
+        }
+      };
     },
   };
 };
 
-export const createTerminalTransport = (): TerminalTransport | undefined =>
-  createDesktopTerminalTransport() ?? createWebTerminalTransport();
+export const createTerminalTransport = (): TerminalTransport => createWebTerminalTransport();

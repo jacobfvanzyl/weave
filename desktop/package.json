@@ -13,7 +13,7 @@
     "start": "electron-forge start",
     "perf": "WEAVE_PERF_LOG=1 WEAVE_PERF_DIR=../.weave-perf electron-forge start --inspect-electron --enable-logging",
     "prepackage": "npm run --prefix .. portal:build",
-    "package": "electron-forge package",
+    "package": "node scripts/package.mjs",
     "package:signed": "WEAVE_DESKTOP_CODESIGN=1 npm run package",
     "package:flare": "npm run package",
     "package:coppermind": "npm run package",
@@ -67,6 +67,7 @@
     "@tanstack/react-router": "^1.170.9",
     "@toeverything/theme": "1.1.23",
     "@weave/client": "file:../packages/client",
+    "@weave/protocol": "file:../packages/protocol",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "ai": "^6.0.53",
@@ -104,11 +105,13 @@
     "@types/node": "^25.6.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.1",
     "electron": "42.3.0",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
     "vite": "^7.2.7",
-    "vitest": "^4.0.15"
+    "vitest": "^4.0.15",
+    "ws": "^8.21.0"
   }
 }

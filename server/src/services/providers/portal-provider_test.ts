@@ -1,4 +1,5 @@
-import { connectPortal, disconnectPortal } from '../../portal/registry.ts';
+import { RpcPeer, type RpcSocket } from '../../../../packages/protocol/src/peer.ts';
+import { connectPortalRpc, disconnectPortalRpc } from '../../portal/registry.ts';
 import { callerForOwner, ServiceError } from '../types.ts';
 import { PortalProvider, portalToolScope } from './portal-provider.ts';
 
@@ -19,13 +20,19 @@ const assertThrowsServiceError = (operation: () => unknown, code: string) => {
   throw new Error('Expected operation to throw.');
 };
 
-const socket = () => ({ send: (_data: string) => undefined, close: (_code?: number, _reason?: string) => undefined });
+const socket = (): RpcSocket => ({
+  readyState: WebSocket.OPEN,
+  bufferedAmount: 0,
+  send: (_data: string) => undefined,
+  close: (_code?: number, _reason?: string) => undefined,
+});
 
 Deno.test('PortalProvider treats explicit portalId scopes as exact targets', () => {
-  connectPortal({
+  const peer = new RpcPeer(socket());
+  connectPortalRpc({
     portalId: 'provider-test-portal-2',
     userId: 'owner-1',
-    ws: socket(),
+    peer,
     capabilities: ['portal.fs.read'],
     roots: [{ id: 'default' }],
   });
@@ -40,6 +47,6 @@ Deno.test('PortalProvider treats explicit portalId scopes as exact targets', () 
     );
     assertEquals(error.status, 400);
   } finally {
-    disconnectPortal('provider-test-portal-2');
+    disconnectPortalRpc('provider-test-portal-2', peer);
   }
 });

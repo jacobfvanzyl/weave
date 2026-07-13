@@ -15,8 +15,6 @@ type AppShellState = {
   isSidebarPreviewOpen: boolean;
   isGeneralTerminalOpen: boolean;
   isGeneralTerminalActive: boolean;
-  isWindowStreamOpen: boolean;
-  isWindowStreamActive: boolean;
   editorFocusRequest: number;
   terminalFocusRequest: number;
   generalTerminalFocusRequest: number;
@@ -24,8 +22,6 @@ type AppShellState = {
   setSidebarPreviewOpen: (isOpen: boolean) => void;
   setGeneralTerminalOpen: (isOpen: boolean) => void;
   setGeneralTerminalActive: (isActive: boolean) => void;
-  setWindowStreamOpen: (isOpen: boolean) => void;
-  setWindowStreamActive: (isActive: boolean) => void;
   requestEditorFocus: () => void;
   requestTerminalFocus: () => void;
   requestGeneralTerminalFocus: () => void;
@@ -36,8 +32,6 @@ const isPortraitViewportNow = () => typeof window !== 'undefined' && window.inne
   isSidebarPreviewOpen: false,
   isGeneralTerminalOpen: false,
   isGeneralTerminalActive: false,
-  isWindowStreamOpen: false,
-  isWindowStreamActive: false,
   editorFocusRequest: 0,
   terminalFocusRequest: 0,
   generalTerminalFocusRequest: 0,
@@ -63,8 +57,6 @@ export const useAppShellStore = create<AppShellState>()(
   setSidebarPreviewOpen: ( isSidebarPreviewOpen) => set({ isSidebarPreviewOpen }),
   setGeneralTerminalOpen: ( isGeneralTerminalOpen) => set({ isGeneralTerminalOpen }),
   setGeneralTerminalActive: ( isGeneralTerminalActive) => set({ isGeneralTerminalActive }),
-  setWindowStreamOpen: ( isWindowStreamOpen) => set({ isWindowStreamOpen }),
-  setWindowStreamActive: ( isWindowStreamActive) => set({ isWindowStreamActive }),
   requestEditorFocus: () => set((state) => ({ editorFocusRequest: state.editorFocusRequest + 1 })),
   requestTerminalFocus: () => set((state) => ({ terminalFocusRequest: state.terminalFocusRequest + 1, })),
   requestGeneralTerminalFocus: () => set((state) => ({ generalTerminalFocusRequest: state.generalTerminalFocusRequest + 1, })),

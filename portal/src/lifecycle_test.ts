@@ -30,19 +30,18 @@ Deno.test('Portal home defaults to ~/.config on macOS and Linux', () => {
   assertEquals(getPortalRuntimePath(env), '/Users/example/.config/weave/portal/runtime.json');
 });
 
-Deno.test('Portal runtime writes 0600, masks token, and can be removed', async () => {
+Deno.test('Portal runtime v2 writes 0600 and can be removed', async () => {
   const directory = await Deno.makeTempDir({ prefix: 'weave-runtime-' });
   const path = `${directory}/runtime.json`;
   const runtime: PortalRuntimeFile = {
-    version: 1,
+    version: 2,
     pid: 123,
+    instanceId: 'instance-123',
     portalId: 'portal_123',
     configPath: `${directory}/config.json`,
-    httpServerUrl: 'http://localhost:4111',
-    wsServerUrl: 'ws://localhost:4112',
-    controlHost: '127.0.0.1',
-    controlPort: 49321,
-    controlToken: 'abcdefghijklmnopqrstuvwxyz',
+    serverUrl: 'http://localhost:4111',
+    connectionState: 'connected',
+    connectedAt: new Date(0).toISOString(),
     startedAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   };
@@ -52,8 +51,8 @@ Deno.test('Portal runtime writes 0600, masks token, and can be removed', async (
     assertEquals(await readPortalRuntime(path), runtime);
     const stat = await Deno.stat(path);
     if (stat.mode !== null) assertEquals(stat.mode & 0o777, 0o600);
-    assertEquals(maskPortalRuntime(runtime)?.controlToken, 'abcd...wxyz');
-    assertEquals(runtimeMatchesServer(runtime, 'http://localhost:4111/', 'ws://localhost:4112/'), true);
+    assertEquals(maskPortalRuntime(runtime), runtime);
+    assertEquals(runtimeMatchesServer(runtime, 'http://localhost:4111/'), true);
     assertEquals((await checkPortalRuntimeHealth(runtime)).ok, false);
     await removePortalRuntime(path);
     assertEquals(await readPortalRuntime(path), undefined);
@@ -66,7 +65,7 @@ Deno.test('Portal runtime ignores malformed files', async () => {
   const directory = await Deno.makeTempDir({ prefix: 'weave-runtime-bad-' });
   const path = `${directory}/runtime.json`;
   try {
-    await Deno.writeTextFile(path, '{"version":1}');
+    await Deno.writeTextFile(path, '{"version":2}');
     assertEquals(await readPortalRuntime(path), undefined);
   } finally {
     await Deno.remove(directory, { recursive: true });
@@ -84,15 +83,13 @@ Deno.test('Portal runtime writes remain atomic under replacement races', async (
   const directory = await Deno.makeTempDir({ prefix: 'weave-runtime-atomic-' });
   const path = `${directory}/runtime.json`;
   const runtime = (pid: number): PortalRuntimeFile => ({
-    version: 1,
+    version: 2,
     pid,
+    instanceId: `instance-${pid}`,
     portalId: `portal_${pid}`,
     configPath: `${directory}/config.json`,
-    httpServerUrl: 'http://localhost:4111',
-    wsServerUrl: 'ws://localhost:4112',
-    controlHost: '127.0.0.1',
-    controlPort: 49000 + pid,
-    controlToken: `token-${pid}`,
+    serverUrl: 'http://localhost:4111',
+    connectionState: 'connected',
     startedAt: new Date(pid).toISOString(),
     updatedAt: new Date(pid).toISOString(),
   });
@@ -113,24 +110,21 @@ Deno.test('Portal runtime cleanup only removes the owning daemon runtime', async
   const directory = await Deno.makeTempDir({ prefix: 'weave-runtime-owner-' });
   const path = `${directory}/runtime.json`;
   const older: PortalRuntimeFile = {
-    version: 1,
+    version: 2,
     pid: 100,
+    instanceId: 'instance-old',
     portalId: 'portal_old',
     configPath: `${directory}/config.json`,
-    httpServerUrl: 'http://localhost:4111',
-    wsServerUrl: 'ws://localhost:4112',
-    controlHost: '127.0.0.1',
-    controlPort: 49100,
-    controlToken: 'old-token',
+    serverUrl: 'http://localhost:4111',
+    connectionState: 'connected',
     startedAt: new Date(100).toISOString(),
     updatedAt: new Date(100).toISOString(),
   };
   const replacement: PortalRuntimeFile = {
     ...older,
     pid: 200,
+    instanceId: 'instance-new',
     portalId: 'portal_new',
-    controlPort: 49200,
-    controlToken: 'new-token',
     startedAt: new Date(200).toISOString(),
     updatedAt: new Date(200).toISOString(),
   };

@@ -642,227 +642,40 @@ const unwiredAgentService = new Proxy({}, {
   },
 }) as AgentService;
 
-export const createChatStateRoutes = (service: AgentService) => [
-  defineRoute('/owner/me', {
-    method: 'GET',
-    handler: async (c) => {
-      try {
-        const user = getAuthUserFromHeader(c.req.header('Authorization'));
-        if (!user) return c.json({ error: 'Unauthorized' }, 401);
+export const loadChatThreadUiMessages = async (
+  service: AgentService,
+  input: { resourceId: string; threadId: string; origin?: string },
+) => {
+  const { resourceId, threadId } = input;
+  const origin = input.origin ?? '';
+  const [rawMessages, suspendedAskUserRunIds, compactions] = await Promise.all([
+    service.getChatThreadMessages({ resourceId, threadId }),
+    service.getChatSuspendedAskUserRunIds({ resourceId, threadId }),
+    service.listChatThreadCompactions({ resourceId, threadId }),
+  ]);
+  const completedAskToolCallIds = collectCompletedAskToolCallIds(rawMessages);
+  const persistedMessages: UiChatMessage[] = rawMessages.map((message: MastraDBMessage) =>
+    toUiMessage(message, origin, completedAskToolCallIds, suspendedAskUserRunIds)
+  );
+  for (const checkpoint of compactions) {
+    const marker = threadCompactionDisplayMessage(checkpoint) as UiChatMessage;
+    const index = persistedMessages.findIndex(message => message.id === checkpoint.compactedThroughMessageId);
+    persistedMessages.splice(index < 0 ? persistedMessages.length : index + 1, 0, marker);
+  }
+  const pendingMessages = service.getChatSubmittedUserMessages(resourceId, threadId)
+    .map((message, index) => toPendingSubmittedMessage(message, origin, index))
+    .filter((message): message is UiChatMessage => message !== null);
+  const retainedRunMessages = service.getChatUiMessages(resourceId, threadId) as UiChatMessage[];
+  const messagesWithRetainedRun = mergeRetainedRunMessages(persistedMessages, retainedRunMessages);
+  const retainedRunMerged = messagesWithRetainedRun !== persistedMessages;
+  const shouldAppendRunMessages = retainedRunMessages.length > 0 && !retainedRunMerged &&
+    (pendingMessages.length > 0 || messagesWithRetainedRun[messagesWithRetainedRun.length - 1]?.role !== 'assistant');
 
-        return c.json({ user: { id: user.id, name: user.name } });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-  defineRoute('/chat/threads', {
-    method: 'GET',
-    handler: async (c) => {
-      try {
-        const resourceId = getResourceId(c);
-
-        return c.json({ threads: await service.listChatThreads({ resourceId }) });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-  defineRoute('/chat/threads', {
-    method: 'POST',
-    handler: async (c) => {
-      try {
-        const body = await c.req.json();
-        const resourceId = getResourceId(c);
-        const threadId = body?.threadId;
-        const title = body?.title ?? '...';
-        const projectId = typeof body?.projectId === 'string' ? body.projectId : undefined;
-        const workspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
-
-        const thread = await service.createChatThread({
-          resourceId,
-          threadId,
-          title,
-          projectId,
-          workspaceId,
-        });
-
-        return c.json({ thread });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-  defineRoute('/chat/threads/reorder', {
-    method: 'PATCH',
-    handler: async (c) => {
-      try {
-        const resourceId = getResourceId(c);
-        const body = await c.req.json();
-        const threadIds = Array.isArray(body?.threadIds)
-          ? body.threadIds.filter((id: unknown) => typeof id === 'string')
-          : [];
-        const scope = body?.scope as Record<string, unknown> | undefined;
-        const scopeProjectId = typeof scope?.projectId === 'string' ? scope.projectId : undefined;
-        const scopeWorkspaceId = typeof scope?.workspaceId === 'string' ? scope.workspaceId : undefined;
-        const plain = scope?.plain === true;
-
-        await service.reorderChatThreads({
-          resourceId,
-          threadIds,
-          scope: {
-            ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
-            ...(scopeWorkspaceId ? { workspaceId: scopeWorkspaceId } : {}),
-            ...(plain ? { plain } : {}),
-          },
-        });
-
-        return c.json({ ok: true });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-  defineRoute('/chat/threads/:threadId/raw-messages', {
-    method: 'GET',
-    handler: async (c) => {
-      try {
-        const resourceId = getResourceId(c);
-        const threadId = c.req.param('threadId');
-
-        return c.json({ messages: await service.getChatThreadRawMessages({ resourceId, threadId }) });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-  defineRoute('/chat/threads/:threadId/context-usage', {
-    method: 'GET',
-    handler: async (c) => {
-      try {
-        const resourceId = getResourceId(c);
-        const threadId = c.req.param('threadId');
-        const modelId = nonEmptyString(c.req.query('model'));
-        if (!modelId) return c.json({ error: 'model is required' }, 400);
-
-        return c.json(
-          await service.getChatThreadContextUsage({
-            threadId,
-            resourceId,
-            modelId,
-          }),
-        );
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-  defineRoute('/chat/threads/:threadId/compact', {
-    method: 'POST',
-    handler: async (c) => {
-      try {
-        const resourceId = getResourceId(c);
-        const threadId = c.req.param('threadId');
-        const body = await c.req.json();
-        const model = nonEmptyString(body?.model);
-        if (!model) return c.json({ error: 'model is required' }, 400);
-        const result = await service.compactChatThread({
-          resourceId,
-          threadId,
-          model,
-          instructions: nonEmptyString(body?.instructions),
-          abortSignal: c.req.raw.signal,
-        });
-        return c.json(result);
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-  defineRoute('/chat/threads/:threadId/messages', {
-    method: 'GET',
-    handler: async (c) => {
-      try {
-        const resourceId = getResourceId(c);
-        const threadId = c.req.param('threadId');
-
-        const origin = new URL(c.req.url).origin;
-        const [rawMessages, suspendedAskUserRunIds, compactions] = await Promise.all([
-          service.getChatThreadMessages({ resourceId, threadId }),
-          service.getChatSuspendedAskUserRunIds({ resourceId, threadId }),
-          service.listChatThreadCompactions({ resourceId, threadId }),
-        ]);
-        const completedAskToolCallIds = collectCompletedAskToolCallIds(rawMessages);
-        const persistedMessages: UiChatMessage[] = rawMessages
-          .map((message: MastraDBMessage) =>
-            toUiMessage(message, origin, completedAskToolCallIds, suspendedAskUserRunIds)
-          );
-        for (const checkpoint of compactions) {
-          const marker = threadCompactionDisplayMessage(checkpoint) as UiChatMessage;
-          const index = persistedMessages.findIndex(message => message.id === checkpoint.compactedThroughMessageId);
-          persistedMessages.splice(index < 0 ? persistedMessages.length : index + 1, 0, marker);
-        }
-        const pendingMessages = service.getChatSubmittedUserMessages(resourceId, threadId)
-          .map((message, index) => toPendingSubmittedMessage(message, origin, index))
-          .filter((message): message is UiChatMessage => message !== null);
-        const retainedRunMessages = service.getChatUiMessages(resourceId, threadId) as UiChatMessage[];
-        const messagesWithRetainedRun = mergeRetainedRunMessages(persistedMessages, retainedRunMessages);
-        const retainedRunMerged = messagesWithRetainedRun !== persistedMessages;
-        const shouldAppendRunMessages = retainedRunMessages.length > 0 && !retainedRunMerged &&
-          (pendingMessages.length > 0 || messagesWithRetainedRun[messagesWithRetainedRun.length - 1]?.role !== 'assistant');
-
-        return c.json({
-          messages: mergePendingSubmittedMessages(
-            messagesWithRetainedRun,
-            shouldAppendRunMessages ? [...pendingMessages, ...retainedRunMessages] : pendingMessages,
-          ),
-        });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-  defineRoute('/chat/threads/:threadId', {
-    method: 'PATCH',
-    handler: async (c) => {
-      try {
-        const resourceId = getResourceId(c);
-        const threadId = c.req.param('threadId');
-        const body = await c.req.json();
-        const title = typeof body?.title === 'string' ? body.title.trim() : '';
-        const hasArchived = typeof body?.archived === 'boolean';
-        if (!title && !hasArchived) return c.json({ error: 'title or archived is required' }, 400);
-
-        const thread = await service.updateChatThread({
-          resourceId,
-          threadId,
-          ...(title ? { title } : {}),
-          ...(hasArchived ? { archived: body.archived } : {}),
-        });
-
-        return c.json({ thread });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-  defineRoute('/chat/threads/:threadId', {
-    method: 'DELETE',
-    handler: async (c) => {
-      try {
-        const resourceId = getResourceId(c);
-        const threadId = c.req.param('threadId');
-
-        await service.deleteChatThread({ resourceId, threadId });
-        return c.json({ ok: true });
-      } catch (error) {
-        return errorResponse(c, error);
-      }
-    },
-  }),
-];
-
-export const chatStateRoutes = createChatStateRoutes(unwiredAgentService);
+  return mergePendingSubmittedMessages(
+    messagesWithRetainedRun,
+    shouldAppendRunMessages ? [...pendingMessages, ...retainedRunMessages] : pendingMessages,
+  );
+};
 
 export const __chatStateContextUsageTest = {
   contextUsageRecallOptions,

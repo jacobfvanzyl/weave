@@ -1,16 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { configureMastraConnection } from '../../packages/client/src/lib/mastra-client';
+import { configureMastraConnection, rpcRequest as sendRpcRequest } from '../../packages/client/src/lib/mastra-client';
 import { cancelThreadRun, createWorkspace, deleteWorkspace, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, getThreadRunState, listProjectBranches, listProjects, listServerThreads, listWorkspaceGitStates, pullWorkspaceGitUpstream, sendThreadSteeringMessage, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
 import { createWorkspaceDraftDefaults } from '../../packages/client/src/lib/workspace-create-defaults';
 import { overlayWorkspaceGitState } from '../../packages/client/src/lib/workspace-git-state';
 import { sortThreadsForDisplay } from '../../packages/client/src/lib/thread-eligibility';
 import { expandPrompt, listPrompts } from '../../packages/client/src/lib/prompts-api';
+import { RpcRemoteError } from '@weave/protocol';
 
-const jsonResponse = (body: unknown) =>
-  new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  });
+const installRpcMock = (implementation: (...args: any[]) => unknown | Promise<unknown>) => {
+  const rpcRequest = vi.fn(implementation);
+  vi.stubGlobal('window', { weaveDesktop: { rpcRequest } });
+  return rpcRequest;
+};
 
 const workspace: Workspace = {
   id: 'workspace-1',
@@ -82,19 +83,39 @@ describe('chat-state Project/Workspace API client', () => {
     configureMastraConnection({ mastraUrl: 'http://localhost:4111', authToken: null });
   });
 
-  it('reads compatibility /projects response shapes', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ projects: [project] }));
-    vi.stubGlobal('fetch', fetchMock);
-
+  it('lists projects through the shared RPC connection', async () => {
+    const rpc = installRpcMock(async () => ({ projects: [project] }));
     await expect(listProjects()).resolves.toEqual([project]);
-    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/projects', {
-      headers: { Authorization: 'Bearer token-1' },
+    expect(rpc).toHaveBeenCalledWith('code.project.list', { product: 'all' }, undefined);
+  });
+
+  it('keeps AbortSignal in the renderer and cancels Desktop RPC by request id', async () => {
+    let rejectRequest: (error: Error) => void = () => undefined;
+    const rpcRequest = vi.fn((_method: string, _params: unknown, _options: unknown) =>
+      new Promise<never>((_resolve, reject) => {
+        rejectRequest = reject;
+      })
+    );
+    const cancelRpcRequest = vi.fn(() => rejectRequest(new Error('aborted by Desktop IPC')));
+    vi.stubGlobal('window', { weaveDesktop: { rpcRequest, cancelRpcRequest } });
+    const controller = new AbortController();
+
+    const request = sendRpcRequest('chat.run.start', { threadId: 'thread-1' }, {
+      signal: controller.signal,
     });
+    const forwardedOptions = rpcRequest.mock.calls[0]?.[2] as {
+      requestId?: string;
+      signal?: unknown;
+    };
+
+    expect(forwardedOptions.requestId).toMatch(/^renderer_/);
+    expect('signal' in forwardedOptions).toBe(false);
+    controller.abort();
+    await expect(request).rejects.toThrow('aborted by Desktop IPC');
+    expect(cancelRpcRequest).toHaveBeenCalledWith(forwardedOptions.requestId);
   });
 
   it('reads and cancels active chat run state', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const run = {
       active: true,
       status: 'running',
@@ -102,62 +123,37 @@ describe('chat-state Project/Workspace API client', () => {
       startedAt: '2026-06-10T10:00:00.000Z',
       updatedAt: '2026-06-10T10:00:01.000Z',
     };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === 'POST') return jsonResponse({ ok: true, run: { ...run, active: false, status: 'cancelled' } });
-      return jsonResponse({ run });
+    const rpc = installRpcMock(async (method: string) => {
+      if (method === 'chat.run.cancel') return { ok: true, run: { ...run, active: false, status: 'cancelled' } };
+      return { run };
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     await expect(getThreadRunState('thread-1')).resolves.toEqual(run);
     await expect(cancelThreadRun('thread-1')).resolves.toMatchObject({ active: false, status: 'cancelled' });
-
-    expect(fetchMock.mock.calls).toEqual([
-      ['http://weave.test/chat/runs/thread-1', { headers: { Authorization: 'Bearer token-1' } }],
-      ['http://weave.test/chat/runs/thread-1/cancel', { method: 'POST', headers: { Authorization: 'Bearer token-1' } }],
+    expect(rpc.mock.calls).toEqual([
+      ['chat.run.get', { threadId: 'thread-1' }, undefined],
+      ['chat.run.cancel', { threadId: 'thread-1' }, undefined],
     ]);
   });
 
-  it('sends steering messages to the active thread run endpoint', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse({ ok: true, accepted: true, runId: 'run-1', messageId: 'msg-1' }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(sendThreadSteeringMessage('thread-1', {
+  it('sends steering messages through RPC with the active durable run id', async () => {
+    const rpc = installRpcMock(async () => ({ ok: true, accepted: true, runId: 'run-1', messageId: 'msg-1' }));
+    const message = {
       id: 'user-1',
-      role: 'user',
-      parts: [{ type: 'text', text: 'steer now' }],
-    }, { runId: 'active-run-1' })).resolves.toEqual({ ok: true, accepted: true, runId: 'run-1', messageId: 'msg-1' });
-
-    expect(fetchMock.mock.calls).toEqual([
-      [
-        'http://weave.test/chat/runs/thread-1/steer',
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', Authorization: 'Bearer token-1' },
-          body: JSON.stringify({
-            message: {
-              id: 'user-1',
-              role: 'user',
-              parts: [{ type: 'text', text: 'steer now' }],
-            },
-            runId: 'active-run-1',
-          }),
-          signal: expect.any(AbortSignal),
-        },
-      ],
-    ]);
+      role: 'user' as const,
+      parts: [{ type: 'text' as const, text: 'steer now' }],
+    };
+    await expect(sendThreadSteeringMessage('thread-1', message, { runId: 'active-run-1' })).resolves.toEqual({
+      ok: true, accepted: true, runId: 'run-1', messageId: 'msg-1',
+    });
+    expect(rpc).toHaveBeenCalledWith('chat.run.steer', {
+      threadId: 'thread-1', message, runId: 'active-run-1',
+    }, { timeoutMs: 5_000, signal: undefined });
   });
 
   it('returns not_active when steering races with a completed run', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
     const run = { active: false, status: 'completed' as const };
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: false, reason: 'not_active', run }), {
-        status: 409,
-        headers: { 'content-type': 'application/json' },
-      }));
-    vi.stubGlobal('fetch', fetchMock);
+    installRpcMock(async () => { throw new RpcRemoteError(-32009, 'Run is not active.', { run }); });
 
     await expect(sendThreadSteeringMessage('thread-1', {
       id: 'user-1',
@@ -167,14 +163,8 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('returns stale_run when steering reaches a different active run', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
     const run = { active: true, status: 'running' as const, runId: 'next-run' };
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: false, reason: 'stale_run', run }), {
-        status: 409,
-        headers: { 'content-type': 'application/json' },
-      }));
-    vi.stubGlobal('fetch', fetchMock);
+    installRpcMock(async () => { throw new RpcRemoteError(-32009, 'Run changed.', { run }); });
 
     await expect(sendThreadSteeringMessage('thread-1', {
       id: 'user-1',
@@ -183,39 +173,16 @@ describe('chat-state Project/Workspace API client', () => {
     }, { runId: 'old-run' })).resolves.toEqual({ ok: false, reason: 'stale_run', run });
   });
 
-  it('aborts steering requests that do not resolve promptly', async () => {
-    vi.useFakeTimers();
-    try {
-      configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
-      const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
-        new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => {
-            const error = new Error('aborted');
-            error.name = 'AbortError';
-            reject(error);
-          });
-        }));
-      vi.stubGlobal('fetch', fetchMock);
-
-      const request = sendThreadSteeringMessage('thread-1', {
-        id: 'user-1',
-        role: 'user',
-        parts: [{ type: 'text', text: 'steer now' }],
-      }, { runId: 'active-run-1', timeoutMs: 10 });
-      const rejection = expect(request).rejects.toMatchObject({ name: 'AbortError' });
-
-      await vi.advanceTimersByTimeAsync(10);
-      await rejection;
-    } finally {
-      vi.useRealTimers();
-    }
+  it('forwards steering timeouts to the RPC transport', async () => {
+    const rpc = installRpcMock(async () => ({ ok: true, accepted: true, runId: 'run-1', messageId: 'msg-1' }));
+    await sendThreadSteeringMessage('thread-1', {
+      id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'steer now' }],
+    }, { runId: 'active-run-1', timeoutMs: 10 });
+    expect(rpc.mock.calls[0][2]).toMatchObject({ timeoutMs: 10 });
   });
 
   it('creates workspaces with separate display name and branch action', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ project, workspace }));
-    vi.stubGlobal('fetch', fetchMock);
-
+    const rpc = installRpcMock(async () => ({ project, workspace }));
     await expect(createWorkspace('project-1', {
       name: 'Review checkout',
       mode: 'newBranch',
@@ -224,37 +191,28 @@ describe('chat-state Project/Workspace API client', () => {
       path: '/repo.review',
     })).resolves.toEqual(workspace);
 
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://weave.test/code/projects/project-1/workspaces');
-    expect(init).toMatchObject({ method: 'POST' });
-    expect(JSON.parse(String(init?.body))).toEqual({
-      name: 'Review checkout',
+    expect(rpc).toHaveBeenCalledWith('code.workspace.create', {
+      projectId: 'project-1', name: 'Review checkout',
       mode: 'newBranch',
       branch: 'feature/review',
       base: 'main',
       path: '/repo.review',
-    });
+    }, undefined);
   });
 
   it('creates detached workspaces without branch or path payload fields', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ project, workspace }));
-    vi.stubGlobal('fetch', fetchMock);
-
+    const rpc = installRpcMock(async () => ({ project, workspace }));
     await expect(createWorkspace('project-1', {
       name: 'clever-lovelace',
       mode: 'detached',
       base: 'main',
     })).resolves.toEqual(workspace);
 
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://weave.test/code/projects/project-1/workspaces');
-    expect(init).toMatchObject({ method: 'POST' });
-    expect(JSON.parse(String(init?.body))).toEqual({
-      name: 'clever-lovelace',
+    expect(rpc).toHaveBeenCalledWith('code.workspace.create', {
+      projectId: 'project-1', name: 'clever-lovelace',
       mode: 'detached',
       base: 'main',
-    });
+    }, undefined);
   });
 
   it('builds workspace creation defaults for detached Docker-style checkouts', () => {
@@ -269,10 +227,7 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('switches branch as a workspace update', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ project, workspace }));
-    vi.stubGlobal('fetch', fetchMock);
-
+    const rpc = installRpcMock(async () => ({ project, workspace }));
     const updated = await updateWorkspace('project-1', 'workspace-1', {
       branch: 'main',
       createBranch: false,
@@ -280,14 +235,12 @@ describe('chat-state Project/Workspace API client', () => {
     expect(updated).toMatchObject({ id: 'workspace-1' });
     expect('branch' in updated).toBe(false);
 
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://weave.test/code/projects/project-1/workspaces/workspace-1');
-    expect(init).toMatchObject({ method: 'PATCH' });
-    expect(JSON.parse(String(init?.body))).toEqual({ branch: 'main', createBranch: false });
+    expect(rpc).toHaveBeenCalledWith('code.workspace.update', {
+      projectId: 'project-1', workspaceId: 'workspace-1', branch: 'main', createBranch: false,
+    }, undefined);
   });
 
   it('reads live workspace git-state snapshots', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const states = [{
       projectId: 'project-1',
       workspaceId: 'workspace-1',
@@ -301,17 +254,12 @@ describe('chat-state Project/Workspace API client', () => {
       detached: false,
       checkedAt: '2026-06-03T08:01:00.000Z',
     }];
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ states }));
-    vi.stubGlobal('fetch', fetchMock);
-
+    const rpc = installRpcMock(async () => ({ states }));
     await expect(listWorkspaceGitStates()).resolves.toEqual(states);
-    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/code/projects/workspaces/git-state', {
-      headers: { Authorization: 'Bearer token-1' },
-    });
+    expect(rpc).toHaveBeenCalledWith('code.workspace.gitState.list', undefined, undefined);
   });
 
   it('runs workspace upstream fetch and pull operations', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const state = {
       projectId: 'project-1',
       workspaceId: 'workspace-1',
@@ -323,40 +271,26 @@ describe('chat-state Project/Workspace API client', () => {
       behind: 0,
       checkedAt: '2026-06-03T08:01:00.000Z',
     };
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ state }));
-    vi.stubGlobal('fetch', fetchMock);
-
+    const rpc = installRpcMock(async () => ({ state }));
     await expect(fetchWorkspaceGitUpstream('project-1', 'workspace-1')).resolves.toEqual(state);
     await expect(pullWorkspaceGitUpstream('project-1', 'workspace-1')).resolves.toEqual(state);
-    expect(fetchMock.mock.calls).toEqual([
-      ['http://weave.test/code/projects/project-1/workspaces/workspace-1/git/fetch', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer token-1' },
-      }],
-      ['http://weave.test/code/projects/project-1/workspaces/workspace-1/git/pull', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer token-1' },
-      }],
+    expect(rpc.mock.calls).toEqual([
+      ['code.workspace.git.fetch', { projectId: 'project-1', workspaceId: 'workspace-1' }, undefined],
+      ['code.workspace.git.pull', { projectId: 'project-1', workspaceId: 'workspace-1' }, undefined],
     ]);
   });
 
   it('reads project branch options', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const branches = [
       { name: 'main', ref: 'main', kind: 'local', current: true },
       { name: 'feature/review', ref: 'origin/feature/review', kind: 'remote' },
     ];
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ branches }));
-    vi.stubGlobal('fetch', fetchMock);
-
+    const rpc = installRpcMock(async () => ({ branches }));
     await expect(listProjectBranches('project-1')).resolves.toEqual(branches);
-    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/code/projects/project-1/branches', {
-      headers: { Authorization: 'Bearer token-1' },
-    });
+    expect(rpc).toHaveBeenCalledWith('code.project.branches.list', { projectId: 'project-1' }, undefined);
   });
 
   it('discovers project worktrees with adoption metadata', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const worktrees = [
       {
         path: '/repo',
@@ -376,17 +310,12 @@ describe('chat-state Project/Workspace API client', () => {
         adopted: false,
       },
     ];
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ worktrees }));
-    vi.stubGlobal('fetch', fetchMock);
-
+    const rpc = installRpcMock(async () => ({ worktrees }));
     await expect(discoverWorkspaces('project-1')).resolves.toEqual(worktrees);
-    expect(fetchMock).toHaveBeenCalledWith('http://weave.test/code/projects/project-1/workspaces/discover', {
-      headers: { Authorization: 'Bearer token-1' },
-    });
+    expect(rpc).toHaveBeenCalledWith('code.workspace.discover', { projectId: 'project-1' }, undefined);
   });
 
   it('previews and removes workspaces with branch cleanup options', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const branchCleanup = {
       requested: false,
       status: 'not_requested',
@@ -395,17 +324,16 @@ describe('chat-state Project/Workspace API client', () => {
       targetRef: 'origin/feature/review',
       targetKind: 'same_name_remote',
     };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      if (String(input).endsWith('/removal-preview')) {
-        return jsonResponse({
+    const rpc = installRpcMock(async (method: string) => {
+      if (method === 'code.workspace.removalPreview') {
+        return {
           workspace,
           activeThreadCount: 1,
           archivedThreadCount: 2,
           branchCleanup,
-        });
+        };
       }
-
-      return jsonResponse({
+      return {
         project,
         workspace,
         mode: 'remove',
@@ -413,9 +341,8 @@ describe('chat-state Project/Workspace API client', () => {
         activeThreadCount: 1,
         archivedThreadCount: 2,
         branchCleanup: { ...branchCleanup, requested: true, status: 'deleted' },
-      });
+      };
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     await expect(fetchWorkspaceRemovalPreview('project-1', 'workspace-1')).resolves.toEqual({
       workspace,
@@ -430,20 +357,16 @@ describe('chat-state Project/Workspace API client', () => {
     })).resolves.toMatchObject({
       branchCleanup: { requested: true, status: 'deleted', branch: 'feature/review' },
     });
-    expect(fetchMock.mock.calls).toEqual([
-      ['http://weave.test/code/projects/project-1/workspaces/workspace-1/removal-preview', {
-        headers: { Authorization: 'Bearer token-1' },
-      }],
-      ['http://weave.test/code/projects/project-1/workspaces/workspace-1?mode=remove&force=true&deleteLocalBranch=true', {
-        method: 'DELETE',
-        headers: { Authorization: 'Bearer token-1' },
-      }],
+    expect(rpc.mock.calls).toEqual([
+      ['code.workspace.removalPreview', { projectId: 'project-1', workspaceId: 'workspace-1' }, undefined],
+      ['code.workspace.delete', {
+        projectId: 'project-1', workspaceId: 'workspace-1', mode: 'remove', force: true, deleteLocalBranch: true,
+      }, undefined],
     ]);
   });
 
   it('maps removed workspace metadata onto chat threads', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+    installRpcMock(async () => ({
       threads: [{
         id: 'thread-1',
         title: 'Old review',
@@ -465,7 +388,6 @@ describe('chat-state Project/Workspace API client', () => {
         },
       }],
     }));
-    vi.stubGlobal('fetch', fetchMock);
 
     await expect(listServerThreads()).resolves.toEqual([expect.objectContaining({
       id: 'thread-1',
@@ -483,8 +405,7 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('maps legacy plan artifact metadata onto lightweight thread plans', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+    installRpcMock(async () => ({
       threads: [{
         id: 'thread-1',
         title: 'Plan work',
@@ -510,7 +431,6 @@ describe('chat-state Project/Workspace API client', () => {
         },
       }],
     }));
-    vi.stubGlobal('fetch', fetchMock);
 
     await expect(listServerThreads()).resolves.toEqual([expect.objectContaining({
       latestPlan: {
@@ -529,7 +449,6 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('prefers newer draft proposal metadata over older different-path finalized proposal metadata', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const proposalItem = {
       id: 'src-file-ts',
       kind: 'file_edit',
@@ -542,7 +461,7 @@ describe('chat-state Project/Workspace API client', () => {
       current_hash: 'old-hash',
       proposed_hash: 'new-hash',
     };
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+    installRpcMock(async () => ({
       threads: [{
         id: 'thread-1',
         title: 'Proposal work',
@@ -575,7 +494,6 @@ describe('chat-state Project/Workspace API client', () => {
         },
       }],
     }));
-    vi.stubGlobal('fetch', fetchMock);
 
     await expect(listServerThreads()).resolves.toEqual([expect.objectContaining({
       latestProposal: expect.objectContaining({
@@ -595,7 +513,6 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('prefers finalized proposal metadata over stale same-path draft metadata', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: 'token-1' });
     const proposalItem = {
       id: 'src-file-ts',
       kind: 'file_edit',
@@ -608,7 +525,7 @@ describe('chat-state Project/Workspace API client', () => {
       current_hash: 'old-hash',
       proposed_hash: 'new-hash',
     };
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+    installRpcMock(async () => ({
       threads: [{
         id: 'thread-1',
         title: 'Proposal work',
@@ -641,7 +558,6 @@ describe('chat-state Project/Workspace API client', () => {
         },
       }],
     }));
-    vi.stubGlobal('fetch', fetchMock);
 
     await expect(listServerThreads()).resolves.toEqual([expect.objectContaining({
       latestProposal: expect.objectContaining({
@@ -729,11 +645,8 @@ describe('chat-state Project/Workspace API client', () => {
     expect('branch' in detachedWorkspace).toBe(false);
   });
 
-  it('sends draft context query params for prompt APIs without profileId', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ prompts: [] }));
-    vi.stubGlobal('fetch', fetchMock);
-
+  it('sends draft context to prompt RPC methods without profileId', async () => {
+    const rpc = installRpcMock(async () => ({ prompts: [] }));
     const context = {
       threadId: 'draft-thread',
       projectId: 'project-1',
@@ -742,31 +655,24 @@ describe('chat-state Project/Workspace API client', () => {
 
     await listPrompts(context);
 
-    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
-      'http://weave.test/agent/prompts?threadId=draft-thread&projectId=project-1&workspaceId=workspace-1',
-    ]);
+    expect(rpc).toHaveBeenCalledWith('agent.prompts.list', context, undefined);
   });
 
   it('sends draft context when expanding prompts', async () => {
-    configureMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ text: 'Ship now' }));
-    vi.stubGlobal('fetch', fetchMock);
-
+    const rpc = installRpcMock(async () => ({ text: 'Ship now' }));
     await expect(expandPrompt('ship', 'now', {
       threadId: 'draft-thread',
       projectId: 'project-1',
       workspaceId: 'workspace-1',
     })).resolves.toBe('Ship now');
 
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe('http://weave.test/agent/prompts/ship/expand?threadId=draft-thread&projectId=project-1&workspaceId=workspace-1');
-    expect(init).toMatchObject({ method: 'POST' });
-    expect(JSON.parse(String(init?.body))).toEqual({
+    expect(rpc).toHaveBeenCalledWith('agent.prompts.expand', {
+      name: 'ship',
       arguments: 'now',
       threadId: 'draft-thread',
       projectId: 'project-1',
       workspaceId: 'workspace-1',
-    });
+    }, undefined);
   });
 
   it('hydrates plan panel state from server thread metadata', async () => {
@@ -967,10 +873,9 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('does not send draft profileId when first persisting a plain thread', async () => {
-    const { useChatStore, useWorkspaceSurfaceStore, configureFreshMastraConnection } = await loadFreshChatStore();
-    configureFreshMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
+    const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
     const now = '2026-06-03T08:00:00.000Z';
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+    const rpc = installRpcMock(async () => ({
       thread: {
         id: 'draft-thread',
         title: 'Hello',
@@ -980,7 +885,6 @@ describe('chat-state Project/Workspace API client', () => {
         metadata: {},
       },
     }));
-    vi.stubGlobal('fetch', fetchMock);
     useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread' });
     useChatStore.setState({
       resourceId: 'browser-user-test',
@@ -989,23 +893,21 @@ describe('chat-state Project/Workspace API client', () => {
 
     await useChatStore.getState().ensureThreadPersisted('draft-thread', 'Hello');
 
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe('http://weave.test/chat/threads');
-    expect(init).toMatchObject({ method: 'POST' });
-    expect(JSON.parse(String(init?.body))).toEqual({
+    expect(rpc).toHaveBeenCalledWith('chat.thread.create', {
       threadId: 'draft-thread',
       title: 'Hello',
-    });
+      projectId: undefined,
+      workspaceId: undefined,
+    }, undefined);
     expect(useChatStore.getState().threads[0]).toMatchObject({ id: 'draft-thread' });
     expect('profileId' in useChatStore.getState().threads[0]).toBe(false);
     expect(useChatStore.getState().threads[0].draft).toBeUndefined();
   });
 
   it('does not send draft profileId when first persisting a project thread', async () => {
-    const { useChatStore, useWorkspaceSurfaceStore, configureFreshMastraConnection } = await loadFreshChatStore();
-    configureFreshMastraConnection({ mastraUrl: 'http://weave.test', authToken: null });
+    const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
     const now = '2026-06-03T08:00:00.000Z';
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+    const rpc = installRpcMock(async () => ({
       thread: {
         id: 'draft-thread',
         title: 'Hello',
@@ -1016,7 +918,6 @@ describe('chat-state Project/Workspace API client', () => {
       },
       workspace,
     }));
-    vi.stubGlobal('fetch', fetchMock);
     useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread', workspaceId: 'workspace-1' });
     useChatStore.setState({
       resourceId: 'browser-user-test',
@@ -1034,13 +935,12 @@ describe('chat-state Project/Workspace API client', () => {
 
     await useChatStore.getState().ensureThreadPersisted('draft-thread', 'Hello');
 
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe('http://weave.test/code/projects/project-1/threads');
-    expect(init).toMatchObject({ method: 'POST' });
-    expect(JSON.parse(String(init?.body))).toEqual({
+    expect(rpc).toHaveBeenCalledWith('code.project.threads.create', {
+      projectId: 'project-1',
       threadId: 'draft-thread',
       title: 'Hello',
       workspaceId: 'workspace-1',
-    });
+      product: 'code',
+    }, undefined);
   });
 });

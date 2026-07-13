@@ -109,6 +109,16 @@ export const observeServerNotifications = (
   });
 };
 
+export const getServerNotificationResumeWindow = (resourceId: string) => {
+  const trimmedResourceId = optionalString(resourceId);
+  if (!trimmedResourceId) throw new Error('Notification resource id is required.');
+  const state = getResourceState(trimmedResourceId);
+  return {
+    oldestSequence: state.buffer[0]?.sequence ?? state.nextSequence,
+    latestSequence: state.nextSequence - 1,
+  };
+};
+
 export const clearNotificationHubForTests = () => {
   resourceStates.clear();
 };

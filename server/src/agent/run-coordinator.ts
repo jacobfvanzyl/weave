@@ -35,7 +35,7 @@ export type AgentThreadRunStatus =
   | 'error';
 
 type AgentThreadRunEvent =
-  | { type: 'chunk'; chunk: unknown }
+  | { type: 'chunk'; sequence: number; chunk: unknown }
   | { type: 'close' }
   | { type: 'error'; error: unknown };
 
@@ -1454,7 +1454,7 @@ export class AgentRunCoordinator {
       });
     }
 
-    for (const listener of run.listeners) listener({ type: 'chunk', chunk });
+    for (const listener of run.listeners) listener({ type: 'chunk', sequence, chunk });
     if (toolApprovalChunk(chunk)) run.status = 'awaiting_approval';
   }
 
@@ -1525,6 +1525,39 @@ export class AgentRunCoordinator {
         listener = (event) => {
           if (event.type === 'chunk') {
             controller.enqueue(event.chunk);
+          } else if (event.type === 'error') {
+            if (listener) run.listeners.delete(listener);
+            controller.error(event.error);
+          } else {
+            if (listener) run.listeners.delete(listener);
+            controller.close();
+          }
+        };
+        run.listeners.add(listener);
+      },
+      cancel() {
+        if (listener) run.listeners.delete(listener);
+      },
+    });
+  }
+
+  observeSequencedRun(run: AgentThreadRun, afterSequence = 0) {
+    let listener: AgentThreadRunListener | undefined;
+
+    return new ReadableStream<{ sequence: number; chunk: unknown }>({
+      start(controller) {
+        for (const event of run.sequencedChunks) {
+          if (event.sequence > afterSequence) controller.enqueue(event);
+        }
+
+        if (!activeThreadRunStatuses.has(run.status)) {
+          controller.close();
+          return;
+        }
+
+        listener = (event) => {
+          if (event.type === 'chunk') {
+            controller.enqueue({ sequence: event.sequence, chunk: event.chunk });
           } else if (event.type === 'error') {
             if (listener) run.listeners.delete(listener);
             controller.error(event.error);

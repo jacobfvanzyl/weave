@@ -1,6 +1,6 @@
 import type { UIMessage } from 'ai';
-import { getAuthHeaders } from './mastra-client';
-import { weaveRoutes } from './weave-routes';
+import { RpcRemoteError } from '@weave/protocol';
+import { rpcRequest } from './mastra-client';
 import { productForProjectKind, type ProductId } from './products';
 import { selectPreferredThreadProposal } from './proposal-review-state';
 import type {
@@ -161,9 +161,6 @@ export type Project = {
   createdAt: string;
   updatedAt: string;
 };
-
-const productProjectRoutes = (product: ProductId) =>
-  product === 'notes' ? weaveRoutes.notes : product === 'chat' ? weaveRoutes.chat : weaveRoutes.code;
 
 const productForProjectInput = (projectKind?: Project['projectKind']): ProductId =>
   projectKind ? productForProjectKind(projectKind) : 'chat';
@@ -328,116 +325,70 @@ export class ApiError extends Error {
   }
 }
 
-const parseJson = async <T>(response: Response): Promise<T> => {
-  if (!response.ok) {
-    const text = await response.text();
-    try {
-      const body = JSON.parse(text) as Record<string, unknown>;
-      throw new ApiError(
-        typeof body.error === 'string' ? body.error : text,
-        response.status,
-        { code: typeof body.code === 'string' ? body.code : undefined, body },
-      );
-    } catch (error) {
-      if (error instanceof ApiError) throw error;
-      throw new ApiError(text, response.status);
-    }
-  }
-
-  return response.json() as Promise<T>;
-};
-
 export type AuthUser = {
   id: string;
   name: string;
 };
 
 export const getAuthUser = async () => {
-  const result = await parseJson<{ owner?: AuthUser; user?: AuthUser }>(
-    await fetch(weaveRoutes.owner.me(), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ owner?: AuthUser; user?: AuthUser }>('owner.get');
 
   return result.owner ?? result.user!;
 };
 
 export const listServerThreads = async () => {
-  const result = await parseJson<{ threads: ServerThread[] }>(
-    await fetch(weaveRoutes.chat.threads(), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ threads: ServerThread[] }>('chat.thread.list');
 
   return result.threads.map(toChatThread);
 };
 
 export const createServerThread = async (threadId: string, projectId?: string, workspaceId?: string, title = '...') => {
-  const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(weaveRoutes.chat.threads(), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title, projectId, workspaceId }),
-    }),
-  );
+  const result = await rpcRequest<{ thread: ServerThread }>('chat.thread.create', {
+    threadId,
+    title,
+    projectId,
+    workspaceId,
+  });
 
   return toChatThread(result.thread);
 };
 
 export const archiveServerThread = async (threadId: string, archived = true) => {
-  const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(weaveRoutes.chat.thread(threadId), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ archived }),
-    }),
-  );
+  const result = await rpcRequest<{ thread: ServerThread }>('chat.thread.update', { threadId, archived });
 
   return toChatThread(result.thread);
 };
 
 export const renameServerThread = async (threadId: string, title: string) => {
-  const result = await parseJson<{ thread: ServerThread }>(
-    await fetch(weaveRoutes.chat.thread(threadId), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ title }),
-    }),
-  );
+  const result = await rpcRequest<{ thread: ServerThread }>('chat.thread.update', { threadId, title });
 
   return toChatThread(result.thread);
 };
 
 export const deleteServerThread = async (threadId: string) => {
-  await parseJson<{ ok: true }>(
-    await fetch(weaveRoutes.chat.thread(threadId), { method: 'DELETE', headers: getAuthHeaders() }),
-  );
+  await rpcRequest('chat.thread.delete', { threadId });
 };
 
 export const listProjects = async () => {
-  const result = await parseJson<{ projects: Project[] }>(
-    await fetch(weaveRoutes.compat.projects(), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ projects: Project[] }>('code.project.list', { product: 'all' });
 
   return result.projects;
 };
 
 export const listProductProjects = async (product: ProductId) => {
-  const result = await parseJson<{ projects: Project[] }>(
-    await fetch(productProjectRoutes(product).projects(), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ projects: Project[] }>('code.project.list', { product });
 
   return result.projects;
 };
 
 export const listWorkspaceGitStates = async () => {
-  const result = await parseJson<{ states: WorkspaceGitState[] }>(
-    await fetch(weaveRoutes.code.workspaceGitStates(), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ states: WorkspaceGitState[] }>('code.workspace.gitState.list');
 
   return result.states;
 };
 
 export const listProjectBranches = async (projectId: string) => {
-  const result = await parseJson<{ branches: WorkspaceBranchOption[] }>(
-    await fetch(weaveRoutes.code.projectBranches(projectId), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ branches: WorkspaceBranchOption[] }>('code.project.branches.list', { projectId });
 
   return result.branches;
 };
@@ -528,26 +479,19 @@ const normalizePortalConnection = (portal: unknown): PortalConnection | undefine
 };
 
 export const listPortals = async () => {
-  const result = await parseJson<{ portals: unknown[] }>(
-    await fetch(weaveRoutes.portal.portals(), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ portals: unknown[] }>('portal.list');
 
   return result.portals.flatMap((portal) => normalizePortalConnection(portal) ?? []);
 };
 
 export const browsePortal = async (portalId: string, rootId = 'default', path = '') => {
-  const params = new URLSearchParams({ rootId, path });
-  return parseJson<PortalBrowseResult>(
-    await fetch(weaveRoutes.portal.portalBrowse(portalId, params), { headers: getAuthHeaders() }),
-  );
+  return await rpcRequest<PortalBrowseResult>('portal.browse', { portalId, rootId, path });
 };
 
 export const setPrimaryPortal = async (portalId: string) => {
-  const result = await parseJson<{ ok: true; primaryPortalId: string; portals: unknown[] }>(
-    await fetch(weaveRoutes.portal.portalPrimary(portalId), {
-      method: 'PATCH',
-      headers: getAuthHeaders(),
-    }),
+  const result = await rpcRequest<{ ok: true; primaryPortalId: string; portals: unknown[] }>(
+    'portal.primary.set',
+    { portalId },
   );
 
   return {
@@ -558,50 +502,32 @@ export const setPrimaryPortal = async (portalId: string) => {
 
 export const createProject = async (input: string | CreateProjectInput) => {
   const body: CreateProjectInput = typeof input === 'string' ? { name: input, projectKind: 'general' } : input;
-  const routes = productProjectRoutes(productForProjectInput(body.projectKind));
-  const result = await parseJson<{ project: Project }>(
-    await fetch(routes.projects(), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(body),
-    }),
-  );
+  const result = await rpcRequest<{ project: Project }>('code.project.create', {
+    ...body,
+    product: productForProjectInput(body.projectKind),
+  });
 
   return result.project;
 };
 
 export const deleteProject = async (projectId: string, projectKind?: Project['projectKind']) => {
-  await parseJson<{ ok: true }>(
-    await fetch(
-      projectKind
-        ? productProjectRoutes(productForProjectKind(projectKind)).project(projectId)
-        : weaveRoutes.compat.project(projectId),
-      { method: 'DELETE', headers: getAuthHeaders() },
-    ),
-  );
+  await rpcRequest('code.project.delete', {
+    projectId,
+    product: projectKind ? productForProjectKind(projectKind) : 'all',
+  });
 };
 
 export const reorderProjects = async (projectIds: string[], product: ProductId = 'code') => {
-  const routes = productProjectRoutes(product);
-  const result = await parseJson<{ projects: Project[] }>(
-    await fetch(routes.reorderProjects(), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ projectIds }),
-    }),
-  );
+  const result = await rpcRequest<{ projects: Project[] }>('code.project.reorder', { projectIds, product });
 
   return result.projects;
 };
 
 export const reorderAllProjects = async (projectIds: string[]) => {
-  const result = await parseJson<{ projects: Project[] }>(
-    await fetch(weaveRoutes.compat.reorderProjects(), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ projectIds }),
-    }),
-  );
+  const result = await rpcRequest<{ projects: Project[] }>('code.project.reorder', {
+    projectIds,
+    product: 'all',
+  });
 
   return result.projects;
 };
@@ -610,69 +536,54 @@ export const createWorkspace = async (projectId: string, input: string | CreateW
   const body = typeof input === 'string'
     ? { name: input, mode: 'newBranch' satisfies WorkspaceBranchMode, branch: input }
     : input;
-  const result = await parseJson<{ project: Project; workspace: Workspace }>(
-    await fetch(weaveRoutes.code.workspaces(projectId), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(body),
-    }),
-  );
+  const result = await rpcRequest<{ project: Project; workspace: Workspace }>('code.workspace.create', {
+    projectId,
+    ...body,
+  });
 
   return result.workspace;
 };
 
 export const updateWorkspace = async (projectId: string, workspaceId: string, input: UpdateWorkspaceInput) => {
-  const result = await parseJson<{ project: Project; workspace: Workspace }>(
-    await fetch(weaveRoutes.code.workspace(projectId, workspaceId), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(input),
-    }),
-  );
+  const result = await rpcRequest<{ project: Project; workspace: Workspace }>('code.workspace.update', {
+    projectId,
+    workspaceId,
+    ...input,
+  });
 
   return result.workspace;
 };
 
 export const fetchWorkspaceGitUpstream = async (projectId: string, workspaceId: string) => {
-  const result = await parseJson<{ state: WorkspaceGitState }>(
-    await fetch(weaveRoutes.code.workspaceGitFetch(projectId, workspaceId), {
-      method: 'POST',
-      headers: getAuthHeaders(),
-    }),
-  );
+  const result = await rpcRequest<{ state: WorkspaceGitState }>('code.workspace.git.fetch', {
+    projectId,
+    workspaceId,
+  });
 
   return result.state;
 };
 
 export const pullWorkspaceGitUpstream = async (projectId: string, workspaceId: string) => {
-  const result = await parseJson<{ state: WorkspaceGitState }>(
-    await fetch(weaveRoutes.code.workspaceGitPull(projectId, workspaceId), {
-      method: 'POST',
-      headers: getAuthHeaders(),
-    }),
-  );
+  const result = await rpcRequest<{ state: WorkspaceGitState }>('code.workspace.git.pull', {
+    projectId,
+    workspaceId,
+  });
 
   return result.state;
 };
 
 export const adoptWorkspace = async (projectId: string, path: string, name?: string) => {
-  const result = await parseJson<{ project: Project; workspace: Workspace }>(
-    await fetch(weaveRoutes.code.adoptWorkspace(projectId), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ path, name }),
-    }),
-  );
+  const result = await rpcRequest<{ project: Project; workspace: Workspace }>('code.workspace.adopt', {
+    projectId,
+    path,
+    name,
+  });
 
   return result.workspace;
 };
 
 export const fetchWorkspaceRemovalPreview = async (projectId: string, workspaceId: string) => {
-  return parseJson<WorkspaceRemovalPreview>(
-    await fetch(weaveRoutes.code.workspaceRemovalPreview(projectId, workspaceId), {
-      headers: getAuthHeaders(),
-    }),
-  );
+  return await rpcRequest<WorkspaceRemovalPreview>('code.workspace.removalPreview', { projectId, workspaceId });
 };
 
 export const deleteWorkspace = async (
@@ -681,36 +592,23 @@ export const deleteWorkspace = async (
   input: 'detach' | 'remove' | DeleteWorkspaceOptions,
 ) => {
   const options = typeof input === 'string' ? { mode: input } : input;
-  const params = new URLSearchParams({ mode: options.mode });
-  if (options.force) params.set('force', 'true');
-  if (options.deleteLocalBranch) params.set('deleteLocalBranch', 'true');
-
-  const result = await parseJson<DeleteWorkspaceResult>(
-    await fetch(weaveRoutes.code.workspace(projectId, workspaceId, params), {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    }),
-  );
+  const result = await rpcRequest<DeleteWorkspaceResult>('code.workspace.delete', {
+    projectId,
+    workspaceId,
+    ...options,
+  });
 
   return result;
 };
 
 export const discoverWorkspaces = async (projectId: string) => {
-  const result = await parseJson<{ worktrees: DiscoveredWorktree[] }>(
-    await fetch(weaveRoutes.code.discoverWorkspaces(projectId), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ worktrees: DiscoveredWorktree[] }>('code.workspace.discover', { projectId });
 
   return result.worktrees;
 };
 
 export const reorderWorkspaces = async (projectId: string, workspaceIds: string[]) => {
-  const result = await parseJson<{ project: Project }>(
-    await fetch(weaveRoutes.code.reorderWorkspaces(projectId), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ workspaceIds }),
-    }),
-  );
+  const result = await rpcRequest<{ project: Project }>('code.workspace.reorder', { projectId, workspaceIds });
 
   return result.project;
 };
@@ -722,14 +620,13 @@ export const createProjectThread = async (
   title = '...',
   projectKind?: Project['projectKind'],
 ) => {
-  const routes = productProjectRoutes(projectKind ? productForProjectKind(projectKind) : 'code');
-  const result = await parseJson<{ thread: ServerThread; workspace: Workspace }>(
-    await fetch(routes.projectThreads(projectId), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ threadId, title, workspaceId }),
-    }),
-  );
+  const result = await rpcRequest<{ thread: ServerThread; workspace: Workspace }>('code.project.threads.create', {
+    projectId,
+    threadId,
+    title,
+    workspaceId,
+    product: projectKind ? productForProjectKind(projectKind) : 'code',
+  });
 
   return { thread: toChatThread(result.thread), workspace: result.workspace };
 };
@@ -738,19 +635,11 @@ export const reorderThreads = async (
   scope: { plain?: true; projectId?: string; workspaceId?: string },
   threadIds: string[],
 ) => {
-  await parseJson<{ ok: true }>(
-    await fetch(weaveRoutes.chat.reorderThreads(), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ scope, threadIds }),
-    }),
-  );
+  await rpcRequest('chat.thread.reorder', { scope, threadIds });
 };
 
 export const listServerMessages = async (threadId: string) => {
-  const result = await parseJson<{ messages: UIMessage[] }>(
-    await fetch(weaveRoutes.chat.threadMessages(threadId), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ messages: UIMessage[] }>('chat.thread.messages.list', { threadId });
 
   return result.messages;
 };
@@ -766,17 +655,13 @@ export type ThreadRunState = {
 };
 
 export const getThreadRunState = async (threadId: string) => {
-  const result = await parseJson<{ run: ThreadRunState }>(
-    await fetch(weaveRoutes.chat.run(threadId), { headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ run: ThreadRunState }>('chat.run.get', { threadId });
 
   return result.run;
 };
 
 export const cancelThreadRun = async (threadId: string) => {
-  const result = await parseJson<{ ok: true; run: ThreadRunState }>(
-    await fetch(weaveRoutes.chat.cancelRun(threadId), { method: 'POST', headers: getAuthHeaders() }),
-  );
+  const result = await rpcRequest<{ ok: true; run: ThreadRunState }>('chat.run.cancel', { threadId });
 
   return result.run;
 };
@@ -797,31 +682,23 @@ export const sendThreadSteeringMessage = async (
   message: UIMessage,
   options: SendThreadSteeringMessageOptions = {},
 ): Promise<ThreadSteeringResult> => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? defaultThreadSteeringTimeoutMs);
-
-  const response = await fetch(weaveRoutes.chat.steerRun(threadId), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ message, ...(options.runId ? { runId: options.runId } : {}) }),
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
-
-  if (response.status === 409) {
-    const text = await response.text();
-    const body = (() => {
-      try {
-        return JSON.parse(text) as { error?: unknown; reason?: unknown; run?: ThreadRunState };
-      } catch {
-        return undefined;
-      }
-    })();
-    if (body?.reason === 'not_active' && body.run) return { ok: false, reason: 'not_active', run: body.run };
-    if (body?.reason === 'stale_run' && body.run) return { ok: false, reason: 'stale_run', run: body.run };
-    throw new ApiError(typeof body?.error === 'string' ? body.error : text, response.status, { body });
+  try {
+    return await rpcRequest<{ ok: true; accepted: true; runId: string; messageId: string }>(
+      'chat.run.steer',
+      { threadId, message, ...(options.runId ? { runId: options.runId } : {}) },
+      { timeoutMs: options.timeoutMs ?? defaultThreadSteeringTimeoutMs },
+    );
+  } catch (error) {
+    if (error instanceof RpcRemoteError && error.code === -32009) {
+      const body = error.data as { run?: ThreadRunState } | undefined;
+      if (body?.run) return {
+        ok: false,
+        reason: options.runId && body.run.runId !== options.runId ? 'stale_run' : 'not_active',
+        run: body.run,
+      };
+    }
+    throw error;
   }
-
-  return parseJson<{ ok: true; accepted: true; runId: string; messageId: string }>(response);
 };
 
 export type ContextUsage = {
@@ -847,10 +724,7 @@ export type ContextUsage = {
 };
 
 export const getThreadContextUsage = async (threadId: string, modelId: string) => {
-  const params = new URLSearchParams({ model: modelId });
-  return parseJson<ContextUsage>(
-    await fetch(weaveRoutes.chat.threadContextUsage(threadId, params), { headers: getAuthHeaders() }),
-  );
+  return await rpcRequest<ContextUsage>('chat.thread.contextUsage', { threadId, model: modelId });
 };
 
 export type CompactThreadResult = {
@@ -858,8 +732,8 @@ export type CompactThreadResult = {
 };
 
 export const compactThread = async (threadId: string, model: string, instructions?: string) =>
-  parseJson<CompactThreadResult>(await fetch(weaveRoutes.chat.compactThread(threadId), {
-    method: 'POST',
-    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, ...(instructions?.trim() ? { instructions: instructions.trim() } : {}) }),
-  }));
+  await rpcRequest<CompactThreadResult>('chat.thread.compact', {
+    threadId,
+    model,
+    ...(instructions?.trim() ? { instructions: instructions.trim() } : {}),
+  });

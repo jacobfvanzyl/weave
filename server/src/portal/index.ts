@@ -2,24 +2,27 @@ import {
   getPortalConnection,
   listPortalConnections,
   requestPortalTool,
+  requestPortalRpc,
   resolvePortalForTarget,
+  subscribePortalRpcEvent,
 } from './registry';
-import { registerPortalRoutes } from './routes';
 import type { PortalCore } from './types';
 
 export const portalCore: PortalCore = {
-  registerRoutes: registerPortalRoutes,
   getConnection: getPortalConnection,
   listConnections: listPortalConnections,
   requestTool: requestPortalTool,
+  requestRpc: requestPortalRpc,
+  subscribeRpcEvent: subscribePortalRpcEvent,
   resolveForTarget: resolvePortalForTarget,
 };
 
 export {
   getPortalConnection,
   listPortalConnections,
-  registerPortalRoutes,
   requestPortalTool,
+  requestPortalRpc,
   resolvePortalForTarget,
+  subscribePortalRpcEvent,
 };
 export type { PortalCore };

@@ -1,13 +1,11 @@
 import type { AgentMessageInput } from '@mastra/core/agent';
-import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
-import type { AgentService } from '../../../agent/service';
 import { AgentRunCoordinator, createAgentRunCoordinatorTestApi } from '../../../agent/run-coordinator';
-import { defineRoute } from '../../../server/routes';
 import type { ResourceService } from '../../../services/resource-service';
 import { callerForOwner } from '../../../services/types';
 import {
   attachmentIdFromReference,
   attachmentModelUrl,
+  attachmentUrlPath,
   type AttachmentPayload,
   type AttachmentStorage,
   parseBase64DataUrl,
@@ -16,63 +14,7 @@ import {
 } from '../../attachments/storage';
 
 const maxImageAttachmentBytes = 10 * 1024 * 1024;
-const sseKeepAliveIntervalMs = 15_000;
-
-const toSseResponse = (stream: ReadableStream<unknown>) => {
-  const reader = stream.getReader();
-  let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
-
-  const clearKeepAliveTimer = () => {
-    if (!keepAliveTimer) return;
-    clearInterval(keepAliveTimer);
-    keepAliveTimer = undefined;
-  };
-
-  const sseStream = new ReadableStream<string>({
-    async start(controller) {
-      keepAliveTimer = setInterval(() => {
-        controller.enqueue(': keep-alive\n\n');
-      }, sseKeepAliveIntervalMs);
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          controller.enqueue(`data: ${JSON.stringify(value)}\n\n`);
-        }
-
-        controller.close();
-      } catch (error) {
-        controller.error(error);
-      } finally {
-        clearKeepAliveTimer();
-        reader.releaseLock();
-      }
-    },
-    cancel(reason) {
-      clearKeepAliveTimer();
-      return reader.cancel(reason).catch(() => undefined);
-    },
-  });
-
-  return new Response(sseStream.pipeThrough(new TextEncoderStream()), {
-    headers: {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-      'x-vercel-ai-ui-message-stream': 'v1',
-      'x-accel-buffering': 'no',
-    },
-  });
-};
-
-const getResourceId = (c: any) => {
-  const resourceId = c.get('requestContext')?.get(MASTRA_RESOURCE_ID_KEY);
-  if (typeof resourceId !== 'string' || !resourceId) throw new Error('Authenticated resource missing');
-  return resourceId;
-};
-
-const getSubmittedUserMessages = (messages: unknown) => {
+export const getSubmittedUserMessages = (messages: unknown) => {
   if (!Array.isArray(messages)) return [];
 
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -86,13 +28,16 @@ const getSubmittedUserMessages = (messages: unknown) => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-type AttachmentNormalizerStorage = Pick<AttachmentStorage, 'findByThread' | 'put'>;
+type AttachmentNormalizerStorage = Pick<AttachmentStorage, 'findByThread' | 'put'> & {
+  get?: AttachmentStorage['get'];
+};
 
 const attachmentAccessForNormalization = (
   options: {
     resourceId?: string;
     threadId?: string;
-    resources?: Pick<ResourceService, 'findAttachmentsByThread' | 'putAttachment'>;
+    resources?: Pick<ResourceService, 'findAttachmentsByThread' | 'putAttachment'> &
+      Partial<Pick<ResourceService, 'getAttachment'>>;
     storage?: AttachmentNormalizerStorage;
   },
 ): AttachmentNormalizerStorage => {
@@ -102,6 +47,7 @@ const attachmentAccessForNormalization = (
   if (!resources) {
     return {
       findByThread: async () => [],
+      get: async () => null,
       put: async () => {
         throw new Error('Attachment storage is not configured for chat route normalization');
       },
@@ -116,11 +62,12 @@ const attachmentAccessForNormalization = (
   return {
     findByThread: (threadId: string): Promise<StoredAttachmentMetadata[]> =>
       resources.findAttachmentsByThread(caller, threadId),
+    get: async (id: string) => resources.getAttachment ? resources.getAttachment(caller, id) : null,
     put: (input: AttachmentPayload): Promise<StoredAttachment> => resources.putAttachment(caller, input),
   };
 };
 
-const normalizeMessageImageAttachments = async (
+export const normalizeMessageImageAttachments = async (
   messages: unknown,
   options: {
     resourceId?: string;
@@ -185,9 +132,19 @@ const normalizeMessageImageAttachments = async (
           : rawData
           ? attachmentIdFromReference(rawData)
           : undefined;
+        const referenced = referencedAttachmentId && storage.get ? await storage.get(referencedAttachmentId) : null;
         const stored = mediaType?.startsWith('image/')
           ? referencedAttachmentId
-            ? threadAttachments.find((attachment) => attachment.id === referencedAttachmentId)
+            ? referenced
+              ? {
+                id: referencedAttachmentId,
+                urlPath: attachmentUrlPath(referencedAttachmentId),
+                mimeType: referenced.mimeType,
+                sizeBytes: referenced.sizeBytes,
+                originalName: referenced.originalName,
+                createdAt: '',
+              }
+              : threadAttachments.find((attachment) => attachment.id === referencedAttachmentId)
             : newestMatchingAttachment(partRecord)
           : undefined;
         if (!stored) return part;
@@ -233,7 +190,7 @@ const isDisplayOnlySubmittedPart = (part: unknown) => {
     (type === 'reasoning' || type === 'redacted-reasoning' || type.startsWith('data-'));
 };
 
-const sanitizeSubmittedMessagesForMastra = (messages: unknown) => {
+export const sanitizeSubmittedMessagesForMastra = (messages: unknown) => {
   if (!Array.isArray(messages)) return messages;
 
   return messages
@@ -276,10 +233,10 @@ const latestUserMessageOnly = (messages: unknown) => {
   return [messages[messages.length - 1]];
 };
 
-const submittedMessagesForMemory = (messages: unknown, threadId: unknown) =>
+export const submittedMessagesForMemory = (messages: unknown, threadId: unknown) =>
   typeof threadId === 'string' && threadId.trim() ? latestUserMessageOnly(messages) : messages;
 
-const getString = (value: unknown) => typeof value === 'string' && value.trim() ? value : undefined;
+export const getString = (value: unknown) => typeof value === 'string' && value.trim() ? value : undefined;
 
 const toAgentFileData = (value: string) => {
   try {
@@ -289,7 +246,7 @@ const toAgentFileData = (value: string) => {
   }
 };
 
-const toAgentMessageInput = (message: unknown): AgentMessageInput => {
+export const toAgentMessageInput = (message: unknown): AgentMessageInput => {
   if (!isRecord(message) || message.role !== 'user') {
     throw new Error('Steering message must be a user message');
   }
@@ -348,183 +305,3 @@ export const __chatRouteMemoryTest = {
 };
 
 export const __chatRunRegistryTest = createAgentRunCoordinatorTestApi(new AgentRunCoordinator());
-
-const unwiredAgentService = new Proxy({}, {
-  get(_target, prop) {
-    throw new Error(`Chat route "${String(prop)}" requires an injected AgentService`);
-  },
-}) as AgentService;
-
-export const createChatRoutes = (
-  service: AgentService,
-  resources?: Pick<ResourceService, 'findAttachmentsByThread' | 'putAttachment'>,
-) => [
-  defineRoute('/chat/runs/:threadId/stream', {
-    method: 'GET',
-    handler: async (c) => {
-      const resourceId = getResourceId(c);
-      const threadId = c.req.param('threadId');
-      const afterSequenceValue = Number(
-        typeof c.req.query === 'function' ? c.req.query('afterSequence') ?? 0 : 0,
-      );
-      const afterSequence = Number.isSafeInteger(afterSequenceValue) && afterSequenceValue >= 0
-        ? afterSequenceValue
-        : 0;
-      const stream = typeof service.replayChatRun === 'function'
-        ? await service.replayChatRun(resourceId, threadId, afterSequence)
-        : service.observeChatRun(resourceId, threadId);
-      if (!stream) return new Response(null, { status: 204 });
-
-      return toSseResponse(stream);
-    },
-  }),
-  defineRoute('/chat/runs/:threadId', {
-    method: 'GET',
-    handler: async (c) => {
-      const resourceId = getResourceId(c);
-      const threadId = c.req.param('threadId');
-      const run = service.getChatRun(resourceId, threadId);
-      const persisted = run.status === 'idle' ? await service.getPersistedChatRun(resourceId, threadId) : undefined;
-      return c.json({ run, persisted });
-    },
-  }),
-  defineRoute('/chat/runs/:threadId/resume', {
-    method: 'POST',
-    handler: async (c) => {
-      const resourceId = getResourceId(c);
-      const threadId = c.req.param('threadId');
-      const body = await c.req.json().catch(() => ({}));
-      const persisted = await service.getPersistedChatRun(resourceId, threadId);
-      if (!persisted || (getString(body?.runId) && persisted.runId !== getString(body.runId))) {
-        return c.json({ ok: false, reason: 'stale_run' }, 409);
-      }
-      if (persisted.status === 'awaiting_approval') {
-        return c.json({ ok: false, reason: 'tool_approval_required', run: persisted }, 409);
-      }
-      return c.json({
-        ok: false,
-        reason: persisted.status === 'interrupted' ? 'safe_automatic_resume_unavailable' : 'not_interrupted',
-        run: persisted,
-      }, 409);
-    },
-  }),
-  defineRoute('/chat/runs/:threadId/tool-approvals/:toolCallId', {
-    method: 'POST',
-    handler: async (c) => {
-      const resourceId = getResourceId(c);
-      const threadId = c.req.param('threadId');
-      const toolCallId = c.req.param('toolCallId');
-      const body = await c.req.json();
-      const runId = getString(body?.runId);
-      const decision = body?.decision === 'approve' || body?.decision === 'deny' ? body.decision : undefined;
-      if (!runId || !decision) return c.json({ error: 'runId and decision are required' }, 400);
-
-      const resumed = await service.respondToToolApproval({
-        resourceId,
-        threadId,
-        runId,
-        toolCallId,
-        decision,
-        rememberForRun: body?.rememberForRun === true,
-        requestContext: c.get('requestContext'),
-      });
-      return toSseResponse(resumed.stream);
-    },
-  }),
-  defineRoute('/chat/runs/:threadId/cancel', {
-    method: 'POST',
-    handler: async (c) => {
-      const resourceId = getResourceId(c);
-      const threadId = c.req.param('threadId');
-      return c.json({ ok: true, run: service.cancelChatRun(resourceId, threadId) });
-    },
-  }),
-  defineRoute('/chat/runs/:threadId/steer', {
-    method: 'POST',
-    handler: async (c) => {
-      const resourceId = getResourceId(c);
-      const threadId = c.req.param('threadId');
-      const body = await c.req.json();
-      const requestedRunId = getString(body?.runId);
-      const run = service.getChatRun(resourceId, threadId);
-
-      if (!run.active) {
-        return c.json({
-          ok: false,
-          reason: requestedRunId ? 'stale_run' : 'not_active',
-          run,
-        }, 409);
-      }
-
-      if (requestedRunId && run.runId !== requestedRunId) {
-        return c.json({ ok: false, reason: 'stale_run', run }, 409);
-      }
-
-      const submittedMessages = Array.isArray(body?.messages) ? body.messages : body?.message ? [body.message] : [];
-      const normalizedMessages = sanitizeSubmittedMessagesForMastra(
-        await normalizeMessageImageAttachments(
-          submittedMessagesForMemory(submittedMessages, threadId),
-          { resourceId, threadId, resources },
-        ),
-      );
-      const submittedUserMessage = getSubmittedUserMessages(normalizedMessages)[0];
-      if (!submittedUserMessage) return c.json({ error: 'Steering requires a user message' }, 400);
-
-      const result = await service.sendChatMessage({
-        resourceId,
-        threadId,
-        activeThreadRunId: requestedRunId,
-        message: toAgentMessageInput(submittedUserMessage),
-      });
-      if (!result.accepted || !result.messageId) {
-        return c.json({ ok: false, reason: 'stale_run', run: service.getChatRun(resourceId, threadId) }, 409);
-      }
-
-      return c.json({
-        ok: true,
-        accepted: true,
-        runId: result.runId,
-        messageId: result.messageId,
-      });
-    },
-  }),
-  defineRoute('/chat/runs', {
-    method: 'POST',
-    handler: async (c) => {
-      const params = await c.req.json();
-      const requestContext = c.get('requestContext');
-      const resourceId = getResourceId(c);
-      const threadId = params?.memory?.thread;
-      params.messages = sanitizeSubmittedMessagesForMastra(
-        await normalizeMessageImageAttachments(submittedMessagesForMemory(params.messages, threadId), {
-          resourceId,
-          threadId: typeof threadId === 'string' ? threadId : undefined,
-          resources,
-        }),
-      );
-
-      const currentRun = typeof threadId === 'string' && typeof service.getChatRun === 'function'
-        ? service.getChatRun(resourceId, threadId)
-        : undefined;
-      if (
-        typeof threadId === 'string' && service.hasActiveThreadRun(resourceId, threadId) &&
-        currentRun?.status !== 'awaiting_approval'
-      ) {
-        return c.json({ error: 'thread has an active stream' }, 409);
-      }
-
-      const run = await service.startChatRun({
-        resourceId,
-        threadId: typeof threadId === 'string' ? threadId : undefined,
-        params,
-        requestContext,
-        submittedUserMessages: getSubmittedUserMessages(params.messages),
-        abortSignal: c.req.raw.signal,
-      });
-
-      return toSseResponse(run.stream);
-    },
-  }),
-];
-
-export const chatRoutes = createChatRoutes(unwiredAgentService);

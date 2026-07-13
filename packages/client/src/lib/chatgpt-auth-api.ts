@@ -1,5 +1,4 @@
-import { getAuthHeaders } from './mastra-client';
-import { weaveRoutes } from './weave-routes';
+import { rpcRequest } from './mastra-client';
 
 export type ChatGPTAuthStatus = {
   connected: boolean;
@@ -14,12 +13,7 @@ type DesktopChatGPTBridge = {
 const desktopBridge = () => (window as Window & { weaveDesktop?: DesktopChatGPTBridge }).weaveDesktop;
 
 export const getChatGPTAuthStatus = async () => {
-  const response = await fetch(weaveRoutes.agent.chatgptAuthStatus(), { headers: getAuthHeaders() });
-  if (!response.ok) {
-    const body = await response.json().catch(() => undefined) as { error?: unknown } | undefined;
-    throw new Error(typeof body?.error === 'string' ? body.error : `ChatGPT auth status failed: ${response.status}`);
-  }
-  return response.json() as Promise<ChatGPTAuthStatus>;
+  return await rpcRequest<ChatGPTAuthStatus>('agent.chatgpt.authStatus');
 };
 
 export const canConnectChatGPT = () => typeof desktopBridge()?.connectChatGPT === 'function';

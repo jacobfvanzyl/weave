@@ -1,3 +1,6 @@
+import type { RpcPeer } from '../../../packages/protocol/src/peer.ts';
+import { notifyClientRpcHosts } from '../client-tools/registry.ts';
+
 export type PortalStatus = 'online' | 'offline';
 
 export type PortalConnection = {
@@ -14,22 +17,45 @@ export type PortalConnection = {
   lastSeenAt: string;
 };
 
-type PortalSocket = {
-  send: (data: string) => void;
-  close: (code?: number, reason?: string) => void;
-};
+type PortalConnectionRecord = PortalConnection & { peer: RpcPeer };
 
-const connections = new Map<string, PortalConnection & { ws: PortalSocket }>();
-const pendingRequests = new Map<
-  string,
-  { resolve: (value: unknown) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> }
->();
-
-const publicConnection = ({ ws: _ws, ...connection }: PortalConnection & { ws: PortalSocket }): PortalConnection =>
-  connection;
+const connections = new Map<string, PortalConnectionRecord>();
+type PortalRpcEventHandler = (params: unknown) => void | Promise<void>;
+const rpcEventHandlers = new Map<string, Set<PortalRpcEventHandler>>();
+const publicConnection = ({ peer: _peer, ...connection }: PortalConnectionRecord): PortalConnection => connection;
 const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+const emitRpcEvent = async (portalId: string, method: string, params: unknown) => {
+  for (const handler of rpcEventHandlers.get(`${portalId}:${method}`) ?? []) await handler(params);
+};
+
+export const subscribePortalRpcEvent = (
+  portalId: string,
+  method: string,
+  handler: PortalRpcEventHandler,
+) => {
+  const key = `${portalId}:${method}`;
+  const handlers = rpcEventHandlers.get(key) ?? new Set<PortalRpcEventHandler>();
+  handlers.add(handler);
+  rpcEventHandlers.set(key, handlers);
+  return () => {
+    handlers.delete(handler);
+    if (handlers.size === 0) rpcEventHandlers.delete(key);
+  };
+};
+
+export const requestPortalRpc = async <T = unknown>(
+  portalId: string,
+  method: string,
+  params?: unknown,
+  timeoutMs = 30_000,
+) => {
+  const connection = connections.get(portalId);
+  if (!connection?.peer) throw new Error('Portal is offline or does not support JSON-RPC.');
+  return await connection.peer.request<T>(method, params, { timeoutMs });
+};
 
 const normalizePath = (value: unknown) => {
   const path = optionalString(value);
@@ -54,12 +80,6 @@ export const listPortalConnections = (userId?: string) =>
 export const getPortalConnection = (portalId: string) => {
   const connection = connections.get(portalId);
   return connection ? publicConnection(connection) : undefined;
-};
-
-export const sendPortalMessage = (portalId: string, message: unknown) => {
-  const connection = connections.get(portalId);
-  if (!connection) throw new Error('Portal is offline');
-  connection.ws.send(JSON.stringify(message));
 };
 
 export const findPortalForProject = (userId: string, projectId: string) =>
@@ -118,16 +138,6 @@ export const resolvePortalForTarget = (input: {
   return publicConnection(hinted ?? candidates[0]);
 };
 
-export const handlePortalMessage = (message: Record<string, unknown>) => {
-  if (message.type !== 'tool.result' || typeof message.id !== 'string') return false;
-  const pending = pendingRequests.get(message.id);
-  if (!pending) return false;
-  clearTimeout(pending.timeout);
-  pendingRequests.delete(message.id);
-  pending.resolve(message);
-  return true;
-};
-
 export const requestPortalTool = async (input: {
   portalId: string;
   projectId?: string;
@@ -144,11 +154,7 @@ export const requestPortalTool = async (input: {
   const connection = connections.get(input.portalId);
   if (!connection) throw new Error('Portal is offline');
 
-  const id = `req_${crypto.randomUUID()}`;
-  const timeoutMs = input.timeoutMs ?? 30_000;
-  const request = {
-    id,
-    type: 'tool.call',
+  return await connection.peer.request('portal.tool.call', {
     projectId: input.projectId,
     workspaceId: input.workspaceId,
     rootId: input.rootId,
@@ -158,24 +164,13 @@ export const requestPortalTool = async (input: {
     idempotencyKey: input.idempotencyKey,
     tool: input.tool,
     args: input.args,
-  };
-
-  const result = new Promise<unknown>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pendingRequests.delete(id);
-      reject(new Error(`Portal tool timed out: ${input.tool}`));
-    }, timeoutMs);
-    pendingRequests.set(id, { resolve, reject, timeout });
-  });
-
-  connection.ws.send(JSON.stringify(request));
-  return result;
+  }, { timeoutMs: input.timeoutMs ?? 30_000 });
 };
 
-export const connectPortal = (input: {
+export const connectPortalRpc = (input: {
   portalId: string;
   userId: string;
-  ws: PortalSocket;
+  peer: RpcPeer;
   name?: string;
   version?: string;
   capabilities?: string[];
@@ -184,9 +179,10 @@ export const connectPortal = (input: {
 }) => {
   const at = new Date().toISOString();
   const existing = connections.get(input.portalId);
-  if (existing && existing.ws !== input.ws) existing.ws.close(4000, 'replaced by newer connection');
-
-  const connection = {
+  if (existing?.peer !== input.peer) {
+    existing?.peer?.close(4409, 'Replaced by newer Portal connection.');
+  }
+  const connection: PortalConnectionRecord = {
     portalId: input.portalId,
     userId: input.userId,
     name: input.name,
@@ -194,12 +190,24 @@ export const connectPortal = (input: {
     capabilities: input.capabilities ?? [],
     mounts: input.mounts ?? [],
     roots: input.roots ?? [],
-    status: 'online' as const,
+    status: 'online',
     connectedAt: at,
     lastSeenAt: at,
-    ws: input.ws,
+    peer: input.peer,
   };
   connections.set(input.portalId, connection);
+  notifyClientRpcHosts(input.userId, 'portal.status.changed', publicConnection(connection));
+  for (
+    const method of [
+      'portal.terminal.event',
+      'portal.workspaceFile.watch.event',
+      'portal.lsp.event',
+      'portal.jupyter.event',
+      'portal.status.changed',
+    ]
+  ) {
+    input.peer.onNotification(method, (params) => emitRpcEvent(input.portalId, method, params));
+  }
   return publicConnection(connection);
 };
 
@@ -214,8 +222,13 @@ export const updatePortal = (
   return publicConnection(next);
 };
 
-export const disconnectPortal = (portalId: string, ws?: PortalSocket) => {
+export const disconnectPortalRpc = (portalId: string, peer?: RpcPeer) => {
   const connection = connections.get(portalId);
-  if (!connection || (ws && connection.ws !== ws)) return;
+  if (!connection || (peer && connection.peer !== peer)) return;
   connections.delete(portalId);
+  notifyClientRpcHosts(connection.userId, 'portal.status.changed', {
+    ...publicConnection(connection),
+    status: 'offline',
+    lastSeenAt: new Date().toISOString(),
+  });
 };

@@ -4,7 +4,6 @@ import { contributionDescription } from '../../instructions/contribution-instruc
 import { toolDescription } from '../../instructions/tool-instructions';
 import type { ServerModule } from '../types';
 import { productProjectRoutes } from '../code/routes/projects';
-import { createNotesJupyterRoutes } from './jupyter-routes';
 
 const notesProjectPath = (path: string) =>
   path === '/code/projects'
@@ -34,18 +33,10 @@ registerAgentContribution({
 
 export const notesModule: ServerModule = {
   id: 'notes',
-  registerRoutes: (app, services) => {
+  registerInternalRoutes: (app) => {
     for (const route of productProjectRoutes) {
       const canonicalPath = notesProjectPath(route.path);
       if (canonicalPath) mountRoute(app, route, { canonicalPath });
-    }
-    for (
-      const route of createNotesJupyterRoutes({
-        sessions: services.internal.sessions,
-        tools: services.internal.tools,
-      })
-    ) {
-      mountRoute(app, route);
     }
   },
 };

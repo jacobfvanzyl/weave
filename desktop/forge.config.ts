@@ -40,10 +40,12 @@ const config: ForgeConfig = {
     asar: true,
     appBundleId,
     executableName: appName,
-    extraResource: [
-      path.join(workspaceRoot, 'portal/dist/portal'),
-      ...(process.platform === 'darwin' ? [path.join(workspaceRoot, 'portal/dist/weave-window-stream-native')] : []),
-    ],
+    extraResource: [path.join(workspaceRoot, 'portal/dist/portal')],
+    extendInfo: {
+      NSDesktopFolderUsageDescription: 'Weave Portal needs access to Desktop projects you open in Weave.',
+      NSDocumentsFolderUsageDescription: 'Weave Portal needs access to projects and workspaces you open in Weave.',
+      NSDownloadsFolderUsageDescription: 'Weave Portal needs access to downloaded projects you open in Weave.',
+    },
     icon: 'assets/icon',
     name: appName,
     ...(shouldSignMacBuild

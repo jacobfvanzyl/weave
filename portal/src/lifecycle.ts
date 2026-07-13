@@ -1,14 +1,13 @@
 export type PortalRuntimeFile = {
-  version: 1;
+  version: 2;
   pid: number;
+  instanceId: string;
   portalId: string;
   configPath: string;
-  httpServerUrl: string;
-  wsServerUrl: string;
-  controlHost?: string;
-  controlPort?: number;
-  controlToken?: string;
-  controlCapabilities?: string[];
+  serverUrl: string;
+  connectionState: 'connecting' | 'connected' | 'reconnecting' | 'rejected' | 'stopped';
+  connectedAt?: string;
+  error?: string;
   startedAt: string;
   updatedAt: string;
 };
@@ -20,7 +19,7 @@ export type PortalRuntimeHealth = {
   error?: string;
 };
 
-export type PortalRuntimeIdentity = Pick<PortalRuntimeFile, 'pid' | 'startedAt' | 'controlToken'>;
+export type PortalRuntimeIdentity = Pick<PortalRuntimeFile, 'pid' | 'startedAt' | 'instanceId'>;
 
 export type PortalRuntimeLock = {
   path: string;
@@ -72,12 +71,13 @@ export const readPortalRuntime = async (path = getPortalRuntimePath()): Promise<
   try {
     const runtime = JSON.parse(await Deno.readTextFile(path)) as Partial<PortalRuntimeFile>;
     if (
-      runtime.version !== 1 ||
+      runtime.version !== 2 ||
       typeof runtime.pid !== 'number' ||
+      typeof runtime.instanceId !== 'string' ||
       typeof runtime.portalId !== 'string' ||
       typeof runtime.configPath !== 'string' ||
-      typeof runtime.httpServerUrl !== 'string' ||
-      typeof runtime.wsServerUrl !== 'string'
+      typeof runtime.serverUrl !== 'string' ||
+      typeof runtime.connectionState !== 'string'
     ) {
       return undefined;
     }
@@ -113,7 +113,7 @@ const runtimeMatchesIdentity = (
     runtime &&
       runtime.pid === expected.pid &&
       runtime.startedAt === expected.startedAt &&
-      runtime.controlToken === expected.controlToken,
+      runtime.instanceId === expected.instanceId,
   );
 
 export const removePortalRuntime = async (
@@ -163,7 +163,7 @@ export const maskSecret = (value: string | undefined) => {
 };
 
 export const maskPortalRuntime = (runtime: PortalRuntimeFile | undefined) =>
-  runtime ? { ...runtime, controlToken: maskSecret(runtime.controlToken) } : undefined;
+  runtime ? { ...runtime } : undefined;
 
 export const normalizeHttpUrl = (server: string) => server.replace(/\/+$/, '');
 
@@ -174,30 +174,35 @@ export const normalizeWsUrl = (server: string) => {
   return url.toString().replace(/\/+$/, '');
 };
 
-export const runtimeMatchesServer = (runtime: PortalRuntimeFile, httpServerUrl: string, wsServerUrl: string) =>
-  normalizeHttpUrl(runtime.httpServerUrl) === normalizeHttpUrl(httpServerUrl) &&
-  normalizeWsUrl(runtime.wsServerUrl) === normalizeWsUrl(wsServerUrl);
+export const runtimeMatchesServer = (runtime: PortalRuntimeFile, serverUrl: string) =>
+  normalizeHttpUrl(runtime.serverUrl) === normalizeHttpUrl(serverUrl);
 
 export const checkPortalRuntimeHealth = async (
   runtime: PortalRuntimeFile | undefined,
 ): Promise<PortalRuntimeHealth> => {
-  if (!runtime?.controlHost || !runtime.controlPort || !runtime.controlToken) {
-    return { ok: false, error: 'runtime has no local control endpoint' };
+  if (!runtime) return { ok: false, error: 'runtime file is missing' };
+  const updatedAt = Date.parse(runtime.updatedAt);
+  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > 45_000) {
+    return { ok: false, error: 'runtime heartbeat is stale', body: runtime };
   }
+  return { ok: runtime.connectionState !== 'stopped', body: runtime };
+};
 
+export const verifyPortalProcessInstance = async (
+  runtime: PortalRuntimeFile,
+  runtimePath = getPortalRuntimePath(),
+) => {
   try {
-    const url = new URL(`http://${runtime.controlHost}:${runtime.controlPort}/health`);
-    url.searchParams.set('token', runtime.controlToken);
-    const response = await fetch(url);
-    const text = await response.text();
-    let body: unknown = text;
-    try {
-      body = text ? JSON.parse(text) : undefined;
-    } catch {
-      // Plain-text response bodies are fine for diagnostics.
-    }
-    return { ok: response.ok, status: response.status, body };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    const command = new Deno.Command('ps', {
+      args: ['-p', String(runtime.pid), '-o', 'command='],
+      stdout: 'piped',
+      stderr: 'null',
+    });
+    const output = await command.output();
+    if (!output.success) return false;
+    const commandLine = new TextDecoder().decode(output.stdout);
+    return commandLine.includes(runtimePath) && commandLine.includes(runtime.instanceId);
+  } catch {
+    return false;
   }
 };

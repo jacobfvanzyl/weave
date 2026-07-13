@@ -1,6 +1,5 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { normalizeMastraUrl } from '../shared/connection';
 
 export type ChatGPTAuthStatus = {
   connected: boolean;
@@ -15,9 +14,8 @@ type LoginStart = {
 };
 
 type ChatGPTLoginBrokerOptions = {
-  getConnection: () => { mastraUrl: string; authToken?: string };
+  requestRpc: (method: string, params?: unknown) => Promise<unknown>;
   openExternal: (url: string) => Promise<void>;
-  fetch?: typeof fetch;
   host?: string;
   port?: number;
   now?: () => number;
@@ -38,14 +36,6 @@ const failureHtml = (message: string) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>ChatGPT Login Failed</title></head><body><h1>ChatGPT Login Failed</h1><p>${
     escapeHtml(message)
   }</p></body></html>`;
-
-const responseError = async (response: Response, operation: string) => {
-  const body = await response.json().catch(() => undefined) as { error?: unknown } | undefined;
-  const message = typeof body?.error === 'string' && body.error.trim()
-    ? body.error.trim()
-    : `${operation} failed with HTTP ${response.status}.`;
-  return new Error(message);
-};
 
 const parseStart = (value: unknown): LoginStart => {
   const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -71,7 +61,6 @@ const parseStatus = (value: unknown): ChatGPTAuthStatus => {
 };
 
 export class ChatGPTLoginBroker {
-  private readonly request: typeof fetch;
   private readonly host: string;
   private readonly port: number;
   private readonly now: () => number;
@@ -79,7 +68,6 @@ export class ChatGPTLoginBroker {
   private abortActive: (() => void) | undefined;
 
   constructor(private readonly options: ChatGPTLoginBrokerOptions) {
-    this.request = options.fetch ?? fetch;
     this.host = options.host ?? '127.0.0.1';
     this.port = options.port ?? 1455;
     this.now = options.now ?? Date.now;
@@ -101,14 +89,6 @@ export class ChatGPTLoginBroker {
 
   private runAttempt(): Promise<ChatGPTAuthStatus> {
     return new Promise((resolve, reject) => {
-      const connection = this.options.getConnection();
-      const mastraUrl = normalizeMastraUrl(connection.mastraUrl);
-      const authToken = connection.authToken?.trim();
-      if (!authToken) {
-        reject(new Error('A saved Weave owner token is required before connecting ChatGPT.'));
-        return;
-      }
-
       let server: Server | undefined;
       let timeout: NodeJS.Timeout | undefined;
       let expectedState: string | undefined;
@@ -149,16 +129,8 @@ export class ChatGPTLoginBroker {
               throw new Error('OpenAI callback state did not match this login attempt.');
             }
 
-            const completion = await this.request(`${mastraUrl}/agent/chatgpt/login/complete`, {
-              method: 'POST',
-              headers: {
-                authorization: `Bearer ${authToken}`,
-                'content-type': 'application/json',
-              },
-              body: JSON.stringify({ code, state }),
-            });
-            if (!completion.ok) throw await responseError(completion, 'ChatGPT login completion');
-            const status = parseStatus(await completion.json());
+            const completion = await this.options.requestRpc('agent.chatgpt.login.complete', { code, state });
+            const status = parseStatus(completion);
             response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             response.end(successHtml);
             finish(undefined, status);
@@ -184,12 +156,7 @@ export class ChatGPTLoginBroker {
           try {
             const address = server?.address() as AddressInfo | null;
             if (!address) throw new Error('Desktop callback listener did not start.');
-            const started = await this.request(`${mastraUrl}/agent/chatgpt/login/start`, {
-              method: 'POST',
-              headers: { authorization: `Bearer ${authToken}` },
-            });
-            if (!started.ok) throw await responseError(started, 'ChatGPT login start');
-            const login = parseStart(await started.json());
+            const login = parseStart(await this.options.requestRpc('agent.chatgpt.login.start'));
             expectedState = login.state;
             const remainingMs = login.expiresAt - this.now();
             if (remainingMs <= 0) throw new Error('ChatGPT login expired before the browser could open.');

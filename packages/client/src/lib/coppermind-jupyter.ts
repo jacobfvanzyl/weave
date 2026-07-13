@@ -1,6 +1,5 @@
 import type { EditorTarget } from './editor-types';
-import { getAuthHeaders } from './mastra-client';
-import { weaveRoutes } from './weave-routes';
+import { onRpcConnectionState, onRpcNotification, rpcRequest } from './mastra-client';
 
 export type CoppermindJupyterSessionInput = {
   target: EditorTarget;
@@ -49,9 +48,7 @@ export type CoppermindJupyterSessionResult = {
   pythonPath?: string;
   portalId?: string;
   rootPath: string;
-  token?: string;
   venvPath?: string;
-  wsUrl: string;
 };
 
 export type CoppermindJupyterOutput =
@@ -86,145 +83,93 @@ export type CoppermindJupyterEvent =
   }
   | { type: 'error'; sessionId?: string; requestId?: string; cellId?: string; error: string };
 
-type JupyterEventEnvelope = {
-  type?: string;
-  event?: CoppermindJupyterEvent;
-};
-
-const parseResponse = async <T>(response: Response, fallbackMessage: string): Promise<T> => {
-  const text = await response.text();
-  const parsed = text
-    ? (() => {
-      try {
-        return JSON.parse(text) as { error?: string } & T;
-      } catch {
-        return undefined;
-      }
-    })()
-    : undefined;
-  if (!response.ok) throw new Error(parsed?.error || text || `${fallbackMessage}: HTTP ${response.status}`);
-  if (!parsed) throw new Error(`${fallbackMessage}: empty response`);
-  return parsed;
-};
-
-const postNotesJupyter = async <T>(
-  url: string,
-  body: Record<string, unknown>,
-  fallbackMessage: string,
-) => {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(body),
-  });
-  return await parseResponse<T>(response, fallbackMessage);
-};
+const sessionInputs = new Map<string, CoppermindJupyterSessionInput>();
 
 export const getCoppermindJupyterStatus = async (target: EditorTarget) =>
-  await postNotesJupyter<CoppermindJupyterStatusResult>(
-    weaveRoutes.notes.jupyterStatus(),
-    { target },
-    'Jupyter status request failed',
-  );
+  await rpcRequest<CoppermindJupyterStatusResult>('jupyter.status', { target });
 
 export const getCoppermindJupyterKernelspecs = async (target: EditorTarget) =>
-  await postNotesJupyter<CoppermindJupyterKernelspecsResult>(
-    weaveRoutes.notes.jupyterKernelspecs(),
-    { target },
-    'Jupyter kernelspec request failed',
-  );
+  await rpcRequest<CoppermindJupyterKernelspecsResult>('jupyter.kernelspecs', { target });
 
-export const createCoppermindJupyterSession = async (input: CoppermindJupyterSessionInput) =>
-  await postNotesJupyter<CoppermindJupyterSessionResult>(
-    weaveRoutes.notes.jupyterSession(),
-    {
-      target: input.target,
-      path: input.path,
-      kernelName: input.kernelName,
-      language: input.language,
-    },
-    'Jupyter session request failed',
-  );
-
-const jupyterWsUrl = (session: CoppermindJupyterSessionResult) => {
-  const url = new URL(session.wsUrl, window.location.href);
-  if (session.token && !url.searchParams.has('token')) url.searchParams.set('token', session.token);
-  return url.toString();
+export const createCoppermindJupyterSession = async (input: CoppermindJupyterSessionInput) => {
+  const result = await rpcRequest<CoppermindJupyterSessionResult>('jupyter.session.create', input);
+  sessionInputs.set(result.sessionId, input);
+  return result;
 };
 
-const parseEnvelope = (data: unknown): JupyterEventEnvelope | undefined => {
-  try {
-    const parsed = typeof data === 'string' ? JSON.parse(data) : undefined;
-    return parsed && typeof parsed === 'object' ? parsed as JupyterEventEnvelope : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-export const createCoppermindJupyterSocket = (
+export const createCoppermindJupyterRpcSession = (
   session: CoppermindJupyterSessionResult,
   onEvent: (event: CoppermindJupyterEvent) => void,
 ) => {
-  const socket = new WebSocket(jupyterWsUrl(session));
   let closed = false;
-  let readyResolve: (() => void) | undefined;
-  let readyReject: ((error: Error) => void) | undefined;
-  const ready = new Promise<void>((resolve, reject) => {
-    readyResolve = resolve;
-    readyReject = reject;
-  });
-
-  socket.addEventListener('open', () => {
-    readyResolve?.();
-    readyResolve = undefined;
-    readyReject = undefined;
-  });
-
-  socket.addEventListener('message', (event) => {
-    const envelope = parseEnvelope(event.data);
-    if (envelope?.type !== 'jupyter.event' || !envelope.event) return;
+  const input = sessionInputs.get(session.sessionId);
+  let activeSession = session;
+  let recreateOnExecute = false;
+  const pending = new Map<string, string>();
+  const detach = onRpcNotification('jupyter.event', raw => {
+    const envelope = raw && typeof raw === 'object'
+      ? raw as { sessionId?: string; event?: CoppermindJupyterEvent }
+      : undefined;
+    if (envelope?.sessionId !== activeSession.sessionId || !envelope.event) return;
+    if (envelope.event.type === 'complete' || envelope.event.type === 'error') {
+      if (envelope.event.requestId) pending.delete(envelope.event.requestId);
+    }
     onEvent(envelope.event);
   });
-
-  socket.addEventListener('error', () => {
-    readyReject?.(new Error('Jupyter WebSocket failed.'));
-    readyResolve = undefined;
-    readyReject = undefined;
+  const detachState = onRpcConnectionState(state => {
+    if (state === 'connected' || closed) return;
+    recreateOnExecute = true;
+    for (const [requestId, cellId] of pending) {
+      onEvent({
+        type: 'complete',
+        sessionId: activeSession.sessionId,
+        requestId,
+        cellId,
+        status: 'interrupted',
+      });
+    }
+    pending.clear();
   });
-
-  socket.addEventListener('close', () => {
-    closed = true;
-    readyReject?.(new Error('Jupyter WebSocket closed before it became ready.'));
-    readyResolve = undefined;
-    readyReject = undefined;
-  });
-
-  const send = (message: Record<string, unknown>) => {
-    if (closed || socket.readyState !== WebSocket.OPEN) return false;
-    socket.send(JSON.stringify(message));
-    return true;
-  };
-
   return {
-    ready,
-    isOpen: () => !closed && socket.readyState === WebSocket.OPEN,
-    execute: (input: { requestId: string; cellId: string; code: string }) =>
-      send({
-        type: 'execute',
-        requestId: input.requestId,
-        cellId: input.cellId,
-        code: input.code,
-        allowStdin: false,
-        silent: false,
-        storeHistory: true,
-      }),
+    ready: Promise.resolve(),
+    isOpen: () => !closed,
+    execute: (request: { requestId: string; cellId: string; code: string }) => {
+      if (closed || !input) return false;
+      pending.set(request.requestId, request.cellId);
+      void (async () => {
+        if (recreateOnExecute) {
+          activeSession = await createCoppermindJupyterSession(input);
+          recreateOnExecute = false;
+        }
+        await rpcRequest('jupyter.session.execute', {
+          ...input,
+          sessionId: activeSession.sessionId,
+          requestId: request.requestId,
+          cellId: request.cellId,
+          code: request.code,
+          allowStdin: false,
+          silent: false,
+          storeHistory: true,
+        });
+      })().catch(error => {
+        pending.delete(request.requestId);
+        onEvent({
+          type: 'error',
+          sessionId: activeSession.sessionId,
+          requestId: request.requestId,
+          cellId: request.cellId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return true;
+    },
     close: () => {
       if (closed) return;
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'detach' }));
-      }
       closed = true;
-      socket.close();
+      detach();
+      detachState();
+      sessionInputs.delete(activeSession.sessionId);
+      if (input) void rpcRequest('jupyter.session.close', { ...input, sessionId: activeSession.sessionId }).catch(() => undefined);
     },
   };
 };

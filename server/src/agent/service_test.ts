@@ -1,5 +1,6 @@
 import {
   extractSuspendedAskUserRunIdsFromWorkflowSnapshots,
+  hashChatSystemPrompt,
   MastraAgentService,
   threadCompactionEnabled,
 } from './service.ts';
@@ -176,6 +177,12 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
     coordinator.clearForTests();
     console.info = originalInfo;
   }
+});
+
+Deno.test('chat system prompt hashing accepts absent plain-thread system content', () => {
+  const first = hashChatSystemPrompt(undefined);
+  assert(typeof first === 'string' && first.length === 12, 'expected a short stable prompt hash');
+  assertEquals(first, hashChatSystemPrompt(undefined));
 });
 
 Deno.test('extractSuspendedAskUserRunIdsFromWorkflowSnapshots maps current ask_user payloads only', () => {

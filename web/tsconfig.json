@@ -11,10 +11,13 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": {
       "@weave/client": ["../packages/client/src/index.ts"],
       "@weave/client/*": ["../packages/client/src/*"],
+      "@weave/protocol": ["../packages/protocol/src/index.ts"],
+      "@weave/protocol/*": ["../packages/protocol/src/*"],
       "~/*": ["../packages/client/src/*"],
       "@/*": ["src/*"],
       "react": ["node_modules/@types/react"],
@@ -29,6 +32,7 @@
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src", "../packages/client/src"],
+  "include": ["src", "../packages/client/src", "../packages/protocol/src"],
+  "exclude": ["../packages/client/src/**/*.test.ts", "../packages/protocol/src/**/*_test.ts"],
   "references": []
 }

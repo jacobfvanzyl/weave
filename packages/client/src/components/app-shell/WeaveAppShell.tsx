@@ -305,14 +305,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
   const setTerminalSnapshotWindows = useTerminalStore((state) => state.setTerminalSnapshotWindows);
   const activeTerminalTabByTarget = useTerminalStore((state) => state.activeTerminalTabByTarget);
   const setActiveTerminalTab = useTerminalStore((state) => state.setActiveTerminalTab);
-  const isWindowStreamOpen = useAppShellStore((state) => state.isWindowStreamOpen);
-  const setWindowStreamOpen = useAppShellStore((state) => state.setWindowStreamOpen);
-  const isWindowStreamActive = useAppShellStore((state) => state.isWindowStreamActive);
-  const setWindowStreamActive = useAppShellStore((state) => state.setWindowStreamActive);
-  useEffect(() => {
-    if (isWindowStreamOpen) setWindowStreamOpen(false);
-    if (isWindowStreamActive) setWindowStreamActive(false);
-  }, [isWindowStreamActive, isWindowStreamOpen, setWindowStreamActive, setWindowStreamOpen]);
   const windowSurfaces = useShellLayout({
     editorTargetKey: sideEditorTargetKey,
     hasEditorTarget: hasEditorPaneTarget,

@@ -2,14 +2,16 @@ import type {
   getPortalConnection,
   listPortalConnections,
   requestPortalTool,
+  requestPortalRpc,
   resolvePortalForTarget,
+  subscribePortalRpcEvent,
 } from './registry';
-import type { registerPortalRoutes } from './routes';
 
 export type PortalCore = {
-  registerRoutes: typeof registerPortalRoutes;
   getConnection: typeof getPortalConnection;
   listConnections: typeof listPortalConnections;
   requestTool: typeof requestPortalTool;
+  requestRpc: typeof requestPortalRpc;
+  subscribeRpcEvent: typeof subscribePortalRpcEvent;
   resolveForTarget: typeof resolvePortalForTarget;
 };

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect as playwrightExpect, type ElectronApplication, type Locator } from '@playwright/test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { WebSocketServer } from 'ws';
 
 const runSmoke = process.env.WEAVE_ELECTRON_SMOKE === '1';
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -12,6 +13,7 @@ const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
   let app: ElectronApplication | undefined;
   let server: ReturnType<typeof createServer> | undefined;
+  let rpcServer: WebSocketServer | undefined;
   let serverUrl = '';
   let userDataPath = '';
   let scrollThreadMessages: Array<Record<string, unknown>> = [];
@@ -144,199 +146,90 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
       metadata: { sortOrder: 1 },
     }];
     server = createServer((request, response) => {
-      response.setHeader('access-control-allow-origin', '*');
-      response.setHeader('access-control-allow-headers', 'authorization, content-type');
-      if (request.method === 'OPTIONS') {
-        response.statusCode = 204;
-        response.end();
-        return;
-      }
-
-      if (request.url === '/owner/me' || request.url === '/chat-state/me') {
-        if (request.headers.authorization === 'Bearer test-token') {
-          response.setHeader('content-type', 'application/json');
-          response.end(JSON.stringify({
-            owner: { id: 'smoke-user', name: 'Smoke User' },
-            user: { id: 'smoke-user', name: 'Smoke User' },
-          }));
-          return;
-        }
-
-        response.statusCode = 401;
-        response.end('unauthorized');
-        return;
-      }
-
-      if (request.url === '/agent/models' || request.url === '/models') {
+      if (request.url === '/health') {
         response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ defaultModel: 'openai/gpt-5.5', options: [] }));
+        response.end(JSON.stringify({ ok: true }));
         return;
       }
-
-      if (request.url === '/agent/chatgpt/auth-status' || request.url === '/chatgpt/auth-status') {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ connected: true, accountId: 'smoke-chatgpt' }));
-        return;
-      }
-
-      if (request.url === '/projects') {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ projects: allProjects }));
-        return;
-      }
-
-      if (request.url === '/code/projects') {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ projects: [codeProject] }));
-        return;
-      }
-
-      if (request.url === '/notes/projects') {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ projects: [notesProject] }));
-        return;
-      }
-
-      if (request.url === '/chat/projects') {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ projects: [generalProject] }));
-        return;
-      }
-
-      if (request.url === '/chat/threads') {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ threads: smokeThreads }));
-        return;
-      }
-
-      const threadMessagesMatch = request.url?.match(/^\/chat\/threads\/([^/]+)\/messages$/);
-      if (threadMessagesMatch) {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({
-          messages: decodeURIComponent(threadMessagesMatch[1]) === 'scroll-thread' ? scrollThreadMessages : [],
-        }));
-        return;
-      }
-
-      if (request.url?.match(/^\/chat\/runs\/[^/]+$/)) {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ run: { active: false, status: 'idle' } }));
-        return;
-      }
-
-      if (request.url?.match(/^\/chat\/threads\/[^/]+\/context-usage(?:\?|$)/)) {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({
-          modelId: 'openai/gpt-5.5',
-          tokens: 0,
-          contextWindow: 128_000,
-          contextLimitPercent: 80,
-          contextLimitTokens: 102_400,
-          percent: 0,
-          compactionEnabled: true,
-          source: 'estimate',
-        }));
-        return;
-      }
-
-      if (request.url === '/workspace-files/index' && request.method === 'POST') {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({
-          path: '',
-          entries: [],
-          notes: [],
-          attachments: [],
-          backlinks: {},
-          checkedAt: now,
-        }));
-        return;
-      }
-
-      if (request.url === '/portal' || request.url === '/portals') {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({
-          portals: [
-            {
-              portalId: 'smoke-portal',
-              userId: 'smoke-user',
-              name: 'Smoke Portal',
-              status: 'online',
-              capabilities: [
-                'portal.terminal.session',
-                'portal.window.session',
-                'portal.window.list',
-                'portal.applications.list',
-                'portal.applications.open',
-              ],
-              roots: [{ id: 'default', name: 'Default' }],
-              primary: true,
-            },
-          ],
-        }));
-        return;
-      }
-
-      if (
-        request.url?.startsWith('/portal/window-sessions/windows') ||
-        request.url?.startsWith('/window-sessions/windows')
-      ) {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({
-          portalId: 'smoke-portal',
-          ok: true,
-          windows: [{
-            id: 'sck:1',
-            title: 'Smoke Window',
-            appName: 'Smoke App',
-            bundleIdentifier: 'com.example.smoke',
-            pid: 100,
-          }],
-        }));
-        return;
-      }
-
-      if (
-        request.url === '/portal/window-sessions/applications/open' ||
-        request.url === '/window-sessions/applications/open'
-      ) {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({
-          portalId: 'smoke-portal',
-          ok: true,
-          application: {
-            id: 'bundle:com.example.smoke',
-            name: 'Smoke App',
-            path: '/Applications/Smoke.app',
-            bundleIdentifier: 'com.example.smoke',
-            isRunning: true,
-            pids: [100],
-          },
-        }));
-        return;
-      }
-
-      if (
-        request.url?.startsWith('/portal/window-sessions/applications') ||
-        request.url?.startsWith('/window-sessions/applications')
-      ) {
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({
-          portalId: 'smoke-portal',
-          ok: true,
-          applications: [{
-            id: 'bundle:com.example.smoke',
-            name: 'Smoke App',
-            path: '/Applications/Smoke.app',
-            bundleIdentifier: 'com.example.smoke',
-            isRunning: true,
-            pids: [100],
-          }],
-        }));
-        return;
-      }
-
       response.statusCode = 404;
       response.end('not found');
+    });
+    rpcServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== '/rpc') {
+        socket.destroy();
+        return;
+      }
+      rpcServer?.handleUpgrade(request, socket, head, ws => rpcServer?.emit('connection', ws, request));
+    });
+    rpcServer.on('connection', socket => {
+      socket.on('message', payload => {
+        const message = JSON.parse(payload.toString()) as {
+          id?: string | number;
+          method?: string;
+          params?: Record<string, unknown>;
+        };
+        if (message.id === undefined || !message.method) return;
+        const respond = (result: unknown) => socket.send(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
+        if (message.method === 'initialize') {
+          if (message.params?.token !== 'test-token') {
+            socket.send(JSON.stringify({
+              jsonrpc: '2.0', id: message.id,
+              error: { code: -32001, message: 'Authentication failed.', data: { code: 'UNAUTHENTICATED' } },
+            }));
+            socket.close(4401, 'Authentication failed.');
+            return;
+          }
+          respond({
+            protocolVersion: 1,
+            connectionId: `smoke_${crypto.randomUUID()}`,
+            role: 'client',
+            heartbeatIntervalMs: 20_000,
+            maxFrameBytes: 1024 * 1024,
+            capabilities: [],
+            owner: { id: 'smoke-user', name: 'Smoke User' },
+          });
+          return;
+        }
+        const result = (() => {
+          switch (message.method) {
+            case 'owner.get': return { owner: { id: 'smoke-user', name: 'Smoke User' } };
+            case 'agent.models.list': return { defaultModel: 'openai/gpt-5.5', options: [] };
+            case 'agent.chatgpt.authStatus': return { connected: true, accountId: 'smoke-chatgpt' };
+            case 'code.project.list': {
+              const product = message.params?.product;
+              return { projects: product === 'code' ? [codeProject] : product === 'notes' ? [notesProject] : product === 'chat' ? [generalProject] : allProjects };
+            }
+            case 'code.workspace.gitState.list': return { states: [] };
+            case 'chat.thread.list': return { threads: smokeThreads };
+            case 'chat.thread.messages.list': return {
+              messages: message.params?.threadId === 'scroll-thread' ? scrollThreadMessages : [],
+            };
+            case 'chat.run.get': return { run: { active: false, status: 'idle' } };
+            case 'chat.thread.contextUsage': return {
+              modelId: 'openai/gpt-5.5', tokens: 0, contextWindow: 128_000,
+              contextLimitPercent: 80, contextLimitTokens: 102_400, percent: 0,
+              compactionEnabled: true, source: 'estimate',
+            };
+            case 'workspaceFile.index': return {
+              path: '', entries: [], notes: [], attachments: [], backlinks: {}, checkedAt: now,
+            };
+            case 'workspaceFile.list': return {
+              path: typeof message.params?.path === 'string' ? message.params.path : '',
+              entries: [],
+            };
+            case 'portal.list': return { portals: [{
+              portalId: 'smoke-portal', userId: 'smoke-user', name: 'Smoke Portal', status: 'online',
+              capabilities: ['terminal'], roots: [{ id: 'default', name: 'Default' }], primary: true,
+            }] };
+            case 'notification.subscribe': return { subscriptionId: 'smoke-notifications', lastSequence: 0 };
+            case 'agent.prompts.list': return { prompts: [] };
+            case 'client.surface.update': return { ok: true };
+            default: return null;
+          }
+        })();
+        respond(result);
+      });
     });
 
     await new Promise<void>(resolve => {
@@ -351,6 +244,8 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
 
   afterEach(async () => {
     await app?.close();
+    rpcServer?.clients.forEach(socket => socket.close());
+    rpcServer?.close();
     await new Promise<void>(resolve => server?.close(() => resolve()));
     rmSync(userDataPath, { recursive: true, force: true });
   });
@@ -451,28 +346,30 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     const appHeader = page.locator('header').first();
     const appBarBreadcrumb = appHeader.locator('[data-weave-context-breadcrumb]');
     const codeWorkspaceTitle = sidebar.getByRole('button', { name: /main/ }).first();
-    const codeWorkspaceThread = sidebar.getByRole('button', { name: /^Code workspace thread$/ });
-    const notesProjectThread = sidebar.getByRole('button', { name: /^Notes project thread$/ });
-    const windowStreamShell = page.locator('[data-weave-window-stream-shell]');
-    const hasSelectedHighlight = (locator: Locator) => locator.evaluate(element => {
-      if (element.classList.contains('bg-selected-thread')) return true;
-      let current = element.parentElement;
-      while (current) {
-        const highlight = current.querySelector('[data-sidebar-highlight]');
-        if (highlight) return highlight.classList.contains('bg-selected-thread');
-        current = current.parentElement;
-      }
-      return false;
-    });
+    const codeWorkspaceThread = () => sidebar.getByRole('button', { name: /^Code workspace thread$/ });
+    const notesProjectThread = () => sidebar.getByRole('button', { name: /^Notes project thread$/ });
+    const hasSelectedHighlight = async (locator: Locator) => {
+      if (await locator.count() === 0) return false;
+      return locator.evaluate(element => {
+        if (element.classList.contains('bg-selected-thread')) return true;
+        let current = element.parentElement;
+        while (current) {
+          const highlight = current.querySelector('[data-sidebar-highlight]');
+          if (highlight) return highlight.classList.contains('bg-selected-thread');
+          current = current.parentElement;
+        }
+        return false;
+      });
+    };
     const reopenSidebarIfHidden = async () => {
-      if (await sidebar.count()) return;
-      await page.getByRole('button', { name: 'Show sidebar' }).first().click();
+      if (await sidebar.isVisible()) return;
+      const showSidebar = page.getByRole('button', { name: 'Show sidebar' }).first();
+      await showSidebar.waitFor({ state: 'visible', timeout: 5_000 });
+      await showSidebar.click();
       await sidebar.waitFor({ timeout: 5_000 });
     };
     await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toBeVisible();
     await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toHaveCount(0);
-    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
-    await playwrightExpect(windowStreamShell).toHaveCount(0);
 
     await codeWorkspaceTitle.click({ force: true });
     await playwrightExpect(appBarBreadcrumb).toBeVisible({ timeout: 5_000 });
@@ -484,29 +381,31 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
     await generalTerminalToggle.waitFor({ timeout: 5_000 });
     await playwrightExpect(generalTerminalToggle.locator('[data-weave-terminal-count-badge]')).toHaveCount(0);
     await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toBeVisible();
-    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
-    await playwrightExpect(windowStreamShell).toHaveCount(0);
 
-    await codeWorkspaceThread.click({ force: true });
+    await codeWorkspaceThread().waitFor({ state: 'visible', timeout: 5_000 });
+    await codeWorkspaceThread().click();
     await playwrightExpect(appHeader.getByRole('button', { name: 'Hide chat' })).toBeVisible();
     await reopenSidebarIfHidden();
-    expect(await hasSelectedHighlight(codeWorkspaceThread)).toBe(true);
+    expect(await hasSelectedHighlight(codeWorkspaceThread())).toBe(true);
     await appHeader.getByRole('button', { name: 'Hide chat' }).click();
-    expect(await hasSelectedHighlight(codeWorkspaceThread)).toBe(false);
+    await reopenSidebarIfHidden();
+    expect(await hasSelectedHighlight(codeWorkspaceThread())).toBe(false);
     expect(await hasSelectedHighlight(codeWorkspaceTitle)).toBe(true);
 
-    await notesProjectThread.click({ force: true });
+    await reopenSidebarIfHidden();
+    await notesProjectThread().waitFor({ state: 'visible', timeout: 5_000 });
+    await notesProjectThread().click();
     await playwrightExpect(appBarBreadcrumb).toContainText('Smoke Notes');
     await playwrightExpect(appBarBreadcrumb).toContainText('Vault');
     await playwrightExpect(appHeader.getByRole('button', { name: 'Hide chat' })).toBeVisible();
     await reopenSidebarIfHidden();
-    expect(await hasSelectedHighlight(notesProjectThread)).toBe(true);
+    expect(await hasSelectedHighlight(notesProjectThread())).toBe(true);
     await appHeader.getByRole('button', { name: 'Hide chat' }).click();
-    expect(await hasSelectedHighlight(notesProjectThread)).toBe(false);
+    await reopenSidebarIfHidden();
+    expect(await hasSelectedHighlight(notesProjectThread())).toBe(false);
     expect(await hasSelectedHighlight(notesVaultTitle)).toBe(true);
     await playwrightExpect(page.getByRole('button', { name: 'Show general terminal' })).toBeVisible();
     await playwrightExpect(page.getByRole('button', { name: 'Show terminal' })).toHaveCount(0);
-    await playwrightExpect(page.getByRole('button', { name: 'Show window stream' })).toHaveCount(0);
     await playwrightExpect(appHeader.getByRole('button', { name: 'Hide notes' })).toBeVisible();
 
     await sidebar.getByRole('button', { name: /^Loose thought$/ }).click({ force: true });
@@ -671,14 +570,16 @@ describe.skipIf(!runSmoke)('Weave Electron smoke', () => {
       await page.setViewportSize({ width, height });
       await page.waitForLoadState('domcontentloaded');
       const authToken = page.getByLabel('Auth token');
-      try {
-        await authToken.waitFor({ timeout: 1_500 });
+      const header = page.locator('header').first();
+      const initialSurface = await Promise.race([
+        authToken.waitFor({ timeout: 10_000 }).then(() => 'auth' as const),
+        header.waitFor({ timeout: 10_000 }).then(() => 'shell' as const),
+      ]);
+      if (initialSurface === 'auth') {
         await authToken.fill('test-token');
         await page.getByRole('button', { name: 'Save' }).click();
-      } catch {
-        // The profile already retained its connection credentials.
       }
-      await page.locator('header').first().waitFor({ timeout: 5_000 });
+      await header.waitFor({ timeout: 10_000 });
       return page;
     };
     const closeProfile = async () => {

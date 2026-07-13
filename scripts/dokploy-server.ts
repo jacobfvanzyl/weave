@@ -102,7 +102,7 @@ export const createServerSnapshot = async (cwd = repoRoot): Promise<Snapshot> =>
   const env = { GIT_INDEX_FILE: indexPath };
   try {
     await git(cwd, ['read-tree', 'HEAD'], env);
-    await git(cwd, ['add', '-A', '--', 'server'], env);
+    await git(cwd, ['add', '-A', '--', 'server', 'packages/protocol'], env);
     const listed = await git(cwd, ['diff', '--cached', '--name-only', '-z'], env);
     const files = splitNull(listed);
     const suspicious = files.filter(isSuspiciousSnapshotPath);
@@ -225,8 +225,7 @@ export const triggerAndWaitForDeployment = async (
 };
 
 const healthUrls = () => ({
-  server: `${optionalEnv('WEAVE_REMOTE_SERVER_URL', 'http://homelab:4111').replace(/\/+$/, '')}/health`,
-  portal: `${optionalEnv('WEAVE_REMOTE_PORTAL_URL', 'http://homelab:4112').replace(/\/+$/, '')}/health`,
+  server: optionalEnv('WEAVE_REMOTE_SERVER_URL', 'http://homelab:4111').replace(/\/+$/, ''),
 });
 
 const fetchHealth = async (url: string) => {
@@ -242,7 +241,8 @@ export const verifyRemoteHealth = async (timeoutMs = 90000) => {
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await Promise.all([fetchHealth(urls.server), fetchHealth(urls.portal)]);
+      await fetchHealth(`${urls.server}/health`);
+      await verifyRemoteRpc(urls.server);
       return urls;
     } catch (error) {
       lastError = error;
@@ -250,6 +250,62 @@ export const verifyRemoteHealth = async (timeoutMs = 90000) => {
     }
   }
   throw new Error(`Remote health verification failed: ${lastError instanceof Error ? lastError.message : lastError}`);
+};
+
+export const verifyRemoteRpc = async (serverUrl: string) => {
+  const url = new URL(serverUrl);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/rpc`;
+  url.search = '';
+  const token = Deno.env.get('WEAVE_REMOTE_OWNER_TOKEN')?.trim() ?? Deno.env.get('WEAVE_OWNER_TOKEN')?.trim();
+  if (!token) {
+    throw new Error('WEAVE_REMOTE_OWNER_TOKEN is required for authenticated RPC deployment verification');
+  }
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(url);
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error(`${url} RPC probe timed out`));
+    }, 5_000);
+    const finish = (error?: Error) => {
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve();
+    };
+    socket.onopen = () => {
+      socket.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'deploy-probe',
+        method: 'initialize',
+        params: {
+          protocolVersion: 1,
+          role: 'client',
+          token,
+          capabilities: [],
+          client: {
+            clientAppId: 'deploy-probe',
+            clientInstanceId: `deploy-probe-${crypto.randomUUID()}`,
+          },
+        },
+      }));
+    };
+    socket.onmessage = event => {
+      try {
+        const message = JSON.parse(String(event.data)) as { id?: unknown; result?: { protocolVersion?: unknown } };
+        if (message.id !== 'deploy-probe' || message.result?.protocolVersion !== 1) {
+          throw new Error('RPC probe received an invalid initialize response.');
+        }
+        socket.close(1000, 'Deployment RPC probe complete.');
+        finish();
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    socket.onerror = () => finish(new Error(`${url} WebSocket upgrade failed`));
+    socket.onclose = event => {
+      if (event.code !== 1000) finish(new Error(`${url} RPC probe closed (${event.code})`));
+    };
+  });
 };
 
 const promoteLastGood = async (commit: string, cwd = repoRoot) => {
@@ -282,7 +338,7 @@ const deploy = async () => {
   const urls = await verifyRemoteHealth();
   await promoteLastGood(snapshot.commit);
   console.info(`Deployment ${deployment.deploymentId} is healthy.`);
-  console.info(`Server: ${urls.server}\nPortal: ${urls.portal}`);
+  console.info(`Server: ${urls.server}`);
 };
 
 const status = async () => {
@@ -300,7 +356,7 @@ const status = async () => {
   );
   try {
     const urls = await verifyRemoteHealth(5000);
-    console.info(`Health: ok (${urls.server}, ${urls.portal})`);
+    console.info(`Health: ok (${urls.server})`);
   } catch (error) {
     console.info(`Health: unavailable (${error instanceof Error ? error.message : error})`);
   }

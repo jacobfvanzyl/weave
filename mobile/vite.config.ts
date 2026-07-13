@@ -11,6 +11,8 @@ const mobileSrc = fileURLToPath(new URL('./src', import.meta.url));
 const mobileRoot = fileURLToPath(new URL('.', import.meta.url));
 const clientSrc = fileURLToPath(new URL('../packages/client/src', import.meta.url));
 const clientRoot = fileURLToPath(new URL('../packages/client', import.meta.url));
+const protocolSrc = fileURLToPath(new URL('../packages/protocol/src', import.meta.url));
+const protocolRoot = fileURLToPath(new URL('../packages/protocol', import.meta.url));
 
 const mobileDeviceLogPlugin = (): Plugin => ({
   name: 'weave-mobile-device-log',
@@ -81,6 +83,7 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@weave/client': clientSrc,
+        '@weave/protocol': protocolSrc,
         '~': clientSrc,
         '@': mobileSrc,
       },
@@ -88,7 +91,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       fs: {
-        allow: [mobileRoot, clientRoot],
+        allow: [mobileRoot, clientRoot, protocolRoot],
       },
     },
   };

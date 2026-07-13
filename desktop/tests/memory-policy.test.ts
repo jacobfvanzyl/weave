@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ToolCallFilter } from '@mastra/core/processors';
 import {
   CompactToolHistoryProcessor,
@@ -1211,15 +1211,30 @@ describe('observational memory request shaping', () => {
       status: { type: 'requires-action', reason: 'composer-send' },
     });
 
-    const complete = await imageAttachmentAdapter.send(pending as any);
-    expect(complete.content).toEqual([
-      expect.objectContaining({
-        type: 'file',
-        mimeType: 'image/png',
-        filename: 'clipboard-image',
-        data: expect.stringMatching(/^data:image\/png;base64,/),
-      }),
-    ]);
+    const rpcRequest = vi.fn(async (method: string) => method === 'attachment.put'
+      ? { id: 'attachment-1', urlPath: '/attachments/attachment-1' }
+      : { ok: true });
+    vi.stubGlobal('window', { weaveDesktop: { rpcRequest } });
+    try {
+      const complete = await imageAttachmentAdapter.send(pending as any);
+      expect(complete.content).toEqual([
+        expect.objectContaining({
+          type: 'file',
+          mimeType: 'image/png',
+          filename: 'clipboard-image',
+          data: '/attachments/attachment-1',
+          metadata: { attachmentId: 'attachment-1' },
+        }),
+      ]);
+      expect(rpcRequest.mock.calls.map(call => call[0])).toEqual([
+        'binary.begin',
+        'binary.chunk',
+        'binary.complete',
+        'attachment.put',
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('accepts pasted JPEG screenshots with an empty MIME type when the filename identifies the image', async () => {

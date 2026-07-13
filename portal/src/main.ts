@@ -1,19 +1,12 @@
-import { isLspClientEnvelope, PortalLspHost } from './lsp.ts';
-import { isJupyterClientEnvelope, PortalJupyterHost } from './jupyter.ts';
-import { isTerminalClientEnvelope, PortalTerminalHost, startTerminalControlServer } from './terminal.ts';
+import { type PortalLspClientMessage, PortalLspHost } from './lsp.ts';
+import { type PortalJupyterClientMessage, PortalJupyterHost } from './jupyter.ts';
+import { PortalTerminalHost, type TerminalClientMessage } from './terminal.ts';
 import {
-  isWorkspaceFileWatchClientEnvelope,
   PortalWorkspaceFileHost,
   type PortalWorkspaceFileTarget,
+  type PortalWorkspaceFileWatchClientMessage,
 } from './workspace-files.ts';
-import {
-  isWindowClientEnvelope,
-  isWindowHostAvailable,
-  PortalWindowHost,
-  type ResolvedWindowStreamConfig,
-  resolveWindowStreamConfig,
-  type WindowStreamConfig,
-} from './window.ts';
+import { RpcConnection, WEAVE_RPC_PROTOCOL_VERSION } from '../../packages/protocol/src/index.ts';
 import { logPortalPerfEvent, startPortalPerfSampler } from './perf.ts';
 import { installBoundedConsoleLog } from './bounded-log.ts';
 import {
@@ -26,8 +19,8 @@ import {
   readPortalRuntime,
   removePortalRuntime,
   resolvePortalHome,
-  runtimeMatchesServer,
   tryAcquirePortalRuntimeLock,
+  verifyPortalProcessInstance,
   writePortalRuntime,
 } from './lifecycle.ts';
 import {
@@ -51,6 +44,7 @@ import {
 import { assertToolAllowed, normalizeExecutionProfile } from './execution-policy.ts';
 import { commandSessions } from './command-sessions.ts';
 import { IdempotentExecutionCache } from './idempotency.ts';
+import { PortalBinaryTransfers } from './binary-transfers.ts';
 
 const portalToolExecutions = new IdempotentExecutionCache<unknown>();
 
@@ -68,11 +62,11 @@ type PortalRoot = {
 };
 
 type PortalConfig = {
+  serverUrl?: string;
   httpServerUrl?: string;
   wsServerUrl?: string;
   authToken?: string;
   portalId?: string;
-  windowStream?: WindowStreamConfig;
   portal?: {
     portalId?: string;
     portalToken?: string;
@@ -85,10 +79,8 @@ type PortalConfig = {
 export type ResolvedPortalConfig = {
   portalId: string;
   portalToken: string;
-  httpServerUrl: string;
-  wsServerUrl: string;
+  serverUrl: string;
   name: string;
-  windowStream: ResolvedWindowStreamConfig;
   mounts?: PortalMount[];
   roots?: PortalRoot[];
 };
@@ -101,31 +93,8 @@ type ParsedArgs = {
 const defaultConfigPath = getPortalConfigPath();
 const defaultRuntimePath = getPortalRuntimePath();
 const defaultHttpServerUrl = 'http://localhost:4111';
-const defaultWsServerUrl = 'ws://localhost:4112';
 const defaultName = 'Mage Portal';
 const version = '0.1.0';
-const requiredControlCapabilities = [
-  'terminal',
-  'workspace-files',
-  'workspace-files.watch',
-  'lsp',
-  'terminal.tmux-source-of-truth',
-  'terminal.tmux-control-mode',
-  'command-sessions',
-];
-const macWindowCapabilities = [
-  'portal.window.list',
-  'portal.window.session',
-  'portal.applications.list',
-  'portal.applications.open',
-];
-
-const getWindowCapabilities = async (windowStream: ResolvedWindowStreamConfig) =>
-  await isWindowHostAvailable(undefined, windowStream) ? macWindowCapabilities : [];
-const getControlCapabilities = async (windowStream: ResolvedWindowStreamConfig) => [
-  ...requiredControlCapabilities,
-  ...await getWindowCapabilities(windowStream),
-];
 
 const parseArgs = (args: string[]): ParsedArgs => {
   const [command, ...rest] = args;
@@ -218,7 +187,10 @@ type WeaveContextFile = {
 
 const fileMutationQueues = new Map<string, Promise<unknown>>();
 
-const withFileMutationQueue = async <T>(path: string, task: () => Promise<T>) => {
+const withFileMutationQueue = async <T>(
+  path: string,
+  task: () => Promise<T>,
+) => {
   const previous = fileMutationQueues.get(path) ?? Promise.resolve();
   const next = previous.catch(() => undefined).then(task);
   fileMutationQueues.set(path, next);
@@ -237,19 +209,18 @@ const readConfig = async (path: string): Promise<PortalConfig> => {
   return JSON.parse(content) as PortalConfig;
 };
 
-const resolvePortalConfig = (
-  config: PortalConfig,
-  windowStream = resolveWindowStreamConfig(config.windowStream),
-): ResolvedPortalConfig => {
+const resolvePortalConfig = (config: PortalConfig): ResolvedPortalConfig => {
   const portal = config.portal ?? {};
-  if (!portal.portalId || !portal.portalToken) throw new Error('Portal is not logged in. Run portal login first.');
+  if (!portal.portalId || !portal.portalToken) {
+    throw new Error('Portal is not logged in. Run portal login first.');
+  }
   return {
     portalId: portal.portalId,
     portalToken: portal.portalToken,
-    httpServerUrl: normalizeHttpUrl(config.httpServerUrl ?? defaultHttpServerUrl),
-    wsServerUrl: normalizeWsUrl(config.wsServerUrl ?? defaultWsServerUrl),
+    serverUrl: normalizeHttpUrl(
+      config.serverUrl ?? config.httpServerUrl ?? defaultHttpServerUrl,
+    ),
     name: portal.name ?? defaultName,
-    windowStream,
     mounts: portal.mounts,
     roots: portal.roots,
   };
@@ -257,18 +228,16 @@ const resolvePortalConfig = (
 
 const writeConfig = async (path: string, config: PortalConfig) => {
   await ensureParentDir(path);
-  await Deno.writeTextFile(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-};
-
-const toWsUrl = (server: string) => {
-  const url = new URL(server);
-  if (url.protocol === 'http:') url.protocol = 'ws:';
-  if (url.protocol === 'https:') url.protocol = 'wss:';
-  return url.toString().replace(/\/$/, '');
+  const simplified: PortalConfig = {
+    serverUrl: normalizeHttpUrl(config.serverUrl ?? config.httpServerUrl ?? defaultHttpServerUrl),
+    ...(config.portal ? { portal: config.portal } : {}),
+  };
+  await Deno.writeTextFile(path, `${JSON.stringify(simplified, null, 2)}\n`, {
+    mode: 0o600,
+  });
 };
 
 const normalizeHttpUrl = (server: string) => server.replace(/\/$/, '');
-const normalizeWsUrl = (server: string) => toWsUrl(server).replace(/\/$/, '');
 
 const authTokenFromLegacyMap = (rawTokens: string | undefined) => {
   const raw = rawTokens?.trim();
@@ -278,16 +247,22 @@ const authTokenFromLegacyMap = (rawTokens: string | undefined) => {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error('WEAVE_AUTH_TOKENS must be valid JSON or replaced with WEAVE_OWNER_TOKEN.');
+    throw new Error(
+      'WEAVE_AUTH_TOKENS must be valid JSON or replaced with WEAVE_OWNER_TOKEN.',
+    );
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('WEAVE_AUTH_TOKENS must be an object token map or replaced with WEAVE_OWNER_TOKEN.');
+    throw new Error(
+      'WEAVE_AUTH_TOKENS must be an object token map or replaced with WEAVE_OWNER_TOKEN.',
+    );
   }
 
   const tokens = Object.keys(parsed).filter((token) => token.trim());
   if (tokens.length !== 1) {
-    throw new Error('WEAVE_AUTH_TOKENS is unsupported for multiple tokens. Set one WEAVE_OWNER_TOKEN instead.');
+    throw new Error(
+      'WEAVE_AUTH_TOKENS is unsupported for multiple tokens. Set one WEAVE_OWNER_TOKEN instead.',
+    );
   }
 
   return tokens[0];
@@ -300,30 +275,44 @@ const getLoginAuthToken = (flags: Record<string, string | boolean>) =>
     authTokenFromLegacyMap(Deno.env.get('WEAVE_AUTH_TOKENS'));
 
 const login = async (flags: Record<string, string | boolean>) => {
-  const httpServerUrl = normalizeHttpUrl(stringFlag(flags, 'server') ?? defaultHttpServerUrl);
-  const wsServerUrl = normalizeWsUrl(stringFlag(flags, 'ws-server') ?? defaultWsServerUrl);
+  const serverUrl = normalizeHttpUrl(
+    stringFlag(flags, 'server') ?? defaultHttpServerUrl,
+  );
   const authToken = getLoginAuthToken(flags);
   const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
   const name = stringFlag(flags, 'name') ?? defaultName;
 
-  if (!authToken) throw new Error('Missing auth token. Pass --token or set WEAVE_OWNER_TOKEN.');
+  if (!authToken) {
+    throw new Error(
+      'Missing auth token. Pass --token or set WEAVE_OWNER_TOKEN.',
+    );
+  }
 
-  const response = await fetch(`${httpServerUrl}/portal/token`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${authToken}` },
+  const connection = new RpcConnection({
+    serverUrl,
+    reconnect: false,
+    initialize: {
+      protocolVersion: WEAVE_RPC_PROTOCOL_VERSION,
+      role: 'client',
+      token: authToken,
+      capabilities: [],
+      client: {
+        clientAppId: 'portal-login',
+        clientInstanceId: `portal-login_${crypto.randomUUID()}`,
+      },
+    },
   });
-
-  if (!response.ok) throw new Error(`Portal token request failed: ${response.status} ${await response.text()}`);
-
-  const body = await response.json() as { portalId?: string; token?: string };
-  if (!body.portalId || !body.token) throw new Error('Portal token response missing portalId/token.');
+  const body = await connection.request<{ portalId?: string; token?: string }>(
+    'portal.token.issue',
+  )
+    .finally(() => connection.close());
+  if (!body.portalId || !body.token) {
+    throw new Error('Portal token response missing portalId/token.');
+  }
 
   const existingConfig = await readConfig(configPath);
   const config: PortalConfig = {
-    ...existingConfig,
-    httpServerUrl,
-    wsServerUrl,
-    portalId: body.portalId,
+    serverUrl,
     portal: {
       ...(existingConfig.portal ?? {}),
       portalId: body.portalId,
@@ -345,19 +334,29 @@ const getRoots = (config: Pick<ResolvedPortalConfig, 'roots'>) =>
 const isAbsolutePath = (path: string) => path.startsWith('/');
 const expandHomePath = (path: string) => {
   if (path === '~') return Deno.env.get('HOME') ?? path;
-  if (path.startsWith('~/')) return `${Deno.env.get('HOME') ?? '~'}${path.slice(1)}`;
+  if (path.startsWith('~/')) {
+    return `${Deno.env.get('HOME') ?? '~'}${path.slice(1)}`;
+  }
   return path;
 };
 
-const resolveRootPath = async (config: ResolvedPortalConfig, rootId: string, path = '') => {
+const resolveRootPath = async (
+  config: ResolvedPortalConfig,
+  rootId: string,
+  path = '',
+) => {
   const root = getRoots(config).find((item) => item.id === rootId);
   if (!root) throw new Error(`Unknown root: ${rootId}`);
   const rootPath = await Deno.realPath(root.path);
   const normalizedPath = expandHomePath(path.trim());
   const target = normalizedPath
-    ? await Deno.realPath(isAbsolutePath(normalizedPath) ? normalizedPath : `${rootPath}/${normalizedPath}`)
+    ? await Deno.realPath(
+      isAbsolutePath(normalizedPath) ? normalizedPath : `${rootPath}/${normalizedPath}`,
+    )
     : rootPath;
-  if (target !== rootPath && !target.startsWith(`${rootPath}/`)) throw new Error('Path escapes Portal root');
+  if (target !== rootPath && !target.startsWith(`${rootPath}/`)) {
+    throw new Error('Path escapes Portal root');
+  }
   return { rootPath, target };
 };
 
@@ -416,7 +415,10 @@ const collectTextFiles = async (
       }
       if (!entry.isFile) continue;
       if (fileNames && !fileNames.includes(entry.name)) continue;
-      if (extensions && !extensions.some((extension) => entry.name.endsWith(extension))) continue;
+      if (
+        extensions &&
+        !extensions.some((extension) => entry.name.endsWith(extension))
+      ) continue;
 
       const contextPath = `${contextPrefix}/${relativePath(root, absolutePath)}`;
       const file = await readWeaveContextFile(absolutePath, contextPath, kind);
@@ -443,7 +445,11 @@ const collectSkillDirectoryFiles = async (
       }
       if (!entry.isFile) continue;
       const contextPath = `${contextPrefix}/${relativePath(root, absolutePath)}`;
-      const file = await readWeaveContextFile(absolutePath, contextPath, 'skill');
+      const file = await readWeaveContextFile(
+        absolutePath,
+        contextPath,
+        'skill',
+      );
       if (file) files.push(file);
     }
   };
@@ -469,13 +475,21 @@ const collectWeaveDirectory = async (
   }
 
   files.push(
-    ...await collectTextFiles(`${dir}/prompts`, `${contextPrefix}/prompts`, 'prompt', {
-      extensions: ['.md'],
-      maxDepth: 0,
-    }),
+    ...await collectTextFiles(
+      `${dir}/prompts`,
+      `${contextPrefix}/prompts`,
+      'prompt',
+      {
+        extensions: ['.md'],
+        maxDepth: 0,
+      },
+    ),
   );
   files.push(
-    ...await collectSkillDirectoryFiles(`${dir}/skills`, `${contextPrefix}/skills`),
+    ...await collectSkillDirectoryFiles(
+      `${dir}/skills`,
+      `${contextPrefix}/skills`,
+    ),
   );
 
   return files;
@@ -483,12 +497,17 @@ const collectWeaveDirectory = async (
 
 const collectRootAgentInstructions = async (workspaceRoot: string) => {
   const root = await Deno.realPath(workspaceRoot);
-  const gitRoot = await runGit(root, ['rev-parse', '--show-toplevel']).catch(() => root);
+  const gitRoot = await runGit(root, ['rev-parse', '--show-toplevel']).catch(
+    () => root,
+  );
   const normalizedGitRoot = normalizePath(gitRoot);
   const directories = [normalizedGitRoot];
   if (root !== normalizedGitRoot && root.startsWith(`${normalizedGitRoot}/`)) {
     let current = normalizedGitRoot;
-    for (const segment of root.slice(normalizedGitRoot.length + 1).split('/').filter(Boolean)) {
+    for (
+      const segment of root.slice(normalizedGitRoot.length + 1).split('/')
+        .filter(Boolean)
+    ) {
       current = `${current}/${segment}`;
       directories.push(current);
     }
@@ -501,15 +520,24 @@ const collectRootAgentInstructions = async (workspaceRoot: string) => {
     const prefix = relativePath(normalizedGitRoot, directory);
     for (const name of ['AGENTS.md', 'AGENTS.override.md']) {
       const contextPath = prefix ? `${prefix}/${name}` : name;
-      const file = await readWeaveContextFile(`${directory}/${name}`, contextPath, 'agents');
+      const file = await readWeaveContextFile(
+        `${directory}/${name}`,
+        contextPath,
+        'agents',
+      );
       if (file) files.push(file);
     }
   }
   return files;
 };
 
-const resolveWorkspaceRoot = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
-  if (typeof request.workspacePath === 'string' && request.workspacePath.trim()) {
+const resolveWorkspaceRoot = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
+  if (
+    typeof request.workspacePath === 'string' && request.workspacePath.trim()
+  ) {
     return await Deno.realPath(request.workspacePath.trim());
   }
 
@@ -523,7 +551,9 @@ const resolveWorkspaceRoot = async (config: ResolvedPortalConfig, request: Recor
     ? (await resolveRootPath(config, request.rootId, request.repoPath)).target
     : undefined;
 
-  if (!root) throw new Error(`Project is not mounted: ${String(request.projectId)}`);
+  if (!root) {
+    throw new Error(`Project is not mounted: ${String(request.projectId)}`);
+  }
   return root;
 };
 
@@ -534,16 +564,22 @@ export const resolveWorkspacePath = async (
   mustExist = true,
 ) => {
   const root = await resolveWorkspaceRoot(config, request);
-  const candidatePath = normalizePath(path.startsWith('/') ? path : `${root}/${path}`);
+  const candidatePath = normalizePath(
+    path.startsWith('/') ? path : `${root}/${path}`,
+  );
 
   if (mustExist) {
     const candidate = await Deno.realPath(candidatePath);
-    if (candidate !== root && !candidate.startsWith(`${root}/`)) throw new Error('Path escapes Project mount');
+    if (candidate !== root && !candidate.startsWith(`${root}/`)) {
+      throw new Error('Path escapes Project mount');
+    }
     return { root, candidate };
   }
 
   const parentPath = getParentPath(candidatePath);
-  if (candidatePath !== root && !candidatePath.startsWith(`${root}/`)) throw new Error('Path escapes Project mount');
+  if (candidatePath !== root && !candidatePath.startsWith(`${root}/`)) {
+    throw new Error('Path escapes Project mount');
+  }
   let existingParent = parentPath;
   while (!(await Deno.stat(existingParent).catch(() => undefined))) {
     const next = getParentPath(existingParent);
@@ -551,27 +587,45 @@ export const resolveWorkspacePath = async (
     existingParent = next;
   }
   const realExistingParent = await Deno.realPath(existingParent);
-  if (realExistingParent !== root && !realExistingParent.startsWith(`${root}/`)) {
+  if (
+    realExistingParent !== root && !realExistingParent.startsWith(`${root}/`)
+  ) {
     throw new Error('Path escapes Project mount');
   }
   await Deno.mkdir(parentPath, { recursive: true });
   const realParent = await Deno.realPath(parentPath);
-  const candidate = normalizePath(`${realParent}/${candidatePath.slice(parentPath.length + 1)}`);
-  if (candidate !== root && !candidate.startsWith(`${root}/`)) throw new Error('Path escapes Project mount');
+  const candidate = normalizePath(
+    `${realParent}/${candidatePath.slice(parentPath.length + 1)}`,
+  );
+  if (candidate !== root && !candidate.startsWith(`${root}/`)) {
+    throw new Error('Path escapes Project mount');
+  }
   return { root, candidate };
 };
 
-const pathStatTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const pathStatTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = (request.args ?? {}) as Record<string, unknown>;
   const path = typeof args.path === 'string' ? expandHomePath(args.path.trim()) : '';
   if (!path) return { ok: false, error: 'path is required' };
   const rootId = typeof args.rootId === 'string' && args.rootId.trim() ? args.rootId.trim() : undefined;
   const realPath = rootId ? (await resolveRootPath(config, rootId, path)).target : await Deno.realPath(path);
   const stat = await Deno.stat(realPath);
-  return { ok: true, path: realPath, isDirectory: stat.isDirectory, isFile: stat.isFile, isSymlink: stat.isSymlink };
+  return {
+    ok: true,
+    path: realPath,
+    isDirectory: stat.isDirectory,
+    isFile: stat.isFile,
+    isSymlink: stat.isSymlink,
+  };
 };
 
-const listRootTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const listRootTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined;
   const rootId = typeof args?.rootId === 'string' ? args.rootId : 'default';
   const path = typeof args?.path === 'string' ? args.path : '';
@@ -597,17 +651,30 @@ const listRootTool = async (config: ResolvedPortalConfig, request: Record<string
   };
 };
 
-const inspectGitTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const inspectGitTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined;
   const rootId = typeof args?.rootId === 'string' ? args.rootId : 'default';
   const path = typeof args?.path === 'string' ? args.path : '';
   const { rootPath, target } = await resolveRootPath(config, rootId, path);
   const git = await inspectGit(target);
-  if (git.root !== target) throw new Error('Selected path is inside a git repo; select the repo root');
-  return { ok: true, rootId, path: target === rootPath ? '' : target.slice(rootPath.length + 1), git };
+  if (git.root !== target) {
+    throw new Error('Selected path is inside a git repo; select the repo root');
+  }
+  return {
+    ok: true,
+    rootId,
+    path: target === rootPath ? '' : target.slice(rootPath.length + 1),
+    git,
+  };
 };
 
-const readAgentInstructionsTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const readAgentInstructionsTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined;
   const rootId = typeof args?.rootId === 'string' ? args.rootId : 'default';
   const path = typeof args?.path === 'string' ? args.path : '';
@@ -621,18 +688,25 @@ const readAgentInstructionsTool = async (config: ResolvedPortalConfig, request: 
 
 const collectProjectWeaveDirectory = async (workspaceRoot: string) => {
   const root = await Deno.realPath(workspaceRoot);
-  return await collectWeaveDirectory(`${root}/.weave`, '.weave', { includeConfig: false });
+  return await collectWeaveDirectory(`${root}/.weave`, '.weave', {
+    includeConfig: false,
+  });
 };
 
 export const discoverGlobalWeaveContext = async () => {
   const home = Deno.env.get('HOME');
   if (!home) return { basePath: undefined, files: [] as WeaveContextFile[] };
   const basePath = normalizePath(`${home}/.config/weave`);
-  const files = await collectWeaveDirectory(basePath, '.config/weave', { includeConfig: true });
+  const files = await collectWeaveDirectory(basePath, '.config/weave', {
+    includeConfig: true,
+  });
   return { basePath, files };
 };
 
-export const discoverProjectWeaveContext = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+export const discoverProjectWeaveContext = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const workspaceRoot = await resolveWorkspaceRoot(config, request);
   const [agents, weaveFiles] = await Promise.all([
     collectRootAgentInstructions(workspaceRoot),
@@ -645,14 +719,20 @@ export const discoverProjectWeaveContext = async (config: ResolvedPortalConfig, 
     files,
     diagnostics: {
       instructionFiles: agents.length,
-      instructionBytes: agents.reduce((total, file) => total + (file.size ?? file.content.length), 0),
+      instructionBytes: agents.reduce(
+        (total, file) => total + (file.size ?? file.content.length),
+        0,
+      ),
       truncatedFiles: files.filter((file) => (file.size ?? 0) > file.content.length).map((file) => file.path),
       precedence: 'git-root-to-workspace; AGENTS.override.md follows AGENTS.md at each level',
     },
   };
 };
 
-export const discoverWeaveContextTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+export const discoverWeaveContextTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined;
   const scope: WeaveContextScope = args?.scope === 'project' ? 'project' : 'global';
   const discovered = scope === 'project'
@@ -666,31 +746,49 @@ export const discoverWeaveContextTool = async (config: ResolvedPortalConfig, req
   };
 };
 
-const gitWorktreeCreateTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitWorktreeCreateTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined ?? {};
   const root = await resolveWorkspaceRoot(config, request);
   return { ok: true, worktree: await createGitWorktree(root, args) };
 };
 
-const gitWorktreeListTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitWorktreeListTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const root = await resolveWorkspaceRoot(config, request);
   return { ok: true, worktrees: await listGitWorktrees(root) };
 };
 
-export const listGitBranchesTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+export const listGitBranchesTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const root = await resolveWorkspaceRoot(config, request);
   return { ok: true, branches: await listGitBranches(root) };
 };
 
-const gitWorktreeSwitchTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitWorktreeSwitchTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined ?? {};
   const root = await resolveWorkspaceRoot(config, request);
   return { ok: true, worktree: await switchGitWorktree(root, args) };
 };
 
-const gitWorktreeRemoveTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitWorktreeRemoveTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined ?? {};
-  const root = await resolveWorkspaceRoot(config, { ...request, workspacePath: undefined });
+  const root = await resolveWorkspaceRoot(config, {
+    ...request,
+    workspacePath: undefined,
+  });
   try {
     const result = await removeGitWorktree(
       root,
@@ -706,9 +804,15 @@ const gitWorktreeRemoveTool = async (config: ResolvedPortalConfig, request: Reco
   }
 };
 
-const gitWorktreeBranchCleanupTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitWorktreeBranchCleanupTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined ?? {};
-  const root = await resolveWorkspaceRoot(config, { ...request, workspacePath: undefined });
+  const root = await resolveWorkspaceRoot(config, {
+    ...request,
+    workspacePath: undefined,
+  });
   const branchCleanup = await inspectGitBranchCleanup(
     root,
     args,
@@ -717,52 +821,101 @@ const gitWorktreeBranchCleanupTool = async (config: ResolvedPortalConfig, reques
   return { ok: true, branchCleanup };
 };
 
-const gitWorktreeValidateTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitWorktreeValidateTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined;
   const path = typeof args?.path === 'string' && args.path.trim() ? args.path.trim() : undefined;
   if (!path) throw new Error('Missing path');
 
   const primaryRoot = await resolveWorkspaceRoot(config, request);
-  const candidate = path.startsWith('/')
-    ? await Deno.realPath(path)
-    : (await resolveRootPath(config, typeof args?.rootId === 'string' ? args.rootId : 'default', path)).target;
-  return { ok: true, worktree: await validateGitWorktree(primaryRoot, candidate) };
+  const candidate = path.startsWith('/') ? await Deno.realPath(path) : (await resolveRootPath(
+    config,
+    typeof args?.rootId === 'string' ? args.rootId : 'default',
+    path,
+  )).target;
+  return {
+    ok: true,
+    worktree: await validateGitWorktree(primaryRoot, candidate),
+  };
 };
 
-const gitStatusTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitStatusTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const root = await resolveWorkspaceRoot(config, request);
   return { ok: true, ...await getGitStatus(root) };
 };
 
-const gitFetchTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitFetchTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const root = await resolveWorkspaceRoot(config, request);
   return { ok: true, ...await fetchGitUpstream(root) };
 };
 
-const gitPullTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitPullTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const root = await resolveWorkspaceRoot(config, request);
   return { ok: true, ...await pullGitUpstream(root) };
 };
 
-const gitDiffTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitDiffTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const root = await resolveWorkspaceRoot(config, request);
-  return { ok: true, ...await getGitDiff(root, request.args as Record<string, unknown> | undefined ?? {}) };
+  return {
+    ok: true,
+    ...await getGitDiff(
+      root,
+      request.args as Record<string, unknown> | undefined ?? {},
+    ),
+  };
 };
 
-const gitLogTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitLogTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const root = await resolveWorkspaceRoot(config, request);
-  return { ok: true, ...await getGitLog(root, request.args as Record<string, unknown> | undefined ?? {}) };
+  return {
+    ok: true,
+    ...await getGitLog(
+      root,
+      request.args as Record<string, unknown> | undefined ?? {},
+    ),
+  };
 };
 
-const gitShowTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const gitShowTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const root = await resolveWorkspaceRoot(config, request);
-  return { ok: true, ...await getGitShow(root, request.args as Record<string, unknown> | undefined ?? {}) };
+  return {
+    ok: true,
+    ...await getGitShow(
+      root,
+      request.args as Record<string, unknown> | undefined ?? {},
+    ),
+  };
 };
 
 const maxReadLines = 2000;
 const maxReadBytes = 50 * 1024;
 
-const truncateReadContent = (content: string, startLine: number, totalLines: number, userLimit?: number) => {
+const truncateReadContent = (
+  content: string,
+  startLine: number,
+  totalLines: number,
+  userLimit?: number,
+) => {
   const lines = content.split('\n');
   let selectedLines = userLimit ? lines.slice(0, userLimit) : lines;
   let truncatedByLimit = userLimit !== undefined && userLimit < lines.length;
@@ -790,33 +943,62 @@ const truncateReadContent = (content: string, startLine: number, totalLines: num
   return `${output}\n\n[Showing lines ${startLine}-${shownEnd} of ${totalLines}. Use offset=${nextOffset} to continue.]`;
 };
 
-const readFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const readFileTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined;
-  if (typeof request.projectId !== 'string') throw new Error('Missing projectId');
+  if (typeof request.projectId !== 'string') {
+    throw new Error('Missing projectId');
+  }
   if (typeof args?.path !== 'string') throw new Error('Missing path');
 
-  const { candidate: filePath } = await resolveWorkspacePath(config, request, args.path);
+  const { candidate: filePath } = await resolveWorkspacePath(
+    config,
+    request,
+    args.path,
+  );
   const content = await Deno.readTextFile(filePath);
   const lines = content.split('\n');
   const offset = typeof args.offset === 'number' && args.offset > 0 ? Math.floor(args.offset) : 1;
   const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : undefined;
-  if (offset > lines.length) throw new Error(`Offset ${offset} is beyond end of file (${lines.length} lines total)`);
+  if (offset > lines.length) {
+    throw new Error(
+      `Offset ${offset} is beyond end of file (${lines.length} lines total)`,
+    );
+  }
 
   const selected = lines.slice(offset - 1).join('\n');
-  return { ok: true, content: truncateReadContent(selected, offset, lines.length, limit) };
+  return {
+    ok: true,
+    content: truncateReadContent(selected, offset, lines.length, limit),
+  };
 };
 
-const writeFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const writeFileTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined;
-  if (typeof request.projectId !== 'string') throw new Error('Missing projectId');
+  if (typeof request.projectId !== 'string') {
+    throw new Error('Missing projectId');
+  }
   if (typeof args?.path !== 'string') throw new Error('Missing path');
   if (typeof args?.content !== 'string') throw new Error('Missing content');
 
-  const { candidate: filePath } = await resolveWorkspacePath(config, request, args.path, false);
+  const { candidate: filePath } = await resolveWorkspacePath(
+    config,
+    request,
+    args.path,
+    false,
+  );
   return await withFileMutationQueue(filePath, async () => {
     await ensureParentDir(filePath);
     await Deno.writeTextFile(filePath, args.content as string);
-    return { ok: true, bytes: new TextEncoder().encode(args.content as string).byteLength };
+    return {
+      ok: true,
+      bytes: new TextEncoder().encode(args.content as string).byteLength,
+    };
   });
 };
 
@@ -852,18 +1034,40 @@ type DiffOp = {
 const unifiedDiffContextLines = 3;
 const unifiedDiffSyncLookahead = 500;
 
-const findSyncLine = (oldLines: string[], newLines: string[], oldIndex: number, newIndex: number) => {
-  const maxOldOffset = Math.min(unifiedDiffSyncLookahead, oldLines.length - oldIndex - 1);
-  const maxNewOffset = Math.min(unifiedDiffSyncLookahead, newLines.length - newIndex - 1);
+const findSyncLine = (
+  oldLines: string[],
+  newLines: string[],
+  oldIndex: number,
+  newIndex: number,
+) => {
+  const maxOldOffset = Math.min(
+    unifiedDiffSyncLookahead,
+    oldLines.length - oldIndex - 1,
+  );
+  const maxNewOffset = Math.min(
+    unifiedDiffSyncLookahead,
+    newLines.length - newIndex - 1,
+  );
 
-  for (let distance = 1; distance <= maxOldOffset + maxNewOffset; distance += 1) {
+  for (
+    let distance = 1;
+    distance <= maxOldOffset + maxNewOffset;
+    distance += 1
+  ) {
     const minOldOffset = Math.max(0, distance - maxNewOffset);
     const maxOldOffsetForDistance = Math.min(maxOldOffset, distance);
-    for (let oldOffset = minOldOffset; oldOffset <= maxOldOffsetForDistance; oldOffset += 1) {
+    for (
+      let oldOffset = minOldOffset;
+      oldOffset <= maxOldOffsetForDistance;
+      oldOffset += 1
+    ) {
       const newOffset = distance - oldOffset;
       if (newOffset < 0 || newOffset > maxNewOffset) continue;
       if (oldLines[oldIndex + oldOffset] === newLines[newIndex + newOffset]) {
-        return { oldIndex: oldIndex + oldOffset, newIndex: newIndex + newOffset };
+        return {
+          oldIndex: oldIndex + oldOffset,
+          newIndex: newIndex + newOffset,
+        };
       }
     }
   }
@@ -877,18 +1081,33 @@ const buildLineDiff = (oldLines: string[], newLines: string[]) => {
   let newIndex = 0;
 
   const pushEqual = () => {
-    ops.push({ type: 'equal', line: oldLines[oldIndex], oldStart: oldIndex, newStart: newIndex });
+    ops.push({
+      type: 'equal',
+      line: oldLines[oldIndex],
+      oldStart: oldIndex,
+      newStart: newIndex,
+    });
     oldIndex += 1;
     newIndex += 1;
   };
 
   const pushDelete = () => {
-    ops.push({ type: 'delete', line: oldLines[oldIndex], oldStart: oldIndex, newStart: newIndex });
+    ops.push({
+      type: 'delete',
+      line: oldLines[oldIndex],
+      oldStart: oldIndex,
+      newStart: newIndex,
+    });
     oldIndex += 1;
   };
 
   const pushInsert = () => {
-    ops.push({ type: 'insert', line: newLines[newIndex], oldStart: oldIndex, newStart: newIndex });
+    ops.push({
+      type: 'insert',
+      line: newLines[newIndex],
+      oldStart: oldIndex,
+      newStart: newIndex,
+    });
     newIndex += 1;
   };
 
@@ -946,15 +1165,24 @@ export const generateUnifiedDiff = (oldContent: string, newContent: string) => {
   let changeCursor = 0;
 
   while (changeCursor < changeIndexes.length) {
-    let start = Math.max(0, changeIndexes[changeCursor] - unifiedDiffContextLines);
-    let end = Math.min(ops.length - 1, changeIndexes[changeCursor] + unifiedDiffContextLines);
+    let start = Math.max(
+      0,
+      changeIndexes[changeCursor] - unifiedDiffContextLines,
+    );
+    let end = Math.min(
+      ops.length - 1,
+      changeIndexes[changeCursor] + unifiedDiffContextLines,
+    );
     changeCursor += 1;
 
     while (
       changeCursor < changeIndexes.length &&
       changeIndexes[changeCursor] <= end + unifiedDiffContextLines
     ) {
-      end = Math.min(ops.length - 1, changeIndexes[changeCursor] + unifiedDiffContextLines);
+      end = Math.min(
+        ops.length - 1,
+        changeIndexes[changeCursor] + unifiedDiffContextLines,
+      );
       changeCursor += 1;
     }
 
@@ -964,27 +1192,46 @@ export const generateUnifiedDiff = (oldContent: string, newContent: string) => {
   return hunks.join('\n');
 };
 
-const editFileTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const editFileTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined;
-  if (typeof request.projectId !== 'string') throw new Error('Missing projectId');
+  if (typeof request.projectId !== 'string') {
+    throw new Error('Missing projectId');
+  }
   if (typeof args?.path !== 'string') throw new Error('Missing path');
-  if (!Array.isArray(args?.edits) || args.edits.length === 0) throw new Error('Missing edits');
+  if (!Array.isArray(args?.edits) || args.edits.length === 0) {
+    throw new Error('Missing edits');
+  }
   const requestedEdits = args.edits;
 
-  const { candidate: filePath } = await resolveWorkspacePath(config, request, args.path);
+  const { candidate: filePath } = await resolveWorkspacePath(
+    config,
+    request,
+    args.path,
+  );
   return await withFileMutationQueue(filePath, async () => {
     const rawContent = await Deno.readTextFile(filePath);
     const { bom, text } = stripBom(rawContent);
     const lineEnding = detectLineEnding(text);
     const content = normalizeLineEndings(text);
-    const matchedEdits: Array<{ index: number; length: number; newText: string; editIndex: number }> = [];
+    const matchedEdits: Array<
+      { index: number; length: number; newText: string; editIndex: number }
+    > = [];
 
     requestedEdits.forEach((edit: unknown, editIndex: number) => {
-      if (!edit || typeof edit !== 'object') throw new Error(`Invalid edits[${editIndex}]`);
+      if (!edit || typeof edit !== 'object') {
+        throw new Error(`Invalid edits[${editIndex}]`);
+      }
       const oldText = (edit as Record<string, unknown>).oldText;
       const newText = (edit as Record<string, unknown>).newText;
-      if (typeof oldText !== 'string' || typeof newText !== 'string') throw new Error(`Invalid edits[${editIndex}]`);
-      if (!oldText) throw new Error(`edits[${editIndex}].oldText must not be empty`);
+      if (typeof oldText !== 'string' || typeof newText !== 'string') {
+        throw new Error(`Invalid edits[${editIndex}]`);
+      }
+      if (!oldText) {
+        throw new Error(`edits[${editIndex}].oldText must not be empty`);
+      }
 
       const normalizedOldText = normalizeLineEndings(oldText);
       const matchIndex = content.indexOf(normalizedOldText);
@@ -1024,18 +1271,34 @@ const editFileTool = async (config: ResolvedPortalConfig, request: Record<string
       nextContent = `${nextContent.slice(0, edit.index)}${edit.newText}${nextContent.slice(edit.index + edit.length)}`;
     }
     if (nextContent === content) {
-      throw new Error(`No changes made to ${args.path}. The replacements produced identical content.`);
+      throw new Error(
+        `No changes made to ${args.path}. The replacements produced identical content.`,
+      );
     }
 
-    await Deno.writeTextFile(filePath, bom + restoreLineEndings(nextContent, lineEnding));
-    return { ok: true, replacements: matchedEdits.length, diff: generateUnifiedDiff(content, nextContent) };
+    await Deno.writeTextFile(
+      filePath,
+      bom + restoreLineEndings(nextContent, lineEnding),
+    );
+    return {
+      ok: true,
+      replacements: matchedEdits.length,
+      diff: generateUnifiedDiff(content, nextContent),
+    };
   });
 };
 
-const bashTool = async (config: ResolvedPortalConfig, request: Record<string, unknown>) => {
+const bashTool = async (
+  config: ResolvedPortalConfig,
+  request: Record<string, unknown>,
+) => {
   const args = request.args as Record<string, unknown> | undefined;
-  if (typeof request.projectId !== 'string') throw new Error('Missing projectId');
-  if (typeof args?.command !== 'string' || !args.command.trim()) throw new Error('Missing command');
+  if (typeof request.projectId !== 'string') {
+    throw new Error('Missing projectId');
+  }
+  if (typeof args?.command !== 'string' || !args.command.trim()) {
+    throw new Error('Missing command');
+  }
 
   const root = await resolveWorkspaceRoot(config, request);
   const profile = normalizeExecutionProfile(request.executionProfile);
@@ -1047,7 +1310,8 @@ const bashTool = async (config: ResolvedPortalConfig, request: Record<string, un
     profile,
     timeoutMs,
     yieldMs: 0,
-    validation: args.validation === 'test' || args.validation === 'typecheck' || args.validation === 'lint' ||
+    validation: args.validation === 'test' || args.validation === 'typecheck' ||
+        args.validation === 'lint' ||
         args.validation === 'build' || args.validation === 'other'
       ? args.validation
       : undefined,
@@ -1055,8 +1319,12 @@ const bashTool = async (config: ResolvedPortalConfig, request: Record<string, un
   const output = started.status === 'running' ? await commandSessions.wait(root, started.id) : started;
   return {
     ok: output.status === 'completed',
-    stdout: output.events.filter((event) => event.stream === 'stdout').map((event) => event.text).join(''),
-    stderr: output.events.filter((event) => event.stream !== 'stdout').map((event) => event.text).join(''),
+    stdout: output.events.filter((event) => event.stream === 'stdout').map((
+      event,
+    ) => event.text).join(''),
+    stderr: output.events.filter((event) => event.stream !== 'stdout').map((
+      event,
+    ) => event.text).join(''),
     exitCode: output.exitCode,
     timedOut: output.timedOut,
     sandboxed: output.sandboxed,
@@ -1080,7 +1348,9 @@ const commandSessionTool = async (
   const args = isRecord(request.args) ? request.args : {};
   const root = await resolveWorkspaceRoot(config, request);
   if (action === 'start') {
-    if (typeof args.command !== 'string' || !args.command.trim()) throw new Error('command is required');
+    if (typeof args.command !== 'string' || !args.command.trim()) {
+      throw new Error('command is required');
+    }
     const cwd = typeof args.cwd === 'string' && args.cwd.trim()
       ? (await resolveWorkspacePath(config, request, args.cwd.trim())).candidate
       : root;
@@ -1094,7 +1364,8 @@ const commandSessionTool = async (
         timeoutMs: typeof args.timeout === 'number' && args.timeout > 0 ? Math.floor(args.timeout * 1000) : undefined,
         yieldMs: typeof args.yieldMs === 'number' && args.yieldMs >= 0 ? Math.floor(args.yieldMs) : undefined,
         pty: args.pty === true,
-        validation: args.validation === 'test' || args.validation === 'typecheck' || args.validation === 'lint' ||
+        validation: args.validation === 'test' || args.validation === 'typecheck' ||
+            args.validation === 'lint' ||
             args.validation === 'build' || args.validation === 'other'
           ? args.validation
           : undefined,
@@ -1128,7 +1399,9 @@ const commandSessionTool = async (
   return { ok: true, ...commandSessions.stop(root, sessionId) };
 };
 
-const workspaceFileTargetFromRequest = (request: Record<string, unknown>): PortalWorkspaceFileTarget => ({
+const workspaceFileTargetFromRequest = (
+  request: Record<string, unknown>,
+): PortalWorkspaceFileTarget => ({
   projectId: typeof request.projectId === 'string' ? request.projectId : undefined,
   workspaceId: typeof request.workspaceId === 'string' ? request.workspaceId : undefined,
   rootId: typeof request.rootId === 'string' ? request.rootId : undefined,
@@ -1141,22 +1414,19 @@ const workspaceFileInputFromToolCall = (request: Record<string, unknown>) => {
   return { target: workspaceFileTargetFromRequest(request), ...args };
 };
 
-const handleToolCall = async (
+const executePortalToolCall = async (
   config: ResolvedPortalConfig,
   workspaceFileHost: PortalWorkspaceFileHost,
   lspHost: PortalLspHost,
   jupyterHost: PortalJupyterHost,
-  windowHost: PortalWindowHost,
-  ws: WebSocket,
   request: Record<string, unknown>,
 ) => {
   const executionProfile = normalizeExecutionProfile(request.executionProfile);
-  const id = typeof request.id === 'string' ? request.id : undefined;
-  if (!id) return;
 
   try {
     assertToolAllowed(request.tool, executionProfile);
-    const idempotencyKey = typeof request.idempotencyKey === 'string' && request.idempotencyKey.length <= 512
+    const idempotencyKey = typeof request.idempotencyKey === 'string' &&
+        request.idempotencyKey.length <= 512
       ? request.idempotencyKey
       : undefined;
     const result = await portalToolExecutions.execute(
@@ -1179,65 +1449,87 @@ const handleToolCall = async (
           : request.tool === 'exec_stop'
           ? await commandSessionTool(config, request, 'stop')
           : request.tool === 'portal.fs.list'
-          ? await workspaceFileHost.list(workspaceFileInputFromToolCall(request))
+          ? await workspaceFileHost.list(
+            workspaceFileInputFromToolCall(request),
+          )
           : request.tool === 'portal.fs.read'
           ? await workspaceFileHost.read(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['read']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalWorkspaceFileHost['read']
+            >[0],
           )
           : request.tool === 'portal.fs.hash'
           ? await workspaceFileHost.hash(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['hash']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalWorkspaceFileHost['hash']
+            >[0],
           )
           : request.tool === 'portal.fs.diffPreview'
           ? await workspaceFileHost.diffPreview(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['diffPreview']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalWorkspaceFileHost['diffPreview']
+            >[0],
           )
           : request.tool === 'portal.fs.write'
           ? await workspaceFileHost.write(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['write']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalWorkspaceFileHost['write']
+            >[0],
           )
           : request.tool === 'portal.fs.mkdir'
           ? await workspaceFileHost.mkdir(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['mkdir']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalWorkspaceFileHost['mkdir']
+            >[0],
           )
           : request.tool === 'portal.fs.move'
           ? await workspaceFileHost.move(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['move']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalWorkspaceFileHost['move']
+            >[0],
           )
           : request.tool === 'portal.fs.delete'
           ? await workspaceFileHost.delete(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['delete']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalWorkspaceFileHost['delete']
+            >[0],
           )
           : request.tool === 'portal.fs.index'
           ? await workspaceFileHost.index(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['index']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalWorkspaceFileHost['index']
+            >[0],
           )
           : request.tool === 'portal.fs.upload'
           ? await workspaceFileHost.upload(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalWorkspaceFileHost['upload']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalWorkspaceFileHost['upload']
+            >[0],
           )
           : request.tool === 'portal.lsp.session'
           ? await lspHost.createSession(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['createSession']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalLspHost['createSession']
+            >[0],
           )
           : request.tool === 'portal.lsp.query'
-          ? await lspHost.query(workspaceFileInputFromToolCall(request) as Parameters<PortalLspHost['query']>[0])
+          ? await lspHost.query(
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalLspHost['query']
+            >[0],
+          )
           : request.tool === 'portal.jupyter.status'
           ? await jupyterHost.status(workspaceFileInputFromToolCall(request))
           : request.tool === 'portal.jupyter.kernelspecs'
-          ? await jupyterHost.kernelspecs(workspaceFileInputFromToolCall(request))
+          ? await jupyterHost.kernelspecs(
+            workspaceFileInputFromToolCall(request),
+          )
           : request.tool === 'portal.jupyter.session'
           ? await jupyterHost.createSession(
-            workspaceFileInputFromToolCall(request) as Parameters<PortalJupyterHost['createSession']>[0],
+            workspaceFileInputFromToolCall(request) as Parameters<
+              PortalJupyterHost['createSession']
+            >[0],
           )
-          : request.tool === 'portal.window.list'
-          ? await windowHost.list()
-          : request.tool === 'portal.applications.list'
-          ? await windowHost.listApplications()
-          : request.tool === 'portal.applications.open'
-          ? await windowHost.openApplication({
-            applicationId: isRecord(request.args) ? optionalString(request.args.applicationId) : undefined,
-          })
           : request.tool === 'portal.fs.browse'
           ? await listRootTool(config, request)
           : request.tool === 'portal.fs.pathStat'
@@ -1277,14 +1569,12 @@ const handleToolCall = async (
           : undefined,
     );
     if (!result) throw new Error(`Unsupported tool: ${String(request.tool)}`);
-    ws.send(JSON.stringify({ id, type: 'tool.result', ...result }));
+    return result;
   } catch (error) {
-    ws.send(JSON.stringify({
-      id,
-      type: 'tool.result',
+    return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
-    }));
+    };
   }
 };
 
@@ -1332,59 +1622,7 @@ const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
     'portal.git.log',
     'portal.git.show',
   ];
-  return [...baseCapabilities, ...await getWindowCapabilities(config.windowStream)];
-};
-
-const hasRequiredControlCapabilities = (body: unknown) => {
-  const capabilities = body && typeof body === 'object'
-    ? (body as { controlCapabilities?: unknown }).controlCapabilities
-    : undefined;
-  return Array.isArray(capabilities) &&
-    requiredControlCapabilities.every((capability) => capabilities.includes(capability));
-};
-
-const shutdownRuntime = async (runtime: PortalRuntimeFile | undefined) => {
-  if (!runtime?.controlHost || !runtime.controlPort || !runtime.controlToken) return;
-  const url = new URL(`http://${runtime.controlHost}:${runtime.controlPort}/shutdown`);
-  url.searchParams.set('token', runtime.controlToken);
-  await fetch(url).catch(() => undefined);
-};
-
-const waitForRuntimeShutdown = async (runtime: PortalRuntimeFile, timeoutMs = 5_000) => {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (!(await checkPortalRuntimeHealth(runtime)).ok) return;
-    await sleep(100);
-  }
-  throw new Error(`Timed out waiting for Portal daemon ${runtime.pid} to stop.`);
-};
-
-const acquireDaemonRuntime = async (
-  runtimePath: string,
-  httpServerUrl: string,
-  wsServerUrl: string,
-  timeoutMs = 10_000,
-) => {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const lock = await tryAcquirePortalRuntimeLock(runtimePath);
-    if (lock) return { lock };
-
-    const runtime = await readPortalRuntime(runtimePath);
-    const health = await checkPortalRuntimeHealth(runtime);
-    if (runtime && health.ok) {
-      if (!runtimeMatchesServer(runtime, httpServerUrl, wsServerUrl)) {
-        throw new Error(`Portal daemon is already running for a different server: ${runtimePath}`);
-      }
-      if (!hasRequiredControlCapabilities(health.body)) {
-        throw new Error(`Portal daemon is running without required local-control capabilities: ${runtimePath}`);
-      }
-      return { existingRuntime: runtime };
-    }
-
-    await sleep(100);
-  }
-  throw new Error(`Timed out waiting for the Portal runtime lock: ${runtimePath}.lock`);
+  return baseCapabilities;
 };
 
 type PortalRemoteConnectionUpdate = {
@@ -1393,366 +1631,372 @@ type PortalRemoteConnectionUpdate = {
   connectedAt?: string;
 };
 
-const connectOnce = (
+const rpcSessionInput = (params: unknown, type: string) => {
+  const input = isRecord(params) ? params : {};
+  const clientId = optionalString(input.clientId);
+  if (!clientId) throw new Error('clientId is required.');
+  const { clientId: _clientId, ...message } = input;
+  return { clientId, message: { ...message, type } };
+};
+
+const connectOnce = async (
   config: ResolvedPortalConfig,
+  instanceId: string,
   terminalHost: PortalTerminalHost,
   workspaceFileHost: PortalWorkspaceFileHost,
   lspHost: PortalLspHost,
   jupyterHost: PortalJupyterHost,
-  windowHost: PortalWindowHost,
-  onSocket?: (ws: WebSocket) => void,
+  onConnection?: (connection: RpcConnection) => void,
   onConnectionUpdate?: (update: PortalRemoteConnectionUpdate) => void,
-) =>
-  new Promise<void>((resolve, reject) => {
-    const url = new URL('/portals/connect', config.wsServerUrl);
-    url.searchParams.set('portalId', config.portalId);
-    url.searchParams.set('token', config.portalToken);
-
-    const ws = new WebSocket(url);
-    onSocket?.(ws);
-    let accepted = false;
-    let rejected = false;
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
-
-    const cleanup = () => {
-      if (heartbeat !== undefined) clearInterval(heartbeat);
-    };
-
-    ws.onopen = () => {
-      console.log(`Connected socket: ${url.origin}`);
-      logPortalPerfEvent('socket_open', { origin: url.origin });
-    };
-
-    ws.onmessage = async (event) => {
-      const rawMessage = String(event.data);
-      const message = JSON.parse(rawMessage) as Record<string, unknown>;
-      console.log('<-', JSON.stringify(message));
-
-      if (message.type === 'portal.accepted') {
-        accepted = true;
-        onConnectionUpdate?.({ state: 'connected', connectedAt: new Date().toISOString() });
-        logPortalPerfEvent('socket_accepted', { origin: url.origin });
-        ws.send(JSON.stringify({
-          type: 'portal.hello',
-          name: config.name,
-          version,
-          capabilities: await getPortalCapabilities(config),
-          mounts: config.mounts ?? [],
-          roots: getRoots(config).map((root) => ({ id: root.id, name: root.name })),
-        }));
-        heartbeat = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'portal.pong' }));
-        }, 15_000);
-      }
-
-      if (message.type === 'portal.rejected') {
-        rejected = true;
-        const error = typeof message.error === 'string' ? message.error : 'Portal rejected';
-        onConnectionUpdate?.({ state: 'rejected', error });
-        cleanup();
-        reject(new Error(error));
-        ws.close();
-      }
-
-      if (isTerminalClientEnvelope(message)) {
-        void terminalHost.handleClientMessage(message.clientId, message.message, (terminalEvent) => {
-          ws.send(JSON.stringify({ type: 'terminal.event', clientId: message.clientId, event: terminalEvent }));
-        });
-        return;
-      }
-
-      if (isWorkspaceFileWatchClientEnvelope(message)) {
-        void workspaceFileHost.handleClientMessage(message.clientId, message.message, (watchEvent) => {
-          ws.send(
-            JSON.stringify({ type: 'workspace-file.watch.event', clientId: message.clientId, event: watchEvent }),
-          );
-        });
-        return;
-      }
-
-      if (isWindowClientEnvelope(message)) {
-        void windowHost.handleClientMessage(message.clientId, message.message, (windowEvent) => {
-          ws.send(JSON.stringify({ type: 'window.event', clientId: message.clientId, event: windowEvent }));
-        });
-        return;
-      }
-
-      if (isLspClientEnvelope(message)) {
-        void lspHost.handleClientMessage(message.clientId, message.message, (lspEvent) => {
-          ws.send(JSON.stringify({ type: 'lsp.event', clientId: message.clientId, event: lspEvent }));
-        });
-        return;
-      }
-
-      if (isJupyterClientEnvelope(message)) {
-        void jupyterHost.handleClientMessage(message.clientId, message.message, (jupyterEvent) => {
-          ws.send(JSON.stringify({ type: 'jupyter.event', clientId: message.clientId, event: jupyterEvent }));
-        });
-        return;
-      }
-
-      if (message.type === 'tool.call') {
-        void handleToolCall(config, workspaceFileHost, lspHost, jupyterHost, windowHost, ws, message);
-      }
-    };
-
-    ws.onerror = () => {
-      cleanup();
-      if (!accepted) {
-        onConnectionUpdate?.({ state: 'reconnecting', error: 'WebSocket connection failed' });
-        logPortalPerfEvent('socket_error', { origin: url.origin, accepted });
-        reject(new Error('WebSocket connection failed'));
-      }
-    };
-
-    ws.onclose = (event) => {
-      cleanup();
-      terminalHost.detachClientsByPrefix('relay:');
-      workspaceFileHost.detachClientsByPrefix('relay-workspace-file-watch:');
-      windowHost.detachClientsByPrefix('window:');
-      lspHost.detachClientsByPrefix('relay-lsp:');
-      jupyterHost.detachClientsByPrefix('relay-jupyter:');
-      console.log(`Socket closed: ${event.code} ${event.reason}`.trim());
-      if (!rejected) {
-        onConnectionUpdate?.({
-          state: 'reconnecting',
-          error: event.reason || (accepted ? 'Portal server connection closed' : 'Portal server connection failed'),
-        });
-      }
-      logPortalPerfEvent('socket_close', {
-        origin: url.origin,
-        accepted,
-        code: event.code,
-        reason: event.reason,
-        bufferedAmount: ws.bufferedAmount,
-      });
-      resolve();
-    };
+) => {
+  const binaryTransfers = new PortalBinaryTransfers();
+  const capabilities = await getPortalCapabilities(config);
+  const connection = new RpcConnection({
+    serverUrl: config.serverUrl,
+    reconnect: false,
+    initialize: {
+      protocolVersion: WEAVE_RPC_PROTOCOL_VERSION,
+      role: 'portal',
+      token: config.portalToken,
+      capabilities,
+      portal: {
+        portalId: config.portalId,
+        name: config.name,
+        version,
+        instanceId,
+        mounts: config.mounts ?? [],
+        roots: getRoots(config).map((root) => ({
+          id: root.id,
+          name: root.name,
+          path: root.path,
+        })),
+      },
+    },
   });
+  onConnection?.(connection);
+
+  connection.register(
+    'portal.tool.call',
+    (params) =>
+      executePortalToolCall(
+        config,
+        workspaceFileHost,
+        lspHost,
+        jupyterHost,
+        isRecord(params) ? params : {},
+      ),
+  );
+  connection.register(
+    'binary.begin',
+    (params) => binaryTransfers.begin(params),
+  );
+  connection.register(
+    'binary.chunk',
+    (params) => binaryTransfers.chunk(params),
+  );
+  connection.register(
+    'binary.complete',
+    (params) => binaryTransfers.complete(params),
+  );
+  connection.register(
+    'binary.abort',
+    (params) => binaryTransfers.abort(params),
+  );
+  for (
+    const action of [
+      'list',
+      'read',
+      'hash',
+      'diffPreview',
+      'write',
+      'mkdir',
+      'move',
+      'delete',
+      'index',
+      'upload',
+    ] as const
+  ) {
+    connection.register(`portal.workspaceFile.${action}`, async (params) => {
+      const request = isRecord(params) ? params : {};
+      const target = isRecord(request.target) ? request.target : {};
+      const args = isRecord(request.args) ? { ...request.args } : {};
+      if (action === 'upload' || action === 'write') {
+        const transferId = optionalString(args.transferId);
+        if (!transferId) throw new Error('transferId is required.');
+        const bytes = binaryTransfers.consume(
+          transferId,
+          `workspaceFile.${action}`,
+        );
+        if (action === 'upload') {
+          args.base64Content = binaryTransfers.toBase64(bytes);
+        } else {args.content = new TextDecoder('utf-8', { fatal: true }).decode(
+            bytes,
+          );}
+        delete args.transferId;
+      }
+      const result = await executePortalToolCall(
+        config,
+        workspaceFileHost,
+        lspHost,
+        jupyterHost,
+        {
+          ...target,
+          tool: action === 'diffPreview' ? 'portal.fs.diffPreview' : `portal.fs.${action}`,
+          args,
+        },
+      );
+      if (
+        action !== 'read' || !isRecord(result) ||
+        typeof result.content !== 'string'
+      ) return result;
+      const transfer = await binaryTransfers.createDownload(
+        new TextEncoder().encode(result.content),
+        'workspaceFile.read',
+        'text/plain; charset=utf-8',
+      );
+      const { content: _content, ...metadata } = result;
+      return { ...metadata, contentTransfer: transfer };
+    });
+  }
+  const terminalActions = {
+    snapshot: 'snapshot',
+    list: 'list',
+    create: 'create',
+    attach: 'start',
+    input: 'input',
+    resize: 'resize',
+    close: 'close',
+    detach: 'detach',
+  } as const;
+  for (const [action, type] of Object.entries(terminalActions)) {
+    connection.register(`portal.terminal.${action}`, async (params) => {
+      const { clientId, message } = rpcSessionInput(params, type);
+      await terminalHost.handleClientMessage(
+        `rpc:${clientId}`,
+        message as TerminalClientMessage,
+        (event) => {
+          connection.notify('portal.terminal.event', { clientId, event }, 2);
+        },
+      );
+      return { ok: true };
+    });
+  }
+  const watchActions = {
+    start: 'watch.start',
+    update: 'watch.update',
+    stop: 'watch.stop',
+  } as const;
+  for (const [action, type] of Object.entries(watchActions)) {
+    connection.register(
+      `portal.workspaceFile.watch.${action}`,
+      async (params) => {
+        const { clientId, message } = rpcSessionInput(params, type);
+        await workspaceFileHost.handleClientMessage(
+          `rpc:${clientId}`,
+          message as PortalWorkspaceFileWatchClientMessage,
+          (event) =>
+            connection.notify('portal.workspaceFile.watch.event', {
+              clientId,
+              event,
+            }, 3),
+        );
+        return { ok: true };
+      },
+    );
+  }
+  const lspActions = {
+    start: 'start',
+    send: 'jsonrpc',
+    close: 'detach',
+  } as const;
+  for (const [action, type] of Object.entries(lspActions)) {
+    connection.register(`portal.lsp.${action}`, async (params) => {
+      const { clientId, message } = rpcSessionInput(params, type);
+      await lspHost.handleClientMessage(
+        `rpc:${clientId}`,
+        message as PortalLspClientMessage,
+        (event) => {
+          connection.notify('portal.lsp.event', { clientId, event }, 2);
+        },
+      );
+      return { ok: true };
+    });
+  }
+  const jupyterActions = { execute: 'execute', close: 'detach' } as const;
+  for (const [action, type] of Object.entries(jupyterActions)) {
+    connection.register(`portal.jupyter.${action}`, async (params) => {
+      const { clientId, message } = rpcSessionInput(params, type);
+      await jupyterHost.handleClientMessage(
+        `rpc:${clientId}`,
+        message as PortalJupyterClientMessage,
+        (event) => {
+          connection.notify('portal.jupyter.event', { clientId, event }, 2);
+        },
+      );
+      return { ok: true };
+    });
+  }
+
+  let stopRequested = false;
+  connection.register('portal.shutdown', () => {
+    stopRequested = true;
+    setTimeout(() => connection.close('Portal shutdown requested.'), 25);
+    return { ok: true };
+  });
+
+  onConnectionUpdate?.({ state: 'connecting' });
+  try {
+    await connection.connect();
+    const connectedAt = new Date().toISOString();
+    onConnectionUpdate?.({ state: 'connected', connectedAt });
+    logPortalPerfEvent('rpc_connected', { serverUrl: config.serverUrl });
+    await new Promise<void>((resolve) => {
+      const detach = connection.onState((state) => {
+        if (state !== 'idle' && state !== 'closed') return;
+        detach();
+        resolve();
+      });
+    });
+  } finally {
+    binaryTransfers.clear();
+    terminalHost.detachClientsByPrefix('rpc:');
+    workspaceFileHost.detachClientsByPrefix('rpc:');
+    lspHost.detachClientsByPrefix('rpc:');
+    jupyterHost.detachClientsByPrefix('rpc:');
+    connection.close();
+  }
+  return { stopRequested };
+};
 
 const daemon = async (flags: Record<string, string | boolean>) => {
   const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
   const runtimePath = stringFlag(flags, 'runtime') ?? defaultRuntimePath;
-  const rawConfig = await readConfig(configPath);
-  const windowStream = resolveWindowStreamConfig(rawConfig.windowStream, flags);
-  const config = resolvePortalConfig(rawConfig, windowStream);
-  config.wsServerUrl = normalizeWsUrl(stringFlag(flags, 'ws-server') ?? config.wsServerUrl);
+  const config = resolvePortalConfig(await readConfig(configPath));
+  config.serverUrl = normalizeHttpUrl(
+    stringFlag(flags, 'server') ?? config.serverUrl,
+  );
   config.name = stringFlag(flags, 'name') ?? config.name;
-  const noControl = flags['no-control'] === true;
-  const runtimeOwnership = noControl
-    ? undefined
-    : await acquireDaemonRuntime(runtimePath, config.httpServerUrl, config.wsServerUrl);
-  if (runtimeOwnership?.existingRuntime) {
-    console.log(`Portal daemon already running: ${runtimeOwnership.existingRuntime.portalId}`);
-    console.log(`Runtime: ${runtimePath}`);
-    return;
+  const instanceId = stringFlag(flags, 'instance-id') ?? crypto.randomUUID();
+  const runtimeLock = await tryAcquirePortalRuntimeLock(runtimePath);
+  if (!runtimeLock) {
+    const existing = await readPortalRuntime(runtimePath);
+    const health = await checkPortalRuntimeHealth(existing);
+    if (existing && health.ok && existing.serverUrl === config.serverUrl) {
+      console.log(`Portal daemon already running: ${existing.portalId}`);
+      return;
+    }
+    throw new Error(`Portal runtime is locked: ${runtimePath}.lock`);
   }
-  const runtimeLock = runtimeOwnership?.lock;
+
+  const terminalHost = new PortalTerminalHost({ config });
+  const workspaceFileHost = new PortalWorkspaceFileHost({ config });
+  const lspHost = new PortalLspHost({ config });
+  const jupyterHost = new PortalJupyterHost({ config });
+  const startedAt = new Date().toISOString();
+  let stopping = false;
+  let activeConnection: RpcConnection | undefined;
+  let connectionState: PortalRuntimeFile['connectionState'] = 'connecting';
+  let connectedAt: string | undefined;
+  let connectionError: string | undefined;
+  let retryMs = 1_000;
+  let runtimeWritePromise = Promise.resolve();
+
+  const writeHeartbeat = () => {
+    const runtime: PortalRuntimeFile = {
+      version: 2,
+      pid: Deno.pid,
+      instanceId,
+      portalId: config.portalId,
+      configPath,
+      serverUrl: config.serverUrl,
+      connectionState,
+      ...(connectedAt ? { connectedAt } : {}),
+      ...(connectionError ? { error: connectionError } : {}),
+      startedAt,
+      updatedAt: new Date().toISOString(),
+    };
+    runtimeWritePromise = runtimeWritePromise.then(() => writePortalRuntime(runtimePath, runtime));
+    return runtime;
+  };
+  let runtime = writeHeartbeat();
+  await runtimeWritePromise;
+  const runtimeInterval = setInterval(() => {
+    runtime = writeHeartbeat();
+  }, 5_000);
+
+  const requestStop = () => {
+    stopping = true;
+    activeConnection?.close('Portal stopping.');
+  };
+  try {
+    Deno.addSignalListener('SIGINT', requestStop);
+    Deno.addSignalListener('SIGTERM', requestStop);
+  } catch {
+    // Signal listeners are best-effort on non-POSIX systems.
+  }
+
+  const perfSampler = startPortalPerfSampler({
+    sample: () => ({
+      portal: {
+        portalId: config.portalId,
+        instanceId,
+        stopping,
+        retryMs,
+        connectionState,
+        connectedAt,
+      },
+      terminal: terminalHost.getPerfSnapshot(),
+      lsp: lspHost.getPerfSnapshot(),
+    }),
+  });
+  console.log(`Portal daemon: ${config.portalId}`);
+  console.log(`Server: ${config.serverUrl}`);
+  console.log(`Runtime: ${runtimePath}`);
 
   try {
-    const existingRuntime = noControl ? undefined : await readPortalRuntime(runtimePath);
-
-    if (existingRuntime) {
-      const existingHealth = await checkPortalRuntimeHealth(existingRuntime);
-      if (existingHealth.ok) {
-        if (runtimeMatchesServer(existingRuntime, config.httpServerUrl, config.wsServerUrl)) {
-          if (hasRequiredControlCapabilities(existingHealth.body)) {
-            console.log(`Portal daemon already running: ${existingRuntime.portalId}`);
-            console.log(`Runtime: ${runtimePath}`);
-            return;
-          }
-          await shutdownRuntime(existingRuntime);
-          await waitForRuntimeShutdown(existingRuntime);
-          await removePortalRuntime(runtimePath, existingRuntime).catch(() => undefined);
-        } else {
-          throw new Error(
-            `Portal daemon is already running for a different server. Run "portal stop" first: ${runtimePath}`,
-          );
-        }
-      }
-      await removePortalRuntime(runtimePath, existingRuntime).catch(() => undefined);
-    }
-
-    const terminalHost = new PortalTerminalHost({ config });
-    const workspaceFileHost = new PortalWorkspaceFileHost({ config });
-    const lspHost = new PortalLspHost({ config });
-    const jupyterHost = new PortalJupyterHost({ config });
-    const windowHost = new PortalWindowHost({ config });
-    const controlToken = noControl ? undefined : stringFlag(flags, 'control-token') ?? crypto.randomUUID();
-    const controlPort = noControl ? undefined : numberFlag(flags, 'control-port') ?? 0;
-    const controlHost = stringFlag(flags, 'control-host') ?? '127.0.0.1';
-    let activeSocket: WebSocket | undefined;
-    let remoteConnectionState: PortalRemoteConnectionUpdate['state'] = 'connecting';
-    let remoteConnectionError: string | undefined;
-    let remoteConnectedAt: string | undefined;
-    let stopping = false;
-    let runtimeInterval: ReturnType<typeof setInterval> | undefined;
-    let controlServer: Deno.HttpServer<Deno.NetAddr> | undefined;
-    let runtime: PortalRuntimeFile | undefined;
-    let runtimeWritePromise = Promise.resolve();
-    let cleanupPromise: Promise<void> | undefined;
-    let stopFallbackTimer: ReturnType<typeof setTimeout> | undefined;
-    const controlCapabilities = await getControlCapabilities(windowStream);
-    let retryMs = 1_000;
-    const perfSampler = startPortalPerfSampler({
-      sample: () => ({
-        portal: {
-          portalId: config.portalId,
-          stopping,
-          retryMs,
-          remoteConnectionState,
-          remoteConnectionError,
-          remoteConnectedAt,
-          activeSocket: activeSocket
-            ? {
-              readyState: activeSocket.readyState,
-              bufferedAmount: activeSocket.bufferedAmount,
-            }
-            : undefined,
-          control: {
-            enabled: Boolean(controlToken && controlPort !== undefined),
-            host: controlHost,
-            port: runtime?.controlPort,
-            capabilityCount: controlCapabilities.length,
-          },
-        },
-        terminal: terminalHost.getPerfSnapshot(),
-        lsp: lspHost.getPerfSnapshot(),
-      }),
-    });
-
-    const cleanup = async () => {
-      if (cleanupPromise) return await cleanupPromise;
-      cleanupPromise = (async () => {
-        if (runtimeInterval !== undefined) clearInterval(runtimeInterval);
-        perfSampler.stop();
-        terminalHost.dispose();
-        workspaceFileHost.dispose();
-        await lspHost.dispose();
-        await jupyterHost.dispose();
-        windowHost.dispose();
-        activeSocket?.close();
-        if (controlServer) await controlServer.shutdown().catch(() => undefined);
-        await runtimeWritePromise;
-        if (runtime) await removePortalRuntime(runtimePath, runtime).catch(() => undefined);
-        await runtimeLock?.release();
-      })();
-      return await cleanupPromise;
-    };
-
-    const requestStop = () => {
-      if (stopping) return;
-      stopping = true;
-      activeSocket?.close();
-      stopFallbackTimer = setTimeout(() => {
-        void cleanup().finally(() => Deno.exit(0));
-      }, 2_000);
-    };
-
-    console.log(`Portal daemon: ${config.portalId}`);
-    console.log(`WebSocket: ${config.wsServerUrl}`);
-    if (controlToken && controlPort !== undefined) {
-      controlServer = startTerminalControlServer({
-        host: terminalHost,
-        workspaceFiles: workspaceFileHost,
-        lsp: lspHost,
-        hostname: controlHost,
-        port: controlPort,
-        token: controlToken,
-        metadata: {
-          portalId: config.portalId,
-          configPath,
-          httpServerUrl: config.httpServerUrl,
-          wsServerUrl: config.wsServerUrl,
-          runtimePath,
-          controlCapabilities,
-          localControlReady: true,
-        },
-        getMetadata: () => ({
-          remoteConnectionState,
-          ...(remoteConnectionError ? { remoteConnectionError } : {}),
-          ...(remoteConnectedAt ? { remoteConnectedAt } : {}),
-        }),
-        onShutdown: requestStop,
-      });
-      const actualControlPort = controlServer.addr.port;
-      const now = new Date().toISOString();
-      runtime = {
-        version: 1,
-        pid: Deno.pid,
-        portalId: config.portalId,
-        configPath,
-        httpServerUrl: config.httpServerUrl,
-        wsServerUrl: config.wsServerUrl,
-        controlHost,
-        controlPort: actualControlPort,
-        controlToken,
-        controlCapabilities,
-        startedAt: now,
-        updatedAt: now,
-      };
-      await writePortalRuntime(runtimePath, runtime);
-      runtimeInterval = setInterval(() => {
-        if (!runtime) return;
-        const nextRuntime = { ...runtime, updatedAt: new Date().toISOString() };
-        runtime = nextRuntime;
-        runtimeWritePromise = runtimeWritePromise.then(() => writePortalRuntime(runtimePath, nextRuntime)).catch(
-          () => undefined,
-        );
-      }, 15_000);
-      console.log(`Portal home: ${resolvePortalHome()}`);
-      console.log(`Config: ${configPath}`);
-      console.log(`Runtime: ${runtimePath}`);
-      console.log(`Local control: http://${controlHost}:${actualControlPort}`);
-    } else {
-      console.log('Local control: disabled');
-    }
-
-    try {
-      Deno.addSignalListener('SIGINT', requestStop);
-      Deno.addSignalListener('SIGTERM', requestStop);
-    } catch {
-      // Signal listeners are best-effort for compiled and non-POSIX runtimes.
-    }
-
     while (!stopping) {
       try {
-        remoteConnectionState = remoteConnectedAt ? 'reconnecting' : 'connecting';
-        await connectOnce(
+        const result = await connectOnce(
           config,
+          instanceId,
           terminalHost,
           workspaceFileHost,
           lspHost,
           jupyterHost,
-          windowHost,
-          (ws) => {
-            activeSocket = ws;
+          (connection) => {
+            activeConnection = connection;
           },
           (update) => {
-            remoteConnectionState = update.state;
-            remoteConnectionError = update.error;
-            if (update.connectedAt) remoteConnectedAt = update.connectedAt;
+            connectionState = update.state;
+            connectionError = update.error;
+            if (update.connectedAt) connectedAt = update.connectedAt;
+            runtime = writeHeartbeat();
           },
         );
+        if (result.stopRequested) stopping = true;
         retryMs = 1_000;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        remoteConnectionState = message.toLowerCase().includes('invalid portal token') ? 'rejected' : 'reconnecting';
-        remoteConnectionError = message;
-        console.error(message);
+        connectionError = error instanceof Error ? error.message : String(error);
+        connectionState = /auth|token|reject/i.test(connectionError) ? 'rejected' : 'reconnecting';
+        runtime = writeHeartbeat();
+        console.error(connectionError);
       }
-
       if (stopping) break;
-      console.log(`Reconnecting in ${retryMs}ms`);
-      const sleepStartedAt = Date.now();
-      while (!stopping && Date.now() - sleepStartedAt < retryMs) await sleep(Math.min(250, retryMs));
+      await sleep(retryMs);
       retryMs = Math.min(retryMs * 2, 30_000);
     }
-
-    if (stopFallbackTimer !== undefined) clearTimeout(stopFallbackTimer);
-    await cleanup();
   } finally {
-    await runtimeLock?.release();
+    clearInterval(runtimeInterval);
+    connectionState = 'stopped';
+    runtime = writeHeartbeat();
+    await runtimeWritePromise.catch(() => undefined);
+    perfSampler.stop();
+    terminalHost.dispose();
+    workspaceFileHost.dispose();
+    await lspHost.dispose();
+    await jupyterHost.dispose();
+    await removePortalRuntime(runtimePath, runtime).catch(() => undefined);
+    await runtimeLock.release();
   }
 };
 
@@ -1767,7 +2011,10 @@ const addRoot = async (flags: Record<string, string | boolean>) => {
   const realPath = await Deno.realPath(path);
   const portal = config.portal ?? {};
   const roots = (portal.roots ?? []).filter((root) => root.id !== id);
-  config.portal = { ...portal, roots: [...roots, { id, name, path: realPath }] };
+  config.portal = {
+    ...portal,
+    roots: [...roots, { id, name, path: realPath }],
+  };
   await writeConfig(configPath, config);
   console.log(`Root ${id}: ${realPath}`);
 };
@@ -1776,13 +2023,18 @@ const mountProject = async (flags: Record<string, string | boolean>) => {
   const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
   const projectId = stringFlag(flags, 'project');
   const path = stringFlag(flags, 'path');
-  if (!projectId || !path) throw new Error('mount requires --project and --path');
+  if (!projectId || !path) {
+    throw new Error('mount requires --project and --path');
+  }
 
   const config = await readConfig(configPath);
   const realPath = await Deno.realPath(path);
   const portal = config.portal ?? {};
   const mounts = (portal.mounts ?? []).filter((mount) => mount.projectId !== projectId);
-  config.portal = { ...portal, mounts: [...mounts, { projectId, localPath: realPath }] };
+  config.portal = {
+    ...portal,
+    mounts: [...mounts, { projectId, localPath: realPath }],
+  };
   await writeConfig(configPath, config);
   console.log(`Mounted ${projectId}: ${realPath}`);
 };
@@ -1813,40 +2065,60 @@ const status = async (flags: Record<string, string | boolean>) => {
 const stop = async (flags: Record<string, string | boolean>) => {
   const runtimePath = stringFlag(flags, 'runtime') ?? defaultRuntimePath;
   const runtime = await readPortalRuntime(runtimePath);
-  if (!runtime?.controlHost || !runtime.controlPort || !runtime.controlToken) {
+  if (!runtime) {
     console.log(`No local Portal runtime found at ${runtimePath}`);
     return;
   }
-
-  const url = new URL(`http://${runtime.controlHost}:${runtime.controlPort}/shutdown`);
-  url.searchParams.set('token', runtime.controlToken);
-  try {
-    const response = await fetch(url, { method: 'POST' });
-    if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
-    console.log(`Stopped Portal daemon: ${runtime.portalId}`);
-  } catch (error) {
-    console.log(
-      `Portal runtime was not reachable; removing stale runtime file. ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+  if (!await verifyPortalProcessInstance(runtime, runtimePath)) {
+    throw new Error(
+      'Refusing to terminate Portal: runtime path and instance id do not match the process command line.',
     );
   }
-  await removePortalRuntime(runtimePath).catch(() => undefined);
+  Deno.kill(runtime.pid, 'SIGTERM');
+  console.log(`Stopping Portal daemon: ${runtime.portalId}`);
+};
+
+const start = async (flags: Record<string, string | boolean>) => {
+  const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
+  const runtimePath = stringFlag(flags, 'runtime') ?? defaultRuntimePath;
+  const instanceId = crypto.randomUUID();
+  const serverUrl = stringFlag(flags, 'server');
+  const logPath = stringFlag(flags, 'log-file') ??
+    `${resolvePortalHome()}/portal.log`;
+  await ensureParentDir(logPath);
+  const child = new Deno.Command(Deno.execPath(), {
+    args: [
+      'daemon',
+      '--config',
+      configPath,
+      '--runtime',
+      runtimePath,
+      '--instance-id',
+      instanceId,
+      '--log-file',
+      logPath,
+      ...(serverUrl ? ['--server', serverUrl] : []),
+    ],
+    stdin: 'null',
+    stdout: 'null',
+    stderr: 'null',
+  }).spawn();
+  child.unref();
+  console.log(`Starting Portal daemon (pid ${child.pid}).`);
+  console.log(`Runtime: ${runtimePath}`);
 };
 
 const usage = () => {
   console.log(`mage-portal ${version}
 
 Commands:
-  login --server http://localhost:4111 --token <owner-token> [--ws-server ws://localhost:4112] [--name <name>]
+  login --server http://localhost:4111 --token <owner-token> [--name <name>]
+  start [--config ~/.config/weave/portal/config.json] [--server http://localhost:4111]
   root --path /path/to/code [--id default] [--name Code] [--config ~/.config/weave/portal/config.json]
   mount --project project_x --path /path/to/repo [--config ~/.config/weave/portal/config.json]
-  daemon [--config ~/.config/weave/portal/config.json] [--ws-server ws://localhost:4112] [--control-port 0] [--control-token token] [--no-control]
+  daemon [--config ~/.config/weave/portal/config.json] [--server http://localhost:4111]
+         [--runtime ~/.config/weave/portal/runtime.json] [--instance-id <random-id>]
          [--log-file ~/.config/weave/portal/desktop-daemon.log] [--log-max-bytes 1000000]
-         [--window-stream-backend native-webrtc] [--window-stream-codec h264|hevc]
-         [--window-stream-profile balanced|quality|performance|low-bandwidth|custom]
-         [--window-stream-max-fps 60] [--window-stream-max-dimension 1920] [--window-stream-bitrate-mbps 20]
-         [--window-stream-color-mode srgb-full-range|srgb-video-range|rec709-full-range|rec709-video-range]
   status [--config ~/.config/weave/portal/config.json]
   stop
 `);
@@ -1859,11 +2131,15 @@ const main = async () => {
     const logPath = stringFlag(flags, 'log-file');
     if (logPath) {
       await ensureParentDir(logPath);
-      installBoundedConsoleLog(logPath, numberFlag(flags, 'log-max-bytes') ?? 1_000_000);
+      installBoundedConsoleLog(
+        logPath,
+        numberFlag(flags, 'log-max-bytes') ?? 1_000_000,
+      );
     }
   }
 
   if (command === 'login') return login(flags);
+  if (command === 'start') return start(flags);
   if (!command || command === 'daemon') return daemon(flags);
   if (command === 'root') return addRoot(flags);
   if (command === 'mount') return mountProject(flags);

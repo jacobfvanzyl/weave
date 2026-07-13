@@ -70,8 +70,8 @@ services:
   weave-migrate:
     image: ${WEAVE_SERVER_IMAGE:-weave-server:local}
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: server/Dockerfile
     restart: 'no'
     depends_on:
       postgres:
@@ -79,7 +79,6 @@ services:
     environment: &weave-server-environment
       NODE_ENV: production
       PORT: 4111
-      WEAVE_PORTAL_WS_PORT: 4112
       WEAVE_DATABASE_URL: postgres://supabase_admin:${WEAVE_POSTGRES_PASSWORD:-weave}@postgres:5432/weave
       WEAVE_DBOS_ENABLED: '1'
       WEAVE_MEMORY_EMBEDDING_MODEL: ${WEAVE_MEMORY_EMBEDDING_MODEL:-ollama/nomic-embed-text}
@@ -112,8 +111,8 @@ services:
   weave-server:
     image: ${WEAVE_SERVER_IMAGE:-weave-server:local}
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: server/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:
@@ -128,7 +127,6 @@ services:
         condition: service_completed_successfully
     ports:
       - '${WEAVE_BIND_ADDRESS:-127.0.0.1}:${WEAVE_SERVER_PORT:-4111}:4111'
-      - '${WEAVE_BIND_ADDRESS:-127.0.0.1}:${WEAVE_PORTAL_HOST_PORT:-4112}:4112'
     environment:
       <<: *weave-server-environment
       WEAVE_CREDENTIAL_ENCRYPTION_KEY: ${WEAVE_CREDENTIAL_ENCRYPTION_KEY}
@@ -138,10 +136,8 @@ services:
         - deno
         - eval
         - |
-          for (const url of ['http://127.0.0.1:4111/health', 'http://127.0.0.1:4112/health']) {
-            const response = await fetch(url);
-            if (!response.ok) Deno.exit(1);
-          }
+          const response = await fetch('http://127.0.0.1:4111/health');
+          if (!response.ok) Deno.exit(1);
       interval: 10s
       timeout: 5s
       retries: 12

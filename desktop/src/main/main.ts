@@ -1,41 +1,13 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, safeStorage, session, shell } from 'electron';
-import { realpath } from 'node:fs/promises';
+import { app, BrowserWindow, ipcMain, nativeTheme, safeStorage, shell } from 'electron';
+import { RpcConnection, WEAVE_RPC_PROTOCOL_VERSION } from '@weave/protocol';
 import path from 'node:path';
 import type { DesktopConnectionInput, DesktopConnectionTestResult } from '../shared/desktop-api';
-import type { WorkspaceFileTarget } from '../shared/workspace-file';
-import type { TerminalStartInput, TerminalTargetInput } from '../shared/terminal';
-import { getServerOrigin, isHttpUrl, normalizeMastraUrl, parseDesktopConnectionInput } from '../shared/connection';
+import { isHttpUrl, normalizeMastraUrl, parseDesktopConnectionInput } from '../shared/connection';
 import { ConnectionSettingsStore } from './settings-store';
-import {
-  parseWorkspaceFileDeleteInput,
-  parseWorkspaceFileDiffPreviewInput,
-  parseWorkspaceFileHashInput,
-  parseWorkspaceFileIndexInput,
-  parseWorkspaceFileListInput,
-  parseWorkspaceFileMkdirInput,
-  parseWorkspaceFileMoveInput,
-  parseWorkspaceFileReadInput,
-  parseWorkspaceFileUploadInput,
-  parseWorkspaceFileWatchPaths,
-  parseWorkspaceFileWatchStartInput,
-  parseWorkspaceFileWatchStopInput,
-  parseWorkspaceFileWatchSubscriptionId,
-  parseWorkspaceFileWriteInput,
-  parseLspSessionInput,
-} from './workspace-file-input';
-import { PortalWorkspaceFileClient } from './portal-workspace-file-client';
-import { PortalLspClient } from './portal-lsp-client';
-import {
-  parseTerminalInputData,
-  parseTerminalId,
-  parseTerminalResize,
-  parseTerminalStartInput,
-  parseTerminalTargetInput,
-} from './terminal-input';
 import { PortalSupervisor } from './portal-supervisor';
-import { PortalTerminalClient } from './portal-terminal-client';
 import { startDesktopPerfSampler } from './perf';
 import { ChatGPTLoginBroker } from './chatgpt-login';
+import { DesktopRpcConnection } from './rpc-connection';
 import {
   clearNativeNotifications,
   getNativeNotificationPermissionState,
@@ -45,25 +17,11 @@ import {
 } from './native-notifications';
 
 let settingsStore: ConnectionSettingsStore | undefined;
+let desktopRpcConnection: DesktopRpcConnection | undefined;
 let portalSupervisor: PortalSupervisor | undefined;
-let portalTerminalClient: PortalTerminalClient | undefined;
-let portalWorkspaceFileClient: PortalWorkspaceFileClient | undefined;
-let portalLspClient: PortalLspClient | undefined;
 let desktopPerfSampler: ReturnType<typeof startDesktopPerfSampler> | undefined;
 let chatGPTLoginBroker: ChatGPTLoginBroker | undefined;
 
-const ipcErrorResult = (error: unknown) => ({
-  __weaveIpcError: true,
-  message: error instanceof Error ? error.message : String(error),
-});
-
-const handleIpcResult = async <T>(operation: () => T | Promise<T>) => {
-  try {
-    return await operation();
-  } catch (error) {
-    return ipcErrorResult(error);
-  }
-};
 const appName = 'Weave';
 const appBundleId = 'com.veezee.weave';
 const appUserDataPath = process.env.WEAVE_DESKTOP_USER_DATA || path.join(app.getPath('appData'), appName);
@@ -79,64 +37,39 @@ app.setPath('userData', appUserDataPath);
 if (process.platform === 'win32') app.setAppUserModelId(appBundleId);
 
 const getSettingsStore = () => {
-  if (!settingsStore) {
-    throw new Error('Connection settings store is not initialized.');
-  }
-
+  if (!settingsStore) throw new Error('Connection settings store is not initialized.');
   return settingsStore;
 };
 
-const isConfiguredServerRequest = (url: string) => {
-  try {
-    const settings = getSettingsStore().getSettings();
-    return new URL(url).origin === getServerOrigin(settings.mastraUrl);
-  } catch {
-    return false;
-  }
-};
-
-const installAuthHeaderInjection = () => {
-  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    const authToken = getSettingsStore().getAuthToken();
-
-    if (!authToken || !isConfiguredServerRequest(details.url)) {
-      callback({ requestHeaders: details.requestHeaders });
-      return;
-    }
-
-    callback({
-      requestHeaders: {
-        ...details.requestHeaders,
-        Authorization: `Bearer ${authToken}`,
-      },
-    });
-  });
+const getRpc = () => {
+  if (!desktopRpcConnection) throw new Error('Desktop RPC connection is not initialized.');
+  return desktopRpcConnection;
 };
 
 const testConnection = async (input?: DesktopConnectionInput): Promise<DesktopConnectionTestResult> => {
   try {
     const store = getSettingsStore();
-    const savedSettings = store.getSettings();
-    const mastraUrl = normalizeMastraUrl(input?.mastraUrl ?? savedSettings.mastraUrl);
-    const authToken = Object.hasOwn(input ?? {}, 'authToken') ? input?.authToken?.trim() : store.getAuthToken();
-    const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-    const response = await fetch(`${mastraUrl}/owner/me`, { headers });
-
-    if (!response.ok) {
-      const error = (await response.text()).trim();
-      return { ok: false, status: response.status, error: error || `HTTP ${response.status}` };
-    }
-
-    const data = await response.json() as {
-      owner?: { id?: unknown; name?: unknown };
-      user?: { id?: unknown; name?: unknown };
-    };
-    const user = data.owner ?? data.user;
-    if (typeof user?.id !== 'string' || typeof user.name !== 'string') {
+    const saved = store.getSettings();
+    const serverUrl = normalizeMastraUrl(input?.mastraUrl ?? saved.mastraUrl);
+    const token = Object.hasOwn(input ?? {}, 'authToken') ? input?.authToken?.trim() : store.getAuthToken();
+    if (!token) return { ok: false, error: 'Authentication token is required.' };
+    const connection = new RpcConnection({
+      serverUrl,
+      reconnect: false,
+      initialize: {
+        protocolVersion: WEAVE_RPC_PROTOCOL_VERSION,
+        role: 'client',
+        token,
+        capabilities: [],
+        client: { clientAppId: 'weave', clientInstanceId: `desktop-test_${crypto.randomUUID()}` },
+      },
+    });
+    const response = await connection.request<{ owner: { id?: unknown; name?: unknown } }>('owner.get')
+      .finally(() => connection.close());
+    if (typeof response.owner?.id !== 'string' || typeof response.owner.name !== 'string') {
       return { ok: false, error: 'Connection response did not include a valid owner.' };
     }
-
-    return { ok: true, user: { id: user.id, name: user.name } };
+    return { ok: true, user: { id: response.owner.id, name: response.owner.name } };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'Connection failed.' };
   }
@@ -150,94 +83,18 @@ const openExternal = async (url: string) => {
 const getChatGPTLoginBroker = () => {
   if (!chatGPTLoginBroker) {
     chatGPTLoginBroker = new ChatGPTLoginBroker({
-      getConnection: () => ({
-        mastraUrl: getSettingsStore().getSettings().mastraUrl,
-        authToken: getSettingsStore().getAuthToken(),
-      }),
+      requestRpc: (method, params) => getRpc().request(method, params),
       openExternal,
     });
   }
   return chatGPTLoginBroker;
 };
 
-type ProjectListing = {
-  id?: unknown;
-  projectKind?: unknown;
-  portalId?: unknown;
-  portalRootId?: unknown;
-  repoPath?: unknown;
-  workspaces?: unknown;
-};
-
-type WorkspaceListing = {
-  id?: unknown;
-  path?: unknown;
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object');
-
-const resolveGitWorkspace = async (input: WorkspaceFileTarget, featureName: string) => {
-  const store = getSettingsStore();
-  const settings = store.getSettings();
-  const authToken = store.getAuthToken();
-  const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-  const response = await fetch(`${normalizeMastraUrl(settings.mastraUrl)}/code/projects`, { headers });
-
-  if (!response.ok) {
-    const error = (await response.text()).trim();
-    throw new Error(error || `Failed to load Projects for ${featureName}: HTTP ${response.status}`);
-  }
-
-  const data = await response.json() as { projects?: ProjectListing[] };
-  const projects = Array.isArray(data.projects) ? data.projects : [];
-  const project = projects.find(candidate => candidate.id === input.projectId);
-  if (!project) throw new Error('Project was not found.');
-  if (project.projectKind !== 'git') throw new Error(`${featureName} is only available for Git Projects.`);
-
-  const workspaces = Array.isArray(project.workspaces) ? project.workspaces.filter(isRecord) as WorkspaceListing[] : [];
-  const workspace = workspaces.find(candidate => candidate.id === input.workspaceId);
-  if (!workspace) throw new Error('Workspace was not found.');
-  if (typeof workspace.path !== 'string' || !workspace.path.trim()) {
-    throw new Error('Workspace does not have a local workspace path.');
-  }
-
-  return {
-    cwd: workspace.path.trim(),
-    portalId: typeof project.portalId === 'string' ? project.portalId : undefined,
-    rootId: typeof project.portalRootId === 'string' ? project.portalRootId : undefined,
-    repoPath: typeof project.repoPath === 'string' ? project.repoPath : undefined,
-  };
-};
-
-const resolveTerminalWorkspace = async (input: TerminalTargetInput) => {
-  if (!input.projectId || !input.workspaceId) throw new Error('Project and Workspace are required for this terminal.');
-  const target = await resolveGitWorkspace({ projectId: input.projectId, workspaceId: input.workspaceId }, 'terminal');
-  return {
-    ...input,
-    portalId: input.portalId ?? target.portalId,
-    rootId: input.rootId ?? target.rootId,
-    repoPath: input.repoPath ?? target.repoPath,
-    workspacePath: input.workspacePath ?? target.cwd,
-  };
-};
-
-const resolveGeneralTerminal = async (input: TerminalTargetInput) => ({
-  ...input,
-  cwd: await realpath(input.cwd?.trim() || app.getPath('home')),
-});
-
-const resolveTerminalTarget = async (input: TerminalTargetInput) =>
-  input.kind === 'general'
-    ? await resolveGeneralTerminal(input)
-    : await resolveTerminalWorkspace(input);
-
-const resolveWorkspaceFileWorkspace = (target: WorkspaceFileTarget) => resolveGitWorkspace(target, 'workspace-file');
-
 const getPortalSupervisor = () => {
-  if (!settingsStore) throw new Error('Connection settings store is not initialized.');
   if (!portalSupervisor) {
     portalSupervisor = new PortalSupervisor({
-      settingsStore,
+      settingsStore: getSettingsStore(),
+      rpc: getRpc(),
       homePath: app.getPath('home'),
       isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
@@ -252,50 +109,11 @@ const getPortalSupervisor = () => {
   return portalSupervisor;
 };
 
-const resetPortalClients = () => {
-  portalTerminalClient?.dispose();
-  portalWorkspaceFileClient?.dispose();
-  portalTerminalClient = undefined;
-  portalWorkspaceFileClient = undefined;
-  portalLspClient = undefined;
-};
-
-const getPortalTerminalClient = () => {
-  const supervisor = getPortalSupervisor();
-  if (!portalTerminalClient) portalTerminalClient = new PortalTerminalClient(supervisor);
-
-  return portalTerminalClient;
-};
-
-const getPortalWorkspaceFileClient = () => {
-  const supervisor = getPortalSupervisor();
-  if (!portalWorkspaceFileClient) {
-    portalWorkspaceFileClient = new PortalWorkspaceFileClient({
-      supervisor,
-      resolveWorkspace: resolveWorkspaceFileWorkspace,
-    });
-  }
-
-  return portalWorkspaceFileClient;
-};
-
-const getPortalLspClient = () => {
-  const supervisor = getPortalSupervisor();
-  if (!portalLspClient) {
-    portalLspClient = new PortalLspClient({
-      supervisor,
-      resolveWorkspace: resolveWorkspaceFileWorkspace,
-    });
-  }
-
-  return portalLspClient;
-};
-
 const registerIpcHandlers = () => {
   ipcMain.handle('connection:get-settings', () => getSettingsStore().getSettings());
   ipcMain.handle('connection:save-settings', (_event, input: unknown) => {
     const settings = getSettingsStore().saveSettings(parseDesktopConnectionInput(input));
-    resetPortalClients();
+    getRpc().reconnect();
     void getPortalSupervisor().reconcile({ refreshPortalToken: true }).catch(error => console.error('[portal]', error));
     return settings;
   });
@@ -303,94 +121,12 @@ const registerIpcHandlers = () => {
     testConnection(input === undefined ? undefined : parseDesktopConnectionInput(input)),
   );
   ipcMain.handle('portal:get-status', () => getPortalSupervisor().getStatus());
-  ipcMain.handle('portal:retry', () => handleIpcResult(async () => {
+  ipcMain.handle('portal:retry', async () => {
     await getPortalSupervisor().retry();
     return getPortalSupervisor().getStatus();
-  }));
+  });
   ipcMain.handle('shell:open-external', (_event, url: string) => openExternal(url));
-  ipcMain.handle('chatgpt:connect', () => handleIpcResult(() => getChatGPTLoginBroker().connect()));
-  ipcMain.handle('terminal:snapshot', () => getPortalTerminalClient().snapshot());
-  ipcMain.handle('terminal:list', async (_event, input: unknown) => {
-    const parsed = parseTerminalTargetInput(input);
-    const resolved = parsed.kind === 'general'
-      ? await resolveGeneralTerminal(parsed)
-      : await resolveTerminalWorkspace(parsed);
-    return getPortalTerminalClient().list(resolved);
-  });
-  ipcMain.handle('terminal:create', async (_event, input: unknown) => {
-    const parsed = parseTerminalTargetInput(input);
-    const resolved = parsed.kind === 'general'
-      ? await resolveGeneralTerminal(parsed)
-      : await resolveTerminalWorkspace(parsed);
-    return getPortalTerminalClient().create(resolved);
-  });
-  ipcMain.handle('terminal:start', async (event, input: unknown) => {
-    const parsed = parseTerminalStartInput(input);
-    const resolved = parsed.kind === 'general'
-      ? await resolveGeneralTerminal(parsed)
-      : await resolveTerminalWorkspace(parsed);
-    return getPortalTerminalClient().start({ ...resolved, terminalId: parsed.terminalId }, event.sender);
-  });
-  ipcMain.handle('terminal:input', (_event, terminalId: unknown, data: unknown) =>
-    getPortalTerminalClient().input(parseTerminalId(terminalId), parseTerminalInputData(data)),
-  );
-  ipcMain.handle('terminal:resize', (_event, terminalId: unknown, cols: unknown, rows: unknown) => {
-    const size = parseTerminalResize(cols, rows);
-    return getPortalTerminalClient().resize(parseTerminalId(terminalId), size.cols, size.rows);
-  });
-  ipcMain.handle('terminal:close', async (_event, terminalId: unknown, input?: unknown) => {
-    const resolved = input === undefined ? undefined : await resolveTerminalTarget(parseTerminalTargetInput(input));
-    return getPortalTerminalClient().close(parseTerminalId(terminalId), resolved);
-  });
-  ipcMain.handle('terminal:detach', (event, terminalId: unknown) =>
-    getPortalTerminalClient().detach(parseTerminalId(terminalId), event.sender),
-  );
-  ipcMain.handle('workspace-file:list', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().list(parseWorkspaceFileListInput(input)),
-  ));
-  ipcMain.handle('workspace-file:read', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().read(parseWorkspaceFileReadInput(input)),
-  ));
-  ipcMain.handle('workspace-file:hash', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().hash(parseWorkspaceFileHashInput(input)),
-  ));
-  ipcMain.handle('workspace-file:diff-preview', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().diffPreview(parseWorkspaceFileDiffPreviewInput(input)),
-  ));
-  ipcMain.handle('workspace-file:write', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().write(parseWorkspaceFileWriteInput(input)),
-  ));
-  ipcMain.handle('workspace-file:mkdir', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().mkdir(parseWorkspaceFileMkdirInput(input)),
-  ));
-  ipcMain.handle('workspace-file:move', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().move(parseWorkspaceFileMoveInput(input)),
-  ));
-  ipcMain.handle('workspace-file:delete', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().delete(parseWorkspaceFileDeleteInput(input)),
-  ));
-  ipcMain.handle('workspace-file:index', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().index(parseWorkspaceFileIndexInput(input)),
-  ));
-  ipcMain.handle('workspace-file:upload', (_event, input: unknown) => handleIpcResult(() =>
-    getPortalWorkspaceFileClient().upload(parseWorkspaceFileUploadInput(input)),
-  ));
-  ipcMain.handle('workspace-file:watch-start', (event, input: unknown) =>
-    getPortalWorkspaceFileClient().watchStart(parseWorkspaceFileWatchStartInput(input), event.sender),
-  );
-  ipcMain.handle('workspace-file:watch-update', (_event, input: unknown) => {
-    const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
-    return getPortalWorkspaceFileClient().watchUpdate(
-      parseWorkspaceFileWatchSubscriptionId(record.subscriptionId),
-      parseWorkspaceFileWatchPaths(record.paths),
-    );
-  });
-  ipcMain.handle('workspace-file:watch-stop', (_event, input: unknown) =>
-    getPortalWorkspaceFileClient().watchStop(parseWorkspaceFileWatchStopInput(input)),
-  );
-  ipcMain.handle('lsp:create-session', (_event, input: unknown) =>
-    getPortalLspClient().createSession(parseLspSessionInput(input)),
-  );
+  ipcMain.handle('chatgpt:connect', () => getChatGPTLoginBroker().connect());
   ipcMain.handle('native-notifications:get-permission-state', () => getNativeNotificationPermissionState());
   ipcMain.handle('native-notifications:request-permission', () => requestNativeNotificationPermission());
   ipcMain.handle('native-notifications:show', (_event, input: unknown) =>
@@ -403,7 +139,6 @@ const registerIpcHandlers = () => {
 
 const createWindow = () => {
   nativeTheme.themeSource = 'dark';
-
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -425,27 +160,13 @@ const createWindow = () => {
       spellcheck: false,
     },
   });
-
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void openExternal(url).catch(() => undefined);
     return { action: 'deny' };
   });
-
-  mainWindow.webContents.on('will-navigate', event => {
-    event.preventDefault();
-  });
-
-  const webContentsId = mainWindow.webContents.id;
-  mainWindow.webContents.on('destroyed', () => {
-    portalTerminalClient?.detachWebContents(webContentsId);
-    portalWorkspaceFileClient?.detachWebContents(webContentsId);
-  });
-
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-  } else {
-    void mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
-  }
+  mainWindow.webContents.on('will-navigate', event => event.preventDefault());
+  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+  else void mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
 };
 
 app.whenReady().then(() => {
@@ -453,24 +174,17 @@ app.whenReady().then(() => {
     userDataPath: sharedConnectionUserDataPath,
     encryption: safeStorage,
   });
-
-  installAuthHeaderInjection();
+  desktopRpcConnection = new DesktopRpcConnection(settingsStore);
   registerIpcHandlers();
   getPortalSupervisor().startMonitoring();
   if (devAppIconPath && process.platform === 'darwin') app.dock?.setIcon(devAppIconPath);
   createWindow();
   desktopPerfSampler = startDesktopPerfSampler({
     sample: () => ({
+      rpcState: desktopRpcConnection?.state,
       portalSupervisor: portalSupervisor?.getPerfSnapshot(),
-      portalTerminalClient: portalTerminalClient?.getPerfSnapshot(),
-      portalClients: {
-        terminal: Boolean(portalTerminalClient),
-        'workspace-file': Boolean(portalWorkspaceFileClient),
-        lsp: Boolean(portalLspClient),
-      },
     }),
   });
-
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -486,6 +200,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   desktopPerfSampler?.stop();
   chatGPTLoginBroker?.dispose();
-  resetPortalClients();
   portalSupervisor?.dispose();
+  desktopRpcConnection?.dispose();
 });

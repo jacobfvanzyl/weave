@@ -1,5 +1,4 @@
-import { getAuthHeaders } from './mastra-client';
-import { weaveRoutes } from './weave-routes';
+import { rpcRequest } from './mastra-client';
 
 export type PromptResolutionContext = {
   threadId?: string | null;
@@ -27,22 +26,18 @@ export const contextParams = (context?: string | PromptResolutionContext) => {
 };
 
 export const listPrompts = async (context?: string | PromptResolutionContext) => {
-  const response = await fetch(weaveRoutes.agent.prompts(contextParams(context)), { headers: getAuthHeaders() });
-  if (!response.ok) throw new Error(`Failed to list prompts: ${response.status}`);
-  const data = await response.json() as { prompts?: PromptSummary[] };
+  const normalized = typeof context === 'string' ? { threadId: context } : context;
+  const data = await rpcRequest<{ prompts?: PromptSummary[] }>('agent.prompts.list', normalized);
   return data.prompts ?? [];
 };
 
 export const expandPrompt = async (name: string, args: string, context?: string | PromptResolutionContext) => {
   const bodyContext = typeof context === 'string' ? { threadId: context } : context;
-  const response = await fetch(weaveRoutes.agent.promptExpand(name, contextParams(context)), {
-    method: 'POST',
-    headers: { ...getAuthHeaders(), 'content-type': 'application/json' },
-    body: JSON.stringify({ arguments: args, ...bodyContext }),
+  const data = await rpcRequest<{ text?: string }>('agent.prompts.expand', {
+    name,
+    arguments: args,
+    ...bodyContext,
   });
-
-  if (!response.ok) throw new Error(`Failed to expand prompt: ${response.status}`);
-  const data = await response.json() as { text?: string };
   if (typeof data.text !== 'string') throw new Error('Prompt expansion response missing text');
   return data.text;
 };

@@ -33,7 +33,9 @@ const createRepo = async () => {
   await git(root, 'config', 'user.name', 'Deploy Test');
   await git(root, 'config', 'user.email', 'deploy@example.test');
   await Deno.mkdir(`${root}/server`, { recursive: true });
+  await Deno.mkdir(`${root}/packages/protocol`, { recursive: true });
   await Deno.writeTextFile(`${root}/server/app.ts`, 'export const value = 1;\n');
+  await Deno.writeTextFile(`${root}/packages/protocol/index.ts`, 'export const version = 1;\n');
   await Deno.writeTextFile(`${root}/README.md`, 'base\n');
   await Deno.writeTextFile(`${root}/.gitignore`, '.env\n');
   await git(root, 'add', '.');
@@ -46,6 +48,8 @@ Deno.test('server snapshots include dirty server files without touching branch o
   try {
     await Deno.writeTextFile(`${root}/server/app.ts`, 'export const value = 2;\n');
     await Deno.writeTextFile(`${root}/server/new.ts`, 'export const added = true;\n');
+    await Deno.writeTextFile(`${root}/packages/protocol/index.ts`, 'export const version = 2;\n');
+    await Deno.writeTextFile(`${root}/packages/protocol/schema.ts`, 'export const schema = true;\n');
     await Deno.writeTextFile(`${root}/README.md`, 'outside change\n');
     await Deno.writeTextFile(`${root}/server/.env`, 'SECRET=ignored\n');
     const beforeStatus = await git(root, 'status', '--porcelain=v1');
@@ -55,11 +59,15 @@ Deno.test('server snapshots include dirty server files without touching branch o
 
     assertEquals(await git(root, 'show', `${snapshot.commit}:server/app.ts`), 'export const value = 2;');
     assertEquals(await git(root, 'show', `${snapshot.commit}:server/new.ts`), 'export const added = true;');
+    assertEquals(await git(root, 'show', `${snapshot.commit}:packages/protocol/index.ts`), 'export const version = 2;');
+    assertEquals(await git(root, 'show', `${snapshot.commit}:packages/protocol/schema.ts`), 'export const schema = true;');
     assertEquals(await git(root, 'show', `${snapshot.commit}:README.md`), 'base');
     assertEquals(await git(root, 'status', '--porcelain=v1'), beforeStatus);
     assertEquals(await git(root, 'branch', '--show-current'), beforeBranch);
     assert(snapshot.files.includes('server/app.ts'), 'tracked server change was omitted');
     assert(snapshot.files.includes('server/new.ts'), 'untracked server file was omitted');
+    assert(snapshot.files.includes('packages/protocol/index.ts'), 'tracked protocol change was omitted');
+    assert(snapshot.files.includes('packages/protocol/schema.ts'), 'untracked protocol file was omitted');
     assert(!snapshot.files.includes('server/.env'), 'ignored env file entered snapshot');
   } finally {
     await Deno.remove(root, { recursive: true });

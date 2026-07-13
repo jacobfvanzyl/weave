@@ -11,11 +11,14 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": {
       "#/*": ["src/*"],
       "@weave/client": ["../packages/client/src/index.ts"],
       "@weave/client/*": ["../packages/client/src/*"],
+      "@weave/protocol": ["../packages/protocol/src/index.ts"],
+      "@weave/protocol/*": ["../packages/protocol/src/*"],
       "~/*": ["../packages/client/src/*"],
       "hono": ["../node_modules/hono"],
       "hono/helper/websocket": ["../node_modules/hono/dist/types/helper/websocket/index.d.ts"],
@@ -25,6 +28,7 @@
       "react-dom/client": ["node_modules/@types/react-dom/client.d.ts"],
       "react/jsx-runtime": ["node_modules/@types/react/jsx-runtime"],
       "react/jsx-dev-runtime": ["node_modules/@types/react/jsx-dev-runtime"],
+      "ws": ["node_modules/@types/ws/index.d.ts"],
       "*": ["node_modules/*"]
     },
     "resolveJsonModule": true,
@@ -33,6 +37,7 @@
     "jsx": "react-jsx",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src", "tests", "forge.env.d.ts", "../packages/client/src"],
+  "include": ["src", "tests", "forge.env.d.ts", "../packages/client/src", "../packages/protocol/src"],
+  "exclude": ["../packages/protocol/src/**/*_test.ts"],
   "references": []
 }

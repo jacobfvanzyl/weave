@@ -15,19 +15,9 @@ import {
   type EventService,
   internalServices,
   type ResourceService,
-  type SessionService,
   type ToolService,
 } from '../services';
 import type { ServiceEvent } from '../services/event-service';
-import type {
-  JupyterSessionInput,
-  LspSessionInput,
-  TerminalSessionInput,
-  WindowApplicationOpenInput,
-  WindowSessionInput,
-  WindowSessionToolInput,
-  WorkspaceFileWatchSessionInput,
-} from '../services/session-service';
 import {
   callerForOwner,
   type JsonValue,
@@ -59,34 +49,6 @@ export type WorkflowToolInput = {
   grants?: ServiceGrant[];
 };
 
-export type WorkflowTerminalSessionInput = Omit<TerminalSessionInput, 'caller' | 'grants'> & {
-  grants?: ServiceGrant[];
-};
-
-export type WorkflowLspSessionInput = Omit<LspSessionInput, 'caller' | 'grants'> & {
-  grants?: ServiceGrant[];
-};
-
-export type WorkflowJupyterSessionInput = Omit<JupyterSessionInput, 'caller' | 'grants'> & {
-  grants?: ServiceGrant[];
-};
-
-export type WorkflowWindowSessionToolInput = Omit<WindowSessionToolInput, 'caller' | 'grants'> & {
-  grants?: ServiceGrant[];
-};
-
-export type WorkflowWindowApplicationOpenInput = Omit<WindowApplicationOpenInput, 'caller' | 'grants'> & {
-  grants?: ServiceGrant[];
-};
-
-export type WorkflowWindowSessionInput = Omit<WindowSessionInput, 'caller' | 'grants'> & {
-  grants?: ServiceGrant[];
-};
-
-export type WorkflowWorkspaceFileWatchSessionInput = Omit<WorkspaceFileWatchSessionInput, 'caller' | 'grants'> & {
-  grants?: ServiceGrant[];
-};
-
 export type WorkflowEventInput = {
   stream: string;
   type: string;
@@ -111,7 +73,6 @@ export type WorkflowAuditEventInput = {
 export type WorkflowServiceRuntimeDeps = {
   agents?: AgentService;
   tools?: ToolService;
-  sessions?: SessionService;
   resources?: ResourceService;
   events?: EventService;
 };
@@ -131,31 +92,6 @@ export interface WorkflowServiceRuntime {
     signal: JsonValue,
   ): Promise<{ accepted: boolean }>;
   invokeTool<T = unknown>(context: WorkflowServiceContext, input: WorkflowToolInput): Promise<T>;
-  issueTerminalToken(context: WorkflowServiceContext, input: WorkflowTerminalSessionInput): ReturnType<
-    SessionService['issueTerminalToken']
-  >;
-  startLspSession(context: WorkflowServiceContext, input: WorkflowLspSessionInput): ReturnType<
-    SessionService['startLspSession']
-  >;
-  handleJupyter(context: WorkflowServiceContext, input: WorkflowJupyterSessionInput): ReturnType<
-    SessionService['handleJupyter']
-  >;
-  listWindows(context: WorkflowServiceContext, input: WorkflowWindowSessionToolInput): ReturnType<
-    SessionService['listWindows']
-  >;
-  listApplications(context: WorkflowServiceContext, input: WorkflowWindowSessionToolInput): ReturnType<
-    SessionService['listApplications']
-  >;
-  openApplication(context: WorkflowServiceContext, input: WorkflowWindowApplicationOpenInput): ReturnType<
-    SessionService['openApplication']
-  >;
-  issueWindowSessionToken(context: WorkflowServiceContext, input: WorkflowWindowSessionInput): ReturnType<
-    SessionService['issueWindowSessionToken']
-  >;
-  issueWorkspaceFileWatchToken(
-    context: WorkflowServiceContext,
-    input: WorkflowWorkspaceFileWatchSessionInput,
-  ): ReturnType<SessionService['issueWorkspaceFileWatchToken']>;
   putAttachment(context: WorkflowServiceContext, input: AttachmentPayload): Promise<StoredAttachment>;
   getAttachment(context: WorkflowServiceContext, attachmentId: string): Promise<AttachmentReadResult | null>;
   findAttachmentsByThread(context: WorkflowServiceContext, threadId: string): Promise<StoredAttachmentMetadata[]>;
@@ -187,7 +123,6 @@ export class DefaultWorkflowServiceRuntime implements WorkflowServiceRuntime {
   constructor(
     private readonly agents: AgentService = defaultAgentService,
     private readonly tools: ToolService = internalServices.tools,
-    private readonly sessions: SessionService = internalServices.sessions,
     private readonly resources: ResourceService = internalServices.resources,
     private readonly events: EventService = internalServices.events,
   ) {}
@@ -253,47 +188,6 @@ export class DefaultWorkflowServiceRuntime implements WorkflowServiceRuntime {
       timeoutMs: input.timeoutMs,
       grants: this.grants(context, input),
     });
-  }
-
-  issueTerminalToken(context: WorkflowServiceContext, input: WorkflowTerminalSessionInput) {
-    this.requireGrant(context, input, 'session', 'portal.terminal.issue', input.scope);
-    return this.sessions.issueTerminalToken(this.sessionInput(context, input));
-  }
-
-  startLspSession(context: WorkflowServiceContext, input: WorkflowLspSessionInput) {
-    this.requireGrant(context, input, 'session', 'portal.lsp.session', input.scope);
-    return this.sessions.startLspSession(this.sessionInput(context, input));
-  }
-
-  handleJupyter(context: WorkflowServiceContext, input: WorkflowJupyterSessionInput) {
-    const operation = input.action === 'kernelspecs' ? 'portal.jupyter.kernelspecs' : `portal.jupyter.${input.action}`;
-    this.requireGrant(context, input, 'session', operation, input.scope);
-    return this.sessions.handleJupyter(this.sessionInput(context, input));
-  }
-
-  listWindows(context: WorkflowServiceContext, input: WorkflowWindowSessionToolInput) {
-    this.requireGrant(context, input, 'session', 'portal.window.list', input.scope);
-    return this.sessions.listWindows(this.sessionInput(context, input));
-  }
-
-  listApplications(context: WorkflowServiceContext, input: WorkflowWindowSessionToolInput) {
-    this.requireGrant(context, input, 'session', 'portal.applications.list', input.scope);
-    return this.sessions.listApplications(this.sessionInput(context, input));
-  }
-
-  openApplication(context: WorkflowServiceContext, input: WorkflowWindowApplicationOpenInput) {
-    this.requireGrant(context, input, 'session', 'portal.applications.open', input.scope);
-    return this.sessions.openApplication(this.sessionInput(context, input));
-  }
-
-  issueWindowSessionToken(context: WorkflowServiceContext, input: WorkflowWindowSessionInput) {
-    this.requireGrant(context, input, 'session', 'portal.window.session', input.scope);
-    return this.sessions.issueWindowSessionToken(this.sessionInput(context, input));
-  }
-
-  issueWorkspaceFileWatchToken(context: WorkflowServiceContext, input: WorkflowWorkspaceFileWatchSessionInput) {
-    this.requireGrant(context, input, 'session', 'portal.fs.watch', input.scope);
-    return this.sessions.issueWorkspaceFileWatchToken(this.sessionInput(context, input));
   }
 
   putAttachment(context: WorkflowServiceContext, input: AttachmentPayload) {
@@ -387,17 +281,6 @@ export class DefaultWorkflowServiceRuntime implements WorkflowServiceRuntime {
     };
   }
 
-  private sessionInput<T extends { grants?: ServiceGrant[] }>(
-    context: WorkflowServiceContext,
-    input: T,
-  ): T & { caller: ServiceCaller; grants: ServiceGrant[] } {
-    return {
-      ...input,
-      caller: this.caller(context),
-      grants: this.grants(context, input),
-    };
-  }
-
   private requireGrant(
     context: WorkflowServiceContext,
     input: { grants?: ServiceGrant[] } | undefined,
@@ -417,7 +300,6 @@ export const createWorkflowServiceRuntime = (deps: WorkflowServiceRuntimeDeps = 
   new DefaultWorkflowServiceRuntime(
     deps.agents,
     deps.tools,
-    deps.sessions,
     deps.resources,
     deps.events,
   );

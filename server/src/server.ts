@@ -1,11 +1,10 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { createOwnerAuthMiddleware, loadOwnerAuthConfig } from './owner/auth';
+import { loadOwnerAuthConfig } from './owner/auth';
 import { agentCore, mastra } from './agent';
 import { portalCore } from './portal';
-import { registerServerModules } from './modules/types';
 import { serverModules } from './modules';
-import { registerCompatibilityRoutes } from './server/compatibility-routes';
+import { registerServerRpcModules } from './modules/types.ts';
 import type { ServerVariables } from './server/types';
 import { startServerPerfSampler } from './server/perf';
 import { internalServices } from './services';
@@ -15,6 +14,13 @@ import { getContextBudgetPercentages } from './agent/context-budget';
 import { assertCredentialEncryptionConfigured } from './agent/credentials/chatgpt-credential-repository';
 import { isAllowedCorsOrigin } from './server/cors-origin';
 import { agentRunRepository } from './agent/run-repository';
+import {
+  createInternalModuleApi,
+  createRpcUpgradeHandler,
+  registerCoreRpcMethods,
+  rpcGatewayStats,
+  RpcRouter,
+} from './rpc/index.ts';
 
 requireWeaveDatabaseUrl();
 getContextBudgetPercentages();
@@ -31,6 +37,27 @@ const configuredCorsOrigins = new Set(
 );
 
 const app = new Hono<{ Variables: ServerVariables }>();
+const rpcRouter = new RpcRouter();
+const requestModule = createInternalModuleApi({
+  auth,
+  mastra,
+  agent: agentCore,
+  portal: portalCore,
+  internal: internalServices,
+  modules: serverModules,
+});
+registerCoreRpcMethods(rpcRouter, {
+  agent: agentCore,
+  portal: portalCore,
+  internal: internalServices,
+});
+registerServerRpcModules(rpcRouter, {
+  auth,
+  agent: agentCore,
+  portal: portalCore,
+  internal: internalServices,
+  requestModule,
+}, serverModules);
 
 app.use(
   '*',
@@ -40,17 +67,9 @@ app.use(
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   }),
 );
-app.get('/health', (c) => c.json({ ok: true }));
-app.use('*', createOwnerAuthMiddleware({ auth, mastra }));
-
-agentCore.registerRoutes(app);
-portalCore.registerRoutes(app, { mastra, sessions: internalServices.sessions });
-registerServerModules(app, { auth, agent: agentCore, portal: portalCore, internal: internalServices }, serverModules);
-registerCompatibilityRoutes(app, {
-  agent: agentCore.service,
-  resources: internalServices.resources,
-  sessions: internalServices.sessions,
-});
+app.get('/health', (c) => c.json({ ok: true, rpc: rpcGatewayStats() }));
+app.get('/rpc', createRpcUpgradeHandler({ auth, router: rpcRouter, configuredOrigins: configuredCorsOrigins }));
+app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
 startServerPerfSampler({
   sample: () => ({ chat: agentCore.service.getChatPerfSnapshot() }),

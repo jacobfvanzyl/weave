@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dispatchNotificationEvent, clearNotificationCoordinatorForTests } from '../../packages/client/src/lib/notifications/coordinator';
 import { createDesktopNotificationAdapter } from '../../packages/client/src/lib/notifications/adapters/desktop';
 import { clearNativeNotificationAdapterForTests, setNativeNotificationAdapter } from '../../packages/client/src/lib/notifications/registry';
-import { connectServerNotificationStream, parseNotificationSseChunk } from '../../packages/client/src/lib/notifications/server-stream';
 import { sendTestNotification } from '../../packages/client/src/lib/notifications/test-notification';
 import { parseWeaveNotificationEvent, type NativeNotificationAdapter, type WeaveNotificationEvent } from '../../packages/client/src/lib/notifications/types';
 import { useNotificationSettingsStore } from '../../packages/client/src/stores/notification-store';
@@ -169,41 +168,6 @@ describe('notification coordinator', () => {
   });
 });
 
-describe('server notification stream', () => {
-  it('parses SSE notification chunks', () => {
-    expect(parseNotificationSseChunk('id: 7\nevent: notification\ndata: {"ok":true}\n\n')).toEqual([
-      { id: '7', event: 'notification', data: '{"ok":true}' },
-    ]);
-  });
-
-  it('reconnects with the last seen sequence id', async () => {
-    const delivered = vi.fn();
-    const encoder = new TextEncoder();
-    const fetchCalls: string[] = [];
-    let fetchCount = 0;
-
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      fetchCalls.push(String(input));
-      fetchCount += 1;
-      const payload = fetchCount === 1
-        ? `id: 7\nevent: notification\ndata: ${JSON.stringify({ ...event, source: 'server' })}\n\n`
-        : ': connected\n\n';
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(encoder.encode(payload));
-          controller.close();
-        },
-      }), { status: 200 });
-    }));
-
-    const stop = connectServerNotificationStream({ onEvent: delivered, retryMs: 1 });
-    await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(fetchCalls.some(call => call.includes('after=7'))).toBe(true));
-    stop();
-
-    expect(delivered).toHaveBeenCalledWith(expect.objectContaining({ id: 'notification-1', source: 'server' }));
-  });
-});
 
 describe('desktop notification adapter', () => {
   it('proxies delivery and actions through the Electron bridge', async () => {

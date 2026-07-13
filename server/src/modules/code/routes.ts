@@ -3,9 +3,8 @@ import { registerAgentContribution } from '../../agent/contributions';
 import { contributionDescription } from '../../instructions/contribution-instructions';
 import { toolDescription } from '../../instructions/tool-instructions';
 import type { ServerModule } from '../types';
-import { createLspRoutes } from './routes/lsp';
 import { projectRoutes } from './routes/projects';
-import { createTerminalRoutes } from './routes/terminals';
+import { registerCodeRpcMethods } from './rpc.ts';
 
 registerAgentContribution({
   moduleId: 'code',
@@ -41,9 +40,8 @@ registerAgentContribution({
 
 export const codeModule: ServerModule = {
   id: 'code',
-  registerRoutes: (app, services) => {
+  registerInternalRoutes: (app) => {
     for (const route of projectRoutes) mountRoute(app, route);
-    for (const route of createLspRoutes({ sessions: services.internal.sessions })) mountRoute(app, route);
-    for (const route of createTerminalRoutes({ sessions: services.internal.sessions })) mountRoute(app, route);
   },
+  registerRpc: registerCodeRpcMethods,
 };

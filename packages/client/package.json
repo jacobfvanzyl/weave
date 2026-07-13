@@ -26,6 +26,7 @@
     "@blocksuite/presets": "0.19.5",
     "@blocksuite/store": "0.19.5",
     "@toeverything/theme": "1.1.23",
+    "@weave/protocol": "file:../protocol",
     "@criblinc/docker-names": "^1.2.2",
     "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/commands": "^6.10.0",

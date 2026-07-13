@@ -12,6 +12,8 @@ const webRoot = fileURLToPath(new URL('.', import.meta.url));
 const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
 const clientSrc = fileURLToPath(new URL('../packages/client/src', import.meta.url));
 const clientRoot = fileURLToPath(new URL('../packages/client', import.meta.url));
+const protocolSrc = fileURLToPath(new URL('../packages/protocol/src', import.meta.url));
+const protocolRoot = fileURLToPath(new URL('../packages/protocol', import.meta.url));
 const sharedClientDependencyResolver = (): Plugin => ({
   name: 'weave-client-dependency-resolver',
   enforce: 'pre',
@@ -35,6 +37,7 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@weave/client': clientSrc,
+        '@weave/protocol': protocolSrc,
         '~': clientSrc,
         '@': webSrc,
       },
@@ -42,7 +45,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       fs: {
-        allow: [webRoot, clientRoot],
+        allow: [webRoot, clientRoot, protocolRoot],
       },
     },
   };

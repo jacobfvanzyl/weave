@@ -1,6 +1,6 @@
 import { Preferences } from '@capacitor/preferences';
 import type { ConnectionAdapter, ConnectionInput, ConnectionSettings, ConnectionTestResult } from './connection-types';
-import { weaveRoutePaths } from './weave-routes';
+import { testRpcConnection } from './mastra-client';
 
 type PersistedMobileConnectionSettings = {
   mastraUrl?: string;
@@ -9,7 +9,6 @@ type PersistedMobileConnectionSettings = {
 
 const MOBILE_CONNECTION_STORAGE_KEY = 'weave.connection.v1';
 const DEFAULT_MASTRA_URL = 'http://localhost:4111';
-const CONNECTION_TEST_TIMEOUT_MS = 5_000;
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | boolean | undefined> }).env ?? {};
 const processEnv = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } })
   .process?.env ?? {};
@@ -97,16 +96,6 @@ const writePersistedSettings = async (settings: PersistedMobileConnectionSetting
   await Preferences.set({ key: MOBILE_CONNECTION_STORAGE_KEY, value: JSON.stringify(settings) });
 };
 
-const createTimeoutSignal = () => {
-  const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), CONNECTION_TEST_TIMEOUT_MS);
-
-  return {
-    signal: controller.signal,
-    clear: () => globalThis.clearTimeout(timeoutId),
-  };
-};
-
 const getSettings = async (): Promise<ConnectionSettings> => {
   const persisted = await readPersistedSettings();
   return {
@@ -135,33 +124,15 @@ const testConnection = async (input?: ConnectionInput): Promise<ConnectionTestRe
     const savedSettings = await getSettings();
     const mastraUrl = normalizeMastraUrl(input?.mastraUrl ?? savedSettings.mastraUrl);
     const authToken = Object.hasOwn(input ?? {}, 'authToken') ? trimToken(input?.authToken) : getAuthToken();
-    const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-    const timeout = createTimeoutSignal();
-    let response: Response;
-
-    try {
-      response = await fetch(`${mastraUrl}${weaveRoutePaths.owner.me()}`, { headers, signal: timeout.signal });
-    } finally {
-      timeout.clear();
-    }
-
-    if (!response.ok) {
-      const error = (await response.text()).trim();
-      return { ok: false, status: response.status, error: error || `HTTP ${response.status}` };
-    }
-
-    const data = await response.json() as { owner?: { id?: unknown; name?: unknown }; user?: { id?: unknown; name?: unknown } };
-    const user = data.owner ?? data.user;
+    if (!authToken) return { ok: false, error: 'Authentication token is required.' };
+    const data = await testRpcConnection(mastraUrl, authToken);
+    const user = data.owner;
     if (typeof user?.id !== 'string' || typeof user.name !== 'string') {
       return { ok: false, error: 'Connection response did not include a valid owner.' };
     }
 
     return { ok: true, user: { id: user.id, name: user.name } };
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      return { ok: false, error: 'Connection timed out.' };
-    }
-
     return { ok: false, error: error instanceof Error ? error.message : 'Connection failed.' };
   }
 };

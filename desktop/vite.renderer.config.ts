@@ -16,6 +16,8 @@ const clientSrc = fileURLToPath(
 const clientRoot = fileURLToPath(
   new URL("../packages/client", import.meta.url),
 );
+const protocolSrc = fileURLToPath(new URL('../packages/protocol/src', import.meta.url));
+const protocolRoot = fileURLToPath(new URL('../packages/protocol', import.meta.url));
 const sharedClientDependencyResolver = (): Plugin => ({
   name: "weave-client-dependency-resolver",
   enforce: "pre",
@@ -50,13 +52,14 @@ export default defineConfig(({ mode }) => {
       alias: {
         "#": desktopSrc,
         "@weave/client": clientSrc,
+        "@weave/protocol": protocolSrc,
         "~": clientSrc,
       },
       dedupe: ["react", "react-dom"],
     },
     server: {
       fs: {
-        allow: [desktopRoot, clientRoot],
+        allow: [desktopRoot, clientRoot, protocolRoot],
       },
     },
   };

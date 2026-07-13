@@ -1,5 +1,5 @@
 import type { ConnectionAdapter, ConnectionInput, ConnectionSettings, ConnectionTestResult } from './connection-types';
-import { weaveRoutePaths } from './weave-routes';
+import { testRpcConnection } from './mastra-client';
 
 type PersistedWebConnectionSettings = {
   mastraUrl?: string;
@@ -108,16 +108,9 @@ const testConnection = async (input?: ConnectionInput): Promise<ConnectionTestRe
     const savedSettings = getSettings();
     const mastraUrl = normalizeMastraUrl(input?.mastraUrl ?? savedSettings.mastraUrl);
     const authToken = Object.hasOwn(input ?? {}, 'authToken') ? trimToken(input?.authToken) : getAuthToken();
-    const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-    const response = await fetch(`${mastraUrl}${weaveRoutePaths.owner.me()}`, { headers });
-
-    if (!response.ok) {
-      const error = (await response.text()).trim();
-      return { ok: false, status: response.status, error: error || `HTTP ${response.status}` };
-    }
-
-    const data = await response.json() as { owner?: { id?: unknown; name?: unknown }; user?: { id?: unknown; name?: unknown } };
-    const user = data.owner ?? data.user;
+    if (!authToken) return { ok: false, error: 'Authentication token is required.' };
+    const data = await testRpcConnection(mastraUrl, authToken);
+    const user = data.owner;
     if (typeof user?.id !== 'string' || typeof user.name !== 'string') {
       return { ok: false, error: 'Connection response did not include a valid owner.' };
     }

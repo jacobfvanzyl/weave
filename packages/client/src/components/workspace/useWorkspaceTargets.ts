@@ -118,8 +118,6 @@ export const useWorkspaceTargets = ({
   const notesTarget = activeNotesWorkspaceTarget && isNotesTargetAvailable(activeProject, hasOnlinePortalForActiveWorkspace)
     ? activeNotesWorkspaceTarget
     : undefined;
-  const hasWindowStreamPortal = onlinePortals.some(portal => portal.capabilities.includes('portal.window.session'));
-
   return {
     activeGitWorkspaceTarget,
     activeNotesWorkspaceTarget,
@@ -135,7 +133,6 @@ export const useWorkspaceTargets = ({
     hasChatPaneTarget,
     hasOnlinePortalForActiveWorkspace,
     hasThreadTitle,
-    hasWindowStreamPortal,
     notesTarget,
     onlinePortalIds,
     onlinePortals,

@@ -117,7 +117,7 @@ import {
   type CoppermindJupyterEvent,
   type CoppermindJupyterSessionResult,
   createCoppermindJupyterSession,
-  createCoppermindJupyterSocket,
+  createCoppermindJupyterRpcSession,
 } from "../../lib/coppermind-jupyter";
 import {
   CoppermindInkCellBlockSpec,
@@ -322,12 +322,12 @@ type LoadedCoppermindState =
     runtime: CoppermindBlockSuiteRuntime;
   };
 
-type CoppermindJupyterSocket = ReturnType<typeof createCoppermindJupyterSocket>;
+type CoppermindJupyterRpcSession = ReturnType<typeof createCoppermindJupyterRpcSession>;
 
 type CoppermindJupyterConnection = {
   path: string;
   session: CoppermindJupyterSessionResult;
-  socket: CoppermindJupyterSocket;
+  socket: CoppermindJupyterRpcSession;
   targetKey: string;
 };
 
@@ -2625,7 +2625,7 @@ export const CoppermindDocumentEditor = forwardRef<
     undefined
   );
   const jupyterConnectionPromiseRef = useRef<
-    Promise<CoppermindJupyterSocket> | undefined
+    Promise<CoppermindJupyterRpcSession> | undefined
   >(undefined);
   const pendingCodeExecutionsRef = useRef(
     new Map<string, CoppermindPendingCodeExecution>(),
@@ -3080,7 +3080,7 @@ export const CoppermindDocumentEditor = forwardRef<
           "Jupyter is not available in the connected Portal environment.",
         );
       }
-      const socket = createCoppermindJupyterSocket(
+      const socket = createCoppermindJupyterRpcSession(
         session,
         handleCoppermindJupyterEvent,
       );

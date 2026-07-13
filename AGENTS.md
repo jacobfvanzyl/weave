@@ -45,7 +45,7 @@ run on the Mac. Deploy server changes headlessly from the repository root:
 deno task server:deploy
 ```
 
-This typechecks the server, snapshots `HEAD` plus the current `server/` working tree through a temporary Git index,
+This typechecks the server, snapshots `HEAD` plus the current `server/` and `packages/protocol/` working trees through a temporary Git index,
 force-with-lease pushes `deploy/pi-dev`, triggers the Dokploy Compose API, follows the deployment, and verifies the
 Tailscale health endpoints. It must not stage files, switch the current branch, or create a commit on the working branch.
 Keep Dokploy Auto Deploy disabled so one edit produces one intentional deployment.

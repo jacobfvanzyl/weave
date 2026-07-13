@@ -26,8 +26,6 @@
     "portal:login": "deno task portal:login",
     "portal:dev": "deno task portal:dev",
     "portal:build": "deno task portal:build",
-    "portal:window-stream-native:smoke": "deno task portal:window-stream-native:smoke",
-    "portal:window-stream-native:benchmark": "deno task portal:window-stream-native:benchmark",
     "portal:start": "deno task portal:start",
     "portal:status": "deno task portal:status",
     "portal:stop": "deno task portal:stop",

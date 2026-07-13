@@ -6,15 +6,12 @@ import {
   type ResolvedPortalConfig,
   resolveWorkspacePath,
 } from './main.ts';
-import { resolveWindowStreamConfig } from './window.ts';
 
 const portalConfig: ResolvedPortalConfig = {
   portalId: 'portal_test',
   portalToken: 'token',
-  httpServerUrl: 'http://localhost:4111',
-  wsServerUrl: 'ws://localhost:4112',
+  serverUrl: 'http://localhost:4111',
   name: 'Test Portal',
-  windowStream: resolveWindowStreamConfig(),
   mounts: [],
   roots: [],
 };

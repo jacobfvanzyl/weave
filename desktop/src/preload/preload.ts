@@ -12,25 +12,6 @@ import type {
   NativeNotificationShowResult,
   WeaveNotificationEvent,
 } from '@weave/client/lib/notifications/types';
-import type {
-  WorkspaceFileFile,
-  WorkspaceFileDiffPreviewResult,
-  WorkspaceFileHashResult,
-  WorkspaceFileIndexResult,
-  WorkspaceFileListResult,
-  WorkspaceFileOperationResult,
-  WorkspaceFileTarget,
-  WorkspaceFileWatchEventEnvelope,
-  WorkspaceFileWatchStartResult,
-  WorkspaceFileWriteResult,
-} from '../shared/workspace-file';
-import type {
-  TerminalHostEvent,
-  TerminalStartInput,
-  TerminalStartResult,
-  TerminalTargetInput,
-  TerminalWindowRecord,
-} from '../shared/terminal';
 
 type IpcErrorResult = {
   __weaveIpcError: true;
@@ -56,6 +37,40 @@ const bridge: WeaveDesktopBridge = {
     ipcRenderer.invoke('connection:save-settings', input) as Promise<DesktopConnectionSettings>,
   testConnection: (input?: DesktopConnectionInput) =>
     ipcRenderer.invoke('connection:test', input) as Promise<DesktopConnectionTestResult>,
+  rpcRequest: <T = unknown>(method: string, params?: unknown, options?: {
+    timeoutMs?: number;
+    requestId?: string;
+  }) => ipcRenderer.invoke(
+    'rpc:request',
+    options?.requestId ?? `renderer_${crypto.randomUUID()}`,
+    method,
+    params,
+    { ...(options?.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) },
+  ) as Promise<T>,
+  cancelRpcRequest: requestId => ipcRenderer.send('rpc:request-cancel', requestId),
+  rpcNotify: (method: string, params?: unknown) =>
+    ipcRenderer.invoke('rpc:notify', method, params) as Promise<void>,
+  onRpcConnectionState: listener => {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed') => listener(state);
+    ipcRenderer.on('rpc:connection-state', wrapped);
+    return () => ipcRenderer.removeListener('rpc:connection-state', wrapped);
+  },
+  onRpcNotification: listener => {
+    const wrapped = (_event: Electron.IpcRendererEvent, notification: { method: string; params: unknown }) =>
+      listener(notification.method, notification.params);
+    ipcRenderer.on('rpc:notification', wrapped);
+    return () => ipcRenderer.removeListener('rpc:notification', wrapped);
+  },
+  onRpcReverseRequest: listener => {
+    const wrapped = (
+      _event: Electron.IpcRendererEvent,
+      request: { requestId: string; method: string; params: unknown },
+    ) => listener(request.requestId, request.method, request.params);
+    ipcRenderer.on('rpc:reverse-request', wrapped);
+    return () => ipcRenderer.removeListener('rpc:reverse-request', wrapped);
+  },
+  respondRpcReverseRequest: (requestId, result, error) =>
+    ipcRenderer.invoke('rpc:reverse-response', requestId, result, error) as Promise<void>,
   getPortalStatus: () => ipcRenderer.invoke('portal:get-status') as Promise<DesktopPortalStatus>,
   retryPortal: () => unwrapIpcResult<DesktopPortalStatus>(ipcRenderer.invoke('portal:retry')),
   onPortalStatus: listener => {
@@ -67,65 +82,6 @@ const bridge: WeaveDesktopBridge = {
   connectChatGPT: () =>
     unwrapIpcResult<DesktopChatGPTAuthStatus>(ipcRenderer.invoke('chatgpt:connect')),
   getPlatform: () => process.platform,
-  terminalSnapshot: () =>
-    ipcRenderer.invoke('terminal:snapshot') as Promise<TerminalWindowRecord[]>,
-  terminalList: (input: TerminalTargetInput) =>
-    ipcRenderer.invoke('terminal:list', input) as Promise<TerminalWindowRecord[]>,
-  terminalCreate: (input: TerminalTargetInput) =>
-    ipcRenderer.invoke('terminal:create', input) as Promise<TerminalWindowRecord>,
-  terminalStart: (input: TerminalStartInput) =>
-    ipcRenderer.invoke('terminal:start', input) as Promise<TerminalStartResult>,
-  terminalInput: (terminalId: string, data: string) =>
-    ipcRenderer.invoke('terminal:input', terminalId, data) as Promise<void>,
-  terminalResize: (terminalId: string, cols: number, rows: number) =>
-    ipcRenderer.invoke('terminal:resize', terminalId, cols, rows) as Promise<void>,
-  terminalClose: (terminalId: string, input?: TerminalTargetInput) =>
-    ipcRenderer.invoke('terminal:close', terminalId, input) as Promise<void>,
-  terminalDetach: (terminalId: string) => ipcRenderer.invoke('terminal:detach', terminalId) as Promise<void>,
-  onTerminalEvent: listener => {
-    const wrappedListener = (_event: Electron.IpcRendererEvent, terminalEvent: TerminalHostEvent) => {
-      listener(terminalEvent);
-    };
-    ipcRenderer.on('terminal:event', wrappedListener);
-    return () => ipcRenderer.removeListener('terminal:event', wrappedListener);
-  },
-  workspaceFileList: (target: WorkspaceFileTarget, path?: string) =>
-    unwrapIpcResult<WorkspaceFileListResult>(ipcRenderer.invoke('workspace-file:list', { target, path })),
-  workspaceFileRead: (target: WorkspaceFileTarget, path: string) =>
-    unwrapIpcResult<WorkspaceFileFile>(ipcRenderer.invoke('workspace-file:read', { target, path })),
-  workspaceFileHash: (target: WorkspaceFileTarget, path: string) =>
-    unwrapIpcResult<WorkspaceFileHashResult>(ipcRenderer.invoke('workspace-file:hash', { target, path })),
-  workspaceFileDiffPreview: (target: WorkspaceFileTarget, path: string, diff: string) =>
-    unwrapIpcResult<WorkspaceFileDiffPreviewResult>(ipcRenderer.invoke('workspace-file:diff-preview', { target, path, diff })),
-  workspaceFileWrite: (target: WorkspaceFileTarget, path: string, content: string, version?: string) =>
-    unwrapIpcResult<WorkspaceFileWriteResult>(ipcRenderer.invoke('workspace-file:write', { target, path, content, version })),
-  workspaceFileMkdir: (target: WorkspaceFileTarget, path: string) =>
-    unwrapIpcResult<WorkspaceFileOperationResult>(ipcRenderer.invoke('workspace-file:mkdir', { target, path })),
-  workspaceFileMove: (target: WorkspaceFileTarget, fromPath: string, toPath: string, overwrite?: boolean) =>
-    unwrapIpcResult<WorkspaceFileOperationResult>(ipcRenderer.invoke('workspace-file:move', { target, fromPath, toPath, overwrite })),
-  workspaceFileDelete: (target: WorkspaceFileTarget, path: string, recursive?: boolean) =>
-    unwrapIpcResult<WorkspaceFileOperationResult>(ipcRenderer.invoke('workspace-file:delete', { target, path, recursive })),
-  workspaceFileIndex: (target: WorkspaceFileTarget, path?: string) =>
-    unwrapIpcResult<WorkspaceFileIndexResult>(ipcRenderer.invoke('workspace-file:index', { target, path })),
-  workspaceFileUpload: (target: WorkspaceFileTarget, path: string, base64Content: string, contentType?: string) =>
-    unwrapIpcResult<WorkspaceFileOperationResult>(
-      ipcRenderer.invoke('workspace-file:upload', { target, path, base64Content, contentType }),
-    ),
-  workspaceFileWatchStart: (target: WorkspaceFileTarget, paths: string[]) =>
-    ipcRenderer.invoke('workspace-file:watch-start', { target, paths }) as Promise<WorkspaceFileWatchStartResult>,
-  workspaceFileWatchUpdate: (subscriptionId: string, paths: string[]) =>
-    ipcRenderer.invoke('workspace-file:watch-update', { subscriptionId, paths }) as Promise<WorkspaceFileWatchStartResult>,
-  workspaceFileWatchStop: (subscriptionId: string) =>
-    ipcRenderer.invoke('workspace-file:watch-stop', { subscriptionId }) as Promise<void>,
-  onWorkspaceFileWatchEvent: listener => {
-    const wrappedListener = (_event: Electron.IpcRendererEvent, watchEvent: WorkspaceFileWatchEventEnvelope) => {
-      listener(watchEvent);
-    };
-    ipcRenderer.on('workspace-file:watch-event', wrappedListener);
-    return () => ipcRenderer.removeListener('workspace-file:watch-event', wrappedListener);
-  },
-  lspCreateSession: (target: WorkspaceFileTarget, path: string, languageId?: string, serverId?: string) =>
-    ipcRenderer.invoke('lsp:create-session', { target, path, languageId, serverId }),
   nativeNotificationsGetPermissionState: () =>
     ipcRenderer.invoke('native-notifications:get-permission-state'),
   nativeNotificationsRequestPermission: () =>

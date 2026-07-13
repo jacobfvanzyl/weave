@@ -29,7 +29,6 @@ const observeDeniedTools = new Set([
   'portal.git.worktree.branch-cleanup',
   'portal.git.fetch',
   'portal.git.pull',
-  'portal.applications.open',
 ]);
 
 export const normalizeExecutionProfile = (value: unknown): ExecutionProfile =>

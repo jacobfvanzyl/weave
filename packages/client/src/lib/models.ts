@@ -1,5 +1,4 @@
-import { getAuthHeaders } from './mastra-client';
-import { weaveRoutes } from './weave-routes';
+import { rpcRequest } from './mastra-client';
 
 export type ModelOption = {
   id: string;
@@ -28,9 +27,7 @@ export type ModelConfig = {
 };
 
 export const fetchModelConfig = async (): Promise<ModelConfig> => {
-  const response = await fetch(weaveRoutes.agent.models(), { headers: getAuthHeaders() });
-  if (!response.ok) throw new Error(`models failed: ${response.status}`);
-  return await response.json() as ModelConfig;
+  return await rpcRequest<ModelConfig>('agent.models.list');
 };
 
 export const resolveModelInput = (input: string, options: ModelOption[]) => {

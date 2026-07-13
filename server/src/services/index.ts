@@ -3,13 +3,11 @@ import { type EventService, eventService } from './event-service';
 import { PortalProvider } from './providers/portal-provider';
 import { StubProvider } from './providers/stub-providers';
 import { type ResourceService, resourceService } from './resource-service';
-import { DefaultSessionService, type SessionService } from './session-service';
 import { DefaultToolService, type ToolService } from './tool-service';
 
 export type InternalServices = {
   bindings: ServiceBindingRepository;
   tools: ToolService;
-  sessions: SessionService;
   resources: ResourceService;
   events: EventService;
   providers: {
@@ -29,12 +27,10 @@ export const createInternalServices = (): InternalServices => {
     external: new StubProvider('external'),
   };
   const tools = new DefaultToolService(bindings, providers);
-  const sessions = new DefaultSessionService(tools);
   return {
     bindings,
     providers,
     tools,
-    sessions,
     resources: resourceService,
     events: eventService,
   };
@@ -44,7 +40,6 @@ export const internalServices = createInternalServices();
 
 export type { EventService } from './event-service';
 export type { ResourceService } from './resource-service';
-export type { SessionService } from './session-service';
 export type { ToolService } from './tool-service';
 export type {
   ServiceBinding,
