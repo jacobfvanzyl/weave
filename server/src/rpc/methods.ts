@@ -7,8 +7,8 @@ import type { AgentCore } from "../agent/index.ts";
 import type { InternalServices } from "../services/index.ts";
 import type { PortalCore } from "../portal/types.ts";
 import type { RpcRouter, RpcSession } from "./router.ts";
-import { RpcApplicationError } from "../../../packages/protocol/src/peer.ts";
-import { rpcErrorCode } from "../../../packages/protocol/src/schema.ts";
+import { RpcApplicationError } from "@weave/protocol/peer";
+import { rpcErrorCode } from "@weave/protocol";
 import {
   getString,
   getSubmittedUserMessages,
@@ -24,7 +24,7 @@ import {
   type BinaryTransferDescriptor,
   WEAVE_RPC_BINARY_CHUNK_BYTES,
   WEAVE_RPC_BINARY_WINDOW_SIZE,
-} from "../../../packages/protocol/src/schema.ts";
+} from "@weave/protocol";
 import {
   workflowControlService,
   workflowDefinitionResponse,
@@ -70,6 +70,8 @@ import {
 } from "./handlers.ts";
 const safeSequence = (value: unknown) =>
   Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const artifactSummary = (record: UserArtifactRecord) => ({
   kind: record.kind,
@@ -440,6 +442,15 @@ export const registerCoreRpcMethods = (
     (params, { session }) =>
       guarded(async () => {
         const body = { ...recordParams(params) };
+        const requestId = optionalString(body.requestId);
+        if (requestId && !uuidPattern.test(requestId)) {
+          throw new RpcApplicationError(
+            rpcErrorCode.invalidParams,
+            "requestId must be a UUID.",
+            { code: "INVALID_PARAMS" },
+          );
+        }
+        delete body.requestId;
         const memory = recordParams(body.memory);
         const threadId = optionalString(memory.thread);
         body.messages = sanitizeSubmittedMessagesForMastra(
@@ -464,7 +475,8 @@ export const registerCoreRpcMethods = (
             session.ownerContext.owner.id,
             threadId,
           ) &&
-          current?.status !== "awaiting_approval"
+          current?.status !== "awaiting_approval" &&
+          current?.runId !== requestId
         ) {
           throw new RpcApplicationError(
             rpcErrorCode.conflict,
@@ -475,6 +487,7 @@ export const registerCoreRpcMethods = (
         const started = await services.agent.service.startChatRun({
           resourceId: session.ownerContext.owner.id,
           threadId,
+          requestId,
           params: body,
           requestContext: session.ownerContext.requestContext,
           submittedUserMessages: getSubmittedUserMessages(body.messages),
@@ -489,18 +502,17 @@ export const registerCoreRpcMethods = (
     "client",
     (params, { session }) =>
       guarded(async () => {
-        const threadId = requiredString(
-          recordParams(params).threadId,
-          "threadId",
-        );
-        const run = services.agent.service.getChatRun(
-          session.ownerContext.owner.id,
-          threadId,
-        );
+        const body = recordParams(params);
+        const threadId = requiredString(body.threadId, "threadId");
+        const runId = optionalString(body.runId);
+        const run = runId
+          ? await services.agent.service.getChatRunById(session.ownerContext.owner.id, threadId, runId)
+          : services.agent.service.getChatRun(session.ownerContext.owner.id, threadId);
         const persisted = run.status === "idle"
           ? await services.agent.service.getPersistedChatRun(
             session.ownerContext.owner.id,
             threadId,
+            runId,
           )
           : undefined;
         return { run, persisted };
@@ -514,12 +526,14 @@ export const registerCoreRpcMethods = (
       guarded(async () => {
         const body = recordParams(params);
         const threadId = requiredString(body.threadId, "threadId");
+        const runId = optionalString(body.runId);
         const afterSequence = safeSequence(body.afterSequence);
         if (afterSequence > 0) recordRpcReplayRequest();
         const stream = await services.agent.service.replaySequencedChatRun(
           session.ownerContext.owner.id,
           threadId,
           afterSequence,
+          runId,
         );
         if (!stream) {
           return { subscriptionId: null, active: false, afterSequence };
@@ -546,6 +560,7 @@ export const registerCoreRpcMethods = (
               session.peer.notify("chat.run.event", {
                 subscriptionId,
                 threadId,
+                ...(runId ? { runId } : {}),
                 sequence: value.sequence,
                 event: value.chunk,
               }, 1);
@@ -554,6 +569,7 @@ export const registerCoreRpcMethods = (
             session.peer.notify("chat.run.event", {
               subscriptionId,
               threadId,
+              ...(runId ? { runId } : {}),
               sequence: lastSequence,
               done: true,
             }, 1);
@@ -562,6 +578,7 @@ export const registerCoreRpcMethods = (
               session.peer.notify("chat.run.event", {
                 subscriptionId,
                 threadId,
+                ...(runId ? { runId } : {}),
                 sequence: lastSequence,
                 error: error instanceof Error ? error.message : String(error),
               }, 1);

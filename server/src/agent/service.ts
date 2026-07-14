@@ -1,6 +1,7 @@
 import { handleChatStream, toAISdkStream } from '@mastra/ai-sdk';
 import type { AgentMessageInput, MastraDBMessage } from '@mastra/core/agent';
 import type { Mastra } from '@mastra/core/mastra';
+import type { ThreadCompactionEventData } from '@weave/protocol';
 import { listAgentContributions } from './contributions';
 import { type ModelContextBudget, putModelContextBudget, resolveModelContextBudget } from './context-budget';
 import { getThreadContextUsageSnapshot } from './mastra/context-usage';
@@ -39,14 +40,20 @@ import { callerForOwner, type JsonValue, type ServiceCaller, ServiceError } from
 import { toolService } from '../services/tool-runtime';
 import { getWeaveDb } from '../storage/postgres';
 import {
-  batchCompactionMessages,
+  batchCompactionTranscripts,
   buildCompactionPrompt,
+  collectCompactionAttachments,
   compactionSourceFingerprint,
   estimateMessageTokens,
+  normalizeCheckpoint,
+  projectCompaction,
   putThreadCompactionContext,
+  putThreadCompactionStepRuntime,
+  redactCompactionText,
   selectCompactionCut,
-  serializeCompactionMessages,
+  structuredCheckpointV2OutputSchema,
   validateCompactionSummary,
+  validateStructuredCheckpoint,
 } from './thread-compaction';
 import {
   type ThreadCompactionRecord,
@@ -56,8 +63,7 @@ import {
 } from './thread-compaction-repository';
 import { chatGPTCodexAuthService } from './mastra/providers/chatgpt-codex-auth';
 
-export const hashChatSystemPrompt = (system: unknown) =>
-  hashText(JSON.stringify(system ?? null));
+export const hashChatSystemPrompt = (system: unknown) => hashText(JSON.stringify(system ?? null));
 
 export {
   contextUsageRecallOptions,
@@ -125,6 +131,7 @@ export type PromptContextInput = Omit<AgentContextInput, 'mastra' | 'resourceId'
 export type StartChatRunRequest = {
   resourceId: string;
   threadId?: string;
+  requestId?: string;
   params: Record<string, unknown>;
   requestContext: unknown;
   submittedUserMessages?: unknown[];
@@ -231,11 +238,18 @@ export type CompactChatThreadRequest = ChatThreadMessagesRequest & {
   instructions?: string;
   trigger?: ThreadCompactionTrigger;
   abortSignal?: AbortSignal;
+  fixedTokens?: number;
+  pendingTokens?: number;
+  activeRunId?: string;
+  origin?: 'pre_run' | 'mid_run' | 'manual';
+  onEvent?: (event: { type: 'data-thread-compaction'; data: ThreadCompactionEventData }) => void;
 };
 
 export type CompactChatThreadResult = {
-  status: 'completed' | 'not_needed';
+  status: 'completed' | 'not_needed' | 'rejected';
   checkpoint?: ThreadCompactionRecord;
+  attempt?: ThreadCompactionRecord;
+  reason?: string;
   budget: ModelContextBudget;
 };
 
@@ -283,10 +297,12 @@ export interface AgentService {
     resourceId: string,
     threadId: string,
     afterSequence?: number,
+    runId?: string,
   ): Promise<ReadableStream<{ sequence: number; chunk: unknown }> | undefined>;
-  getPersistedChatRun(resourceId: string, threadId: string): Promise<AgentRunRecordV1 | undefined>;
+  getPersistedChatRun(resourceId: string, threadId: string, runId?: string): Promise<AgentRunRecordV1 | undefined>;
   respondToToolApproval(input: RespondToToolApprovalRequest): Promise<StartChatRunResult>;
   getChatRun(resourceId: string | undefined, threadId: string | undefined): AgentThreadRunSnapshot;
+  getChatRunById(resourceId: string, threadId: string, runId: string): Promise<AgentThreadRunSnapshot>;
   cancelChatRun(resourceId: string | undefined, threadId: string | undefined): AgentThreadRunSnapshot;
   sendChatMessage(input: SendChatMessageRequest): Promise<SendChatMessageResult>;
   hasActiveThreadRun(resourceId: string | undefined, threadId: string | undefined): boolean;
@@ -413,6 +429,51 @@ export class MastraAgentService implements AgentService {
   }
 
   async startChatRun(input: StartChatRunRequest): Promise<StartChatRunResult> {
+    const startRequestFingerprint = hashText(JSON.stringify(stableJsonValue({
+      threadId: input.threadId,
+      params: input.params,
+      submittedUserMessages: input.submittedUserMessages ?? [],
+    })));
+    if (input.requestId) {
+      const duplicate = this.runCoordinator.getRunById(input.requestId);
+      if (duplicate) {
+        if (
+          duplicate.resourceId !== input.resourceId || duplicate.threadId !== input.threadId ||
+          duplicate.metadata.startRequestFingerprint !== startRequestFingerprint
+        ) {
+          throw new ServiceError('operation_failed', 'chat run request id was reused with different input', 409, {
+            reason: 'request_id_conflict',
+          });
+        }
+        return {
+          run: duplicate,
+          stream: this.runCoordinator.observeRun(duplicate),
+          snapshot: toThreadRunSnapshot(duplicate),
+        };
+      }
+      const persistedDuplicate = await this.persistedRuns.get(input.requestId);
+      if (persistedDuplicate) {
+        if (
+          persistedDuplicate.resourceId !== input.resourceId || persistedDuplicate.threadId !== input.threadId ||
+          persistedDuplicate.metadata.startRequestFingerprint !== startRequestFingerprint
+        ) {
+          throw new ServiceError('operation_failed', 'chat run request id was reused with different input', 409, {
+            reason: 'request_id_conflict',
+          });
+        }
+        const events = await this.persistedRuns.events(persistedDuplicate.runId);
+        return {
+          stream: new ReadableStream<unknown>({
+            start(controller) {
+              for (const event of events) controller.enqueue(event.data);
+              controller.close();
+            },
+          }),
+          snapshot: persistedThreadRunSnapshot(persistedDuplicate),
+        };
+      }
+    }
+
     let existingRun = input.threadId ? this.runCoordinator.getThreadRun(input.resourceId, input.threadId) : undefined;
     if (!existingRun && input.threadId && containsToolApprovalResponse(input.params.messages)) {
       const persisted = await this.persistedRuns.latest(input.resourceId, input.threadId);
@@ -432,7 +493,11 @@ export class MastraAgentService implements AgentService {
       throw new ServiceError('operation_failed', 'thread has an active stream', 409);
     }
 
-    const prepared = await this.prepareChatRun(input);
+    const backgroundStart = Boolean(input.threadId && !existingRun);
+    const prepared = await this.prepareChatRun(input, {
+      automaticCompaction: backgroundStart ? 'defer' : 'perform',
+      ...(existingRun ? { activeRun: existingRun } : {}),
+    });
     const mastra = await this.getMastra();
     const { executionProfile: _executionProfile, verify: _verify, ...chatParams } = input.params;
     const mastraRunId = existingRun?.mastraRunId ?? stringValue(input.params.runId) ?? crypto.randomUUID();
@@ -452,132 +517,193 @@ export class MastraAgentService implements AgentService {
         network: prepared.executionProfile === 'host' ? 'host' : 'denied',
       },
       skills: prepared.skillSummaries,
+      startRequestFingerprint,
     };
+
+    // Preparing a run performs asynchronous work. Recheck ownership immediately
+    // before the synchronous create so concurrent retries cannot replace one another.
+    if (backgroundStart) {
+      const concurrentRun = input.requestId
+        ? this.runCoordinator.getRunById(input.requestId)
+        : this.runCoordinator.getActiveThreadRun(input.resourceId, input.threadId);
+      if (concurrentRun) {
+        if (
+          concurrentRun.resourceId !== input.resourceId || concurrentRun.threadId !== input.threadId ||
+          concurrentRun.metadata.startRequestFingerprint !== startRequestFingerprint
+        ) {
+          throw new ServiceError('operation_failed', 'chat run request id was reused with different input', 409, {
+            reason: 'request_id_conflict',
+          });
+        }
+        return {
+          run: concurrentRun,
+          stream: this.runCoordinator.observeRun(concurrentRun),
+          snapshot: toThreadRunSnapshot(concurrentRun),
+        };
+      }
+      const occupiedRun = this.runCoordinator.getActiveThreadRun(input.resourceId, input.threadId);
+      if (occupiedRun) {
+        throw new ServiceError('operation_failed', 'thread has an active stream', 409);
+      }
+    }
+
     const run = existingRun ??
       (input.threadId
         ? this.runCoordinator.createThreadRun(input.resourceId, input.threadId, input.submittedUserMessages ?? [], {
+          ...(input.requestId ? { runId: input.requestId } : {}),
           mastraRunId,
           executionProfile: prepared.executionProfile,
           model: stringValue(input.params.model),
           requestContext: input.requestContext,
           metadata: runMetadata,
+          phase: prepared.automaticCompactionNeeded ? 'compacting' : 'generating',
         })
         : undefined);
 
-    try {
-      if (run && !existingRun) await this.runCoordinator.flushPersistence(run);
-      const maxSteps = getAgentMaxSteps();
-      const stream = await this.chatStreamHandler({
-        mastra,
-        agentId: 'mage-hand',
-        version: 'v6',
-        sendReasoning: true,
-        defaultOptions: { maxSteps },
-        ...(run
-          ? {
-            messageMetadata: ({ part }: { part?: unknown }) => {
-              if (!isRecord(part)) return undefined;
-              if (part.type === 'start') return buildRunTimingMetadata(run, 'running');
-              if (part.type === 'finish') return buildRunTimingMetadata(run, 'completed');
-              return undefined;
-            },
-          }
-          : {}),
-        params: {
-          ...chatParams,
-          maxSteps,
-          runId: mastraRunId,
-          ...(prepared.routedModel
-            ? { model: ownerScopedSubscriptionModel(prepared.routedModel, input.resourceId) }
-            : {}),
-          providerOptions: prepared.providerOptions as never,
-          memory: prepared.memory as never,
-          system: prepared.system as never,
-          requestContext: input.requestContext as never,
-          savePerStep: true,
-          abortSignal: run?.controller.signal ?? input.abortSignal,
-          tracingOptions: {
-            ...callerTracingOptions,
-            metadata: {
-              ...callerTraceMetadata,
-              ...runMetadata,
-              ...(run ? { agentRunId: run.runId } : {}),
-              ...(input.threadId ? { threadId: input.threadId } : {}),
-            },
-            tags: [
-              ...new Set([
-                ...Array.isArray(callerTracingOptions.tags)
-                  ? callerTracingOptions.tags.filter((tag): tag is string => typeof tag === 'string')
-                  : [],
-                'weave-coding-agent',
-                `execution:${prepared.executionProfile}`,
-              ]),
-            ],
-          },
-        } as never,
-      });
-
-      const modelStream = prepared.automaticCompaction
-        ? prependStreamValues(
-          stream as ReadableStream<unknown>,
-          threadCompactionStreamEvents(prepared.automaticCompaction),
-        )
-        : stream as ReadableStream<unknown>;
-      const verifiedStream = prepared.verificationEnabled && run
-        ? appendRunVerification(modelStream, {
-          requirements: input.submittedUserMessages ?? [],
-          verify: async (evidence) => {
-            try {
-              const repositoryEvidence = await collectRepositoryVerifierEvidence(
-                input.resourceId,
-                prepared.resolvedContext,
-              );
-              const verifier = await mastra.getAgent('runVerifierAgent');
-              if (!verifier) throw new Error('Run verifier agent is unavailable.');
-              const result = await verifier.generate(JSON.stringify({ ...evidence, repositoryEvidence }), {
-                maxSteps: 1,
-                requestContext: input.requestContext as never,
-                model: ownerScopedSubscriptionModel('chatgpt/codex/gpt-5.6-luna', input.resourceId),
-                structuredOutput: { schema: runVerificationSchema },
-              } as never);
-              return runVerificationSchema.parse(result.object);
-            } catch (error) {
-              return {
-                verdict: 'needs_evidence' as const,
-                summary: 'The independent verifier could not complete.',
-                missingEvidence: [error instanceof Error ? error.message : String(error)],
-                unresolvedRisks: [],
-                requestAnotherPhase: false,
-              };
+    const executePreparedRun = async (executionPrepared: typeof prepared): Promise<StartChatRunResult> => {
+      try {
+        const maxSteps = getAgentMaxSteps();
+        console.info('[chat] stream request', {
+          agentId: 'mage-hand',
+          selectedModel: executionPrepared.selectedModel,
+          routedModel: executionPrepared.routedModel,
+          reasoningEffort: executionPrepared.reasoningEffort ?? 'default',
+          serviceTier: executionPrepared.serviceTier ?? 'default',
+          threadId: input.threadId,
+          resourceId: input.resourceId,
+          memory: executionPrepared.memoryPolicyStatus,
+          chatgptSubscription: true,
+          executionProfile: executionPrepared.executionProfile,
+        });
+        const stream = await this.chatStreamHandler({
+          mastra,
+          agentId: 'mage-hand',
+          version: 'v6',
+          sendReasoning: true,
+          defaultOptions: { maxSteps },
+          ...(run
+            ? {
+              messageMetadata: ({ part }: { part?: unknown }) => {
+                if (!isRecord(part)) return undefined;
+                if (part.type === 'start') return buildRunTimingMetadata(run, 'running');
+                if (part.type === 'finish') return buildRunTimingMetadata(run, 'completed');
+                return undefined;
+              },
             }
-          },
-        })
-        : modelStream;
-      const bufferedStream = bufferAssistantTextStream(
-        filterCompactToolHistoryTextStream(
-          normalizeAskUserSuspensionStream(verifiedStream, { mastraRunId }),
-        ),
-      );
-      if (!run) {
-        return { stream: bufferedStream, snapshot: { active: false, status: 'idle' } };
-      }
+            : {}),
+          params: {
+            ...chatParams,
+            maxSteps,
+            runId: mastraRunId,
+            ...(executionPrepared.routedModel
+              ? { model: ownerScopedSubscriptionModel(executionPrepared.routedModel, input.resourceId) }
+              : {}),
+            providerOptions: executionPrepared.providerOptions as never,
+            memory: executionPrepared.memory as never,
+            system: executionPrepared.system as never,
+            requestContext: input.requestContext as never,
+            savePerStep: true,
+            abortSignal: run?.controller.signal ?? input.abortSignal,
+            tracingOptions: {
+              ...callerTracingOptions,
+              metadata: {
+                ...callerTraceMetadata,
+                ...runMetadata,
+                ...(run ? { agentRunId: run.runId } : {}),
+                ...(input.threadId ? { threadId: input.threadId } : {}),
+              },
+              tags: [
+                ...new Set([
+                  ...Array.isArray(callerTracingOptions.tags)
+                    ? callerTracingOptions.tags.filter((tag): tag is string => typeof tag === 'string')
+                    : [],
+                  'weave-coding-agent',
+                  `execution:${executionPrepared.executionProfile}`,
+                ]),
+              ],
+            },
+          } as never,
+        });
 
-      if (existingRun) {
-        if (!this.runCoordinator.resumeRunPump(run, bufferedStream)) {
-          throw new ServiceError('operation_failed', 'Agent run could not be resumed.', 409);
+        const modelStream = stream as ReadableStream<unknown>;
+        const verifiedStream = executionPrepared.verificationEnabled && run
+          ? appendRunVerification(modelStream, {
+            requirements: input.submittedUserMessages ?? [],
+            verify: async (evidence) => {
+              try {
+                const repositoryEvidence = await collectRepositoryVerifierEvidence(
+                  input.resourceId,
+                  executionPrepared.resolvedContext,
+                );
+                const verifier = await mastra.getAgent('runVerifierAgent');
+                if (!verifier) throw new Error('Run verifier agent is unavailable.');
+                const result = await verifier.generate(JSON.stringify({ ...evidence, repositoryEvidence }), {
+                  maxSteps: 1,
+                  requestContext: input.requestContext as never,
+                  model: ownerScopedSubscriptionModel('chatgpt/codex/gpt-5.6-luna', input.resourceId),
+                  structuredOutput: { schema: runVerificationSchema },
+                } as never);
+                return runVerificationSchema.parse(result.object);
+              } catch (error) {
+                return {
+                  verdict: 'needs_evidence' as const,
+                  summary: 'The independent verifier could not complete.',
+                  missingEvidence: [error instanceof Error ? error.message : String(error)],
+                  unresolvedRisks: [],
+                  requestAnotherPhase: false,
+                };
+              }
+            },
+          })
+          : modelStream;
+        const bufferedStream = bufferAssistantTextStream(
+          filterCompactToolHistoryTextStream(
+            normalizeAskUserSuspensionStream(verifiedStream, { mastraRunId }),
+          ),
+        );
+        if (!run) {
+          return { stream: bufferedStream, snapshot: { active: false, status: 'idle' } };
         }
-      } else {
-        this.runCoordinator.startRunPump(run, bufferedStream);
+
+        if (existingRun) {
+          if (!this.runCoordinator.resumeRunPump(run, bufferedStream)) {
+            throw new ServiceError('operation_failed', 'Agent run could not be resumed.', 409);
+          }
+        } else {
+          this.runCoordinator.startRunPump(run, bufferedStream);
+        }
+        return {
+          run,
+          stream: this.runCoordinator.observeRun(run),
+          snapshot: toThreadRunSnapshot(run),
+        };
+      } catch (error) {
+        if (run) this.runCoordinator.settleRun(run, 'error', error);
+        throw error;
       }
+    };
+
+    if (run && !existingRun) {
+      await this.runCoordinator.flushPersistence(run);
+      this.runCoordinator.startRunExecution(run, async () => {
+        const executionPrepared = prepared.automaticCompactionNeeded
+          ? await this.prepareChatRun({ ...input, abortSignal: run.controller.signal }, {
+            automaticCompaction: 'perform',
+            activeRun: run,
+          })
+          : prepared;
+        this.runCoordinator.setPhase(run, 'generating');
+        await this.runCoordinator.flushPersistence(run);
+        await executePreparedRun(executionPrepared);
+      });
       return {
         run,
         stream: this.runCoordinator.observeRun(run),
         snapshot: toThreadRunSnapshot(run),
       };
-    } catch (error) {
-      if (run) this.runCoordinator.settleRun(run, 'error', error);
-      throw error;
     }
+
+    return await executePreparedRun(prepared);
   }
 
   observeChatRun(resourceId: string | undefined, threadId: string | undefined) {
@@ -600,12 +726,18 @@ export class MastraAgentService implements AgentService {
     });
   }
 
-  async replaySequencedChatRun(resourceId: string, threadId: string, afterSequence = 0) {
-    const inMemory = this.runCoordinator.getThreadRun(resourceId, threadId);
+  async replaySequencedChatRun(resourceId: string, threadId: string, afterSequence = 0, runId?: string) {
+    const inMemory = runId
+      ? this.runCoordinator.getRunById(runId)
+      : this.runCoordinator.getThreadRun(resourceId, threadId);
+    if (inMemory && (inMemory.resourceId !== resourceId || inMemory.threadId !== threadId)) return undefined;
     if (inMemory) return this.runCoordinator.observeSequencedRun(inMemory, afterSequence);
 
-    const persisted = await this.persistedRuns.latest(resourceId, threadId);
+    const persisted = runId
+      ? await this.persistedRuns.get(runId)
+      : await this.persistedRuns.latest(resourceId, threadId);
     if (!persisted) return undefined;
+    if (persisted.resourceId !== resourceId || persisted.threadId !== threadId) return undefined;
     if (persisted.status === 'running') await this.persistedRuns.interrupt(persisted.runId);
     const events = await this.persistedRuns.events(persisted.runId, afterSequence);
     return new ReadableStream<{ sequence: number; chunk: unknown }>({
@@ -616,8 +748,9 @@ export class MastraAgentService implements AgentService {
     });
   }
 
-  getPersistedChatRun(resourceId: string, threadId: string) {
-    return this.persistedRuns.latest(resourceId, threadId);
+  async getPersistedChatRun(resourceId: string, threadId: string, runId?: string) {
+    const record = runId ? await this.persistedRuns.get(runId) : await this.persistedRuns.latest(resourceId, threadId);
+    return record?.resourceId === resourceId && record.threadId === threadId ? record : undefined;
   }
 
   async respondToToolApproval(input: RespondToToolApprovalRequest): Promise<StartChatRunResult> {
@@ -689,6 +822,13 @@ export class MastraAgentService implements AgentService {
 
   getChatRun(resourceId: string | undefined, threadId: string | undefined) {
     return this.runCoordinator.getThreadRunSnapshot(resourceId, threadId);
+  }
+
+  async getChatRunById(resourceId: string, threadId: string, runId: string) {
+    const inMemory = this.runCoordinator.getRunById(runId);
+    if (inMemory?.resourceId === resourceId && inMemory.threadId === threadId) return toThreadRunSnapshot(inMemory);
+    const persisted = await this.getPersistedChatRun(resourceId, threadId, runId);
+    return persisted ? persistedThreadRunSnapshot(persisted) : { active: false, status: 'idle' as const };
   }
 
   cancelChatRun(resourceId: string | undefined, threadId: string | undefined) {
@@ -929,7 +1069,8 @@ export class MastraAgentService implements AgentService {
         404,
       );
     }
-    if (this.hasActiveThreadRun(input.resourceId, input.threadId)) {
+    const activeRun = this.runCoordinator.getActiveThreadRun(input.resourceId, input.threadId);
+    if (activeRun && activeRun.runId !== input.activeRunId) {
       throw new ServiceError('operation_failed', 'thread has an active stream', 409, { reason: 'active_run' });
     }
 
@@ -941,18 +1082,28 @@ export class MastraAgentService implements AgentService {
 
     const conversationBudget = await this.resolveContextBudget(input.model);
     const previous = await this.compactions.latest(input.resourceId, input.threadId);
+    const previousCheckpoint = previous ? normalizeCheckpoint(previous.checkpoint, previous.summary) : undefined;
+    const v2Mode = threadCompactionV2Mode();
+    const v2CompactionMode = !previous?.checkpoint || previousCheckpoint?.producer !== 'v2' ||
+        (previousCheckpoint?.lineageDepth ?? 0) >= 4
+      ? 'rebuild' as const
+      : 'incremental' as const;
+    const legacyCompactionMode = previous ? 'incremental' as const : 'rebuild' as const;
+    const compactionMode = v2Mode === 'active' ? v2CompactionMode : legacyCompactionMode;
     const messages = await this.recallThreadMessages(memory, input);
     const cut = selectCompactionCut(
       messages,
       conversationBudget.recentTailTokens,
-      previous?.compactedMessageCount ?? 0,
+      compactionMode === 'rebuild' ? 0 : previous?.compactedMessageCount ?? 0,
     );
     if (!cut) return { status: 'not_needed', budget: conversationBudget };
 
     const compactionModel = process.env.WEAVE_COMPACTION_MODEL?.trim() || 'openai/gpt-5.6-luna';
     const compactionBudget = await this.resolveContextBudget(compactionModel);
     const promptOverheadTokens = 2_000;
-    const previousSummaryTokens = previous?.summary ? Math.ceil(previous.summary.length / 4) : 0;
+    const previousSummaryTokens = compactionMode === 'incremental' && previous?.summary
+      ? Math.ceil(previous.summary.length / 4)
+      : 0;
     const inputCapacity = compactionBudget.contextLimitTokens - compactionBudget.summaryOutputTokens -
       promptOverheadTokens - Math.max(previousSummaryTokens, compactionBudget.summaryOutputTokens);
     if (inputCapacity <= 0) {
@@ -962,8 +1113,9 @@ export class MastraAgentService implements AgentService {
     const sourceTokens = cut.source.reduce((total, message) => total + estimateMessageTokens(message), 0);
     if ((input.trigger ?? 'manual') === 'automatic') {
       const latestAttempt = await this.compactions.latest(input.resourceId, input.threadId, false);
-      const retryAt = latestAttempt?.status === 'failed' ? Date.parse(latestAttempt.updatedAt) + 15 * 60 * 1000 : 0;
-      const enoughNewContext = latestAttempt?.status !== 'failed' ||
+      const throttledStatus = latestAttempt?.status === 'failed' || latestAttempt?.status === 'rejected';
+      const retryAt = throttledStatus ? Date.parse(latestAttempt.updatedAt) + 15 * 60 * 1000 : 0;
+      const enoughNewContext = !throttledStatus ||
         sourceTokens >= (latestAttempt.sourceTokens ?? 0) + conversationBudget.retryDeltaTokens;
       if (!enoughNewContext && Date.now() < retryAt) {
         throw new ServiceError(
@@ -991,6 +1143,18 @@ export class MastraAgentService implements AgentService {
         compactionModel,
         reasoningEffort: 'medium',
         sourceTokens,
+        compactionMode,
+      });
+      input.onEvent?.({
+        type: 'data-thread-compaction',
+        data: {
+          phase: 'started',
+          compactionId: job.id,
+          origin: input.origin ?? (input.trigger === 'manual' ? 'manual' : 'pre_run'),
+          trigger: job.trigger,
+          generation: job.generation,
+          mode: compactionMode,
+        },
       });
     } catch (error) {
       if ((error as { status?: number }).status === 409) {
@@ -1005,41 +1169,288 @@ export class MastraAgentService implements AgentService {
       const mastra = await this.getMastra();
       const agent = await mastra.getAgent('threadCompactionAgent');
       if (!agent) throw new Error('threadCompactionAgent is not registered');
-      const batches = batchCompactionMessages(cut.source, inputCapacity);
-      let summary = previous?.summary;
-      for (const batch of batches) {
-        const output = await agent.stream(
-          buildCompactionPrompt({
-            previousSummary: summary,
-            transcript: serializeCompactionMessages(batch),
-            instructions: input.instructions,
-          }),
-          {
-            model: ownerScopedSubscriptionModel(routeSubscriptionModel(compactionModel), input.resourceId),
-            maxOutputTokens: compactionBudget.summaryOutputTokens,
-            providerOptions: buildProviderOptions(undefined, {
-              reasoningEffort: 'medium',
+      if (v2Mode !== 'active') {
+        let summary = compactionMode === 'incremental' ? previous?.summary : undefined;
+        for (const transcript of batchCompactionTranscripts(cut.source, inputCapacity)) {
+          const output = await agent.stream(
+            buildCompactionPrompt({
+              previousSummary: summary,
+              transcript,
+              instructions: input.instructions,
+              mode: summary ? 'incremental' : compactionMode,
+              outputFormat: 'legacy_markdown',
             }),
-            toolChoice: 'none',
-            ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
-          } as never,
-        );
-        summary = validateCompactionSummary(
-          String(await (output as { text: Promise<unknown> }).text),
-          compactionBudget.summaryOutputTokens,
-        ).summary;
+            {
+              model: ownerScopedSubscriptionModel(routeSubscriptionModel(compactionModel), input.resourceId),
+              maxOutputTokens: compactionBudget.summaryOutputTokens,
+              providerOptions: buildProviderOptions(undefined, { reasoningEffort: 'medium' }),
+              toolChoice: 'none',
+              ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+            } as never,
+          );
+          summary = validateCompactionSummary(
+            String(await (output as { text: Promise<unknown> }).text),
+            compactionBudget.summaryOutputTokens,
+          ).summary;
+        }
+        const validatedLegacy = validateCompactionSummary(summary ?? '', compactionBudget.summaryOutputTokens);
+        const checkpoint = normalizeCheckpoint(undefined, validatedLegacy.summary);
+        checkpoint.lineageDepth = compactionMode === 'rebuild' ? 0 : (previousCheckpoint?.lineageDepth ?? 0) + 1;
+        const projection = projectCompaction({
+          budget: conversationBudget,
+          fixedTokens: input.fixedTokens,
+          previousCheckpointTokens: previousSummaryTokens,
+          sourceTokens,
+          retainedTokens: cut.retainedTokens,
+          pendingTokens: input.pendingTokens,
+          candidateTokens: validatedLegacy.tokens,
+        });
+        if (v2Mode === 'shadow' && shouldSampleCompactionShadow(job.id)) {
+          try {
+            const shadowCut = selectCompactionCut(
+              messages,
+              conversationBudget.recentTailTokens,
+              v2CompactionMode === 'rebuild' ? 0 : previous?.compactedMessageCount ?? 0,
+            );
+            if (!shadowCut) throw new Error('V2 shadow candidate did not require compaction.');
+            const shadowPreviousSummaryTokens = v2CompactionMode === 'incremental' && previous?.summary
+              ? Math.ceil(previous.summary.length / 4)
+              : 0;
+            const shadowInputCapacity = compactionBudget.contextLimitTokens - compactionBudget.summaryOutputTokens -
+              promptOverheadTokens - Math.max(shadowPreviousSummaryTokens, compactionBudget.summaryOutputTokens);
+            const shadowSourceTokens = shadowCut.source.reduce(
+              (total, message) => total + estimateMessageTokens(message),
+              0,
+            );
+            const attachmentCatalog = collectCompactionAttachments(
+              messages.slice(0, shadowCut.firstRetainedIndex),
+            );
+            const lineageDepth = v2CompactionMode === 'rebuild' ? 0 : (previousCheckpoint?.lineageDepth ?? 0) + 1;
+            let shadowCheckpoint = v2CompactionMode === 'incremental' ? previousCheckpoint : undefined;
+            let shadowTokens = 0;
+            for (const transcript of batchCompactionTranscripts(shadowCut.source, shadowInputCapacity)) {
+              const output = await agent.generate(
+                buildCompactionPrompt({
+                  previousCheckpoint: shadowCheckpoint,
+                  transcript,
+                  instructions: input.instructions,
+                  mode: shadowCheckpoint ? 'incremental' : v2CompactionMode,
+                }),
+                {
+                  maxSteps: 1,
+                  model: ownerScopedSubscriptionModel(routeSubscriptionModel(compactionModel), input.resourceId),
+                  maxOutputTokens: compactionBudget.summaryOutputTokens,
+                  providerOptions: buildProviderOptions(undefined, { reasoningEffort: 'medium' }),
+                  toolChoice: 'none',
+                  structuredOutput: { schema: structuredCheckpointV2OutputSchema },
+                  ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+                } as never,
+              );
+              const shadow = validateStructuredCheckpoint((output as { object?: unknown }).object, {
+                maxTokens: compactionBudget.summaryOutputTokens,
+                attachmentCatalog,
+                lineageDepth,
+              });
+              shadowCheckpoint = shadow.checkpoint;
+              shadowTokens = shadow.tokens;
+            }
+            const shadowProjection = projectCompaction({
+              budget: conversationBudget,
+              fixedTokens: input.fixedTokens,
+              previousCheckpointTokens: shadowPreviousSummaryTokens,
+              sourceTokens: shadowSourceTokens,
+              retainedTokens: shadowCut.retainedTokens,
+              pendingTokens: input.pendingTokens,
+              candidateTokens: shadowTokens,
+            });
+            console.info('[thread-compaction] v2 shadow candidate', {
+              resourceId: input.resourceId,
+              threadId: input.threadId,
+              generation: job.generation,
+              mode: v2CompactionMode,
+              wouldAccept: shadowProjection.accepted,
+              reason: shadowProjection.reason,
+              tokensBefore: shadowProjection.tokensBefore,
+              tokensAfter: shadowProjection.tokensAfter,
+              reclaimedTokens: shadowProjection.reclaimedTokens,
+            });
+          } catch (error) {
+            if (input.abortSignal?.aborted) throw error;
+            console.warn('[thread-compaction] v2 shadow candidate failed', {
+              resourceId: input.resourceId,
+              threadId: input.threadId,
+              generation: job.generation,
+              error: redactCompactionText(error instanceof Error ? error.message : String(error)),
+            });
+          }
+        }
+        await this.compactions.complete(job.id, {
+          summary: validatedLegacy.summary,
+          checkpoint,
+          compactedThroughMessageId: cut.compactedThrough.id,
+          compactedThroughCreatedAt: timestampString(cut.compactedThrough.createdAt),
+          compactedMessageCount: cut.compactedMessageCount,
+          firstRetainedMessageId: cut.firstRetained?.id,
+          sourceTokens,
+          summaryTokens: validatedLegacy.tokens,
+          projectedTokens: projection.tokensAfter,
+          projectionBeforeTokens: projection.tokensBefore,
+          projectionAfterTokens: projection.tokensAfter,
+          reclaimedTokens: projection.reclaimedTokens,
+          sourceFingerprint: compactionSourceFingerprint(cut.source),
+        });
+        if (v2Mode === 'shadow') {
+          console.info('[thread-compaction] legacy decision during v2 shadow rollout', {
+            resourceId: input.resourceId,
+            threadId: input.threadId,
+            generation: job.generation,
+            accepted: true,
+            reason: projection.reason,
+            tokensBefore: projection.tokensBefore,
+            tokensAfter: projection.tokensAfter,
+            reclaimedTokens: projection.reclaimedTokens,
+          });
+        }
+        input.onEvent?.({
+          type: 'data-thread-compaction',
+          data: {
+            phase: 'completed',
+            compactionId: job.id,
+            origin: input.origin ?? (input.trigger === 'manual' ? 'manual' : 'pre_run'),
+            trigger: job.trigger,
+            generation: job.generation,
+            mode: compactionMode,
+            tokensBefore: projection.tokensBefore,
+            tokensAfter: projection.tokensAfter,
+            reclaimedTokens: projection.reclaimedTokens,
+            headroomTokens: projection.headroomTokens,
+          },
+        });
+        const completedCheckpoint = await this.compactions.latest(input.resourceId, input.threadId);
+        return { status: 'completed', checkpoint: completedCheckpoint, budget: conversationBudget };
       }
 
-      const validated = validateCompactionSummary(summary ?? '', compactionBudget.summaryOutputTokens);
+      const attachmentCatalog = collectCompactionAttachments(messages.slice(0, cut.firstRetainedIndex));
+      const lineageDepth = compactionMode === 'rebuild' ? 0 : (previousCheckpoint?.lineageDepth ?? 0) + 1;
+      let checkpoint = compactionMode === 'incremental' ? previousCheckpoint : undefined;
+      let validated: ReturnType<typeof validateStructuredCheckpoint> | undefined;
+
+      const generateTranscript = async (transcript: string, splitDepth = 0): Promise<void> => {
+        const validationErrors: string[] = [];
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const output = await agent.generate(
+              buildCompactionPrompt({
+                previousCheckpoint: checkpoint,
+                transcript,
+                instructions: input.instructions,
+                mode: checkpoint ? 'incremental' : compactionMode,
+                validationErrors,
+              }),
+              {
+                maxSteps: 1,
+                model: ownerScopedSubscriptionModel(routeSubscriptionModel(compactionModel), input.resourceId),
+                maxOutputTokens: compactionBudget.summaryOutputTokens,
+                providerOptions: buildProviderOptions(undefined, {
+                  reasoningEffort: 'medium',
+                }),
+                toolChoice: 'none',
+                structuredOutput: { schema: structuredCheckpointV2OutputSchema },
+                ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+              } as never,
+            );
+            validated = validateStructuredCheckpoint((output as { object?: unknown }).object, {
+              maxTokens: compactionBudget.summaryOutputTokens,
+              attachmentCatalog,
+              lineageDepth,
+            });
+            checkpoint = validated.checkpoint;
+            return;
+          } catch (error) {
+            if (input.abortSignal?.aborted) throw error;
+            validationErrors.push(redactCompactionText(error instanceof Error ? error.message : String(error)));
+          }
+        }
+
+        if (splitDepth < 3 && transcript.length > 1_024) {
+          const middle = Math.floor(transcript.length / 2);
+          await generateTranscript(transcript.slice(0, middle), splitDepth + 1);
+          await generateTranscript(transcript.slice(middle), splitDepth + 1);
+          return;
+        }
+        throw new Error(validationErrors.at(-1) ?? 'Compaction checkpoint generation failed.');
+      };
+
+      for (const transcript of batchCompactionTranscripts(cut.source, inputCapacity)) {
+        await generateTranscript(transcript);
+      }
+      if (!validated || !checkpoint) throw new Error('Compaction produced no structured checkpoint.');
+
+      const projection = projectCompaction({
+        budget: conversationBudget,
+        fixedTokens: input.fixedTokens,
+        previousCheckpointTokens: previousSummaryTokens,
+        sourceTokens,
+        retainedTokens: cut.retainedTokens,
+        pendingTokens: input.pendingTokens,
+        candidateTokens: validated.tokens,
+      });
+      if (!projection.accepted) {
+        await this.compactions.reject(job.id, {
+          reason: projection.reason ?? 'insufficient_gain',
+          projectionBeforeTokens: projection.tokensBefore,
+          projectionAfterTokens: projection.tokensAfter,
+          reclaimedTokens: projection.reclaimedTokens,
+        });
+        const attempt = await this.compactions.latest(input.resourceId, input.threadId, false);
+        console.info('[thread-compaction] rejected', {
+          resourceId: input.resourceId,
+          threadId: input.threadId,
+          generation: job.generation,
+          trigger: job.trigger,
+          mode: compactionMode,
+          reason: projection.reason,
+          tokensBefore: projection.tokensBefore,
+          tokensAfter: projection.tokensAfter,
+          reclaimedTokens: projection.reclaimedTokens,
+        });
+        input.onEvent?.({
+          type: 'data-thread-compaction',
+          data: {
+            phase: 'rejected',
+            compactionId: job.id,
+            origin: input.origin ?? (input.trigger === 'manual' ? 'manual' : 'pre_run'),
+            trigger: job.trigger,
+            generation: job.generation,
+            mode: compactionMode,
+            reason: projection.reason,
+            tokensBefore: projection.tokensBefore,
+            tokensAfter: projection.tokensAfter,
+            reclaimedTokens: projection.reclaimedTokens,
+            headroomTokens: projection.headroomTokens,
+          },
+        });
+        return {
+          status: 'rejected',
+          reason: projection.reason,
+          attempt,
+          budget: conversationBudget,
+        };
+      }
+
       await this.compactions.complete(job.id, {
         summary: validated.summary,
+        checkpoint,
         compactedThroughMessageId: cut.compactedThrough.id,
         compactedThroughCreatedAt: timestampString(cut.compactedThrough.createdAt),
         compactedMessageCount: cut.compactedMessageCount,
         firstRetainedMessageId: cut.firstRetained?.id,
         sourceTokens,
         summaryTokens: validated.tokens,
-        projectedTokens: validated.tokens + cut.retainedTokens,
+        projectedTokens: projection.tokensAfter,
+        projectionBeforeTokens: projection.tokensBefore,
+        projectionAfterTokens: projection.tokensAfter,
+        reclaimedTokens: projection.reclaimedTokens,
         sourceFingerprint: compactionSourceFingerprint(cut.source),
       });
       console.info('[thread-compaction] completed', {
@@ -1049,13 +1460,42 @@ export class MastraAgentService implements AgentService {
         trigger: job.trigger,
         durationMs: Date.now() - Date.parse(job.startedAt),
         sourceTokens,
-        projectedTokens: validated.tokens + cut.retainedTokens,
+        mode: compactionMode,
+        projectedTokens: projection.tokensAfter,
+        reclaimedTokens: projection.reclaimedTokens,
         compressionRatio: sourceTokens > 0 ? validated.tokens / sourceTokens : 0,
       });
-      const checkpoint = await this.compactions.latest(input.resourceId, input.threadId);
-      return { status: 'completed', checkpoint, budget: conversationBudget };
+      input.onEvent?.({
+        type: 'data-thread-compaction',
+        data: {
+          phase: 'completed',
+          compactionId: job.id,
+          origin: input.origin ?? (input.trigger === 'manual' ? 'manual' : 'pre_run'),
+          trigger: job.trigger,
+          generation: job.generation,
+          mode: compactionMode,
+          tokensBefore: projection.tokensBefore,
+          tokensAfter: projection.tokensAfter,
+          reclaimedTokens: projection.reclaimedTokens,
+          headroomTokens: projection.headroomTokens,
+        },
+      });
+      const completedCheckpoint = await this.compactions.latest(input.resourceId, input.threadId);
+      return { status: 'completed', checkpoint: completedCheckpoint, budget: conversationBudget };
     } catch (error) {
       await this.compactions.fail(job.id, error, input.abortSignal?.aborted);
+      input.onEvent?.({
+        type: 'data-thread-compaction',
+        data: {
+          phase: input.abortSignal?.aborted ? 'cancelled' : 'failed',
+          compactionId: job.id,
+          origin: input.origin ?? (input.trigger === 'manual' ? 'manual' : 'pre_run'),
+          trigger: job.trigger,
+          generation: job.generation,
+          mode: compactionMode,
+          reason: input.abortSignal?.aborted ? 'cancelled' : 'generation_failed',
+        },
+      });
       console.error('[thread-compaction] failed', {
         resourceId: input.resourceId,
         threadId: input.threadId,
@@ -1064,9 +1504,12 @@ export class MastraAgentService implements AgentService {
         durationMs: Date.now() - Date.parse(job.startedAt),
       });
       if (error instanceof ServiceError) throw error;
-      throw new ServiceError('operation_failed', error instanceof Error ? error.message : String(error), 500, {
-        reason: 'compaction_failed',
-      });
+      throw new ServiceError(
+        'operation_failed',
+        redactCompactionText(error instanceof Error ? error.message : String(error)),
+        500,
+        { reason: 'compaction_failed' },
+      );
     }
   }
 
@@ -1115,8 +1558,16 @@ export class MastraAgentService implements AgentService {
     return result.messages;
   }
 
-  private async prepareChatRun(input: StartChatRunRequest) {
+  private async prepareChatRun(
+    input: StartChatRunRequest,
+    options: {
+      automaticCompaction?: 'perform' | 'defer';
+      activeRun?: AgentThreadRun;
+    } = {},
+  ) {
     const params = input.params;
+    putThreadCompactionContext(input.requestContext, undefined);
+    putThreadCompactionStepRuntime(input.requestContext, undefined);
     const mastra = await this.getMastra();
     const executionProfile = normalizeExecutionProfile(params.executionProfile);
     putExecutionProfile(input.requestContext, executionProfile);
@@ -1129,6 +1580,23 @@ export class MastraAgentService implements AgentService {
       (await getModelConfig()).defaultModel;
     const contextBudget = await this.resolveContextBudget(selectedModel);
     putModelContextBudget(input.requestContext, contextBudget);
+
+    const isProjectWorkspace = Boolean(
+      resolvedContext?.threadMetadata?.mode === 'project' && resolvedContext.threadMetadata.workspaceId,
+    );
+    const isGitProject = resolvedContext?.projectKind === 'git';
+    const isNotesProject = resolvedContext?.projectKind === 'notes';
+    markGitWorkspaceContext(input.requestContext, isProjectWorkspace);
+    markGitProjectContext(input.requestContext, isGitProject);
+    const skillSummaries = resolvedContext ? listResolvedContextSkillSummaries(resolvedContext) : [];
+    const system = buildChatSystemMessages({
+      includeGitInstructions: isGitProject,
+      includeNotesInstructions: isNotesProject,
+      agentFiles: resolvedContext?.agentFiles,
+      skillSummaries,
+      callerSystem: params.system as Parameters<typeof buildChatSystemMessages>[0]['callerSystem'],
+    });
+    const minimumFixedInputTokens = estimateInputValueTokens(system);
 
     const memory = input.threadId && threadCompactionEnabled() ? await this.getMemory() : undefined;
     let checkpoint = input.threadId && threadCompactionEnabled()
@@ -1151,71 +1619,162 @@ export class MastraAgentService implements AgentService {
     let memoryPolicy = memoryPolicyFor();
 
     let automaticCompaction: ThreadCompactionRecord | undefined;
+    let automaticCompactionNeeded = false;
     if (input.threadId && memory && memoryPolicy && threadCompactionEnabled()) {
+      const compactionMemoryOptions = memoryPolicy.options;
       const snapshot = getThreadContextUsageSnapshot(input.threadId, input.resourceId);
       const checkpointIsNewer = checkpoint?.completedAt &&
         (!snapshot?.updatedAt || Date.parse(checkpoint.completedAt) > Date.parse(snapshot.updatedAt));
+      const checkpointTokens = checkpoint?.summary ? Math.ceil(checkpoint.summary.length / 4) : 0;
+      let estimatedMemoryTokens: number | undefined;
+      const getEstimatedMemoryTokens = async () =>
+        estimatedMemoryTokens ??= await estimateMemoryContextTokens(memory, {
+          threadId: input.threadId!,
+          resourceId: input.resourceId,
+          memoryConfig: compactionMemoryOptions,
+        });
       const usedTokens = checkpointIsNewer && checkpoint?.projectedTokens !== undefined
         ? checkpoint.projectedTokens
-        : snapshot?.usedTokens ?? (await estimateMemoryContextTokens(memory, {
-              threadId: input.threadId,
-              resourceId: input.resourceId,
-              memoryConfig: memoryPolicy.options,
-            })) + (checkpoint?.summary ? Math.ceil(checkpoint.summary.length / 4) : 0);
+        : snapshot?.usedTokens ?? (await getEstimatedMemoryTokens()) + checkpointTokens;
       const pendingTokens = estimatePendingMessageTokens(input.submittedUserMessages);
       if (usedTokens + pendingTokens >= contextBudget.contextLimitTokens) {
-        const result = await this.compactChatThread({
-          resourceId: input.resourceId,
-          threadId: input.threadId,
-          model: selectedModel,
-          trigger: 'automatic',
-          abortSignal: input.abortSignal,
-        });
-        automaticCompaction = result.checkpoint;
-        if (!result.checkpoint) {
-          throw new ServiceError(
-            'operation_failed',
-            'The thread exceeds the selected model context limit and does not yet have a safe compaction boundary.',
-            409,
-            { reason: 'context_limit_exceeded' },
+        automaticCompactionNeeded = true;
+        if ((options.automaticCompaction ?? 'perform') === 'perform') {
+          const hardCeilingTokens = Math.floor(contextBudget.advertisedContextTokens * 0.95);
+          const dynamicMemoryTokens = await getEstimatedMemoryTokens();
+          const fixedTokens = Math.max(
+            minimumFixedInputTokens,
+            usedTokens - dynamicMemoryTokens - checkpointTokens,
           );
-        }
-        checkpoint = await this.compactions.latest(input.resourceId, input.threadId);
-        totalMessages = checkpoint
-          ? await this.getStoredMessageTotal(memory, { resourceId: input.resourceId, threadId: input.threadId })
-          : undefined;
-        memoryPolicy = memoryPolicyFor();
-        if (
-          (checkpoint?.projectedTokens ?? contextBudget.contextLimitTokens) + pendingTokens >=
-            contextBudget.contextLimitTokens
-        ) {
-          throw new ServiceError(
-            'operation_failed',
-            'Compaction could not reduce the thread below the selected model context limit.',
-            409,
-            { reason: 'context_limit_exceeded' },
-          );
+          try {
+            const result = await this.compactChatThread({
+              resourceId: input.resourceId,
+              threadId: input.threadId,
+              model: selectedModel,
+              trigger: 'automatic',
+              origin: 'pre_run',
+              activeRunId: options.activeRun?.runId,
+              fixedTokens,
+              pendingTokens,
+              abortSignal: options.activeRun?.controller.signal ?? input.abortSignal,
+              ...(options.activeRun
+                ? {
+                  onEvent: (event) => this.runCoordinator.appendChunk(options.activeRun!, event),
+                }
+                : {}),
+            });
+            automaticCompaction = result.checkpoint;
+            checkpoint = await this.compactions.latest(input.resourceId, input.threadId);
+            if (result.status === 'completed') {
+              totalMessages = checkpoint
+                ? await this.getStoredMessageTotal(memory, { resourceId: input.resourceId, threadId: input.threadId })
+                : undefined;
+              memoryPolicy = memoryPolicyFor();
+            }
+
+            const projectedTokens = result.checkpoint?.projectionAfterTokens ?? result.attempt?.projectionAfterTokens ??
+              usedTokens + pendingTokens;
+            if (projectedTokens >= hardCeilingTokens) {
+              throw new ServiceError(
+                'operation_failed',
+                'Compaction could not reduce the thread below the provider safety ceiling.',
+                409,
+                { reason: 'context_limit_exceeded', projectedTokens, hardCeilingTokens },
+              );
+            }
+          } catch (error) {
+            if (options.activeRun?.controller.signal.aborted || input.abortSignal?.aborted) throw error;
+            if (
+              error instanceof ServiceError && isRecord(error.details) &&
+              error.details.reason === 'context_limit_exceeded'
+            ) throw error;
+            if (usedTokens + pendingTokens >= hardCeilingTokens) {
+              throw new ServiceError(
+                'operation_failed',
+                'The thread exceeds the provider safety ceiling and compaction failed.',
+                409,
+                { reason: 'context_limit_exceeded', projectedTokens: usedTokens + pendingTokens, hardCeilingTokens },
+              );
+            }
+            console.warn('[thread-compaction] proceeding below hard ceiling after automatic compaction failure', {
+              resourceId: input.resourceId,
+              threadId: input.threadId,
+              projectedTokens: usedTokens + pendingTokens,
+              hardCeilingTokens,
+              error: redactCompactionText(error instanceof Error ? error.message : String(error)),
+            });
+          }
         }
       }
     }
-    if (checkpoint) putThreadCompactionContext(input.requestContext, { checkpoint, budget: contextBudget });
-    const isProjectWorkspace = Boolean(
-      resolvedContext?.threadMetadata?.mode === 'project' && resolvedContext.threadMetadata.workspaceId,
+    putThreadCompactionContext(
+      input.requestContext,
+      checkpoint ? { checkpoint, budget: contextBudget } : undefined,
     );
-    const isGitProject = resolvedContext?.projectKind === 'git';
-    const isNotesProject = resolvedContext?.projectKind === 'notes';
-    markGitWorkspaceContext(input.requestContext, isProjectWorkspace);
-    markGitProjectContext(input.requestContext, isGitProject);
+    if (options.activeRun && input.threadId && memory && memoryPolicy && threadCompactionEnabled()) {
+      const run = options.activeRun;
+      putThreadCompactionStepRuntime(input.requestContext, {
+        compactIfNeeded: async ({ messages, abortSignal }) => {
+          if (run.controller.signal.aborted || abortSignal?.aborted) return undefined;
+          const latestCheckpoint = await this.compactions.latest(input.resourceId, input.threadId!);
+          const checkpointTokens = latestCheckpoint?.summary ? Math.ceil(latestCheckpoint.summary.length / 4) : 0;
+          const dynamicTokens = messages.reduce((total, message) => total + estimateMessageTokens(message), 0) +
+            checkpointTokens;
+          const latestSnapshot = getThreadContextUsageSnapshot(input.threadId!, input.resourceId);
+          const fixedTokens = Math.max(
+            minimumFixedInputTokens,
+            (latestSnapshot?.usedTokens ?? dynamicTokens) - dynamicTokens,
+          );
+          const projectedTokens = fixedTokens + dynamicTokens;
+          if (projectedTokens < contextBudget.contextLimitTokens) return undefined;
 
-    const skillSummaries = resolvedContext ? listResolvedContextSkillSummaries(resolvedContext) : [];
-    const system = buildChatSystemMessages({
-      includeGitInstructions: isGitProject,
-      includeNotesInstructions: isNotesProject,
-      agentFiles: resolvedContext?.agentFiles,
-      skillSummaries,
-      callerSystem: params.system as Parameters<typeof buildChatSystemMessages>[0]['callerSystem'],
-    });
-
+          const hardCeilingTokens = Math.floor(contextBudget.advertisedContextTokens * 0.95);
+          this.runCoordinator.setPhase(run, 'compacting');
+          try {
+            const result = await this.compactChatThread({
+              resourceId: input.resourceId,
+              threadId: input.threadId!,
+              model: selectedModel,
+              trigger: 'automatic',
+              origin: 'mid_run',
+              activeRunId: run.runId,
+              fixedTokens,
+              abortSignal: run.controller.signal,
+              onEvent: (event) => this.runCoordinator.appendChunk(run, event),
+            });
+            const afterTokens = result.checkpoint?.projectionAfterTokens ?? result.attempt?.projectionAfterTokens ??
+              projectedTokens;
+            if (afterTokens >= hardCeilingTokens) {
+              throw new ServiceError(
+                'operation_failed',
+                'Mid-run compaction could not reduce context below the provider safety ceiling.',
+                409,
+                { reason: 'context_limit_exceeded', projectedTokens: afterTokens, hardCeilingTokens },
+              );
+            }
+            if (result.checkpoint) {
+              putThreadCompactionContext(input.requestContext, {
+                checkpoint: result.checkpoint,
+                budget: contextBudget,
+              });
+            }
+            return result.checkpoint;
+          } catch (error) {
+            if (run.controller.signal.aborted || projectedTokens >= hardCeilingTokens) throw error;
+            console.warn('[thread-compaction] mid-run attempt failed below hard ceiling', {
+              resourceId: input.resourceId,
+              threadId: input.threadId,
+              projectedTokens,
+              hardCeilingTokens,
+              error: redactCompactionText(error instanceof Error ? error.message : String(error)),
+            });
+            return undefined;
+          } finally {
+            if (!run.controller.signal.aborted) this.runCoordinator.setPhase(run, 'generating');
+          }
+        },
+      });
+    }
     const routedModel = routeSubscriptionModel(selectedModel);
     const providerModel = routedModel ?? selectedModel;
     const requestHasReasoningEffort = hasOwn(params, 'reasoningEffort');
@@ -1229,21 +1788,12 @@ export class MastraAgentService implements AgentService {
       ? normalizeOpenAIServiceTier(params.serviceTier, providerModel)
       : normalizeOpenAIServiceTier(resolvedContext?.config.serviceTier, providerModel);
 
-    console.info('[chat] stream request', {
-      agentId: 'mage-hand',
-      selectedModel: params.model,
-      routedModel,
-      reasoningEffort: reasoningEffort ?? 'default',
-      serviceTier: serviceTier ?? 'default',
-      threadId: input.threadId,
-      resourceId: input.resourceId,
-      memory: memoryPolicy?.status,
-      chatgptSubscription: true,
-      executionProfile,
-    });
-
     return {
+      selectedModel,
       routedModel,
+      reasoningEffort,
+      serviceTier,
+      memoryPolicyStatus: memoryPolicy?.status,
       providerOptions: buildProviderOptions(params.providerOptions, {
         reasoningEffort,
         serviceTier,
@@ -1260,6 +1810,7 @@ export class MastraAgentService implements AgentService {
         : params.memory,
       system,
       automaticCompaction,
+      automaticCompactionNeeded,
       executionProfile,
       verificationEnabled: params.verify !== false && isGitProject,
       skillSummaries,
@@ -1483,6 +2034,14 @@ const stringValue = (value: unknown) => typeof value === 'string' && value.trim(
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
+const stableJsonValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, stableJsonValue(value[key])]),
+  );
+};
+
 const containsToolApprovalResponse = (value: unknown): boolean => {
   if (Array.isArray(value)) return value.some(containsToolApprovalResponse);
   if (!isRecord(value)) return false;
@@ -1548,6 +2107,18 @@ export const threadCompactionEnabled = () => {
   return value === undefined || value === '' || (value !== '0' && value !== 'false');
 };
 
+export const threadCompactionV2Mode = (): 'legacy' | 'shadow' | 'active' => {
+  const value = process.env.WEAVE_COMPACTION_V2_MODE?.trim().toLowerCase();
+  return value === 'shadow' || value === 'active' ? value : 'legacy';
+};
+
+const shouldSampleCompactionShadow = (id: string) => {
+  const configured = Number(process.env.WEAVE_COMPACTION_V2_SHADOW_SAMPLE_PERCENT ?? 10);
+  const percent = Number.isFinite(configured) ? Math.min(100, Math.max(0, configured)) : 10;
+  const bucket = Number.parseInt(hashText(id).slice(0, 8), 16) % 100;
+  return bucket < percent;
+};
+
 const estimatePendingMessageTokens = (messages: unknown[] | undefined) => {
   if (!messages?.length) return 0;
   try {
@@ -1557,52 +2128,30 @@ const estimatePendingMessageTokens = (messages: unknown[] | undefined) => {
   }
 };
 
-const threadCompactionStreamEvents = (checkpoint: ThreadCompactionRecord) => {
-  const budget = {
-    modelId: checkpoint.conversationModel,
-    advertisedContextTokens: checkpoint.advertisedContextTokens,
-    contextLimitPercent: checkpoint.contextLimitPercent,
-    contextLimitTokens: checkpoint.contextLimitTokens,
-    recentTailTokens: checkpoint.recentTailTokens,
-    summaryOutputTokens: checkpoint.summaryOutputTokens,
-  };
-  return [
-    {
-      type: 'data-thread-compaction',
-      data: { phase: 'started', generation: checkpoint.generation, trigger: checkpoint.trigger, ...budget },
-    },
-    {
-      type: 'data-thread-compaction',
-      data: {
-        phase: 'completed',
-        generation: checkpoint.generation,
-        trigger: checkpoint.trigger,
-        projectedTokens: checkpoint.projectedTokens,
-        ...budget,
-      },
-    },
-  ];
+const estimateInputValueTokens = (value: unknown) => {
+  if (value === undefined || value === null) return 0;
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+  return Math.ceil(serialized.length / 4);
 };
 
-const prependStreamValues = <T>(stream: ReadableStream<T>, values: T[]) => {
-  const reader = stream.getReader();
-  return new ReadableStream<T>({
-    start(controller) {
-      for (const value of values) controller.enqueue(value);
-    },
-    async pull(controller) {
-      try {
-        const next = await reader.read();
-        if (next.done) controller.close();
-        else controller.enqueue(next.value);
-      } catch (error) {
-        controller.error(error);
-      }
-    },
-    cancel(reason) {
-      return reader.cancel(reason);
-    },
-  });
+const persistedThreadRunSnapshot = (record: AgentRunRecordV1): AgentThreadRunSnapshot => {
+  const status = record.status === 'failed' || record.status === 'interrupted' ? 'error' as const : record.status;
+  const phase = record.metadata.phase === 'compacting' || record.metadata.phase === 'generating'
+    ? record.metadata.phase
+    : undefined;
+  const active = status === 'running';
+  const startedAt = Date.parse(record.startedAt);
+  const endedAt = active ? Date.now() : Date.parse(record.completedAt ?? record.updatedAt);
+  return {
+    active,
+    status,
+    runId: record.runId,
+    ...(phase ? { phase } : {}),
+    startedAt: record.startedAt,
+    updatedAt: record.updatedAt,
+    ...(Number.isFinite(startedAt) && Number.isFinite(endedAt) ? { durationMs: Math.max(0, endedAt - startedAt) } : {}),
+    ...(record.error ? { error: record.error } : {}),
+  };
 };
 
 const hasOwn = (value: unknown, key: string) =>

@@ -11,6 +11,7 @@ type ChatRunSubscriptionResult = {
 type ChatRunEvent = {
   subscriptionId?: unknown;
   threadId?: unknown;
+  runId?: unknown;
   sequence?: unknown;
   event?: unknown;
   done?: unknown;
@@ -25,7 +26,7 @@ const asSequence = (value: unknown) => Number.isSafeInteger(value) && Number(val
 
 export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
   extends AssistantChatTransport<UI_MESSAGE> {
-  private readonly lastSequenceByThread = new Map<string, number>();
+  private readonly lastSequenceByRun = new Map<string, number>();
   private readonly onRunStarted?: () => void;
 
   constructor(options: RpcChatTransportOptions<UI_MESSAGE> = {}) {
@@ -37,19 +38,34 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
   override async sendMessages(
     options: Parameters<ChatTransport<UI_MESSAGE>['sendMessages']>[0],
   ): Promise<ReadableStream<UIMessageChunk>> {
-    const body = await this.prepareBody(options);
-    await rpcRequest('chat.run.start', body, { signal: options.abortSignal });
-    this.lastSequenceByThread.set(options.chatId, 0);
+    const requestId = crypto.randomUUID();
+    const body = { ...await this.prepareBody(options), requestId };
+    let started: { run?: { runId?: string } };
+    try {
+      started = await rpcRequest('chat.run.start', body, { signal: options.abortSignal });
+    } catch (error) {
+      if (options.abortSignal?.aborted) throw error;
+      const recovered = await rpcRequest<{
+        run?: { runId?: string };
+        persisted?: { runId?: string };
+      }>('chat.run.get', { threadId: options.chatId, runId: requestId });
+      if (recovered.run?.runId !== requestId && recovered.persisted?.runId !== requestId) throw error;
+      started = { run: { runId: requestId } };
+    }
+    const runId = started.run?.runId ?? requestId;
+    this.lastSequenceByRun.set(runId, 0);
     this.onRunStarted?.();
-    return await this.subscribe(options.chatId, options.abortSignal);
+    return await this.subscribe(options.chatId, runId, options.abortSignal);
   }
 
   override async reconnectToStream(
     options: Parameters<ChatTransport<UI_MESSAGE>['reconnectToStream']>[0],
   ): Promise<ReadableStream<UIMessageChunk> | null> {
-    const state = await rpcRequest<{ run?: { active?: boolean } }>('chat.run.get', { threadId: options.chatId });
-    if (!state.run?.active) return null;
-    return await this.subscribe(options.chatId);
+    const state = await rpcRequest<{ run?: { active?: boolean; runId?: string } }>('chat.run.get', {
+      threadId: options.chatId,
+    });
+    if (!state.run?.active || !state.run.runId) return null;
+    return await this.subscribe(options.chatId, state.run.runId);
   }
 
   private async prepareBody(options: Parameters<ChatTransport<UI_MESSAGE>['sendMessages']>[0]) {
@@ -73,7 +89,7 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
     };
   }
 
-  private async subscribe(threadId: string, signal?: AbortSignal) {
+  private async subscribe(threadId: string, runId: string, signal?: AbortSignal) {
     let subscriptionId: string | undefined;
     let closed = false;
     let detach: () => void = () => {};
@@ -100,7 +116,10 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
         signal?.addEventListener('abort', unsubscribe, { once: true });
         detach = onRpcNotification('chat.run.event', raw => {
           const event = raw && typeof raw === 'object' ? raw as ChatRunEvent : {};
-          if (event.threadId !== threadId || (subscriptionId && event.subscriptionId !== subscriptionId)) return;
+          if (
+            event.threadId !== threadId || event.runId !== runId ||
+            (subscriptionId && event.subscriptionId !== subscriptionId)
+          ) return;
           // Completion/error notifications carry the last durable event sequence as a
           // watermark; they are control messages, not duplicate durable events.
           if (event.error) {
@@ -112,9 +131,9 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
             return;
           }
           const sequence = asSequence(event.sequence);
-          const lastSequence = this.lastSequenceByThread.get(threadId) ?? 0;
+          const lastSequence = this.lastSequenceByRun.get(runId) ?? 0;
           if (sequence !== undefined && sequence <= lastSequence) return;
-          if (sequence !== undefined) this.lastSequenceByThread.set(threadId, sequence);
+          if (sequence !== undefined) this.lastSequenceByRun.set(runId, sequence);
           if (event.event !== undefined) controller.enqueue(event.event as UIMessageChunk);
         });
 
@@ -124,7 +143,8 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
           try {
             const result = await rpcRequest<ChatRunSubscriptionResult>('chat.run.subscribe', {
               threadId,
-              afterSequence: this.lastSequenceByThread.get(threadId) ?? 0,
+              runId,
+              afterSequence: this.lastSequenceByRun.get(runId) ?? 0,
             }, { signal });
             if (closed) return;
             if (!result.active || !result.subscriptionId) {
@@ -152,7 +172,14 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
           finish(error);
         }
       },
-      cancel: () => unsubscribe(),
+      cancel: () => {
+        if (subscriptionId) void rpcRequest('chat.run.unsubscribe', { subscriptionId }).catch(() => undefined);
+        if (closed) return;
+        closed = true;
+        detach();
+        detachState();
+        signal?.removeEventListener('abort', unsubscribe);
+      },
     });
 
     return stream;

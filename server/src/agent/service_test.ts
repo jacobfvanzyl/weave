@@ -115,7 +115,7 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
   );
 
   try {
-    await service.startChatRun({
+    const started = await service.startChatRun({
       resourceId: 'resource-1',
       threadId: 'thread-1',
       requestContext,
@@ -129,6 +129,7 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
         messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }],
       },
     });
+    await started.run?.executionPromise;
 
     assert(captured.options, 'expected stream handler options');
     assertEquals(captured.options.agentId, 'mage-hand');

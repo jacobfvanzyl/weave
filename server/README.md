@@ -5,12 +5,15 @@ The Deno server owns authentication, backend modules, persistence, workflows, an
 ## Commands
 
 ```shell
-deno task server:dev
+pnpm install
+pnpm dev:server
 deno task server:build
 deno task server:start
 deno task server:db:migrate
 deno task server:db:import-libsql --dry-run
 ```
+
+Run `pnpm install` only from the repository root. PNPM owns the server's `node_modules`; Deno uses that tree in manual mode while `server/deno.lock` remains the runtime lock.
 
 ## RPC architecture
 
@@ -49,6 +52,16 @@ The tailnet application endpoint is `http://homelab:4111`; Garage S3 remains on 
 `WEAVE_DATABASE_URL` is required. Weave metadata lives in the `weave` Postgres schema and is managed by Drizzle migrations under `server/drizzle`. Mastra storage/vector tables live in `mastra`, DBOS uses `dbos`, and object payloads live in Garage.
 
 No migration is required for the single-socket cutover: persisted chat run events and workflow run events remain the replay sources.
+
+## Compaction V2 rollout
+
+Thread compaction defaults to the existing Markdown checkpoint path. Set `WEAVE_COMPACTION_V2_MODE=shadow` to keep
+that behavior while sampling structured V2 candidates, or `WEAVE_COMPACTION_V2_MODE=active` to persist and inject V2
+checkpoints. `WEAVE_COMPACTION_V2_SHADOW_SAMPLE_PERCENT` controls the deterministic shadow sample and defaults to 10.
+Shadow telemetry records only decisions and token metrics; it does not log checkpoint or message content.
+
+Apply the Weave database migrations before enabling active mode. Rollback to `legacy` is code-only: the Markdown
+compatibility rendering remains populated, and the nullable V2 columns are safe for the preceding server version.
 
 ## Layout
 

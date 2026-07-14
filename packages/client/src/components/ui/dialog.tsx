@@ -2,9 +2,9 @@
 
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
-import { cn } from "~/lib/utils";
-import { Button } from "~/components/ui/button";
-import { ScrollArea } from "~/components/ui/scroll-area";
+import { cn } from "@weave/client/lib/utils";
+import { Button } from "@weave/client/components/ui/button";
+import { ScrollArea } from "@weave/client/components/ui/scroll-area";
 
 const DialogCreateHandle = DialogPrimitive.createHandle;
 

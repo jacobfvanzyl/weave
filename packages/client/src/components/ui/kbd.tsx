@@ -1,6 +1,6 @@
 import type * as React from "react";
 
-import { cn } from "~/lib/utils";
+import { cn } from "@weave/client/lib/utils";
 
 function Kbd({ className, ...props }: React.ComponentProps<"kbd">) {
   return (

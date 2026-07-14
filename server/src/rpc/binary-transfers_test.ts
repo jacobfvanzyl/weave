@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1';
-import { RpcPeer, type RpcSocket } from '../../../packages/protocol/src/peer.ts';
-import { WEAVE_RPC_BINARY_CHUNK_BYTES } from '../../../packages/protocol/src/schema.ts';
+import { RpcPeer, type RpcSocket } from '@weave/protocol/peer';
+import { WEAVE_RPC_BINARY_CHUNK_BYTES } from '@weave/protocol';
 import { createOwnerRequestContext } from '../owner/context.ts';
 import type { RpcSession } from './router.ts';
 import { BinaryTransferRegistry } from './binary-transfers.ts';

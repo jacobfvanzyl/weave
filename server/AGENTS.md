@@ -14,7 +14,8 @@ This directory is the Weave **Deno** server written in TypeScript. It owns HTTP 
 ## Commands
 
 ```bash
-deno task dev # Start the Deno server at localhost:4111
+pnpm install # Run once from the repository root
+pnpm dev:server # Start the Deno server at localhost:4111
 deno task build # Deno-check the server entrypoint
 deno task start # Start the Deno server
 deno task check # Deno-check the server entrypoint
@@ -39,9 +40,9 @@ Top-level files define how your Mastra project is configured, built, and connect
 | File                  | Description                                                                                                       |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `src/agent/mastra/index.ts` | Private entry point where the Weave Agent configures and initializes Mastra.                                      |
-| `deno.json`           | Deno tasks, compiler options, and npm import map.                                                                 |
+| `deno.json`           | Deno tasks and compiler options. Node modules are supplied by the root PNPM workspace in manual mode.             |
 | `.env.example`        | Template for server environment variables - copy and rename to `.env` to add secrets.                             |
-| `package.json`        | Defines project metadata, dependencies, and available npm scripts.                                                |
+| `package.json`        | Sole declaration point for the server's npm dependencies and package-local scripts.                              |
 | `tsconfig.json`       | Configures TypeScript options such as path aliases, compiler settings, and build output.                          |
 
 ## Boundaries
@@ -60,6 +61,7 @@ Top-level files define how your Mastra project is configured, built, and connect
 - Never commit `.env` files or secrets
 - Never modify `node_modules` or Mastra's database files directly
 - Never hardcode API keys (always use environment variables)
+- Never install server dependencies separately; run `pnpm install` at the repository root
 ## Resources
 
 - [Mastra Documentation](https://mastra.ai/llms.txt)

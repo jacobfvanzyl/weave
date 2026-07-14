@@ -4,9 +4,9 @@ import {
   binaryTransferDescriptorSchema,
   type BinaryTransferDescriptor,
   WEAVE_RPC_BINARY_CHUNK_BYTES,
-} from '../../../packages/protocol/src/schema.ts';
-import { RpcApplicationError } from '../../../packages/protocol/src/peer.ts';
-import { rpcErrorCode } from '../../../packages/protocol/src/schema.ts';
+} from '@weave/protocol';
+import { RpcApplicationError } from '@weave/protocol/peer';
+import { rpcErrorCode } from '@weave/protocol';
 import type { RpcSession } from './router.ts';
 
 const maxAttachmentBytes = 10 * 1024 * 1024;

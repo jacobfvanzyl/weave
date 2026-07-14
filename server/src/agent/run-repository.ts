@@ -194,6 +194,15 @@ export class AgentRunRepository {
     ], 'write');
   }
 
+  async updateMetadata(runId: string, metadata: Record<string, unknown>) {
+    const db = await this.getDb();
+    await db.execute({
+      sql: `update agent_runs set metadata = metadata || ?::jsonb, updated_at = now() where run_id = ?`,
+      args: [JSON.stringify(metadata), runId],
+    });
+    return this.get(runId);
+  }
+
   async settle(
     runId: string,
     status: Extract<AgentRunRecordStatus, 'completed' | 'failed' | 'cancelled'>,

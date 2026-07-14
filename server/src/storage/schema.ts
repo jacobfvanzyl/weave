@@ -251,6 +251,8 @@ export const threadCompactions = weaveSchema.table(
     status: text('status').notNull(),
     instructions: text('instructions'),
     summary: text('summary'),
+    checkpointJson: jsonb('checkpoint_json'),
+    compactionMode: text('compaction_mode'),
     compactedThroughMessageId: text('compacted_through_message_id'),
     compactedThroughCreatedAt: timestamp('compacted_through_created_at', { withTimezone: true }),
     compactedMessageCount: integer('compacted_message_count'),
@@ -269,6 +271,10 @@ export const threadCompactions = weaveSchema.table(
     sourceTokens: integer('source_tokens'),
     summaryTokens: integer('summary_tokens'),
     projectedTokens: integer('projected_tokens'),
+    projectionBeforeTokens: integer('projection_before_tokens'),
+    projectionAfterTokens: integer('projection_after_tokens'),
+    reclaimedTokens: integer('reclaimed_tokens'),
+    decisionReason: text('decision_reason'),
     sourceFingerprint: text('source_fingerprint'),
     error: text('error'),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
@@ -283,7 +289,14 @@ export const threadCompactions = weaveSchema.table(
     ),
     index('thread_compactions_resource_thread_created_idx').on(table.resourceId, table.threadId, table.createdAt),
     check('thread_compactions_trigger_check', sql`${table.trigger} in ('manual', 'automatic')`),
-    check('thread_compactions_status_check', sql`${table.status} in ('running', 'completed', 'failed', 'cancelled')`),
+    check(
+      'thread_compactions_status_check',
+      sql`${table.status} in ('running', 'completed', 'rejected', 'failed', 'cancelled')`,
+    ),
+    check(
+      'thread_compactions_mode_check',
+      sql`${table.compactionMode} is null or ${table.compactionMode} in ('incremental', 'rebuild')`,
+    ),
   ],
 );
 

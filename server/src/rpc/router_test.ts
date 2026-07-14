@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1';
-import { RpcPeer, RpcRemoteError, type RpcSocket } from '../../../packages/protocol/src/peer.ts';
+import { RpcPeer, RpcRemoteError, type RpcSocket } from '@weave/protocol/peer';
 import { createOwnerRequestContext } from '../owner/context.ts';
 import { RpcRouter, type RpcSession } from './router.ts';
 

@@ -3,11 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "description": "Weave Deno server",
+  "files": [
+    "deno.json",
+    "deno.lock",
+    "drizzle",
+    "drizzle.config.ts",
+    "src"
+  ],
   "scripts": {
-    "dev": "deno task --config deno.json dev",
-    "build": "deno task --config deno.json build",
-    "start": "deno task --config deno.json start",
-    "check": "deno task --config deno.json check"
+    "dev": "deno task dev",
+    "build": "deno task build",
+    "start": "deno task start",
+    "check": "deno task check"
   },
   "type": "module",
   "engines": {
@@ -15,25 +22,25 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "3.0.84",
-    "@ai-sdk/provider": "2.0.1",
-    "@ai-sdk/provider-utils": "3.0.23",
     "@aws-sdk/client-s3": "^3.1081.0",
     "@dbos-inc/dbos-sdk": "4.23.6",
     "@mastra/ai-sdk": "1.4.5",
-    "@mastra/core": "1.42.0",
+    "@mastra/core": "catalog:",
     "@mastra/loggers": "1.1.2",
     "@mastra/memory": "1.20.3",
     "@mastra/observability": "1.14.1",
     "@mastra/pg": "1.13.0",
+    "@weave/protocol": "workspace:*",
     "drizzle-orm": "0.45.2",
     "exa-js": "2.13.0",
     "hono": "4.12.18",
     "pg": "8.22.0",
-    "yaml": "2.9.0",
-    "zod": "4.4.3"
+    "yaml": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@libsql/client": "0.17.4",
+    "@types/node": "catalog:",
     "@types/pg": "8.15.6",
     "drizzle-kit": "0.31.10"
   }

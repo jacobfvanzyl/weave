@@ -1,4 +1,4 @@
-import { RpcPeer, type RpcSocket } from '../../../../packages/protocol/src/peer.ts';
+import { RpcPeer, type RpcSocket } from '@weave/protocol/peer';
 import { connectPortalRpc, disconnectPortalRpc } from '../../portal/registry.ts';
 import { callerForOwner, ServiceError } from '../types.ts';
 import { PortalProvider, portalToolScope } from './portal-provider.ts';

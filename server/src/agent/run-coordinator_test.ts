@@ -144,6 +144,44 @@ Deno.test('AgentRunCoordinator surfaces a run-record persistence failure before 
   await assertRejects(() => coordinator.flushPersistence(run), 'database unavailable');
 });
 
+Deno.test('AgentRunCoordinator persists phase changes and owns one background execution', async () => {
+  const metadataUpdates: Record<string, unknown>[] = [];
+  const coordinator = new AgentRunCoordinator({
+    subscribeContextUsage: () => () => undefined,
+    repository: {
+      create: async () => undefined,
+      updateMetadata: async (_runId: string, metadata: Record<string, unknown>) => {
+        metadataUpdates.push(metadata);
+      },
+    } as any,
+  });
+  let releaseExecution: () => void = () => undefined;
+  const executionGate = new Promise<void>((resolve) => {
+    releaseExecution = resolve;
+  });
+  let executionCount = 0;
+  try {
+    const run = coordinator.createThreadRun('resource-1', 'thread-1', [], { phase: 'compacting' });
+    const first = coordinator.startRunExecution(run, async () => {
+      executionCount += 1;
+      await executionGate;
+    });
+    const duplicate = coordinator.startRunExecution(run, async () => {
+      executionCount += 1;
+    });
+    assert(first === duplicate, 'duplicate ownership must return the same execution promise');
+    coordinator.setPhase(run, 'generating');
+    await coordinator.flushPersistence(run);
+    assertEquals(executionCount, 1);
+    assertEquals(coordinator.getThreadRunSnapshot('resource-1', 'thread-1').phase, 'generating');
+    assertEquals(metadataUpdates, [{ phase: 'generating' }]);
+    releaseExecution();
+    await first;
+  } finally {
+    coordinator.clearForTests();
+  }
+});
+
 Deno.test('AgentRunCoordinator keeps only one current run per resource/thread key', () => {
   const { coordinator, unsubscribeCount } = createTestCoordinator();
   try {

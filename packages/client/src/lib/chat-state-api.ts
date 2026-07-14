@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { RpcRemoteError } from '@weave/protocol';
+import { RpcRemoteError, type ThreadRunPhase } from '@weave/protocol';
 import { rpcRequest } from './mastra-client';
 import { productForProjectKind, type ProductId } from './products';
 import { selectPreferredThreadProposal } from './proposal-review-state';
@@ -647,6 +647,7 @@ export const listServerMessages = async (threadId: string) => {
 export type ThreadRunState = {
   active: boolean;
   status: 'idle' | 'running' | 'cancelling' | 'completed' | 'cancelled' | 'error';
+  phase?: ThreadRunPhase;
   runId?: string;
   startedAt?: string;
   updatedAt?: string;

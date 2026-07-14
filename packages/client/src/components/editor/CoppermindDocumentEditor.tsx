@@ -192,9 +192,9 @@ type CoppermindCanvasToolController = {
 
 type CoppermindCanvasToolState = {
   activeTool?: CoppermindCanvasToolId;
-  brushColor: string;
+  brushColor: LineColor;
   brushLineWidth: LineWidth;
-  shapeFillColor: string;
+  shapeFillColor: ShapeFillColor;
   shapeName: ShapeName;
 };
 
@@ -756,12 +756,14 @@ const normalizeCanvasToolId = (
 const isTransparentColor = (color: string) =>
   color.toLowerCase().endsWith("transparent");
 
-const shapeStrokeFromFill = (fillColor: string) => {
+const shapeStrokeFromFill = (fillColor: ShapeFillColor): LineColor => {
   const strokeColor = fillColor.replace(
     "--affine-palette-shape-",
     "--affine-palette-line-",
   );
-  return isTransparentColor(strokeColor) ? LineColor.Grey : strokeColor;
+  return isTransparentColor(strokeColor)
+    ? LineColor.Grey
+    : strokeColor as LineColor;
 };
 
 const coppermindSectionDragDataType = "application/x-coppermind-section-id";
@@ -1113,9 +1115,9 @@ const getCanvasToolState = (
 
   return {
     activeTool: normalizeCanvasToolId(currentTool.type),
-    brushColor: props.brush.color as string,
+    brushColor: props.brush.color as LineColor,
     brushLineWidth: props.brush.lineWidth,
-    shapeFillColor: shapeProps.fillColor as string,
+    shapeFillColor: shapeProps.fillColor as ShapeFillColor,
     shapeName,
   };
 };
@@ -1148,12 +1150,12 @@ const getCanvasToolBindings = (
     const nextShape = shapeName ?? ShapeType.Rect;
     controller.setTool("shape", { shapeName: nextShape });
   },
-  updateBrush: (props: { color?: string; lineWidth?: LineWidth }) => {
+  updateBrush: (props: { color?: LineColor; lineWidth?: LineWidth }) => {
     if (!controller || !editPropsStore) return;
     editPropsStore.recordLastProps("brush", props);
     controller.setTool("brush");
   },
-  updateShapeFill: (shapeName: ShapeName, fillColor: string) => {
+  updateShapeFill: (shapeName: ShapeName, fillColor: ShapeFillColor) => {
     if (!controller || !editPropsStore) return;
     editPropsStore.recordLastProps(`shape:${shapeName}`, {
       filled: !isTransparentColor(fillColor),

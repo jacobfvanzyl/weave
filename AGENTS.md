@@ -23,17 +23,16 @@ Public HTTP behavior should be registered by modules under `server/src/modules`.
 ## Commands
 
 ```bash
-deno task server:install
-deno task dev # starts the Deno server
-deno task server:dev
-deno task portal:dev
-deno task desktop:dev
-deno task web:dev
-deno task build # Deno-checks the server entrypoint
-deno task desktop:typecheck
-deno task desktop:test
+pnpm install # always install from the repository root
+pnpm dev:server
+pnpm dev:desktop
+pnpm dev:web
+pnpm dev:mobile -- [mobile options]
+cd portal && deno task dev
+deno task server:build
 deno task portal:check
 deno task portal:test
+deno task tui:check
 ```
 
 ## Raspberry Pi Server Deployment
@@ -60,4 +59,5 @@ one-time setup, Tailscale endpoints, cutover procedure, and recovery details.
 
 - Do not commit `.env` files or secrets.
 - Do not modify `node_modules` or Mastra database files directly.
-- Prefer root scripts for cross-package commands and package-local scripts when working inside one package.
+- Use PNPM 11.13.0 for every `package.json` project and never create npm, Bun, or Yarn lockfiles.
+- Prefer the four root PNPM scripts for app development and package-local scripts for focused checks or builds.

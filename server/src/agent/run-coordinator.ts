@@ -5,6 +5,7 @@ import {
   logServerPerfEvent,
   memoryDelta,
 } from '../server/perf';
+import type { ThreadRunPhase } from '@weave/protocol';
 import {
   isCompactToolHistoryTextPart,
   isLegacyCompactToolHistoryText,
@@ -34,6 +35,8 @@ export type AgentThreadRunStatus =
   | 'cancelled'
   | 'error';
 
+export type AgentThreadRunPhase = ThreadRunPhase;
+
 type AgentThreadRunEvent =
   | { type: 'chunk'; sequence: number; chunk: unknown }
   | { type: 'close' }
@@ -49,8 +52,10 @@ export type AgentThreadRun = {
   mastraRunId: string;
   executionProfile: ExecutionProfile;
   model?: string;
+  metadata: Record<string, unknown>;
   requestContext?: unknown;
   status: AgentThreadRunStatus;
+  phase?: AgentThreadRunPhase;
   startedAt: string;
   updatedAt: string;
   controller: AbortController;
@@ -66,11 +71,13 @@ export type AgentThreadRun = {
   terminalChunkType?: string;
   error?: string;
   perf?: ChatRunPerf;
+  executionPromise?: Promise<void>;
 };
 
 export type AgentThreadRunSnapshot = {
   active: boolean;
   status: AgentThreadRunStatus | 'idle';
+  phase?: AgentThreadRunPhase;
   runId?: string;
   startedAt?: string;
   updatedAt?: string;
@@ -583,6 +590,7 @@ export const toThreadRunSnapshot = (run: AgentThreadRun | undefined): AgentThrea
   ...(run
     ? {
       runId: run.runId,
+      ...(run.phase ? { phase: run.phase } : {}),
       startedAt: run.startedAt,
       updatedAt: run.updatedAt,
       durationMs: getRunDurationMs(run, isActiveThreadRun(run) ? Date.now() : Date.parse(run.updatedAt)),
@@ -1322,11 +1330,13 @@ export class AgentRunCoordinator {
     threadId: string,
     submittedUserMessages: unknown[] = [],
     options: {
+      runId?: string;
       mastraRunId?: string;
       executionProfile?: ExecutionProfile;
       model?: string;
       requestContext?: unknown;
       metadata?: Record<string, unknown>;
+      phase?: AgentThreadRunPhase;
     } = {},
   ) {
     const key = threadRunKey(resourceId, threadId);
@@ -1339,12 +1349,14 @@ export class AgentRunCoordinator {
       key,
       resourceId,
       threadId,
-      runId: crypto.randomUUID(),
+      runId: options.runId ?? crypto.randomUUID(),
       mastraRunId: options.mastraRunId ?? crypto.randomUUID(),
       executionProfile: options.executionProfile ?? 'workspace',
       model: options.model,
+      metadata: { ...(options.metadata ?? {}), ...(options.phase ? { phase: options.phase } : {}) },
       requestContext: options.requestContext,
       status: 'running',
+      phase: options.phase,
       startedAt: now,
       updatedAt: now,
       controller: new AbortController(),
@@ -1368,7 +1380,7 @@ export class AgentRunCoordinator {
         mastraRunId: run.mastraRunId,
         executionProfile: run.executionProfile,
         model: run.model,
-        metadata: options.metadata,
+        metadata: run.metadata,
         startedAt: now,
       }).then(() => undefined).catch((error) => {
         run.persistenceError = error;
@@ -1402,8 +1414,12 @@ export class AgentRunCoordinator {
       mastraRunId: record.mastraRunId,
       executionProfile: record.executionProfile,
       model: record.model,
+      metadata: record.metadata,
       requestContext: options.requestContext,
       status: 'awaiting_approval',
+      phase: record.metadata.phase === 'compacting' || record.metadata.phase === 'generating'
+        ? record.metadata.phase
+        : undefined,
       startedAt: record.startedAt,
       updatedAt: record.updatedAt,
       controller: new AbortController(),
@@ -1456,6 +1472,31 @@ export class AgentRunCoordinator {
 
     for (const listener of run.listeners) listener({ type: 'chunk', sequence, chunk });
     if (toolApprovalChunk(chunk)) run.status = 'awaiting_approval';
+  }
+
+  setPhase(run: AgentThreadRun, phase: AgentThreadRunPhase) {
+    if (this.runs.get(run.key) !== run || !activeThreadRunStatuses.has(run.status)) return;
+    run.phase = phase;
+    run.metadata = { ...run.metadata, phase };
+    run.updatedAt = new Date().toISOString();
+    if (this.repository) {
+      run.persistenceChain = run.persistenceChain.then(() => this.repository!.updateMetadata(run.runId, { phase }))
+        .then(() => undefined).catch((error) => {
+          run.persistenceError = error;
+          run.controller.abort(error);
+          queueMicrotask(() => this.settleRun(run, 'error', error));
+        });
+    }
+  }
+
+  startRunExecution(run: AgentThreadRun, execute: (signal: AbortSignal) => Promise<void>) {
+    if (run.executionPromise) return run.executionPromise;
+    run.executionPromise = execute(run.controller.signal).catch((error) => {
+      if (activeThreadRunStatuses.has(run.status)) {
+        this.settleRun(run, run.controller.signal.aborted ? 'cancelled' : 'error', error);
+      }
+    });
+    return run.executionPromise;
   }
 
   completeRun(run: AgentThreadRun) {

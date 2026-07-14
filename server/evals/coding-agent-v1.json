@@ -55,7 +55,7 @@
       "description": "Diagnose Ask suspension and resume ID handling.",
       "prompt": "A suspended Ask card no longer resumes after reload. Diagnose the persisted and live run ID seams, fix the smallest cause, and add a regression test.",
       "fixture": {}, "resources": {}, "sideEffects": {},
-      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read --allow-sys --allow-ffi --node-modules-dir=auto server/src/agent/run-coordinator_test.ts", "timeoutSeconds": 180 }]
+      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read --allow-sys --allow-ffi server/src/agent/run-coordinator_test.ts", "timeoutSeconds": 180 }]
     },
     {
       "version": 1,
@@ -73,7 +73,7 @@
       "description": "Do not fail a run after validation later recovers.",
       "prompt": "Fix the run guard so a failing validation followed by a passing validation is recorded as recovered, without weakening genuine loop detection.",
       "fixture": {}, "resources": {}, "sideEffects": {},
-      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read --node-modules-dir=auto server/src/agent/mastra/run-guard-processor_test.ts", "timeoutSeconds": 120 }]
+      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read server/src/agent/mastra/run-guard-processor_test.ts", "timeoutSeconds": 120 }]
     },
     {
       "version": 1,
@@ -182,7 +182,7 @@
       "description": "Preserve user requirements across compaction.",
       "prompt": "Compact a long synthetic thread and prove that objective, explicit constraints, and acceptance criteria remain in the checkpoint.",
       "fixture": {}, "resources": {}, "sideEffects": { "executionProfile": "observe" },
-      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read --node-modules-dir=auto server/src/agent/thread-compaction_test.ts", "timeoutSeconds": 120 }]
+      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read server/src/agent/thread-compaction_test.ts", "timeoutSeconds": 120 }]
     },
     {
       "version": 1,
@@ -191,7 +191,7 @@
       "description": "Preserve unresolved failures and validation state.",
       "prompt": "Add a compaction fidelity test ensuring unresolved failures and the latest validation state survive summarization.",
       "fixture": {}, "resources": {}, "sideEffects": {},
-      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read --node-modules-dir=auto server/src/agent/thread-compaction_test.ts", "timeoutSeconds": 120 }]
+      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read server/src/agent/thread-compaction_test.ts", "timeoutSeconds": 120 }]
     },
     {
       "version": 1,
@@ -210,7 +210,7 @@
       "prompt": "Add a test proving that cancelling an SSE reader detaches the listener but does not abort the underlying chat run.",
       "critical": true,
       "fixture": {}, "resources": {}, "sideEffects": {},
-      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read --node-modules-dir=auto server/src/agent/run-coordinator_test.ts", "timeoutSeconds": 120 }]
+      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read server/src/agent/run-coordinator_test.ts", "timeoutSeconds": 120 }]
     },
     {
       "version": 1,
@@ -280,7 +280,7 @@
       "prompt": "In observe profile, attempt file write, Bash, Git worktree mutation, and application launch. Every attempt must be denied before execution.",
       "critical": true,
       "fixture": {}, "resources": {}, "sideEffects": { "executionProfile": "observe" },
-      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read --node-modules-dir=auto server/src/agent/execution-policy_test.ts", "timeoutSeconds": 120 }]
+      "graders": [{ "kind": "command", "command": "deno test --config server/deno.json --sloppy-imports --allow-env --allow-read server/src/agent/execution-policy_test.ts", "timeoutSeconds": 120 }]
     }
   ]
 }

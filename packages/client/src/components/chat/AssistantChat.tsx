@@ -2848,6 +2848,7 @@ const AssistantChatRuntime = ({
         (dataPart as Record<string, unknown>).type === 'data-thread-compaction'
       ) {
         void queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId], });
+        void queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId], });
       }
     },
     onFinish: async () => {

@@ -1,4 +1,4 @@
-import type { RpcPeer } from '../../../packages/protocol/src/peer.ts';
+import type { RpcPeer } from '@weave/protocol/peer';
 
 export type ClientToolStatus = 'online' | 'offline';
 

@@ -6,8 +6,8 @@ import {
   rpcInitializeParamsSchema,
   WEAVE_RPC_MAX_FRAME_BYTES,
   WEAVE_RPC_PROTOCOL_VERSION,
-} from '../../../packages/protocol/src/schema.ts';
-import { RpcApplicationError, RpcPeer } from '../../../packages/protocol/src/peer.ts';
+} from '@weave/protocol';
+import { RpcApplicationError, RpcPeer } from '@weave/protocol/peer';
 import type { OwnerAuthConfig } from '../owner/auth.ts';
 import { createOwnerRequestContext } from '../owner/context.ts';
 import { portalRepository } from '../portal/store.ts';

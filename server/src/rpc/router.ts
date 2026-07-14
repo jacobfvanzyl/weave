@@ -1,5 +1,5 @@
-import type { RpcPeer } from '../../../packages/protocol/src/peer.ts';
-import { rpcMethodNameSchema } from '../../../packages/protocol/src/schema.ts';
+import type { RpcPeer } from '@weave/protocol/peer';
+import { rpcMethodNameSchema } from '@weave/protocol';
 import type { OwnerContext } from '../owner/context.ts';
 
 export type RpcSessionRole = 'client' | 'portal';

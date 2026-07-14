@@ -1,6 +1,9 @@
+import type { ThreadCompactionEventData } from "@weave/protocol";
+
 export type ThreadCompactionDisplay = {
-  trigger: "automatic" | "manual";
+  trigger: ThreadCompactionEventData["trigger"];
   generation?: number;
+  compactionId?: string;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -17,6 +20,7 @@ export const getThreadCompactionDisplay = (
   }
   return {
     trigger: display.trigger,
+    ...(typeof display.compactionId === "string" ? { compactionId: display.compactionId } : {}),
     ...(typeof display.generation === "number"
       ? { generation: display.generation }
       : {}),
@@ -36,6 +40,7 @@ export const getThreadCompactionPartDisplay = (
   }
   return {
     trigger: part.data.trigger,
+    ...(typeof part.data.compactionId === "string" ? { compactionId: part.data.compactionId } : {}),
     ...(typeof part.data.generation === "number"
       ? { generation: part.data.generation }
       : {}),

@@ -195,6 +195,24 @@ export type BinaryAckParams = z.infer<typeof binaryAckParamsSchema>;
 export type BinaryCompleteParams = z.infer<typeof binaryCompleteParamsSchema>;
 export type BinaryAbortParams = z.infer<typeof binaryAbortParamsSchema>;
 
+export const threadRunPhaseSchema = z.enum(['compacting', 'generating']);
+export type ThreadRunPhase = z.infer<typeof threadRunPhaseSchema>;
+
+export const threadCompactionEventDataSchema = z.object({
+  phase: z.enum(['started', 'completed', 'rejected', 'failed', 'cancelled']),
+  compactionId: z.string().min(1),
+  origin: z.enum(['pre_run', 'mid_run', 'manual']),
+  trigger: z.enum(['automatic', 'manual']),
+  generation: z.number().int().positive(),
+  mode: z.enum(['incremental', 'rebuild']),
+  reason: z.string().optional(),
+  tokensBefore: z.number().int().nonnegative().optional(),
+  tokensAfter: z.number().int().nonnegative().optional(),
+  reclaimedTokens: z.number().int().optional(),
+  headroomTokens: z.number().int().optional(),
+}).strict();
+export type ThreadCompactionEventData = z.infer<typeof threadCompactionEventDataSchema>;
+
 export const rpcMethodNames = [
   'initialize',
   'connection.ping',

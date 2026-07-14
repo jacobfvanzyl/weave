@@ -1,4 +1,4 @@
-import type { RpcPeer } from '../../../packages/protocol/src/peer.ts';
+import type { RpcPeer } from '@weave/protocol/peer';
 import { notifyClientRpcHosts } from '../client-tools/registry.ts';
 
 export type PortalStatus = 'online' | 'offline';

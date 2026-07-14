@@ -8,7 +8,10 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(scriptDir, '..');
+const electronRoot = path.join(desktopRoot, 'node_modules', 'electron');
+const electronInstallScriptPath = path.join(electronRoot, 'install.js');
 const sourceDistPath = path.join(desktopRoot, 'node_modules', 'electron', 'dist');
+const sourceElectronPath = path.join(sourceDistPath, 'Electron.app', 'Contents', 'MacOS', 'Electron');
 const signedDistPath = path.join(desktopRoot, '.electron-signed-dev');
 const appPath = path.join(signedDistPath, 'Electron.app');
 const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist');
@@ -47,8 +50,17 @@ if (process.platform !== 'darwin') {
   process.exit(0);
 }
 
-if (!existsSync(sourceDistPath)) {
-  throw new Error('Electron dist was not found. Run npm install in desktop/ first.');
+if (!existsSync(electronInstallScriptPath)) {
+  throw new Error('Electron was not found. Run pnpm install from the repository root first.');
+}
+
+if (!existsSync(sourceElectronPath)) {
+  console.log('Electron runtime was not found; downloading it now.');
+  run(process.execPath, [electronInstallScriptPath], { stdio: 'inherit' });
+}
+
+if (!existsSync(sourceElectronPath)) {
+  throw new Error('Electron runtime installation completed without creating the Electron executable.');
 }
 
 const identity = findSigningIdentity();

@@ -1,0 +1,49 @@
+packages:
+  - server
+  - web
+  - mobile
+  - desktop
+  - packages/*
+
+catalog:
+  '@blocksuite/store': 0.19.5
+  '@capacitor/preferences': ^8.0.1
+  '@codemirror/commands': ^6.10.0
+  '@codemirror/state': ^6.6.0
+  '@lezer/highlight': ^1.2.3
+  '@mastra/core': 1.42.0
+  '@tailwindcss/vite': ^4.1.18
+  '@types/node': ^25.6.2
+  '@types/react': ^19.2.7
+  '@types/react-dom': ^19.2.3
+  '@vitejs/plugin-react': ^5.1.1
+  lucide-react: ^0.561.0
+  react: ^19.2.3
+  react-dom: ^19.2.3
+  typescript: ^5.9.3
+  vite: ^7.2.7
+  vitest: ^4.0.15
+  yaml: 2.9.0
+  zod: 4.4.3
+
+overrides:
+  '@blocksuite/icons': 2.1.75
+
+pmOnFail: error
+verifyDepsBeforeRun: error
+disallowWorkspaceCycles: true
+injectWorkspacePackages: true
+strictDepBuilds: true
+# PNPM 11.7 defaults this differently in CI, which otherwise invalidates the local modules tree.
+enableGlobalVirtualStore: false
+# Deno resolves Node type directives from the workspace root in manual mode.
+publicHoistPattern:
+  - '@types/node'
+# Electron Forge 7.11.2 pins Electron's Node-gyp fork to an exact Git commit.
+blockExoticSubdeps: false
+
+allowBuilds:
+  esbuild: true
+  fs-xattr: true
+  fsevents: true
+  macos-alias: true

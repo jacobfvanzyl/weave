@@ -1,5 +1,5 @@
-import { RpcApplicationError } from '../../../packages/protocol/src/peer.ts';
-import { rpcErrorCode } from '../../../packages/protocol/src/schema.ts';
+import { RpcApplicationError } from '@weave/protocol/peer';
+import { rpcErrorCode } from '@weave/protocol';
 import { ServiceError } from '../services/types.ts';
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>

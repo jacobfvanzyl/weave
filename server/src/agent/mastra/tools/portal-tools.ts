@@ -199,26 +199,6 @@ type PortalBashOutput = PortalBaseOutput & {
   outputLines?: number;
 };
 
-type CommandSessionOutput = PortalBaseOutput & {
-  id?: string;
-  status?: string;
-  cwd?: string;
-  startedAt?: string;
-  updatedAt?: string;
-  finishedAt?: string;
-  exitCode?: number;
-  timedOut?: boolean;
-  sandboxed?: boolean;
-  network?: 'denied' | 'host';
-  nextOffset?: number;
-  baseOffset?: number;
-  outputChars?: number;
-  outputBytes?: number;
-  outputLines?: number;
-  events?: Array<{ offset?: number; stream?: string; text?: string; at?: string }>;
-  validation?: 'test' | 'typecheck' | 'lint' | 'build' | 'other';
-};
-
 export const normalizePortalResult = (result: unknown) => {
   const record = result && typeof result === 'object' && !Array.isArray(result)
     ? result as Record<string, unknown>
@@ -472,6 +452,8 @@ const commandSessionOutputSchema = z.object({
   events: z.array(commandEventSchema).optional(),
   validation: z.enum(['test', 'typecheck', 'lint', 'build', 'other']).optional(),
 });
+
+type CommandSessionOutput = z.infer<typeof commandSessionOutputSchema>;
 
 const payloadTextMaxInlineChars = 2_000;
 const payloadTextPreviewChars = 1_200;

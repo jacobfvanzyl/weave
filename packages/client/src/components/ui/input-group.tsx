@@ -3,9 +3,9 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
-import { cn } from "~/lib/utils";
-import { Input, type InputProps } from "~/components/ui/input";
-import { Textarea, type TextareaProps } from "~/components/ui/textarea";
+import { cn } from "@weave/client/lib/utils";
+import { Input, type InputProps } from "@weave/client/components/ui/input";
+import { Textarea, type TextareaProps } from "@weave/client/components/ui/textarea";
 
 function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
   return (

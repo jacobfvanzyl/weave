@@ -26,25 +26,12 @@ const preferencesMock = vi.hoisted(() => {
   };
 });
 
-const mockVirtual = vi.mock as unknown as (
-  path: string,
-  factory: () => unknown,
-  options: { virtual: true },
-) => void;
-
-mockVirtual('@capacitor/preferences', () => ({
+vi.mock('@capacitor/preferences', () => ({
   Preferences: {
     get: preferencesMock.get,
     set: preferencesMock.set,
   },
-}), { virtual: true });
-
-mockVirtual('__vite-optional-peer-dep:@capacitor/preferences:@weave/client:false', () => ({
-  Preferences: {
-    get: preferencesMock.get,
-    set: preferencesMock.set,
-  },
-}), { virtual: true });
+}));
 
 type PersistedSettings = {
   mastraUrl?: string;
@@ -67,7 +54,7 @@ const loadFreshAdapter = async (env: Env, persisted?: PersistedSettings) => {
     if (value !== undefined) vi.stubEnv(key, value);
   }
 
-  const { createMobileConnectionAdapter } = await import('../../packages/client/src/lib/mobile-connection-adapter');
+  const { createMobileConnectionAdapter } = await import('./mobile-connection-adapter');
   return createMobileConnectionAdapter();
 };
 

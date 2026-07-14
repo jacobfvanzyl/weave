@@ -7,7 +7,7 @@ Portal is the Deno daemon that performs host-side tools, terminal sessions, work
 ```bash
 # The server must already be reachable on port 4111.
 deno task portal:login -- --token OWNER_TOKEN --name "My Laptop"
-deno task portal:dev
+cd portal && deno task dev
 deno task portal:status
 deno task portal:stop
 deno task portal:build

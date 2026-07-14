@@ -3,7 +3,7 @@
 import { Dialog as CommandDialogPrimitive } from "@base-ui/react/dialog";
 import { SearchIcon } from "lucide-react";
 import type * as React from "react";
-import { cn } from "~/lib/utils";
+import { cn } from "@weave/client/lib/utils";
 import {
   Autocomplete,
   AutocompleteCollection,
@@ -14,7 +14,7 @@ import {
   AutocompleteItem,
   AutocompleteList,
   AutocompleteSeparator,
-} from "~/components/ui/autocomplete";
+} from "@weave/client/components/ui/autocomplete";
 
 const CommandDialog = CommandDialogPrimitive.Root;
 

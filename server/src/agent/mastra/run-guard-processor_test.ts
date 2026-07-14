@@ -30,8 +30,8 @@ Deno.test('run guard counts only consecutive identical calls', () => {
 Deno.test('run guard treats a passing validation after failure as recovered', () => {
   const snapshot = summarizeRunGuard(
     [
-      { toolCalls: [call('1', 'npm run test', 'test')], toolResults: [result('1', false)] },
-      { toolCalls: [call('2', 'npm run test', 'test')], toolResults: [result('2', true)] },
+      { toolCalls: [call('1', 'pnpm test', 'test')], toolResults: [result('1', false)] },
+      { toolCalls: [call('2', 'pnpm test', 'test')], toolResults: [result('2', true)] },
     ],
     [],
     options,

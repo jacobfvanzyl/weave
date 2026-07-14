@@ -1,5 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert@1';
-import { RpcPeer, type RpcSocket } from '../../../packages/protocol/src/peer.ts';
+import { RpcPeer, type RpcSocket } from '@weave/protocol/peer';
 import { connectClientToolRpcHost, disconnectClientToolRpcHost } from '../client-tools/registry.ts';
 import { connectPortalRpc, disconnectPortalRpc } from '../portal/registry.ts';
 
