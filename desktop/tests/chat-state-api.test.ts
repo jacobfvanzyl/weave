@@ -904,6 +904,107 @@ describe('chat-state Project/Workspace API client', () => {
     expect(useChatStore.getState().threads[0].draft).toBeUndefined();
   });
 
+  it('keeps a first-send thread selected until a server list observes it', async () => {
+    const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
+    const now = '2026-06-03T08:00:00.000Z';
+    let resolveCreate: (value: unknown) => void = () => undefined;
+    const createResponse = new Promise(resolve => {
+      resolveCreate = resolve;
+    });
+    installRpcMock(async (method: string) => {
+      if (method !== 'chat.thread.create') throw new Error(`Unexpected RPC method: ${method}`);
+      return await createResponse;
+    });
+    useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread' });
+    useChatStore.setState({
+      resourceId: 'browser-user-test',
+      threads: [{ id: 'draft-thread', title: '...', createdAt: now, updatedAt: now, draft: true }],
+      hasInitializedThreads: true,
+    });
+
+    const persist = useChatStore.getState().ensureThreadPersisted('draft-thread', 'Hello');
+
+    expect(useChatStore.getState().threads[0]).toMatchObject({
+      id: 'draft-thread',
+      persistenceState: 'creating',
+    });
+    useChatStore.getState().setServerThreads([]);
+    expect(useWorkspaceSurfaceStore.getState().threadId).toBe('draft-thread');
+    expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual(['draft-thread']);
+
+    resolveCreate({
+      thread: {
+        id: 'draft-thread',
+        title: 'Hello',
+        resourceId: 'browser-user-test',
+        createdAt: now,
+        updatedAt: now,
+        metadata: {},
+      },
+    });
+    await persist;
+
+    expect(useChatStore.getState().threads[0]).toMatchObject({
+      id: 'draft-thread',
+      persistenceState: 'awaiting_server_list',
+    });
+    useChatStore.getState().setServerThreads([]);
+    expect(useWorkspaceSurfaceStore.getState().threadId).toBe('draft-thread');
+    expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual(['draft-thread']);
+
+    useChatStore.getState().setServerThreads([{
+      id: 'draft-thread',
+      title: 'Hello',
+      createdAt: now,
+      updatedAt: now,
+    }]);
+    expect(useChatStore.getState().threads[0]).toMatchObject({ id: 'draft-thread', title: 'Hello' });
+    expect(useChatStore.getState().threads[0].persistenceState).toBeUndefined();
+    expect(useWorkspaceSurfaceStore.getState().threadId).toBe('draft-thread');
+  });
+
+  it('restores a failed first-send persistence attempt to a retryable draft', async () => {
+    const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
+    const now = '2026-06-03T08:00:00.000Z';
+    let attempts = 0;
+    installRpcMock(async (method: string) => {
+      if (method !== 'chat.thread.create') throw new Error(`Unexpected RPC method: ${method}`);
+      attempts += 1;
+      if (attempts === 1) throw new Error('create failed');
+      return {
+        thread: {
+          id: 'draft-thread',
+          title: 'Hello',
+          resourceId: 'browser-user-test',
+          createdAt: now,
+          updatedAt: now,
+          metadata: {},
+        },
+      };
+    });
+    useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread' });
+    useChatStore.setState({
+      resourceId: 'browser-user-test',
+      threads: [{ id: 'draft-thread', title: '...', createdAt: now, updatedAt: now, draft: true }],
+      hasInitializedThreads: true,
+    });
+
+    await expect(useChatStore.getState().ensureThreadPersisted('draft-thread', 'Hello')).rejects.toThrow('create failed');
+
+    expect(useChatStore.getState().threads[0]).toMatchObject({ id: 'draft-thread', draft: true, title: 'Hello' });
+    expect(useChatStore.getState().threads[0].persistenceState).toBeUndefined();
+    useChatStore.getState().setServerThreads([]);
+    expect(useWorkspaceSurfaceStore.getState().threadId).toBe('draft-thread');
+    expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual(['draft-thread']);
+
+    await expect(useChatStore.getState().ensureThreadPersisted('draft-thread', 'Hello')).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
+    expect(useChatStore.getState().threads[0]).toMatchObject({
+      id: 'draft-thread',
+      persistenceState: 'awaiting_server_list',
+    });
+  });
+
   it('does not send draft profileId when first persisting a project thread', async () => {
     const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
     const now = '2026-06-03T08:00:00.000Z';

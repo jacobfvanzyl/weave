@@ -41,6 +41,8 @@ export type ChatThread = {
   latestPlan?: ThreadPlan;
   latestProposal?: ThreadProposal;
   draft?: boolean;
+  // Local-only handoff state; a stale server list must not discard a first-send thread.
+  persistenceState?: 'creating' | 'awaiting_server_list';
 };
 
 export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
@@ -428,7 +430,7 @@ export const useChatStore = create<ChatState>()(
             localThread) => {
               return ( !deletedThreadIds.has(localThread.id) &&
                 !activeThreads.some((serverThread) => serverThread.id === localThread.id) &&
-              isDraftThread(localThread));
+              (isDraftThread(localThread) || localThread.persistenceState !== undefined));
             }
           );
           let nextThreads = [...mappedServerThreads, ...optimisticThreads];
@@ -534,19 +536,37 @@ export const useChatStore = create<ChatState>()(
         set((state) => ({
           threads: state.threads.map((thread) =>
             thread.id === threadId
-              ? { ...thread, title: threadTitle, updatedAt: now, draft: false }
+              ? { ...thread, title: threadTitle, updatedAt: now, draft: false, persistenceState: 'creating' }
               : thread,
           ),
         }));
 
-        const serverThread = existing?.projectId
-          ? (await createProjectThread(existing.projectId, threadId, existing.workspaceId, threadTitle)).thread
-          : await createServerThread(threadId, undefined, undefined, threadTitle);
+        let serverThread: ChatThread;
+        try {
+          serverThread = existing?.projectId
+            ? (await createProjectThread(existing.projectId, threadId, existing.workspaceId, threadTitle)).thread
+            : await createServerThread(threadId, undefined, undefined, threadTitle);
+        } catch (error) {
+          set((state) => ({
+            threads: state.threads.map((thread) =>
+              thread.id === threadId && thread.persistenceState === 'creating'
+                ? { ...thread, draft: true, persistenceState: undefined }
+                : thread,
+            ),
+          }));
+          throw error;
+        }
 
         set((state) => ({
           threads: state.threads.map((thread) =>
             thread.id === threadId
-              ? { ...serverThread, title: thread.title && !['New chat', '...'].includes(thread.title) ? thread.title : serverThread.title, }
+              ? {
+                ...serverThread,
+                title: thread.title && !['New chat', '...'].includes(thread.title) ? thread.title : serverThread.title,
+                ...(thread.persistenceState === 'creating'
+                  ? { persistenceState: 'awaiting_server_list' as const }
+                  : {}),
+              }
               : thread,
           ),
         }));
