@@ -38,6 +38,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { editorExplorerWidthPx } from '../../lib/editor-layout';
 import {
   applyCoppermindAutosaveResult,
   coppermindAutosaveDebounceMs,
@@ -83,6 +84,7 @@ type UnifiedEditorPanelProps = {
   breadcrumb?: ReactNode;
   followRequest?: EditorFollowRequest;
   focusRequest?: number;
+  forceExplorerHoverOnly?: boolean;
   isExpanded: boolean;
   mode: EditorMode;
   onExpandedChange: (isExpanded: boolean) => void;
@@ -563,6 +565,7 @@ export const UnifiedEditorPanel = ({
   breadcrumb,
   followRequest,
   focusRequest = 0,
+  forceExplorerHoverOnly = false,
   isExpanded,
   mode,
   onExpandedChange,
@@ -670,7 +673,8 @@ export const UnifiedEditorPanel = ({
   const isDirty = getBufferDirty(openBuffer);
   const hasDirtyBuffers = Object.values(buffersByTabId).some(getBufferDirty);
   const shouldPersistExplorerOpen = !activeEditorTab;
-  const isExplorerLockedOpen = isExplorerVisible || shouldPersistExplorerOpen;
+  const isExplorerPinned = isExplorerVisible || shouldPersistExplorerOpen;
+  const isExplorerLockedOpen = isExplorerPinned && !forceExplorerHoverOnly;
   const canUseExplorerSlideOver = !isExplorerLockedOpen;
   const isExplorerSlideOverVisible = canUseExplorerSlideOver && isExplorerSlideOverOpen;
   const isExplorerOverlayVisible = isExplorerLockedOpen || isExplorerSlideOverVisible;
@@ -978,9 +982,18 @@ export const UnifiedEditorPanel = ({
 
   const toggleExplorerRail = useCallback(() => {
     clearExplorerSlideOverCloseTimeout();
+    if (forceExplorerHoverOnly) {
+      setIsExplorerSlideOverOpen(true);
+      return;
+    }
     setExplorerVisible(editorTabTargetKey, !isExplorerVisible);
     setIsExplorerSlideOverOpen(false);
-  }, [clearExplorerSlideOverCloseTimeout, editorTabTargetKey, isExplorerVisible, setExplorerVisible]);
+  }, [clearExplorerSlideOverCloseTimeout, editorTabTargetKey, forceExplorerHoverOnly, isExplorerVisible, setExplorerVisible]);
+
+  useEffect(() => {
+    if (canUseExplorerSlideOver) return;
+    closeExplorerSlideOver();
+  }, [canUseExplorerSlideOver, closeExplorerSlideOver]);
 
   const openCoppermindCellsSidebarPreview = useCallback(() => {
     if (!canUseCoppermindCellsSidebarPreview) return;
@@ -2535,7 +2548,9 @@ export const UnifiedEditorPanel = ({
 
   const explorerToggleLabel = isExplorerLockedOpen
     ? 'Hide explorer'
-    : isExplorerSlideOverVisible ? 'Keep explorer open' : 'Show explorer';
+    : forceExplorerHoverOnly
+      ? 'Show explorer (hover-only at this width)'
+      : isExplorerSlideOverVisible ? 'Keep explorer open' : 'Show explorer';
   const explorerToggleHoverHandlers = canUseExplorerSlideOver
     ? {
         onMouseEnter: openExplorerSlideOver,
@@ -2554,7 +2569,8 @@ export const UnifiedEditorPanel = ({
 
     return (
       <aside
-        className="absolute bottom-0 right-0 top-0 z-20 flex w-80 max-w-full flex-col overflow-hidden border-l border-border bg-card"
+        className="absolute bottom-0 right-0 top-0 z-20 flex max-w-full flex-col overflow-hidden border-l border-border bg-card"
+        style={{ width: editorExplorerWidthPx }}
         data-weave-editor-explorer
         data-presentation={presentation}
         onMouseEnter={isSlideOver ? openExplorerSlideOver : undefined}
@@ -2674,6 +2690,7 @@ export const UnifiedEditorPanel = ({
         data-weave-editor-mode={mode}
         data-weave-surface="editor"
         data-expanded={isExpanded ? 'true' : 'false'}
+        data-weave-explorer-responsive-hover-only={forceExplorerHoverOnly ? 'true' : 'false'}
         style={editorPanelStyle}
       >
         <div className="flex h-10 shrink-0 items-center border-b border-border" data-weave-editor-titlebar data-weave-editor-tab-bar>

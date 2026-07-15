@@ -568,6 +568,25 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
       await playwrightExpect(
         appHeader.getByRole("button", { name: "Hide chat" }),
       ).toBeVisible();
+      const splitPaneWidths = await page.evaluate(() => {
+        const chatPane = document.querySelector<HTMLElement>(
+          '[data-weave-main-pane="chat"]',
+        );
+        const editorPane = document.querySelector<HTMLElement>(
+          '[data-weave-main-pane="editor"]',
+        );
+        return {
+          chat: chatPane?.getBoundingClientRect().width ?? 0,
+          editor: editorPane?.getBoundingClientRect().width ?? 0,
+          main: chatPane?.parentElement?.getBoundingClientRect().width ?? 0,
+          rightPaneReserved: Number(chatPane?.dataset.weaveRightPaneReservedWidth ?? 0),
+        };
+      });
+      expect(splitPaneWidths.rightPaneReserved).toBeGreaterThanOrEqual(0);
+      expect(splitPaneWidths.editor + 1).toBeGreaterThanOrEqual(splitPaneWidths.rightPaneReserved);
+      expect(splitPaneWidths.chat + 1).toBeGreaterThanOrEqual(
+        Math.min(48 * 16, Math.max(0, splitPaneWidths.main - 1)),
+      );
       await reopenSidebarIfHidden();
       expect(await hasSelectedHighlight(codeWorkspaceThread())).toBe(true);
       await appHeader.getByRole("button", { name: "Hide chat" }).click();

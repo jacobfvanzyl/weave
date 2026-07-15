@@ -142,31 +142,31 @@ describe('workspace surface store', () => {
     });
   });
 
-  it('defaults terminal placement to the left column and stores preferences per workspace', async () => {
+  it('defaults terminal placement to the right column and stores preferences per workspace', async () => {
     const { defaultTerminalPaneColumn, useWorkspaceSurfaceStore } = await loadFreshSurfaceStore();
     const workspace1Key = workspaceRefKey('project-1', 'workspace-1');
     const workspace2Key = workspaceRefKey('project-1', 'workspace-2');
 
     useWorkspaceSurfaceStore.getState().selectWorkspace('project-1', 'workspace-1');
     expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspace1Key] ?? defaultTerminalPaneColumn)
-      .toBe('left');
+      .toBe('right');
 
     useWorkspaceSurfaceStore.getState().toggleTerminalPaneColumn('project-1', 'workspace-1');
-    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspace1Key]).toBe('right');
+    expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspace1Key]).toBe('left');
 
     useWorkspaceSurfaceStore.getState().selectWorkspace('project-1', 'workspace-2');
     expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspace2Key] ?? defaultTerminalPaneColumn)
-      .toBe('left');
+      .toBe('right');
 
     useWorkspaceSurfaceStore.getState().setTerminalPaneColumn('project-1', 'workspace-2', 'right');
     expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace).toMatchObject({
-      [workspace1Key]: 'right',
+      [workspace1Key]: 'left',
       [workspace2Key]: 'right',
     });
 
     useWorkspaceSurfaceStore.getState().toggleTerminalPaneColumn('project-1', 'workspace-2');
     expect(useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace).toMatchObject({
-      [workspace1Key]: 'right',
+      [workspace1Key]: 'left',
       [workspace2Key]: 'left',
     });
   });
@@ -232,7 +232,7 @@ describe('workspace surface store', () => {
     expect(
       useWorkspaceSurfaceStore.getState().terminalPaneColumnsByWorkspace[workspaceRefKey('project-1', 'workspace-2')] ??
         defaultTerminalPaneColumn,
-    ).toBe('left');
+    ).toBe('right');
   });
 
   it('normalizes same-version persisted surface layouts before restoring them', async () => {

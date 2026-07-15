@@ -1,5 +1,6 @@
 import type { RefObject, ReactNode } from 'react';
 import { Maximize2, MessageSquare, Minimize2, Settings, X } from 'lucide-react';
+import { mainPaneDividerWidthPx } from '../../lib/editor-layout';
 import { useChatStore, type ChatThread } from '../../stores/chat-store';
 import { Button } from '../ui/button';
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
@@ -9,6 +10,7 @@ type ChatPaneProps = {
   activeThreadId: string;
   breadcrumb?: ReactNode;
   isMaximized: boolean;
+  rightPaneReservedWidthPx?: number;
   runningThreadIds: string[];
   surfaceRef: RefObject<HTMLDivElement | null>;
   terminalSlot?: ReactNode;
@@ -21,6 +23,7 @@ export const ChatPane = ({
   activeThreadId,
   breadcrumb,
   isMaximized,
+  rightPaneReservedWidthPx,
   runningThreadIds,
   surfaceRef,
   terminalSlot,
@@ -36,9 +39,15 @@ export const ChatPane = ({
   return (
     <div
       key="chat"
-      className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
+      className={rightPaneReservedWidthPx !== undefined
+        ? 'flex min-h-0 min-w-0 shrink-0 flex-col overflow-hidden'
+        : 'flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden'}
+      style={rightPaneReservedWidthPx === undefined
+        ? undefined
+        : { width: `max(0px, calc(100% - ${rightPaneReservedWidthPx}px - ${mainPaneDividerWidthPx}px))` }}
       data-weave-main-pane="chat"
       data-maximized={isMaximized ? 'true' : 'false'}
+      data-weave-right-pane-reserved-width={rightPaneReservedWidthPx}
     >
       <div className="relative flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
         <MessageSquare size={15} className="relative z-10 shrink-0 text-muted-foreground" />

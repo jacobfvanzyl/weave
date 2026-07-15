@@ -9,6 +9,7 @@ type EditorPaneProps = {
   breadcrumb?: ReactNode;
   followRequest?: EditorFollowRequest;
   focusRequest: number;
+  forceExplorerHoverOnly?: boolean;
   isMaximized: boolean;
   mode: EditorMode;
   target: UnifiedEditorTarget;
@@ -23,6 +24,7 @@ export const EditorPane = ({
   breadcrumb,
   followRequest,
   focusRequest,
+  forceExplorerHoverOnly = false,
   isMaximized,
   mode,
   target,
@@ -43,6 +45,7 @@ export const EditorPane = ({
         <UnifiedEditorPanel
           followRequest={followRequest}
           focusRequest={focusRequest}
+          forceExplorerHoverOnly={forceExplorerHoverOnly}
           breadcrumb={breadcrumb}
           isExpanded={isMaximized}
           mode={mode}

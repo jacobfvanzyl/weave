@@ -113,7 +113,7 @@ export type WorkspaceSurfaceSnapshot = Pick<
 export const initialSurfaceThreadId = createClientId('thread');
 
 export const defaultPaneVisibility: PaneVisibility = { chatOpen: true, editorOpen: false, terminalOpen: false, };
-export const defaultTerminalPaneColumn: TerminalPaneColumn = 'left';
+export const defaultTerminalPaneColumn: TerminalPaneColumn = 'right';
 
 export const getPaneVisibilityForThread = (thread: ThreadSurfaceContext | undefined): PaneVisibility => ({
   chatOpen: true,

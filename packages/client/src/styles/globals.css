@@ -140,6 +140,7 @@
   --weave-editor-gutter-background: color-mix(in oklab, var(--background) 86%, var(--ctp-surface0));
   --weave-editor-gutter-foreground: var(--ctp-overlay1);
   --weave-editor-gutter-border: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --weave-editor-column-guide: color-mix(in oklab, var(--foreground) 12%, transparent);
   --weave-editor-active-line: color-mix(in oklab, var(--ctp-surface0) 62%, transparent);
   --weave-editor-active-gutter-foreground: var(--ctp-text);
   --weave-editor-caret: var(--ctp-mauve);
@@ -245,6 +246,7 @@
   --weave-editor-gutter-background: color-mix(in oklab, var(--background) 86%, var(--ctp-surface0));
   --weave-editor-gutter-foreground: var(--ctp-overlay1);
   --weave-editor-gutter-border: color-mix(in oklab, var(--foreground) 8%, transparent);
+  --weave-editor-column-guide: color-mix(in oklab, var(--foreground) 11%, transparent);
   --weave-editor-active-line: color-mix(in oklab, var(--ctp-surface0) 58%, transparent);
   --weave-editor-active-gutter-foreground: var(--ctp-text);
   --weave-editor-caret: var(--ctp-mauve);

@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { defaultMainEditorMinimumWidthPx, minimumMainEditorColumns } from '../../lib/editor-layout';
 
-export const chatContentMaxWidthPx = 48 * 16;
+export const chatPaneMinimumWidthPx = 48 * 16;
 export const threadSidebarWidthPx = 24 * 16;
-export const minimumMainEditorColumns = 80;
-export const defaultMinimumMainEditorWidthPx = minimumMainEditorColumns * 8;
 export const editorColumnMeasureText = '0'.repeat(minimumMainEditorColumns);
 
 export const isPortraitViewportNow = () => window.innerHeight > window.innerWidth;
@@ -45,7 +44,7 @@ export const useMeasuredElementWidth = <T extends HTMLElement = HTMLDivElement>(
 
 export const useMainPaneMetrics = () => {
   const [pageRef, pageWidth] = useMeasuredElementWidth();
-  const [editorMinimumMeasureRef, editorMinimumWidthPx] = useMeasuredElementWidth<HTMLSpanElement>(defaultMinimumMainEditorWidthPx);
+  const [editorMinimumMeasureRef, editorMinimumWidthPx] = useMeasuredElementWidth<HTMLSpanElement>(defaultMainEditorMinimumWidthPx);
 
   return {
     editorMinimumMeasureRef,

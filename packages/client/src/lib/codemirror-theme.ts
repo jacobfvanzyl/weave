@@ -3,6 +3,11 @@ import { type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
+import {
+  editorContentWidthCss,
+  editorLineHorizontalPaddingPx,
+  editorTextWidthCss,
+} from "./editor-layout";
 
 export const editorCanvasBackgroundColor = "#1e1e2e";
 
@@ -104,9 +109,25 @@ export const editorTheme = EditorView.theme({
     minHeight: "100%",
     padding: "12px 0",
     caretColor: "var(--weave-editor-caret)",
+    width: editorContentWidthCss,
+    maxWidth: "100%",
+    minWidth: "0",
+    flexGrow: "0",
+    flexShrink: "1",
+    position: "relative",
+  },
+  ".cm-content::after": {
+    content: '""',
+    position: "absolute",
+    top: "0",
+    bottom: "0",
+    left: `calc(${editorLineHorizontalPaddingPx}px + ${editorTextWidthCss})`,
+    borderLeft: "1px solid var(--weave-editor-column-guide)",
+    pointerEvents: "none",
   },
   ".cm-line": {
-    padding: "0 12px",
+    boxSizing: "border-box",
+    padding: `0 ${editorLineHorizontalPaddingPx}px`,
   },
   ".cm-gutters": {
     backgroundColor: "var(--weave-editor-gutter-background)",

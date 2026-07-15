@@ -12,6 +12,11 @@ import {
   sanitizeProductForClientApp,
 } from '../../lib/client-app';
 import { productForProjectKind, type ProductId, projectBelongsToProduct } from '../../lib/products';
+import {
+  editorLineHorizontalPaddingPx,
+  getTwoColumnPaneLayout,
+  mainPaneDividerWidthPx,
+} from '../../lib/editor-layout';
 import { proposalWorkflowEnabled } from '../../lib/proposal-workflow';
 import { canViewProposalReview } from '../../lib/proposal-review-state';
 import { createTerminalTransport, isDesktopTerminalTransportAvailable } from '../../lib/terminal-transport';
@@ -19,7 +24,7 @@ import { workspaceRefKey } from '../../lib/thread-eligibility';
 import { type ChatThread, useChatStore } from '../../stores/chat-store';
 import { useAppShellStore } from '../../stores/app-shell-store';
 import { useClientSessionViewStore } from '../../stores/client-session-view-store';
-import { getEditorTabTargetKey, useEditorTabStore } from '../../stores/editor-tab-store';
+import { defaultEditorExplorerVisible, getEditorTabTargetKey, useEditorTabStore } from '../../stores/editor-tab-store';
 import { useProductStore } from '../../stores/product-store';
 import { generalTerminalId, useTerminalStore } from '../../stores/terminal-store';
 import { defaultTerminalPaneColumn,
@@ -42,8 +47,9 @@ import { NotificationHost } from '../notifications/NotificationHost';
 import { ContextBreadcrumb } from '../workspace/ContextBreadcrumb';
 import { WorkspaceMainContent } from '../workspace/WorkspaceMainContent';
 import {
-  chatContentMaxWidthPx,
+  chatPaneMinimumWidthPx,
   editorColumnMeasureText,
+  threadSidebarWidthPx,
   useIsPortraitViewport,
   useMainPaneMetrics,
 } from '../workspace/useMainPaneMetrics';
@@ -244,8 +250,19 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     ? ( terminalPaneColumnsByWorkspace[terminalWorkspaceRef] ?? defaultTerminalPaneColumn)
     : defaultTerminalPaneColumn;
   const canToggleTerminalPaneColumn = Boolean(showTerminalPane && showChatPane && showEditorPane && terminalTarget);
-  const visibleMainPaneMinimumWidthPx = (showChatPane ? chatContentMaxWidthPx : 0)
+  const sideEditorMode = activeSurfaceProduct === 'notes' ? 'notes' : activeSurfaceProduct === 'code' ? 'code' : undefined;
+  const sideEditorTargetKey = sideEditorMode && workspaceTargets.activeProjectId && workspaceTargets.activeWorkspaceId
+    ? getEditorTabTargetKey(sideEditorMode, workspaceTargets.activeProjectId, workspaceTargets.activeWorkspaceId)
+    : undefined;
+  const isEditorExplorerPinned = useEditorTabStore((state) => {
+    if (!sideEditorTargetKey || editorSlotMode !== 'editor') return false;
+    const tabSet = state.editorTabsByTarget[sideEditorTargetKey];
+    const activeEditorTab = tabSet?.tabs.find((tab) => tab.id === tabSet.activeTabId) ?? tabSet?.tabs[0];
+    return (state.explorerVisibleByTarget[sideEditorTargetKey] ?? defaultEditorExplorerVisible) || !activeEditorTab;
+  });
+  const visibleMainPaneMinimumWidthPx = (showChatPane ? chatPaneMinimumWidthPx : 0)
     + (showEditorPane ? editorMinimumWidthPx : 0)
+    + (showChatPane && showEditorPane ? mainPaneDividerWidthPx : 0)
     + (showTerminalPane && !showChatPane && !showEditorPane ? editorMinimumWidthPx : 0);
   const terminalHost = showTerminalPane
     ? showChatPane && showEditorPane
@@ -284,7 +301,6 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     : breadcrumbPane === 'editor'
       ? editorBreadcrumb
       : undefined;
-  const sideEditorTargetKey = workspaceTargets.activeWorkspaceId ? `${activeSurfaceProduct === 'notes' ? 'notes' : 'code'}:${workspaceTargets.activeWorkspaceId}` : undefined;
   const terminalWorkspaceId = workspaceTargets.activeWorkspaceId;
   const terminalTargetKey = terminalTarget?.terminalId ?? terminalWorkspaceId;
   const terminalTransport = useMemo<TerminalTransport | undefined>(() => createTerminalTransport(), []);
@@ -344,6 +360,19 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     toggleGeneralTerminal,
     toggleSidebar,
   } = windowSurfaces;
+  const mainPaneAvailableWidthPx = Math.max(
+    0,
+    pageWidth - (isSidebarOpen ? threadSidebarWidthPx : 0),
+  );
+  const twoColumnPaneLayout = showChatPane && showEditorPane
+    ? getTwoColumnPaneLayout({
+      availableWidthPx: mainPaneAvailableWidthPx,
+      chatMinimumWidthPx: chatPaneMinimumWidthPx,
+      editorMinimumWidthPx,
+      isExplorerPinned: isEditorExplorerPinned,
+    })
+    : undefined;
+  const forceExplorerHoverOnly = twoColumnPaneLayout?.shouldForceExplorerHoverOnly ?? false;
   const terminalTabs = terminalTargetKey ? ( terminalTabsByTarget[terminalTargetKey] ?? []) : [];
   const activeTerminalTabId = terminalTargetKey
     ? ( activeTerminalTabByTarget[terminalTargetKey] ?? terminalTabs[0]?.id)
@@ -981,6 +1010,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
     <ChatPane
       activeThreadId={activeThreadId}
       isMaximized={isChatMaximized}
+      rightPaneReservedWidthPx={twoColumnPaneLayout?.editorReservedWidthPx}
       runningThreadIds={runningThreadIds}
       surfaceRef={chatSurfaceRef}
       terminalSlot={showTerminalInChatPane ? renderTerminalPanel('pane') : undefined}
@@ -1061,6 +1091,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       <EditorPane
         followRequest={editorFollowRequest}
         focusRequest={editorFocusRequest}
+        forceExplorerHoverOnly={forceExplorerHoverOnly}
         isMaximized={isEditorMaximized}
         mode={notesTarget ? 'notes' : 'code'}
         target={(notesTarget ?? editorTarget)!}
@@ -1167,7 +1198,12 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
 	      <div ref={pageRef} className="weave-app-shell box-border flex overflow-hidden pt-[var(--weave-safe-area-top)]" data-weave-surface="app">
 	      <span
 	        ref={editorMinimumMeasureRef}
-	        className="pointer-events-none fixed -left-[9999px] -top-[9999px] font-mono text-sm opacity-0"
+	        className="pointer-events-none fixed -left-[9999px] -top-[9999px] font-mono opacity-0"
+	        style={{
+	          fontSize: 'var(--weave-editor-font-size)',
+	          paddingLeft: `calc(var(--weave-editor-gutter-width) + ${editorLineHorizontalPaddingPx}px)`,
+	          paddingRight: `${editorLineHorizontalPaddingPx}px`,
+	        }}
 	        aria-hidden="true"
       >
         {editorColumnMeasureText}
