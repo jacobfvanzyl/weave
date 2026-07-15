@@ -417,6 +417,7 @@ export class PortalSupervisor {
     this.setStatus({
       phase: runtime.connectionState === 'connected' ? 'ready' : 'reconnecting',
       serverUrl: normalizeUrl(runtime.serverUrl),
+      portalId: runtime.portalId,
       source,
       remoteConnectionState: runtime.connectionState === 'stopped' ? 'reconnecting' : runtime.connectionState,
       remoteConnectedAt: runtime.connectedAt,
@@ -443,6 +444,7 @@ export class PortalSupervisor {
     this.setStatus({
       phase: 'failed',
       serverUrl: normalizeUrl(this.settingsStore.getSettings().mastraUrl),
+      portalId: this.status.portalId,
       source: this.status.source,
       error: error instanceof Error ? error.message : String(error),
     });

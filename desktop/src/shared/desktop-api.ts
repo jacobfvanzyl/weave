@@ -32,6 +32,7 @@ export type DesktopConnectionTestResult =
 export type DesktopPortalStatus = {
   phase: 'idle' | 'starting' | 'ready' | 'reconnecting' | 'failed';
   serverUrl: string;
+  portalId?: string;
   source?: 'adopted' | 'launched';
   remoteConnectionState?: 'connecting' | 'connected' | 'reconnecting' | 'rejected';
   remoteConnectedAt?: string;

@@ -9,6 +9,9 @@ export const statusLabel = (status: DesktopPortalStatus | undefined) => {
   return 'Portal idle';
 };
 
+export const adoptedLocalPortalId = (status: DesktopPortalStatus | undefined) =>
+  status?.source === 'adopted' ? status.portalId : undefined;
+
 export const portalStatusPresentation = (status: DesktopPortalStatus | undefined) => ({
   label: statusLabel(status),
   tone:

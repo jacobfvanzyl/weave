@@ -20,6 +20,7 @@ import { adoptWorkspace, ApiError,
 import { getClientAppStorageItem, getClientAppStorageKey } from '../../lib/client-app';
 import { claimLegacyClientSessionValue } from '../../lib/client-session';
 import { cn } from '../../lib/cn';
+import { portalCountPresentation } from '../../lib/portal-count-presentation';
 import {
   productForProjectKind,
   type ProductId, projectBelongsToProduct, projectKindForProduct, } from '../../lib/products';
@@ -265,6 +266,7 @@ const SortableItem = ({
 };
 
 type WorkspaceSidebarProps = {
+  adoptedLocalPortalId?: string;
   closeOnSelect?: boolean;
   connectionSettingsButton?: ReactNode;
   onClose?: () => void;
@@ -275,6 +277,7 @@ type WorkspaceSidebarProps = {
 };
 
 export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>(({
+  adoptedLocalPortalId,
   closeOnSelect = true,
   connectionSettingsButton,
   onClose,
@@ -414,7 +417,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
       setPendingBranchActionKey((current) => ( current === key ? null : current));
     }
   };
-  const onlinePortalCount = portals.filter((portal) => portal.status === 'online').length;
+  const portalCount = portalCountPresentation(portals, adoptedLocalPortalId);
   const plainThreads = showPlainThreads
     ? sortThreadsForDisplay(threads.filter((thread) => (!thread.projectId || thread.adHoc) && thread.archived !== true),)
     : [];
@@ -1984,11 +1987,11 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
         {connectionSettingsButton}
         <div
           className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground"
-          title={`${onlinePortalCount} online Portal${onlinePortalCount === 1 ? '' : 's'}`}
-          aria-label={`${onlinePortalCount} online Portal${onlinePortalCount === 1 ? '' : 's'}`}
+          title={portalCount.label}
+          aria-label={portalCount.label}
         >
-          <Shell size={15} className={cn('shrink-0', onlinePortalCount > 0 ? 'text-success' : 'text-muted-foreground')} />
-          <span className="tabular-nums">{onlinePortalCount}</span>
+          <Shell size={15} className={cn('shrink-0', portalCount.tone)} />
+          <span className="tabular-nums">{portalCount.count}</span>
         </div>
       </div>
     </aside>

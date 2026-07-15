@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import { CircleCheck, CircleDot, Loader2, RefreshCw, TriangleAlert } from 'lucide-react';
 import { Button } from '@weave/client/components/ui/button';
 import type { DesktopPortalStatus } from '../shared/desktop-api';
@@ -13,49 +12,16 @@ const StatusIcon = ({ status }: { status: DesktopPortalStatus | undefined }) => 
   return <TriangleAlert size={14} />;
 };
 
-export const PortalStatusIndicator = ({ compact = false }: { compact?: boolean }) => {
-  const [status, setStatus] = useState<DesktopPortalStatus>();
-  const [retrying, setRetrying] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void window.weaveDesktop.getPortalStatus().then(nextStatus => {
-      if (!cancelled) setStatus(nextStatus);
-    });
-    const unsubscribe = window.weaveDesktop.onPortalStatus(nextStatus => {
-      if (!cancelled) setStatus(nextStatus);
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, []);
-
-  const retry = async () => {
-    setRetrying(true);
-    try {
-      setStatus(await window.weaveDesktop.retryPortal());
-    } catch (error) {
-      setStatus(current => ({
-        phase: 'failed',
-        serverUrl: current?.serverUrl ?? '',
-        error: error instanceof Error ? error.message : String(error),
-      }));
-    } finally {
-      setRetrying(false);
-    }
-  };
-
+export const PortalStatusIndicator = ({
+  onRetry,
+  retrying,
+  status,
+}: {
+  onRetry: () => void | Promise<void>;
+  retrying: boolean;
+  status: DesktopPortalStatus | undefined;
+}) => {
   const { label, tone, showRetry } = portalStatusPresentation(status);
-
-  if (compact) {
-    return (
-      <span aria-label={label} className={`inline-flex h-8 items-center gap-1.5 px-1 text-xs ${tone}`} title={label}>
-        <StatusIcon status={status} />
-        <span className="sr-only">{label}</span>
-      </span>
-    );
-  }
 
   return (
     <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
@@ -78,7 +44,7 @@ export const PortalStatusIndicator = ({ compact = false }: { compact?: boolean }
           size="sm"
           type="button"
           variant="outline"
-          onClick={() => void retry()}
+          onClick={() => void onRetry()}
         >
           <RefreshCw className={retrying ? 'animate-spin' : undefined} size={14} />
           Retry Portal

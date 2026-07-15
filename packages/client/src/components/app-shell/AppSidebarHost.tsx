@@ -4,6 +4,7 @@ import type { ProductId } from '../../lib/products';
 import { WorkspaceSidebar } from '../sidebar/WorkspaceSidebar';
 
 type AppSidebarHostProps = {
+  adoptedLocalPortalId?: string;
   closeOnPinnedSelect: boolean;
   clientApp: ClientAppDefinition;
   connectionSettingsButton?: ReactNode;
@@ -19,6 +20,7 @@ type AppSidebarHostProps = {
 };
 
 export const AppSidebarHost = ({
+  adoptedLocalPortalId,
   closeOnPinnedSelect,
   clientApp,
   connectionSettingsButton,
@@ -47,6 +49,7 @@ export const AppSidebarHost = ({
           />
           <WorkspaceSidebar
             ref={sidebarRef}
+            adoptedLocalPortalId={adoptedLocalPortalId}
             closeOnSelect={closeOnPinnedSelect}
             connectionSettingsButton={connectionSettingsButton}
             product={sidebarProduct}
@@ -75,6 +78,7 @@ export const AppSidebarHost = ({
           ) : null}
           <WorkspaceSidebar
             ref={sidebarRef}
+            adoptedLocalPortalId={adoptedLocalPortalId}
             presentation="overlay"
             closeOnSelect
             connectionSettingsButton={connectionSettingsButton}

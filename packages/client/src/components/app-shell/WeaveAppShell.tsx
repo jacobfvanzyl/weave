@@ -113,11 +113,12 @@ const terminalSyncKey = (target?: TerminalPanelTarget) => target ? [
 ].join(':') : undefined;
 
 type WeaveAppShellProps = {
+  adoptedLocalPortalId?: string;
   clientApp?: ClientAppInputId | ClientAppDefinition;
   connectionSettingsButton?: ReactNode;
 };
 
-export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsButton }: WeaveAppShellProps = {}) => {
+export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput, connectionSettingsButton }: WeaveAppShellProps = {}) => {
   const clientApp = useMemo(() => getClientAppDefinition(clientAppInput), [clientAppInput]);
   const resourceId = useChatStore((state) => state.resourceId);
   const threadId = useWorkspaceSurfaceStore((state) => state.threadId);
@@ -1217,6 +1218,7 @@ export const WeaveAppShell = ({ clientApp: clientAppInput, connectionSettingsBut
       />
       <NotificationHost />
       <AppSidebarHost
+        adoptedLocalPortalId={adoptedLocalPortalId}
         closeOnPinnedSelect={isPortraitViewport}
         clientApp={clientApp}
         connectionSettingsButton={connectionSettingsButton}
