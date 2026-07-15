@@ -1,33 +1,18 @@
+import {
+  type ClientToolConnection as ProtocolClientToolConnection,
+  parseRpcRequestResult,
+  type RpcRequestParams,
+  type RpcRequestResult,
+} from '@weave/protocol';
 import type { RpcPeer } from '@weave/protocol/peer';
 
 export type ClientToolStatus = 'online' | 'offline';
-
-export type ClientToolConnection = {
-  clientId: string;
-  userId: string;
-  name?: string;
-  version?: string;
-  capabilities: string[];
-  projectId?: string;
-  workspaceId?: string;
-  threadId?: string;
-  active?: boolean;
-  status: ClientToolStatus;
-  connectedAt: string;
-  lastSeenAt: string;
-};
+export type ClientToolConnection = ProtocolClientToolConnection;
 
 type ClientToolConnectionRecord = ClientToolConnection & { peer: RpcPeer };
 const connections = new Map<string, ClientToolConnectionRecord>();
 const publicConnection = ({ peer: _peer, ...connection }: ClientToolConnectionRecord): ClientToolConnection =>
   connection;
-const optionalString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
-const stringArray = (value: unknown) =>
-  Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) =>
-      item.trim()
-    )
-    : [];
 
 export const listClientToolConnections = (userId?: string) =>
   [...connections.values()]
@@ -42,6 +27,7 @@ export const connectClientToolRpcHost = (input: {
   name?: string;
   version?: string;
   capabilities?: string[];
+  surfaceId?: string;
   projectId?: string;
   workspaceId?: string;
   threadId?: string;
@@ -58,6 +44,7 @@ export const connectClientToolRpcHost = (input: {
     name: input.name,
     version: input.version,
     capabilities: input.capabilities ?? [],
+    surfaceId: input.surfaceId,
     projectId: input.projectId,
     workspaceId: input.workspaceId,
     threadId: input.threadId,
@@ -76,7 +63,14 @@ export const updateClientToolHost = (
   patch: Partial<
     Pick<
       ClientToolConnection,
-      'name' | 'version' | 'capabilities' | 'projectId' | 'workspaceId' | 'threadId' | 'active'
+      | 'name'
+      | 'version'
+      | 'capabilities'
+      | 'surfaceId'
+      | 'projectId'
+      | 'workspaceId'
+      | 'threadId'
+      | 'active'
     >
   > = {},
 ) => {
@@ -115,16 +109,26 @@ export const notifyClientRpcHosts = (
 
 export const requestClientTool = async (input: {
   clientId: string;
-  tool: string;
-  args?: unknown;
+  tool: 'editor.context';
+  args?: RpcRequestParams<'server', 'client', 'client.editorContext.get'>;
   timeoutMs?: number;
-}) => {
+}): Promise<RpcRequestResult<'server', 'client', 'client.editorContext.get'>> => {
   const connection = connections.get(input.clientId);
   if (!connection) throw new Error('Client is offline');
-  if (!connection.capabilities.includes(input.tool)) throw new Error(`Client does not support tool: ${input.tool}`);
+  if (!connection.capabilities.includes('client.editorContext.get')) {
+    throw new Error(`Client does not support tool: ${input.tool}`);
+  }
 
-  const method = input.tool === 'editor.context' ? 'client.editorContext.get' : input.tool;
-  return await connection.peer.request(method, input.args ?? {}, { timeoutMs: input.timeoutMs ?? 5_000 });
+  return parseRpcRequestResult(
+    'server',
+    'client',
+    'client.editorContext.get',
+    await connection.peer.request(
+      'client.editorContext.get',
+      input.args,
+      { timeoutMs: input.timeoutMs ?? 5_000 },
+    ),
+  );
 };
 
 export const resolveClientToolHostForTarget = (input: {
@@ -154,13 +158,3 @@ export const resolveClientToolHostForTarget = (input: {
     })[0],
   );
 };
-
-export const normalizeClientToolHello = (message: Record<string, unknown>) => ({
-  name: optionalString(message.name),
-  version: optionalString(message.version),
-  capabilities: stringArray(message.capabilities),
-  projectId: optionalString(message.projectId),
-  workspaceId: optionalString(message.workspaceId),
-  threadId: optionalString(message.threadId),
-  active: message.active === true,
-});

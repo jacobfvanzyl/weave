@@ -1,12 +1,26 @@
-import { type PortalLspClientMessage, PortalLspHost } from './lsp.ts';
-import { type PortalJupyterClientMessage, PortalJupyterHost } from './jupyter.ts';
-import { PortalTerminalHost, type TerminalClientMessage } from './terminal.ts';
+import { PortalLspHost } from './lsp.ts';
+import { PortalJupyterHost } from './jupyter.ts';
+import { PortalTerminalHost } from './terminal.ts';
+import { PortalWorkspaceFileHost, type PortalWorkspaceFileTarget } from './workspace-files.ts';
 import {
-  PortalWorkspaceFileHost,
-  type PortalWorkspaceFileTarget,
-  type PortalWorkspaceFileWatchClientMessage,
-} from './workspace-files.ts';
-import { RpcConnection, WEAVE_RPC_PROTOCOL_VERSION } from '../../packages/protocol/src/index.ts';
+  jupyterClientMessageSchema,
+  lspClientMessageSchema,
+  parsePortalToolArgs,
+  parsePortalToolResult,
+  parseRpcRequestParams,
+  parseRpcRequestResult,
+  type PortalToolArgs,
+  type PortalToolName,
+  portalToolNames,
+  portalToolNameSchema,
+  type PortalToolResult,
+  RpcConnection,
+  rpcRequestMethods,
+  type RpcRequestParams,
+  terminalClientMessageSchema,
+  WEAVE_RPC_PROTOCOL_VERSION,
+  workspaceFileWatchClientMessageSchema,
+} from '@weave/protocol';
 import { logPortalPerfEvent, startPortalPerfSampler } from './perf.ts';
 import { installBoundedConsoleLog } from './bounded-log.ts';
 import {
@@ -229,7 +243,9 @@ const resolvePortalConfig = (config: PortalConfig): ResolvedPortalConfig => {
 const writeConfig = async (path: string, config: PortalConfig) => {
   await ensureParentDir(path);
   const simplified: PortalConfig = {
-    serverUrl: normalizeHttpUrl(config.serverUrl ?? config.httpServerUrl ?? defaultHttpServerUrl),
+    serverUrl: normalizeHttpUrl(
+      config.serverUrl ?? config.httpServerUrl ?? defaultHttpServerUrl,
+    ),
     ...(config.portal ? { portal: config.portal } : {}),
   };
   await Deno.writeTextFile(path, `${JSON.stringify(simplified, null, 2)}\n`, {
@@ -302,9 +318,7 @@ const login = async (flags: Record<string, string | boolean>) => {
       },
     },
   });
-  const body = await connection.request<{ portalId?: string; token?: string }>(
-    'portal.token.issue',
-  )
+  const body = await connection.request('portal.token.issue')
     .finally(() => connection.close());
   if (!body.portalId || !body.token) {
     throw new Error('Portal token response missing portalId/token.');
@@ -1399,19 +1413,17 @@ const commandSessionTool = async (
   return { ok: true, ...commandSessions.stop(root, sessionId) };
 };
 
-const workspaceFileTargetFromRequest = (
-  request: Record<string, unknown>,
-): PortalWorkspaceFileTarget => ({
-  projectId: typeof request.projectId === 'string' ? request.projectId : undefined,
-  workspaceId: typeof request.workspaceId === 'string' ? request.workspaceId : undefined,
-  rootId: typeof request.rootId === 'string' ? request.rootId : undefined,
-  repoPath: typeof request.repoPath === 'string' ? request.repoPath : undefined,
-  workspacePath: typeof request.workspacePath === 'string' ? request.workspacePath : undefined,
-});
-
-const workspaceFileInputFromToolCall = (request: Record<string, unknown>) => {
-  const args = isRecord(request.args) ? request.args : {};
-  return { target: workspaceFileTargetFromRequest(request), ...args };
+export const workspaceFileTargetFromRequest = (
+  value: unknown,
+): PortalWorkspaceFileTarget => {
+  const request = isRecord(value) ? value : {};
+  return ({
+    projectId: typeof request.projectId === 'string' ? request.projectId : undefined,
+    workspaceId: typeof request.workspaceId === 'string' ? request.workspaceId : undefined,
+    rootId: typeof request.rootId === 'string' ? request.rootId : undefined,
+    repoPath: typeof request.repoPath === 'string' ? request.repoPath : undefined,
+    workspacePath: typeof request.workspacePath === 'string' ? request.workspacePath : undefined,
+  });
 };
 
 const executePortalToolCall = async (
@@ -1419,157 +1431,215 @@ const executePortalToolCall = async (
   workspaceFileHost: PortalWorkspaceFileHost,
   lspHost: PortalLspHost,
   jupyterHost: PortalJupyterHost,
-  request: Record<string, unknown>,
+  requestInput: unknown,
 ) => {
-  const executionProfile = normalizeExecutionProfile(request.executionProfile);
-
   try {
-    assertToolAllowed(request.tool, executionProfile);
+    const request = parseRpcRequestParams(
+      'server',
+      'portal',
+      'portal.tool.call',
+      requestInput,
+    );
+    const tool = portalToolNameSchema.parse(request.tool);
+    parsePortalToolArgs(tool, request.args);
+    const executionProfile = normalizeExecutionProfile(
+      request.executionProfile,
+    );
+    assertToolAllowed(tool, executionProfile);
     const idempotencyKey = typeof request.idempotencyKey === 'string' &&
         request.idempotencyKey.length <= 512
       ? request.idempotencyKey
       : undefined;
+    const portalHandler = <Name extends PortalToolName>(
+      name: Name,
+      handler: (args: PortalToolArgs<Name>) => Promise<unknown>,
+    ) =>
+    async () =>
+      parsePortalToolResult(
+        name,
+        await handler(parsePortalToolArgs(name, request.args)),
+      );
+    const withArgs = <Args extends Record<string, unknown>>(
+      args: Args,
+    ): Record<string, unknown> => ({
+      ...request,
+      tool,
+      args,
+    });
+    const target = workspaceFileTargetFromRequest(request);
+    const workspaceInput = <Args extends Record<string, unknown>>(
+      args: Args,
+    ) => ({ target, ...target, ...args });
+    const handlers: {
+      [Name in PortalToolName]: () => Promise<PortalToolResult<Name>>;
+    } = {
+      read: portalHandler(
+        'read',
+        (args) => readFileTool(config, withArgs(args)),
+      ),
+      write: portalHandler(
+        'write',
+        (args) => writeFileTool(config, withArgs(args)),
+      ),
+      edit: portalHandler(
+        'edit',
+        (args) => editFileTool(config, withArgs(args)),
+      ),
+      bash: portalHandler('bash', (args) => bashTool(config, withArgs(args))),
+      exec_start: portalHandler(
+        'exec_start',
+        (args) => commandSessionTool(config, withArgs(args), 'start'),
+      ),
+      exec_poll: portalHandler(
+        'exec_poll',
+        (args) => commandSessionTool(config, withArgs(args), 'poll'),
+      ),
+      exec_write: portalHandler(
+        'exec_write',
+        (args) => commandSessionTool(config, withArgs(args), 'write'),
+      ),
+      exec_stop: portalHandler(
+        'exec_stop',
+        (args) => commandSessionTool(config, withArgs(args), 'stop'),
+      ),
+      'portal.context.discover': portalHandler(
+        'portal.context.discover',
+        (args) => discoverWeaveContextTool(config, withArgs(args)),
+      ),
+      'portal.git.status': portalHandler(
+        'portal.git.status',
+        (args) => gitStatusTool(config, withArgs(args)),
+      ),
+      'portal.git.diff': portalHandler(
+        'portal.git.diff',
+        (args) => gitDiffTool(config, withArgs(args)),
+      ),
+      'portal.git.log': portalHandler(
+        'portal.git.log',
+        (args) => gitLogTool(config, withArgs(args)),
+      ),
+      'portal.git.show': portalHandler(
+        'portal.git.show',
+        (args) => gitShowTool(config, withArgs(args)),
+      ),
+      'portal.git.fetch': portalHandler(
+        'portal.git.fetch',
+        (args) => gitFetchTool(config, withArgs(args)),
+      ),
+      'portal.git.pull': portalHandler(
+        'portal.git.pull',
+        (args) => gitPullTool(config, withArgs(args)),
+      ),
+      'portal.fs.list': portalHandler(
+        'portal.fs.list',
+        (args) => workspaceFileHost.list(workspaceInput(args)),
+      ),
+      'portal.fs.read': portalHandler(
+        'portal.fs.read',
+        (args) => workspaceFileHost.read(workspaceInput(args)),
+      ),
+      'portal.fs.hash': portalHandler(
+        'portal.fs.hash',
+        (args) => workspaceFileHost.hash(workspaceInput(args)),
+      ),
+      'portal.fs.diffPreview': portalHandler(
+        'portal.fs.diffPreview',
+        (args) => workspaceFileHost.diffPreview(workspaceInput(args)),
+      ),
+      'portal.fs.write': portalHandler(
+        'portal.fs.write',
+        (args) => workspaceFileHost.write(workspaceInput(args)),
+      ),
+      'portal.fs.mkdir': portalHandler(
+        'portal.fs.mkdir',
+        (args) => workspaceFileHost.mkdir(workspaceInput(args)),
+      ),
+      'portal.fs.move': portalHandler(
+        'portal.fs.move',
+        (args) => workspaceFileHost.move(workspaceInput(args)),
+      ),
+      'portal.fs.delete': portalHandler(
+        'portal.fs.delete',
+        (args) => workspaceFileHost.delete(workspaceInput(args)),
+      ),
+      'portal.fs.index': portalHandler(
+        'portal.fs.index',
+        (args) => workspaceFileHost.index(workspaceInput(args)),
+      ),
+      'portal.fs.upload': portalHandler(
+        'portal.fs.upload',
+        (args) => workspaceFileHost.upload(workspaceInput(args)),
+      ),
+      'portal.lsp.session': portalHandler(
+        'portal.lsp.session',
+        (args) => lspHost.createSession(workspaceInput(args)),
+      ),
+      'portal.lsp.query': portalHandler(
+        'portal.lsp.query',
+        (args) => lspHost.query(workspaceInput(args)),
+      ),
+      'portal.jupyter.status': portalHandler(
+        'portal.jupyter.status',
+        (args) => jupyterHost.status(workspaceInput(args)),
+      ),
+      'portal.jupyter.kernelspecs': portalHandler(
+        'portal.jupyter.kernelspecs',
+        (args) => jupyterHost.kernelspecs(workspaceInput(args)),
+      ),
+      'portal.jupyter.session': portalHandler(
+        'portal.jupyter.session',
+        (args) => jupyterHost.createSession(workspaceInput(args)),
+      ),
+      'portal.fs.browse': portalHandler(
+        'portal.fs.browse',
+        (args) => listRootTool(config, withArgs(args)),
+      ),
+      'portal.fs.pathStat': portalHandler(
+        'portal.fs.pathStat',
+        (args) => pathStatTool(config, withArgs(args)),
+      ),
+      'portal.git.inspect': portalHandler(
+        'portal.git.inspect',
+        (args) => inspectGitTool(config, withArgs(args)),
+      ),
+      'portal.agentInstructions.read': portalHandler(
+        'portal.agentInstructions.read',
+        (args) => readAgentInstructionsTool(config, withArgs(args)),
+      ),
+      'portal.git.worktree.create': portalHandler(
+        'portal.git.worktree.create',
+        (args) => gitWorktreeCreateTool(config, withArgs(args)),
+      ),
+      'portal.git.worktree.list': portalHandler(
+        'portal.git.worktree.list',
+        (args) => gitWorktreeListTool(config, withArgs(args)),
+      ),
+      'portal.git.branches.list': portalHandler(
+        'portal.git.branches.list',
+        (args) => listGitBranchesTool(config, withArgs(args)),
+      ),
+      'portal.git.worktree.switch': portalHandler(
+        'portal.git.worktree.switch',
+        (args) => gitWorktreeSwitchTool(config, withArgs(args)),
+      ),
+      'portal.git.worktree.remove': portalHandler(
+        'portal.git.worktree.remove',
+        (args) => gitWorktreeRemoveTool(config, withArgs(args)),
+      ),
+      'portal.git.worktree.branch-cleanup': portalHandler(
+        'portal.git.worktree.branch-cleanup',
+        (args) => gitWorktreeBranchCleanupTool(config, withArgs(args)),
+      ),
+      'portal.git.worktree.validate': portalHandler(
+        'portal.git.worktree.validate',
+        (args) => gitWorktreeValidateTool(config, withArgs(args)),
+      ),
+    };
     const result = await portalToolExecutions.execute(
       idempotencyKey,
-      async () =>
-        request.tool === 'read'
-          ? await readFileTool(config, request)
-          : request.tool === 'write'
-          ? await writeFileTool(config, request)
-          : request.tool === 'edit'
-          ? await editFileTool(config, request)
-          : request.tool === 'bash'
-          ? await bashTool(config, request)
-          : request.tool === 'exec_start'
-          ? await commandSessionTool(config, request, 'start')
-          : request.tool === 'exec_poll'
-          ? await commandSessionTool(config, request, 'poll')
-          : request.tool === 'exec_write'
-          ? await commandSessionTool(config, request, 'write')
-          : request.tool === 'exec_stop'
-          ? await commandSessionTool(config, request, 'stop')
-          : request.tool === 'portal.fs.list'
-          ? await workspaceFileHost.list(
-            workspaceFileInputFromToolCall(request),
-          )
-          : request.tool === 'portal.fs.read'
-          ? await workspaceFileHost.read(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalWorkspaceFileHost['read']
-            >[0],
-          )
-          : request.tool === 'portal.fs.hash'
-          ? await workspaceFileHost.hash(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalWorkspaceFileHost['hash']
-            >[0],
-          )
-          : request.tool === 'portal.fs.diffPreview'
-          ? await workspaceFileHost.diffPreview(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalWorkspaceFileHost['diffPreview']
-            >[0],
-          )
-          : request.tool === 'portal.fs.write'
-          ? await workspaceFileHost.write(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalWorkspaceFileHost['write']
-            >[0],
-          )
-          : request.tool === 'portal.fs.mkdir'
-          ? await workspaceFileHost.mkdir(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalWorkspaceFileHost['mkdir']
-            >[0],
-          )
-          : request.tool === 'portal.fs.move'
-          ? await workspaceFileHost.move(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalWorkspaceFileHost['move']
-            >[0],
-          )
-          : request.tool === 'portal.fs.delete'
-          ? await workspaceFileHost.delete(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalWorkspaceFileHost['delete']
-            >[0],
-          )
-          : request.tool === 'portal.fs.index'
-          ? await workspaceFileHost.index(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalWorkspaceFileHost['index']
-            >[0],
-          )
-          : request.tool === 'portal.fs.upload'
-          ? await workspaceFileHost.upload(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalWorkspaceFileHost['upload']
-            >[0],
-          )
-          : request.tool === 'portal.lsp.session'
-          ? await lspHost.createSession(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalLspHost['createSession']
-            >[0],
-          )
-          : request.tool === 'portal.lsp.query'
-          ? await lspHost.query(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalLspHost['query']
-            >[0],
-          )
-          : request.tool === 'portal.jupyter.status'
-          ? await jupyterHost.status(workspaceFileInputFromToolCall(request))
-          : request.tool === 'portal.jupyter.kernelspecs'
-          ? await jupyterHost.kernelspecs(
-            workspaceFileInputFromToolCall(request),
-          )
-          : request.tool === 'portal.jupyter.session'
-          ? await jupyterHost.createSession(
-            workspaceFileInputFromToolCall(request) as Parameters<
-              PortalJupyterHost['createSession']
-            >[0],
-          )
-          : request.tool === 'portal.fs.browse'
-          ? await listRootTool(config, request)
-          : request.tool === 'portal.fs.pathStat'
-          ? await pathStatTool(config, request)
-          : request.tool === 'portal.git.inspect'
-          ? await inspectGitTool(config, request)
-          : request.tool === 'portal.agentInstructions.read'
-          ? await readAgentInstructionsTool(config, request)
-          : request.tool === 'portal.context.discover'
-          ? await discoverWeaveContextTool(config, request)
-          : request.tool === 'portal.git.worktree.create'
-          ? await gitWorktreeCreateTool(config, request)
-          : request.tool === 'portal.git.worktree.list'
-          ? await gitWorktreeListTool(config, request)
-          : request.tool === 'portal.git.branches.list'
-          ? await listGitBranchesTool(config, request)
-          : request.tool === 'portal.git.worktree.switch'
-          ? await gitWorktreeSwitchTool(config, request)
-          : request.tool === 'portal.git.worktree.remove'
-          ? await gitWorktreeRemoveTool(config, request)
-          : request.tool === 'portal.git.worktree.branch-cleanup'
-          ? await gitWorktreeBranchCleanupTool(config, request)
-          : request.tool === 'portal.git.worktree.validate'
-          ? await gitWorktreeValidateTool(config, request)
-          : request.tool === 'portal.git.status'
-          ? await gitStatusTool(config, request)
-          : request.tool === 'portal.git.fetch'
-          ? await gitFetchTool(config, request)
-          : request.tool === 'portal.git.pull'
-          ? await gitPullTool(config, request)
-          : request.tool === 'portal.git.diff'
-          ? await gitDiffTool(config, request)
-          : request.tool === 'portal.git.log'
-          ? await gitLogTool(config, request)
-          : request.tool === 'portal.git.show'
-          ? await gitShowTool(config, request)
-          : undefined,
+      handlers[tool],
     );
-    if (!result) throw new Error(`Unsupported tool: ${String(request.tool)}`);
-    return result;
+    return parsePortalToolResult(tool, result);
   } catch (error) {
     return {
       ok: false,
@@ -1578,52 +1648,9 @@ const executePortalToolCall = async (
   }
 };
 
-const getPortalCapabilities = async (config: ResolvedPortalConfig) => {
-  const baseCapabilities = [
-    'read',
-    'write',
-    'edit',
-    'bash',
-    'terminal',
-    'portal.fs.list',
-    'portal.fs.read',
-    'portal.fs.hash',
-    'portal.fs.diffPreview',
-    'portal.fs.write',
-    'portal.fs.mkdir',
-    'portal.fs.move',
-    'portal.fs.delete',
-    'portal.fs.watch',
-    'portal.lsp',
-    'portal.lsp.session',
-    'portal.lsp.query',
-    'portal.jupyter.status',
-    'portal.jupyter.kernelspecs',
-    'portal.jupyter.session',
-    'portal.jupyter.execute',
-    'portal.fs.index',
-    'portal.fs.upload',
-    'portal.fs.browse',
-    'portal.fs.pathStat',
-    'portal.git.inspect',
-    'portal.agentInstructions.read',
-    'portal.context.discover',
-    'portal.git.worktree.validate',
-    'portal.git.worktree.create',
-    'portal.git.worktree.list',
-    'portal.git.branches.list',
-    'portal.git.worktree.switch',
-    'portal.git.worktree.remove',
-    'portal.git.worktree.branch-cleanup',
-    'portal.git.status',
-    'portal.git.fetch',
-    'portal.git.pull',
-    'portal.git.diff',
-    'portal.git.log',
-    'portal.git.show',
-  ];
-  return baseCapabilities;
-};
+const getPortalCapabilities = async (_config: ResolvedPortalConfig) => [
+  ...new Set([...portalToolNames, ...rpcRequestMethods('server', 'portal')]),
+];
 
 type PortalRemoteConnectionUpdate = {
   state: 'connecting' | 'connected' | 'reconnecting' | 'rejected';
@@ -1631,12 +1658,11 @@ type PortalRemoteConnectionUpdate = {
   connectedAt?: string;
 };
 
-const rpcSessionInput = (params: unknown, type: string) => {
+const rpcClientInput = (params: unknown) => {
   const input = isRecord(params) ? params : {};
   const clientId = optionalString(input.clientId);
   if (!clientId) throw new Error('clientId is required.');
-  const { clientId: _clientId, ...message } = input;
-  return { clientId, message: { ...message, type } };
+  return { clientId, input };
 };
 
 const connectOnce = async (
@@ -1646,12 +1672,12 @@ const connectOnce = async (
   workspaceFileHost: PortalWorkspaceFileHost,
   lspHost: PortalLspHost,
   jupyterHost: PortalJupyterHost,
-  onConnection?: (connection: RpcConnection) => void,
+  onConnection?: (connection: RpcConnection<'portal'>) => void,
   onConnectionUpdate?: (update: PortalRemoteConnectionUpdate) => void,
 ) => {
   const binaryTransfers = new PortalBinaryTransfers();
   const capabilities = await getPortalCapabilities(config);
-  const connection = new RpcConnection({
+  const connection = new RpcConnection<'portal'>({
     serverUrl: config.serverUrl,
     reconnect: false,
     initialize: {
@@ -1694,6 +1720,7 @@ const connectOnce = async (
     'binary.chunk',
     (params) => binaryTransfers.chunk(params),
   );
+  connection.register('binary.ack', () => ({ ok: true }));
   connection.register(
     'binary.complete',
     (params) => binaryTransfers.complete(params),
@@ -1717,9 +1744,16 @@ const connectOnce = async (
     ] as const
   ) {
     connection.register(`portal.workspaceFile.${action}`, async (params) => {
-      const request = isRecord(params) ? params : {};
-      const target = isRecord(request.target) ? request.target : {};
-      const args = isRecord(request.args) ? { ...request.args } : {};
+      const portalMethod = `portal.workspaceFile.${action}` as const;
+      const request = parseRpcRequestParams(
+        'server',
+        'portal',
+        portalMethod,
+        params,
+      );
+      const target = request.target;
+      const toolTarget = workspaceFileTargetFromRequest(target);
+      const args: Record<string, unknown> = { ...request.args };
       if (action === 'upload' || action === 'write') {
         const transferId = optionalString(args.transferId);
         if (!transferId) throw new Error('transferId is required.');
@@ -1740,22 +1774,31 @@ const connectOnce = async (
         lspHost,
         jupyterHost,
         {
-          ...target,
+          ...toolTarget,
           tool: action === 'diffPreview' ? 'portal.fs.diffPreview' : `portal.fs.${action}`,
           args,
         },
       );
+      if ('ok' in result && result.ok === false) {
+        throw new Error(
+          optionalString(result.error) ??
+            `Portal workspace file ${action} failed.`,
+        );
+      }
       if (
-        action !== 'read' || !isRecord(result) ||
+        action !== 'read' || !('content' in result) ||
         typeof result.content !== 'string'
-      ) return result;
+      ) return parseRpcRequestResult('server', 'portal', portalMethod, result);
       const transfer = await binaryTransfers.createDownload(
         new TextEncoder().encode(result.content),
         'workspaceFile.read',
         'text/plain; charset=utf-8',
       );
       const { content: _content, ...metadata } = result;
-      return { ...metadata, contentTransfer: transfer };
+      return parseRpcRequestResult('server', 'portal', portalMethod, {
+        ...metadata,
+        contentTransfer: transfer,
+      });
     });
   }
   const terminalActions = {
@@ -1768,12 +1811,62 @@ const connectOnce = async (
     close: 'close',
     detach: 'detach',
   } as const;
-  for (const [action, type] of Object.entries(terminalActions)) {
+  for (
+    const [action, type] of Object.entries(terminalActions) as Array<
+      [
+        keyof typeof terminalActions,
+        (typeof terminalActions)[keyof typeof terminalActions],
+      ]
+    >
+  ) {
     connection.register(`portal.terminal.${action}`, async (params) => {
-      const { clientId, message } = rpcSessionInput(params, type);
+      const { clientId, input } = rpcClientInput(params);
+      const message = terminalClientMessageSchema.parse(
+        action === 'snapshot' ? { type, requestId: input.requestId } : action === 'list' || action === 'create'
+          ? {
+            type,
+            requestId: input.requestId,
+            kind: input.kind,
+            terminalId: input.terminalId,
+            projectId: input.projectId,
+            workspaceId: input.workspaceId,
+            portalId: input.portalId,
+            rootId: input.rootId,
+            repoPath: input.repoPath,
+            workspacePath: input.workspacePath,
+            cwd: input.cwd,
+            cols: input.cols,
+            rows: input.rows,
+          }
+          : action === 'attach'
+          ? {
+            type,
+            kind: input.kind,
+            terminalId: input.terminalId,
+            projectId: input.projectId,
+            workspaceId: input.workspaceId,
+            portalId: input.portalId,
+            rootId: input.rootId,
+            repoPath: input.repoPath,
+            workspacePath: input.workspacePath,
+            cwd: input.cwd,
+            cols: input.cols,
+            rows: input.rows,
+          }
+          : action === 'input'
+          ? { type, terminalId: input.terminalId, data: input.data }
+          : action === 'resize'
+          ? {
+            type,
+            terminalId: input.terminalId,
+            cols: input.cols,
+            rows: input.rows,
+          }
+          : { type, terminalId: input.terminalId },
+      );
       await terminalHost.handleClientMessage(
         `rpc:${clientId}`,
-        message as TerminalClientMessage,
+        message,
         (event) => {
           connection.notify('portal.terminal.event', { clientId, event }, 2);
         },
@@ -1786,14 +1879,33 @@ const connectOnce = async (
     update: 'watch.update',
     stop: 'watch.stop',
   } as const;
-  for (const [action, type] of Object.entries(watchActions)) {
+  for (
+    const [action, type] of Object.entries(watchActions) as Array<
+      [
+        keyof typeof watchActions,
+        (typeof watchActions)[keyof typeof watchActions],
+      ]
+    >
+  ) {
     connection.register(
       `portal.workspaceFile.watch.${action}`,
       async (params) => {
-        const { clientId, message } = rpcSessionInput(params, type);
+        const { clientId, input } = rpcClientInput(params);
+        const message = workspaceFileWatchClientMessageSchema.parse(
+          action === 'start'
+            ? {
+              type,
+              requestId: input.requestId,
+              target: input.target,
+              paths: input.paths,
+            }
+            : action === 'update'
+            ? { type, requestId: input.requestId, paths: input.paths }
+            : { type, requestId: input.requestId },
+        );
         await workspaceFileHost.handleClientMessage(
           `rpc:${clientId}`,
-          message as PortalWorkspaceFileWatchClientMessage,
+          message,
           (event) =>
             connection.notify('portal.workspaceFile.watch.event', {
               clientId,
@@ -1809,12 +1921,30 @@ const connectOnce = async (
     send: 'jsonrpc',
     close: 'detach',
   } as const;
-  for (const [action, type] of Object.entries(lspActions)) {
+  for (
+    const [action, type] of Object.entries(lspActions) as Array<
+      [keyof typeof lspActions, (typeof lspActions)[keyof typeof lspActions]]
+    >
+  ) {
     connection.register(`portal.lsp.${action}`, async (params) => {
-      const { clientId, message } = rpcSessionInput(params, type);
+      const { clientId, input } = rpcClientInput(params);
+      const message = lspClientMessageSchema.parse(
+        action === 'start'
+          ? {
+            type,
+            sessionId: input.sessionId,
+            target: input.target,
+            path: input.path,
+            languageId: input.languageId,
+            serverId: input.serverId,
+          }
+          : action === 'send'
+          ? { type, sessionId: input.sessionId, message: input.message }
+          : { type, sessionId: input.sessionId },
+      );
       await lspHost.handleClientMessage(
         `rpc:${clientId}`,
-        message as PortalLspClientMessage,
+        message,
         (event) => {
           connection.notify('portal.lsp.event', { clientId, event }, 2);
         },
@@ -1823,12 +1953,33 @@ const connectOnce = async (
     });
   }
   const jupyterActions = { execute: 'execute', close: 'detach' } as const;
-  for (const [action, type] of Object.entries(jupyterActions)) {
+  for (
+    const [action, type] of Object.entries(jupyterActions) as Array<
+      [
+        keyof typeof jupyterActions,
+        (typeof jupyterActions)[keyof typeof jupyterActions],
+      ]
+    >
+  ) {
     connection.register(`portal.jupyter.${action}`, async (params) => {
-      const { clientId, message } = rpcSessionInput(params, type);
+      const { clientId, input } = rpcClientInput(params);
+      const message = jupyterClientMessageSchema.parse(
+        action === 'execute'
+          ? {
+            type,
+            sessionId: input.sessionId,
+            requestId: input.requestId,
+            cellId: input.cellId,
+            code: input.code,
+            silent: input.silent,
+            storeHistory: input.storeHistory,
+            allowStdin: input.allowStdin,
+          }
+          : { type, sessionId: input.sessionId },
+      );
       await jupyterHost.handleClientMessage(
         `rpc:${clientId}`,
-        message as PortalJupyterClientMessage,
+        message,
         (event) => {
           connection.notify('portal.jupyter.event', { clientId, event }, 2);
         },
@@ -1894,7 +2045,7 @@ const daemon = async (flags: Record<string, string | boolean>) => {
   const jupyterHost = new PortalJupyterHost({ config });
   const startedAt = new Date().toISOString();
   let stopping = false;
-  let activeConnection: RpcConnection | undefined;
+  let activeConnection: RpcConnection<'portal'> | undefined;
   let connectionState: PortalRuntimeFile['connectionState'] = 'connecting';
   let connectedAt: string | undefined;
   let connectionError: string | undefined;

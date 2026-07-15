@@ -8,9 +8,28 @@ import { expandPrompt, listPrompts } from '../../packages/client/src/lib/prompts
 import { RpcRemoteError } from '@weave/protocol';
 
 const installRpcMock = (implementation: (...args: any[]) => unknown | Promise<unknown>) => {
-  const rpcRequest = vi.fn(implementation);
+  const rpc = vi.fn(implementation);
+  const rpcRequest = vi.fn(async (request: { requestId: string; method: string; params?: unknown; options?: unknown }) => {
+    try {
+      const result = await rpc(request.method, request.params, request.options);
+      return {
+        kind: 'success' as const,
+        requestId: request.requestId,
+        method: request.method,
+        result,
+      };
+    } catch (error) {
+      if (!(error instanceof RpcRemoteError)) throw error;
+      return {
+        kind: 'error' as const,
+        requestId: request.requestId,
+        method: request.method,
+        error: { code: error.code, message: error.message, data: error.data },
+      };
+    }
+  });
   vi.stubGlobal('window', { weaveDesktop: { rpcRequest } });
-  return rpcRequest;
+  return rpc;
 };
 
 const workspace: Workspace = {
@@ -91,7 +110,7 @@ describe('chat-state Project/Workspace API client', () => {
 
   it('keeps AbortSignal in the renderer and cancels Desktop RPC by request id', async () => {
     let rejectRequest: (error: Error) => void = () => undefined;
-    const rpcRequest = vi.fn((_method: string, _params: unknown, _options: unknown) =>
+    const rpcRequest = vi.fn((request: { requestId: string }) =>
       new Promise<never>((_resolve, reject) => {
         rejectRequest = reject;
       })
@@ -100,19 +119,22 @@ describe('chat-state Project/Workspace API client', () => {
     vi.stubGlobal('window', { weaveDesktop: { rpcRequest, cancelRpcRequest } });
     const controller = new AbortController();
 
-    const request = sendRpcRequest('chat.run.start', { threadId: 'thread-1' }, {
+    const request = sendRpcRequest('chat.run.start', {
+      messages: [],
+      memory: { thread: 'thread-1' },
+    }, {
       signal: controller.signal,
     });
-    const forwardedOptions = rpcRequest.mock.calls[0]?.[2] as {
+    const forwardedEnvelope = rpcRequest.mock.calls[0]?.[0] as {
       requestId?: string;
-      signal?: unknown;
+      options?: { signal?: unknown };
     };
 
-    expect(forwardedOptions.requestId).toMatch(/^renderer_/);
-    expect('signal' in forwardedOptions).toBe(false);
+    expect(forwardedEnvelope.requestId).toMatch(/^renderer_/);
+    expect('signal' in (forwardedEnvelope.options ?? {})).toBe(false);
     controller.abort();
     await expect(request).rejects.toThrow('aborted by Desktop IPC');
-    expect(cancelRpcRequest).toHaveBeenCalledWith(forwardedOptions.requestId);
+    expect(cancelRpcRequest).toHaveBeenCalledWith(forwardedEnvelope.requestId);
   });
 
   it('reads and cancels active chat run state', async () => {
@@ -659,7 +681,7 @@ describe('chat-state Project/Workspace API client', () => {
   });
 
   it('sends draft context when expanding prompts', async () => {
-    const rpc = installRpcMock(async () => ({ text: 'Ship now' }));
+    const rpc = installRpcMock(async () => ({ name: 'ship', text: 'Ship now' }));
     await expect(expandPrompt('ship', 'now', {
       threadId: 'draft-thread',
       projectId: 'project-1',

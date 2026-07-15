@@ -27,13 +27,13 @@ export const contextParams = (context?: string | PromptResolutionContext) => {
 
 export const listPrompts = async (context?: string | PromptResolutionContext) => {
   const normalized = typeof context === 'string' ? { threadId: context } : context;
-  const data = await rpcRequest<{ prompts?: PromptSummary[] }>('agent.prompts.list', normalized);
+  const data = await rpcRequest('agent.prompts.list', normalized);
   return data.prompts ?? [];
 };
 
 export const expandPrompt = async (name: string, args: string, context?: string | PromptResolutionContext) => {
   const bodyContext = typeof context === 'string' ? { threadId: context } : context;
-  const data = await rpcRequest<{ text?: string }>('agent.prompts.expand', {
+  const data = await rpcRequest('agent.prompts.expand', {
     name,
     arguments: args,
     ...bodyContext,

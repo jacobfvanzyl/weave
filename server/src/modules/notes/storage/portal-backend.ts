@@ -1,4 +1,10 @@
 import { requestPortalTool } from '../../../portal/registry';
+import {
+  parsePortalToolArgs,
+  type PortalToolArgs,
+  type PortalToolName,
+  type PortalToolResult,
+} from '@weave/protocol';
 import type { ToolService } from '../../../services/tool-service';
 import { callerForOwner, type ServiceCaller } from '../../../services/types';
 import type {
@@ -8,17 +14,17 @@ import type {
   ResolvedNotesVaultBinding,
 } from './types';
 
-export type PortalToolRequester = (input: {
+export type PortalToolRequester = <Name extends PortalToolName>(input: {
   portalId: string;
   projectId?: string;
   workspaceId?: string;
   rootId?: string;
   repoPath?: string;
   workspacePath?: string;
-  tool: string;
-  args: unknown;
+  tool: Name;
+  args: PortalToolArgs<Name>;
   timeoutMs?: number;
-}) => Promise<unknown>;
+}) => Promise<PortalToolResult<Name>>;
 
 export type ServicePortalNotesVaultBackendOptions = {
   callerKind?: ServiceCaller['kind'];
@@ -54,6 +60,11 @@ const requestPortalWorkspaceFileTool = async (
   options?: NotesVaultBackendOptions,
 ) => {
   const storage = assertPortalStorage(binding.storage);
+  const tool = `portal.fs.${action}` as const;
+  const toolArgs = parsePortalToolArgs(
+    tool,
+    action === 'write' || action === 'move' ? { ...(isRecord(args) ? args : {}), createParents: true } : args,
+  );
   return cleanPortalResult(
     await requestPortal({
       portalId: storage.portalId,
@@ -62,8 +73,8 @@ const requestPortalWorkspaceFileTool = async (
       rootId: storage.rootId,
       repoPath: storage.vaultPath,
       workspacePath: storage.workspacePath,
-      tool: `portal.fs.${action}`,
-      args: action === 'write' || action === 'move' ? { ...(isRecord(args) ? args : {}), createParents: true } : args,
+      tool,
+      args: toolArgs,
       timeoutMs: options?.timeoutMs,
     }),
   );

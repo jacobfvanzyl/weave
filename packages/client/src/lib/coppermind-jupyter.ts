@@ -1,98 +1,33 @@
 import type { EditorTarget } from './editor-types';
+import type {
+  JupyterHostEvent,
+  JupyterKernelspecsResult,
+  JupyterKernelSpec,
+  JupyterOutput,
+  JupyterSessionResult,
+  JupyterStatusResult,
+  RpcRequestParams,
+} from '@weave/protocol';
 import { onRpcConnectionState, onRpcNotification, rpcRequest } from './mastra-client';
 
-export type CoppermindJupyterSessionInput = {
-  target: EditorTarget;
-  path: string;
-  kernelName?: string;
-  language?: string;
-};
-
-export type CoppermindJupyterStatusResult = {
-  ok: true;
-  available: boolean;
-  status: 'ready' | 'missing' | 'error';
-  command?: string;
-  rootPath?: string;
-  url?: string;
-  uvAvailable?: boolean;
-  uvCommand?: string;
-  workspaceKernelName?: string;
-  venvPath?: string;
-  pythonPath?: string;
-  error?: string;
-};
-
-export type CoppermindJupyterKernelSpec = {
-  name: string;
-  displayName: string;
-  language?: string;
-  argv?: string[];
-};
-
-export type CoppermindJupyterKernelspecsResult = {
-  ok: true;
-  available: boolean;
-  defaultKernelName?: string;
-  kernelspecs: CoppermindJupyterKernelSpec[];
-  error?: string;
-};
-
-export type CoppermindJupyterSessionResult = {
-  ok: true;
-  available: boolean;
-  sessionId: string;
-  kernelId: string;
-  kernelName: string;
-  path: string;
-  pythonPath?: string;
-  portalId?: string;
-  rootPath: string;
-  venvPath?: string;
-};
-
-export type CoppermindJupyterOutput =
-  | { output_type: 'stream'; name: string; text: string }
-  | {
-    output_type: 'display_data';
-    data: Record<string, unknown>;
-    metadata?: Record<string, unknown>;
-    transient?: Record<string, unknown>;
-  }
-  | {
-    output_type: 'execute_result';
-    execution_count?: number | null;
-    data: Record<string, unknown>;
-    metadata?: Record<string, unknown>;
-  }
-  | { output_type: 'error'; ename: string; evalue: string; traceback: string[] };
-
-export type CoppermindJupyterEvent =
-  | { type: 'ready'; sessionId: string; kernelId: string; kernelName: string }
-  | { type: 'status'; sessionId: string; requestId?: string; cellId?: string; executionState: string }
-  | { type: 'execution_input'; sessionId: string; requestId?: string; cellId?: string; executionCount: number }
-  | { type: 'output'; sessionId: string; requestId?: string; cellId?: string; output: CoppermindJupyterOutput }
-  | { type: 'clear_output'; sessionId: string; requestId?: string; cellId?: string; wait: boolean }
-  | {
-    type: 'complete';
-    sessionId: string;
-    requestId?: string;
-    cellId?: string;
-    status: 'ok' | 'error' | 'interrupted';
-    executionCount?: number | null;
-  }
-  | { type: 'error'; sessionId?: string; requestId?: string; cellId?: string; error: string };
+export type CoppermindJupyterSessionInput = RpcRequestParams<'client', 'server', 'jupyter.session.create'>;
+export type CoppermindJupyterStatusResult = JupyterStatusResult;
+export type CoppermindJupyterKernelSpec = JupyterKernelSpec;
+export type CoppermindJupyterKernelspecsResult = JupyterKernelspecsResult;
+export type CoppermindJupyterSessionResult = JupyterSessionResult;
+export type CoppermindJupyterOutput = JupyterOutput;
+export type CoppermindJupyterEvent = JupyterHostEvent;
 
 const sessionInputs = new Map<string, CoppermindJupyterSessionInput>();
 
 export const getCoppermindJupyterStatus = async (target: EditorTarget) =>
-  await rpcRequest<CoppermindJupyterStatusResult>('jupyter.status', { target });
+  await rpcRequest('jupyter.status', { target });
 
 export const getCoppermindJupyterKernelspecs = async (target: EditorTarget) =>
-  await rpcRequest<CoppermindJupyterKernelspecsResult>('jupyter.kernelspecs', { target });
+  await rpcRequest('jupyter.kernelspecs', { target });
 
 export const createCoppermindJupyterSession = async (input: CoppermindJupyterSessionInput) => {
-  const result = await rpcRequest<CoppermindJupyterSessionResult>('jupyter.session.create', input);
+  const result = await rpcRequest('jupyter.session.create', input);
   sessionInputs.set(result.sessionId, input);
   return result;
 };
@@ -107,9 +42,7 @@ export const createCoppermindJupyterRpcSession = (
   let recreateOnExecute = false;
   const pending = new Map<string, string>();
   const detach = onRpcNotification('jupyter.event', raw => {
-    const envelope = raw && typeof raw === 'object'
-      ? raw as { sessionId?: string; event?: CoppermindJupyterEvent }
-      : undefined;
+    const envelope = raw;
     if (envelope?.sessionId !== activeSession.sessionId || !envelope.event) return;
     if (envelope.event.type === 'complete' || envelope.event.type === 'error') {
       if (envelope.event.requestId) pending.delete(envelope.event.requestId);

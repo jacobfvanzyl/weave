@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1';
 import { RpcPeer, type RpcSocket } from '@weave/protocol/peer';
-import { WEAVE_RPC_BINARY_CHUNK_BYTES } from '@weave/protocol';
+import { WEAVE_RPC_BINARY_CHUNK_BYTES, WEAVE_RPC_BINARY_WINDOW_SIZE } from '@weave/protocol';
 import { createOwnerRequestContext } from '../owner/context.ts';
 import type { RpcSession } from './router.ts';
 import { BinaryTransferRegistry } from './binary-transfers.ts';
@@ -43,6 +43,11 @@ const base64 = (bytes: Uint8Array) => {
   return btoa(result);
 };
 
+const transferWindow = {
+  chunkBytes: WEAVE_RPC_BINARY_CHUNK_BYTES,
+  windowSize: WEAVE_RPC_BINARY_WINDOW_SIZE,
+};
+
 Deno.test('binary uploads accept out-of-order window chunks and validate their checksum', async () => {
   const registry = new BinaryTransferRegistry();
   const owner = session('one');
@@ -51,7 +56,7 @@ Deno.test('binary uploads accept out-of-order window chunks and validate their c
   const sha256 = await digest(bytes);
   registry.beginUpload({
     transferId: 'upload', direction: 'upload', purpose: 'workspaceFile.upload',
-    sizeBytes: bytes.byteLength, sha256,
+    sizeBytes: bytes.byteLength, sha256, ...transferWindow,
   }, owner.value);
 
   assertEquals(registry.putChunk({
@@ -69,13 +74,13 @@ Deno.test('binary uploads reject incomplete and checksum-mismatched transfers', 
   const owner = session('one');
   const bytes = new Uint8Array([1, 2, 3]);
   const sha256 = await digest(bytes);
-  registry.beginUpload({ transferId: 'incomplete', direction: 'upload', purpose: 'test', sizeBytes: 3, sha256 }, owner.value);
+  registry.beginUpload({ transferId: 'incomplete', direction: 'upload', purpose: 'test', sizeBytes: 3, sha256, ...transferWindow }, owner.value);
   await assertRejects(
     () => registry.completeUpload({ transferId: 'incomplete', chunks: 1, sha256 }, owner.value),
     Error,
     'incomplete',
   );
-  registry.beginUpload({ transferId: 'bad', direction: 'upload', purpose: 'test', sizeBytes: 3, sha256 }, owner.value);
+  registry.beginUpload({ transferId: 'bad', direction: 'upload', purpose: 'test', sizeBytes: 3, sha256, ...transferWindow }, owner.value);
   registry.putChunk({ transferId: 'bad', index: 0, data: base64(bytes) }, owner.value);
   await assertRejects(
     () => registry.completeUpload({ transferId: 'bad', chunks: 1, sha256: '0'.repeat(64) }, owner.value),
@@ -91,6 +96,7 @@ Deno.test('binary transfers are connection-scoped and expire with their connecti
   const emptyDigest = await digest(new Uint8Array());
   registry.beginUpload({
     transferId: 'scoped', direction: 'upload', purpose: 'test', sizeBytes: 0, sha256: emptyDigest,
+    ...transferWindow,
   }, owner.value);
   await assertRejects(
     async () => registry.consumeUpload('scoped', other.value),
@@ -110,6 +116,6 @@ Deno.test('binary attachment uploads preserve the 10 MiB domain limit', async ()
   const owner = session('one');
   await assertRejects(async () => registry.beginUpload({
     transferId: 'large', direction: 'upload', purpose: 'attachment.image',
-    sizeBytes: 10 * 1024 * 1024 + 1, sha256: '0'.repeat(64),
+    sizeBytes: 10 * 1024 * 1024 + 1, sha256: '0'.repeat(64), ...transferWindow,
   }, owner.value), Error, 'exceeds');
 });

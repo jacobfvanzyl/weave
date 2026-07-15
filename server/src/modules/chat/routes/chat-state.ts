@@ -11,6 +11,7 @@ import {
   estimateContextTokens,
   estimateMemoryContextTokens,
 } from '../../../agent/context-token-estimate';
+import { normalizeWeaveChatMessages } from '../../../agent/chat-protocol';
 
 const askUserToolName = 'ask_user';
 
@@ -671,10 +672,10 @@ export const loadChatThreadUiMessages = async (
   const shouldAppendRunMessages = retainedRunMessages.length > 0 && !retainedRunMerged &&
     (pendingMessages.length > 0 || messagesWithRetainedRun[messagesWithRetainedRun.length - 1]?.role !== 'assistant');
 
-  return mergePendingSubmittedMessages(
+  return normalizeWeaveChatMessages(mergePendingSubmittedMessages(
     messagesWithRetainedRun,
     shouldAppendRunMessages ? [...pendingMessages, ...retainedRunMessages] : pendingMessages,
-  );
+  ));
 };
 
 export const __chatStateContextUsageTest = {

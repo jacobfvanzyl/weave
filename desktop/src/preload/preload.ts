@@ -12,6 +12,17 @@ import type {
   NativeNotificationShowResult,
   WeaveNotificationEvent,
 } from '@weave/client/lib/notifications/types';
+import {
+  type DesktopRpcRequestEnvelope,
+  type DesktopRpcResponseEnvelope,
+  parseDesktopRpcNotificationEnvelope,
+  parseDesktopRpcNotifyEnvelope,
+  parseDesktopRpcRequestEnvelope,
+  parseDesktopRpcResponseEnvelope,
+  parseDesktopRpcReverseRequestEnvelope,
+  parseDesktopRpcReverseResponseEnvelope,
+  type RpcRequestMethod,
+} from '@weave/protocol';
 
 type IpcErrorResult = {
   __weaveIpcError: true;
@@ -37,40 +48,38 @@ const bridge: WeaveDesktopBridge = {
     ipcRenderer.invoke('connection:save-settings', input) as Promise<DesktopConnectionSettings>,
   testConnection: (input?: DesktopConnectionInput) =>
     ipcRenderer.invoke('connection:test', input) as Promise<DesktopConnectionTestResult>,
-  rpcRequest: <T = unknown>(method: string, params?: unknown, options?: {
-    timeoutMs?: number;
-    requestId?: string;
-  }) => ipcRenderer.invoke(
-    'rpc:request',
-    options?.requestId ?? `renderer_${crypto.randomUUID()}`,
-    method,
-    params,
-    { ...(options?.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) },
-  ) as Promise<T>,
+  rpcRequest: async <Method extends RpcRequestMethod<'client', 'server'>>(
+    input: DesktopRpcRequestEnvelope<Method>,
+  ): Promise<DesktopRpcResponseEnvelope<Method>> => {
+    const method = input.method as Method;
+    const request = parseDesktopRpcRequestEnvelope<Method>(input, method);
+    const response: unknown = await ipcRenderer.invoke('rpc:request', request);
+    return parseDesktopRpcResponseEnvelope<Method>(response, method);
+  },
   cancelRpcRequest: requestId => ipcRenderer.send('rpc:request-cancel', requestId),
-  rpcNotify: (method: string, params?: unknown) =>
-    ipcRenderer.invoke('rpc:notify', method, params) as Promise<void>,
+  rpcNotify: input => ipcRenderer.invoke('rpc:notify', parseDesktopRpcNotifyEnvelope(input, input.method)) as Promise<void>,
   onRpcConnectionState: listener => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed') => listener(state);
     ipcRenderer.on('rpc:connection-state', wrapped);
     return () => ipcRenderer.removeListener('rpc:connection-state', wrapped);
   },
   onRpcNotification: listener => {
-    const wrapped = (_event: Electron.IpcRendererEvent, notification: { method: string; params: unknown }) =>
-      listener(notification.method, notification.params);
+    const wrapped = (_event: Electron.IpcRendererEvent, input: unknown) =>
+      listener(parseDesktopRpcNotificationEnvelope(input));
     ipcRenderer.on('rpc:notification', wrapped);
     return () => ipcRenderer.removeListener('rpc:notification', wrapped);
   },
   onRpcReverseRequest: listener => {
-    const wrapped = (
-      _event: Electron.IpcRendererEvent,
-      request: { requestId: string; method: string; params: unknown },
-    ) => listener(request.requestId, request.method, request.params);
+    const wrapped = (_event: Electron.IpcRendererEvent, input: unknown) =>
+      listener(parseDesktopRpcReverseRequestEnvelope(input));
     ipcRenderer.on('rpc:reverse-request', wrapped);
     return () => ipcRenderer.removeListener('rpc:reverse-request', wrapped);
   },
-  respondRpcReverseRequest: (requestId, result, error) =>
-    ipcRenderer.invoke('rpc:reverse-response', requestId, result, error) as Promise<void>,
+  respondRpcReverseRequest: response =>
+    ipcRenderer.invoke(
+      'rpc:reverse-response',
+      parseDesktopRpcReverseResponseEnvelope(response, response.method),
+    ) as Promise<void>,
   getPortalStatus: () => ipcRenderer.invoke('portal:get-status') as Promise<DesktopPortalStatus>,
   retryPortal: () => unwrapIpcResult<DesktopPortalStatus>(ipcRenderer.invoke('portal:retry')),
   onPortalStatus: listener => {

@@ -1,28 +1,11 @@
 import { AssistantChatTransport } from '@assistant-ui/react-ai-sdk';
 import type { ChatTransport, HttpChatTransportInitOptions, UIMessage, UIMessageChunk } from 'ai';
+import { parseRpcRequestParams } from '@weave/protocol';
 import { onRpcConnectionState, onRpcNotification, rpcRequest } from './mastra-client';
-
-type ChatRunSubscriptionResult = {
-  subscriptionId: string | null;
-  active: boolean;
-  afterSequence: number;
-};
-
-type ChatRunEvent = {
-  subscriptionId?: unknown;
-  threadId?: unknown;
-  runId?: unknown;
-  sequence?: unknown;
-  event?: unknown;
-  done?: unknown;
-  error?: unknown;
-};
 
 type RpcChatTransportOptions<UI_MESSAGE extends UIMessage> = HttpChatTransportInitOptions<UI_MESSAGE> & {
   onRunStarted?: () => void;
 };
-
-const asSequence = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 
 export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
   extends AssistantChatTransport<UI_MESSAGE> {
@@ -39,16 +22,16 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
     options: Parameters<ChatTransport<UI_MESSAGE>['sendMessages']>[0],
   ): Promise<ReadableStream<UIMessageChunk>> {
     const requestId = crypto.randomUUID();
-    const body = { ...await this.prepareBody(options), requestId };
+    const body = parseRpcRequestParams('client', 'server', 'chat.run.start', {
+      ...await this.prepareBody(options),
+      requestId,
+    });
     let started: { run?: { runId?: string } };
     try {
       started = await rpcRequest('chat.run.start', body, { signal: options.abortSignal });
     } catch (error) {
       if (options.abortSignal?.aborted) throw error;
-      const recovered = await rpcRequest<{
-        run?: { runId?: string };
-        persisted?: { runId?: string };
-      }>('chat.run.get', { threadId: options.chatId, runId: requestId });
+      const recovered = await rpcRequest('chat.run.get', { threadId: options.chatId, runId: requestId });
       if (recovered.run?.runId !== requestId && recovered.persisted?.runId !== requestId) throw error;
       started = { run: { runId: requestId } };
     }
@@ -61,7 +44,7 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
   override async reconnectToStream(
     options: Parameters<ChatTransport<UI_MESSAGE>['reconnectToStream']>[0],
   ): Promise<ReadableStream<UIMessageChunk> | null> {
-    const state = await rpcRequest<{ run?: { active?: boolean; runId?: string } }>('chat.run.get', {
+    const state = await rpcRequest('chat.run.get', {
       threadId: options.chatId,
     });
     if (!state.run?.active || !state.run.runId) return null;
@@ -114,8 +97,7 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
           finish();
         };
         signal?.addEventListener('abort', unsubscribe, { once: true });
-        detach = onRpcNotification('chat.run.event', raw => {
-          const event = raw && typeof raw === 'object' ? raw as ChatRunEvent : {};
+        detach = onRpcNotification('chat.run.event', event => {
           if (
             event.threadId !== threadId || event.runId !== runId ||
             (subscriptionId && event.subscriptionId !== subscriptionId)
@@ -130,10 +112,10 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
             finish();
             return;
           }
-          const sequence = asSequence(event.sequence);
+          const sequence = event.sequence;
           const lastSequence = this.lastSequenceByRun.get(runId) ?? 0;
-          if (sequence !== undefined && sequence <= lastSequence) return;
-          if (sequence !== undefined) this.lastSequenceByRun.set(runId, sequence);
+          if (sequence <= lastSequence) return;
+          this.lastSequenceByRun.set(runId, sequence);
           if (event.event !== undefined) controller.enqueue(event.event as UIMessageChunk);
         });
 
@@ -141,7 +123,7 @@ export class RpcAssistantChatTransport<UI_MESSAGE extends UIMessage = UIMessage>
           if (closed || subscribing) return;
           subscribing = true;
           try {
-            const result = await rpcRequest<ChatRunSubscriptionResult>('chat.run.subscribe', {
+            const result = await rpcRequest('chat.run.subscribe', {
               threadId,
               runId,
               afterSequence: this.lastSequenceByRun.get(runId) ?? 0,

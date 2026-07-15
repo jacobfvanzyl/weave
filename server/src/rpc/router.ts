@@ -1,5 +1,13 @@
 import type { RpcPeer } from '@weave/protocol/peer';
-import { rpcMethodNameSchema } from '@weave/protocol';
+import {
+  parseRpcRequestResult,
+  rpcAllowedSourceRoles,
+  type RpcRequestMethod,
+  type RpcRequestParams,
+  type RpcRequestParsedParams,
+  type RpcRequestResult,
+  type RpcRequestSource,
+} from '@weave/protocol';
 import type { OwnerContext } from '../owner/context.ts';
 
 export type RpcSessionRole = 'client' | 'portal';
@@ -26,36 +34,76 @@ export type RpcPortalSession = {
 
 export type RpcSession = RpcClientSession | RpcPortalSession;
 
-export type RpcHandlerContext = {
-  session: RpcSession;
+type RpcServerMethod = RpcRequestMethod<RpcSessionRole, 'server'>;
+type RpcServerSource<Method extends RpcServerMethod> = RpcRequestSource<'server', Method> & RpcSessionRole;
+
+export type RpcHandlerContext<Method extends RpcServerMethod = RpcServerMethod> = {
+  session: Extract<RpcSession, { role: RpcServerSource<Method> }>;
   signal: AbortSignal;
 };
 
-export type RpcServerHandler = (
-  params: unknown,
-  context: RpcHandlerContext,
-) => unknown | Promise<unknown>;
+export type RpcServerHandler<Method extends RpcServerMethod = RpcServerMethod> = (
+  params: RpcRequestParsedParams<RpcServerSource<Method>, 'server', Method>,
+  context: RpcHandlerContext<Method>,
+) => RpcRequestResult<RpcServerSource<Method>, 'server', Method> |
+  Promise<RpcRequestResult<RpcServerSource<Method>, 'server', Method>>;
 
 type HandlerRegistration = {
   roles: ReadonlySet<RpcSessionRole>;
-  handler: RpcServerHandler;
+  handler: (params: unknown, context: RpcHandlerContext) => unknown | Promise<unknown>;
 };
 
 export class RpcRouter {
   private readonly handlers = new Map<string, HandlerRegistration>();
 
-  register(
-    method: string,
-    roles: RpcSessionRole | RpcSessionRole[],
-    handler: RpcServerHandler,
+  register<Method extends RpcServerMethod>(
+    method: Method,
+    roles: RpcServerSource<Method> | RpcServerSource<Method>[],
+    handler: RpcServerHandler<Method>,
   ) {
-    rpcMethodNameSchema.parse(method);
+    this.addRegistration(method, roles, handler);
+  }
+
+  registerValidated<Method extends RpcServerMethod>(
+    method: Method,
+    roles: RpcServerSource<Method> | RpcServerSource<Method>[],
+    handler: (
+      params: RpcRequestParsedParams<RpcServerSource<Method>, 'server', Method>,
+      context: RpcHandlerContext<Method>,
+    ) => unknown | Promise<unknown>,
+  ) {
+    this.addRegistration(method, roles, async (params, context) =>
+      parseRpcRequestResult(
+        context.session.role,
+        'server',
+        method,
+        await handler(params, context),
+      )
+    );
+  }
+
+  private addRegistration<Method extends RpcServerMethod>(
+    method: Method,
+    roles: RpcServerSource<Method> | RpcServerSource<Method>[],
+    handler: (
+      params: RpcRequestParsedParams<RpcServerSource<Method>, 'server', Method>,
+      context: RpcHandlerContext<Method>,
+    ) => unknown | Promise<unknown>,
+  ) {
     if (this.handlers.has(method)) {
       throw new Error(`RPC server method already registered: ${method}`);
     }
+    const allowedRoles = rpcAllowedSourceRoles(method, 'server', 'request') as RpcSessionRole[];
+    const declaredRoles = Array.isArray(roles) ? roles : [roles];
+    if (
+      allowedRoles.length !== declaredRoles.length ||
+      allowedRoles.some((role) => !declaredRoles.includes(role as RpcServerSource<Method>))
+    ) {
+      throw new Error(`RPC roles for ${method} must match the protocol registry: ${allowedRoles.join(', ')}.`);
+    }
     this.handlers.set(method, {
-      roles: new Set(Array.isArray(roles) ? roles : [roles]),
-      handler,
+      roles: new Set(allowedRoles),
+      handler: handler as unknown as HandlerRegistration['handler'],
     });
   }
 

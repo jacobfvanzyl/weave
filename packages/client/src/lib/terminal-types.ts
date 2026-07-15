@@ -1,4 +1,10 @@
-export type TerminalSessionKind = 'workspace' | 'general';
+import type {
+  TerminalHostEvent as ProtocolTerminalHostEvent,
+  TerminalSessionKind,
+  TerminalWindowRecord,
+} from '@weave/protocol';
+
+export type { TerminalSessionKind, TerminalWindowRecord } from '@weave/protocol';
 
 export type TerminalStartInput = {
   kind: TerminalSessionKind;
@@ -18,20 +24,6 @@ export type TerminalTargetInput = Omit<TerminalStartInput, 'terminalId'> & {
   terminalId?: string;
 };
 
-export type TerminalWindowRecord = {
-  terminalId: string;
-  scopeId: string;
-  slot: number;
-  kind: TerminalSessionKind;
-  cwd: string;
-  title: string;
-  processName?: string;
-  portalId?: string;
-  rootId?: string;
-  projectId?: string;
-  workspaceId?: string;
-};
-
 export type TerminalClientMessage =
   | { type: 'snapshot'; requestId?: string }
   | ({ type: 'list'; requestId?: string } & TerminalTargetInput)
@@ -42,26 +34,8 @@ export type TerminalClientMessage =
   | { type: 'close'; terminalId: string }
   | { type: 'detach'; terminalId: string };
 
-export type TerminalStartedEvent = {
-  type: 'started';
-  terminalId: string;
-  workspaceId?: string;
-  sessionId: string;
-  cwd: string;
-  pid?: number;
-  cols: number;
-  rows: number;
-};
-
-export type TerminalHostEvent =
-  | TerminalStartedEvent
-  | { type: 'windows'; requestId?: string; windows: TerminalWindowRecord[] }
-  | { type: 'created'; requestId?: string; terminalId: string; workspaceId?: string; window: TerminalWindowRecord }
-  | { type: 'output'; terminalId: string; workspaceId?: string; data: string }
-  | { type: 'replay'; terminalId: string; workspaceId?: string; data: string }
-  | { type: 'title'; terminalId: string; workspaceId?: string; title: string }
-  | { type: 'exit'; terminalId: string; workspaceId?: string; exitCode?: number; signal?: number | string }
-  | { type: 'error'; requestId?: string; terminalId: string; workspaceId?: string; error: string };
+export type TerminalStartedEvent = Extract<ProtocolTerminalHostEvent, { type: 'started' }>;
+export type TerminalHostEvent = ProtocolTerminalHostEvent;
 
 export type TerminalStartResult = {
   sessionId: string;

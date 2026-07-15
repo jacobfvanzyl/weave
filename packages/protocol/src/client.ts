@@ -5,12 +5,36 @@ import {
   type RpcSocket,
 } from "./peer.ts";
 import {
+  parseRpcRequestResult,
   type RpcInitializeParams,
   type RpcInitializeResult,
   rpcInitializeResultSchema,
   rpcMethodNameSchema,
+  type RpcNotificationData,
+  type RpcNotificationMethod,
+  type RpcNotificationParams,
+  type RpcRequestArguments,
+  type RpcRequestMethod,
+  type RpcRequestParams,
+  type RpcRequestParsedParams,
+  type RpcRequestResult,
   WEAVE_RPC_PATH,
 } from "./schema.ts";
+
+export type RpcConnectionRole = Exclude<RpcInitializeParams["role"], "server">;
+type InitializeFor<Role extends RpcConnectionRole> = Extract<
+  RpcInitializeParams,
+  { role: Role }
+>;
+export type RpcConnectionHandler<
+  Role extends RpcConnectionRole,
+  Method extends RpcRequestMethod<"server", Role>,
+> = (
+  params: RpcRequestParsedParams<"server", Role, Method>,
+  context: Parameters<RpcHandler>[1],
+) =>
+  | RpcRequestResult<"server", Role, Method>
+  | Promise<RpcRequestResult<"server", Role, Method>>;
 
 export type RpcConnectionState =
   | "idle"
@@ -40,21 +64,14 @@ export type RpcWebSocket = RpcSocket & {
   ): void;
 };
 
-export type RpcConnectionOptions = {
+export type RpcConnectionOptions<Role extends RpcConnectionRole = "client"> = {
   serverUrl: string;
   initialize:
-    | RpcInitializeParams
-    | (() => RpcInitializeParams | Promise<RpcInitializeParams>);
+    | InitializeFor<Role>
+    | (() => InitializeFor<Role> | Promise<InitializeFor<Role>>);
   createSocket?: (url: string) => RpcWebSocket;
   reconnect?: boolean;
   reconnectDelayMs?: (attempt: number) => number;
-};
-
-type DurableSubscription = {
-  method: string;
-  params: () => unknown;
-  onResult?: (result: unknown) => void | Promise<void>;
-  onError?: (error: unknown) => void | Promise<void>;
 };
 
 const rpcUrl = (serverUrl: string) => {
@@ -75,7 +92,7 @@ const defaultSocket = (url: string) =>
 const delayForAttempt = (attempt: number) =>
   Math.min(10_000, 250 * 2 ** Math.min(attempt, 5));
 
-export class RpcConnection {
+export class RpcConnection<Role extends RpcConnectionRole = "client"> {
   private peer?: RpcPeer;
   private socket?: RpcWebSocket;
   private connecting?: Promise<RpcInitializeResult>;
@@ -92,13 +109,10 @@ export class RpcConnection {
   private readonly stateHandlers = new Set<
     (state: RpcConnectionState) => void
   >();
-  private readonly durableSubscriptions = new Map<
-    string,
-    DurableSubscription
-  >();
   private initializeResult?: RpcInitializeResult;
+  private localRole?: Role;
 
-  constructor(private options: RpcConnectionOptions) {}
+  constructor(private options: RpcConnectionOptions<Role>) {}
 
   get state() {
     return this.stateValue;
@@ -108,7 +122,7 @@ export class RpcConnection {
     return this.initializeResult;
   }
 
-  configure(options: RpcConnectionOptions) {
+  configure(options: RpcConnectionOptions<Role>) {
     const changed =
       rpcUrl(options.serverUrl) !== rpcUrl(this.options.serverUrl) ||
       options.initialize !== this.options.initialize;
@@ -122,13 +136,20 @@ export class RpcConnection {
     return () => this.stateHandlers.delete(handler);
   }
 
-  onNotification(method: string, handler: RpcNotificationHandler) {
+  onNotification<Method extends RpcNotificationMethod<"server", Role>>(
+    method: Method,
+    handler: (
+      params: RpcNotificationData<"server", Role, Method>,
+      method: Method,
+    ) => void | Promise<void>,
+  ) {
     const handlers = this.notificationHandlers.get(method) ??
       new Set<RpcNotificationHandler>();
-    handlers.add(handler);
+    const rawHandler = handler as RpcNotificationHandler;
+    handlers.add(rawHandler);
     this.notificationHandlers.set(method, handlers);
     return () => {
-      handlers.delete(handler);
+      handlers.delete(rawHandler);
       if (handlers.size === 0) this.notificationHandlers.delete(method);
     };
   }
@@ -138,25 +159,20 @@ export class RpcConnection {
     return () => this.anyNotificationHandlers.delete(handler);
   }
 
-  register(method: string, handler: RpcHandler) {
+  register<Method extends RpcRequestMethod<"server", Role>>(
+    method: Method,
+    handler: RpcConnectionHandler<Role, Method>,
+  ) {
     rpcMethodNameSchema.parse(method);
     if (this.requestHandlers.has(method)) {
       throw new Error(`RPC handler already registered: ${method}`);
     }
-    this.requestHandlers.set(method, handler);
-    const detach = this.peer?.register(method, handler);
+    this.requestHandlers.set(method, handler as RpcHandler);
+    const detach = this.peer?.register(method, handler as RpcHandler);
     return () => {
       detach?.();
       this.requestHandlers.delete(method);
     };
-  }
-
-  addDurableSubscription(key: string, subscription: DurableSubscription) {
-    this.durableSubscriptions.set(key, subscription);
-    if (this.stateValue === "connected") {
-      void this.resumeSubscription(subscription);
-    }
-    return () => this.durableSubscriptions.delete(key);
   }
 
   async connect() {
@@ -177,20 +193,35 @@ export class RpcConnection {
     }
   }
 
-  async request<T = unknown>(
-    method: string,
-    params?: unknown,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
-  ) {
+  async request<Method extends RpcRequestMethod<Role, "server">>(
+    method: Method,
+    ...args: RpcRequestArguments<Role, "server", Method>
+  ): Promise<RpcRequestResult<Role, "server", Method>> {
     rpcMethodNameSchema.parse(method);
     await this.connect();
     if (!this.peer || this.stateValue !== "connected") {
       throw new Error("RPC connection is not connected.");
     }
-    return await this.peer.request<T>(method, params, options);
+    const [params, options] = args as [
+      unknown,
+      { timeoutMs?: number; signal?: AbortSignal }?,
+    ];
+    if (!this.localRole) {
+      throw new Error("RPC connection has no initialized role.");
+    }
+    return parseRpcRequestResult(
+      this.localRole,
+      "server",
+      method,
+      await this.peer.request(method, params, options),
+    );
   }
 
-  notify(method: string, params?: unknown, priority?: number) {
+  notify<Method extends RpcNotificationMethod<Role, "server">>(
+    method: Method,
+    params: RpcNotificationParams<Role, "server", Method>,
+    priority?: number,
+  ) {
     rpcMethodNameSchema.parse(method);
     if (!this.peer || this.stateValue !== "connected") {
       throw new Error("RPC connection is not connected.");
@@ -202,6 +233,7 @@ export class RpcConnection {
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.initializeResult = undefined;
+    this.localRole = undefined;
     this.peer?.close(1000, reason);
     this.peer = undefined;
     this.socket = undefined;
@@ -233,16 +265,23 @@ export class RpcConnection {
     }
 
     const peer = new RpcPeer(socket, {
+      localRole: (typeof this.options.initialize === "function"
+        ? undefined
+        : this.options.initialize.role) as Role | undefined,
+      remoteRole: "server",
       onUnhandledNotification: async (params, method) => {
         const handlers = this.notificationHandlers.get(method);
         if (handlers) {
-          for (const handler of handlers) await handler(params, method);
+          for (const handler of handlers) {
+            await handler(params, method);
+          }
         }
         for (const handler of this.anyNotificationHandlers) {
           await handler(params, method);
         }
       },
-      onClose: () => this.handleClosed(peer),
+      onClose: () =>
+        this.handleClosed(peer),
     });
     this.peer = peer;
     for (const [method, handler] of this.requestHandlers) {
@@ -272,6 +311,8 @@ export class RpcConnection {
     const initialize = typeof this.options.initialize === "function"
       ? await this.options.initialize()
       : this.options.initialize;
+    this.localRole = initialize.role;
+    peer.setRoles(initialize.role, "server");
     const rawResult = await peer.request("initialize", initialize, {
       timeoutMs: 5_000,
     });
@@ -282,9 +323,6 @@ export class RpcConnection {
     this.initializeResult = result;
     this.reconnectAttempt = 0;
     this.setState("connected");
-    for (const subscription of this.durableSubscriptions.values()) {
-      await this.resumeSubscription(subscription);
-    }
     return result;
   }
 
@@ -293,6 +331,7 @@ export class RpcConnection {
     peer: RpcPeer | undefined,
   ) {
     this.initializeResult = undefined;
+    this.localRole = undefined;
     if (this.peer === peer) this.peer = undefined;
     if (this.socket === socket) this.socket = undefined;
     if (peer) peer.close(1002, "RPC initialization failed.");
@@ -319,24 +358,12 @@ export class RpcConnection {
     }, delay);
   }
 
-  private async resumeSubscription(subscription: DurableSubscription) {
-    try {
-      const result = await this.peer?.request(
-        subscription.method,
-        subscription.params(),
-      );
-      if (result !== undefined) await subscription.onResult?.(result);
-    } catch (error) {
-      await subscription.onError?.(error);
-      // The next reconnect will retry durable subscriptions. Mutations are never kept here.
-    }
-  }
-
   private handleClosed(peer: RpcPeer) {
     if (this.peer !== peer) return;
     this.peer = undefined;
     this.socket = undefined;
     this.initializeResult = undefined;
+    this.localRole = undefined;
     if (this.explicitlyClosed || this.options.reconnect === false) {
       this.setState(this.explicitlyClosed ? "closed" : "idle");
       return;

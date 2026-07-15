@@ -861,6 +861,9 @@ Deno.test('AgentRunCoordinator restores an approval checkpoint without replaying
   const run = coordinator.restoreAwaitingApprovalRun(record, events, { requestContext: { restored: true } });
   assertEquals(run.status, 'awaiting_approval');
   assertEquals(run.nextSequence, 2);
-  assertEquals(run.chunks, events.map((event) => event.data));
+  assertEquals(run.chunks, [
+    { type: 'tool-input-available', toolCallId: 'tool-1', toolName: 'bash', input: null },
+    { type: 'tool-approval-request', approvalId: 'tool-1', toolCallId: 'tool-1' },
+  ]);
   assertEquals(coordinator.getThreadRun('resource-1', 'thread-restored'), run);
 });

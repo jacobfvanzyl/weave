@@ -1,4 +1,9 @@
 import { applyUnifiedDiff } from '../../packages/client/src/lib/proposal-unified-diff.ts';
+import type {
+  WorkspaceFileWatchClientMessage,
+  WorkspaceFileWatchEvent,
+  WorkspaceFileWatchHostEvent,
+} from '@weave/protocol';
 
 export type PortalWorkspaceFileRoot = {
   id: string;
@@ -177,39 +182,12 @@ export type PortalWorkspaceFileOperationResult = {
   path?: string;
 };
 
-export type PortalWorkspaceFileWatchEvent = {
-  kind: Deno.FsEvent['kind'] | 'any';
-  paths: string[];
-  affectedDirectories: string[];
-  rescan?: boolean;
-};
-
-export type PortalWorkspaceFileWatchReadyEvent = {
-  type: 'workspace-file.watch.ready';
-  requestId?: string;
-  paths: string[];
-};
-
-export type PortalWorkspaceFileWatchChangeEvent = {
-  type: 'workspace-file.watch.change';
-  event: PortalWorkspaceFileWatchEvent;
-};
-
-export type PortalWorkspaceFileWatchErrorEvent = {
-  type: 'workspace-file.watch.error';
-  requestId?: string;
-  error: string;
-};
-
-export type PortalWorkspaceFileWatchHostEvent =
-  | PortalWorkspaceFileWatchReadyEvent
-  | PortalWorkspaceFileWatchChangeEvent
-  | PortalWorkspaceFileWatchErrorEvent;
-
-export type PortalWorkspaceFileWatchClientMessage =
-  | { type: 'watch.start'; requestId?: string; target?: PortalWorkspaceFileTarget; paths?: string[] }
-  | { type: 'watch.update'; requestId?: string; paths?: string[] }
-  | { type: 'watch.stop'; requestId?: string };
+export type PortalWorkspaceFileWatchEvent = WorkspaceFileWatchEvent;
+export type PortalWorkspaceFileWatchReadyEvent = Extract<WorkspaceFileWatchHostEvent, { type: 'workspace-file.watch.ready' }>;
+export type PortalWorkspaceFileWatchChangeEvent = Extract<WorkspaceFileWatchHostEvent, { type: 'workspace-file.watch.change' }>;
+export type PortalWorkspaceFileWatchErrorEvent = Extract<WorkspaceFileWatchHostEvent, { type: 'workspace-file.watch.error' }>;
+export type PortalWorkspaceFileWatchHostEvent = WorkspaceFileWatchHostEvent;
+export type PortalWorkspaceFileWatchClientMessage = WorkspaceFileWatchClientMessage;
 
 export type PortalWorkspaceFileWatchClientEnvelope = {
   type: 'workspace-file.watch.client';

@@ -10,7 +10,7 @@ export const registerCodeRpcMethods = (router: RpcRouter, services: RpcModuleSer
   const moduleCall = (path: string, method = 'GET', body?: unknown) =>
     guarded(() => services.requestModule({ path, method, body }));
 
-  router.register('code.project.list', 'client', (params) => {
+  router.registerValidated('code.project.list', 'client', (params) => {
     const body = recordParams(params);
     if (body.product === 'all') {
       return guarded(async () => {
@@ -28,33 +28,33 @@ export const registerCodeRpcMethods = (router: RpcRouter, services: RpcModuleSer
     }
     return moduleCall(`${productPrefix(body.product)}/projects`);
   });
-  router.register('code.project.create', 'client', (params) => {
+  router.registerValidated('code.project.create', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(`${productPrefix(body.product)}/projects`, 'POST', body);
   });
-  router.register('code.project.get', 'client', (params) => {
+  router.registerValidated('code.project.get', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(`${productPrefix(body.product)}/projects/${encoded(body.projectId, 'projectId')}`);
   });
-  router.register('code.project.delete', 'client', (params) => {
+  router.registerValidated('code.project.delete', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(`${productPrefix(body.product)}/projects/${encoded(body.projectId, 'projectId')}`, 'DELETE');
   });
-  router.register('code.project.reorder', 'client', (params) => {
+  router.registerValidated('code.project.reorder', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(`${productPrefix(body.product)}/projects/reorder`, 'PATCH', body);
   });
-  router.register(
+  router.registerValidated(
     'code.project.branches.list',
     'client',
     (params) => moduleCall(`/code/projects/${encoded(recordParams(params).projectId, 'projectId')}/branches`),
   );
-  router.register('code.workspace.gitState.list', 'client', () => moduleCall('/code/projects/workspaces/git-state'));
-  router.register('code.workspace.create', 'client', (params) => {
+  router.registerValidated('code.workspace.gitState.list', 'client', () => moduleCall('/code/projects/workspaces/git-state'));
+  router.registerValidated('code.workspace.create', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(`/code/projects/${encoded(body.projectId, 'projectId')}/workspaces`, 'POST', body);
   });
-  router.register('code.workspace.update', 'client', (params) => {
+  router.registerValidated('code.workspace.update', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(
       `/code/projects/${encoded(body.projectId, 'projectId')}/workspaces/${encoded(body.workspaceId, 'workspaceId')}`,
@@ -62,7 +62,7 @@ export const registerCodeRpcMethods = (router: RpcRouter, services: RpcModuleSer
       body,
     );
   });
-  router.register('code.workspace.git.fetch', 'client', (params) => {
+  router.registerValidated('code.workspace.git.fetch', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(
       `/code/projects/${encoded(body.projectId, 'projectId')}/workspaces/${
@@ -71,7 +71,7 @@ export const registerCodeRpcMethods = (router: RpcRouter, services: RpcModuleSer
       'POST',
     );
   });
-  router.register('code.workspace.git.pull', 'client', (params) => {
+  router.registerValidated('code.workspace.git.pull', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(
       `/code/projects/${encoded(body.projectId, 'projectId')}/workspaces/${
@@ -80,11 +80,11 @@ export const registerCodeRpcMethods = (router: RpcRouter, services: RpcModuleSer
       'POST',
     );
   });
-  router.register('code.workspace.adopt', 'client', (params) => {
+  router.registerValidated('code.workspace.adopt', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(`/code/projects/${encoded(body.projectId, 'projectId')}/workspaces/adopt`, 'POST', body);
   });
-  router.register('code.workspace.removalPreview', 'client', (params) => {
+  router.registerValidated('code.workspace.removalPreview', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(
       `/code/projects/${encoded(body.projectId, 'projectId')}/workspaces/${
@@ -92,7 +92,7 @@ export const registerCodeRpcMethods = (router: RpcRouter, services: RpcModuleSer
       }/removal-preview`,
     );
   });
-  router.register('code.workspace.delete', 'client', (params) => {
+  router.registerValidated('code.workspace.delete', 'client', (params) => {
     const body = recordParams(params);
     const query = new URLSearchParams({ mode: body.mode === 'remove' ? 'remove' : 'detach' });
     if (body.force === true) query.set('force', 'true');
@@ -104,17 +104,17 @@ export const registerCodeRpcMethods = (router: RpcRouter, services: RpcModuleSer
       'DELETE',
     );
   });
-  router.register(
+  router.registerValidated(
     'code.workspace.discover',
     'client',
     (params) =>
       moduleCall(`/code/projects/${encoded(recordParams(params).projectId, 'projectId')}/workspaces/discover`),
   );
-  router.register('code.workspace.reorder', 'client', (params) => {
+  router.registerValidated('code.workspace.reorder', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(`/code/projects/${encoded(body.projectId, 'projectId')}/workspaces/reorder`, 'PATCH', body);
   });
-  router.register('code.project.threads.create', 'client', (params) => {
+  router.registerValidated('code.project.threads.create', 'client', (params) => {
     const body = recordParams(params);
     return moduleCall(
       `${productPrefix(body.product)}/projects/${encoded(body.projectId, 'projectId')}/threads`,
@@ -122,7 +122,7 @@ export const registerCodeRpcMethods = (router: RpcRouter, services: RpcModuleSer
       body,
     );
   });
-  router.register('code.project.threads.list', 'client', (params, { session }) =>
+  router.registerValidated('code.project.threads.list', 'client', (params, { session }) =>
     guarded(async () => {
       const body = recordParams(params);
       const projectId = requiredString(body.projectId, 'projectId');
@@ -134,7 +134,7 @@ export const registerCodeRpcMethods = (router: RpcRouter, services: RpcModuleSer
         });
       return { threads };
     }));
-  router.register(
+  router.registerValidated(
     'code.workspace.resolve',
     'client',
     (params) => moduleCall('/code/workspaces/resolve', 'POST', recordParams(params)),

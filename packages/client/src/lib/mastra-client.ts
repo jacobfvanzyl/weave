@@ -1,8 +1,28 @@
 import {
   RpcConnection,
+  type RpcConnectionHandler,
+  type DesktopRpcNotificationEnvelope,
+  type DesktopRpcNotifyEnvelope,
+  type DesktopRpcRequestEnvelope,
+  type DesktopRpcResponseEnvelope,
+  type DesktopRpcReverseRequestEnvelope,
+  type DesktopRpcReverseResponseEnvelope,
   type RpcConnectionState,
   type RpcHandler,
+  type RpcNotificationMethod,
+  type RpcNotificationData,
+  type RpcNotificationParams,
   type RpcNotificationHandler,
+  type RpcRequestArguments,
+  type RpcRequestMethod,
+  type RpcRequestParams,
+  type RpcRequestParsedParams,
+  type RpcRequestResult,
+  parseDesktopRpcNotifyEnvelope,
+  parseDesktopRpcRequestEnvelope,
+  parseDesktopRpcReverseResponseEnvelope,
+  parseRpcRequestResult,
+  RpcRemoteError,
   WEAVE_RPC_PROTOCOL_VERSION,
 } from '@weave/protocol';
 import { getBuildClientAppId } from './client-app';
@@ -14,16 +34,17 @@ type MastraConnectionConfig = {
 };
 
 type DesktopRpcBridge = {
-  rpcRequest?: <T = unknown>(method: string, params?: unknown, options?: {
-    timeoutMs?: number;
-    requestId?: string;
-  }) => Promise<T>;
+  rpcRequest?: <Method extends RpcRequestMethod<'client', 'server'>>(
+    request: DesktopRpcRequestEnvelope<Method>,
+  ) => Promise<DesktopRpcResponseEnvelope<Method>>;
   cancelRpcRequest?: (requestId: string) => void;
-  rpcNotify?: (method: string, params?: unknown) => Promise<void>;
+  rpcNotify?: <Method extends RpcNotificationMethod<'client', 'server'>>(
+    notification: DesktopRpcNotifyEnvelope<Method>,
+  ) => Promise<void>;
   onRpcConnectionState?: (listener: (state: RpcConnectionState) => void) => () => void;
-  onRpcNotification?: (listener: (method: string, params: unknown) => void) => () => void;
-  onRpcReverseRequest?: (listener: (requestId: string, method: string, params: unknown) => void) => () => void;
-  respondRpcReverseRequest?: (requestId: string, result?: unknown, error?: { message: string }) => Promise<void>;
+  onRpcNotification?: (listener: (notification: DesktopRpcNotificationEnvelope) => void) => () => void;
+  onRpcReverseRequest?: (listener: (request: DesktopRpcReverseRequestEnvelope) => void) => () => void;
+  respondRpcReverseRequest?: (response: DesktopRpcReverseResponseEnvelope) => Promise<void>;
 };
 
 const getDefaultMastraUrl = () => {
@@ -77,7 +98,7 @@ let detachDesktopReverseRequests: (() => void) | undefined;
 const ensureDesktopNotificationBridge = () => {
   const bridge = desktopBridge();
   if (!bridge?.onRpcNotification || detachDesktopNotifications) return;
-  detachDesktopNotifications = bridge.onRpcNotification((method, params) => {
+  detachDesktopNotifications = bridge.onRpcNotification(({ method, params }) => {
     for (const handler of notificationHandlers.get(method) ?? []) void handler(params, method);
   });
 };
@@ -85,17 +106,24 @@ const ensureDesktopNotificationBridge = () => {
 const ensureDesktopReverseBridge = () => {
   const bridge = desktopBridge();
   if (!bridge?.onRpcReverseRequest || detachDesktopReverseRequests) return;
-  detachDesktopReverseRequests = bridge.onRpcReverseRequest((requestId, method, params) => {
+  detachDesktopReverseRequests = bridge.onRpcReverseRequest(({ requestId, method, params }) => {
     const handler = reverseHandlers.get(method);
     if (!handler) {
-      void bridge.respondRpcReverseRequest?.(requestId, undefined, { message: `Method not found: ${method}` });
+      void bridge.respondRpcReverseRequest?.({
+        kind: 'reverse-error', requestId, method, error: { code: -32601, message: `Method not found: ${method}` },
+      });
       return;
     }
     const controller = new AbortController();
     void Promise.resolve(handler(params, { id: requestId, method, signal: controller.signal }))
-      .then(result => bridge.respondRpcReverseRequest?.(requestId, result))
-      .catch(error => bridge.respondRpcReverseRequest?.(requestId, undefined, {
-        message: error instanceof Error ? error.message : String(error),
+      .then(result => bridge.respondRpcReverseRequest?.(parseDesktopRpcReverseResponseEnvelope({
+        kind: 'reverse-success', requestId, method, result,
+      }, method)))
+      .catch(error => bridge.respondRpcReverseRequest?.({
+        kind: 'reverse-error', requestId, method, error: {
+          code: -32603,
+          message: error instanceof Error ? error.message : String(error),
+        },
       }));
   });
 };
@@ -128,19 +156,30 @@ export const getChatUrl = () => `${getWeaveServerUrl()}/rpc`;
 /** @deprecated Application authentication is carried only by initialize over /rpc. */
 export const getAuthHeaders = (): Record<string, string> => ({});
 
-export const rpcRequest = async <T = unknown>(method: string, params?: unknown, options?: {
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}) => {
+export const rpcRequest = async <Method extends RpcRequestMethod<'client', 'server'>>(
+  method: Method,
+  ...args: RpcRequestArguments<'client', 'server', Method>
+): Promise<RpcRequestResult<'client', 'server', Method>> => {
+  const [params, options] = args as [
+    RpcRequestParams<'client', 'server', Method>,
+    { timeoutMs?: number; signal?: AbortSignal }?,
+  ];
   const bridge = desktopBridge();
   if (bridge?.rpcRequest) {
     const signal = options?.signal;
     if (!signal) {
-      return await bridge.rpcRequest<T>(
+      const request = parseDesktopRpcRequestEnvelope<Method>({
+        kind: 'request',
+        requestId: `renderer_${crypto.randomUUID()}`,
         method,
         params,
-        options?.timeoutMs ? { timeoutMs: options.timeoutMs } : undefined,
-      );
+        options: options?.timeoutMs ? { timeoutMs: options.timeoutMs } : undefined,
+      }, method);
+      const response = await bridge.rpcRequest(request);
+      if (response.kind === 'error') {
+        throw new RpcRemoteError(response.error.code, response.error.message, response.error.data);
+      }
+      return parseRpcRequestResult('client', 'server', method, response.result);
     }
     if (signal?.aborted) {
       throw signal.reason instanceof Error
@@ -151,74 +190,69 @@ export const rpcRequest = async <T = unknown>(method: string, params?: unknown, 
     const abort = () => bridge.cancelRpcRequest?.(requestId);
     signal?.addEventListener('abort', abort, { once: true });
     try {
-      return await bridge.rpcRequest<T>(method, params, {
-        ...(options?.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+      const request = parseDesktopRpcRequestEnvelope<Method>({
+        kind: 'request',
         requestId,
-      });
+        method,
+        params,
+        options: options?.timeoutMs ? { timeoutMs: options.timeoutMs } : undefined,
+      }, method);
+      const response = await bridge.rpcRequest(request);
+      if (response.kind === 'error') {
+        throw new RpcRemoteError(response.error.code, response.error.message, response.error.data);
+      }
+      return parseRpcRequestResult('client', 'server', method, response.result);
     } finally {
       signal?.removeEventListener('abort', abort);
     }
   }
-  return await directConnection.request<T>(method, params, options);
+  return await directConnection.request(method, params, options);
 };
 
-export const rpcNotify = async (method: string, params?: unknown, priority?: number) => {
+export const rpcNotify = async <Method extends RpcNotificationMethod<'client', 'server'>>(
+  method: Method,
+  params: RpcNotificationParams<'client', 'server', Method>,
+  priority?: number,
+) => {
   const bridge = desktopBridge();
-  if (bridge?.rpcNotify) return await bridge.rpcNotify(method, params);
+  if (bridge?.rpcNotify) {
+    return await bridge.rpcNotify(parseDesktopRpcNotifyEnvelope<Method>(
+      { kind: 'notification', method, params },
+      method,
+    ));
+  }
   await directConnection.connect();
   directConnection.notify(method, params, priority);
 };
 
-export const onRpcNotification = (method: string, handler: RpcNotificationHandler) => {
+export const onRpcNotification = <Method extends RpcNotificationMethod<'server', 'client'>>(
+  method: Method,
+  handler: (
+    params: RpcNotificationData<'server', 'client', Method>,
+    method: Method,
+  ) => void | Promise<void>,
+) => {
   if (!desktopBridge()?.rpcRequest) return directConnection.onNotification(method, handler);
   const handlers = notificationHandlers.get(method) ?? new Set<RpcNotificationHandler>();
-  handlers.add(handler);
+  const rawHandler = handler as RpcNotificationHandler;
+  handlers.add(rawHandler);
   notificationHandlers.set(method, handlers);
   ensureDesktopNotificationBridge();
   return () => {
-    handlers.delete(handler);
+    handlers.delete(rawHandler);
     if (handlers.size === 0) notificationHandlers.delete(method);
   };
 };
 
-export const registerRpcHandler = (method: string, handler: RpcHandler) => {
+export const registerRpcHandler = <Method extends RpcRequestMethod<'server', 'client'>>(
+  method: Method,
+  handler: RpcConnectionHandler<'client', Method>,
+) => {
   if (!desktopBridge()?.rpcRequest) return directConnection.register(method, handler);
   if (reverseHandlers.has(method)) throw new Error(`RPC handler already registered: ${method}`);
-  reverseHandlers.set(method, handler);
+  reverseHandlers.set(method, handler as RpcHandler);
   ensureDesktopReverseBridge();
   return () => reverseHandlers.delete(method);
-};
-
-export const addRpcSubscription = (
-  key: string,
-  method: string,
-  params: () => unknown,
-  onResult?: (result: unknown) => void | Promise<void>,
-  onError?: (error: unknown) => void | Promise<void>,
-) => {
-  if (desktopBridge()?.rpcRequest) {
-    let disposed = false;
-    let resuming = false;
-    const resume = () => {
-      if (disposed || resuming) return;
-      resuming = true;
-      void rpcRequest(method, params())
-        .then(result => onResult?.(result))
-        .catch(error => onError?.(error))
-        .finally(() => {
-          resuming = false;
-        });
-    };
-    const detachState = desktopBridge()?.onRpcConnectionState?.(state => {
-      if (state === 'connected') resume();
-    });
-    resume();
-    return () => {
-      disposed = true;
-      detachState?.();
-    };
-  }
-  return directConnection.addDurableSubscription(key, { method, params, onResult, onError });
 };
 
 export const onRpcConnectionState = (handler: (state: RpcConnectionState) => void) => {
@@ -245,7 +279,7 @@ export const testRpcConnection = async (serverUrl: string, token: string) => {
   });
   try {
     await connection.connect();
-    return await connection.request<{ owner: { id: string; name: string } }>('owner.get');
+    return await connection.request('owner.get');
   } finally {
     connection.close();
   }

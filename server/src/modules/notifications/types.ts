@@ -1,32 +1,18 @@
-export type WeaveNotificationPriority = 'low' | 'normal' | 'high';
+import type {
+  StoredNotificationEvent as ProtocolStoredNotificationEvent,
+  WeaveNotificationEvent as ProtocolWeaveNotificationEvent,
+} from '@weave/protocol';
 
-export type WeaveNotificationSource = 'client' | 'server';
+export type WeaveNotificationPriority = ProtocolWeaveNotificationEvent['priority'];
 
-export type WeaveNotificationTarget = {
-  threadId?: string;
-  projectId?: string;
-  workspaceId?: string;
-  url?: string;
-};
+export type WeaveNotificationSource = ProtocolWeaveNotificationEvent['source'];
 
-export type WeaveNotificationEvent = {
-  id: string;
-  kind: string;
-  title: string;
-  body?: string;
-  createdAt: string;
-  dedupeKey?: string;
-  priority: WeaveNotificationPriority;
-  target?: WeaveNotificationTarget;
-  source: WeaveNotificationSource;
-};
+export type WeaveNotificationTarget = NonNullable<ProtocolWeaveNotificationEvent['target']>;
+export type WeaveNotificationEvent = ProtocolWeaveNotificationEvent;
 
 export type ServerNotificationInput = Omit<WeaveNotificationEvent, 'createdAt' | 'id' | 'source'> & {
   createdAt?: string;
   id?: string;
 };
 
-export type StoredNotificationEvent = {
-  sequence: number;
-  event: WeaveNotificationEvent;
-};
+export type StoredNotificationEvent = ProtocolStoredNotificationEvent;

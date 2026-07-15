@@ -1,10 +1,32 @@
 import { BrowserWindow, ipcMain, type WebContents } from 'electron';
-import { RpcConnection, type RpcConnectionState, WEAVE_RPC_PROTOCOL_VERSION } from '@weave/protocol';
+import {
+  parseDesktopRpcNotificationEnvelope,
+  parseDesktopRpcNotifyEnvelope,
+  parseDesktopRpcRequestEnvelope,
+  parseDesktopRpcResponseEnvelope,
+  parseDesktopRpcReverseRequestEnvelope,
+  parseDesktopRpcReverseResponseEnvelope,
+  RpcConnection,
+  type RpcConnectionState,
+  type RpcNotificationMethod,
+  type RpcNotificationData,
+  type RpcNotificationParams,
+  type RpcRequestArguments,
+  type RpcRequestMethod,
+  type RpcRequestParams,
+  type RpcRequestParsedParams,
+  type RpcRequestResult,
+  RpcRemoteError,
+  WEAVE_RPC_PROTOCOL_VERSION,
+} from '@weave/protocol';
 import type { ConnectionSettingsStore } from './settings-store';
+
+type EditorContextResult = RpcRequestResult<'server', 'client', 'client.editorContext.get'>;
 
 type ReversePending = {
   sender: WebContents;
-  resolve: (value: unknown) => void;
+  method: 'client.editorContext.get';
+  resolve: (value: EditorContextResult) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
@@ -47,24 +69,35 @@ export class DesktopRpcConnection {
     return () => this.stateHandlers.delete(handler);
   }
 
-  onNotification(method: string, handler: (params: unknown, method: string) => void | Promise<void>) {
-    const handlers = this.notificationHandlers.get(method) ?? new Set();
-    handlers.add(handler);
+  onNotification<Method extends RpcNotificationMethod<'server', 'client'>>(
+    method: Method,
+    handler: (
+      params: RpcNotificationData<'server', 'client', Method>,
+      method: Method,
+    ) => void | Promise<void>,
+  ) {
+    const handlers = this.notificationHandlers.get(method) ??
+      new Set<(params: unknown, method: string) => void | Promise<void>>();
+    const rawHandler = handler as unknown as (params: unknown, method: string) => void | Promise<void>;
+    handlers.add(rawHandler);
     this.notificationHandlers.set(method, handlers);
     return () => {
-      handlers.delete(handler);
+      handlers.delete(rawHandler);
       if (handlers.size === 0) this.notificationHandlers.delete(method);
     };
   }
 
-  async request<T = unknown>(method: string, params?: unknown, options?: {
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  }) {
-    return await this.connection.request<T>(method, params, options);
+  async request<Method extends RpcRequestMethod<'client', 'server'>>(
+    method: Method,
+    ...args: RpcRequestArguments<'client', 'server', Method>
+  ): Promise<RpcRequestResult<'client', 'server', Method>> {
+    return await this.connection.request(method, ...args);
   }
 
-  async notify(method: string, params?: unknown) {
+  async notify<Method extends RpcNotificationMethod<'client', 'server'>>(
+    method: Method,
+    params: RpcNotificationParams<'client', 'server', Method>,
+  ) {
     await this.connection.connect();
     this.connection.notify(method, params);
   }
@@ -117,8 +150,9 @@ export class DesktopRpcConnection {
           console.warn(`[rpc] Desktop notification handler failed: ${method}`, error);
         }
       }
+      const notification = parseDesktopRpcNotificationEnvelope({ kind: 'notification', method, params });
       for (const window of BrowserWindow.getAllWindows()) {
-        if (!window.webContents.isDestroyed()) window.webContents.send('rpc:notification', { method, params });
+        if (!window.webContents.isDestroyed()) window.webContents.send('rpc:notification', notification);
       }
     });
     connection.onState((state) => {
@@ -135,27 +169,36 @@ export class DesktopRpcConnection {
   }
 
   private registerIpc() {
-    ipcMain.handle('rpc:request', async (
-      event,
-      requestId: unknown,
-      method: unknown,
-      params: unknown,
-      options: unknown,
-    ) => {
-      if (typeof requestId !== 'string' || !requestId) throw new Error('RPC request id is required.');
-      if (typeof method !== 'string' || !method) throw new Error('RPC method is required.');
-      if (method === 'client.surface.update') this.updateRendererSurface(event.sender, params);
-      const key = `${event.sender.id}:${requestId}`;
+    ipcMain.handle('rpc:request', async (event, input: unknown) => {
+      const request = parseDesktopRpcRequestEnvelope(input);
+      if (request.method === 'client.surface.update') this.updateRendererSurface(event.sender, request.params);
+      const key = `${event.sender.id}:${request.requestId}`;
       const controller = new AbortController();
-      const requestOptions = options && typeof options === 'object' && !Array.isArray(options)
-        ? options as { timeoutMs?: unknown }
-        : {};
-      const timeoutMs = typeof requestOptions.timeoutMs === 'number' && requestOptions.timeoutMs > 0
-        ? requestOptions.timeoutMs
-        : undefined;
       this.rendererRequests.set(key, controller);
       try {
-        return await this.request(method, params, { signal: controller.signal, timeoutMs });
+        const result = await this.connection.request(
+          request.method,
+          request.params as never,
+          { signal: controller.signal, timeoutMs: request.options?.timeoutMs },
+        );
+        return parseDesktopRpcResponseEnvelope({
+          kind: 'success',
+          requestId: request.requestId,
+          method: request.method,
+          result,
+        }, request.method);
+      } catch (error) {
+        const remote = error instanceof RpcRemoteError ? error : undefined;
+        return parseDesktopRpcResponseEnvelope({
+          kind: 'error',
+          requestId: request.requestId,
+          method: request.method,
+          error: {
+            code: remote?.code ?? -32603,
+            message: remote?.message ?? 'Internal error.',
+            ...(remote?.data === undefined ? {} : { data: remote.data }),
+          },
+        }, request.method);
       } finally {
         this.rendererRequests.delete(key);
       }
@@ -164,24 +207,24 @@ export class DesktopRpcConnection {
       if (typeof requestId !== 'string') return;
       this.rendererRequests.get(`${event.sender.id}:${requestId}`)?.abort(new DOMException('Aborted', 'AbortError'));
     });
-    ipcMain.handle('rpc:notify', (_event, method: unknown, params: unknown) => {
-      if (typeof method !== 'string' || !method) throw new Error('RPC method is required.');
-      return this.notify(method, params);
+    ipcMain.handle('rpc:notify', (_event, input: unknown) => {
+      const notification = parseDesktopRpcNotifyEnvelope(input);
+      return this.connection.notify(notification.method, notification.params as never);
     });
     ipcMain.handle(
       'rpc:reverse-response',
-      (event, requestId: unknown, result: unknown, error: unknown) => {
+      (event, input: unknown) => {
+        const requestId = input && typeof input === 'object' && 'requestId' in input
+          ? (input as { requestId?: unknown }).requestId
+          : undefined;
         if (typeof requestId !== 'string') return;
         const pending = this.reversePending.get(requestId);
         if (!pending || pending.sender.id !== event.sender.id) return;
+        const response = parseDesktopRpcReverseResponseEnvelope(input, pending.method);
         this.reversePending.delete(requestId);
         clearTimeout(pending.timer);
-        const message =
-          error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string'
-            ? (error as { message: string }).message
-            : undefined;
-        if (message) pending.reject(new Error(message));
-        else pending.resolve(result);
+        if (response.kind === 'reverse-error') pending.reject(new Error(response.error.message));
+        else pending.resolve(response.result);
       },
     );
   }
@@ -227,16 +270,20 @@ export class DesktopRpcConnection {
     return BrowserWindow.getAllWindows().find((window) => !window.webContents.isDestroyed())?.webContents;
   }
 
-  private forwardReverseRequest(method: string, params: unknown, signal: AbortSignal) {
+  private forwardReverseRequest(
+    method: 'client.editorContext.get',
+    params: RpcRequestParsedParams<'server', 'client', 'client.editorContext.get'>,
+    signal: AbortSignal,
+  ) {
     const target = this.selectRendererSurface(params);
     if (!target) throw new Error('No Desktop renderer is available.');
     const requestId = `reverse_${crypto.randomUUID()}`;
-    return new Promise<unknown>((resolve, reject) => {
+    return new Promise<EditorContextResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.reversePending.delete(requestId);
         reject(new Error(`Renderer RPC request timed out: ${method}`));
       }, 10_000);
-      this.reversePending.set(requestId, { sender: target, resolve, reject, timer });
+      this.reversePending.set(requestId, { sender: target, method, resolve, reject, timer });
       const abort = () => {
         const pending = this.reversePending.get(requestId);
         if (!pending) return;
@@ -246,7 +293,9 @@ export class DesktopRpcConnection {
       };
       if (signal.aborted) abort();
       else signal.addEventListener('abort', abort, { once: true });
-      target.send('rpc:reverse-request', { requestId, method, params });
+      target.send('rpc:reverse-request', parseDesktopRpcReverseRequestEnvelope({
+        kind: 'reverse-request', requestId, method, params,
+      }));
     });
   }
 }

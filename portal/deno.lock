@@ -25,6 +25,101 @@
   "workspace": {
     "dependencies": [
       "npm:zod@4.4.3"
-    ]
+    ],
+    "links": {
+      "npm:@weave/client@0.1.0": {
+        "dependencies": [
+          "npm:@ai-sdk/react@^3.0.53",
+          "npm:@assistant-ui/core@0.2",
+          "npm:@assistant-ui/react-ai-sdk@^1.3.23",
+          "npm:@assistant-ui/react@0.14",
+          "npm:@atomic-editor/editor@~0.4.3",
+          "npm:@azurity/pure-nerd-font@^3.0.5",
+          "npm:@base-ui/react@^1.5.0",
+          "npm:@blocksuite/block-std@0.19.5",
+          "npm:@blocksuite/blocks@0.19.5",
+          "npm:@blocksuite/presets@0.19.5",
+          "npm:@codemirror/lang-css@^6.3.1",
+          "npm:@codemirror/lang-html@^6.4.11",
+          "npm:@codemirror/lang-javascript@^6.2.5",
+          "npm:@codemirror/lang-json@^6.0.2",
+          "npm:@codemirror/lang-markdown@^6.5.0",
+          "npm:@codemirror/lang-python@^6.2.1",
+          "npm:@codemirror/lang-sql@^6.10.0",
+          "npm:@codemirror/lang-yaml@^6.1.3",
+          "npm:@codemirror/language@^6.12.3",
+          "npm:@codemirror/lsp-client@^6.2.5",
+          "npm:@codemirror/merge@^6.12.2",
+          "npm:@codemirror/view@^6.43.0",
+          "npm:@criblinc/docker-names@^1.2.2",
+          "npm:@dnd-kit/core@^6.3.1",
+          "npm:@dnd-kit/modifiers@9",
+          "npm:@dnd-kit/sortable@10",
+          "npm:@dnd-kit/utilities@^3.2.2",
+          "npm:@excalidraw/excalidraw@~0.18.1",
+          "npm:@fontsource-variable/jetbrains-mono@^5.2.8",
+          "npm:@lezer/lr@^1.4.10",
+          "npm:@preact/signals-core@^1.14.0",
+          "npm:@replit/codemirror-vim@^6.3.0",
+          "npm:@tanstack/hotkeys@0.8.0",
+          "npm:@tanstack/react-hotkeys@0.10.0",
+          "npm:@tanstack/react-query@^5.90.12",
+          "npm:@toeverything/theme@1.1.23",
+          "npm:@xterm/addon-fit@0.11",
+          "npm:@xterm/xterm@6",
+          "npm:ai@^6.0.53",
+          "npm:class-variance-authority@~0.7.1",
+          "npm:clsx@^2.1.1",
+          "npm:codemirror@^6.0.2",
+          "npm:lit@^3.2.0",
+          "npm:react-markdown@^10.1.0",
+          "npm:rehype-raw@7",
+          "npm:rehype-sanitize@6",
+          "npm:remark-gfm@^4.0.1",
+          "npm:tailwind-merge@^3.4.0",
+          "npm:tailwindcss@^4.1.18",
+          "npm:zustand@^5.0.9"
+        ],
+        "peerDependenciesMeta": {
+          "@capacitor/preferences": {
+            "optional": true
+          }
+        }
+      },
+      "npm:@weave/protocol@0.1.0": {},
+      "npm:weave-desktop@0.1.0": {},
+      "npm:weave-mobile@0.1.0": {
+        "dependencies": [
+          "npm:@capacitor/core@^8.3.4",
+          "npm:@capacitor/ios@^8.3.4",
+          "npm:@capacitor/keyboard@^8.0.3",
+          "npm:@capacitor/local-notifications@^8.2.0",
+          "npm:@capacitor/status-bar@^8.0.2"
+        ]
+      },
+      "npm:weave-server@0.1.0": {
+        "dependencies": [
+          "npm:@ai-sdk/openai@3.0.84",
+          "npm:@aws-sdk/client-s3@^3.1081.0",
+          "npm:@dbos-inc/dbos-sdk@4.23.6",
+          "npm:@mastra/ai-sdk@1.4.5",
+          "npm:@mastra/loggers@1.1.2",
+          "npm:@mastra/memory@1.20.3",
+          "npm:@mastra/observability@1.14.1",
+          "npm:@mastra/pg@1.13.0",
+          "npm:drizzle-orm@0.45.2",
+          "npm:exa-js@2.13.0",
+          "npm:hono@4.12.18",
+          "npm:pg@8.22.0"
+        ]
+      },
+      "npm:weave-web@0.1.0": {
+        "dependencies": [
+          "npm:@iconify-icons/material-symbols@^1.2.58",
+          "npm:@iconify/react@^6.0.2"
+        ]
+      },
+      "npm:weave@0.1.0": {}
+    }
   }
 }

@@ -1,5 +1,10 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import {
+  type LiveEditorContextResult,
+  type LiveEditorContextSnapshot,
+  liveEditorContextSnapshotSchema,
+} from '@weave/protocol';
 import { requestClientTool, resolveClientToolHostForTarget } from '../../../client-tools/registry';
 import { toolDescription, toolInputDescription } from './instructions';
 import { formatToolModelOutput, getCodeToolModelOutputMaxChars } from './model-output';
@@ -10,7 +15,7 @@ type EditorContextOutput = {
   error?: string;
   reason?: string;
   clientId?: string;
-  context?: Record<string, unknown>;
+  context?: LiveEditorContextSnapshot;
 };
 
 const textPreview = (value: unknown, maxChars = 2_400) => {
@@ -21,23 +26,24 @@ const textPreview = (value: unknown, maxChars = 2_400) => {
 const recordValue = (value: unknown) =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
-const summarizeTabs = (tabs: unknown) => Array.isArray(tabs)
-  ? tabs.slice(0, 24).map(item => {
-    const tab = recordValue(item);
-    return [
-      tab.active ? '*' : '-',
-      typeof tab.path === 'string' ? tab.path : '(unknown)',
-      tab.dirty ? 'dirty' : undefined,
-      tab.loaded === false ? 'unloaded' : undefined,
-      tab.preview ? 'preview' : undefined,
-    ].filter(Boolean).join(' ');
-  })
-  : [];
+const summarizeTabs = (tabs: unknown) =>
+  Array.isArray(tabs)
+    ? tabs.slice(0, 24).map((item) => {
+      const tab = recordValue(item);
+      return [
+        tab.active ? '*' : '-',
+        typeof tab.path === 'string' ? tab.path : '(unknown)',
+        tab.dirty ? 'dirty' : undefined,
+        tab.loaded === false ? 'unloaded' : undefined,
+        tab.preview ? 'preview' : undefined,
+      ].filter(Boolean).join(' ');
+    })
+    : [];
 
 const summarizeCoppermind = (coppermind: unknown) => {
   const context = recordValue(coppermind);
   const sections = Array.isArray(context.sections) ? context.sections : [];
-  const rows = sections.slice(0, 40).map(item => {
+  const rows = sections.slice(0, 40).map((item) => {
     const section = recordValue(item);
     return [
       section.id === context.activeSectionId ? '*' : '-',
@@ -51,7 +57,9 @@ const summarizeCoppermind = (coppermind: unknown) => {
   });
   if (!rows.length) return undefined;
   return [
-    `coppermind mode=${context.mode ?? 'unknown'} activeSection=${context.activeSectionId ?? 'none'} sections=${sections.length}`,
+    `coppermind mode=${context.mode ?? 'unknown'} activeSection=${
+      context.activeSectionId ?? 'none'
+    } sections=${sections.length}`,
     ...rows,
     sections.length > rows.length ? `... ${sections.length - rows.length} sections omitted` : undefined,
   ].filter(Boolean).join('\n');
@@ -65,9 +73,7 @@ const editorContextModelOutput = (output: unknown, maxChars = getCodeToolModelOu
   const selection = recordValue(codeMirror.selection);
   const visibleRange = recordValue(codeMirror.visibleRange);
   const body = [
-    summarizeTabs(context.openTabs).length
-      ? ['open tabs:', ...summarizeTabs(context.openTabs)].join('\n')
-      : undefined,
+    summarizeTabs(context.openTabs).length ? ['open tabs:', ...summarizeTabs(context.openTabs)].join('\n') : undefined,
     activeBuffer.path
       ? [
         `active buffer: ${activeBuffer.path}`,
@@ -97,21 +103,19 @@ const editorContextModelOutput = (output: unknown, maxChars = getCodeToolModelOu
   );
 };
 
-const normalizeClientToolResult = (value: unknown, clientId: string): EditorContextOutput => {
-  const result = recordValue(value);
-  if (result.ok === false) {
+const normalizeClientToolResult = (result: LiveEditorContextResult, clientId: string): EditorContextOutput => {
+  if (!result.ok) {
     return {
       ok: false,
       clientId,
-      error: typeof result.error === 'string' ? result.error : undefined,
-      reason: typeof result.reason === 'string' ? result.reason : 'client_error',
+      error: result.error,
+      reason: result.reason,
     };
   }
-  const context = recordValue(result.context);
   return {
     ok: true,
     clientId,
-    context,
+    context: result.context,
   };
 };
 
@@ -126,7 +130,7 @@ export const editorContextTool = createTool({
     error: z.string().optional(),
     reason: z.string().optional(),
     clientId: z.string().optional(),
-    context: z.record(z.string(), z.unknown()).optional(),
+    context: liveEditorContextSnapshotSchema.optional(),
   }),
   execute: async (input, context): Promise<EditorContextOutput> => {
     let binding: Awaited<ReturnType<typeof getThreadBinding>>;
@@ -145,7 +149,7 @@ export const editorContextTool = createTool({
       projectId: binding.projectId,
       workspaceId: binding.workspaceId,
       threadId: context.agent?.threadId,
-      capability: 'editor.context',
+      capability: 'client.editorContext.get',
     });
 
     if (!client) {
@@ -157,16 +161,19 @@ export const editorContextTool = createTool({
     }
 
     try {
-      return normalizeClientToolResult(await requestClientTool({
-        clientId: client.clientId,
-        tool: 'editor.context',
-        args: {
-          projectId: binding.projectId,
-          workspaceId: binding.workspaceId,
-          mode: input.mode,
-        },
-        timeoutMs: 5_000,
-      }), client.clientId);
+      return normalizeClientToolResult(
+        await requestClientTool({
+          clientId: client.clientId,
+          tool: 'editor.context',
+          args: {
+            projectId: binding.projectId,
+            workspaceId: binding.workspaceId,
+            mode: input.mode,
+          },
+          timeoutMs: 5_000,
+        }),
+        client.clientId,
+      );
     } catch (error) {
       return {
         ok: false,

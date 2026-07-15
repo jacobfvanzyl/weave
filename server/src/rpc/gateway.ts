@@ -237,6 +237,7 @@ export const createRpcUpgradeHandler = (input: {
                 name: parsed.data.client.name,
                 version: parsed.data.client.version,
                 capabilities: parsed.data.capabilities,
+                surfaceId: parsed.data.client.surfaceId,
                 projectId: parsed.data.client.projectId,
                 workspaceId: parsed.data.client.workspaceId,
                 threadId: parsed.data.client.threadId,
@@ -308,6 +309,7 @@ export const createRpcUpgradeHandler = (input: {
                 },
               );
             }
+            peer!.setRoles('server', initializedSession.role);
             detachRouter = input.router.attach(initializedSession);
             stats.connections += 1;
             stats.accepted += 1;

@@ -1,5 +1,20 @@
 import type { UIMessage } from 'ai';
-import { RpcRemoteError, type ThreadRunPhase } from '@weave/protocol';
+import {
+  RpcRemoteError,
+  type BranchCleanup,
+  type BranchOption,
+  type ChatThread as ProtocolChatThread,
+  type DeleteWorkspaceResult,
+  type DiscoveredWorktree,
+  type NotesStorageMetadata,
+  type Project,
+  type RemovedWorkspaceSnapshot,
+  type RpcRequestParams,
+  type ThreadRunState,
+  type Workspace,
+  type WorkspaceGitState,
+  type WorkspaceRemovalPreview,
+} from '@weave/protocol';
 import { rpcRequest } from './mastra-client';
 import { productForProjectKind, type ProductId } from './products';
 import { selectPreferredThreadProposal } from './proposal-review-state';
@@ -14,153 +29,24 @@ import type {
   ThreadProposalItem,
 } from '../stores/chat-store';
 
-type ServerThread = {
-  id: string;
-  title?: string;
-  resourceId: string;
-  createdAt: string;
-  updatedAt: string;
-  metadata?: Record<string, unknown>;
-};
-
-export type BranchCleanupStatus =
-  | 'not_requested'
-  | 'not_applicable'
-  | 'not_pushed'
-  | 'not_merged'
-  | 'deleted'
-  | 'failed';
-
-export type BranchCleanupTargetKind =
-  | 'upstream'
-  | 'same_name_remote'
-  | 'default_branch';
-
-export type BranchCleanup = {
-  requested: boolean;
-  status: BranchCleanupStatus;
-  eligible?: boolean;
-  branch?: string;
-  targetRef?: string;
-  targetKind?: BranchCleanupTargetKind;
-  error?: string;
-};
-
-export type RemovedWorkspaceSnapshot = {
-  id: string;
-  projectId: string;
-  name: string;
-  path?: string;
-  branch?: string;
-  removedAt: string;
-};
-
-export type Workspace = {
-  id: string;
-  projectId: string;
-  portalId?: string;
-  mountId?: string;
-  workspaceKind: 'primary' | 'worktree';
-  source?: 'primary' | 'git' | 'notes' | 'adopted' | 'legacy';
-  name: string;
-  path?: string;
-  status: 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual' | 'error';
-  locked?: boolean;
-  branch?: string;
-  head?: string;
-  upstream?: string;
-  ahead?: number;
-  behind?: number;
-  detached?: boolean;
-  baseBranch?: string;
-  sortOrder?: number;
-  lastError?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type WorkspaceRemovalPreview = {
-  workspace: Workspace;
-  activeThreadCount: number;
-  archivedThreadCount: number;
-  branchCleanup: BranchCleanup;
-};
-
-export type DeleteWorkspaceOptions = {
-  mode: 'detach' | 'remove';
-  force?: boolean;
-  deleteLocalBranch?: boolean;
-};
-
-export type DeleteWorkspaceResult = WorkspaceRemovalPreview & {
-  project: Project;
-  mode: 'detach' | 'remove';
-  force?: boolean;
-  removedWorkspace?: RemovedWorkspaceSnapshot;
-};
-
-export type WorkspaceGitState = {
-  projectId: string;
-  workspaceId: string;
-  path?: string;
-  status: Workspace['status'];
-  branch?: string;
-  head?: string;
-  upstream?: string;
-  ahead?: number;
-  behind?: number;
-  detached?: boolean;
-  checkedAt: string;
-  lastError?: string;
-};
-
-export type WorkspaceBranchOption = {
-  name: string;
-  ref: string;
-  kind: 'local' | 'remote';
-  current?: boolean;
-};
-
-export type DiscoveredWorktree = {
-  path?: string;
-  branch?: string;
-  commit?: string;
-  head?: string;
-  detached?: boolean;
-  adopted?: boolean;
-  workspaceId?: string;
-};
-
-export type NotesStorageMetadata = {
-  kind: string;
-  bucket?: string;
-  prefix?: string;
-  portalId?: string;
-  rootId?: string;
-  vaultPath?: string;
-  workspacePath?: string;
-  [key: string]: unknown;
-};
-
-export type Project = {
-  id: string;
-  userId: string;
-  name: string;
-  projectKind: 'general' | 'git' | 'notes';
-  description?: string;
-  portalId?: string;
-  portalRootId?: string;
-  repoPath?: string;
-  vaultPath?: string;
-  notesStorage?: NotesStorageMetadata;
-  gitRemote?: string;
-  defaultBranch?: string;
-  rootPathHint?: string;
-  sortOrder?: number;
-  workspaces: Workspace[];
-  createdAt: string;
-  updatedAt: string;
-};
+export type {
+  BranchCleanup,
+  DeleteWorkspaceResult,
+  DiscoveredWorktree,
+  NotesStorageMetadata,
+  Project,
+  RemovedWorkspaceSnapshot,
+  Workspace,
+  WorkspaceGitState,
+  WorkspaceRemovalPreview,
+} from '@weave/protocol';
+export type BranchCleanupStatus = BranchCleanup['status'];
+export type BranchCleanupTargetKind = NonNullable<BranchCleanup['targetKind']>;
+export type WorkspaceBranchOption = BranchOption;
+export type DeleteWorkspaceOptions = Omit<
+  RpcRequestParams<'client', 'server', 'code.workspace.delete'>,
+  'projectId' | 'workspaceId'
+>;
 
 const productForProjectInput = (projectKind?: Project['projectKind']): ProductId =>
   projectKind ? productForProjectKind(projectKind) : 'chat';
@@ -289,7 +175,7 @@ const toThreadProposal = (value: unknown): ThreadProposal | undefined => {
   };
 };
 
-const toChatThread = (thread: ServerThread): ChatThread => {
+const toChatThread = (thread: ProtocolChatThread): ChatThread => {
   const latestProposal = selectPreferredThreadProposal(
     toThreadProposal(thread.metadata?.latestProposal),
     toThreadProposal(thread.metadata?.latestProposalDraft),
@@ -331,19 +217,19 @@ export type AuthUser = {
 };
 
 export const getAuthUser = async () => {
-  const result = await rpcRequest<{ owner?: AuthUser; user?: AuthUser }>('owner.get');
+  const result = await rpcRequest('owner.get');
 
-  return result.owner ?? result.user!;
+  return result.owner;
 };
 
 export const listServerThreads = async () => {
-  const result = await rpcRequest<{ threads: ServerThread[] }>('chat.thread.list');
+  const result = await rpcRequest('chat.thread.list');
 
   return result.threads.map(toChatThread);
 };
 
 export const createServerThread = async (threadId: string, projectId?: string, workspaceId?: string, title = '...') => {
-  const result = await rpcRequest<{ thread: ServerThread }>('chat.thread.create', {
+  const result = await rpcRequest('chat.thread.create', {
     threadId,
     title,
     projectId,
@@ -354,13 +240,13 @@ export const createServerThread = async (threadId: string, projectId?: string, w
 };
 
 export const archiveServerThread = async (threadId: string, archived = true) => {
-  const result = await rpcRequest<{ thread: ServerThread }>('chat.thread.update', { threadId, archived });
+  const result = await rpcRequest('chat.thread.update', { threadId, archived });
 
   return toChatThread(result.thread);
 };
 
 export const renameServerThread = async (threadId: string, title: string) => {
-  const result = await rpcRequest<{ thread: ServerThread }>('chat.thread.update', { threadId, title });
+  const result = await rpcRequest('chat.thread.update', { threadId, title });
 
   return toChatThread(result.thread);
 };
@@ -370,25 +256,25 @@ export const deleteServerThread = async (threadId: string) => {
 };
 
 export const listProjects = async () => {
-  const result = await rpcRequest<{ projects: Project[] }>('code.project.list', { product: 'all' });
+  const result = await rpcRequest('code.project.list', { product: 'all' });
 
   return result.projects;
 };
 
 export const listProductProjects = async (product: ProductId) => {
-  const result = await rpcRequest<{ projects: Project[] }>('code.project.list', { product });
+  const result = await rpcRequest('code.project.list', { product });
 
   return result.projects;
 };
 
 export const listWorkspaceGitStates = async () => {
-  const result = await rpcRequest<{ states: WorkspaceGitState[] }>('code.workspace.gitState.list');
+  const result = await rpcRequest('code.workspace.gitState.list');
 
   return result.states;
 };
 
 export const listProjectBranches = async (projectId: string) => {
-  const result = await rpcRequest<{ branches: WorkspaceBranchOption[] }>('code.project.branches.list', { projectId });
+  const result = await rpcRequest('code.project.branches.list', { projectId });
 
   return result.branches;
 };
@@ -479,17 +365,17 @@ const normalizePortalConnection = (portal: unknown): PortalConnection | undefine
 };
 
 export const listPortals = async () => {
-  const result = await rpcRequest<{ portals: unknown[] }>('portal.list');
+  const result = await rpcRequest('portal.list');
 
   return result.portals.flatMap((portal) => normalizePortalConnection(portal) ?? []);
 };
 
 export const browsePortal = async (portalId: string, rootId = 'default', path = '') => {
-  return await rpcRequest<PortalBrowseResult>('portal.browse', { portalId, rootId, path });
+  return await rpcRequest('portal.browse', { portalId, rootId, path });
 };
 
 export const setPrimaryPortal = async (portalId: string) => {
-  const result = await rpcRequest<{ ok: true; primaryPortalId: string; portals: unknown[] }>(
+  const result = await rpcRequest(
     'portal.primary.set',
     { portalId },
   );
@@ -502,7 +388,7 @@ export const setPrimaryPortal = async (portalId: string) => {
 
 export const createProject = async (input: string | CreateProjectInput) => {
   const body: CreateProjectInput = typeof input === 'string' ? { name: input, projectKind: 'general' } : input;
-  const result = await rpcRequest<{ project: Project }>('code.project.create', {
+  const result = await rpcRequest('code.project.create', {
     ...body,
     product: productForProjectInput(body.projectKind),
   });
@@ -518,13 +404,13 @@ export const deleteProject = async (projectId: string, projectKind?: Project['pr
 };
 
 export const reorderProjects = async (projectIds: string[], product: ProductId = 'code') => {
-  const result = await rpcRequest<{ projects: Project[] }>('code.project.reorder', { projectIds, product });
+  const result = await rpcRequest('code.project.reorder', { projectIds, product });
 
   return result.projects;
 };
 
 export const reorderAllProjects = async (projectIds: string[]) => {
-  const result = await rpcRequest<{ projects: Project[] }>('code.project.reorder', {
+  const result = await rpcRequest('code.project.reorder', {
     projectIds,
     product: 'all',
   });
@@ -533,10 +419,10 @@ export const reorderAllProjects = async (projectIds: string[]) => {
 };
 
 export const createWorkspace = async (projectId: string, input: string | CreateWorkspaceInput) => {
-  const body = typeof input === 'string'
+  const body: CreateWorkspaceInput = typeof input === 'string'
     ? { name: input, mode: 'newBranch' satisfies WorkspaceBranchMode, branch: input }
     : input;
-  const result = await rpcRequest<{ project: Project; workspace: Workspace }>('code.workspace.create', {
+  const result = await rpcRequest('code.workspace.create', {
     projectId,
     ...body,
   });
@@ -545,7 +431,7 @@ export const createWorkspace = async (projectId: string, input: string | CreateW
 };
 
 export const updateWorkspace = async (projectId: string, workspaceId: string, input: UpdateWorkspaceInput) => {
-  const result = await rpcRequest<{ project: Project; workspace: Workspace }>('code.workspace.update', {
+  const result = await rpcRequest('code.workspace.update', {
     projectId,
     workspaceId,
     ...input,
@@ -555,7 +441,7 @@ export const updateWorkspace = async (projectId: string, workspaceId: string, in
 };
 
 export const fetchWorkspaceGitUpstream = async (projectId: string, workspaceId: string) => {
-  const result = await rpcRequest<{ state: WorkspaceGitState }>('code.workspace.git.fetch', {
+  const result = await rpcRequest('code.workspace.git.fetch', {
     projectId,
     workspaceId,
   });
@@ -564,7 +450,7 @@ export const fetchWorkspaceGitUpstream = async (projectId: string, workspaceId: 
 };
 
 export const pullWorkspaceGitUpstream = async (projectId: string, workspaceId: string) => {
-  const result = await rpcRequest<{ state: WorkspaceGitState }>('code.workspace.git.pull', {
+  const result = await rpcRequest('code.workspace.git.pull', {
     projectId,
     workspaceId,
   });
@@ -573,7 +459,7 @@ export const pullWorkspaceGitUpstream = async (projectId: string, workspaceId: s
 };
 
 export const adoptWorkspace = async (projectId: string, path: string, name?: string) => {
-  const result = await rpcRequest<{ project: Project; workspace: Workspace }>('code.workspace.adopt', {
+  const result = await rpcRequest('code.workspace.adopt', {
     projectId,
     path,
     name,
@@ -583,7 +469,7 @@ export const adoptWorkspace = async (projectId: string, path: string, name?: str
 };
 
 export const fetchWorkspaceRemovalPreview = async (projectId: string, workspaceId: string) => {
-  return await rpcRequest<WorkspaceRemovalPreview>('code.workspace.removalPreview', { projectId, workspaceId });
+  return await rpcRequest('code.workspace.removalPreview', { projectId, workspaceId });
 };
 
 export const deleteWorkspace = async (
@@ -592,7 +478,7 @@ export const deleteWorkspace = async (
   input: 'detach' | 'remove' | DeleteWorkspaceOptions,
 ) => {
   const options = typeof input === 'string' ? { mode: input } : input;
-  const result = await rpcRequest<DeleteWorkspaceResult>('code.workspace.delete', {
+  const result = await rpcRequest('code.workspace.delete', {
     projectId,
     workspaceId,
     ...options,
@@ -602,13 +488,13 @@ export const deleteWorkspace = async (
 };
 
 export const discoverWorkspaces = async (projectId: string) => {
-  const result = await rpcRequest<{ worktrees: DiscoveredWorktree[] }>('code.workspace.discover', { projectId });
+  const result = await rpcRequest('code.workspace.discover', { projectId });
 
   return result.worktrees;
 };
 
 export const reorderWorkspaces = async (projectId: string, workspaceIds: string[]) => {
-  const result = await rpcRequest<{ project: Project }>('code.workspace.reorder', { projectId, workspaceIds });
+  const result = await rpcRequest('code.workspace.reorder', { projectId, workspaceIds });
 
   return result.project;
 };
@@ -620,7 +506,7 @@ export const createProjectThread = async (
   title = '...',
   projectKind?: Project['projectKind'],
 ) => {
-  const result = await rpcRequest<{ thread: ServerThread; workspace: Workspace }>('code.project.threads.create', {
+  const result = await rpcRequest('code.project.threads.create', {
     projectId,
     threadId,
     title,
@@ -639,30 +525,21 @@ export const reorderThreads = async (
 };
 
 export const listServerMessages = async (threadId: string) => {
-  const result = await rpcRequest<{ messages: UIMessage[] }>('chat.thread.messages.list', { threadId });
+  const result = await rpcRequest('chat.thread.messages.list', { threadId });
 
   return result.messages;
 };
 
-export type ThreadRunState = {
-  active: boolean;
-  status: 'idle' | 'running' | 'cancelling' | 'completed' | 'cancelled' | 'error';
-  phase?: ThreadRunPhase;
-  runId?: string;
-  startedAt?: string;
-  updatedAt?: string;
-  durationMs?: number;
-  error?: string;
-};
+export type { ThreadRunState } from '@weave/protocol';
 
 export const getThreadRunState = async (threadId: string) => {
-  const result = await rpcRequest<{ run: ThreadRunState }>('chat.run.get', { threadId });
+  const result = await rpcRequest('chat.run.get', { threadId });
 
   return result.run;
 };
 
 export const cancelThreadRun = async (threadId: string) => {
-  const result = await rpcRequest<{ ok: true; run: ThreadRunState }>('chat.run.cancel', { threadId });
+  const result = await rpcRequest('chat.run.cancel', { threadId });
 
   return result.run;
 };
@@ -684,7 +561,7 @@ export const sendThreadSteeringMessage = async (
   options: SendThreadSteeringMessageOptions = {},
 ): Promise<ThreadSteeringResult> => {
   try {
-    return await rpcRequest<{ ok: true; accepted: true; runId: string; messageId: string }>(
+    return await rpcRequest(
       'chat.run.steer',
       { threadId, message, ...(options.runId ? { runId: options.runId } : {}) },
       { timeoutMs: options.timeoutMs ?? defaultThreadSteeringTimeoutMs },
@@ -725,7 +602,7 @@ export type ContextUsage = {
 };
 
 export const getThreadContextUsage = async (threadId: string, modelId: string) => {
-  return await rpcRequest<ContextUsage>('chat.thread.contextUsage', { threadId, model: modelId });
+  return await rpcRequest('chat.thread.contextUsage', { threadId, model: modelId });
 };
 
 export type CompactThreadResult = {
@@ -733,7 +610,7 @@ export type CompactThreadResult = {
 };
 
 export const compactThread = async (threadId: string, model: string, instructions?: string) =>
-  await rpcRequest<CompactThreadResult>('chat.thread.compact', {
+  await rpcRequest('chat.thread.compact', {
     threadId,
     model,
     ...(instructions?.trim() ? { instructions: instructions.trim() } : {}),

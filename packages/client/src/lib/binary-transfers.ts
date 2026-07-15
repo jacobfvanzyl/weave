@@ -1,5 +1,6 @@
 import {
   type BinaryTransferDescriptor,
+  type JsonObject,
   WEAVE_RPC_BINARY_CHUNK_BYTES,
   WEAVE_RPC_BINARY_WINDOW_SIZE,
 } from '@weave/protocol';
@@ -36,7 +37,7 @@ export const uploadBinaryTransfer = async (input: {
   bytes: Uint8Array;
   purpose: string;
   mimeType?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: JsonObject;
 }) => {
   const transferId = `upload_${crypto.randomUUID()}`;
   const digest = await sha256(input.bytes);
@@ -80,11 +81,14 @@ export const downloadBinaryTransfer = async (descriptor: BinaryTransferDescripto
   const chunks = new Map<number, Uint8Array>();
   try {
     for (const window of batches(indices, WEAVE_RPC_BINARY_WINDOW_SIZE)) {
-      const results = await Promise.all(window.map(index => rpcRequest<{ index: number; data: string }>(
+      const results = await Promise.all(window.map(index => rpcRequest(
         'binary.chunk',
         { transferId: descriptor.transferId, index },
       )));
-      for (const result of results) chunks.set(result.index, fromBase64(result.data));
+      for (const result of results) {
+        if (!('data' in result)) throw new Error('Binary download returned an upload acknowledgement.');
+        chunks.set(result.index, fromBase64(result.data));
+      }
     }
     const bytes = new Uint8Array(descriptor.sizeBytes);
     let offset = 0;
@@ -115,7 +119,7 @@ export const uploadImageAttachment = async (file: File, mimeType: string, thread
     mimeType,
     metadata: { originalName: file.name || 'image', ...(threadId ? { threadId } : {}) },
   });
-  return await rpcRequest<{ id: string; urlPath: string; mimeType: string; sizeBytes: number; originalName: string }>(
+  return await rpcRequest(
     'attachment.put',
     {
       transferId: transfer.transferId,
@@ -137,10 +141,7 @@ export const getAttachmentObjectUrl = async (reference: string) => {
   if (!attachmentId) return reference;
   const cached = attachmentUrls.get(attachmentId);
   if (cached) return cached;
-  const result = await rpcRequest<{
-    transfer: BinaryTransferDescriptor;
-    attachment: { mimeType: string };
-  }>('attachment.read', { attachmentId });
+  const result = await rpcRequest('attachment.read', { attachmentId });
   const bytes = await downloadBinaryTransfer(result.transfer);
   const url = URL.createObjectURL(new Blob([bytes], { type: result.attachment.mimeType }));
   attachmentUrls.set(attachmentId, url);

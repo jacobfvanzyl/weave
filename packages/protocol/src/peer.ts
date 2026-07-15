@@ -1,9 +1,18 @@
 import {
+  getRpcContract,
   type JsonRpcErrorObject,
   type JsonRpcId,
   type JsonRpcMessage,
   jsonRpcMessageSchema,
+  type JsonValue,
+  parseRpcNotificationParams,
+  parseRpcRequestParams,
+  parseRpcRequestResult,
+  rpcCloseCode,
+  RpcContractError,
   rpcErrorCode,
+  type RpcRequestOptions,
+  type RpcRole,
   WEAVE_RPC_MAX_FRAME_BYTES,
 } from "./schema.ts";
 
@@ -14,9 +23,9 @@ export type RpcSocket = {
   close(code?: number, reason?: string): void;
 };
 
-export type RpcHandlerContext = {
+export type RpcHandlerContext<Method extends string = string> = {
   id: JsonRpcId;
-  method: string;
+  method: Method;
   signal: AbortSignal;
 };
 
@@ -42,6 +51,8 @@ type OutboundItem = {
 };
 
 export type RpcPeerOptions = {
+  localRole?: RpcRole;
+  remoteRole?: RpcRole;
   maxFrameBytes?: number;
   requestTimeoutMs?: number;
   highWatermarkBytes?: number;
@@ -56,7 +67,7 @@ export class RpcRemoteError extends Error {
   constructor(
     readonly code: number,
     message: string,
-    readonly data?: unknown,
+    readonly data?: JsonValue,
   ) {
     super(message);
     this.name = "RpcRemoteError";
@@ -77,6 +88,34 @@ export class RpcApplicationError extends Error {
 const jsonByteLength = (value: string) =>
   new TextEncoder().encode(value).byteLength;
 
+const awaitJsonValue = (value: unknown): JsonValue | undefined => {
+  if (
+    value === null || typeof value === "string" || typeof value === "boolean"
+  ) return value;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (Array.isArray(value)) {
+    const items: JsonValue[] = [];
+    for (const item of value) {
+      const parsed = awaitJsonValue(item);
+      if (parsed === undefined) return undefined;
+      items.push(parsed);
+    }
+    return items;
+  }
+  if (value && typeof value === "object") {
+    const record: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const parsed = awaitJsonValue(item);
+      if (parsed === undefined) return undefined;
+      record[key] = parsed;
+    }
+    return record;
+  }
+  return undefined;
+};
+
 export class RpcPeer {
   private readonly handlers = new Map<string, RpcHandler>();
   private readonly notificationHandlers = new Map<
@@ -95,6 +134,8 @@ export class RpcPeer {
   private nextId = 0;
   private flushing = false;
   private closed = false;
+  private localRole?: RpcRole;
+  private remoteRole?: RpcRole;
 
   constructor(
     private readonly socket: RpcSocket,
@@ -105,6 +146,19 @@ export class RpcPeer {
     this.highWatermarkBytes = options.highWatermarkBytes ?? 4 * 1024 * 1024;
     this.hardLimitBytes = options.hardLimitBytes ?? 16 * 1024 * 1024;
     this.createId = options.createId ?? (() => `${++this.nextId}`);
+    this.localRole = options.localRole;
+    this.remoteRole = options.remoteRole;
+  }
+
+  setRoles(localRole: RpcRole, remoteRole: RpcRole) {
+    if (
+      (this.localRole && this.localRole !== localRole) ||
+      (this.remoteRole && this.remoteRole !== remoteRole)
+    ) {
+      throw new Error("RPC peer roles cannot change after assignment.");
+    }
+    this.localRole = localRole;
+    this.remoteRole = remoteRole;
   }
 
   register(method: string, handler: RpcHandler) {
@@ -118,34 +172,61 @@ export class RpcPeer {
   onNotification(method: string, handler: RpcNotificationHandler) {
     const handlers = this.notificationHandlers.get(method) ??
       new Set<RpcNotificationHandler>();
-    handlers.add(handler);
+    const rawHandler = handler as RpcNotificationHandler;
+    handlers.add(rawHandler);
     this.notificationHandlers.set(method, handlers);
     return () => {
-      handlers.delete(handler);
+      handlers.delete(rawHandler);
       if (handlers.size === 0) this.notificationHandlers.delete(method);
     };
   }
 
-  request<T = unknown>(
+  request(
     method: string,
-    params?: unknown,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
-  ) {
+    unvalidatedParams?: unknown,
+    options: RpcRequestOptions = {},
+  ): Promise<unknown> {
     if (this.closed) {
       return Promise.reject(new Error("RPC connection is closed."));
     }
+    let params = unvalidatedParams;
+    if (this.localRole && this.remoteRole) {
+      const contract = getRpcContract(
+        "request",
+        this.localRole,
+        this.remoteRole,
+        method,
+      );
+      if (!contract) {
+        return Promise.reject(
+          new Error(
+            `RPC request is not allowed for ${this.localRole} -> ${this.remoteRole}: ${method}`,
+          ),
+        );
+      }
+      try {
+        params = parseRpcRequestParams(
+          this.localRole,
+          this.remoteRole,
+          method,
+          unvalidatedParams,
+        );
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
     const id = this.createId();
     const timeoutMs = options.timeoutMs ?? this.requestTimeoutMs;
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
       const pending: PendingRequest = {
         method,
-        resolve: (value) => resolve(value as T),
+        resolve,
         reject,
       };
       if (timeoutMs > 0) {
         pending.timer = setTimeout(() => {
           this.pending.delete(id);
-          this.notify("connection.cancel", { id });
+          this.sendNotification("connection.cancel", { id }, 2);
           reject(new Error(`RPC request timed out: ${method}`));
         }, timeoutMs);
       }
@@ -154,7 +235,7 @@ export class RpcPeer {
         const abort = () => {
           if (!this.pending.delete(id)) return;
           if (pending.timer) clearTimeout(pending.timer);
-          this.notify("connection.cancel", { id });
+          this.sendNotification("connection.cancel", { id }, 2);
           reject(
             options.signal?.reason instanceof Error
               ? options.signal.reason
@@ -175,12 +256,40 @@ export class RpcPeer {
     });
   }
 
-  notify(method: string, params?: unknown, priority = 2) {
+  notify(
+    method: string,
+    params?: unknown,
+    priority = 2,
+  ) {
+    this.sendNotification(method, params, priority);
+  }
+
+  private sendNotification(method: string, params: unknown, priority: number) {
     if (this.closed) return;
+    let validatedParams: unknown = params;
+    if (this.localRole && this.remoteRole) {
+      const contract = getRpcContract(
+        "notification",
+        this.localRole,
+        this.remoteRole,
+        method,
+      );
+      if (!contract) {
+        throw new Error(
+          `RPC notification is not allowed for ${this.localRole} -> ${this.remoteRole}: ${method}`,
+        );
+      }
+      validatedParams = parseRpcNotificationParams(
+        this.localRole,
+        this.remoteRole,
+        method,
+        params,
+      );
+    }
     this.enqueue({
       jsonrpc: "2.0",
       method,
-      ...(params === undefined ? {} : { params }),
+      ...(validatedParams === undefined ? {} : { params: validatedParams }),
     }, priority);
   }
 
@@ -224,12 +333,25 @@ export class RpcPeer {
           (typeof raw.id === "string" || typeof raw.id === "number")
         ? raw.id
         : null;
-      this.sendError(
-        id,
-        rpcErrorCode.invalidRequest,
-        "Invalid Request",
-        parsed.error.flatten(),
-      );
+      const responseLike = raw && typeof raw === "object" &&
+        !Array.isArray(raw) &&
+        "id" in raw && ("result" in raw || "error" in raw);
+      const notificationLike = raw && typeof raw === "object" &&
+        !Array.isArray(raw) &&
+        "method" in raw && !("id" in raw);
+      if (responseLike || notificationLike) {
+        this.close(
+          rpcCloseCode.invalidMessage,
+          "Peer sent an invalid RPC response or notification.",
+        );
+      } else {
+        this.sendError(
+          id,
+          rpcErrorCode.invalidRequest,
+          "Invalid Request",
+          parsed.error.flatten(),
+        );
+      }
       return;
     }
     await this.handleMessage(parsed.data);
@@ -322,6 +444,25 @@ export class RpcPeer {
     }
     if ("method" in message) {
       if (message.method === "connection.cancel") {
+        if (this.remoteRole && this.localRole) {
+          try {
+            parseRpcNotificationParams(
+              this.remoteRole,
+              this.localRole,
+              message.method,
+              message.params,
+            );
+          } catch (error) {
+            this.options.onError?.(
+              error instanceof Error ? error : new Error(String(error)),
+            );
+            this.close(
+              rpcCloseCode.invalidMessage,
+              "Peer sent invalid cancellation parameters.",
+            );
+            return;
+          }
+        }
         const id = message.params && typeof message.params === "object" &&
             "id" in message.params
           ? (message.params as { id?: unknown }).id
@@ -333,14 +474,47 @@ export class RpcPeer {
         }
         return;
       }
+      let params = message.params;
+      if (this.remoteRole && this.localRole) {
+        const contract = getRpcContract(
+          "notification",
+          this.remoteRole,
+          this.localRole,
+          message.method,
+        );
+        if (!contract) {
+          this.close(
+            rpcCloseCode.invalidMessage,
+            `Peer sent an unsupported notification: ${message.method}`,
+          );
+          return;
+        }
+        try {
+          params = parseRpcNotificationParams(
+            this.remoteRole,
+            this.localRole,
+            message.method,
+            message.params,
+          );
+        } catch (error) {
+          this.options.onError?.(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+          this.close(
+            rpcCloseCode.invalidMessage,
+            `Peer sent invalid notification parameters: ${message.method}`,
+          );
+          return;
+        }
+      }
       const handlers = this.notificationHandlers.get(message.method);
       if (handlers?.size) {
         for (const handler of handlers) {
-          await handler(message.params, message.method);
+          await handler(params, message.method);
         }
       } else {
         await this.options.onUnhandledNotification?.(
-          message.params,
+          params,
           message.method,
         );
       }
@@ -359,7 +533,29 @@ export class RpcPeer {
           message.error.data,
         ),
       );
-    } else pending.resolve(message.result);
+    } else {
+      let result = message.result;
+      if (this.localRole && this.remoteRole) {
+        try {
+          result = parseRpcRequestResult(
+            this.localRole,
+            this.remoteRole,
+            pending.method,
+            message.result,
+          );
+        } catch (error) {
+          pending.reject(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+          this.close(
+            rpcCloseCode.invalidMessage,
+            `Peer sent an invalid response for ${pending.method}.`,
+          );
+          return;
+        }
+      }
+      pending.resolve(result);
+    }
   }
 
   private async handleRequest(
@@ -374,18 +570,79 @@ export class RpcPeer {
       );
       return;
     }
+    let params = message.params;
+    if (this.remoteRole && this.localRole) {
+      const contract = getRpcContract(
+        "request",
+        this.remoteRole,
+        this.localRole,
+        message.method,
+      );
+      if (!contract) {
+        this.sendError(
+          message.id,
+          rpcErrorCode.methodNotFound,
+          `Method not found: ${message.method}`,
+        );
+        return;
+      }
+      try {
+        params = parseRpcRequestParams(
+          this.remoteRole,
+          this.localRole,
+          message.method,
+          message.params,
+        );
+      } catch (error) {
+        this.options.onError?.(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+        this.sendError(
+          message.id,
+          rpcErrorCode.invalidParams,
+          "Invalid params",
+          {
+            code: "INVALID_PARAMS",
+          },
+        );
+        return;
+      }
+    }
     const controller = new AbortController();
     this.active.set(message.id, controller);
     try {
-      const result = await handler(message.params, {
+      const result = await handler(params, {
         id: message.id,
         method: message.method,
         signal: controller.signal,
       });
-      this.enqueue(
-        { jsonrpc: "2.0", id: message.id, result: result ?? null },
-        0,
-      );
+      let validatedResult = result;
+      if (this.remoteRole && this.localRole) {
+        try {
+          validatedResult = parseRpcRequestResult(
+            this.remoteRole,
+            this.localRole,
+            message.method,
+            result,
+          );
+        } catch (error) {
+          this.options.onError?.(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+          this.sendError(
+            message.id,
+            rpcErrorCode.applicationInternal,
+            "Internal error",
+            { code: "INTERNAL" },
+          );
+          return;
+        }
+      }
+      this.enqueue({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: validatedResult ?? null,
+      }, 0);
     } catch (error) {
       if (error instanceof RpcApplicationError) {
         this.sendError(message.id, error.code, error.message, error.data);
@@ -413,10 +670,13 @@ export class RpcPeer {
     message: string,
     data?: unknown,
   ) {
+    const parsedData = data === undefined
+      ? undefined
+      : (awaitJsonValue(data) ?? { code: "INTERNAL" });
     const error: JsonRpcErrorObject = {
       code,
       message,
-      ...(data === undefined ? {} : { data }),
+      ...(parsedData === undefined ? {} : { data: parsedData }),
     };
     this.enqueue({ jsonrpc: "2.0", id, error }, 0);
   }

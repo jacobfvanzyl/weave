@@ -4,6 +4,16 @@ import type {
   NotificationPermissionState,
   WeaveNotificationEvent,
 } from '@weave/client/lib/notifications/types';
+import type {
+  DesktopRpcNotificationEnvelope,
+  DesktopRpcNotifyEnvelope,
+  DesktopRpcRequestEnvelope,
+  DesktopRpcResponseEnvelope,
+  DesktopRpcReverseRequestEnvelope,
+  DesktopRpcReverseResponseEnvelope,
+  RpcNotificationMethod,
+  RpcRequestMethod,
+} from '@weave/protocol';
 
 export type DesktopConnectionSettings = {
   mastraUrl: string;
@@ -38,22 +48,19 @@ export type WeaveDesktopBridge = {
   getConnectionSettings: () => Promise<DesktopConnectionSettings>;
   saveConnectionSettings: (input: DesktopConnectionInput) => Promise<DesktopConnectionSettings>;
   testConnection: (input?: DesktopConnectionInput) => Promise<DesktopConnectionTestResult>;
-  rpcRequest: <T = unknown>(method: string, params?: unknown, options?: {
-    timeoutMs?: number;
-    requestId?: string;
-  }) => Promise<T>;
+  rpcRequest: <Method extends RpcRequestMethod<'client', 'server'>>(
+    request: DesktopRpcRequestEnvelope<Method>,
+  ) => Promise<DesktopRpcResponseEnvelope<Method>>;
   cancelRpcRequest: (requestId: string) => void;
-  rpcNotify: (method: string, params?: unknown) => Promise<void>;
-  onRpcConnectionState: (listener: (state: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed') => void) => () => void;
-  onRpcNotification: (listener: (method: string, params: unknown) => void) => () => void;
-  onRpcReverseRequest: (
-    listener: (requestId: string, method: string, params: unknown) => void,
-  ) => () => void;
-  respondRpcReverseRequest: (
-    requestId: string,
-    result?: unknown,
-    error?: { message: string },
+  rpcNotify: <Method extends RpcNotificationMethod<'client', 'server'>>(
+    notification: DesktopRpcNotifyEnvelope<Method>,
   ) => Promise<void>;
+  onRpcConnectionState: (listener: (state: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed') => void) => () => void;
+  onRpcNotification: (listener: (notification: DesktopRpcNotificationEnvelope) => void) => () => void;
+  onRpcReverseRequest: (
+    listener: (request: DesktopRpcReverseRequestEnvelope) => void,
+  ) => () => void;
+  respondRpcReverseRequest: (response: DesktopRpcReverseResponseEnvelope) => Promise<void>;
   getPortalStatus: () => Promise<DesktopPortalStatus>;
   retryPortal: () => Promise<DesktopPortalStatus>;
   onPortalStatus: (listener: (status: DesktopPortalStatus) => void) => () => void;

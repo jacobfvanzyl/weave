@@ -6,12 +6,18 @@ const rpc = vi.hoisted(() => {
     notificationHandlers,
     request: vi.fn(async (method: string, params?: unknown) => {
       if (method === 'chat.run.start') {
-        return { run: { runId: (params as { requestId?: string } | undefined)?.requestId } };
+        return {
+          run: {
+            active: true,
+            status: 'running',
+            runId: (params as { requestId?: string } | undefined)?.requestId,
+          },
+        };
       }
       if (method === 'chat.run.subscribe') {
         return { subscriptionId: 'chat_sub_1', active: true, afterSequence: 0 };
       }
-      return {};
+      return { ok: true };
     }),
   };
 });
@@ -43,7 +49,11 @@ describe('RpcAssistantChatTransport', () => {
   });
 
   it('closes when done repeats the final durable event sequence', async () => {
-    const transport = new RpcAssistantChatTransport();
+    const transport = new RpcAssistantChatTransport({
+      prepareSendMessagesRequest: async ({ messages }) => ({
+        body: { messages, memory: { thread: 'thread-1' } },
+      }),
+    });
     const stream = await transport.sendMessages({
       chatId: 'thread-1',
       messages: [],
@@ -87,17 +97,24 @@ describe('RpcAssistantChatTransport', () => {
       }
       if (method === 'chat.run.get') {
         expect(params).toEqual({ threadId: 'thread-2', runId: requestId });
-        return { run: { runId: requestId, active: true } };
+        return { run: { runId: requestId, active: true, status: 'running' } };
       }
       if (method === 'chat.run.subscribe') {
         expect(params).toEqual({ threadId: 'thread-2', runId: requestId, afterSequence: 0 });
         return { subscriptionId: 'chat_sub_recovered', active: true, afterSequence: 0 };
       }
-      return {};
+      return { ok: true };
     });
 
-    const transport = new RpcAssistantChatTransport();
-    const stream = await transport.sendMessages({ chatId: 'thread-2', messages: [] } as never);
+    const transport = new RpcAssistantChatTransport({
+      prepareSendMessagesRequest: async ({ messages }) => ({
+        body: { messages, memory: { thread: 'thread-2' } },
+      }),
+    });
+    const stream = await transport.sendMessages({
+      chatId: 'thread-2',
+      messages: [],
+    } as never);
     expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
     await stream.cancel();
     expect(rpc.request.mock.calls.filter(([method]) => method === 'chat.run.start')).toHaveLength(1);

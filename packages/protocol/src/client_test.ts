@@ -114,5 +114,8 @@ Deno.test("RpcConnection rejects methods outside the shared protocol catalog", a
       client: { clientAppId: "test", clientInstanceId: "catalog-instance" },
     },
   });
-  await assertRejects(() => connection.request("legacy.rest.call"), Error);
+  const rawRequest = connection.request.bind(connection) as (
+    method: string,
+  ) => Promise<unknown>;
+  await assertRejects(() => rawRequest("legacy.rest.call"), Error);
 });

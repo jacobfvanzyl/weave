@@ -1,4 +1,7 @@
+import type { WorkspaceGitState } from '@weave/protocol';
 import { listProjectWorktrees } from '../git/service';
+
+export type { WorkspaceGitState } from '@weave/protocol';
 
 export type WorkspaceGitStatus = 'ready' | 'offline' | 'creating' | 'dirty' | 'missing' | 'virtual' | 'error';
 
@@ -19,21 +22,6 @@ export type GitStateProject = {
   portalRootId?: string;
   repoPath?: string;
   workspaces: GitStateWorkspace[];
-};
-
-export type WorkspaceGitState = {
-  projectId: string;
-  workspaceId: string;
-  path?: string;
-  status: WorkspaceGitStatus;
-  branch?: string;
-  head?: string;
-  upstream?: string;
-  ahead?: number;
-  behind?: number;
-  detached?: boolean;
-  checkedAt: string;
-  lastError?: string;
 };
 
 export type PortalToolRequester = (input: {

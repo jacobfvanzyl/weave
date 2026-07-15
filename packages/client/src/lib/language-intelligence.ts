@@ -1,36 +1,14 @@
 import type { Transport } from '@codemirror/lsp-client';
-import type { EditorTarget } from './editor-types';
+import type {
+  LspSessionResult,
+  RpcRequestParams,
+} from '@weave/protocol';
 import { detectLanguagePackLspId } from './language-packs/core';
 import { onRpcConnectionState, onRpcNotification, rpcRequest } from './mastra-client';
 
-export type LspSessionStatus = 'ready' | 'missing' | 'disabled' | 'unsupported' | 'error';
-
-export type LspSessionInput = {
-  target: EditorTarget;
-  path: string;
-  languageId?: string;
-  serverId?: string;
-};
-
-export type LspSessionResult = {
-  ok: true;
-  sessionId: string;
-  status: LspSessionStatus;
-  serverId?: string;
-  languageId?: string;
-  documentUri?: string;
-  rootUri?: string;
-  rootPath?: string;
-  command?: string;
-  args?: string[];
-  capabilities?: unknown;
-  error?: string;
-};
-
-type LspHostEvent =
-  | (LspSessionResult & { type: 'ready' })
-  | { type: 'jsonrpc'; sessionId: string; message: string }
-  | { type: 'error'; sessionId?: string; error: string };
+export type LspSessionStatus = LspSessionResult['status'];
+export type LspSessionInput = RpcRequestParams<'client', 'server', 'lsp.session.create'>;
+export type { LspSessionResult } from '@weave/protocol';
 
 const sessionInputs = new Map<string, LspSessionInput>();
 
@@ -48,7 +26,7 @@ export const createLspSession = async (input: LspSessionInput) => {
     } satisfies LspSessionResult;
   }
   const request = { ...input, languageId };
-  const result = await rpcRequest<LspSessionResult>('lsp.session.create', request);
+  const result = await rpcRequest('lsp.session.create', request);
   if (result.sessionId) sessionInputs.set(result.sessionId, request);
   return result;
 };
@@ -68,9 +46,7 @@ export const createLspRpcTransport = (session: LspSessionResult) => {
   });
 
   const detachNotification = onRpcNotification('lsp.event', raw => {
-    const envelope = raw && typeof raw === 'object'
-      ? raw as { sessionId?: string; event?: LspHostEvent }
-      : undefined;
+    const envelope = raw;
     if (envelope?.sessionId !== activeSession.sessionId || !envelope.event) return;
     const event = envelope.event;
     if (event.type === 'ready') {

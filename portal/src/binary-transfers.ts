@@ -4,7 +4,7 @@ import {
   type BinaryTransferDescriptor,
   binaryTransferDescriptorSchema,
   WEAVE_RPC_BINARY_CHUNK_BYTES,
-} from '../../packages/protocol/src/index.ts';
+} from '@weave/protocol';
 
 const maxTransferBytes = 64 * 1024 * 1024;
 
@@ -56,7 +56,7 @@ export class PortalBinaryTransfers {
       throw new Error('Binary transfer id is already in use.');
     }
     this.uploads.set(descriptor.transferId, { descriptor, chunks: new Map() });
-    return { transferId: descriptor.transferId, accepted: true };
+    return { transferId: descriptor.transferId, accepted: true as const };
   }
 
   chunk(raw: unknown) {
@@ -140,7 +140,7 @@ export class PortalBinaryTransfers {
       throw new Error('Binary download checksum mismatch.');
     }
     this.downloads.delete(input.transferId);
-    return { ok: true };
+    return { ok: true as const };
   }
 
   consume(transferId: string, expectedPurpose?: string) {
@@ -185,7 +185,7 @@ export class PortalBinaryTransfers {
       this.uploads.delete(transferId);
       this.downloads.delete(transferId);
     }
-    return { ok: true };
+    return { ok: true as const };
   }
 
   clear() {

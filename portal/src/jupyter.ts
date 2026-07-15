@@ -7,6 +7,17 @@ import {
   resolvePortalWorkspaceFileRoot,
 } from './workspace-files.ts';
 import { resolvePortalHome } from './lifecycle.ts';
+import { jsonObjectSchema } from '@weave/protocol';
+import type {
+  JsonObject,
+  JupyterClientMessage,
+  JupyterHostEvent,
+  JupyterKernelSpec,
+  JupyterKernelspecsResult,
+  JupyterOutput,
+  JupyterSessionResult,
+  JupyterStatusResult,
+} from '@weave/protocol';
 
 export type PortalJupyterTarget = PortalWorkspaceFileTarget;
 
@@ -33,94 +44,14 @@ export type PortalJupyterExecuteInput = {
   allowStdin?: boolean;
 };
 
-export type PortalJupyterStatusResult = {
-  ok: true;
-  available: boolean;
-  status: 'ready' | 'missing' | 'error';
-  command?: string;
-  rootPath?: string;
-  url?: string;
-  uvAvailable?: boolean;
-  uvCommand?: string;
-  workspaceKernelName?: string;
-  venvPath?: string;
-  pythonPath?: string;
-  error?: string;
-};
-
-export type PortalJupyterKernelSpec = {
-  name: string;
-  displayName: string;
-  language?: string;
-  argv?: string[];
-};
-
-export type PortalJupyterKernelspecsResult = {
-  ok: true;
-  available: boolean;
-  defaultKernelName?: string;
-  kernelspecs: PortalJupyterKernelSpec[];
-  error?: string;
-};
-
-export type PortalJupyterSessionResult = {
-  ok: true;
-  available: boolean;
-  sessionId: string;
-  kernelId: string;
-  kernelName: string;
-  rootPath: string;
-  path: string;
-  venvPath?: string;
-  pythonPath?: string;
-};
-
-export type PortalJupyterMimeBundle = Record<string, unknown>;
-
-export type PortalJupyterOutput =
-  | { output_type: 'stream'; name: 'stdout' | 'stderr' | string; text: string }
-  | {
-    output_type: 'display_data';
-    data: PortalJupyterMimeBundle;
-    metadata?: Record<string, unknown>;
-    transient?: Record<string, unknown>;
-  }
-  | {
-    output_type: 'execute_result';
-    execution_count?: number | null;
-    data: PortalJupyterMimeBundle;
-    metadata?: Record<string, unknown>;
-  }
-  | { output_type: 'error'; ename: string; evalue: string; traceback: string[] };
-
-export type PortalJupyterHostEvent =
-  | { type: 'ready'; sessionId: string; kernelId: string; kernelName: string }
-  | { type: 'status'; sessionId: string; requestId?: string; cellId?: string; executionState: string }
-  | { type: 'execution_input'; sessionId: string; requestId?: string; cellId?: string; executionCount: number }
-  | { type: 'output'; sessionId: string; requestId?: string; cellId?: string; output: PortalJupyterOutput }
-  | { type: 'clear_output'; sessionId: string; requestId?: string; cellId?: string; wait: boolean }
-  | {
-    type: 'complete';
-    sessionId: string;
-    requestId?: string;
-    cellId?: string;
-    status: 'ok' | 'error' | 'interrupted';
-    executionCount?: number | null;
-  }
-  | { type: 'error'; sessionId?: string; requestId?: string; cellId?: string; error: string };
-
-export type PortalJupyterClientMessage =
-  | {
-    type: 'execute';
-    sessionId: string;
-    requestId?: string;
-    cellId?: string;
-    code: string;
-    silent?: boolean;
-    storeHistory?: boolean;
-    allowStdin?: boolean;
-  }
-  | { type: 'detach'; sessionId?: string };
+export type PortalJupyterStatusResult = JupyterStatusResult;
+export type PortalJupyterKernelSpec = JupyterKernelSpec;
+export type PortalJupyterKernelspecsResult = JupyterKernelspecsResult;
+export type PortalJupyterSessionResult = JupyterSessionResult;
+export type PortalJupyterMimeBundle = JsonObject;
+export type PortalJupyterOutput = JupyterOutput;
+export type PortalJupyterHostEvent = JupyterHostEvent;
+export type PortalJupyterClientMessage = JupyterClientMessage;
 
 export type PortalJupyterClientEnvelope = {
   type: 'jupyter.client';
@@ -1071,14 +1002,14 @@ const outputFromJupyterMessage = (
     };
   }
   if (messageType === 'display_data' || messageType === 'execute_result') {
-    const data = isRecord(content.data) ? content.data : {};
-    const metadata = isRecord(content.metadata) ? content.metadata : {};
+    const data = jsonObjectSchema.parse(isRecord(content.data) ? content.data : {});
+    const metadata = jsonObjectSchema.parse(isRecord(content.metadata) ? content.metadata : {});
     if (messageType === 'display_data') {
       return {
         output_type: 'display_data',
         data,
         metadata,
-        ...(isRecord(content.transient) ? { transient: content.transient } : {}),
+        ...(isRecord(content.transient) ? { transient: jsonObjectSchema.parse(content.transient) } : {}),
       };
     }
     return {

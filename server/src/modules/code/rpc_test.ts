@@ -5,10 +5,12 @@ import type { RpcRouter } from '../../rpc/router.ts';
 Deno.test('code.project.list aggregates every product without a legacy aggregate route', async () => {
   const handlers = new Map<string, (params: unknown, context: unknown) => unknown>();
   const requestedPaths: string[] = [];
+  const register = (method: string, _role: string, handler: (params: unknown, context: unknown) => unknown) => {
+    handlers.set(method, handler);
+  };
   const router = {
-    register: (method: string, _role: string, handler: (params: unknown, context: unknown) => unknown) => {
-      handlers.set(method, handler);
-    },
+    register,
+    registerValidated: register,
   } as unknown as RpcRouter;
   const services = {
     requestModule: ({ path }: { path: string }) => {

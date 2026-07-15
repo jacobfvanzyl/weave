@@ -1,14 +1,18 @@
-import type { JsonValue, ServiceGrant, ServiceScope } from '../services/types';
-import type { WorkflowAgentRunInput } from './service-runtime';
+import type { WorkflowDefinition, WorkflowState } from '@weave/protocol';
+import type { JsonValue } from '../services/types';
 
-export type WorkflowDefinition = {
-  id: string;
-  version: string;
-  name: string;
-  initialStateId: string;
-  states: Record<string, WorkflowState>;
-  grants: ServiceGrant[];
-};
+export type {
+  WorkflowAgentState,
+  WorkflowConditionCase,
+  WorkflowConditionState,
+  WorkflowDefinition,
+  WorkflowEndState,
+  WorkflowNotifyState,
+  WorkflowResourceState,
+  WorkflowState,
+  WorkflowToolState,
+  WorkflowTransitionMap,
+} from '@weave/protocol';
 
 export type WorkflowRunInput = {
   ownerId: string;
@@ -17,89 +21,6 @@ export type WorkflowRunInput = {
   definition: WorkflowDefinition;
   input?: JsonValue;
 };
-
-export type WorkflowTransitionMap = {
-  success?: string;
-  failure?: string;
-};
-
-export type WorkflowAgentState = {
-  type: 'agent';
-  agentId?: string;
-  input: JsonValue;
-  model?: string;
-  maxSteps?: number;
-  memory?: WorkflowAgentRunInput['memory'];
-  scope?: WorkflowAgentRunInput['scope'];
-  on: WorkflowTransitionMap;
-};
-
-export type WorkflowToolState = {
-  type: 'tool';
-  toolId: string;
-  scope?: ServiceScope;
-  input?: JsonValue;
-  timeoutMs?: number;
-  on: WorkflowTransitionMap;
-};
-
-export type WorkflowNotifyState = {
-  type: 'notify';
-  input: JsonValue;
-  on: WorkflowTransitionMap;
-};
-
-export type WorkflowResourceState =
-  | {
-    type: 'resource';
-    action: 'getAttachment';
-    attachmentId: JsonValue;
-    on: WorkflowTransitionMap;
-  }
-  | {
-    type: 'resource';
-    action: 'findAttachmentsByThread';
-    threadId: JsonValue;
-    on: WorkflowTransitionMap;
-  }
-  | {
-    type: 'resource';
-    action: 'findAttachmentsByOriginalName';
-    originalName: JsonValue;
-    mimeType?: JsonValue;
-    on: WorkflowTransitionMap;
-  }
-  | {
-    type: 'resource';
-    action: 'deleteAttachment';
-    attachmentId: JsonValue;
-    on: WorkflowTransitionMap;
-  };
-
-export type WorkflowConditionCase = {
-  ref: string;
-  equals: JsonValue;
-  to: string;
-};
-
-export type WorkflowConditionState = {
-  type: 'condition';
-  cases: WorkflowConditionCase[];
-  default: string;
-};
-
-export type WorkflowEndState = {
-  type: 'end';
-  result?: JsonValue;
-};
-
-export type WorkflowState =
-  | WorkflowAgentState
-  | WorkflowToolState
-  | WorkflowNotifyState
-  | WorkflowResourceState
-  | WorkflowConditionState
-  | WorkflowEndState;
 
 export class WorkflowDefinitionError extends Error {
   constructor(message: string) {

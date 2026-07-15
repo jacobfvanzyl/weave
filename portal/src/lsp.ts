@@ -7,6 +7,12 @@ import {
   resolvePortalWorkspaceFileRoot,
 } from './workspace-files.ts';
 import { detectLanguagePackLspId } from '../../packages/client/src/lib/language-packs/core.ts';
+import { jsonValueSchema } from '@weave/protocol';
+import type {
+  LspClientMessage,
+  LspHostEvent,
+  LspSessionResult,
+} from '@weave/protocol';
 
 export type LspLanguageId =
   | 'javascript'
@@ -31,32 +37,10 @@ export type PortalLspSessionInput = {
   serverId?: string;
 } & PortalLspTarget;
 
-export type PortalLspSessionStatus = 'ready' | 'missing' | 'disabled' | 'unsupported' | 'error';
-
-export type PortalLspSessionResult = {
-  ok: true;
-  sessionId: string;
-  status: PortalLspSessionStatus;
-  serverId?: string;
-  languageId?: LspLanguageId;
-  documentUri?: string;
-  rootUri?: string;
-  rootPath?: string;
-  command?: string;
-  args?: string[];
-  capabilities?: unknown;
-  error?: string;
-};
-
-export type PortalLspClientMessage =
-  | ({ type: 'start'; sessionId?: string } & Partial<PortalLspSessionInput>)
-  | { type: 'jsonrpc'; sessionId: string; message: string }
-  | { type: 'detach'; sessionId?: string };
-
-export type PortalLspHostEvent =
-  | (PortalLspSessionResult & { type: 'ready' })
-  | { type: 'jsonrpc'; sessionId: string; message: string }
-  | { type: 'error'; sessionId?: string; error: string };
+export type PortalLspSessionStatus = LspSessionResult['status'];
+export type PortalLspSessionResult = LspSessionResult;
+export type PortalLspClientMessage = LspClientMessage | { type: 'start'; sessionId: string };
+export type PortalLspHostEvent = LspHostEvent;
 
 export type PortalLspClientEnvelope = {
   type: 'lsp.client';
@@ -1521,7 +1505,7 @@ export class PortalLspHost {
       rootPath: session.rootPath,
       command: session.command,
       args: session.args,
-      capabilities,
+      ...(capabilities === undefined ? {} : { capabilities: jsonValueSchema.parse(capabilities) }),
       error: session.error,
     };
   }

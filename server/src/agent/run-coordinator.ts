@@ -5,7 +5,7 @@ import {
   logServerPerfEvent,
   memoryDelta,
 } from '../server/perf';
-import type { ThreadRunPhase } from '@weave/protocol';
+import type { ThreadRunPhase, WeaveChatChunk, WeaveChatMessage } from '@weave/protocol';
 import {
   isCompactToolHistoryTextPart,
   isLegacyCompactToolHistoryText,
@@ -14,6 +14,7 @@ import {
 import { subscribeThreadContextUsage, type ThreadContextUsageSnapshot } from './mastra/context-usage';
 import type { ExecutionProfile } from './execution-policy';
 import type { AgentRunEventV1, AgentRunRecordV1, AgentRunRepository, AgentRunSafeCheckpointV1 } from './run-repository';
+import { normalizeWeaveChatChunk, normalizeWeaveChatMessages } from './chat-protocol';
 
 const activeThreadRunCleanupDelayMs = 5 * 60 * 1000;
 
@@ -38,7 +39,7 @@ export type AgentThreadRunStatus =
 export type AgentThreadRunPhase = ThreadRunPhase;
 
 type AgentThreadRunEvent =
-  | { type: 'chunk'; sequence: number; chunk: unknown }
+  | { type: 'chunk'; sequence: number; chunk: WeaveChatChunk }
   | { type: 'close' }
   | { type: 'error'; error: unknown };
 
@@ -59,12 +60,12 @@ export type AgentThreadRun = {
   startedAt: string;
   updatedAt: string;
   controller: AbortController;
-  chunks: unknown[];
-  sequencedChunks: Array<{ sequence: number; chunk: unknown }>;
+  chunks: WeaveChatChunk[];
+  sequencedChunks: Array<{ sequence: number; chunk: WeaveChatChunk }>;
   nextSequence: number;
   persistenceChain: Promise<void>;
   persistenceError?: unknown;
-  submittedUserMessages: unknown[];
+  submittedUserMessages: WeaveChatMessage[];
   listeners: Set<AgentThreadRunListener>;
   contextUsageUnsubscribe?: () => void;
   cleanupTimer?: ReturnType<typeof setTimeout>;
@@ -1179,24 +1180,25 @@ export const buildRunUiMessagesFromChunks = (run: AgentThreadRun): RunUiMessage[
           : typeof existingPart?.type === 'string' && existingPart.type.startsWith('tool-')
           ? existingPart.type.slice('tool-'.length)
           : 'tool';
-        const toolName = typeof chunk.toolName === 'string' ? chunk.toolName : existingToolName;
+        const toolName = chunk.toolName ?? existingToolName;
+        const output = chunk.type === 'tool-output-available' ? chunk.output : undefined;
         upsertRunToolPart(assistantMessage, {
           toolCallId: chunk.toolCallId,
           toolName,
           state: chunk.type === 'tool-output-available' ? 'output-available' : 'output-error',
           input: existingPart?.input,
           rawInput: existingPart?.rawInput,
-          output: chunk.type === 'tool-output-available' ? chunk.output : undefined,
+          output,
           errorText: chunk.type === 'tool-output-error' ? chunk.errorText : undefined,
           dynamic: existingPart?.type === 'dynamic-tool' || chunk.dynamic === true,
           providerExecuted: chunk.providerExecuted,
-          preliminary: chunk.preliminary,
+          preliminary: chunk.type === 'tool-output-available' ? chunk.preliminary : undefined,
           title: existingPart?.title,
           toolMetadata: chunk.toolMetadata ?? existingPart?.toolMetadata,
           providerMetadata: chunk.providerMetadata,
         });
         if (toolName === askUserToolName) {
-          markAskUserPartSubmitted(messages, message, chunk.toolCallId, normalizeAskUserResume(chunk.output));
+          markAskUserPartSubmitted(messages, message, chunk.toolCallId, normalizeAskUserResume(output));
         }
         break;
       }
@@ -1231,12 +1233,7 @@ export const buildRunUiMessagesFromChunks = (run: AgentThreadRun): RunUiMessage[
         break;
       }
       default: {
-        const askUserPart = chunk.type === 'data-tool-call-suspended'
-          ? normalizeAskUserSuspensionPart(chunk)
-          : undefined;
-        if (askUserPart) {
-          getAssistantMessage().parts.push(askUserPart);
-        } else if (chunk.type.startsWith('data-') && chunk.transient !== true) {
+        if ('data' in chunk && chunk.type.startsWith('data-') && chunk.transient !== true) {
           getAssistantMessage().parts.push({ ...chunk });
         }
         break;
@@ -1364,7 +1361,7 @@ export class AgentRunCoordinator {
       sequencedChunks: [],
       nextSequence: 0,
       persistenceChain: Promise.resolve(),
-      submittedUserMessages,
+      submittedUserMessages: normalizeWeaveChatMessages(submittedUserMessages),
       listeners: new Set(),
       perf: this.createPerf(),
     };
@@ -1405,7 +1402,7 @@ export class AgentRunCoordinator {
     const sequencedChunks = events
       .filter((event) => event.runId === record.runId && event.sequence > 0)
       .sort((left, right) => left.sequence - right.sequence)
-      .map((event) => ({ sequence: event.sequence, chunk: event.data }));
+      .map((event) => ({ sequence: event.sequence, chunk: normalizeWeaveChatChunk(event.data) }));
     const run: AgentThreadRun = {
       key,
       resourceId: record.resourceId,
@@ -1427,7 +1424,7 @@ export class AgentRunCoordinator {
       sequencedChunks,
       nextSequence: Math.max(record.lastSequence, ...sequencedChunks.map((event) => event.sequence), 0),
       persistenceChain: Promise.resolve(),
-      submittedUserMessages: options.submittedUserMessages ?? [],
+      submittedUserMessages: normalizeWeaveChatMessages(options.submittedUserMessages ?? []),
       listeners: new Set(),
       perf: this.createPerf(),
     };
@@ -1436,29 +1433,34 @@ export class AgentRunCoordinator {
   }
 
   appendChunk(run: AgentThreadRun, chunk: unknown) {
+    const transformedChunk = normalizeAskUserSuspensionChunk(chunk) ??
+      normalizeAskUserToolInputChunk(chunk, run.mastraRunId) ??
+      chunk;
+    const normalizedChunk = normalizeWeaveChatChunk(transformedChunk);
     if (
       this.runs.get(run.key) !== run ||
-      (!activeThreadRunStatuses.has(run.status) && !(run.status === 'awaiting_approval' && toolApprovalChunk(chunk)))
+      (!activeThreadRunStatuses.has(run.status) &&
+        !(run.status === 'awaiting_approval' && toolApprovalChunk(normalizedChunk)))
     ) return;
 
-    const type = getStreamChunkType(chunk);
-    recordChatRunPerfChunk(run, chunk, type);
+    const type = getStreamChunkType(normalizedChunk);
+    recordChatRunPerfChunk(run, normalizedChunk, type);
     if (type === 'finish' || type === 'abort') run.terminalChunkType = type;
-    run.chunks.push(chunk);
+    run.chunks.push(normalizedChunk);
     const sequence = ++run.nextSequence;
-    run.sequencedChunks.push({ sequence, chunk });
+    run.sequencedChunks.push({ sequence, chunk: normalizedChunk });
     run.updatedAt = new Date().toISOString();
 
     if (this.repository) {
-      const checkpoint = checkpointForChunk(chunk, sequence);
+      const checkpoint = checkpointForChunk(normalizedChunk, sequence);
       run.persistenceChain = run.persistenceChain.then(() =>
         this.repository!.appendEvent({
           runId: run.runId,
           sequence,
           eventType: type ?? 'unknown',
-          data: chunk,
+          data: normalizedChunk,
           checkpoint,
-          ...(toolApprovalChunk(chunk) ? { status: 'awaiting_approval' as const } : {}),
+          ...(toolApprovalChunk(normalizedChunk) ? { status: 'awaiting_approval' as const } : {}),
         })
       ).catch((error) => {
         run.persistenceError = error;
@@ -1470,8 +1472,8 @@ export class AgentRunCoordinator {
       });
     }
 
-    for (const listener of run.listeners) listener({ type: 'chunk', sequence, chunk });
-    if (toolApprovalChunk(chunk)) run.status = 'awaiting_approval';
+    for (const listener of run.listeners) listener({ type: 'chunk', sequence, chunk: normalizedChunk });
+    if (toolApprovalChunk(normalizedChunk)) run.status = 'awaiting_approval';
   }
 
   setPhase(run: AgentThreadRun, phase: AgentThreadRunPhase) {
@@ -1552,7 +1554,7 @@ export class AgentRunCoordinator {
   observeRun(run: AgentThreadRun, afterSequence = 0) {
     let listener: AgentThreadRunListener | undefined;
 
-    return new ReadableStream<unknown>({
+    return new ReadableStream<WeaveChatChunk>({
       start(controller) {
         for (const event of run.sequencedChunks) {
           if (event.sequence > afterSequence) controller.enqueue(event.chunk);
@@ -1585,7 +1587,7 @@ export class AgentRunCoordinator {
   observeSequencedRun(run: AgentThreadRun, afterSequence = 0) {
     let listener: AgentThreadRunListener | undefined;
 
-    return new ReadableStream<{ sequence: number; chunk: unknown }>({
+    return new ReadableStream<{ sequence: number; chunk: WeaveChatChunk }>({
       start(controller) {
         for (const event of run.sequencedChunks) {
           if (event.sequence > afterSequence) controller.enqueue(event);

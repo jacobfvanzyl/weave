@@ -591,21 +591,24 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
       id: 'thread-1',
       title: '...',
       resourceId: 'resource-1',
-      updatedAt: '2026-07-02T10:00:00.000Z',
+      createdAt: new Date('2026-07-02T09:00:00.000Z'),
+      updatedAt: new Date('2026-07-02T10:00:00.000Z'),
       metadata: { mode: 'plain', sortOrder: 1 },
     },
     {
       id: 'thread-2',
       title: 'Ready',
       resourceId: 'resource-1',
-      updatedAt: '2026-07-02T10:01:00.000Z',
+      createdAt: new Date('2026-07-02T09:01:00.000Z'),
+      updatedAt: new Date('2026-07-02T10:01:00.000Z'),
       metadata: { mode: 'plain', sortOrder: 0 },
     },
     {
       id: '__project__hidden',
       title: 'Hidden',
       resourceId: 'resource-1',
-      updatedAt: '2026-07-02T10:02:00.000Z',
+      createdAt: new Date('2026-07-02T09:02:00.000Z'),
+      updatedAt: new Date('2026-07-02T10:02:00.000Z'),
       metadata: {},
     },
   ];
@@ -622,6 +625,8 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
       id: options.threadId,
       title: options.title,
       resourceId: options.resourceId,
+      createdAt: new Date('2026-07-02T11:00:00.000Z'),
+      updatedAt: new Date('2026-07-02T11:00:00.000Z'),
       metadata: options.metadata,
     }),
     updateThread: async (options: any) => {
@@ -630,6 +635,8 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
         id: options.id,
         title: options.title,
         resourceId: 'resource-1',
+        createdAt: new Date('2026-07-02T09:00:00.000Z'),
+        updatedAt: new Date('2026-07-02T12:00:00.000Z'),
         metadata: options.metadata,
       };
     },
@@ -667,6 +674,8 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
     id: 'thread-new',
     title: 'New',
     resourceId: 'resource-1',
+    createdAt: '2026-07-02T11:00:00.000Z',
+    updatedAt: '2026-07-02T11:00:00.000Z',
     metadata: { mode: 'plain', sortOrder: -1 },
   });
 
@@ -705,6 +714,8 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
     id: 'thread-1',
     title: 'Updated',
     resourceId: 'resource-1',
+    createdAt: '2026-07-02T09:00:00.000Z',
+    updatedAt: '2026-07-02T12:00:00.000Z',
     metadata: { mode: 'plain', sortOrder: 1, archived: true },
   });
 

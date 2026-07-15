@@ -12,7 +12,6 @@ import type {
 } from './editor-types';
 import { onRpcConnectionState, onRpcNotification, rpcRequest } from './mastra-client';
 import { downloadBinaryTransfer, uploadBinaryTransfer } from './binary-transfers';
-import type { BinaryTransferDescriptor } from '@weave/protocol';
 
 export const isDesktopWorkspaceFileBackendAvailable = () => false;
 export const isWebWorkspaceFileBackendAvailable = () => true;
@@ -21,11 +20,6 @@ export const isWorkspaceFileBackendAvailable = () => true;
 type CreateWorkspaceFileBackendOptions = {
   preferDesktopBridge?: boolean;
 };
-
-type WorkspaceFileWatchHostEvent =
-  | { type: 'workspace-file.watch.ready'; requestId?: string; paths: string[] }
-  | { type: 'workspace-file.watch.change'; event: EditorWatchEvent }
-  | { type: 'workspace-file.watch.error'; requestId?: string; error: string };
 
 let watchCounter = 0;
 const requestId = () => `workspace_watch_${++watchCounter}`;
@@ -40,11 +34,8 @@ const createRpcWorkspaceFileWatch = async (
   let closed = false;
   let currentPaths = [...paths];
   let disconnected = false;
-  const detach = onRpcNotification('workspaceFile.watch.event', raw => {
-    const envelope = raw && typeof raw === 'object'
-      ? raw as { sessionId?: string; event?: WorkspaceFileWatchHostEvent }
-      : undefined;
-    if (envelope?.sessionId !== sessionId || !envelope.event) return;
+  const detach = onRpcNotification('workspaceFile.watch.event', envelope => {
+    if (envelope.sessionId !== sessionId) return;
     const event = envelope.event;
     if (event.type === 'workspace-file.watch.change') listener(event.event);
     if (event.type === 'workspace-file.watch.ready' && event.requestId) {
@@ -105,9 +96,9 @@ const createRpcWorkspaceFileWatch = async (
 
 export const createWorkspaceFileBackend = (_options: CreateWorkspaceFileBackendOptions = {}): WorkspaceFileBackend => {
   return {
-    list: (target, path) => rpcRequest<EditorListResult>('workspaceFile.list', { target, path }),
+    list: (target, path) => rpcRequest('workspaceFile.list', { target, path }),
     read: async (target, path) => {
-      const result = await rpcRequest<EditorFile & { contentTransfer?: BinaryTransferDescriptor }>(
+      const result = await rpcRequest(
         'workspaceFile.read',
         { target, path },
       );
@@ -116,33 +107,33 @@ export const createWorkspaceFileBackend = (_options: CreateWorkspaceFileBackendO
       const { contentTransfer: _transfer, ...metadata } = result;
       return { ...metadata, content: new TextDecoder().decode(bytes) };
     },
-    hash: (target, path) => rpcRequest<EditorHashResult>('workspaceFile.hash', { target, path }),
+    hash: (target, path) => rpcRequest('workspaceFile.hash', { target, path }),
     diffPreview: (target, path, diff) =>
-      rpcRequest<EditorDiffPreviewResult>('workspaceFile.diffPreview', { target, path, diff }),
+      rpcRequest('workspaceFile.diffPreview', { target, path, diff }),
     write: async (target, path, content, version) => {
       const transfer = await uploadBinaryTransfer({
         bytes: new TextEncoder().encode(content),
         purpose: 'workspaceFile.write',
         mimeType: 'text/plain; charset=utf-8',
       });
-      return await rpcRequest<EditorWriteResult>('workspaceFile.write', {
+      return await rpcRequest('workspaceFile.write', {
         target,
         path,
         transferId: transfer.transferId,
         version,
       });
     },
-    mkdir: (target, path) => rpcRequest<FileOperationResult>('workspaceFile.mkdir', { target, path }),
+    mkdir: (target, path) => rpcRequest('workspaceFile.mkdir', { target, path }),
     move: (target, fromPath, toPath, overwrite) =>
-      rpcRequest<FileOperationResult>('workspaceFile.move', { target, fromPath, toPath, overwrite }),
+      rpcRequest('workspaceFile.move', { target, fromPath, toPath, overwrite }),
     delete: (target, path, recursive) =>
-      rpcRequest<FileOperationResult>('workspaceFile.delete', { target, path, recursive }),
-    index: (target, path) => rpcRequest<WorkspaceFileIndexResult>('workspaceFile.index', { target, path }),
+      rpcRequest('workspaceFile.delete', { target, path, recursive }),
+    index: (target, path) => rpcRequest('workspaceFile.index', { target, path }),
     upload: async (target, path, base64Content, contentType) => {
       const binary = atob(base64Content);
       const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
       const transfer = await uploadBinaryTransfer({ bytes, purpose: 'workspaceFile.upload', mimeType: contentType });
-      return await rpcRequest<FileOperationResult>('workspaceFile.upload', {
+      return await rpcRequest('workspaceFile.upload', {
         target,
         path,
         transferId: transfer.transferId,

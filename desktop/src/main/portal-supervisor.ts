@@ -255,9 +255,7 @@ export class PortalSupervisor {
       !refresh && existing?.serverUrl === serverUrl &&
       existing.portal?.portalId && existing.portal.portalToken
     ) return;
-    const token = await this.rpc.request<{ portalId: string; token: string }>(
-      'portal.token.issue',
-    );
+    const token = await this.rpc.request('portal.token.issue');
     await writeJsonFile(this.configPath, {
       serverUrl,
       portal: {
@@ -365,9 +363,7 @@ export class PortalSupervisor {
     const started = Date.now();
     while (Date.now() - started < this.startupTimeoutMs) {
       if (this.onlinePortalIds.has(runtime.portalId)) return;
-      const result = await this.rpc.request<
-        { portals: Array<{ portalId: string; status: string }> }
-      >('portal.list');
+      const result = await this.rpc.request('portal.list');
       if (
         result.portals.some((portal) => portal.portalId === runtime.portalId && portal.status === 'online')
       ) {

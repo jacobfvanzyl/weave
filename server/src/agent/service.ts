@@ -1,7 +1,8 @@
 import { handleChatStream, toAISdkStream } from '@mastra/ai-sdk';
 import type { AgentMessageInput, MastraDBMessage } from '@mastra/core/agent';
+import type { StorageThreadType } from '@mastra/core/memory';
 import type { Mastra } from '@mastra/core/mastra';
-import type { ThreadCompactionEventData } from '@weave/protocol';
+import type { ChatThread, ThreadCompactionEventData } from '@weave/protocol';
 import { listAgentContributions } from './contributions';
 import { type ModelContextBudget, putModelContextBudget, resolveModelContextBudget } from './context-budget';
 import { getThreadContextUsageSnapshot } from './mastra/context-usage';
@@ -62,6 +63,7 @@ import {
   type ThreadCompactionTrigger,
 } from './thread-compaction-repository';
 import { chatGPTCodexAuthService } from './mastra/providers/chatgpt-codex-auth';
+import { normalizeWeaveChatThread } from './chat-protocol';
 
 export const hashChatSystemPrompt = (system: unknown) => hashText(JSON.stringify(system ?? null));
 
@@ -170,13 +172,7 @@ export type RespondToToolApprovalRequest = {
   requestContext?: unknown;
 };
 
-export type ChatThreadRecord = {
-  id: string;
-  title?: string;
-  resourceId?: string;
-  updatedAt?: string;
-  metadata?: unknown;
-};
+export type ChatThreadRecord = ChatThread;
 
 export type ChatThreadScope = {
   projectId?: string;
@@ -215,8 +211,8 @@ export type ChatThreadContextUsage = {
   contextLimitTokens: number;
   percent: number;
   compactionEnabled: boolean;
-  source: string;
-  updatedAt?: string;
+  source: 'provider' | 'estimate';
+  updatedAt: string;
   totalProcessedTokens?: number;
   inputTokens?: number;
   cachedInputTokens?: number;
@@ -773,13 +769,14 @@ export class MastraAgentService implements AgentService {
     }
     if (input.rememberForRun && input.decision === 'approve') {
       const approvalChunk = [...run.chunks].reverse().find((chunk) => {
-        if (!isRecord(chunk)) return false;
-        const data = isRecord(chunk.data) ? chunk.data : undefined;
-        return chunk.toolCallId === input.toolCallId || data?.toolCallId === input.toolCallId;
+        const data = 'data' in chunk && isRecord(chunk.data) ? chunk.data : undefined;
+        const directToolCallId = 'toolCallId' in chunk ? chunk.toolCallId : undefined;
+        return directToolCallId === input.toolCallId || data?.toolCallId === input.toolCallId;
       });
-      if (isRecord(approvalChunk)) {
-        const data = isRecord(approvalChunk.data) ? approvalChunk.data : undefined;
-        const toolName = stringValue(approvalChunk.toolName) ?? stringValue(data?.toolName);
+      if (approvalChunk) {
+        const data = 'data' in approvalChunk && isRecord(approvalChunk.data) ? approvalChunk.data : undefined;
+        const directToolName = 'toolName' in approvalChunk ? approvalChunk.toolName : undefined;
+        const toolName = stringValue(directToolName) ?? stringValue(data?.toolName);
         if (toolName) rememberToolApproval(run.requestContext, toolName);
       }
     }
@@ -892,8 +889,9 @@ export class MastraAgentService implements AgentService {
     });
 
     const threads = await Promise.all(
-      result.threads.filter((thread: ChatThreadRecord) => !isHiddenChatThread(thread)).map(
-        async (thread: ChatThreadRecord) => {
+      result.threads.filter((thread: StorageThreadType) => !isHiddenChatThread(thread)).map(
+        async (storedThread: StorageThreadType) => {
+          const thread = normalizeWeaveChatThread(storedThread);
           if (thread.title && !['New chat', '...'].includes(thread.title)) return thread;
 
           const messages = await this.recallThreadMessages(memory, {
@@ -928,19 +926,23 @@ export class MastraAgentService implements AgentService {
       ? { mode: 'project', projectId: input.projectId, workspaceId: input.workspaceId, sortOrder }
       : { mode: 'plain', sortOrder };
 
-    return await memory.createThread({
-      resourceId: input.resourceId,
-      threadId: input.threadId,
-      title: input.title ?? '...',
-      metadata,
-      saveThread: true,
-    });
+    return normalizeWeaveChatThread(
+      await memory.createThread({
+        resourceId: input.resourceId,
+        threadId: input.threadId,
+        title: input.title ?? '...',
+        metadata,
+        saveThread: true,
+      }),
+    );
   }
 
   async reorderChatThreads(input: ReorderChatThreadsRequest): Promise<void> {
     const memory = await this.getMemory();
     const result = await memory.listThreads({ filter: { resourceId: input.resourceId }, perPage: false });
-    const visibleThreads = result.threads.filter((thread: ChatThreadRecord) => !isHiddenChatThread(thread));
+    const visibleThreads = result.threads
+      .filter((thread: StorageThreadType) => !isHiddenChatThread(thread))
+      .map((thread: StorageThreadType) => normalizeWeaveChatThread(thread));
     const scopedThreads = visibleThreads.filter((thread: ChatThreadRecord) => threadMatchesScope(thread, input.scope));
     const scopedIds = new Set(scopedThreads.map((thread: ChatThreadRecord) => thread.id));
     if (input.threadIds.length !== scopedIds.size || input.threadIds.some((id) => !scopedIds.has(id))) {
@@ -1034,7 +1036,8 @@ export class MastraAgentService implements AgentService {
       percent: Math.min(100, (tokens / budget.contextLimitTokens) * 100),
       compactionEnabled: threadCompactionEnabled(),
       source: checkpointIsNewer ? 'estimate' : snapshot ? snapshot.source : 'estimate',
-      updatedAt: checkpointIsNewer ? completedCheckpoint?.completedAt : snapshot?.updatedAt,
+      updatedAt: (checkpointIsNewer ? completedCheckpoint?.completedAt : snapshot?.updatedAt) ??
+        new Date().toISOString(),
       totalProcessedTokens: snapshot?.totalProcessedTokens,
       inputTokens: snapshot?.inputTokens,
       cachedInputTokens: snapshot?.cachedInputTokens,
@@ -1522,11 +1525,13 @@ export class MastraAgentService implements AgentService {
 
     const metadata = { ...((thread.metadata ?? {}) as Record<string, unknown>) };
     if (input.archived !== undefined) metadata.archived = input.archived;
-    return await memory.updateThread({
-      id: input.threadId,
-      title: input.title || thread.title,
-      metadata,
-    });
+    return normalizeWeaveChatThread(
+      await memory.updateThread({
+        id: input.threadId,
+        title: input.title || thread.title,
+        metadata,
+      }),
+    );
   }
 
   async deleteChatThread(input: ChatThreadMessagesRequest): Promise<void> {
@@ -2191,14 +2196,14 @@ const getTopChatThreadSortOrder = async (
 ) => {
   const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   const orders = result.threads
-    .filter((thread: ChatThreadRecord) => !isHiddenChatThread(thread))
-    .filter((thread: ChatThreadRecord) => {
+    .filter((thread: StorageThreadType) => !isHiddenChatThread(thread))
+    .filter((thread: StorageThreadType) => {
       const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
       if (metadata.archived === true) return false;
       if (scope.projectId) return metadata.projectId === scope.projectId && metadata.workspaceId === scope.workspaceId;
       return metadata.adHoc === true || (metadata.mode !== 'project' && typeof metadata.projectId !== 'string');
     })
-    .map((thread: ChatThreadRecord) => (thread.metadata as Record<string, unknown> | undefined)?.sortOrder)
+    .map((thread: StorageThreadType) => thread.metadata?.sortOrder)
     .filter((value: unknown): value is number => typeof value === 'number');
   return orders.length ? Math.min(...orders) - 1 : 0;
 };

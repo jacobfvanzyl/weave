@@ -1,4 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert@1';
+import { WEAVE_RPC_PROTOCOL_VERSION } from '../../../packages/protocol/src/schema.ts';
 import { verifyRemoteRpc } from '../../../scripts/dokploy-server.ts';
 
 Deno.test('deployment RPC probe upgrades /rpc and completes initialize', async () => {
@@ -6,17 +7,17 @@ Deno.test('deployment RPC probe upgrades /rpc and completes initialize', async (
   Deno.env.set('WEAVE_REMOTE_OWNER_TOKEN', 'probe-token');
   let receivedPath = '';
   let initialize: Record<string, unknown> | undefined;
-  const server = Deno.serve({ hostname: '127.0.0.1', port: 0, onListen: () => undefined }, request => {
+  const server = Deno.serve({ hostname: '127.0.0.1', port: 0, onListen: () => undefined }, (request) => {
     receivedPath = new URL(request.url).pathname;
     const { socket, response } = Deno.upgradeWebSocket(request);
-    socket.onmessage = event => {
+    socket.onmessage = (event) => {
       const message = JSON.parse(String(event.data)) as Record<string, unknown>;
       initialize = message;
       socket.send(JSON.stringify({
         jsonrpc: '2.0',
         id: message.id,
         result: {
-          protocolVersion: 1,
+          protocolVersion: WEAVE_RPC_PROTOCOL_VERSION,
           connectionId: 'probe-connection',
           role: 'client',
           heartbeatIntervalMs: 20_000,
@@ -33,6 +34,10 @@ Deno.test('deployment RPC probe upgrades /rpc and completes initialize', async (
     await verifyRemoteRpc(`http://127.0.0.1:${address.port}`);
     assertEquals(receivedPath, '/rpc');
     assertEquals(initialize?.method, 'initialize');
+    assertEquals(
+      (initialize?.params as Record<string, unknown>).protocolVersion,
+      WEAVE_RPC_PROTOCOL_VERSION,
+    );
     assertEquals((initialize?.params as Record<string, unknown>).token, 'probe-token');
   } finally {
     if (previousToken === undefined) Deno.env.delete('WEAVE_REMOTE_OWNER_TOKEN');

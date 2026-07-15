@@ -1,18 +1,24 @@
 import type { RpcPeer } from '@weave/protocol/peer';
+import {
+  parsePortalToolArgs,
+  parsePortalToolResult,
+  parseRpcRequestResult,
+  type PortalConnection as ProtocolPortalConnection,
+  type PortalMount,
+  type PortalRoot,
+  type PortalToolArgs,
+  type PortalToolName,
+  type PortalToolResult,
+  type RpcRequestMethod,
+  type RpcRequestParams,
+  type RpcRequestParsedParams,
+  type RpcRequestResult,
+} from '@weave/protocol';
 import { notifyClientRpcHosts } from '../client-tools/registry.ts';
 
 export type PortalStatus = 'online' | 'offline';
 
-export type PortalConnection = {
-  portalId: string;
-  userId: string;
-  name?: string;
-  version?: string;
-  primary?: boolean;
-  capabilities: string[];
-  mounts: unknown[];
-  roots: unknown[];
-  status: PortalStatus;
+export type PortalConnection = ProtocolPortalConnection & {
   connectedAt: string;
   lastSeenAt: string;
 };
@@ -46,15 +52,20 @@ export const subscribePortalRpcEvent = (
   };
 };
 
-export const requestPortalRpc = async <T = unknown>(
+export const requestPortalRpc = async <Method extends RpcRequestMethod<'server', 'portal'>>(
   portalId: string,
-  method: string,
-  params?: unknown,
+  method: Method,
+  params: RpcRequestParams<'server', 'portal', Method> | RpcRequestParsedParams<'server', 'portal', Method>,
   timeoutMs = 30_000,
-) => {
+): Promise<RpcRequestResult<'server', 'portal', Method>> => {
   const connection = connections.get(portalId);
   if (!connection?.peer) throw new Error('Portal is offline or does not support JSON-RPC.');
-  return await connection.peer.request<T>(method, params, { timeoutMs });
+  return parseRpcRequestResult(
+    'server',
+    'portal',
+    method,
+    await connection.peer.request(method, params, { timeoutMs }),
+  );
 };
 
 const normalizePath = (value: unknown) => {
@@ -85,7 +96,7 @@ export const getPortalConnection = (portalId: string) => {
 export const findPortalForProject = (userId: string, projectId: string) =>
   portalConnectionsForUser(userId).find((connection) =>
     connection.userId === userId &&
-    connection.mounts.some((mount: any) => mount?.projectId === projectId && typeof mount?.localPath === 'string')
+    connection.mounts.some((mount) => mount.projectId === projectId && typeof mount.localPath === 'string')
   );
 
 export const resolvePortalForTarget = (input: {
@@ -138,7 +149,7 @@ export const resolvePortalForTarget = (input: {
   return publicConnection(hinted ?? candidates[0]);
 };
 
-export const requestPortalTool = async (input: {
+export const requestPortalTool = async <Name extends PortalToolName>(input: {
   portalId: string;
   projectId?: string;
   workspaceId?: string;
@@ -146,15 +157,16 @@ export const requestPortalTool = async (input: {
   repoPath?: string;
   workspacePath?: string;
   executionProfile?: 'observe' | 'workspace' | 'host';
-  tool: string;
-  args: unknown;
+  tool: Name;
+  args: PortalToolArgs<Name>;
   timeoutMs?: number;
   idempotencyKey?: string;
-}) => {
+}): Promise<PortalToolResult<Name>> => {
   const connection = connections.get(input.portalId);
   if (!connection) throw new Error('Portal is offline');
 
-  return await connection.peer.request('portal.tool.call', {
+  const args = parsePortalToolArgs(input.tool, input.args);
+  const result = await connection.peer.request('portal.tool.call', {
     projectId: input.projectId,
     workspaceId: input.workspaceId,
     rootId: input.rootId,
@@ -163,8 +175,9 @@ export const requestPortalTool = async (input: {
     executionProfile: input.executionProfile,
     idempotencyKey: input.idempotencyKey,
     tool: input.tool,
-    args: input.args,
+    args,
   }, { timeoutMs: input.timeoutMs ?? 30_000 });
+  return parsePortalToolResult(input.tool, result);
 };
 
 export const connectPortalRpc = (input: {
@@ -174,8 +187,8 @@ export const connectPortalRpc = (input: {
   name?: string;
   version?: string;
   capabilities?: string[];
-  mounts?: unknown[];
-  roots?: unknown[];
+  mounts?: PortalMount[];
+  roots?: PortalRoot[];
 }) => {
   const at = new Date().toISOString();
   const existing = connections.get(input.portalId);

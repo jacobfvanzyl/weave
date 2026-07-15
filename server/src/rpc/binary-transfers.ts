@@ -3,6 +3,7 @@ import {
   binaryCompleteParamsSchema,
   binaryTransferDescriptorSchema,
   type BinaryTransferDescriptor,
+  type JsonObject,
   WEAVE_RPC_BINARY_CHUNK_BYTES,
 } from '@weave/protocol';
 import { RpcApplicationError } from '@weave/protocol/peer';
@@ -157,7 +158,7 @@ export class BinaryTransferRegistry {
     purpose: string;
     bytes: Uint8Array;
     mimeType?: string;
-    metadata?: Record<string, unknown>;
+    metadata?: JsonObject;
   }) {
     this.observe(input.session);
     const transferId = `download_${crypto.randomUUID()}`;

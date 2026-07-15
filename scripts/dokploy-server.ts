@@ -1,4 +1,5 @@
 import { basename, resolve } from "node:path";
+import { WEAVE_RPC_PROTOCOL_VERSION } from "../packages/protocol/src/v2/primitives.ts";
 
 export const defaultDeployRef = "refs/heads/deploy/pi-dev";
 export const defaultLastGoodRef = "refs/heads/deploy/pi-last-good";
@@ -391,7 +392,7 @@ export const verifyRemoteRpc = async (serverUrl: string) => {
         id: "deploy-probe",
         method: "initialize",
         params: {
-          protocolVersion: 1,
+          protocolVersion: WEAVE_RPC_PROTOCOL_VERSION,
           role: "client",
           token,
           capabilities: [],
@@ -409,7 +410,8 @@ export const verifyRemoteRpc = async (serverUrl: string) => {
           result?: { protocolVersion?: unknown };
         };
         if (
-          message.id !== "deploy-probe" || message.result?.protocolVersion !== 1
+          message.id !== "deploy-probe" ||
+          message.result?.protocolVersion !== WEAVE_RPC_PROTOCOL_VERSION
         ) {
           throw new Error("RPC probe received an invalid initialize response.");
         }

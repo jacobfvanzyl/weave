@@ -490,7 +490,7 @@ const createNotesProject = async (
     vaultPath: realPath,
     notesStorage: {
       kind: 'portal',
-      portalId,
+      ...(portalId ? { portalId } : {}),
       rootId,
       vaultPath: realPath,
       workspacePath: realPath,

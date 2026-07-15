@@ -1,4 +1,5 @@
 import { findPortalForProject, getPortalConnection, resolvePortalForTarget } from '../../../portal/registry';
+import { notesStorageMetadataSchema } from '@weave/protocol';
 import { productProjectRepository } from '../../../products/project-repository';
 import { portalToolScope } from '../../../services/providers/portal-provider';
 import type { ToolService } from '../../../services/tool-service';
@@ -61,21 +62,38 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isSensitiveStorageKey = (key: string) => /secret|token|password|credential|accesskey|privatekey/i.test(key);
 
+const notesStorageKeys = new Set([
+  'kind',
+  'bucket',
+  'prefix',
+  'portalId',
+  'rootId',
+  'vaultPath',
+  'workspacePath',
+  'extensions',
+]);
+
 const normalizeNotesStorageMetadata = (value: unknown): NotesStorageMetadata | undefined => {
   if (!isRecord(value) || typeof value.kind !== 'string' || !value.kind.trim()) return undefined;
-  const sanitized = Object.fromEntries(
-    Object.entries(value).filter(([key]) => !isSensitiveStorageKey(key)),
-  );
-  return {
-    ...sanitized,
+  const legacyExtensions = Object.fromEntries(Object.entries(value).filter(([key]) =>
+    !notesStorageKeys.has(key) && !isSensitiveStorageKey(key)
+  ));
+  const declaredExtensions = isRecord(value.extensions)
+    ? Object.fromEntries(Object.entries(value.extensions).filter(([key]) => !isSensitiveStorageKey(key)))
+    : {};
+  const extensions = { ...legacyExtensions, ...declaredExtensions };
+  const candidate = {
     kind: value.kind.trim(),
-    bucket: optionalString(value.bucket),
-    prefix: optionalString(value.prefix),
-    portalId: optionalString(value.portalId),
-    rootId: optionalString(value.rootId),
-    vaultPath: optionalString(value.vaultPath),
-    workspacePath: optionalString(value.workspacePath),
+    ...(optionalString(value.bucket) ? { bucket: optionalString(value.bucket) } : {}),
+    ...(optionalString(value.prefix) ? { prefix: optionalString(value.prefix) } : {}),
+    ...(optionalString(value.portalId) ? { portalId: optionalString(value.portalId) } : {}),
+    ...(optionalString(value.rootId) ? { rootId: optionalString(value.rootId) } : {}),
+    ...(optionalString(value.vaultPath) ? { vaultPath: optionalString(value.vaultPath) } : {}),
+    ...(optionalString(value.workspacePath) ? { workspacePath: optionalString(value.workspacePath) } : {}),
+    ...(Object.keys(extensions).length ? { extensions } : {}),
   };
+  const parsed = notesStorageMetadataSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
 };
 
 export const sanitizeNotesStorageMetadata = (value: unknown) => normalizeNotesStorageMetadata(value);

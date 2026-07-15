@@ -1,9 +1,13 @@
-import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1.0.19';
-import { detectLanguagePackLspId, findLanguagePacksWithLsp } from '../../packages/client/src/lib/language-packs/core.ts';
-import { detectLspLanguageId, PortalLspHost } from './lsp.ts';
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1.0.19";
+import { parsePortalToolResult } from "@weave/protocol";
+import {
+  detectLanguagePackLspId,
+  findLanguagePacksWithLsp,
+} from "../../packages/client/src/lib/language-packs/core.ts";
+import { detectLspLanguageId, PortalLspHost } from "./lsp.ts";
 
 type CapturedJsonRpcEvent = {
-  jsonrpc?: '2.0';
+  jsonrpc?: "2.0";
   id?: string | number | null;
   method?: string;
   params?: Record<string, unknown>;
@@ -13,8 +17,10 @@ type CapturedJsonRpcEvent = {
 const withTempWorkspace = async (
   callback: (context: { root: string; host: PortalLspHost }) => Promise<void>,
 ) => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-lsp-root-' });
-  const host = new PortalLspHost({ config: { roots: [{ id: 'default', path: root }] } });
+  const root = await Deno.makeTempDir({ prefix: "weave-lsp-root-" });
+  const host = new PortalLspHost({
+    config: { roots: [{ id: "default", path: root }] },
+  });
   try {
     await callback({ root: await Deno.realPath(root), host });
   } finally {
@@ -121,9 +127,12 @@ const findJsonRpcEvent = (
   predicate: (message: CapturedJsonRpcEvent) => boolean,
 ): CapturedJsonRpcEvent | undefined => {
   for (const event of events) {
-    if (!event || typeof event !== 'object' || (event as { type?: string }).type !== 'jsonrpc') continue;
+    if (
+      !event || typeof event !== "object" ||
+      (event as { type?: string }).type !== "jsonrpc"
+    ) continue;
     const rawMessage = (event as { message?: unknown }).message;
-    if (typeof rawMessage !== 'string') continue;
+    if (typeof rawMessage !== "string") continue;
     const message = JSON.parse(rawMessage) as CapturedJsonRpcEvent;
     if (predicate(message)) return message;
   }
@@ -139,7 +148,7 @@ const waitForJsonRpcEvent = async (
     if (event) return event;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error('Timed out waiting for JSON-RPC event.');
+  throw new Error("Timed out waiting for JSON-RPC event.");
 };
 
 const initializeClient = async (
@@ -149,14 +158,14 @@ const initializeClient = async (
   rootUri: string | undefined,
   send: (event: unknown) => void,
 ) => {
-  await host.handleClientMessage(clientId, { type: 'start', sessionId }, send);
+  await host.handleClientMessage(clientId, { type: "start", sessionId }, send);
   await host.handleClientMessage(clientId, {
-    type: 'jsonrpc',
+    type: "jsonrpc",
     sessionId,
     message: JSON.stringify({
-      jsonrpc: '2.0',
+      jsonrpc: "2.0",
       id: 1,
-      method: 'initialize',
+      method: "initialize",
       params: { rootUri, capabilities: {} },
     }),
   }, send);
@@ -168,57 +177,65 @@ const didOpen = async (
   sessionId: string,
   uri: string,
   send: (event: unknown) => void,
-  languageId = 'typescript',
+  languageId = "typescript",
 ) =>
   await host.handleClientMessage(clientId, {
-    type: 'jsonrpc',
+    type: "jsonrpc",
     sessionId,
     message: JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'textDocument/didOpen',
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
       params: {
         textDocument: {
           uri,
           languageId,
           version: 0,
-          text: 'const answer = 42;\n',
+          text: "const answer = 42;\n",
         },
       },
     }),
   }, send);
 
-Deno.test('detectLspLanguageId maps common web language files', () => {
-  assertEquals(detectLspLanguageId('src/App.tsx'), 'typescriptreact');
-  assertEquals(detectLspLanguageId('src/index.ts'), 'typescript');
-  assertEquals(detectLspLanguageId('src/index.mts'), 'typescript');
-  assertEquals(detectLspLanguageId('package.json'), 'json');
-  assertEquals(detectLspLanguageId('settings.jsonc'), 'jsonc');
-  assertEquals(detectLspLanguageId('styles/app.css'), 'css');
-  assertEquals(detectLspLanguageId('public/index.html'), 'html');
-  assertEquals(detectLspLanguageId('README.md'), 'markdown');
-  assertEquals(detectLspLanguageId('lib/main.dart'), 'dart');
-  assertEquals(detectLspLanguageId('schema.graphql'), 'graphql');
-  assertEquals(detectLspLanguageId('schema.gql'), 'graphql');
-  assertEquals(detectLspLanguageId('server/drizzle/0000_initial_weave.sql'), undefined);
-  assertEquals(detectLspLanguageId('config.yaml'), undefined);
-  assertEquals(detectLspLanguageId('.env.local'), undefined);
+Deno.test("detectLspLanguageId maps common web language files", () => {
+  assertEquals(detectLspLanguageId("src/App.tsx"), "typescriptreact");
+  assertEquals(detectLspLanguageId("src/index.ts"), "typescript");
+  assertEquals(detectLspLanguageId("src/index.mts"), "typescript");
+  assertEquals(detectLspLanguageId("package.json"), "json");
+  assertEquals(detectLspLanguageId("settings.jsonc"), "jsonc");
+  assertEquals(detectLspLanguageId("styles/app.css"), "css");
+  assertEquals(detectLspLanguageId("public/index.html"), "html");
+  assertEquals(detectLspLanguageId("README.md"), "markdown");
+  assertEquals(detectLspLanguageId("lib/main.dart"), "dart");
+  assertEquals(detectLspLanguageId("schema.graphql"), "graphql");
+  assertEquals(detectLspLanguageId("schema.gql"), "graphql");
+  assertEquals(
+    detectLspLanguageId("server/drizzle/0000_initial_weave.sql"),
+    undefined,
+  );
+  assertEquals(detectLspLanguageId("config.yaml"), undefined);
+  assertEquals(detectLspLanguageId(".env.local"), undefined);
 });
 
-Deno.test('detectLspLanguageId stays aligned with source-defined LSP language packs', () => {
+Deno.test("detectLspLanguageId stays aligned with source-defined LSP language packs", () => {
   for (const pack of findLanguagePacksWithLsp()) {
     const extension = pack.match.extensions?.[0];
     const filename = pack.match.filenames?.[0];
     const samplePath = extension ? `sample.${extension}` : filename;
-    if (!samplePath) throw new Error(`Language pack ${pack.id} has no sample matcher.`);
+    if (!samplePath) {
+      throw new Error(`Language pack ${pack.id} has no sample matcher.`);
+    }
 
-    assertEquals(detectLspLanguageId(samplePath), detectLanguagePackLspId(samplePath));
+    assertEquals(
+      detectLspLanguageId(samplePath),
+      detectLanguagePackLspId(samplePath),
+    );
   }
 });
 
-Deno.test('PortalLspHost reports missing configured binaries without throwing', async () =>
+Deno.test("PortalLspHost reports missing configured binaries without throwing", async () =>
   await withTempWorkspace(async ({ root, host }) => {
     await Deno.mkdir(`${root}/.weave`, { recursive: true });
-    await Deno.writeTextFile(`${root}/main.ts`, 'const answer = 42;\\n');
+    await Deno.writeTextFile(`${root}/main.ts`, "const answer = 42;\\n");
     await Deno.writeTextFile(
       `${root}/.weave/language-servers.jsonc`,
       `{
@@ -236,34 +253,34 @@ Deno.test('PortalLspHost reports missing configured binaries without throwing', 
 
     const session = await host.createSession({
       target: { workspacePath: root },
-      path: 'main.ts',
-      serverId: 'fake',
+      path: "main.ts",
+      serverId: "fake",
     });
 
     assertEquals(session.ok, true);
-    assertEquals(session.status, 'missing');
-    assertStringIncludes(session.error ?? '', 'missing-lsp');
+    assertEquals(session.status, "missing");
+    assertStringIncludes(session.error ?? "", "missing-lsp");
   }));
 
-Deno.test('PortalLspHost skips disabled optional providers when selecting a default server', async () =>
+Deno.test("PortalLspHost skips disabled optional providers when selecting a default server", async () =>
   await withTempWorkspace(async ({ root, host }) => {
     await Deno.mkdir(`${root}/.weave`, { recursive: true });
-    await Deno.writeTextFile(`${root}/main.ts`, 'const answer = 42;\\n');
+    await Deno.writeTextFile(`${root}/main.ts`, "const answer = 42;\\n");
     await Deno.writeTextFile(
       `${root}/.weave/language-servers.jsonc`,
       JSON.stringify({
         servers: {
           disabledHighPriority: {
             enabled: false,
-            command: './missing-lsp',
-            languages: ['typescript'],
+            command: "./missing-lsp",
+            languages: ["typescript"],
             priority: 3000,
           },
           enabledLowPriority: {
             enabled: true,
             command: Deno.execPath(),
-            args: ['--version'],
-            languages: ['typescript'],
+            args: ["--version"],
+            languages: ["typescript"],
             priority: 2000,
           },
         },
@@ -272,21 +289,21 @@ Deno.test('PortalLspHost skips disabled optional providers when selecting a defa
 
     const session = await host.createSession({
       target: { workspacePath: root },
-      path: 'main.ts',
+      path: "main.ts",
     });
 
     assertEquals(session.ok, true);
-    assertEquals(session.status, 'ready');
-    assertEquals(session.serverId, 'enabledLowPriority');
+    assertEquals(session.status, "ready");
+    assertEquals(session.serverId, "enabledLowPriority");
   }));
 
-Deno.test('PortalLspHost only selects require_configuration servers when a root marker matches', async () =>
+Deno.test("PortalLspHost only selects require_configuration servers when a root marker matches", async () =>
   await withTempWorkspace(async ({ root, host }) => {
     await Deno.mkdir(`${root}/.weave`, { recursive: true });
     await Deno.mkdir(`${root}/bragi`, { recursive: true });
-    await Deno.writeTextFile(`${root}/main.ts`, 'const answer = 42;\n');
-    await Deno.writeTextFile(`${root}/bragi/main.ts`, 'const answer = 42;\n');
-    await Deno.writeTextFile(`${root}/bragi/deno.json`, '{}\n');
+    await Deno.writeTextFile(`${root}/main.ts`, "const answer = 42;\n");
+    await Deno.writeTextFile(`${root}/bragi/main.ts`, "const answer = 42;\n");
+    await Deno.writeTextFile(`${root}/bragi/deno.json`, "{}\n");
     await Deno.writeTextFile(
       `${root}/.weave/language-servers.jsonc`,
       JSON.stringify({
@@ -294,18 +311,18 @@ Deno.test('PortalLspHost only selects require_configuration servers when a root 
           denols: {
             enabled: true,
             command: Deno.execPath(),
-            args: ['--version'],
-            languages: ['typescript'],
-            rootMarkers: ['deno.json', 'deno.jsonc'],
+            args: ["--version"],
+            languages: ["typescript"],
+            rootMarkers: ["deno.json", "deno.jsonc"],
             priority: 3000,
             settings: { require_configuration: true },
           },
           typescript: {
             enabled: true,
             command: Deno.execPath(),
-            args: ['--version'],
-            languages: ['typescript'],
-            rootMarkers: ['package.json', '.git'],
+            args: ["--version"],
+            languages: ["typescript"],
+            rootMarkers: ["package.json", ".git"],
             priority: 100,
           },
         },
@@ -314,27 +331,27 @@ Deno.test('PortalLspHost only selects require_configuration servers when a root 
 
     const rootSession = await host.createSession({
       target: { workspacePath: root },
-      path: 'main.ts',
+      path: "main.ts",
     });
     assertEquals(rootSession.ok, true);
-    assertEquals(rootSession.status, 'ready');
-    assertEquals(rootSession.serverId, 'typescript');
+    assertEquals(rootSession.status, "ready");
+    assertEquals(rootSession.serverId, "typescript");
     assertEquals(rootSession.rootPath, root);
 
     const denoSession = await host.createSession({
       target: { workspacePath: root },
-      path: 'bragi/main.ts',
+      path: "bragi/main.ts",
     });
     assertEquals(denoSession.ok, true);
-    assertEquals(denoSession.status, 'ready');
-    assertEquals(denoSession.serverId, 'denols');
+    assertEquals(denoSession.status, "ready");
+    assertEquals(denoSession.serverId, "denols");
     assertEquals(denoSession.rootPath, `${root}/bragi`);
   }));
 
-Deno.test('PortalLspHost speaks stdio JSON-RPC with a fake language server', async () =>
+Deno.test("PortalLspHost speaks stdio JSON-RPC with a fake language server", async () =>
   await withTempWorkspace(async ({ root, host }) => {
     await Deno.mkdir(`${root}/.weave`, { recursive: true });
-    await Deno.writeTextFile(`${root}/main.ts`, 'const answer = 42;\\n');
+    await Deno.writeTextFile(`${root}/main.ts`, "const answer = 42;\\n");
     const fakeServerPath = `${root}/fake-lsp.ts`;
     await Deno.writeTextFile(fakeServerPath, fakeLspServerSource);
     await Deno.writeTextFile(
@@ -344,9 +361,9 @@ Deno.test('PortalLspHost speaks stdio JSON-RPC with a fake language server', asy
           fake: {
             enabled: true,
             command: Deno.execPath(),
-            args: ['run', '--quiet', fakeServerPath],
-            languages: ['typescript'],
-            rootMarkers: ['package.json', '.git'],
+            args: ["run", "--quiet", fakeServerPath],
+            languages: ["typescript"],
+            rootMarkers: ["package.json", ".git"],
             priority: 1000,
           },
         },
@@ -355,29 +372,31 @@ Deno.test('PortalLspHost speaks stdio JSON-RPC with a fake language server', asy
 
     const hover = await host.query({
       target: { workspacePath: root },
-      path: 'main.ts',
-      serverId: 'fake',
-      feature: 'hover',
+      path: "main.ts",
+      serverId: "fake",
+      feature: "hover",
       line: 0,
       character: 6,
     }) as Record<string, any>;
     assertEquals(hover.ok, true);
-    assertStringIncludes(hover.hover.contents.value, 'hover');
+    assertStringIncludes(hover.hover.contents.value, "hover");
+    parsePortalToolResult("portal.lsp.query", hover);
 
     const diagnostics = await host.query({
       target: { workspacePath: root },
-      path: 'main.ts',
-      serverId: 'fake',
-      feature: 'diagnostics',
+      path: "main.ts",
+      serverId: "fake",
+      feature: "diagnostics",
     }) as Record<string, any>;
     assertEquals(diagnostics.ok, true);
-    assertEquals(diagnostics.diagnostics[0].source, 'fake-lsp');
+    assertEquals(diagnostics.diagnostics[0].source, "fake-lsp");
+    parsePortalToolResult("portal.lsp.query", diagnostics);
   }));
 
-Deno.test('PortalLspHost replays cached diagnostics across editor remounts without server versions', async () =>
+Deno.test("PortalLspHost replays cached diagnostics across editor remounts without server versions", async () =>
   await withTempWorkspace(async ({ root, host }) => {
     await Deno.mkdir(`${root}/.weave`, { recursive: true });
-    await Deno.writeTextFile(`${root}/main.ts`, 'const answer = 42;\n');
+    await Deno.writeTextFile(`${root}/main.ts`, "const answer = 42;\n");
     const fakeServerPath = `${root}/fake-lsp.ts`;
     await Deno.writeTextFile(fakeServerPath, fakeLspServerSource);
     await Deno.writeTextFile(
@@ -387,9 +406,9 @@ Deno.test('PortalLspHost replays cached diagnostics across editor remounts witho
           fake: {
             enabled: true,
             command: Deno.execPath(),
-            args: ['run', '--quiet', fakeServerPath],
-            languages: ['typescript'],
-            rootMarkers: ['package.json', '.git'],
+            args: ["run", "--quiet", fakeServerPath],
+            languages: ["typescript"],
+            rootMarkers: ["package.json", ".git"],
             priority: 1000,
           },
         },
@@ -398,51 +417,82 @@ Deno.test('PortalLspHost replays cached diagnostics across editor remounts witho
 
     const firstSession = await host.createSession({
       target: { workspacePath: root },
-      path: 'main.ts',
-      serverId: 'fake',
+      path: "main.ts",
+      serverId: "fake",
     });
     const firstEvents: unknown[] = [];
     const firstSend = (event: unknown) => firstEvents.push(event);
-    await initializeClient(host, 'client-a', firstSession.sessionId, firstSession.rootUri, firstSend);
+    await initializeClient(
+      host,
+      "client-a",
+      firstSession.sessionId,
+      firstSession.rootUri,
+      firstSend,
+    );
     await waitForJsonRpcEvent(firstEvents, (message) => message.id === 1);
-    await didOpen(host, 'client-a', firstSession.sessionId, firstSession.documentUri!, firstSend);
+    await didOpen(
+      host,
+      "client-a",
+      firstSession.sessionId,
+      firstSession.documentUri!,
+      firstSend,
+    );
 
     const firstDiagnostics = await waitForJsonRpcEvent(
       firstEvents,
-      (message) => message.method === 'textDocument/publishDiagnostics',
+      (message) => message.method === "textDocument/publishDiagnostics",
     );
     assertEquals(firstDiagnostics.params?.version, undefined);
-    assertEquals((firstDiagnostics.params?.diagnostics as Array<Record<string, unknown>>)[0]?.source, 'fake-lsp');
+    assertEquals(
+      (firstDiagnostics.params?.diagnostics as Array<Record<string, unknown>>)[
+        0
+      ]?.source,
+      "fake-lsp",
+    );
 
-    host.detachClient('client-a', firstSession.sessionId);
+    host.detachClient("client-a", firstSession.sessionId);
 
     const secondSession = await host.createSession({
       target: { workspacePath: root },
-      path: 'main.ts',
-      serverId: 'fake',
+      path: "main.ts",
+      serverId: "fake",
     });
     const secondEvents: unknown[] = [];
     const secondSend = (event: unknown) => secondEvents.push(event);
-    await initializeClient(host, 'client-b', secondSession.sessionId, secondSession.rootUri, secondSend);
+    await initializeClient(
+      host,
+      "client-b",
+      secondSession.sessionId,
+      secondSession.rootUri,
+      secondSend,
+    );
     await waitForJsonRpcEvent(secondEvents, (message) => message.id === 1);
-    await didOpen(host, 'client-b', secondSession.sessionId, secondSession.documentUri!, secondSend);
+    await didOpen(
+      host,
+      "client-b",
+      secondSession.sessionId,
+      secondSession.documentUri!,
+      secondSend,
+    );
 
     const replayedDiagnostics = await waitForJsonRpcEvent(
       secondEvents,
-      (message) => message.method === 'textDocument/publishDiagnostics',
+      (message) => message.method === "textDocument/publishDiagnostics",
     );
     assertEquals(replayedDiagnostics.params?.uri, secondSession.documentUri);
     assertEquals(replayedDiagnostics.params?.version, undefined);
     assertEquals(
-      (replayedDiagnostics.params?.diagnostics as Array<Record<string, unknown>>)[0]?.message,
-      'fake diagnostic',
+      (replayedDiagnostics.params?.diagnostics as Array<
+        Record<string, unknown>
+      >)[0]?.message,
+      "fake diagnostic",
     );
   }));
 
-Deno.test('PortalLspHost bridges pull diagnostics into publishDiagnostics for editor clients', async () =>
+Deno.test("PortalLspHost bridges pull diagnostics into publishDiagnostics for editor clients", async () =>
   await withTempWorkspace(async ({ root, host }) => {
     await Deno.mkdir(`${root}/.weave`, { recursive: true });
-    await Deno.writeTextFile(`${root}/main.ts`, 'const answer = 42;\n');
+    await Deno.writeTextFile(`${root}/main.ts`, "const answer = 42;\n");
     const fakeServerPath = `${root}/fake-lsp.ts`;
     await Deno.writeTextFile(fakeServerPath, fakeLspServerSource);
     await Deno.writeTextFile(
@@ -452,9 +502,14 @@ Deno.test('PortalLspHost bridges pull diagnostics into publishDiagnostics for ed
           fake: {
             enabled: true,
             command: Deno.execPath(),
-            args: ['run', '--quiet', fakeServerPath, '--no-publish-diagnostics'],
-            languages: ['typescript'],
-            rootMarkers: ['package.json', '.git'],
+            args: [
+              "run",
+              "--quiet",
+              fakeServerPath,
+              "--no-publish-diagnostics",
+            ],
+            languages: ["typescript"],
+            rootMarkers: ["package.json", ".git"],
             priority: 1000,
           },
         },
@@ -463,32 +518,49 @@ Deno.test('PortalLspHost bridges pull diagnostics into publishDiagnostics for ed
 
     const session = await host.createSession({
       target: { workspacePath: root },
-      path: 'main.ts',
-      serverId: 'fake',
+      path: "main.ts",
+      serverId: "fake",
     });
     const events: unknown[] = [];
     const send = (event: unknown) => events.push(event);
-    await initializeClient(host, 'client-a', session.sessionId, session.rootUri, send);
+    await initializeClient(
+      host,
+      "client-a",
+      session.sessionId,
+      session.rootUri,
+      send,
+    );
     await waitForJsonRpcEvent(events, (message) => message.id === 1);
-    await didOpen(host, 'client-a', session.sessionId, session.documentUri!, send);
+    await didOpen(
+      host,
+      "client-a",
+      session.sessionId,
+      session.documentUri!,
+      send,
+    );
 
     const diagnostics = await waitForJsonRpcEvent(
       events,
-      (message) => message.method === 'textDocument/publishDiagnostics',
+      (message) => message.method === "textDocument/publishDiagnostics",
     );
     assertEquals(diagnostics.params?.version, undefined);
-    assertEquals((diagnostics.params?.diagnostics as Array<Record<string, unknown>>)[0]?.source, 'fake-pull-lsp');
     assertEquals(
-      (diagnostics.params?.diagnostics as Array<Record<string, unknown>>)[0]?.message,
-      'fake pull diagnostic',
+      (diagnostics.params?.diagnostics as Array<Record<string, unknown>>)[0]
+        ?.source,
+      "fake-pull-lsp",
+    );
+    assertEquals(
+      (diagnostics.params?.diagnostics as Array<Record<string, unknown>>)[0]
+        ?.message,
+      "fake pull diagnostic",
     );
   }));
 
-Deno.test('PortalLspHost advertises and answers workspace configuration for diagnostic servers', async () =>
+Deno.test("PortalLspHost advertises and answers workspace configuration for diagnostic servers", async () =>
   await withTempWorkspace(async ({ root, host }) => {
     await Deno.mkdir(`${root}/.weave`, { recursive: true });
-    await Deno.writeTextFile(`${root}/main.ts`, 'const answer = 42;\n');
-    await Deno.writeTextFile(`${root}/deno.json`, '{}\n');
+    await Deno.writeTextFile(`${root}/main.ts`, "const answer = 42;\n");
+    await Deno.writeTextFile(`${root}/deno.json`, "{}\n");
     const fakeServerPath = `${root}/fake-lsp.ts`;
     await Deno.writeTextFile(fakeServerPath, fakeLspServerSource);
     await Deno.writeTextFile(
@@ -497,12 +569,18 @@ Deno.test('PortalLspHost advertises and answers workspace configuration for diag
         servers: {
           denols: {
             enabled: true,
-            toolId: 'deno',
+            toolId: "deno",
             command: Deno.execPath(),
-            args: ['run', '--quiet', fakeServerPath, '--no-publish-diagnostics', '--require-workspace-configuration'],
-            languages: ['typescript'],
-            rootMarkers: ['deno.json', 'deno.jsonc', 'package.json', '.git'],
-            configFiles: ['deno.json', 'deno.jsonc'],
+            args: [
+              "run",
+              "--quiet",
+              fakeServerPath,
+              "--no-publish-diagnostics",
+              "--require-workspace-configuration",
+            ],
+            languages: ["typescript"],
+            rootMarkers: ["deno.json", "deno.jsonc", "package.json", ".git"],
+            configFiles: ["deno.json", "deno.jsonc"],
             priority: 1000,
             settings: { require_configuration: true },
           },
@@ -512,26 +590,42 @@ Deno.test('PortalLspHost advertises and answers workspace configuration for diag
 
     const session = await host.createSession({
       target: { workspacePath: root },
-      path: 'main.ts',
-      serverId: 'denols',
+      path: "main.ts",
+      serverId: "denols",
     });
     const events: unknown[] = [];
     const send = (event: unknown) => events.push(event);
-    await initializeClient(host, 'client-a', session.sessionId, session.rootUri, send);
+    await initializeClient(
+      host,
+      "client-a",
+      session.sessionId,
+      session.rootUri,
+      send,
+    );
     await waitForJsonRpcEvent(events, (message) => message.id === 1);
-    await didOpen(host, 'client-a', session.sessionId, session.documentUri!, send);
+    await didOpen(
+      host,
+      "client-a",
+      session.sessionId,
+      session.documentUri!,
+      send,
+    );
 
     const diagnostics = await waitForJsonRpcEvent(
       events,
-      (message) => message.method === 'textDocument/publishDiagnostics',
+      (message) => message.method === "textDocument/publishDiagnostics",
     );
-    assertEquals((diagnostics.params?.diagnostics as Array<Record<string, unknown>>)[0]?.source, 'fake-pull-lsp');
+    assertEquals(
+      (diagnostics.params?.diagnostics as Array<Record<string, unknown>>)[0]
+        ?.source,
+      "fake-pull-lsp",
+    );
   }));
 
-Deno.test('PortalLspHost keeps shared runtime alive across client shutdown on file switches', async () =>
+Deno.test("PortalLspHost keeps shared runtime alive across client shutdown on file switches", async () =>
   await withTempWorkspace(async ({ root, host }) => {
     await Deno.mkdir(`${root}/.weave`, { recursive: true });
-    await Deno.writeTextFile(`${root}/main.ts`, 'const answer = 42;\\n');
+    await Deno.writeTextFile(`${root}/main.ts`, "const answer = 42;\\n");
     await Deno.writeTextFile(`${root}/env.ts`, 'export const env = "test";\\n');
     const fakeServerPath = `${root}/fake-lsp.ts`;
     await Deno.writeTextFile(fakeServerPath, fakeLspServerSource);
@@ -542,9 +636,9 @@ Deno.test('PortalLspHost keeps shared runtime alive across client shutdown on fi
           fake: {
             enabled: true,
             command: Deno.execPath(),
-            args: ['run', '--quiet', fakeServerPath],
-            languages: ['typescript'],
-            rootMarkers: ['package.json', '.git'],
+            args: ["run", "--quiet", fakeServerPath],
+            languages: ["typescript"],
+            rootMarkers: ["package.json", ".git"],
             priority: 1000,
           },
         },
@@ -553,42 +647,45 @@ Deno.test('PortalLspHost keeps shared runtime alive across client shutdown on fi
 
     const session = await host.createSession({
       target: { workspacePath: root },
-      path: 'main.ts',
-      serverId: 'fake',
+      path: "main.ts",
+      serverId: "fake",
     });
     const events: unknown[] = [];
     const send = (event: unknown) => events.push(event);
-    await host.handleClientMessage('client-a', { type: 'start', sessionId: session.sessionId }, send);
-    await host.handleClientMessage('client-a', {
-      type: 'jsonrpc',
+    await host.handleClientMessage("client-a", {
+      type: "start",
+      sessionId: session.sessionId,
+    }, send);
+    await host.handleClientMessage("client-a", {
+      type: "jsonrpc",
       sessionId: session.sessionId,
       message: JSON.stringify({
-        jsonrpc: '2.0',
+        jsonrpc: "2.0",
         id: 1,
-        method: 'initialize',
+        method: "initialize",
         params: { rootUri: session.rootUri, capabilities: {} },
       }),
     }, send);
-    await host.handleClientMessage('client-a', {
-      type: 'jsonrpc',
+    await host.handleClientMessage("client-a", {
+      type: "jsonrpc",
       sessionId: session.sessionId,
-      message: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'shutdown' }),
+      message: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "shutdown" }),
     }, send);
-    await host.handleClientMessage('client-a', {
-      type: 'jsonrpc',
+    await host.handleClientMessage("client-a", {
+      type: "jsonrpc",
       sessionId: session.sessionId,
-      message: JSON.stringify({ jsonrpc: '2.0', method: 'exit' }),
+      message: JSON.stringify({ jsonrpc: "2.0", method: "exit" }),
     }, send);
 
     const hover = await host.query({
       target: { workspacePath: root },
-      path: 'env.ts',
-      serverId: 'fake',
-      feature: 'hover',
+      path: "env.ts",
+      serverId: "fake",
+      feature: "hover",
       line: 0,
       character: 13,
     }) as Record<string, any>;
 
     assertEquals(hover.ok, true);
-    assertStringIncludes(hover.hover.contents.value, 'hover');
+    assertStringIncludes(hover.hover.contents.value, "hover");
   }));

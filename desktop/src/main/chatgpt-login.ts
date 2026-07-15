@@ -1,20 +1,26 @@
-import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import type { RpcRequestParams, RpcRequestResult } from "@weave/protocol";
 
-export type ChatGPTAuthStatus = {
-  connected: boolean;
-  accountId?: string;
-  expires?: number;
-};
-
-type LoginStart = {
-  url: string;
-  state: string;
-  expiresAt: number;
-};
+export type ChatGPTAuthStatus = RpcRequestResult<
+  "client",
+  "server",
+  "agent.chatgpt.login.complete"
+>;
 
 type ChatGPTLoginBrokerOptions = {
-  requestRpc: (method: string, params?: unknown) => Promise<unknown>;
+  startLogin: () => Promise<
+    RpcRequestResult<"client", "server", "agent.chatgpt.login.start">
+  >;
+  completeLogin: (
+    params: RpcRequestParams<
+      "client",
+      "server",
+      "agent.chatgpt.login.complete"
+    >,
+  ) => Promise<
+    RpcRequestResult<"client", "server", "agent.chatgpt.login.complete">
+  >;
   openExternal: (url: string) => Promise<void>;
   host?: string;
   port?: number;
@@ -26,39 +32,16 @@ const successHtml =
 
 const escapeHtml = (value: string) =>
   value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 
 const failureHtml = (message: string) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>ChatGPT Login Failed</title></head><body><h1>ChatGPT Login Failed</h1><p>${
     escapeHtml(message)
   }</p></body></html>`;
-
-const parseStart = (value: unknown): LoginStart => {
-  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  if (
-    typeof record.url !== 'string' ||
-    typeof record.state !== 'string' ||
-    typeof record.expiresAt !== 'number' ||
-    !Number.isFinite(record.expiresAt)
-  ) {
-    throw new Error('ChatGPT login start response was invalid.');
-  }
-  return { url: record.url, state: record.state, expiresAt: record.expiresAt };
-};
-
-const parseStatus = (value: unknown): ChatGPTAuthStatus => {
-  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  if (record.connected !== true) throw new Error('ChatGPT login completion response was invalid.');
-  return {
-    connected: true,
-    ...(typeof record.accountId === 'string' ? { accountId: record.accountId } : {}),
-    ...(typeof record.expires === 'number' ? { expires: record.expires } : {}),
-  };
-};
 
 export class ChatGPTLoginBroker {
   private readonly host: string;
@@ -68,7 +51,7 @@ export class ChatGPTLoginBroker {
   private abortActive: (() => void) | undefined;
 
   constructor(private readonly options: ChatGPTLoginBrokerOptions) {
-    this.host = options.host ?? '127.0.0.1';
+    this.host = options.host ?? "127.0.0.1";
     this.port = options.port ?? 1455;
     this.now = options.now ?? Date.now;
   }
@@ -104,48 +87,73 @@ export class ChatGPTLoginBroker {
         if (settled) return;
         settled = true;
         cleanup();
-        if (error) reject(error instanceof Error ? error : new Error(String(error)));
-        else if (status) resolve(status);
-        else reject(new Error('ChatGPT login ended without a result.'));
+        if (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        } else if (status) resolve(status);
+        else reject(new Error("ChatGPT login ended without a result."));
       };
-      this.abortActive = () => finish(new Error('ChatGPT login was cancelled because Weave is closing.'));
+      this.abortActive = () =>
+        finish(
+          new Error("ChatGPT login was cancelled because Weave is closing."),
+        );
 
       server = createServer((request, response) => {
         void (async () => {
-          const url = new URL(request.url ?? '/', `http://${this.host}:${this.port}`);
-          if (request.method !== 'GET' || url.pathname !== '/auth/callback') {
-            response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-            response.end('Not found');
+          const url = new URL(
+            request.url ?? "/",
+            `http://${this.host}:${this.port}`,
+          );
+          if (request.method !== "GET" || url.pathname !== "/auth/callback") {
+            response.writeHead(404, {
+              "content-type": "text/plain; charset=utf-8",
+            });
+            response.end("Not found");
             return;
           }
 
-          const providerError = url.searchParams.get('error_description') ?? url.searchParams.get('error');
-          const code = url.searchParams.get('code');
-          const state = url.searchParams.get('state');
+          const providerError = url.searchParams.get("error_description") ??
+            url.searchParams.get("error");
+          const code = url.searchParams.get("code");
+          const state = url.searchParams.get("state");
           try {
             if (providerError) throw new Error(providerError);
-            if (!code || !state) throw new Error('OpenAI callback did not include code and state.');
+            if (!code || !state) {
+              throw new Error(
+                "OpenAI callback did not include code and state.",
+              );
+            }
             if (!expectedState || state !== expectedState) {
-              throw new Error('OpenAI callback state did not match this login attempt.');
+              throw new Error(
+                "OpenAI callback state did not match this login attempt.",
+              );
             }
 
-            const completion = await this.options.requestRpc('agent.chatgpt.login.complete', { code, state });
-            const status = parseStatus(completion);
-            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            const completion = await this.options.completeLogin({
+              code,
+              state,
+            });
+            response.writeHead(200, {
+              "content-type": "text/html; charset=utf-8",
+            });
             response.end(successHtml);
-            finish(undefined, status);
+            finish(undefined, completion);
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            response.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
+            const message = error instanceof Error
+              ? error.message
+              : String(error);
+            response.writeHead(400, {
+              "content-type": "text/html; charset=utf-8",
+            });
             response.end(failureHtml(message));
             finish(error);
           }
         })();
       });
 
-      server.once('error', (error) =>
+      server.once("error", (error) =>
         finish(
-          error instanceof Error && 'code' in error && error.code === 'EADDRINUSE'
+          error instanceof Error && "code" in error &&
+            error.code === "EADDRINUSE"
             ? new Error(
               `Port ${this.port} is already in use. Close the other ChatGPT login or Codex process and try again.`,
             )
@@ -155,12 +163,21 @@ export class ChatGPTLoginBroker {
         void (async () => {
           try {
             const address = server?.address() as AddressInfo | null;
-            if (!address) throw new Error('Desktop callback listener did not start.');
-            const login = parseStart(await this.options.requestRpc('agent.chatgpt.login.start'));
+            if (!address) {
+              throw new Error("Desktop callback listener did not start.");
+            }
+            const login = await this.options.startLogin();
             expectedState = login.state;
             const remainingMs = login.expiresAt - this.now();
-            if (remainingMs <= 0) throw new Error('ChatGPT login expired before the browser could open.');
-            timeout = setTimeout(() => finish(new Error('ChatGPT login timed out. Try again.')), remainingMs);
+            if (remainingMs <= 0) {
+              throw new Error(
+                "ChatGPT login expired before the browser could open.",
+              );
+            }
+            timeout = setTimeout(
+              () => finish(new Error("ChatGPT login timed out. Try again.")),
+              remainingMs,
+            );
             await this.options.openExternal(login.url);
           } catch (error) {
             finish(error);

@@ -1,6 +1,8 @@
 {
   "imports": {
-    "zod": "npm:zod@4.4.3"
+    "zod": "npm:zod@4.4.3",
+    "@weave/protocol": "../packages/protocol/src/index.ts",
+    "@weave/protocol/peer": "../packages/protocol/src/peer.ts"
   },
   "tasks": {
     "check": "deno check src/main.ts",
@@ -13,12 +15,13 @@
     "build": "deno run --allow-run --allow-env --allow-read --allow-write scripts/build.ts",
     "start": "dist/portal start",
     "status": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts status",
-    "stop": "deno run --allow-net --allow-read --allow-write --allow-env src/main.ts stop",
+    "stop": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts stop",
     "install": "deno task build && deno run --allow-read --allow-write --allow-env --allow-run scripts/install.ts"
   },
   "compilerOptions": {
     "lib": ["deno.ns", "deno.window"]
   },
+  "nodeModulesDir": "manual",
   "fmt": {
     "singleQuote": true,
     "lineWidth": 120

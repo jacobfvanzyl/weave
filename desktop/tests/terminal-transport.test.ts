@@ -8,7 +8,12 @@ describe('terminal transport', () => {
   });
 
   it('routes close through the target connection when no terminal session connection exists', async () => {
-    const rpcRequest = vi.fn(async () => ({ ok: true }));
+    const rpcRequest = vi.fn(async (request: { requestId: string; method: string }) => ({
+      kind: 'success' as const,
+      requestId: request.requestId,
+      method: request.method,
+      result: { ok: true },
+    }));
     vi.stubGlobal('window', { weaveDesktop: { rpcRequest } });
 
     const target: TerminalTargetInput = {
@@ -24,15 +29,24 @@ describe('terminal transport', () => {
     const transport = createWebTerminalTransport();
     await transport?.close('terminal-1', target);
 
-    expect(rpcRequest).toHaveBeenCalledWith('terminal.close', {
-      ...target,
-      sessionId: 'terminal-1',
-      terminalId: 'terminal-1',
-    }, undefined);
+    expect(rpcRequest).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'request',
+      method: 'terminal.close',
+      params: {
+        ...target,
+        sessionId: 'terminal-1',
+        terminalId: 'terminal-1',
+      },
+    }));
   });
 
   it('does not send a terminal RPC for an unscoped close', async () => {
-    const rpcRequest = vi.fn(async () => ({ ok: true }));
+    const rpcRequest = vi.fn(async (request: { requestId: string; method: string }) => ({
+      kind: 'success' as const,
+      requestId: request.requestId,
+      method: request.method,
+      result: { ok: true },
+    }));
     vi.stubGlobal('window', { weaveDesktop: { rpcRequest } });
 
     const transport = createWebTerminalTransport();

@@ -27,7 +27,7 @@ export type ModelConfig = {
 };
 
 export const fetchModelConfig = async (): Promise<ModelConfig> => {
-  return await rpcRequest<ModelConfig>('agent.models.list');
+  return await rpcRequest('agent.models.list');
 };
 
 export const resolveModelInput = (input: string, options: ModelOption[]) => {

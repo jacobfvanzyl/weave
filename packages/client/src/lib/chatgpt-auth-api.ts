@@ -13,7 +13,7 @@ type DesktopChatGPTBridge = {
 const desktopBridge = () => (window as Window & { weaveDesktop?: DesktopChatGPTBridge }).weaveDesktop;
 
 export const getChatGPTAuthStatus = async () => {
-  return await rpcRequest<ChatGPTAuthStatus>('agent.chatgpt.authStatus');
+  return await rpcRequest('agent.chatgpt.authStatus');
 };
 
 export const canConnectChatGPT = () => typeof desktopBridge()?.connectChatGPT === 'function';

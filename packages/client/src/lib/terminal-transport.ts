@@ -36,10 +36,7 @@ export const createWebTerminalTransport = (): TerminalTransport => {
   const pending = new Map<string, PendingRequest>();
   const terminalTargets = new Map<string, TerminalStartInput>();
 
-  const detachNotification = onRpcNotification('terminal.event', raw => {
-    const envelope = raw && typeof raw === 'object' ? raw as { event?: TerminalHostEvent } : undefined;
-    const event = envelope?.event;
-    if (!event) return;
+  const detachNotification = onRpcNotification('terminal.event', ({ event }) => {
     const requestId = 'requestId' in event ? event.requestId : undefined;
     if (event.type === 'windows' && requestId) {
       pending.get(requestId)?.resolve(event.windows);

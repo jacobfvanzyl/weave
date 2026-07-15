@@ -1,4 +1,5 @@
 import type { PortalConnection } from '../../portal/registry';
+import { parsePortalToolArgs, portalToolNameSchema } from '@weave/protocol';
 import {
   getPortalConnection,
   listPortalConnections,
@@ -42,15 +43,7 @@ const jsonTargetToPortalTarget = (value: JsonValue): PortalToolTarget => {
   };
 };
 
-const defaultRootId = (portal: PortalConnection) => {
-  const firstRoot = Array.isArray(portal.roots)
-    ? portal.roots.find((root): root is Record<string, unknown> => {
-      if (!root || typeof root !== 'object' || Array.isArray(root)) return false;
-      return typeof (root as Record<string, unknown>).id === 'string';
-    })
-    : undefined;
-  return typeof firstRoot?.id === 'string' ? firstRoot.id : undefined;
-};
+const defaultRootId = (portal: PortalConnection) => portal.roots[0]?.id;
 
 export const portalToolScope = (target: PortalToolTarget): ServiceScope =>
   serviceLocatorScope('portal-target', {
@@ -113,6 +106,8 @@ export class PortalProvider {
     idempotencyKey?: string;
   }) {
     const target = this.resolveTarget(input.caller, input.scope);
+    const tool = portalToolNameSchema.parse(input.toolId);
+    const args = parsePortalToolArgs(tool, input.args);
     return requestPortalTool({
       portalId: target.portalId,
       projectId: target.projectId,
@@ -121,8 +116,8 @@ export class PortalProvider {
       repoPath: target.repoPath,
       workspacePath: target.workspacePath,
       executionProfile: target.executionProfile,
-      tool: input.toolId,
-      args: input.args,
+      tool,
+      args,
       timeoutMs: input.timeoutMs,
       idempotencyKey: input.idempotencyKey,
     });

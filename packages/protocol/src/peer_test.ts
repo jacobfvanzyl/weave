@@ -5,6 +5,7 @@ import {
   RpcRemoteError,
   type RpcSocket,
 } from "./peer.ts";
+import { rpcCloseCode, rpcErrorCode } from "./schema.ts";
 
 class MemorySocket implements RpcSocket {
   readyState = WebSocket.OPEN;
@@ -35,6 +36,22 @@ const connectedPeers = () => {
   return { left, right, leftSocket, rightSocket };
 };
 
+const connectedContractPeers = () => {
+  const leftSocket = new MemorySocket();
+  const rightSocket = new MemorySocket();
+  const left = new RpcPeer(leftSocket, {
+    localRole: "client",
+    remoteRole: "server",
+  });
+  const right = new RpcPeer(rightSocket, {
+    localRole: "server",
+    remoteRole: "client",
+  });
+  leftSocket.peer = right;
+  rightSocket.peer = left;
+  return { left, right, leftSocket, rightSocket };
+};
+
 Deno.test("RpcPeer correlates concurrent requests and reverse requests", async () => {
   const { left, right } = connectedPeers();
   right.register("sum", (params) => {
@@ -48,8 +65,8 @@ Deno.test("RpcPeer correlates concurrent requests and reverse requests", async (
   );
 
   const [sum, reverse] = await Promise.all([
-    left.request<number>("sum", [1, 2, 3]),
-    left.request<number>("reverse", 9),
+    left.request("sum", [1, 2, 3]),
+    left.request("reverse", 9),
   ]);
   assertEquals(sum, 6);
   assertEquals(reverse, 18);
@@ -191,4 +208,85 @@ Deno.test("RpcPeer lets producers wait for outbound backpressure to clear", asyn
   socket.bufferedAmount = 0;
   await pending;
   assertEquals(writable, true);
+});
+
+Deno.test("RpcPeer rejects invalid local request params before sending", async () => {
+  const { left, leftSocket } = connectedContractPeers();
+  await assertRejects(
+    () => left.request("owner.get", {}),
+    Error,
+    "Invalid RPC params",
+  );
+  assertEquals(leftSocket.sent.length, 0);
+});
+
+Deno.test("RpcPeer returns -32602 for invalid inbound request params", async () => {
+  const { right, rightSocket } = connectedContractPeers();
+  right.register("chat.thread.get", () => ({ thread: null }));
+  await right.receive(JSON.stringify({
+    jsonrpc: "2.0",
+    id: "invalid-params",
+    method: "chat.thread.get",
+    params: {},
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEquals(JSON.parse(rightSocket.sent[0]).error, {
+    code: rpcErrorCode.invalidParams,
+    message: "Invalid params",
+    data: { code: "INVALID_PARAMS" },
+  });
+});
+
+Deno.test("RpcPeer sanitizes invalid handler output as an internal error", async () => {
+  const { left, right } = connectedContractPeers();
+  right.register("owner.get", () => ({ owner: { id: 42, name: "invalid" } }));
+  const error = await left.request("owner.get").catch((value) => value);
+  assert(error instanceof RpcRemoteError);
+  assertEquals(error.code, rpcErrorCode.applicationInternal);
+  assertEquals(error.message, "Internal error");
+  assertEquals(error.data, { code: "INTERNAL" });
+});
+
+Deno.test("RpcPeer closes with 4400 when a peer sends an invalid response", async () => {
+  const socket = new MemorySocket();
+  const peer = new RpcPeer(socket, {
+    localRole: "client",
+    remoteRole: "server",
+    createId: () => "owner-request",
+  });
+  const pending = peer.request("owner.get");
+  await peer.receive(JSON.stringify({
+    jsonrpc: "2.0",
+    id: "owner-request",
+    result: { owner: { id: 42, name: "invalid" } },
+  }));
+  await assertRejects(() => pending, Error, "Invalid RPC result");
+  assertEquals(socket.closed?.code, rpcCloseCode.invalidMessage);
+});
+
+Deno.test("RpcPeer closes with 4400 when a peer sends an invalid notification", async () => {
+  const socket = new MemorySocket();
+  const peer = new RpcPeer(socket, {
+    localRole: "client",
+    remoteRole: "server",
+  });
+  await peer.receive(JSON.stringify({
+    jsonrpc: "2.0",
+    method: "chat.run.event",
+    params: { subscriptionId: "subscription-1" },
+  }));
+  assertEquals(socket.closed?.code, rpcCloseCode.invalidMessage);
+});
+
+Deno.test("RpcPeer replaces non-JSON application error data before sending", async () => {
+  const { left, right } = connectedContractPeers();
+  right.register("owner.get", () => {
+    throw new RpcApplicationError(-32000, "Failed safely", {
+      callback: () => undefined,
+    });
+  });
+  const error = await left.request("owner.get").catch((value) => value);
+  assert(error instanceof RpcRemoteError);
+  assertEquals(error.message, "Failed safely");
+  assertEquals(error.data, { code: "INTERNAL" });
 });

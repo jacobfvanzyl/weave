@@ -1211,9 +1211,23 @@ describe('observational memory request shaping', () => {
       status: { type: 'requires-action', reason: 'composer-send' },
     });
 
-    const rpcRequest = vi.fn(async (method: string) => method === 'attachment.put'
-      ? { id: 'attachment-1', urlPath: '/attachments/attachment-1' }
-      : { ok: true });
+    const rpcRequest = vi.fn(async (request: { requestId: string; method: string; params: Record<string, unknown> }) => {
+      const transferId = String(request.params.transferId ?? 'transfer-1');
+      const result = request.method === 'attachment.put'
+        ? {
+          id: 'attachment-1',
+          urlPath: '/attachments/attachment-1',
+          mimeType: 'image/png',
+          sizeBytes: pngBytes.byteLength,
+          originalName: 'clipboard-image',
+        }
+        : request.method === 'binary.begin'
+        ? { transferId, accepted: true }
+        : request.method === 'binary.chunk'
+        ? { transferId, throughIndex: Number(request.params.index ?? 0) }
+        : { ok: true };
+      return { kind: 'success' as const, requestId: request.requestId, method: request.method, result };
+    });
     vi.stubGlobal('window', { weaveDesktop: { rpcRequest } });
     try {
       const complete = await imageAttachmentAdapter.send(pending as any);
@@ -1226,7 +1240,7 @@ describe('observational memory request shaping', () => {
           metadata: { attachmentId: 'attachment-1' },
         }),
       ]);
-      expect(rpcRequest.mock.calls.map(call => call[0])).toEqual([
+      expect(rpcRequest.mock.calls.map(call => call[0].method)).toEqual([
         'binary.begin',
         'binary.chunk',
         'binary.complete',

@@ -1,13 +1,6 @@
-export type NotesStorageMetadata = {
-  kind: string;
-  bucket?: string;
-  prefix?: string;
-  portalId?: string;
-  rootId?: string;
-  vaultPath?: string;
-  workspacePath?: string;
-  [key: string]: unknown;
-};
+import type { NotesStorageMetadata } from '@weave/protocol';
+
+export type { NotesStorageMetadata } from '@weave/protocol';
 
 export type NotesWorkspace = {
   id: string;

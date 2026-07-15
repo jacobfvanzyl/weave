@@ -1,4 +1,5 @@
 import type { CoppermindJupyterOutput } from "./coppermind-jupyter";
+import { jsonObjectSchema, type JsonValue } from '@weave/protocol';
 
 export type CoppermindCodeCellOutput = CoppermindJupyterOutput & {
   outputId: string;
@@ -60,9 +61,10 @@ const toText = (value: unknown) => {
   return value === undefined || value === null ? "" : String(value);
 };
 
-const normalizeMimeBundle = (value: unknown): Record<string, unknown> => (
-  isRecord(value) ? value : {}
-);
+const normalizeMimeBundle = (value: unknown): Record<string, JsonValue> => {
+  const parsed = jsonObjectSchema.safeParse(value);
+  return parsed.success ? parsed.data : {};
+};
 
 type JupyterAnsiCell = {
   char: string;
@@ -393,8 +395,8 @@ export const normalizeJupyterOutput = (
       outputId,
       output_type: "display_data",
       data: normalizeMimeBundle(output.data),
-      ...(isRecord(output.metadata) ? { metadata: output.metadata } : {}),
-      ...(isRecord(output.transient) ? { transient: output.transient } : {}),
+      ...(isRecord(output.metadata) ? { metadata: normalizeMimeBundle(output.metadata) } : {}),
+      ...(isRecord(output.transient) ? { transient: normalizeMimeBundle(output.transient) } : {}),
     };
   }
   return {
@@ -404,7 +406,7 @@ export const normalizeJupyterOutput = (
       ? output.execution_count
       : null,
     data: normalizeMimeBundle(output.data),
-    ...(isRecord(output.metadata) ? { metadata: output.metadata } : {}),
+    ...(isRecord(output.metadata) ? { metadata: normalizeMimeBundle(output.metadata) } : {}),
   };
 };
 
@@ -456,9 +458,9 @@ export const parseCoppermindCodeCellOutputs = (
               outputId,
               output_type: "display_data",
               data: normalizeMimeBundle(item.data),
-              ...(isRecord(item.metadata) ? { metadata: item.metadata } : {}),
+              ...(isRecord(item.metadata) ? { metadata: normalizeMimeBundle(item.metadata) } : {}),
               ...(isRecord(item.transient)
-                ? { transient: item.transient }
+                ? { transient: normalizeMimeBundle(item.transient) }
                 : {}),
             }];
           }
@@ -470,7 +472,7 @@ export const parseCoppermindCodeCellOutputs = (
                 ? item.execution_count
                 : null,
               data: normalizeMimeBundle(item.data),
-              ...(isRecord(item.metadata) ? { metadata: item.metadata } : {}),
+              ...(isRecord(item.metadata) ? { metadata: normalizeMimeBundle(item.metadata) } : {}),
             }];
           }
           return [];
