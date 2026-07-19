@@ -819,6 +819,41 @@ export const normalizeAskUserSuspensionStream = (
     },
   });
 
+const resumedToolOutputChunkTypes = new Set([
+  'tool-output-available',
+  'tool-output-error',
+  'tool-output-denied',
+]);
+
+export const filterResumedToolOutputPreambleStream = (stream: ReadableStream<unknown>) =>
+  new ReadableStream<unknown>({
+    async start(controller) {
+      const reader = stream.getReader();
+      let nextStepStarted = false;
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const type = isRecord(value) ? nonEmptyString(value.type) : undefined;
+          if (type === 'start-step') nextStepStarted = true;
+          if (!nextStepStarted && type && resumedToolOutputChunkTypes.has(type)) continue;
+          controller.enqueue(value);
+        }
+
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        reader.releaseLock();
+      }
+    },
+    cancel(reason) {
+      return stream.cancel(reason).catch(() => undefined);
+    },
+  });
+
 const markAskUserPartSubmitted = (
   completedMessages: RunUiMessage[],
   currentMessage: RunUiMessage | undefined,

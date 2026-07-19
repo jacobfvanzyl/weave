@@ -82,6 +82,18 @@ const streamOf = (...chunks: unknown[]) =>
     },
   });
 
+const waitForThreadRunStatus = async (
+  coordinator: AgentRunCoordinator,
+  threadId: string,
+  status: string,
+) => {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (coordinator.getThreadRunSnapshot('resource-1', threadId).status === status) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(`Timed out waiting for ${threadId} to become ${status}`);
+};
+
 Deno.test('thread compaction defaults to enabled and can be explicitly disabled', () => {
   const previous = Deno.env.get('WEAVE_THREAD_COMPACTION');
   try {
@@ -113,7 +125,6 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
     streamHandler as any,
     async () => resolvedContext(),
   );
-
   try {
     const started = await service.startChatRun({
       resourceId: 'resource-1',
@@ -174,6 +185,156 @@ Deno.test('MastraAgentService.startChatRun prepares chat model, memory, provider
     assertEquals(requestContext.get('gitWorkspace'), true);
     assertEquals(requestContext.get('gitProject'), true);
     assert(requestContext.values.has('weave.agentContext'), 'expected resolved context on request context');
+  } finally {
+    coordinator.clearForTests();
+    console.info = originalInfo;
+  }
+});
+
+Deno.test('MastraAgentService.startChatRun allows a follow-up while the completed run is retained for replay', async () => {
+  const originalInfo = console.info;
+  console.info = () => undefined;
+  const coordinator = createCoordinator();
+  const streamRequests: any[] = [];
+  const service = new MastraAgentService(
+    {} as any,
+    coordinator,
+    (options: any) => {
+      streamRequests.push(options);
+      return Promise.resolve(streamOf({ type: 'finish' }) as any);
+    },
+    async () => resolvedContext(),
+  );
+
+  try {
+    const first = await service.startChatRun({
+      resourceId: 'resource-1',
+      threadId: 'thread-follow-up',
+      requestContext: createRequestContext(),
+      submittedUserMessages: [{ id: 'user-1', role: 'user' }],
+      params: {
+        memory: { thread: 'thread-follow-up' },
+        messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'first' }] }],
+      },
+    });
+    await waitForThreadRunStatus(coordinator, 'thread-follow-up', 'completed');
+    assert(coordinator.getThreadRun('resource-1', 'thread-follow-up'), 'expected completed run to remain retained');
+
+    const second = await service.startChatRun({
+      resourceId: 'resource-1',
+      threadId: 'thread-follow-up',
+      requestContext: createRequestContext(),
+      submittedUserMessages: [{ id: 'user-2', role: 'user' }],
+      params: {
+        memory: { thread: 'thread-follow-up' },
+        messages: [{ id: 'user-2', role: 'user', parts: [{ type: 'text', text: 'second' }] }],
+      },
+    });
+
+    assert(first.run?.runId !== second.run?.runId, 'expected the follow-up to create a distinct Weave run');
+    await waitForThreadRunStatus(coordinator, 'thread-follow-up', 'completed');
+    assertEquals(streamRequests.length, 2);
+  } finally {
+    coordinator.clearForTests();
+    console.info = originalInfo;
+  }
+});
+
+Deno.test('MastraAgentService.startChatRun continues an accepted ask_user response as a fresh turn', async () => {
+  const originalInfo = console.info;
+  console.info = () => undefined;
+  const coordinator = createCoordinator();
+  const streamRequests: any[] = [];
+  const service = new MastraAgentService(
+    {} as any,
+    coordinator,
+    (options: any) => {
+      streamRequests.push(options);
+      return Promise.resolve(streamOf(
+        streamRequests.length === 1
+          ? {
+            type: 'data-tool-call-suspended',
+            data: {
+              runId: 'mastra-ask-run',
+              toolCallId: 'ask-1',
+              toolName: 'ask_user',
+              suspendPayload: {
+                questions: [{
+                  id: 'scope',
+                  question: 'How broad should this be?',
+                  options: [
+                    { id: 'narrow', label: 'Narrow' },
+                    { id: 'broad', label: 'Broad' },
+                  ],
+                }],
+              },
+            },
+          }
+          : { type: 'finish' },
+      ) as any);
+    },
+    async () => resolvedContext(),
+  );
+  (service as any).getChatThreadMessages = async () => [{
+    role: 'user',
+    content: { parts: [{ type: 'text', text: 'research this' }] },
+  }];
+
+  try {
+    await service.startChatRun({
+      resourceId: 'resource-1',
+      threadId: 'thread-ask',
+      requestContext: createRequestContext(),
+      params: {
+        memory: { thread: 'thread-ask' },
+        messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'research this' }] }],
+        runId: 'mastra-ask-run',
+      },
+    });
+    await waitForThreadRunStatus(coordinator, 'thread-ask', 'completed');
+    assert(coordinator.getThreadRun('resource-1', 'thread-ask'), 'expected suspended run to remain retained');
+
+    const resumeData = {
+      action: 'submit',
+      answers: [{ id: 'scope', selectedOptionId: 'narrow', finalAnswer: 'Narrow' }],
+    };
+    const resumeRequestContext = createRequestContext();
+    const resumed = await service.startChatRun({
+      resourceId: 'resource-1',
+      threadId: 'thread-ask',
+      requestContext: resumeRequestContext,
+      params: {
+        memory: { thread: 'thread-ask' },
+        messages: [{ id: 'user-2', role: 'user', parts: [{ type: 'text', text: 'Scope: Narrow' }] }],
+        runId: 'mastra-ask-run',
+        toolCallId: 'ask-1',
+        resumeData,
+      },
+    });
+    await resumed.run?.executionPromise;
+    await waitForThreadRunStatus(coordinator, 'thread-ask', 'completed');
+
+    assertEquals(streamRequests.length, 2);
+    assert(streamRequests[1].params.runId !== 'mastra-ask-run', 'expected a fresh Mastra run id');
+    assertEquals(streamRequests[1].params.toolCallId, undefined);
+    assertEquals(streamRequests[1].params.resumeData, undefined);
+    assertEquals(streamRequests[1].params.messages, [
+      { id: 'user-2', role: 'user', parts: [{ type: 'text', text: 'Scope: Narrow' }] },
+    ]);
+    assertEquals(streamRequests[1].params.context, [
+      {
+        role: 'user',
+        content: 'Relevant prior user requests from this thread:\n1. research this',
+      },
+      {
+        role: 'user',
+        content: [
+          'The user answered the suspended structured clarification. Treat these answers as authoritative and continue the task without repeating the same questions:',
+          '- scope: Narrow',
+        ].join('\n'),
+      },
+    ]);
+    assertEquals(resumeRequestContext.get('weave.askUserResume'), true);
   } finally {
     coordinator.clearForTests();
     console.info = originalInfo;

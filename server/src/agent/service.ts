@@ -32,6 +32,7 @@ import {
   bufferAssistantTextStream,
   buildRunTimingMetadata,
   filterCompactToolHistoryTextStream,
+  filterResumedToolOutputPreambleStream,
   normalizeAskUserSuspensionStream,
   toThreadRunSnapshot,
 } from './run-coordinator';
@@ -66,6 +67,59 @@ import { chatGPTCodexAuthService } from './mastra/providers/chatgpt-codex-auth';
 import { normalizeWeaveChatThread } from './chat-protocol';
 
 export const hashChatSystemPrompt = (system: unknown) => hashText(JSON.stringify(system ?? null));
+
+const getMastraMessageText = (message: MastraDBMessage) =>
+  message.content.parts.flatMap((part) => {
+    if (!part || typeof part !== 'object' || Array.isArray(part)) return [];
+    const record = part as Record<string, unknown>;
+    return record.type === 'text' && typeof record.text === 'string' && record.text.trim() ? [record.text.trim()] : [];
+  }).join('\n');
+
+const buildAskUserResumeContext = (resumeData: unknown, threadMessages: MastraDBMessage[] = []) => {
+  if (!resumeData || typeof resumeData !== 'object' || Array.isArray(resumeData)) return [];
+  const record = resumeData as Record<string, unknown>;
+  if (record.action !== 'submit' && record.action !== 'cancel') return [];
+  const priorUserRequests = threadMessages
+    .filter((message) => message.role === 'user')
+    .map(getMastraMessageText)
+    .filter(Boolean)
+    .slice(-8)
+    .map((text) => text.slice(0, 4_000));
+  const context = priorUserRequests.length > 0
+    ? [{
+      role: 'user',
+      content: [
+        'Relevant prior user requests from this thread:',
+        ...priorUserRequests.map((text, index) => `${index + 1}. ${text}`),
+      ].join('\n'),
+    }]
+    : [];
+
+  if (record.action === 'cancel') {
+    return [...context, {
+      role: 'user',
+      content: 'The user cancelled the structured clarification. Continue with best judgment without repeating it.',
+    }];
+  }
+
+  if (record.action !== 'submit' || !Array.isArray(record.answers)) return context;
+  const answers = record.answers.flatMap((answer) => {
+    if (!answer || typeof answer !== 'object' || Array.isArray(answer)) return [];
+    const entry = answer as Record<string, unknown>;
+    const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+    const finalAnswer = typeof entry.finalAnswer === 'string' ? entry.finalAnswer.trim() : '';
+    return id && finalAnswer ? [`- ${id}: ${finalAnswer}`] : [];
+  });
+  if (answers.length === 0) return context;
+
+  return [...context, {
+    role: 'user',
+    content: [
+      'The user answered the suspended structured clarification. Treat these answers as authoritative and continue the task without repeating the same questions:',
+      ...answers,
+    ].join('\n'),
+  }];
+};
 
 export {
   contextUsageRecallOptions,
@@ -470,7 +524,9 @@ export class MastraAgentService implements AgentService {
       }
     }
 
-    let existingRun = input.threadId ? this.runCoordinator.getThreadRun(input.resourceId, input.threadId) : undefined;
+    let existingRun = input.threadId
+      ? this.runCoordinator.getActiveThreadRun(input.resourceId, input.threadId)
+      : undefined;
     if (!existingRun && input.threadId && containsToolApprovalResponse(input.params.messages)) {
       const persisted = await this.persistedRuns.latest(input.resourceId, input.threadId);
       if (!persisted || persisted.status !== 'awaiting_approval') {
@@ -496,7 +552,33 @@ export class MastraAgentService implements AgentService {
     });
     const mastra = await this.getMastra();
     const { executionProfile: _executionProfile, verify: _verify, ...chatParams } = input.params;
-    const mastraRunId = existingRun?.mastraRunId ?? stringValue(input.params.runId) ?? crypto.randomUUID();
+    const askUserResumeContext = chatParams.resumeData && input.threadId
+      ? buildAskUserResumeContext(
+        chatParams.resumeData,
+        await this.getChatThreadMessages({ resourceId: input.resourceId, threadId: input.threadId }),
+      )
+      : buildAskUserResumeContext(chatParams.resumeData);
+    if (askUserResumeContext.length > 0) {
+      (input.requestContext as { set?: (key: string, value: unknown) => void } | undefined)?.set?.(
+        'weave.askUserResume',
+        true,
+      );
+    }
+    const existingContext = Array.isArray(chatParams.context) ? chatParams.context : [];
+    const continuesAskUserResponse = askUserResumeContext.length > 0;
+    const streamChatParams = { ...chatParams };
+    if (continuesAskUserResponse) {
+      delete streamChatParams.resumeData;
+      delete streamChatParams.toolCallId;
+      delete streamChatParams.runId;
+    }
+    // Mastra resumes directly at the saved workflow step and skips preparation
+    // of new context/messages. Continue accepted Ask responses as a fresh turn
+    // on the same memory thread so legacy parallel-tool snapshots cannot drop
+    // the user's authoritative answers.
+    const mastraRunId = continuesAskUserResponse
+      ? crypto.randomUUID()
+      : existingRun?.mastraRunId ?? stringValue(input.params.runId) ?? crypto.randomUUID();
     const callerTracingOptions = isRecord(chatParams.tracingOptions) ? chatParams.tracingOptions : {};
     const callerTraceMetadata = isRecord(callerTracingOptions.metadata) ? callerTracingOptions.metadata : {};
     const runMetadata = {
@@ -588,7 +670,8 @@ export class MastraAgentService implements AgentService {
             }
             : {}),
           params: {
-            ...chatParams,
+            ...streamChatParams,
+            ...(askUserResumeContext.length > 0 ? { context: [...existingContext, ...askUserResumeContext] } : {}),
             maxSteps,
             runId: mastraRunId,
             ...(executionPrepared.routedModel
@@ -622,8 +705,11 @@ export class MastraAgentService implements AgentService {
         });
 
         const modelStream = stream as ReadableStream<unknown>;
+        const clientSafeStream = continuesAskUserResponse
+          ? filterResumedToolOutputPreambleStream(modelStream)
+          : modelStream;
         const verifiedStream = executionPrepared.verificationEnabled && run
-          ? appendRunVerification(modelStream, {
+          ? appendRunVerification(clientSafeStream, {
             requirements: input.submittedUserMessages ?? [],
             verify: async (evidence) => {
               try {
@@ -651,7 +737,7 @@ export class MastraAgentService implements AgentService {
               }
             },
           })
-          : modelStream;
+          : clientSafeStream;
         const bufferedStream = bufferAssistantTextStream(
           filterCompactToolHistoryTextStream(
             normalizeAskUserSuspensionStream(verifiedStream, { mastraRunId }),

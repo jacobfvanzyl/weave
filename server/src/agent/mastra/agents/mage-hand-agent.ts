@@ -125,6 +125,7 @@ const notesWorkspaceToolKeys = new Set([
 const toolKeysForContext = (requestContext: any) => {
   const agentContext = getAgentContext(requestContext);
   const keys = new Set(baseToolKeys);
+  if (requestContext?.get?.('weave.askUserResume') === true) keys.delete('ask_user');
 
   if (hasWorkspaceBinding(agentContext)) {
     for (const key of editorWorkspaceToolKeys) keys.add(key);

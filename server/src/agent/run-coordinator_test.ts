@@ -3,6 +3,7 @@ import {
   type AgentThreadRun,
   bufferAssistantTextStream,
   filterCompactToolHistoryTextStream,
+  filterResumedToolOutputPreambleStream,
   normalizeAskUserSuspensionStream,
 } from './run-coordinator.ts';
 import type { AgentRunEventV1, AgentRunRecordV1 } from './run-repository.ts';
@@ -320,6 +321,50 @@ Deno.test('normalizeAskUserSuspensionStream converts ask_user tool input chunks 
       data: expectedData,
     },
   });
+  assertEquals(await reader.read(), { done: true });
+});
+
+Deno.test('filterResumedToolOutputPreambleStream removes orphaned prior-step tool outputs only', async () => {
+  const priorAskOutput = {
+    type: 'tool-output-available',
+    toolCallId: 'ask-1',
+    output: { ok: true },
+  };
+  const currentToolOutput = {
+    type: 'tool-output-available',
+    toolCallId: 'read-1',
+    output: 'README',
+  };
+  const reader = filterResumedToolOutputPreambleStream(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(priorAskOutput);
+        controller.enqueue({ type: 'finish-step' });
+        controller.enqueue({ type: 'start-step' });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'read-1',
+          toolName: 'read',
+          input: { path: 'README.md' },
+        });
+        controller.enqueue(currentToolOutput);
+        controller.close();
+      },
+    }),
+  ).getReader();
+
+  assertEquals(await reader.read(), { done: false, value: { type: 'finish-step' } });
+  assertEquals(await reader.read(), { done: false, value: { type: 'start-step' } });
+  assertEquals(await reader.read(), {
+    done: false,
+    value: {
+      type: 'tool-input-available',
+      toolCallId: 'read-1',
+      toolName: 'read',
+      input: { path: 'README.md' },
+    },
+  });
+  assertEquals(await reader.read(), { done: false, value: currentToolOutput });
   assertEquals(await reader.read(), { done: true });
 });
 
