@@ -1,7 +1,7 @@
 # Agent harness user-facing feature landscape and Weave roadmap
 
-**Research cutoff:** 2026-07-31  
-**Weave snapshot:** commit `5e85018b9ea03a4cb49fba2d8a103810d91273b7`, plus the uncommitted worktree inspected on 2026-07-31  
+**Research cutoff:** 2026-07-31<br>
+**Weave snapshot:** commit `5e85018b9ea03a4cb49fba2d8a103810d91273b7`, plus the uncommitted worktree inspected on 2026-07-31<br>
 **Audience:** Weave product and engineering roadmap planning
 
 ## Executive summary
@@ -370,7 +370,7 @@ Using those criteria, review/recovery/extensibility/background control rank abov
 - Expose comments to the active agent and add “Send feedback” as a normal steering/follow-up message.
 - Show validation evidence adjacent to the diff when a run records test/lint commands.
 
-**Dependencies:** Portal Git contracts, workspace target resolution, protocol DTOs for diff/comments, replacement of dormant Proposal navigation.  
+**Dependencies:** Portal Git contracts, workspace target resolution, protocol DTOs for diff/comments, replacement of dormant Proposal navigation.<br>
 **Do not include yet:** hosted PR review, collaborative cursors, merge UI, or rewriting historical Proposal data.
 
 #### N2. MCP runtime and management
@@ -386,7 +386,7 @@ Using those criteria, review/recovery/extensibility/background control rank abov
 - Map MCP tool calls to existing approval parts and execution profiles.
 - Redact secrets in config display, logs, and persisted provider metadata.
 
-**Dependencies:** server-side MCP client/runtime, protocol methods/events, user-artifact storage decision, approval-policy mapping, audit metadata.  
+**Dependencies:** server-side MCP client/runtime, protocol methods/events, user-artifact storage decision, approval-policy mapping, audit metadata.<br>
 **Do not include yet:** arbitrary UI apps from MCP, public registry, organization marketplace, or automatic installation.
 
 #### N3. Turn-linked checkpoints and rewind
@@ -401,7 +401,7 @@ Using those criteria, review/recovery/extensibility/background control rank abov
 - On restore, preview affected paths and refuse/ask when current manual edits diverge.
 - Keep “restore conversation” separate; start with workspace-only restore.
 
-**Dependencies:** mutation boundary in Portal tools, object storage/retention, binary/large-file limits, diff preview, concurrency guard.  
+**Dependencies:** mutation boundary in Portal tools, object storage/retention, binary/large-file limits, diff preview, concurrency guard.<br>
 **Do not include yet:** full environment/database snapshots or magical rollback of external side effects.
 
 #### N4. Background-run inbox and handoff
@@ -416,7 +416,7 @@ Using those criteria, review/recovery/extensibility/background control rank abov
 - Status summary: phase, current tool, elapsed time, plan progress, validation state.
 - Steer, cancel, answer, approve/deny, and take over from the inbox.
 
-**Dependencies:** run list/query contract, notification routing, retained-run lifecycle, reliable approval recovery.  
+**Dependencies:** run list/query contract, notification routing, retained-run lifecycle, reliable approval recovery.<br>
 **Do not include yet:** remote VM provisioning or multi-agent fan-out; prove the single background-run loop first.
 
 ### Next: controlled delegation and visible execution
