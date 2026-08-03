@@ -91,12 +91,14 @@ const defaultSocket = (url: string) =>
   new WebSocket(url) as unknown as RpcWebSocket;
 const delayForAttempt = (attempt: number) =>
   Math.min(10_000, 250 * 2 ** Math.min(attempt, 5));
+const heartbeatTimeoutIntervals = 3;
 
 export class RpcConnection<Role extends RpcConnectionRole = "client"> {
   private peer?: RpcPeer;
   private socket?: RpcWebSocket;
   private connecting?: Promise<RpcInitializeResult>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private heartbeatTimer?: ReturnType<typeof setTimeout>;
   private reconnectAttempt = 0;
   private stateValue: RpcConnectionState = "idle";
   private explicitlyClosed = false;
@@ -232,6 +234,7 @@ export class RpcConnection<Role extends RpcConnectionRole = "client"> {
   disconnect(reason = "RPC connection disconnected.") {
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    this.clearHeartbeatTimer();
     this.initializeResult = undefined;
     this.localRole = undefined;
     this.peer?.close(1000, reason);
@@ -288,6 +291,7 @@ export class RpcConnection<Role extends RpcConnectionRole = "client"> {
       peer.register(method, handler);
     }
     peer.onNotification("connection.ping", (params) => {
+      this.armHeartbeatTimer(peer, this.initializeResult?.heartbeatIntervalMs);
       const nonce = params && typeof params === "object" && "nonce" in params
         ? (params as { nonce?: unknown }).nonce
         : undefined;
@@ -322,6 +326,7 @@ export class RpcConnection<Role extends RpcConnectionRole = "client"> {
     }
     this.initializeResult = result;
     this.reconnectAttempt = 0;
+    this.armHeartbeatTimer(peer, result.heartbeatIntervalMs);
     this.setState("connected");
     return result;
   }
@@ -330,6 +335,7 @@ export class RpcConnection<Role extends RpcConnectionRole = "client"> {
     socket: RpcWebSocket | undefined,
     peer: RpcPeer | undefined,
   ) {
+    this.clearHeartbeatTimer();
     this.initializeResult = undefined;
     this.localRole = undefined;
     if (this.peer === peer) this.peer = undefined;
@@ -360,6 +366,7 @@ export class RpcConnection<Role extends RpcConnectionRole = "client"> {
 
   private handleClosed(peer: RpcPeer) {
     if (this.peer !== peer) return;
+    this.clearHeartbeatTimer();
     this.peer = undefined;
     this.socket = undefined;
     this.initializeResult = undefined;
@@ -377,6 +384,24 @@ export class RpcConnection<Role extends RpcConnectionRole = "client"> {
       this.reconnectTimer = undefined;
       void this.connect().catch(() => undefined);
     }, delay);
+  }
+
+  private armHeartbeatTimer(
+    peer: RpcPeer,
+    heartbeatIntervalMs: number | undefined,
+  ) {
+    this.clearHeartbeatTimer();
+    if (!heartbeatIntervalMs) return;
+    this.heartbeatTimer = setTimeout(() => {
+      this.heartbeatTimer = undefined;
+      if (this.peer !== peer || this.stateValue !== "connected") return;
+      peer.close(4408, "RPC server heartbeat timed out.");
+    }, heartbeatIntervalMs * heartbeatTimeoutIntervals);
+  }
+
+  private clearHeartbeatTimer() {
+    clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
   }
 
   private setState(state: RpcConnectionState) {
