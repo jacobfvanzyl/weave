@@ -41,10 +41,10 @@ const repoRoot = resolve(import.meta.dirname ?? ".", "..");
 
 export const serverSnapshotPaths = [
   ".dockerignore",
+  "bun.lock",
+  "bunfig.toml",
   "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  "scripts/ensure-pnpm.mjs",
+  "scripts/ensure-bun.mjs",
   "server",
   "desktop/package.json",
   "mobile/package.json",
@@ -162,7 +162,7 @@ export const createServerSnapshot = async (
 
     const tree = await git(cwd, ["write-tree"], env);
     const parent = await git(cwd, ["rev-parse", "HEAD"]);
-    const message = `Weave Pi snapshot ${new Date().toISOString()}`;
+    const message = `Weave server snapshot ${new Date().toISOString()}`;
     const commit = await git(cwd, [
       "commit-tree",
       tree,
@@ -329,7 +329,7 @@ export const triggerAndWaitForDeployment = async (
 };
 
 const healthUrls = () => ({
-  server: optionalEnv("WEAVE_REMOTE_SERVER_URL", "http://homelab:4111").replace(
+  server: optionalEnv("WEAVE_REMOTE_SERVER_URL", "http://bazzite:4111").replace(
     /\/+$/,
     "",
   ),
@@ -669,9 +669,9 @@ const cutover = async () => {
   }
 
   const confirmation = prompt(
-    "Type MIGRATE WEAVE TO HOMELAB to replace the Pi database and stop local infrastructure:",
+    "Type MIGRATE WEAVE TO BAZZITE to replace the remote database and stop local infrastructure:",
   );
-  if (confirmation !== "MIGRATE WEAVE TO HOMELAB") {
+  if (confirmation !== "MIGRATE WEAVE TO BAZZITE") {
     throw new Error("Cutover cancelled.");
   }
 
@@ -726,7 +726,7 @@ const cutover = async () => {
   await verifyRemoteHealth();
   console.info("Remote data and health checks passed.");
   console.info(
-    "Set Desktop to http://homelab:4111 with the Dokploy owner token, then test terminal and file operations.",
+    "Set Desktop to http://bazzite:4111 with the Dokploy owner token, then test terminal and file operations.",
   );
   const localStopConfirmation = prompt(
     "After Desktop and Portal work end-to-end, type STOP LOCAL INFRASTRUCTURE to stop local Compose services:",

@@ -51,7 +51,7 @@ if (process.platform !== 'darwin') {
 }
 
 if (!existsSync(electronInstallScriptPath)) {
-  throw new Error('Electron was not found. Run pnpm install from the repository root first.');
+  throw new Error('Electron was not found. Run bun install from the repository root first.');
 }
 
 if (!existsSync(sourceElectronPath)) {

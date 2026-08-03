@@ -7,7 +7,7 @@
     "dev": "node scripts/dev-ios.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "cap:sync": "pnpm build && cap sync ios",
+    "cap:sync": "bun run build && cap sync ios",
     "ios:open": "cap open ios",
     "ios:run": "cap run ios"
   },

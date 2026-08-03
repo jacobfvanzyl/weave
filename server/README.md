@@ -5,15 +5,15 @@ The Deno server owns authentication, backend modules, persistence, workflows, an
 ## Commands
 
 ```shell
-pnpm install
-pnpm dev:server
+bun install
+bun run dev:server
 deno task server:build
 deno task server:start
 deno task server:db:migrate
 deno task server:db:import-libsql --dry-run
 ```
 
-Run `pnpm install` only from the repository root. PNPM owns the server's `node_modules`; Deno uses that tree in manual mode while `server/deno.lock` remains the runtime lock.
+Run `bun install` only from the repository root. Bun owns the server's `node_modules`; Deno uses that tree in manual mode while `server/deno.lock` remains the runtime lock.
 
 ## RPC architecture
 
@@ -25,7 +25,7 @@ Mastra remains private under `src/agent/mastra`. Product modules expose callable
 
 ## Headless Dokploy development
 
-The server stack can run on the Raspberry Pi while Desktop and Portal remain on the development Mac:
+The server stack can run on Bazzite while Desktop and Portal remain on the development Mac:
 
 ```shell
 deno task server:deploy
@@ -45,7 +45,7 @@ deno task server:deploy:test
 
 Rollback changes application code only. Database migrations must remain backward-compatible with the preceding server version. Deployment credentials belong only in ignored, mode-`0600` `server/.env.deploy`; runtime secrets belong in Dokploy.
 
-The tailnet application endpoint is `http://homelab:4111`; Garage S3 remains on `http://homelab:3900`. Postgres, Garage admin, and Ollama are not published. `WEAVE_REMOTE_OWNER_TOKEN` is required in `server/.env.deploy` so deployment verification authenticates and completes an RPC `initialize` request.
+The tailnet application endpoint is `http://bazzite:4111`; Garage S3 remains on `http://bazzite:3900`. Postgres, Garage admin, and Ollama are not published. `WEAVE_REMOTE_OWNER_TOKEN` is required in `server/.env.deploy` so deployment verification authenticates and completes an RPC `initialize` request.
 
 ## Persistence
 

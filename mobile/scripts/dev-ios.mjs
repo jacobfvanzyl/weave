@@ -28,7 +28,7 @@ const readOption = name => {
 const hasFlag = name => args.includes(`--${name}`);
 
 const printHelp = () => {
-  console.log(`Usage: pnpm dev:mobile -- [options]
+  console.log(`Usage: bun run dev:mobile -- [options]
 
 Starts Vite and launches iOS with Capacitor live reload.
 Defaults to a physically connected iPad/iPhone when available, then falls back to an iPad simulator.

@@ -14,6 +14,9 @@
     "./styles/*": "./src/styles/*"
   },
   "scripts": {
+    "storybook": "storybook dev --port 6006 --exact-port --no-open --disable-telemetry",
+    "storybook:build": "storybook build --output-dir storybook-static --disable-telemetry",
+    "storybook:test": "STORYBOOK_DISABLE_TELEMETRY=1 vitest run --config vitest.storybook.config.ts --project=storybook",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -88,11 +91,21 @@
   },
   "devDependencies": {
     "@lezer/generator": "^1.8.0",
+    "@storybook/addon-a11y": "10.5.5",
+    "@storybook/addon-vitest": "10.5.5",
+    "@storybook/react-vite": "10.5.5",
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser-playwright": "4.1.10",
+    "playwright": "1.62.1",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "storybook": "10.5.5",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
   }
 }

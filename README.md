@@ -17,20 +17,19 @@ Weave is split into an owned Deno server plus clients and local runtime pieces.
 
 ## Development
 
-PNPM 11.13.0 is the sole package manager for every Node dependency in the workspace. Install once from the repository root:
+Bun 1.3.14 is the sole package manager for every Node dependency in the workspace. Install once from the repository root:
 
 ```bash
-corepack enable
-pnpm install
+bun install
 ```
 
 The root development interface is intentionally limited to four commands:
 
 ```bash
-pnpm dev:server
-pnpm dev:desktop
-pnpm dev:web
-pnpm dev:mobile -- [mobile options]
+bun run dev:server
+bun run dev:desktop
+bun run dev:web
+bun run dev:mobile -- [mobile options]
 ```
 
 Deno remains the runtime for the server, Portal, and TUI. Their checks and operational tasks stay on their owning Deno surfaces; Portal development is package-local:
@@ -43,4 +42,4 @@ deno task portal:test
 deno task tui:check
 ```
 
-The root `pnpm-lock.yaml` is the only Node dependency lock. Deno lockfiles remain runtime locks. The server `.env`, `.env.example`, Deno runtime, Agent/Mastra implementation, and deploy files live under `server/`.
+The root `bun.lock` is the only Node dependency lock. Deno lockfiles remain runtime locks. The server `.env`, `.env.example`, Deno runtime, Agent/Mastra implementation, and deploy files live under `server/`.

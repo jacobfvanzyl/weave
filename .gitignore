@@ -1,6 +1,8 @@
 output.txt
 node_modules
 dist
+packages/client/storybook-static/
+/.agents/tmp/
 target
 *.tsbuildinfo
 desktop/.vite

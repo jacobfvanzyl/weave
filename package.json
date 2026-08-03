@@ -4,37 +4,43 @@
   "private": true,
   "description": "Weave repo command index",
   "type": "module",
-  "packageManager": "pnpm@11.13.0",
+  "packageManager": "bun@1.3.14",
   "scripts": {
-    "preinstall": "node scripts/ensure-pnpm.mjs",
-    "dev:server": "pnpm --filter weave-server dev",
-    "dev:desktop": "pnpm --filter weave-desktop dev",
-    "dev:web": "pnpm --filter weave-web dev",
-    "dev:mobile": "pnpm --filter weave-mobile dev"
+    "preinstall": "node scripts/ensure-bun.mjs",
+    "dev:server": "bun --filter weave-server dev",
+    "dev:desktop": "bun --filter weave-desktop dev",
+    "dev:web": "bun --filter weave-web dev",
+    "dev:mobile": "bun --filter weave-mobile dev"
   },
   "engines": {
     "node": ">=22.13.0"
   },
-  "workspaces": ["server", "web", "mobile", "desktop", "packages/*"],
-  "catalog": {
-    "@blocksuite/store": "0.19.5",
-    "@capacitor/preferences": "^8.0.1",
-    "@codemirror/commands": "^6.10.0",
-    "@codemirror/state": "^6.6.0",
-    "@lezer/highlight": "^1.2.3",
-    "@mastra/core": "1.42.0",
-    "@tailwindcss/vite": "^4.1.18",
-    "@types/node": "^25.6.2",
-    "@types/react": "^19.2.7",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.1.1",
-    "lucide-react": "^0.561.0",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "typescript": "^5.9.3",
-    "vite": "^7.2.7",
-    "vitest": "^4.0.15",
-    "yaml": "2.9.0",
-    "zod": "4.4.3"
-  }
+  "workspaces": {
+    "packages": ["server", "web", "mobile", "desktop", "packages/*"],
+    "catalog": {
+      "@blocksuite/store": "0.19.5",
+      "@capacitor/preferences": "^8.0.1",
+      "@codemirror/commands": "^6.10.0",
+      "@codemirror/state": "^6.6.0",
+      "@lezer/highlight": "^1.2.3",
+      "@mastra/core": "1.42.0",
+      "@tailwindcss/vite": "^4.1.18",
+      "@types/node": "^25.6.2",
+      "@types/react": "^19.2.7",
+      "@types/react-dom": "^19.2.3",
+      "@vitejs/plugin-react": "^5.1.1",
+      "lucide-react": "^0.561.0",
+      "react": "^19.2.3",
+      "react-dom": "^19.2.3",
+      "typescript": "^5.9.3",
+      "vite": "^7.2.7",
+      "vitest": "^4.0.15",
+      "yaml": "2.9.0",
+      "zod": "4.4.3"
+    }
+  },
+  "overrides": {
+    "@blocksuite/icons": "2.1.75"
+  },
+  "trustedDependencies": ["esbuild", "fs-xattr", "fsevents", "macos-alias"]
 }

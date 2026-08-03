@@ -52,10 +52,10 @@ const createRepo = async () => {
   await Deno.mkdir(`${root}/packages/protocol`, { recursive: true });
   await Deno.mkdir(`${root}/scripts`, { recursive: true });
   await Deno.writeTextFile(`${root}/.dockerignore`, ".git\n");
+  await Deno.writeTextFile(`${root}/bun.lock`, "{}\n");
+  await Deno.writeTextFile(`${root}/bunfig.toml`, "[install]\n");
   await Deno.writeTextFile(`${root}/package.json`, "{}\n");
-  await Deno.writeTextFile(`${root}/pnpm-lock.yaml`, "lockfileVersion: 9.0\n");
-  await Deno.writeTextFile(`${root}/pnpm-workspace.yaml`, "packages: []\n");
-  await Deno.writeTextFile(`${root}/scripts/ensure-pnpm.mjs`, "export {};\n");
+  await Deno.writeTextFile(`${root}/scripts/ensure-bun.mjs`, "export {};\n");
   await Deno.writeTextFile(
     `${root}/server/app.ts`,
     "export const value = 1;\n",
@@ -95,12 +95,12 @@ Deno.test("server snapshots include dirty server files without touching branch o
       "export const schema = true;\n",
     );
     await Deno.writeTextFile(
-      `${root}/pnpm-workspace.yaml`,
-      "packages:\n  - server\n",
+      `${root}/bunfig.toml`,
+      '[install]\nlinker = "isolated"\n',
     );
     await Deno.writeTextFile(
-      `${root}/scripts/ensure-pnpm.mjs`,
-      "export const pnpm = true;\n",
+      `${root}/scripts/ensure-bun.mjs`,
+      "export const bun = true;\n",
     );
     await Deno.writeTextFile(`${root}/README.md`, "outside change\n");
     await Deno.writeTextFile(`${root}/server/.env`, "SECRET=ignored\n");
@@ -126,12 +126,12 @@ Deno.test("server snapshots include dirty server files without touching branch o
       "export const schema = true;",
     );
     assertEquals(
-      await git(root, "show", `${snapshot.commit}:pnpm-workspace.yaml`),
-      "packages:\n  - server",
+      await git(root, "show", `${snapshot.commit}:bunfig.toml`),
+      '[install]\nlinker = "isolated"',
     );
     assertEquals(
-      await git(root, "show", `${snapshot.commit}:scripts/ensure-pnpm.mjs`),
-      "export const pnpm = true;",
+      await git(root, "show", `${snapshot.commit}:scripts/ensure-bun.mjs`),
+      "export const bun = true;",
     );
     assertEquals(
       await git(root, "show", `${snapshot.commit}:README.md`),
@@ -156,12 +156,12 @@ Deno.test("server snapshots include dirty server files without touching branch o
       "untracked protocol file was omitted",
     );
     assert(
-      snapshot.files.includes("pnpm-workspace.yaml"),
-      "root workspace definition was omitted",
+      snapshot.files.includes("bunfig.toml"),
+      "root Bun configuration was omitted",
     );
     assert(
-      snapshot.files.includes("scripts/ensure-pnpm.mjs"),
-      "root PNPM guard was omitted",
+      snapshot.files.includes("scripts/ensure-bun.mjs"),
+      "root Bun guard was omitted",
     );
     assert(
       !snapshot.files.includes("server/.env"),
@@ -175,10 +175,10 @@ Deno.test("server snapshots include dirty server files without touching branch o
 Deno.test("server snapshot paths cover every Dockerfile build input", () => {
   assertEquals(serverSnapshotPaths, [
     ".dockerignore",
+    "bun.lock",
+    "bunfig.toml",
     "package.json",
-    "pnpm-lock.yaml",
-    "pnpm-workspace.yaml",
-    "scripts/ensure-pnpm.mjs",
+    "scripts/ensure-bun.mjs",
     "server",
     "desktop/package.json",
     "mobile/package.json",
