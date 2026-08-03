@@ -23,11 +23,11 @@ Public HTTP behavior should be registered by modules under `server/src/modules`.
 ## Commands
 
 ```bash
-pnpm install # always install from the repository root
-pnpm dev:server
-pnpm dev:desktop
-pnpm dev:web
-pnpm dev:mobile -- [mobile options]
+bun install # always install from the repository root
+bun run dev:server
+bun run dev:desktop
+bun run dev:web
+bun run dev:mobile -- [mobile options]
 cd portal && deno task dev
 deno task server:build
 deno task portal:check
@@ -35,9 +35,9 @@ deno task portal:test
 deno task tui:check
 ```
 
-## Raspberry Pi Server Deployment
+## Bazzite Server Deployment
 
-The development server stack runs in Dokploy on the Tailscale host `homelab`; Desktop and Portal normally continue to
+The development server stack runs in Dokploy on the Tailscale host `bazzite`; Desktop and Portal normally continue to
 run on the Mac. Deploy server changes headlessly from the repository root:
 
 ```bash
@@ -59,5 +59,19 @@ one-time setup, Tailscale endpoints, cutover procedure, and recovery details.
 
 - Do not commit `.env` files or secrets.
 - Do not modify `node_modules` or Mastra database files directly.
-- Use PNPM 11.13.0 for every `package.json` project and never create npm, Bun, or Yarn lockfiles.
-- Prefer the four root PNPM scripts for app development and package-local scripts for focused checks or builds.
+- Use Bun 1.3.14 for every `package.json` project and never create npm, PNPM, or Yarn lockfiles.
+- Prefer the four root Bun scripts for app development and package-local scripts for focused checks or builds.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in the Personal Linear workspace (`jacobfvanzyl`) under the Product team (`PER`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five canonical triage labels mapped one-to-one in Linear. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a multi-context domain layout rooted at `CONTEXT-MAP.md`, with system-wide decisions in `docs/adr/`. See `docs/agents/domain.md`.

@@ -1,0 +1,8 @@
+{
+  "name": "@weave/linear-tool",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "devDependencies": {
+    "@schpet/linear-cli": "2.3.0"
+  }
+}
