@@ -15,6 +15,7 @@
     "make:signed": "WEAVE_DESKTOP_CODESIGN=1 pnpm make",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:acceptance": "bun run package && WEAVE_FULL_STACK_ACCEPTANCE=1 vitest run tests/full-stack-acceptance.test.ts",
     "test:smoke": "WEAVE_ELECTRON_SMOKE=1 vitest run tests/electron-smoke.test.ts"
   },
   "dependencies": {
