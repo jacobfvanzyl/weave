@@ -1736,8 +1736,15 @@ const weaveContextResultSchema = portalToolResultSchema(
     ok: z.literal(true),
     scope: z.enum(["global", "project"]),
     basePath: z.string().optional(),
+    workspacePath: z.string().optional(),
     agentInstructions: z.string().optional(),
     files: z.array(weaveContextFileSchema),
+    diagnostics: z.object({
+      instructionFiles: z.number().int().nonnegative(),
+      instructionBytes: z.number().int().nonnegative(),
+      truncatedFiles: z.array(z.string()),
+      precedence: z.string(),
+    }).strict().optional(),
   }).strict(),
 );
 const lspQuerySuccessSchema = z.union([

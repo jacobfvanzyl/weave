@@ -16,17 +16,21 @@ let __contextSkillSourceTest: any;
 let __agentContextResolverTest: any;
 let __mageHandAgentTest: any;
 let agentContextRequestContextKey: string;
+let contextSkillPathsRequestContextKey: string;
 let singletonAgentConfig: any;
+let baseWorkspace: any;
 
 beforeAll(async () => {
   const promptRegistryPath =
     new URL('../../server/src/agent/mastra/prompt-templates/registry.ts', import.meta.url).href;
   const resolverPath = new URL('../../server/src/agent/mastra/context/resolver.ts', import.meta.url).href;
   const skillSourcePath = new URL('../../server/src/agent/mastra/context/skill-source.ts', import.meta.url).href;
+  const workspacePath = new URL('../../server/src/agent/mastra/workspace.ts', import.meta.url).href;
   const mageHandAgentPath = new URL('../../server/src/agent/mastra/agents/mage-hand-agent.ts', import.meta.url).href;
   const promptRegistry = await import(promptRegistryPath);
   const resolver = await import(resolverPath);
   const skillSource = await import(skillSourcePath);
+  const workspace = await import(workspacePath);
   const mageHandAgent = await import(mageHandAgentPath);
   expandPromptTemplate = promptRegistry.expandPromptTemplate;
   listPromptSummaries = promptRegistry.listPromptSummaries;
@@ -36,7 +40,9 @@ beforeAll(async () => {
   __agentContextResolverTest = resolver.__agentContextResolverTest;
   __mageHandAgentTest = mageHandAgent.__mageHandAgentTest;
   agentContextRequestContextKey = resolver.agentContextRequestContextKey;
+  contextSkillPathsRequestContextKey = resolver.contextSkillPathsRequestContextKey;
   singletonAgentConfig = resolver.singletonAgentConfig;
+  baseWorkspace = workspace.baseWorkspace;
 });
 
 const snapshot = (scope: 'user' | 'project', files: any[]) => ({
@@ -228,13 +234,23 @@ describe('context skill resolution', () => {
     projectSnapshot: snapshot('project', [
       {
         kind: 'skill',
-        path: '.weave/skills/shared/SKILL.md',
+        path: '.agents/skills/shared/SKILL.md',
         content: '---\nname: shared\ndescription: Project shared\n---\nProject shared body\n',
       },
       {
         kind: 'skill',
-        path: '.weave/skills/project-only/SKILL.md',
+        path: '.agents/skills/project-only/SKILL.md',
         content: '---\nname: project-only\ndescription: Project only\n---\nProject only body\n',
+      },
+      {
+        kind: 'skill',
+        path: '.agents/skills/project-only/references/notes.md',
+        content: 'Project-only supporting notes\n',
+      },
+      {
+        kind: 'skill',
+        path: '.weave/skills/legacy-only/SKILL.md',
+        content: '---\nname: legacy-only\ndescription: Legacy only\n---\nLegacy-only body\n',
       },
     ]),
   });
@@ -256,14 +272,20 @@ describe('context skill resolution', () => {
       expect.objectContaining({
         name: 'shared',
         source: 'project',
-        path: '.weave/skills/shared/SKILL.md',
+        path: '.agents/skills/shared/SKILL.md',
         description: 'Project shared',
       }),
       expect.objectContaining({
         name: 'project-only',
         source: 'project',
-        path: '.weave/skills/project-only/SKILL.md',
+        path: '.agents/skills/project-only/SKILL.md',
         description: 'Project only',
+      }),
+      expect.objectContaining({
+        name: 'legacy-only',
+        source: 'project',
+        path: '.weave/skills/legacy-only/SKILL.md',
+        description: 'Legacy only',
       }),
     ]));
     expect(summaries.some((skill) => skill.name === 'shared' && skill.source === 'user')).toBe(false);
@@ -273,8 +295,44 @@ describe('context skill resolution', () => {
       expect.stringMatching(/\/user\/user-only$/),
       expect.stringMatching(/\/project\/shared$/),
       expect.stringMatching(/\/project\/project-only$/),
+      expect.stringMatching(/\/project\/legacy-only$/),
     ]));
     expect(paths.filter((path) => path.endsWith('/shared'))).toHaveLength(1);
+  });
+
+  it('loads project skill instructions and supporting files through the Mastra workspace', async () => {
+    const paths = registerResolvedContextSkills(context);
+    const values = new Map<string, unknown>([[contextSkillPathsRequestContextKey, paths]]);
+    const requestContext = {
+      get: (key: string) => values.get(key),
+    };
+
+    await baseWorkspace.skills.maybeRefresh({ requestContext });
+
+    const skill = await baseWorkspace.skills.get('project-only');
+    expect(skill).toEqual(expect.objectContaining({
+      name: 'project-only',
+      description: 'Project only',
+      instructions: 'Project only body',
+    }));
+    await expect(baseWorkspace.skills.listReferences('project-only')).resolves.toEqual(['notes.md']);
+    await expect(baseWorkspace.skills.getReference('project-only', 'references/notes.md')).resolves.toBe(
+      'Project-only supporting notes\n',
+    );
+
+    await expect(baseWorkspace.skills.get('shared')).resolves.toEqual(expect.objectContaining({
+      name: 'shared',
+      description: 'Project shared',
+      instructions: 'Project shared body',
+    }));
+    await expect(baseWorkspace.skills.get('legacy-only')).resolves.toEqual(expect.objectContaining({
+      name: 'legacy-only',
+      description: 'Legacy only',
+      instructions: 'Legacy-only body',
+    }));
+    await expect(baseWorkspace.skills.search('Project only')).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ skillName: 'project-only' }),
+    ]));
   });
 
   it('merges duplicate skill names with project over user over source precedence', () => {
@@ -296,7 +354,7 @@ describe('context skill resolution', () => {
       [{
         name: 'shared',
         source: 'project',
-        path: '.weave/skills/shared/SKILL.md',
+        path: '.agents/skills/shared/SKILL.md',
         workspacePath: '__project/shared',
         description: 'Project shared',
       }],
@@ -304,7 +362,7 @@ describe('context skill resolution', () => {
 
     expect(byName.get('shared')).toEqual(expect.objectContaining({
       source: 'project',
-      path: '.weave/skills/shared/SKILL.md',
+      path: '.agents/skills/shared/SKILL.md',
       workspacePath: '__project/shared',
       description: 'Project shared',
     }));

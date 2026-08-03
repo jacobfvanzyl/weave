@@ -121,6 +121,28 @@ Deno.test("Portal tool schemas correlate and validate args and results", () => {
   if (Object.hasOwn(worktrees.worktrees[0], "upstream")) {
     throw new Error("expected absent Portal DTO fields to be omitted");
   }
+  const projectContext = parsePortalToolResult("portal.context.discover", {
+    ok: true,
+    scope: "project",
+    basePath: "/repo",
+    workspacePath: "/repo/worktree",
+    files: [],
+    diagnostics: {
+      instructionFiles: 2,
+      instructionBytes: 512,
+      truncatedFiles: [],
+      precedence: "git-root-to-workspace",
+    },
+  });
+  if (
+    projectContext.ok !== true ||
+    projectContext.workspacePath !== "/repo/worktree" ||
+    projectContext.diagnostics?.instructionFiles !== 2
+  ) {
+    throw new Error(
+      "expected Portal project context metadata to survive validation",
+    );
+  }
 
   let rejected = false;
   try {

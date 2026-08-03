@@ -472,10 +472,27 @@ const collectSkillDirectoryFiles = async (
   return files;
 };
 
+const projectSkillNameFromPath = (path: string) => {
+  const parts = path.split('/').filter(Boolean);
+  const skillsIndex = parts.lastIndexOf('skills');
+  return skillsIndex >= 0 ? parts[skillsIndex + 1] : undefined;
+};
+
+const mergeProjectSkillFiles = (
+  weaveSkillFiles: WeaveContextFile[],
+  agentSkillFiles: WeaveContextFile[],
+) => {
+  const agentSkillNames = new Set(agentSkillFiles.map((file) => projectSkillNameFromPath(file.path)).filter(Boolean));
+  return [
+    ...weaveSkillFiles.filter((file) => !agentSkillNames.has(projectSkillNameFromPath(file.path))),
+    ...agentSkillFiles,
+  ];
+};
+
 const collectWeaveDirectory = async (
   dir: string,
   contextPrefix: string,
-  options: { includeConfig: boolean },
+  options: { includeConfig: boolean; includeSkills?: boolean },
 ) => {
   const files: WeaveContextFile[] = [];
 
@@ -499,12 +516,14 @@ const collectWeaveDirectory = async (
       },
     ),
   );
-  files.push(
-    ...await collectSkillDirectoryFiles(
-      `${dir}/skills`,
-      `${contextPrefix}/skills`,
-    ),
-  );
+  if (options.includeSkills !== false) {
+    files.push(
+      ...await collectSkillDirectoryFiles(
+        `${dir}/skills`,
+        `${contextPrefix}/skills`,
+      ),
+    );
+  }
 
   return files;
 };
@@ -700,11 +719,17 @@ const readAgentInstructionsTool = async (
   return { ok: true, agentInstructions, files };
 };
 
-const collectProjectWeaveDirectory = async (workspaceRoot: string) => {
+const collectProjectContextFiles = async (workspaceRoot: string) => {
   const root = await Deno.realPath(workspaceRoot);
-  return await collectWeaveDirectory(`${root}/.weave`, '.weave', {
-    includeConfig: false,
-  });
+  const [weaveFiles, weaveSkillFiles, agentSkillFiles] = await Promise.all([
+    collectWeaveDirectory(`${root}/.weave`, '.weave', {
+      includeConfig: false,
+      includeSkills: false,
+    }),
+    collectSkillDirectoryFiles(`${root}/.weave/skills`, '.weave/skills'),
+    collectSkillDirectoryFiles(`${root}/.agents/skills`, '.agents/skills'),
+  ]);
+  return [...weaveFiles, ...mergeProjectSkillFiles(weaveSkillFiles, agentSkillFiles)];
 };
 
 export const discoverGlobalWeaveContext = async () => {
@@ -724,7 +749,7 @@ export const discoverProjectWeaveContext = async (
   const workspaceRoot = await resolveWorkspaceRoot(config, request);
   const [agents, weaveFiles] = await Promise.all([
     collectRootAgentInstructions(workspaceRoot),
-    collectProjectWeaveDirectory(workspaceRoot),
+    collectProjectContextFiles(workspaceRoot),
   ]);
   const files = [...agents, ...weaveFiles];
   return {

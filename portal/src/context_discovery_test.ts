@@ -53,7 +53,7 @@ Deno.test('Portal discovery reads ~/.config/weave prompts, skills, and config wi
   }
 });
 
-Deno.test('Portal project discovery resolves hierarchical AGENTS instructions through the selected workspace', async () => {
+Deno.test('Portal project discovery reads .agents and .weave skills with .agents precedence', async () => {
   const repo = await Deno.realPath(await Deno.makeTempDir({ prefix: 'weave-project-context-' }));
   const workspace = `${repo}/packages/app`;
   try {
@@ -67,8 +67,11 @@ Deno.test('Portal project discovery resolves hierarchical AGENTS instructions th
     await write(`${repo}/.weave/prompts/root.md`, '# Root prompt\n');
     await write(`${repo}/packages/.weave/prompts/packages.md`, '# Packages prompt\n');
     await write(`${workspace}/.weave/mcp.json`, '{"servers":{}}');
-    await write(`${workspace}/.weave/skills/app/SKILL.md`, '---\nname: app\ndescription: App\n---\n');
-    await write(`${workspace}/.weave/skills/app/references/notes.md`, 'supporting notes');
+    await write(`${workspace}/.agents/skills/app/SKILL.md`, '---\nname: app\ndescription: App\n---\n');
+    await write(`${workspace}/.agents/skills/app/references/notes.md`, 'supporting notes');
+    await write(`${workspace}/.weave/skills/app/SKILL.md`, '---\nname: app\ndescription: Old app\n---\n');
+    await write(`${workspace}/.weave/skills/app/references/old.md`, 'old supporting notes');
+    await write(`${workspace}/.weave/skills/legacy/SKILL.md`, '---\nname: legacy\ndescription: Legacy\n---\n');
 
     const result = await discoverProjectWeaveContext(portalConfig, { workspacePath: workspace });
     assertEquals(result.basePath, workspace);
@@ -78,8 +81,9 @@ Deno.test('Portal project discovery resolves hierarchical AGENTS instructions th
       'agents:packages/AGENTS.md',
       'agents:packages/AGENTS.override.md',
       'agents:packages/app/AGENTS.md',
-      'skill:.weave/skills/app/SKILL.md',
-      'skill:.weave/skills/app/references/notes.md',
+      'skill:.agents/skills/app/SKILL.md',
+      'skill:.agents/skills/app/references/notes.md',
+      'skill:.weave/skills/legacy/SKILL.md',
     ]);
     assertEquals(result.diagnostics.instructionFiles, 4);
   } finally {
