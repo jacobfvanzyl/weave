@@ -1,7 +1,7 @@
-import type { RefObject, ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Maximize2, MessageSquare, Minimize2, Settings, X } from 'lucide-react';
-import { mainPaneDividerWidthPx } from '../../lib/editor-layout';
 import { useChatStore, type ChatThread } from '../../stores/chat-store';
+import { PaneContentHost, type PaneHostIdentity, type PaneHostLifecycle } from '../panes/PaneContentHost';
 import { Button } from '../ui/button';
 import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from '../ui/menu';
 import { AssistantChat } from './AssistantChat';
@@ -10,45 +10,41 @@ type ChatPaneProps = {
   activeThreadId: string;
   breadcrumb?: ReactNode;
   isMaximized: boolean;
-  rightPaneReservedWidthPx?: number;
+  lifecycle: PaneHostLifecycle;
   runningThreadIds: string[];
-  surfaceRef: RefObject<HTMLDivElement | null>;
   terminalSlot?: ReactNode;
   threads: ChatThread[];
-  onClose: () => void;
   onMaximizeToggle: () => void;
 };
 
-export const ChatPane = ({
+const ChatPaneContent = ({
   activeThreadId,
   breadcrumb,
   isMaximized,
-  rightPaneReservedWidthPx,
+  lifecycle,
   runningThreadIds,
-  surfaceRef,
   terminalSlot,
   threads,
-  onClose,
   onMaximizeToggle,
 }: ChatPaneProps) => {
   const showToolCalls = useChatStore(state => state.showToolCalls);
   const setShowToolCalls = useChatStore(state => state.setShowToolCalls);
   const showReasoning = useChatStore(state => state.showReasoning);
   const setShowReasoning = useChatStore(state => state.setShowReasoning);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (lifecycle.focusRequest === 0) return undefined;
+    const animationFrame = window.requestAnimationFrame(() => {
+      surfaceRef.current
+        ?.querySelector<HTMLTextAreaElement>('[data-weave-active-thread="true"] textarea:not([disabled])')
+        ?.focus();
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [lifecycle.focusRequest]);
 
   return (
-    <div
-      key="chat"
-      className={rightPaneReservedWidthPx !== undefined
-        ? 'flex min-h-0 min-w-0 shrink-0 flex-col overflow-hidden'
-        : 'flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden'}
-      style={rightPaneReservedWidthPx === undefined
-        ? undefined
-        : { width: `max(0px, calc(100% - ${rightPaneReservedWidthPx}px - ${mainPaneDividerWidthPx}px))` }}
-      data-weave-main-pane="chat"
-      data-maximized={isMaximized ? 'true' : 'false'}
-      data-weave-right-pane-reserved-width={rightPaneReservedWidthPx}
-    >
+    <>
       <div className="relative flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
         <MessageSquare size={15} className="relative z-10 shrink-0 text-muted-foreground" />
         {breadcrumb ? (
@@ -101,7 +97,7 @@ export const ChatPane = ({
           aria-label="Close chat pane"
           title="Close chat pane"
           data-weave-chat-pane-window-action
-          onClick={onClose}
+          onClick={lifecycle.onClose}
         >
           <X size={14} />
         </Button>
@@ -125,6 +121,31 @@ export const ChatPane = ({
           ))}
       </div>
       {terminalSlot}
-    </div>
+    </>
   );
 };
+
+type ChatPaneHostProps = ChatPaneProps & {
+  identity: PaneHostIdentity;
+};
+
+export const ChatPaneHost = ({ identity, ...props }: ChatPaneHostProps) => (
+  <PaneContentHost
+    className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+    identity={identity}
+    paneType="thread"
+    data-maximized={props.isMaximized ? 'true' : 'false'}
+  >
+    <ChatPaneContent {...props} />
+  </PaneContentHost>
+);
+
+export const LegacyUnscopedChatPane = (props: ChatPaneProps) => (
+  <div
+    className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+    data-maximized={props.isMaximized ? 'true' : 'false'}
+    data-weave-legacy-unscoped-pane="thread"
+  >
+    <ChatPaneContent {...props} />
+  </div>
+);

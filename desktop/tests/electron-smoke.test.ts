@@ -9,7 +9,10 @@ import {
   expect as playwrightExpect,
   type Locator,
 } from "@playwright/test";
-import { WEAVE_RPC_PROTOCOL_VERSION } from "@weave/protocol";
+import {
+  parseRpcRequestResult,
+  WEAVE_RPC_PROTOCOL_VERSION,
+} from "@weave/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 
@@ -23,8 +26,10 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
   let serverUrl = "";
   let userDataPath = "";
   let scrollThreadMessages: Array<Record<string, unknown>> = [];
+  let rpcMethodCalls: string[] = [];
 
   beforeEach(async () => {
+    rpcMethodCalls = [];
     const now = new Date().toISOString();
     const longText = (label: string) =>
       `${label} ${
@@ -180,7 +185,7 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
       createdAt: now,
       updatedAt: now,
       metadata: { sortOrder: 1 },
-    }];
+    }].map((thread) => ({ ...thread, resourceId: "smoke-user" }));
     server = createServer((request, response) => {
       if (request.url === "/health") {
         response.setHeader("content-type", "application/json");
@@ -211,6 +216,7 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
           params?: Record<string, unknown>;
         };
         if (message.id === undefined || !message.method) return;
+        rpcMethodCalls.push(message.method);
         const respond = (result: unknown) =>
           socket.send(
             JSON.stringify({ jsonrpc: "2.0", id: message.id, result }),
@@ -282,6 +288,7 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
                 percent: 0,
                 compactionEnabled: true,
                 source: "estimate",
+                updatedAt: now,
               };
             case "workspaceFile.index":
               return {
@@ -299,6 +306,10 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
                   : "",
                 entries: [],
               };
+            case "workspaceFile.watch.start":
+            case "workspaceFile.watch.update":
+            case "workspaceFile.watch.stop":
+              return { ok: true };
             case "portal.list":
               return {
                 portals: [{
@@ -307,21 +318,55 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
                   name: "Smoke Portal",
                   status: "online",
                   capabilities: ["terminal"],
-                  roots: [{ id: "default", name: "Default" }],
+                  roots: [{
+                    id: "default",
+                    name: "Default",
+                    path: "/tmp",
+                  }],
                   primary: true,
                 }],
               };
+            case "portal.token.issue":
+              return {
+                portalId: "smoke-portal",
+                token: "smoke-portal-token",
+              };
+            case "terminal.list":
+              return { ok: true };
             case "notification.subscribe":
-              return { subscriptionId: "smoke-notifications", lastSequence: 0 };
+              return { subscriptionId: "smoke-notifications", afterSequence: 0 };
             case "agent.prompts.list":
               return { prompts: [] };
             case "client.surface.update":
-              return { ok: true };
+              return null;
             default:
               return null;
           }
         })();
-        respond(result);
+        respond(
+          parseRpcRequestResult("client", "server", message.method, result),
+        );
+        if (
+          (message.method === "workspaceFile.watch.start" ||
+            message.method === "workspaceFile.watch.update") &&
+          typeof message.params?.sessionId === "string" &&
+          typeof message.params?.requestId === "string"
+        ) {
+          socket.send(JSON.stringify({
+            jsonrpc: "2.0",
+            method: "workspaceFile.watch.event",
+            params: {
+              sessionId: message.params.sessionId,
+              event: {
+                type: "workspace-file.watch.ready",
+                requestId: message.params.requestId,
+                paths: Array.isArray(message.params.paths)
+                  ? message.params.paths
+                  : [],
+              },
+            },
+          }));
+        }
       });
     });
 
@@ -528,7 +573,7 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
         const showSidebar = page.getByRole("button", { name: "Show sidebar" })
           .first();
         await showSidebar.waitFor({ state: "visible", timeout: 5_000 });
-        await showSidebar.click();
+        await showSidebar.dispatchEvent("click");
         await sidebar.waitFor({ timeout: 5_000 });
       };
       await playwrightExpect(
@@ -562,12 +607,50 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
       await playwrightExpect(
         page.getByRole("button", { name: "Show terminal" }),
       ).toBeVisible();
+      const editorPaneHost = page.locator('[data-weave-pane-host="editor"]');
+      await playwrightExpect(editorPaneHost).toHaveAttribute(
+        "data-weave-pane-id",
+        /^legacy-pane:editor:[0-9a-f-]+$/,
+      );
+      await playwrightExpect(editorPaneHost).toHaveAttribute(
+        "data-weave-workspace-id",
+        "workspace-1",
+      );
+      await playwrightExpect.poll(() =>
+        rpcMethodCalls.filter((method) =>
+          method === "workspaceFile.watch.start"
+        ).length
+      ).toBeGreaterThan(0);
+
+      await page.getByRole("button", { name: "Show terminal" }).click();
+      const terminalPaneHost = page.locator(
+        '[data-weave-pane-host="terminal"]',
+      );
+      await playwrightExpect(terminalPaneHost).toHaveAttribute(
+        "data-weave-pane-id",
+        /^legacy-pane:terminal:[0-9a-f-]+$/,
+      );
+      await playwrightExpect(terminalPaneHost).toHaveAttribute(
+        "data-weave-workspace-id",
+        "workspace-1",
+      );
+      await page.getByRole("button", { name: "Hide terminal" }).last().click();
+      await playwrightExpect(terminalPaneHost).toHaveCount(0);
 
       await codeWorkspaceThread().waitFor({ state: "visible", timeout: 5_000 });
       await codeWorkspaceThread().click();
       await playwrightExpect(
         appHeader.getByRole("button", { name: "Hide chat" }),
       ).toBeVisible();
+      const chatPaneHost = page.locator('[data-weave-pane-host="thread"]');
+      await playwrightExpect(chatPaneHost).toHaveAttribute(
+        "data-weave-pane-id",
+        /^legacy-pane:thread:[0-9a-f-]+$/,
+      );
+      await playwrightExpect(chatPaneHost).toHaveAttribute(
+        "data-weave-workspace-id",
+        "workspace-1",
+      );
       const splitPaneWidths = await page.evaluate(() => {
         const chatPane = document.querySelector<HTMLElement>(
           '[data-weave-main-pane="chat"]',
@@ -590,6 +673,7 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
       await reopenSidebarIfHidden();
       expect(await hasSelectedHighlight(codeWorkspaceThread())).toBe(true);
       await appHeader.getByRole("button", { name: "Hide chat" }).click();
+      await playwrightExpect(chatPaneHost).toHaveCount(0);
       await reopenSidebarIfHidden();
       expect(await hasSelectedHighlight(codeWorkspaceThread())).toBe(false);
       expect(await hasSelectedHighlight(codeWorkspaceTitle)).toBe(true);
@@ -597,6 +681,11 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
       await reopenSidebarIfHidden();
       await notesProjectThread().waitFor({ state: "visible", timeout: 5_000 });
       await notesProjectThread().click();
+      await playwrightExpect.poll(() =>
+        rpcMethodCalls.filter((method) =>
+          method === "workspaceFile.watch.stop"
+        ).length
+      ).toBeGreaterThan(0);
       await playwrightExpect(appBarBreadcrumb).toContainText("Smoke Notes");
       await playwrightExpect(appBarBreadcrumb).toContainText("Vault");
       await playwrightExpect(
@@ -647,15 +736,16 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
       await page.getByRole("button", { name: "Hide sidebar" }).waitFor({
         timeout: 5_000,
       });
+      await codeWorkspaceThread().click();
 
       const shortcut = process.platform === "darwin" ? "Meta+K" : "Control+K";
       const composer = page.locator(
-        '[data-weave-active-thread="true"] textarea',
+        '[data-weave-pane-host="thread"] [data-weave-active-thread="true"] textarea',
       );
       await composer.waitFor({ state: "visible", timeout: 5_000 });
       await playwrightExpect(composer).toBeEnabled({ timeout: 5_000 });
       const shortcutOverlay = page.locator("[data-weave-shortcut-overlay]");
-      await page.getByRole("button", { name: "Hide sidebar" }).focus();
+      await appHeader.getByRole("button", { name: "Hide chat" }).focus();
       await page.keyboard.press(shortcut);
       await playwrightExpect(shortcutOverlay).toBeVisible({ timeout: 5_000 });
       await playwrightExpect(shortcutOverlay.getByText("Focus chat"))
@@ -663,6 +753,21 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
       await page.keyboard.press("c");
       await playwrightExpect(shortcutOverlay).toBeHidden({ timeout: 5_000 });
       await playwrightExpect(composer).toBeFocused({ timeout: 5_000 });
+      await composer.pressSequentially("Pane host keyboard input");
+      await playwrightExpect(composer).toHaveValue("Pane host keyboard input");
+      await composer.fill("");
+      const showSidebarForLegacyThread = page.getByRole("button", {
+        name: "Show sidebar",
+      }).first();
+      if (await showSidebarForLegacyThread.isVisible()) {
+        await showSidebarForLegacyThread.dispatchEvent("click");
+      }
+      const looseThread = sidebar.getByRole("button", { name: /^Loose thought$/ });
+      await looseThread.waitFor({ state: "visible", timeout: 5_000 });
+      await looseThread.click({ force: true });
+      const activeComposer = page.locator(
+        '[data-weave-active-thread="true"] textarea',
+      );
 
       await page.keyboard.press(shortcut);
       await page.keyboard.press("s");
@@ -672,7 +777,7 @@ describe.skipIf(!runSmoke)("Weave Electron smoke", () => {
       await page.waitForTimeout(900);
       await playwrightExpect(shortcutOverlay).toBeHidden({ timeout: 1_000 });
 
-      await composer.focus({ timeout: 5_000 });
+      await activeComposer.focus({ timeout: 5_000 });
       await page.keyboard.press(shortcut);
       await playwrightExpect(shortcutOverlay).toBeVisible({ timeout: 5_000 });
       await playwrightExpect(shortcutOverlay.getByText("Toggle sidebar"))

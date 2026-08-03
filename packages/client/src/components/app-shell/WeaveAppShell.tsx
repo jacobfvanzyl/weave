@@ -34,9 +34,9 @@ import { ShortcutProvider } from '../shortcuts';
 import { AppSidebarHost } from './AppSidebarHost';
 import { useAppShortcuts } from './useAppShortcuts';
 import { useShellLayout } from './useShellLayout';
-import { ChatPane } from '../chat/ChatPane';
+import { ChatPaneHost, LegacyUnscopedChatPane } from '../chat/ChatPane';
 import { ClientToolHost } from './ClientToolHost';
-import { EditorPane } from '../editor/EditorPane';
+import { EditorPaneHost } from '../editor/EditorPane';
 import { ProposalReviewPane } from '../proposals/ProposalReviewPane';
 import { GlobalTerminalOverlay } from '../terminal/GlobalTerminalOverlay';
 import { TerminalPaneHost } from '../terminal/TerminalPaneHost';
@@ -44,6 +44,7 @@ import type { TerminalPanelTab, TerminalPanelTabsChange, TerminalPanelTarget } f
 import { createTerminalLayoutSyncKey } from '../terminal/terminal-resize-sync';
 import type { TerminalTargetInput, TerminalTransport, TerminalWindowRecord } from '../../lib/terminal-types';
 import { NotificationHost } from '../notifications/NotificationHost';
+import { PaneContentHost, type PaneContentType, type PaneHostIdentity } from '../panes/PaneContentHost';
 import { ContextBreadcrumb } from '../workspace/ContextBreadcrumb';
 import { WorkspaceMainContent } from '../workspace/WorkspaceMainContent';
 import {
@@ -154,7 +155,17 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
   const activeProduct = sanitizeProductForClientApp(storedActiveProduct, clientApp);
   const { editorMinimumMeasureRef, editorMinimumWidthPx, pageRef, pageWidth } = useMainPaneMetrics();
   const sidebarSurfaceRef = useRef<HTMLElement | null>(null);
-  const chatSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const legacyPaneIdsRef = useRef(new Map<string, string>());
+  const [chatFocusRequest, setChatFocusRequest] = useState(0);
+  const getLegacyPaneIdentity = (paneType: PaneContentType, workspaceId: string): PaneHostIdentity => {
+    const key = `${workspaceId}:${paneType}`;
+    let paneId = legacyPaneIdsRef.current.get(key);
+    if (!paneId) {
+      paneId = `legacy-pane:${paneType}:${globalThis.crypto.randomUUID()}`;
+      legacyPaneIdsRef.current.set(key, paneId);
+    }
+    return { paneId, workspaceId };
+  };
   const isPortraitViewport = useIsPortraitViewport();
   const isElectronWindow = isElectronWindowNow();
   const workspaceTargets = useWorkspaceTargets({
@@ -780,11 +791,7 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
 
   const focusChat = useCallback(() => {
     if (hasChatPaneTarget) openPane('chat');
-    window.requestAnimationFrame(() => {
-      chatSurfaceRef.current
-        ?.querySelector<HTMLTextAreaElement>('[data-weave-active-thread="true"] textarea:not([disabled])')
-        ?.focus();
-    });
+    setChatFocusRequest((request) => request + 1);
   }, [hasChatPaneTarget, openPane]);
 
   const createThreadFromShortcut = useCallback(() => {
@@ -969,21 +976,24 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
   const renderAppBarCenterContent = () => renderProductNavigation() ?? appBarBreadcrumb;
 
   const renderTerminalPanel = (variant: 'pane' | 'main') => showTerminalPane ? (
-      terminalTarget ? (
+    terminalTarget ? (
     <TerminalPaneHost
       activeTabId={activeTerminalTabId}
       breadcrumb={breadcrumbPane === 'terminal' && variant === 'main' ? contextBreadcrumb : undefined}
       canToggleMaximized={canToggleTerminalMaximized}
       error={workspaceTerminalError}
-      focusRequest={terminalFocusRequest}
+      identity={getLegacyPaneIdentity('terminal', terminalTarget.workspaceId)}
       isSyncing={isWorkspaceTerminalSyncing}
       isEffectivelyMaximized={isTerminalEffectivelyMaximized}
       layoutSyncKey={terminalLayoutSyncKey}
+      lifecycle={{
+        focusRequest: terminalFocusRequest,
+        onClose: () => closePane('terminal'),
+      }}
       onActiveTabIdChange={handleActiveTerminalTabChange}
       onAddTab={() => void addTerminalTabForTarget(workspaceTerminalSyncTarget)}
       onCloseTab={(tab) => void closeTerminalTabForTarget(workspaceTerminalSyncTarget, tab, () => closePane('terminal'))}
       onExit={() => void handleTerminalExitForTarget(workspaceTerminalSyncTarget, () => closePane('terminal'))}
-      onHide={() => closePane('terminal')}
       onMaximizeToggle={() => handleMainPaneMaximizeToggle('terminal')}
       onRestoreMaximized={restoreMaximizedPane}
       onSessionActiveChange={handleTerminalSessionActiveChange}
@@ -995,31 +1005,69 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
       onTerminalColumnToggle={canToggleTerminalPaneColumn ? handleTerminalPaneColumnToggle : undefined}
       variant={variant}
     />
-      ) : (
+    ) : workspaceTargets.activeWorkspaceId ? (
+      <PaneContentHost
+        className="grid min-h-0 flex-1 place-items-center bg-background text-sm text-muted-foreground"
+        identity={getLegacyPaneIdentity('terminal', workspaceTargets.activeWorkspaceId)}
+        paneType="terminal"
+        data-weave-terminal-unavailable
+      >
         <div
-          className="grid min-h-0 flex-1 place-items-center bg-background text-sm text-muted-foreground"
-          data-weave-terminal-unavailable
+          className="max-w-sm text-center"
         >
-          <div className="max-w-sm text-center">
-            Terminal unavailable. Weave will reconnect this pane when the workspace Portal returns.
-          </div>
+          Terminal unavailable. Weave will reconnect this pane when the workspace Portal returns.
         </div>
-      )
+      </PaneContentHost>
+    ) : (
+      <div
+        className="grid min-h-0 flex-1 place-items-center bg-background text-sm text-muted-foreground"
+        data-weave-terminal-unavailable
+      >
+        <div className="max-w-sm text-center">
+          Terminal unavailable. Weave will reconnect this pane when the workspace Portal returns.
+        </div>
+      </div>
+    )
   ) : null;
 
-  const renderChatPane = () => showChatPane ? (
-    <ChatPane
-      activeThreadId={activeThreadId}
-      isMaximized={isChatMaximized}
-      rightPaneReservedWidthPx={twoColumnPaneLayout?.editorReservedWidthPx}
-      runningThreadIds={runningThreadIds}
-      surfaceRef={chatSurfaceRef}
-      terminalSlot={showTerminalInChatPane ? renderTerminalPanel('pane') : undefined}
-      threads={threads}
-      onClose={() => closePane('chat')}
-      onMaximizeToggle={() => handleMainPaneMaximizeToggle('chat')}
-    />
-  ) : null;
+  const renderChatPane = () => {
+    if (!showChatPane) return null;
+    const chatPaneProps = {
+      activeThreadId,
+      isMaximized: isChatMaximized,
+      lifecycle: {
+        focusRequest: chatFocusRequest,
+        onClose: () => closePane('chat'),
+      },
+      runningThreadIds,
+      terminalSlot: showTerminalInChatPane ? renderTerminalPanel('pane') : undefined,
+      threads,
+      onMaximizeToggle: () => handleMainPaneMaximizeToggle('chat'),
+    };
+    return (
+      <div
+        key="chat"
+        className={twoColumnPaneLayout?.editorReservedWidthPx !== undefined
+          ? 'flex min-h-0 min-w-0 shrink-0 flex-col overflow-hidden'
+          : 'flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden'}
+        style={twoColumnPaneLayout?.editorReservedWidthPx === undefined
+          ? undefined
+          : { width: `max(0px, calc(100% - ${twoColumnPaneLayout.editorReservedWidthPx}px - ${mainPaneDividerWidthPx}px))` }}
+        data-weave-main-pane="chat"
+        data-maximized={isChatMaximized ? 'true' : 'false'}
+        data-weave-right-pane-reserved-width={twoColumnPaneLayout?.editorReservedWidthPx}
+      >
+        {activeThread?.workspaceId ? (
+          <ChatPaneHost
+            {...chatPaneProps}
+            identity={getLegacyPaneIdentity('thread', activeThread.workspaceId)}
+          />
+        ) : (
+          <LegacyUnscopedChatPane {...chatPaneProps} />
+        )}
+      </div>
+    );
+  };
 
   const renderTerminalPane = () => showStandaloneTerminalPane ? (
     <div
@@ -1035,17 +1083,38 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
   const renderEditorPane = () => {
     if (!showEditorPane) return null;
 
-    if (!editorTarget && !notesTarget) {
+    if (!editorTarget && !notesTarget && workspaceTargets.activeWorkspaceId) {
       return (
-        <div
+        <PaneContentHost
           key="editor-unavailable"
           className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
+          identity={getLegacyPaneIdentity('editor', workspaceTargets.activeWorkspaceId)}
+          paneType="editor"
+          data-weave-main-pane="editor"
           data-weave-editor-unavailable
         >
           <div className="grid min-h-0 flex-1 place-items-center bg-background text-sm text-muted-foreground">
             <div className="max-w-sm text-center">
               {activeSurfaceProduct === 'notes' ? 'Notes vault' : 'Editor'} unavailable. Weave will restore it when the
               workspace Portal returns.
+            </div>
+          </div>
+          {showTerminalInEditorPane ? renderTerminalPanel('pane') : null}
+        </PaneContentHost>
+      );
+    }
+
+    if (!editorTarget && !notesTarget) {
+      return (
+        <div
+          key="editor-unavailable"
+          className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
+          data-weave-main-pane="editor"
+          data-weave-editor-unavailable
+        >
+          <div className="grid min-h-0 flex-1 place-items-center bg-background text-sm text-muted-foreground">
+            <div className="max-w-sm text-center">
+              Editor unavailable. Weave will reconnect this pane when the workspace Portal returns.
             </div>
           </div>
           {showTerminalInEditorPane ? renderTerminalPanel('pane') : null}
@@ -1061,50 +1130,67 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
       && validatedProposalReviewKey === currentProposalReviewKey
     ) {
       return (
-        <ProposalReviewPane
+        <PaneContentHost
           key="proposal-review"
-          proposalPath={activeProposalPath}
-          target={editorTarget}
-          threadId={activeThreadId}
+          className="contents"
+          identity={getLegacyPaneIdentity('editor', editorTarget.workspaceId)}
+          paneType="editor"
+        >
+          <ProposalReviewPane
+            proposalPath={activeProposalPath}
+            target={editorTarget}
+            threadId={activeThreadId}
+            isMaximized={isEditorMaximized}
+            terminalSlot={showTerminalInEditorPane ? renderTerminalPanel('pane') : undefined}
+            selectedFilePath={activeProposalFilePath}
+            onClose={closeProposalReview}
+            onOpenSource={(path) => {
+              if (!activeThread?.workspaceId) return;
+              requestEditorFollow({
+                threadId: activeThreadId,
+                workspaceId: activeThread.workspaceId,
+                path,
+                line: 1,
+                toolCallId: 'proposal-review',
+              });
+            }}
+            onExpandedChange={(nextExpanded) => {
+              if (nextExpanded) handleMainPaneMaximizeToggle('editor');
+              else restoreMaximizedPane();
+            }}
+          />
+        </PaneContentHost>
+      );
+    }
+
+    const target = (notesTarget ?? editorTarget)!;
+    return (
+      <div
+        key="editor"
+        className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
+        data-weave-main-pane="editor"
+        data-maximized={isEditorMaximized ? 'true' : 'false'}
+      >
+        <EditorPaneHost
+          followRequest={editorFollowRequest}
+          forceExplorerHoverOnly={forceExplorerHoverOnly}
+          identity={getLegacyPaneIdentity('editor', target.workspaceId)}
           isMaximized={isEditorMaximized}
-          terminalSlot={showTerminalInEditorPane ? renderTerminalPanel('pane') : undefined}
-          selectedFilePath={activeProposalFilePath}
-          onClose={closeProposalReview}
-          onOpenSource={(path) => {
-            if (!activeThread?.workspaceId) return;
-            requestEditorFollow({
-              threadId: activeThreadId,
-              workspaceId: activeThread.workspaceId,
-              path,
-              line: 1,
-              toolCallId: 'proposal-review',
-            });
+          lifecycle={{
+            focusRequest: editorFocusRequest,
+            onClose: () => closePane('editor'),
           }}
+          mode={notesTarget ? 'notes' : 'code'}
+          target={target}
+          terminalSlot={showTerminalInEditorPane ? renderTerminalPanel('pane') : undefined}
+          proposalBackFilePath={canBackToActiveProposalReview ? activeProposalFilePath : undefined}
+          onBackToProposalPreview={canBackToActiveProposalReview && activeProposalPath ? ( path) => openProposalReview(activeProposalPath, { filePath: path }) : undefined}
           onExpandedChange={(nextExpanded) => {
             if (nextExpanded) handleMainPaneMaximizeToggle('editor');
             else restoreMaximizedPane();
           }}
         />
-      );
-    }
-
-    return (
-      <EditorPane
-        followRequest={editorFollowRequest}
-        focusRequest={editorFocusRequest}
-        forceExplorerHoverOnly={forceExplorerHoverOnly}
-        isMaximized={isEditorMaximized}
-        mode={notesTarget ? 'notes' : 'code'}
-        target={(notesTarget ?? editorTarget)!}
-        terminalSlot={showTerminalInEditorPane ? renderTerminalPanel('pane') : undefined}
-        onClose={() => closePane('editor')}
-        proposalBackFilePath={canBackToActiveProposalReview ? activeProposalFilePath : undefined}
-        onBackToProposalPreview={canBackToActiveProposalReview && activeProposalPath ? ( path) => openProposalReview(activeProposalPath, { filePath: path }) : undefined}
-        onExpandedChange={(nextExpanded) => {
-          if (nextExpanded) handleMainPaneMaximizeToggle('editor');
-          else restoreMaximizedPane();
-        }}
-      />
+      </div>
     );
   };
 
