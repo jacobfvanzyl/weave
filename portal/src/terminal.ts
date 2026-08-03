@@ -575,7 +575,7 @@ const terminalCursorPositionSequence = (cursor: { x: number; y: number } | undef
 export const encodeTerminalInputHex = (data: string) =>
   [...textEncoder.encode(data)].map((byte) => byte.toString(16).padStart(2, '0'));
 
-export const decodeTmuxControlOutputValue = (value: string) => {
+export const decodeTmuxControlOutputBytes = (value: string) => {
   const bytes: number[] = [];
   for (let index = 0; index < value.length;) {
     const char = value[index];
@@ -603,8 +603,127 @@ export const decodeTmuxControlOutputValue = (value: string) => {
     bytes.push(...textEncoder.encode(escaped));
     index += 2;
   }
-  return textDecoder.decode(new Uint8Array(bytes));
+  return new Uint8Array(bytes);
 };
+
+type TmuxControlOutputCompatibilityMode =
+  | 'text'
+  | 'escape'
+  | 'legacy-title'
+  | 'legacy-title-escape';
+
+type TmuxControlOutputCompatibilityState = {
+  mode: TmuxControlOutputCompatibilityMode;
+};
+
+const escapeByte = 0x1b;
+const bellByte = 0x07;
+const stringTerminatorByte = 0x9c;
+const legacyTitleStartByte = 0x6b;
+const legacyTitleEndByte = 0x5c;
+
+const filterTmuxControlOutputBytes = (
+  bytes: Uint8Array,
+  state: TmuxControlOutputCompatibilityState,
+) => {
+  const output: number[] = [];
+
+  for (const byte of bytes) {
+    if (state.mode === 'text') {
+      if (byte === escapeByte) {
+        state.mode = 'escape';
+      } else {
+        output.push(byte);
+      }
+      continue;
+    }
+
+    if (state.mode === 'escape') {
+      if (byte === legacyTitleStartByte) {
+        state.mode = 'legacy-title';
+        continue;
+      }
+
+      output.push(escapeByte);
+      if (byte === escapeByte) {
+        state.mode = 'escape';
+      } else {
+        output.push(byte);
+        state.mode = 'text';
+      }
+      continue;
+    }
+
+    if (state.mode === 'legacy-title') {
+      if (byte === escapeByte) {
+        state.mode = 'legacy-title-escape';
+      } else if (byte === bellByte || byte === stringTerminatorByte) {
+        state.mode = 'text';
+      }
+      continue;
+    }
+
+    if (byte === legacyTitleEndByte) {
+      state.mode = 'text';
+    } else if (byte !== escapeByte) {
+      state.mode = 'legacy-title';
+    }
+  }
+
+  return new Uint8Array(output);
+};
+
+const flushTmuxControlOutputBytes = (state: TmuxControlOutputCompatibilityState) => {
+  const trailing = state.mode === 'escape' ? new Uint8Array([escapeByte]) : new Uint8Array();
+  state.mode = 'text';
+  return trailing;
+};
+
+export const decodeTmuxControlOutputValue = (value: string) => {
+  const state: TmuxControlOutputCompatibilityState = { mode: 'text' };
+  const filtered = filterTmuxControlOutputBytes(decodeTmuxControlOutputBytes(value), state);
+  const trailing = flushTmuxControlOutputBytes(state);
+  return textDecoder.decode(new Uint8Array([...filtered, ...trailing]));
+};
+
+export class TmuxControlOutputDecoder {
+  private readonly streams = new Map<string, {
+    compatibility: TmuxControlOutputCompatibilityState;
+    decoder: TextDecoder;
+  }>();
+
+  decode(paneId: string, value: string) {
+    let stream = this.streams.get(paneId);
+    if (!stream) {
+      stream = {
+        compatibility: { mode: 'text' },
+        decoder: new TextDecoder(),
+      };
+      this.streams.set(paneId, stream);
+    }
+    const bytes = filterTmuxControlOutputBytes(
+      decodeTmuxControlOutputBytes(value),
+      stream.compatibility,
+    );
+    return stream.decoder.decode(bytes, { stream: true });
+  }
+
+  flush(paneId: string) {
+    const stream = this.streams.get(paneId);
+    if (!stream) return '';
+    this.streams.delete(paneId);
+    return stream.decoder.decode(flushTmuxControlOutputBytes(stream.compatibility));
+  }
+
+  flushAll() {
+    const output: Array<{ paneId: string; data: string }> = [];
+    for (const paneId of this.streams.keys()) {
+      const data = this.flush(paneId);
+      if (data) output.push({ paneId, data });
+    }
+    return output;
+  }
+}
 
 export type TmuxControlNotification =
   | { type: 'output'; paneId: string; data: string }
@@ -614,18 +733,23 @@ export type TmuxControlNotification =
   | { type: 'exit'; reason?: string }
   | { type: 'other' };
 
-export const parseTmuxControlNotification = (line: string): TmuxControlNotification => {
+type TmuxControlOutputValueDecoder = (paneId: string, value: string) => string;
+
+export const parseTmuxControlNotification = (
+  line: string,
+  decodeOutput: TmuxControlOutputValueDecoder = (_paneId, value) => decodeTmuxControlOutputValue(value),
+): TmuxControlNotification => {
   if (line.startsWith('%output ')) {
     const match = /^%output\s+(\S+)\s?(.*)$/.exec(line);
     return match
-      ? { type: 'output', paneId: match[1], data: decodeTmuxControlOutputValue(match[2] ?? '') }
+      ? { type: 'output', paneId: match[1], data: decodeOutput(match[1], match[2] ?? '') }
       : { type: 'other' };
   }
 
   if (line.startsWith('%extended-output ')) {
     const match = /^%extended-output\s+(\S+)\s+.*?\s:\s?(.*)$/.exec(line);
     return match
-      ? { type: 'output', paneId: match[1], data: decodeTmuxControlOutputValue(match[2] ?? '') }
+      ? { type: 'output', paneId: match[1], data: decodeOutput(match[1], match[2] ?? '') }
       : { type: 'other' };
   }
 
@@ -660,6 +784,7 @@ class TmuxControlModeClient implements PortalTmuxControlClient {
   private attachReady?: { resolve: () => void };
   private commandBlockDepth = 0;
   private closing = false;
+  private readonly outputDecoder = new TmuxControlOutputDecoder();
 
   constructor(private readonly options: TmuxControlClientFactoryOptions) {}
 
@@ -788,6 +913,10 @@ class TmuxControlModeClient implements PortalTmuxControlClient {
       this.handleBufferedOutput(`${buffered}\n`);
     } catch (error) {
       if (!this.closing) this.options.handlers.onError(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      for (const { paneId, data } of this.outputDecoder.flushAll()) {
+        this.options.handlers.onOutput(paneId, data);
+      }
     }
   }
 
@@ -834,7 +963,10 @@ class TmuxControlModeClient implements PortalTmuxControlClient {
     if (this.commandBlockDepth > 0) return;
 
     this.finishAttachReady();
-    const notification = parseTmuxControlNotification(line);
+    const notification = parseTmuxControlNotification(
+      line,
+      (paneId, value) => this.outputDecoder.decode(paneId, value),
+    );
     if (notification.type === 'output') {
       this.options.handlers.onOutput(notification.paneId, notification.data);
       return;

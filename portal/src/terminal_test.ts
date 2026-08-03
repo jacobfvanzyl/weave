@@ -1,5 +1,6 @@
 import { assertEquals, assertExists } from 'jsr:@std/assert@1.0.19';
 import {
+  decodeTmuxControlOutputBytes,
   decodeTmuxControlOutputValue,
   encodeTerminalInputHex,
   parseTmuxControlNotification,
@@ -11,6 +12,7 @@ import {
   resolveTmuxDefaultTerminal,
   type TerminalHostEvent,
   type TerminalWindowRecord,
+  TmuxControlOutputDecoder,
   TmuxTerminalController,
 } from './terminal.ts';
 
@@ -1232,6 +1234,46 @@ Deno.test('tmux control parser decodes output, extended output, and window close
   assertEquals(parseTmuxControlNotification('%continue %2'), { type: 'continue', paneId: '%2' });
   assertEquals(parseTmuxControlNotification('%window-close @7'), { type: 'window-close', windowId: '@7' });
   assertEquals(parseTmuxControlNotification('%begin 1 2 0'), { type: 'other' });
+});
+
+Deno.test('tmux control output decoder preserves UTF-8 split across notifications', () => {
+  const decoder = new TmuxControlOutputDecoder();
+
+  assertEquals(decoder.decode('%1', '\\356'), '');
+  assertEquals(decoder.decode('%1', '\\202'), '');
+  assertEquals(decoder.decode('%1', '\\260'), '');
+  assertEquals(decoder.flush('%1'), '');
+});
+
+Deno.test('tmux control output decoder keeps pane streams independent', () => {
+  const decoder = new TmuxControlOutputDecoder();
+
+  assertEquals(decoder.decode('%1', '\\356'), '');
+  assertEquals(decoder.decode('%2', '\\342\\224\\202'), '│');
+  assertEquals(decoder.decode('%1', '\\202\\260'), '');
+  assertEquals([...decodeTmuxControlOutputBytes('\\033[31m')], [27, 91, 51, 49, 109]);
+});
+
+Deno.test('tmux control output decoder removes legacy tmux title sequences', () => {
+  const decoder = new TmuxControlOutputDecoder();
+
+  assertEquals(
+    decoder.decode('%1', 'before\\033kcd\\033\\134after'),
+    'beforeafter',
+  );
+  assertEquals(decoder.flush('%1'), '');
+});
+
+Deno.test('tmux control output decoder removes legacy titles split across notifications', () => {
+  const decoder = new TmuxControlOutputDecoder();
+
+  assertEquals(decoder.decode('%1', 'before\\033'), 'before');
+  assertEquals(decoder.decode('%1', 'knv'), '');
+  assertEquals(decoder.decode('%1', 'im\\033'), '');
+  assertEquals(decoder.decode('%1', '\\134after'), 'after');
+
+  assertEquals(decoder.decode('%2', 'color\\033'), 'color');
+  assertEquals(decoder.decode('%2', '[31mred'), '\x1b[31mred');
 });
 
 Deno.test('terminal input is encoded as byte hex for send-keys -H', () => {
