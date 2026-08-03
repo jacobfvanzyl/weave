@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import type { ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { createTerminalInputBatcher } from './terminal-input-batcher';
 
 type TerminalRendererViewProps = {
   autoFocus?: boolean;
@@ -208,7 +209,8 @@ export const XtermTerminalView = forwardRef<TerminalRendererHandle, TerminalRend
         terminal.open(containerRef.current);
         terminalRef.current = terminal;
 
-        const dataSubscription = terminal.onData(onInput);
+        const inputBatcher = createTerminalInputBatcher(onInput);
+        const dataSubscription = terminal.onData(data => inputBatcher.push(data));
         const resizeSubscription = terminal.onResize(size => onResize(size.cols, size.rows));
         const titleSubscription = terminal.onTitleChange(title => onTitleChange?.(title));
 
@@ -231,6 +233,7 @@ export const XtermTerminalView = forwardRef<TerminalRendererHandle, TerminalRend
 
         return () => {
           dataSubscription.dispose();
+          inputBatcher.dispose();
           resizeSubscription.dispose();
           titleSubscription.dispose();
         };
