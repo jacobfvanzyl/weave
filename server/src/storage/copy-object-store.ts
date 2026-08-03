@@ -35,7 +35,7 @@ const sourceConfig = (): StoreConfig => ({
 });
 
 const destinationConfig = (source: StoreConfig): StoreConfig => ({
-  endpoint: value('WEAVE_REMOTE_OBJECT_STORAGE_ENDPOINT', 'http://homelab:3900'),
+  endpoint: value('WEAVE_REMOTE_OBJECT_STORAGE_ENDPOINT', 'http://bazzite:3900'),
   region: value('WEAVE_REMOTE_OBJECT_STORAGE_REGION', source.region),
   bucket: value('WEAVE_REMOTE_OBJECT_STORAGE_BUCKET', source.bucket),
   accessKeyId: value('WEAVE_REMOTE_OBJECT_STORAGE_ACCESS_KEY', source.accessKeyId),
