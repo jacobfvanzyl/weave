@@ -26,6 +26,19 @@ const postgresImage = process.env.WEAVE_ACCEPTANCE_POSTGRES_IMAGE ??
   "supabase/postgres:17.6.1.142";
 const timeoutMs = 60_000;
 
+const packagedDesktopExecutable = () => {
+  const packageRoot = path.join(
+    desktopRoot,
+    "out",
+    `Weave-${process.platform}-${process.arch}`,
+  );
+  if (process.platform === "darwin") {
+    return path.join(packageRoot, "Weave.app", "Contents", "MacOS", "Weave");
+  }
+  if (process.platform === "win32") return path.join(packageRoot, "Weave.exe");
+  return path.join(packageRoot, "Weave");
+};
+
 type CommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -38,9 +51,20 @@ type RunningProcess = {
   output: () => string;
 };
 
-const randomValue = () => crypto.randomUUID().replaceAll("-", "");
+const randomToken = () => crypto.randomUUID().replaceAll("-", "");
 const delay = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const spawnCommand = (
+  executable: string,
+  args: string[],
+  options: CommandOptions,
+) =>
+  spawn(executable, args, {
+    cwd: options.cwd ?? repositoryRoot,
+    env: options.env ?? process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 
 const command = (
   executable: string,
@@ -48,11 +72,7 @@ const command = (
   options: CommandOptions,
 ): Promise<string> =>
   new Promise((resolve, reject) => {
-    const child = spawn(executable, args, {
-      cwd: options.cwd ?? repositoryRoot,
-      env: options.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawnCommand(executable, args, options);
     let output = "";
     child.stdout?.on("data", (chunk) => {
       output += String(chunk);
@@ -63,13 +83,15 @@ const command = (
     child.once("error", reject);
     child.once("exit", (code, signal) => {
       if (code === 0) resolve(output.trim());
-      else {reject(
+      else {
+        reject(
           new Error(
             `${options.label} failed (${
               signal ?? code ?? "unknown"
             }).\n${output.trim()}`,
           ),
-        );}
+        );
+      }
     });
   });
 
@@ -78,11 +100,7 @@ const startProcess = (
   args: string[],
   options: CommandOptions,
 ): RunningProcess => {
-  const child = spawn(executable, args, {
-    cwd: options.cwd ?? repositoryRoot,
-    env: options.env ?? process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const child = spawnCommand(executable, args, options);
   let captured = "";
   const capture = (chunk: unknown) => {
     captured = `${captured}${String(chunk)}`.slice(-16_000);
@@ -233,6 +251,7 @@ class AcceptanceDatabase {
 export type AcceptanceDesktopClient = {
   app: ElectronApplication;
   page: Page;
+  refreshFromServer: () => Promise<void>;
   waitUntilConnected: () => Promise<void>;
 };
 
@@ -241,7 +260,7 @@ export type AcceptancePortal = {
 };
 
 export class FullStackAcceptanceHarness {
-  readonly ownerId = `acceptance-owner-${randomValue()}`;
+  readonly ownerId = `acceptance-owner-${randomToken()}`;
   readonly database: AcceptanceDatabase;
   readonly rpc: RpcConnection;
   readonly workspacePath: string;
@@ -249,6 +268,7 @@ export class FullStackAcceptanceHarness {
   private serverProcess: RunningProcess | undefined;
   private portalProcess: RunningProcess | undefined;
   private databaseTunnel: RunningProcess | undefined;
+  private packagedDesktopProcess: RunningProcess | undefined;
   private readonly desktopClients: AcceptanceDesktopClient[] = [];
 
   private constructor(
@@ -278,16 +298,17 @@ export class FullStackAcceptanceHarness {
         capabilities: [],
         client: {
           clientAppId: "weave-acceptance-control",
-          clientInstanceId: `acceptance-control-${randomValue()}`,
+          clientInstanceId: `acceptance-control-${randomToken()}`,
         },
       },
     });
   }
 
   static async start() {
-    await access(desktopMainPath).catch(() => {
+    const desktopExecutable = packagedDesktopExecutable();
+    await access(desktopExecutable).catch(() => {
       throw new Error(
-        "Desktop production bundle is missing. Run `bun --filter weave-desktop package` first.",
+        "Packaged Desktop executable is missing. Run `bun --filter weave-desktop package` first.",
       );
     });
     const rootPath = await mkdtemp(path.join(tmpdir(), "weave-acceptance-"));
@@ -324,10 +345,10 @@ export class FullStackAcceptanceHarness {
         label: "Docker context selection",
       }));
     const dockerAccess = await dockerAccessForContext(dockerContext);
-    const suffix = randomValue().slice(0, 12);
+    const suffix = randomToken().slice(0, 12);
     const postgresContainerName = `weave-acceptance-${suffix}`;
-    const postgresPassword = randomValue();
-    const ownerToken = randomValue();
+    const postgresPassword = randomToken();
+    const ownerToken = randomToken();
     const credentialEncryptionKey = Buffer.from(
       crypto.getRandomValues(new Uint8Array(32)),
     ).toString("base64");
@@ -517,16 +538,51 @@ export class FullStackAcceptanceHarness {
     });
     const page = await app.firstWindow();
     const waitUntilConnected = async () => {
-      await page.reload({ waitUntil: "domcontentloaded" });
       await page.locator("[data-weave-thread-sidebar]").waitFor({
         state: "visible",
         timeout: 15_000,
       });
     };
+    const refreshFromServer = async () => {
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await waitUntilConnected();
+    };
     await waitUntilConnected();
-    const client = { app, page, waitUntilConnected };
+    const client = { app, page, refreshFromServer, waitUntilConnected };
     this.desktopClients.push(client);
     return client;
+  }
+
+  async startPackagedDesktop() {
+    const userDataPath = path.join(this.rootPath, "desktop-packaged");
+    this.packagedDesktopProcess = startProcess(
+      packagedDesktopExecutable(),
+      [],
+      {
+        cwd: desktopRoot,
+        env: {
+          ...process.env,
+          WEAVE_DESKTOP_SERVER_URL: this.serverUrl,
+          WEAVE_DESKTOP_USER_DATA: userDataPath,
+          WEAVE_DESKTOP_CONNECTION_USER_DATA: userDataPath,
+          WEAVE_PORTAL_HOME: this.portalHomePath,
+          WEAVE_OWNER_TOKEN: this.ownerToken,
+        },
+        label: "Packaged Acceptance Desktop",
+      },
+    );
+    await waitFor(
+      "packaged Desktop RPC connection",
+      async () => {
+        const response = await fetch(`${this.serverUrl}/health`);
+        if (!response.ok) return false;
+        const health = await response.json() as {
+          rpc?: { clients?: number };
+        };
+        return (health.rpc?.clients ?? 0) >= 2;
+      },
+      this.packagedDesktopProcess,
+    );
   }
 
   async writeWorkspaceFile(
@@ -541,7 +597,7 @@ export class FullStackAcceptanceHarness {
     const sha256 = [...digestBytes].map((value) =>
       value.toString(16).padStart(2, "0")
     ).join("");
-    const transferId = `acceptance-upload-${randomValue()}`;
+    const transferId = `acceptance-upload-${randomToken()}`;
     const chunks = Math.ceil(bytes.byteLength / WEAVE_RPC_BINARY_CHUNK_BYTES);
     await this.rpc.request("binary.begin", {
       transferId,
@@ -594,6 +650,7 @@ export class FullStackAcceptanceHarness {
     await Promise.allSettled(
       this.desktopClients.splice(0).map((client) => client.app.close()),
     );
+    await stopProcess(this.packagedDesktopProcess);
     await stopProcess(this.portalProcess);
     await stopProcess(this.serverProcess);
     await stopProcess(this.databaseTunnel);

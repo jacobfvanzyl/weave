@@ -19,9 +19,10 @@ describe.skipIf(!runAcceptance)(
       async () => {
         harness = await FullStackAcceptanceHarness.start();
         const portal = await harness.startPortal();
+        await harness.startPackagedDesktop();
 
         const { project } = await harness.rpc.request("code.project.create", {
-          name: "Acceptance Workspace",
+          name: "Acceptance Project",
           projectKind: "git",
           portalId: portal.portalId,
           rootId: "default",
@@ -53,18 +54,35 @@ describe.skipIf(!runAcceptance)(
           );
         }
 
-        await harness.rpc.request("chat.thread.update", {
-          threadId: thread.id,
-          title: "Converged after RPC update",
-        });
-        for (const client of [firstClient, secondClient]) {
-          await client.waitUntilConnected();
-          await playwrightExpect(
-            client.page.locator("[data-weave-thread-sidebar]"),
-          ).toContainText(
-            "Converged after RPC update",
-          );
-        }
+        await firstClient.page.getByRole("button", {
+          name: "Open menu for Durable acceptance thread",
+        }).click();
+        await firstClient.page.getByRole("menuitem", { name: "Archive" })
+          .click();
+        await playwrightExpect.poll(async () => {
+          const result = await harness!.rpc.request("chat.thread.list");
+          return result.threads.find((candidate) => candidate.id === thread.id)
+            ?.metadata?.archived;
+        }).toBe(true);
+
+        await secondClient.refreshFromServer();
+        await playwrightExpect(
+          secondClient.page.locator("[data-weave-thread-sidebar]"),
+        ).not.toContainText("Durable acceptance thread");
+        await secondClient.page.getByRole("button", { name: "main menu" })
+          .click();
+        await secondClient.page.getByRole("menuitem", {
+          name: "Archived Threads",
+        }).click();
+        await secondClient.page.getByRole("dialog").getByRole("button", {
+          name: "Restore",
+        }).click();
+        await playwrightExpect.poll(async () => {
+          const result = await harness!.rpc.request("chat.thread.list");
+          return result.threads.find((candidate) => candidate.id === thread.id)
+            ?.metadata?.archived;
+        }).not.toBe(true);
+        await firstClient.refreshFromServer();
 
         await harness.writeWorkspaceFile(
           {
@@ -83,8 +101,8 @@ describe.skipIf(!runAcceptance)(
 
         await harness.restartServer();
         await Promise.all([
-          firstClient.waitUntilConnected(),
-          secondClient.waitUntilConnected(),
+          firstClient.refreshFromServer(),
+          secondClient.refreshFromServer(),
         ]);
 
         const persistedThreads = await harness.rpc.request("chat.thread.list");
@@ -92,7 +110,7 @@ describe.skipIf(!runAcceptance)(
           expect.arrayContaining([
             expect.objectContaining({
               id: thread.id,
-              title: "Converged after RPC update",
+              title: "Durable acceptance thread",
             }),
           ]),
         );
@@ -105,9 +123,7 @@ describe.skipIf(!runAcceptance)(
         for (const client of [firstClient, secondClient]) {
           await playwrightExpect(
             client.page.locator("[data-weave-thread-sidebar]"),
-          ).toContainText(
-            "Converged after RPC update",
-          );
+          ).toContainText("Durable acceptance thread");
         }
       },
       180_000,
