@@ -200,6 +200,10 @@ const messageFilePartSchema = z.object({
   url: z.string(),
   mediaType: z.string(),
   filename: z.string().optional(),
+  metadata: z.object({
+    attachmentId: nonEmptyStringSchema.optional(),
+    attachmentUrlPath: z.string().optional(),
+  }).strict().optional(),
   providerMetadata: providerMetadataSchema.optional(),
 }).strict();
 const messageSourceUrlPartSchema = z.object({

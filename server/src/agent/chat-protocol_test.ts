@@ -126,3 +126,34 @@ Deno.test('message normalization produces stable Weave-owned messages', () => {
   assertMatch(message.parts[2].type, /^data-upstream-unsupported$/);
   assertEquals(message.metadata, { traceId: 'trace-1' });
 });
+
+Deno.test('message normalization preserves typed image attachment identity', () => {
+  const message = normalizeWeaveChatMessage({
+    id: 'message-image',
+    role: 'user',
+    parts: [
+      {
+        type: 'file',
+        url: 'http://localhost/attachments/att_image',
+        mediaType: 'image/png',
+        metadata: {
+          attachmentId: 'att_image',
+          attachmentUrlPath: '/attachments/att_image',
+        },
+      },
+    ],
+  });
+
+  weaveChatMessageSchema.parse(message);
+  assertEquals(message.parts, [
+    {
+      type: 'file',
+      url: 'http://localhost/attachments/att_image',
+      mediaType: 'image/png',
+      metadata: {
+        attachmentId: 'att_image',
+        attachmentUrlPath: '/attachments/att_image',
+      },
+    },
+  ]);
+});

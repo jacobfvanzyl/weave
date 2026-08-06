@@ -1,4 +1,4 @@
-import { __chatStateContextUsageTest } from './chat-state.ts';
+import { __chatStateContextUsageTest, loadChatThreadUiMessages } from './chat-state.ts';
 
 const assertEquals = (actual: unknown, expected: unknown) => {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -30,4 +30,46 @@ Deno.test('retained run replaces its earliest persisted assistant instead of dup
 
   assertEquals(merged.map((message) => message.id), ['user-1', 'assistant-run-1', 'assistant-final']);
   assertEquals(merged[1], retained[0]);
+});
+
+Deno.test('persisted image attachments remain renderable when a thread is reopened', async () => {
+  const service = {
+    getChatThreadMessages: async () => [{
+      id: 'user-image',
+      role: 'user',
+      content: {
+        format: 2,
+        parts: [],
+        experimental_attachments: [{
+          url: 'https://weave.local/attachments/att_reopened',
+          contentType: 'image/png',
+        }],
+      },
+    }],
+    getChatSuspendedAskUserRunIds: async () => ({}),
+    listChatThreadCompactions: async () => [],
+    getChatSubmittedUserMessages: () => [],
+    getChatUiMessages: () => [],
+  };
+
+  const messages = await loadChatThreadUiMessages(service as any, {
+    resourceId: 'resource-1',
+    threadId: 'thread-1',
+    origin: 'http://localhost',
+  });
+
+  assertEquals(messages, [{
+    id: 'user-image',
+    role: 'user',
+    parts: [{
+      type: 'file',
+      url: 'http://localhost/attachments/att_reopened',
+      mediaType: 'image/png',
+      metadata: {
+        attachmentId: 'att_reopened',
+        attachmentUrlPath: '/attachments/att_reopened',
+      },
+    }],
+    metadata: undefined,
+  }]);
 });

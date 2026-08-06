@@ -22,14 +22,11 @@ const isImagePart = (part: PromptPart) => {
   return partMediaType(part)?.startsWith('image/') ?? false;
 };
 
+const referenceUrl = (value: unknown) =>
+  typeof value === 'string' ? value : value instanceof URL ? value.href : undefined;
+
 const imageReference = (part: PromptPart) => {
-  const value = typeof part.image === 'string'
-    ? part.image
-    : typeof part.url === 'string'
-    ? part.url
-    : typeof part.data === 'string'
-    ? part.data
-    : undefined;
+  const value = referenceUrl(part.image) ?? referenceUrl(part.url) ?? referenceUrl(part.data);
   const match = value?.match(/(?:weave\.local\/attachments\/|\/attachments\/)([A-Za-z0-9_-]+)/);
   const attachmentId = match?.[1];
   const name = typeof part.filename === 'string' ? part.filename : 'image';

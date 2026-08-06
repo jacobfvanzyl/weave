@@ -58,7 +58,13 @@ export const inferImageMimeType = async (file: File) => {
 const isCompleteAttachment = (attachment: Attachment): attachment is CompleteAttachment =>
   attachment.status.type === 'complete';
 
-export const imageAttachmentAdapter: AttachmentAdapter = {
+type ImageAttachmentAdapterOptions = {
+  onSendError?: (error: unknown) => void | Promise<void>;
+};
+
+export const createImageAttachmentAdapter = (
+  options: ImageAttachmentAdapterOptions = {},
+): AttachmentAdapter => ({
   accept: '*',
   async add({ file }) {
     const mimeType = await inferImageMimeType(file);
@@ -74,25 +80,32 @@ export const imageAttachmentAdapter: AttachmentAdapter = {
     };
   },
   async send(attachment) {
-    const mimeType = attachment.contentType ?? await inferImageMimeType(attachment.file) ?? 'image/png';
-    const stored = await uploadImageAttachment(attachment.file, mimeType);
-    return {
-      ...attachment,
-      contentType: mimeType,
-      status: { type: 'complete' },
-      content: [
-        {
-          type: 'file',
-          mimeType,
-          filename: attachment.name,
-          data: stored.urlPath,
-          metadata: { attachmentId: stored.id },
-        },
-      ],
-    };
+    try {
+      const mimeType = attachment.contentType ?? await inferImageMimeType(attachment.file) ?? 'image/png';
+      const stored = await uploadImageAttachment(attachment.file, mimeType);
+      return {
+        ...attachment,
+        contentType: mimeType,
+        status: { type: 'complete' },
+        content: [
+          {
+            type: 'file',
+            mimeType,
+            filename: attachment.name,
+            data: stored.urlPath,
+            metadata: { attachmentId: stored.id },
+          },
+        ],
+      };
+    } catch (error) {
+      await options.onSendError?.(error);
+      throw error;
+    }
   },
   async remove() {},
-};
+});
+
+export const imageAttachmentAdapter = createImageAttachmentAdapter();
 
 export const completeImageAttachment = async (attachment: Attachment) => {
   if (isCompleteAttachment(attachment)) return attachment;

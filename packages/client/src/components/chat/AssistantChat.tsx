@@ -108,15 +108,37 @@ import {
 } from './ask-user';
 import { buildProposalImplementationUserMessage, getProposalActionDisplay, getProposalActionDisplayLabel, } from './proposal-implementation';
 import { getWorkedForLabel, getWorkingForLabel, withAssistantRunTimingCustomMetadata } from './turn-timing';
-import { completeImageAttachment, imageAttachmentAdapter } from '../../lib/image-attachment-adapter';
+import {
+  completeImageAttachment,
+  createImageAttachmentAdapter,
+  imageAttachmentAdapter,
+} from '../../lib/image-attachment-adapter';
+import {
+  ComposerAttachmentUploadRecovery,
+  type ComposerAttachmentUploadRecoveryTarget,
+} from '../../lib/composer-attachment-upload-recovery';
 import { getAttachmentObjectUrl } from '../../lib/binary-transfers';
 import { getLatestPendingToolApproval, type ToolApprovalPart } from './tool-approval';
 import { ChatRenderErrorBoundary } from './ChatRenderErrorBoundary';
-import { shouldApplyPersistedMessageSnapshot } from './persisted-message-reconciliation';
+import {
+  reconcileStoppedThreadMessageSnapshot,
+  shouldApplyPersistedMessageSnapshot,
+} from './persisted-message-reconciliation';
 
 const ThreadIdContext = createContext<string | null>(null);
 const StopThreadRunContext = createContext<(() => Promise<void>) | null>(null);
 const ActiveThreadRunContext = createContext<ThreadRunState | undefined>(undefined);
+type ComposerAttachmentUploadContextValue = {
+  error?: string;
+  prepare: (target: ComposerAttachmentUploadRecoveryTarget) => void;
+  reportUploadError: (error: unknown) => void;
+  reportSteeringError: (error: unknown) => void;
+};
+const ComposerAttachmentUploadContext = createContext<ComposerAttachmentUploadContextValue>({
+  prepare: () => {},
+  reportUploadError: () => {},
+  reportSteeringError: () => {},
+});
 type PendingAskUserResume = {
   mastraRunId: string;
   toolCallId: string;
@@ -185,6 +207,13 @@ const completeComposerAttachment = async (attachment: Attachment) => {
   return completeImageAttachment(attachment);
 };
 
+class SteeringAttachmentUploadError extends Error {
+  constructor(readonly uploadError: unknown) {
+    super(uploadError instanceof Error ? uploadError.message : String(uploadError));
+    this.name = 'SteeringAttachmentUploadError';
+  }
+}
+
 const toSteeringFilePart = (part: ThreadUserMessagePart): UIMessage['parts'][number] | null => {
   if (part.type === 'file') {
     return {
@@ -214,7 +243,10 @@ const buildSteeringUserMessage = async (
   metadata?: Record<string, unknown>,
 ): Promise<UIMessage> => {
   const parts: UIMessage['parts'] = text.length > 0 ? [{ type: 'text', text }] : [];
-  const completeAttachments = await Promise.all(attachments.map(completeComposerAttachment));
+  const completeAttachments = await Promise.all(attachments.map(completeComposerAttachment))
+    .catch((error) => {
+      throw new SteeringAttachmentUploadError(error);
+    });
 
   for (const attachment of completeAttachments) {
     for (const contentPart of attachment.content) {
@@ -1783,6 +1815,7 @@ const SlashHighlightedInput = ({
 
 const Composer = () => {
   const aui = useAui();
+  const attachmentUpload = useContext(ComposerAttachmentUploadContext);
   const threadId = useContext(ThreadIdContext);
   const stopActiveThreadRun = useContext(StopThreadRunContext);
   const activeThreadRun = useContext(ActiveThreadRunContext);
@@ -1916,6 +1949,11 @@ const Composer = () => {
         abandonComposerDraftServerAck(threadId);
         const currentText = aui.composer().getState().text;
         saveComposerDraft(threadId, currentText.length > 0 ? currentText : originalText);
+        attachmentUpload.reportSteeringError(new Error(
+          result.reason === 'stale_run'
+            ? 'The active run changed before this message could be sent'
+            : 'The agent run stopped before this message could be sent',
+        ));
         return;
       }
 
@@ -1940,11 +1978,16 @@ const Composer = () => {
       abandonComposerDraftServerAck(threadId);
       const currentText = aui.composer().getState().text;
       saveComposerDraft(threadId, currentText.length > 0 ? currentText : originalText);
+      if (error instanceof SteeringAttachmentUploadError) {
+        attachmentUpload.reportUploadError(error.uploadError);
+      } else {
+        attachmentUpload.reportSteeringError(error);
+      }
       console.error('[chat] failed to send steering message', error);
     } finally {
       setIsSteeringSending(false);
     }
-  }, [activeThreadRun?.active, activeThreadRun?.runId, aui, composerAttachments, composerText, isSendActive, isSteeringSending, promptContext, queryClient, resourceId, threadId,]);
+  }, [activeThreadRun?.active, activeThreadRun?.runId, attachmentUpload, aui, composerAttachments, composerText, isSendActive, isSteeringSending, promptContext, queryClient, resourceId, threadId,]);
 
   const runLocalCompaction = useCallback(async () => {
     if (!threadId || !activeModel || isCompacting || isThreadRunning) return;
@@ -2029,6 +2072,7 @@ const Composer = () => {
     <ComposerPrimitive.Root
       ref={composerRef}
       onSubmitCapture={() => {
+        attachmentUpload.prepare(aui.composer());
         if (!/^\/compact(?:\s|$)/i.test(composerText.trim())) markDraftAwaitingSend();
       }}
       onSubmit={handleComposerSubmit}
@@ -2040,6 +2084,11 @@ const Composer = () => {
       <div className="mb-3 flex flex-wrap gap-2 empty:hidden">
         <ComposerImageAttachments />
       </div>
+      {attachmentUpload.error ? (
+        <p className="mb-2 text-xs text-destructive" role="alert">
+          {attachmentUpload.error}
+        </p>
+      ) : null}
       <SlashHighlightedInput
         inputRef={inputRef}
         value={composerText}
@@ -2758,6 +2807,48 @@ const AssistantChatRuntime = ({
   const pendingAskUserResumeRef = useRef<PendingAskUserResume | undefined>(undefined);
   const sendingProposalImplementationRequestRef = useRef<string | undefined>(undefined);
   const viewportHandle = useRef<ThreadViewportHandle>({ element: null });
+  const [composerSendError, setComposerSendError] = useState<string>();
+  const composerAttachmentUploadRecovery = useMemo(() => new ComposerAttachmentUploadRecovery(), []);
+  const reportComposerAttachmentUploadError = useCallback((error: unknown, composerAvailable: boolean) => {
+    abandonComposerDraftServerAck(threadId);
+    const reason = error instanceof Error ? error.message : String(error);
+    setComposerSendError(
+      composerAvailable
+        ? `Image upload failed: ${reason}. Your message is still in the composer; try sending it again.`
+        : `Image upload failed: ${reason}.`,
+    );
+  }, [threadId]);
+  const reportComposerSteeringError = useCallback((error: unknown) => {
+    abandonComposerDraftServerAck(threadId);
+    const reason = error instanceof Error ? error.message : String(error);
+    setComposerSendError(`Message not sent: ${reason}. Your message is still in the composer; try sending it again.`);
+  }, [threadId]);
+  const composerAttachmentAdapter = useMemo(
+    () => createImageAttachmentAdapter({
+      onSendError: async (error) => {
+        let restored = false;
+        try {
+          restored = await composerAttachmentUploadRecovery.restore();
+        } catch (restoreError) {
+          console.error('[chat] failed to restore composer after image upload error', restoreError);
+        }
+        reportComposerAttachmentUploadError(error, restored);
+      },
+    }),
+    [composerAttachmentUploadRecovery, reportComposerAttachmentUploadError],
+  );
+  const composerAttachmentUpload = useMemo<ComposerAttachmentUploadContextValue>(
+    () => ({
+      error: composerSendError,
+      prepare: (target) => {
+        setComposerSendError(undefined);
+        composerAttachmentUploadRecovery.capture(target);
+      },
+      reportUploadError: (error) => reportComposerAttachmentUploadError(error, true),
+      reportSteeringError: reportComposerSteeringError,
+    }),
+    [composerAttachmentUploadRecovery, composerSendError, reportComposerAttachmentUploadError, reportComposerSteeringError],
+  );
   const { data: modelConfig } = useQuery({
     queryKey: ['models'],
     queryFn: fetchModelConfig,
@@ -2888,6 +2979,7 @@ const AssistantChatRuntime = ({
   }, [assistantUiInitialMessages, chat, chat.status, persistedMessagesVersion]);
 
   const stopActiveThreadRun = useCallback(async () => {
+    const liveMessagesAtStop = [...chat.messages];
     resumeRunIdRef.current = runState?.runId ?? 'active';
     useChatStore.getState().setThreadRunning(threadId, false);
     const cancelRun = cancelThreadRun(threadId);
@@ -2901,10 +2993,25 @@ const AssistantChatRuntime = ({
       chat.stop();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['thread-run', resourceId, threadId], }),
-        queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId], }),
         queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }),
         queryClient.invalidateQueries({ queryKey: ['thread-context-usage', resourceId, threadId], }),
       ]);
+
+      try {
+        const reconciled = await reconcileStoppedThreadMessageSnapshot({
+          liveMessages: liveMessagesAtStop,
+          loadMessages: () => listServerMessages(threadId),
+          publishMessages: (messages) => {
+            queryClient.setQueryData(['thread-messages', resourceId, threadId], messages);
+          },
+        });
+        if (!reconciled) {
+          await queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId], });
+        }
+      } catch (error) {
+        console.error('[chat] failed to reconcile stopped thread messages', error);
+        await queryClient.invalidateQueries({ queryKey: ['thread-messages', resourceId, threadId], });
+      }
     }
   }, [chat, queryClient, resourceId, runState?.runId, threadId]);
 
@@ -2939,7 +3046,7 @@ const AssistantChatRuntime = ({
     [chat],);
 
   const runtime = useAISDKRuntime(chat, {
-    adapters: { attachments: imageAttachmentAdapter },
+    adapters: { attachments: composerAttachmentAdapter },
   });
 
   if (transport instanceof AssistantChatTransport) { transport.setRuntime(runtime);
@@ -2986,29 +3093,31 @@ const AssistantChatRuntime = ({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <StopThreadRunContext.Provider value={stopActiveThreadRun}>
-        <ActiveThreadRunContext.Provider value={runState}>
-          <AskUserResponseContext.Provider value={{ respond: respondToAskUser }}>
-            <ToolApprovalResponseContext.Provider
-              value={{
-                pending: pendingToolApproval,
-                respond: respondToToolApproval,
-              }}
-            >
-              <ThreadIdContext.Provider value={threadId}>
-              <ThreadRunningTracker threadId={threadId} />
-              <IdleActiveThreadRefresher threadId={threadId} />
-              <Thread
-                autoCollapseContext={autoCollapseContext}
-                activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
-                setIsFollowingBottom={setIsFollowingBottom}
-                viewportHandle={viewportHandle}
-              />
-            </ThreadIdContext.Provider>
-          </ToolApprovalResponseContext.Provider>
-          </AskUserResponseContext.Provider>
-        </ActiveThreadRunContext.Provider>
-      </StopThreadRunContext.Provider>
+      <ComposerAttachmentUploadContext.Provider value={composerAttachmentUpload}>
+        <StopThreadRunContext.Provider value={stopActiveThreadRun}>
+          <ActiveThreadRunContext.Provider value={runState}>
+            <AskUserResponseContext.Provider value={{ respond: respondToAskUser }}>
+              <ToolApprovalResponseContext.Provider
+                value={{
+                  pending: pendingToolApproval,
+                  respond: respondToToolApproval,
+                }}
+              >
+                <ThreadIdContext.Provider value={threadId}>
+                <ThreadRunningTracker threadId={threadId} />
+                <IdleActiveThreadRefresher threadId={threadId} />
+                <Thread
+                  autoCollapseContext={autoCollapseContext}
+                  activeRunStartedAt={runState?.active === true ? runState.startedAt : undefined}
+                  setIsFollowingBottom={setIsFollowingBottom}
+                  viewportHandle={viewportHandle}
+                />
+              </ThreadIdContext.Provider>
+            </ToolApprovalResponseContext.Provider>
+            </AskUserResponseContext.Provider>
+          </ActiveThreadRunContext.Provider>
+        </StopThreadRunContext.Provider>
+      </ComposerAttachmentUploadContext.Provider>
     </AssistantRuntimeProvider>
   );
 };

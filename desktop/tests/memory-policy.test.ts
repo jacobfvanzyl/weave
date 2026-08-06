@@ -8,6 +8,7 @@ import {
   limitCompactToolHistoryPrompt,
 } from '../../server/src/agent/mastra/compact-tool-history-processor';
 import { CurrentTurnImageProcessor } from '../../server/src/agent/mastra/current-turn-image-processor';
+import { normalizeWeaveChatMessage } from '../../server/src/agent/chat-protocol';
 import {
   getMemoryCapabilities,
   getSemanticRecallEmbeddingConfig,
@@ -1195,6 +1196,7 @@ describe('observational memory request shaping', () => {
         metadata: { attachmentId: 'att_current', attachmentUrlPath: '/attachments/att_current' },
       },
     ]);
+    expect(normalizeWeaveChatMessage(pending).parts).toEqual(pending?.parts);
   });
 
   it('accepts pasted PNG screenshots with an empty clipboard MIME type', async () => {

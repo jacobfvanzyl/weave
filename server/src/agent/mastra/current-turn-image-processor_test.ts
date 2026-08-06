@@ -23,3 +23,23 @@ Deno.test('historical images are references while the latest current-turn image 
   assertStringIncludes(String((prompt[0].content as Array<{ text?: string }>)[1]?.text), 'att_visual');
   assertEquals(prompt[1], latest);
 });
+
+Deno.test('provider file URLs retain their durable attachment id on later agentic steps', () => {
+  const providerPrompt = [{
+    role: 'user',
+    content: [
+      { type: 'text', text: 'Inspect this screenshot' },
+      {
+        type: 'file',
+        data: new URL('https://weave.local/attachments/att_provider_file'),
+        mediaType: 'image/png',
+        filename: 'screenshot.png',
+      },
+    ],
+  }];
+
+  const later = stripHistoricalImagePrompt(providerPrompt, { stepNumber: 1 });
+  const reference = (later[0].content as Array<{ text?: string }>)[1]?.text ?? '';
+  assertStringIncludes(reference, 'att_provider_file');
+  assertStringIncludes(reference, 'view_attachment');
+});
