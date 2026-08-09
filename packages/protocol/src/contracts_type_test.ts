@@ -13,6 +13,11 @@ const compileOnly = () => {
 
   void client.request("owner.get");
   void client.request("chat.thread.get", { threadId: "thread-1" });
+  void client.request("chat.thread.create", {
+    threadId: "thread-1",
+    projectId: "project-1",
+    workspaceId: "workspace-1",
+  });
   void client.request("workflow.definition.create", {
     definition: {
       id: "workflow-1",
@@ -38,6 +43,11 @@ const compileOnly = () => {
   void client.request("chat.thread.get");
   // @ts-expect-error undeclared params are rejected
   void client.request("chat.thread.get", { threadId: "thread-1", extra: true });
+  // @ts-expect-error Thread creation requires a Workspace owner
+  void client.request("chat.thread.create", {
+    threadId: "thread-1",
+    projectId: "project-1",
+  });
   // @ts-expect-error notification direction is enforced
   void client.notify("chat.run.event", { subscriptionId: "subscription-1" });
   // @ts-expect-error Portal cannot call client request routes

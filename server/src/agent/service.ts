@@ -238,8 +238,8 @@ export type CreateChatThreadRequest = {
   resourceId: string;
   threadId?: string;
   title?: string;
-  projectId?: string;
-  workspaceId?: string;
+  projectId: string;
+  workspaceId: string;
 };
 
 export type ReorderChatThreadsRequest = {
@@ -974,8 +974,17 @@ export class MastraAgentService implements AgentService {
       orderBy: { field: 'updatedAt', direction: 'DESC' },
     });
 
+    const visibleThreads = result.threads.filter((thread: StorageThreadType) => !isHiddenChatThread(thread));
+    const legacyUnscopedThreads = visibleThreads.filter((thread: StorageThreadType) =>
+      !isWorkspaceOwnedChatThread(thread)
+    );
+    await Promise.all(legacyUnscopedThreads.map(async (thread: StorageThreadType) => {
+      if (threadCompactionEnabled()) await this.compactions.deleteThread(input.resourceId, thread.id);
+      await memory.deleteThread(thread.id);
+    }));
+
     const threads = await Promise.all(
-      result.threads.filter((thread: StorageThreadType) => !isHiddenChatThread(thread)).map(
+      visibleThreads.filter(isWorkspaceOwnedChatThread).map(
         async (storedThread: StorageThreadType) => {
           const thread = normalizeWeaveChatThread(storedThread);
           if (thread.title && !['New chat', '...'].includes(thread.title)) return thread;
@@ -1008,9 +1017,12 @@ export class MastraAgentService implements AgentService {
       projectId: input.projectId,
       workspaceId: input.workspaceId,
     });
-    const metadata = input.projectId
-      ? { mode: 'project', projectId: input.projectId, workspaceId: input.workspaceId, sortOrder }
-      : { mode: 'plain', sortOrder };
+    const metadata = {
+      mode: 'project',
+      projectId: input.projectId,
+      workspaceId: input.workspaceId,
+      sortOrder,
+    };
 
     return normalizeWeaveChatThread(
       await memory.createThread({
@@ -2262,6 +2274,12 @@ const isHiddenChatThread = (thread: { id: string; metadata?: unknown }) => {
     metadata?.kind === 'portal-settings';
 };
 
+const isWorkspaceOwnedChatThread = (thread: { metadata?: unknown }) => {
+  const metadata = thread.metadata as Record<string, unknown> | undefined;
+  return typeof metadata?.projectId === 'string' && metadata.projectId.length > 0 &&
+    typeof metadata.workspaceId === 'string' && metadata.workspaceId.length > 0;
+};
+
 const threadMatchesScope = (thread: ChatThreadRecord, scope: ChatThreadScope | undefined) => {
   const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
   if (metadata.archived === true) return false;
@@ -2278,7 +2296,7 @@ const threadMatchesScope = (thread: ChatThreadRecord, scope: ChatThreadScope | u
 const getTopChatThreadSortOrder = async (
   memory: any,
   resourceId: string,
-  scope: { projectId?: string; workspaceId?: string },
+  scope: { projectId: string; workspaceId: string },
 ) => {
   const result = await memory.listThreads({ filter: { resourceId }, perPage: false });
   const orders = result.threads
@@ -2286,8 +2304,7 @@ const getTopChatThreadSortOrder = async (
     .filter((thread: StorageThreadType) => {
       const metadata = (thread.metadata ?? {}) as Record<string, unknown>;
       if (metadata.archived === true) return false;
-      if (scope.projectId) return metadata.projectId === scope.projectId && metadata.workspaceId === scope.workspaceId;
-      return metadata.adHoc === true || (metadata.mode !== 'project' && typeof metadata.projectId !== 'string');
+      return metadata.projectId === scope.projectId && metadata.workspaceId === scope.workspaceId;
     })
     .map((thread: StorageThreadType) => thread.metadata?.sortOrder)
     .filter((value: unknown): value is number => typeof value === 'number');

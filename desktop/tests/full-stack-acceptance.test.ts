@@ -21,6 +21,31 @@ describe.skipIf(!runAcceptance)(
         const portal = await harness.startPortal();
         await harness.startPackagedDesktop();
 
+        const { project: chatProject } = await harness.rpc.request(
+          "code.project.create",
+          {
+            name: "Acceptance Chat Project",
+            projectKind: "general",
+            product: "chat",
+          },
+        );
+        const chatWorkspace = chatProject.workspaces[0];
+        expect(chatWorkspace).toBeDefined();
+        const { thread: chatThread } = await harness.rpc.request(
+          "code.project.threads.create",
+          {
+            projectId: chatProject.id,
+            workspaceId: chatWorkspace!.id,
+            threadId: "acceptance-chat-thread",
+            title: "Workspace-owned Chat Thread",
+            product: "chat",
+          },
+        );
+        expect(chatThread.metadata).toMatchObject({
+          projectId: chatProject.id,
+          workspaceId: chatWorkspace!.id,
+        });
+
         const { project } = await harness.rpc.request("code.project.create", {
           name: "Acceptance Project",
           projectKind: "git",
@@ -31,6 +56,13 @@ describe.skipIf(!runAcceptance)(
         });
         const workspace = project.workspaces[0];
         expect(workspace).toBeDefined();
+
+        await expect(harness.rpc.request("chat.thread.create", {
+          threadId: "unowned-thread",
+          title: "Must not persist",
+          projectId: project.id,
+          workspaceId: "workspace-missing",
+        })).rejects.toThrow("Workspace was not found.");
 
         const { thread } = await harness.rpc.request("chat.thread.create", {
           threadId: "acceptance-thread",
@@ -106,11 +138,20 @@ describe.skipIf(!runAcceptance)(
         ]);
 
         const persistedThreads = await harness.rpc.request("chat.thread.list");
+        expect(persistedThreads.threads).not.toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: "unowned-thread" }),
+          ]),
+        );
         expect(persistedThreads.threads).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               id: thread.id,
               title: "Durable acceptance thread",
+              metadata: expect.objectContaining({
+                projectId: project.id,
+                workspaceId: workspace!.id,
+              }),
             }),
           ]),
         );

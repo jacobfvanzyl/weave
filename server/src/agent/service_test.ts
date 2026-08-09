@@ -754,7 +754,7 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
       resourceId: 'resource-1',
       createdAt: new Date('2026-07-02T09:00:00.000Z'),
       updatedAt: new Date('2026-07-02T10:00:00.000Z'),
-      metadata: { mode: 'plain', sortOrder: 1 },
+      metadata: { mode: 'project', projectId: 'project-1', workspaceId: 'workspace-1', sortOrder: 1 },
     },
     {
       id: 'thread-2',
@@ -762,7 +762,23 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
       resourceId: 'resource-1',
       createdAt: new Date('2026-07-02T09:01:00.000Z'),
       updatedAt: new Date('2026-07-02T10:01:00.000Z'),
-      metadata: { mode: 'plain', sortOrder: 0 },
+      metadata: { mode: 'project', projectId: 'project-1', workspaceId: 'workspace-1', sortOrder: 0 },
+    },
+    {
+      id: 'legacy-unscoped-thread',
+      title: 'Legacy',
+      resourceId: 'resource-1',
+      createdAt: new Date('2026-07-02T09:01:30.000Z'),
+      updatedAt: new Date('2026-07-02T10:01:30.000Z'),
+      metadata: { mode: 'plain', sortOrder: 2 },
+    },
+    {
+      id: 'workspace-owned-legacy-mode',
+      title: 'Owned without mode',
+      resourceId: 'resource-1',
+      createdAt: new Date('2026-07-02T09:01:45.000Z'),
+      updatedAt: new Date('2026-07-02T10:01:45.000Z'),
+      metadata: { projectId: 'project-1', workspaceId: 'workspace-2', sortOrder: 3 },
     },
     {
       id: '__project__hidden',
@@ -824,12 +840,16 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
   assertEquals(listed.map((thread) => ({ id: thread.id, title: thread.title })), [
     { id: 'thread-2', title: 'Ready' },
     { id: 'thread-1', title: 'Renamed from tool output' },
+    { id: 'workspace-owned-legacy-mode', title: 'Owned without mode' },
   ]);
+  assertEquals(updates, [{ deleteThread: 'legacy-unscoped-thread' }]);
 
   const created = await service.createChatThread({
     resourceId: 'resource-1',
     threadId: 'thread-new',
     title: 'New',
+    projectId: 'project-1',
+    workspaceId: 'workspace-1',
   });
   assertEquals(created, {
     id: 'thread-new',
@@ -837,17 +857,25 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
     resourceId: 'resource-1',
     createdAt: '2026-07-02T11:00:00.000Z',
     updatedAt: '2026-07-02T11:00:00.000Z',
-    metadata: { mode: 'plain', sortOrder: -1 },
+    metadata: { mode: 'project', projectId: 'project-1', workspaceId: 'workspace-1', sortOrder: -1 },
   });
 
   await service.reorderChatThreads({
     resourceId: 'resource-1',
     threadIds: ['thread-2', 'thread-1'],
-    scope: { plain: true },
+    scope: { projectId: 'project-1', workspaceId: 'workspace-1' },
   });
-  assertEquals(updates.slice(0, 2), [
-    { id: 'thread-2', title: 'Ready', metadata: { mode: 'plain', sortOrder: 0 } },
-    { id: 'thread-1', title: '...', metadata: { mode: 'plain', sortOrder: 1 } },
+  assertEquals(updates.slice(1, 3), [
+    {
+      id: 'thread-2',
+      title: 'Ready',
+      metadata: { mode: 'project', projectId: 'project-1', workspaceId: 'workspace-1', sortOrder: 0 },
+    },
+    {
+      id: 'thread-1',
+      title: '...',
+      metadata: { mode: 'project', projectId: 'project-1', workspaceId: 'workspace-1', sortOrder: 1 },
+    },
   ]);
 
   assertEquals(
@@ -877,7 +905,13 @@ Deno.test('MastraAgentService chat thread state methods keep memory access behin
     resourceId: 'resource-1',
     createdAt: '2026-07-02T09:00:00.000Z',
     updatedAt: '2026-07-02T12:00:00.000Z',
-    metadata: { mode: 'plain', sortOrder: 1, archived: true },
+    metadata: {
+      mode: 'project',
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      sortOrder: 1,
+      archived: true,
+    },
   });
 
   await service.deleteChatThread({ resourceId: 'resource-1', threadId: 'thread-1' });

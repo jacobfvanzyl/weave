@@ -372,11 +372,13 @@ describe('chat store', () => {
       title: 'Plan work',
       createdAt: now,
       updatedAt: now,
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
       latestPlan: planFixture({
         updatedAt: '2026-06-18T12:05:00.000Z',
         completed: 1,
       }),
-    }]);
+    }], [{ id: 'project-1', workspaces: [{ id: 'workspace-1' }] }]);
 
     expect(useChatStore.getState().threadPlans['thread-1']).toMatchObject({
       completed: 2,
@@ -398,11 +400,13 @@ describe('chat store', () => {
       title: 'Plan work',
       createdAt: now,
       updatedAt: now,
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
       latestPlan: planFixture({
         artifactPath: '.agents/plans/new.md',
         updatedAt: '2026-06-18T12:20:00.000Z',
       }),
-    }]);
+    }], [{ id: 'project-1', workspaces: [{ id: 'workspace-1' }] }]);
 
     expect(useChatStore.getState().threadPlans['thread-1']).toMatchObject({
       artifactPath: '.agents/plans/new.md',

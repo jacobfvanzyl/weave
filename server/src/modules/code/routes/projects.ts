@@ -406,6 +406,19 @@ const createVirtualNotesWorkspace = (baseProject: Project, name: string): Worksp
   updatedAt: baseProject.createdAt,
 });
 
+const createGeneralWorkspace = (baseProject: Project, name = baseProject.name): Workspace => ({
+  id: createId('workspace'),
+  projectId: baseProject.id,
+  workspaceKind: 'primary',
+  source: 'primary',
+  name,
+  locked: true,
+  sortOrder: 0,
+  status: 'ready',
+  createdAt: baseProject.createdAt,
+  updatedAt: baseProject.createdAt,
+});
+
 const createObjectNotesStorage = (
   baseProject: Project,
   requestedStorage?: NotesStorageMetadata,
@@ -562,7 +575,7 @@ export const projectRoutes = [
         };
 
         const project = projectKind === 'general'
-          ? baseProject
+          ? { ...baseProject, workspaces: [createGeneralWorkspace(baseProject)] }
           : projectKind === 'git'
           ? await createGitProject(c, resourceId, baseProject, body)
           : await createNotesProject(c, resourceId, baseProject, body);
@@ -834,16 +847,24 @@ export const projectRoutes = [
         const body = await c.req.json();
         const name = cleanName(body?.name);
         if (!name) return c.json({ error: 'name is required' }, 400);
+
+        const memory = await getMemory(c);
+        const project = await getProject(memory, resourceId, projectId);
+        if (!project) return c.json({ error: 'project not found' }, 404);
+        if (project.projectKind === 'general') {
+          if (project.workspaces.length > 0) return c.json({ error: 'project already has a Workspace' }, 409);
+          const at = nowIso();
+          const workspace = createGeneralWorkspace({ ...project, createdAt: at, updatedAt: at }, name);
+          const nextProject = { ...project, workspaces: [workspace], updatedAt: at };
+          return c.json({ project: await saveProject(memory, resourceId, nextProject), workspace });
+        }
+
         const mode = body?.mode === 'existingBranch' || body?.mode === 'detached' ? body.mode : 'newBranch';
         const branch = normalizeBranch(body?.branch);
         const base = normalizeBranch(body?.base);
         if (mode !== 'detached' && !branch) {
           return c.json({ error: 'branch is required for branch-backed workspaces' }, 400);
         }
-
-        const memory = await getMemory(c);
-        const project = await getProject(memory, resourceId, projectId);
-        if (!project) return c.json({ error: 'project not found' }, 404);
         assertGitProjectReady(project, resourceId);
 
         const worktree = await createProjectWorktree(project, resourceId, {
@@ -1170,36 +1191,20 @@ export const projectRoutes = [
         if (!project) return c.json({ error: 'project not found' }, 404);
 
         const at = nowIso();
-        const requestedWorkspaceId = typeof body?.workspaceId === 'string'
-          ? body.workspaceId
-          : project.projectKind === 'notes'
-          ? project.workspaces[0]?.id
-          : undefined;
-        const workspace = requestedWorkspaceId
-          ? project.workspaces.find((item) => item.id === requestedWorkspaceId)
-          : undefined;
-        if (requestedWorkspaceId && !workspace) return c.json({ error: 'workspace not found' }, 404);
+        const requestedWorkspaceId = optionalString(body?.workspaceId);
+        if (!requestedWorkspaceId) return c.json({ error: 'workspaceId is required' }, 400);
+        const workspace = project.workspaces.find((item) => item.id === requestedWorkspaceId);
+        if (!workspace) return c.json({ error: 'workspace not found' }, 404);
         const isAdHoc = project.systemKind === 'adHoc' && workspace?.systemKind === 'adHoc';
-        if (project.projectKind === 'general' && requestedWorkspaceId && !isAdHoc) {
-          return c.json({ error: 'general projects cannot have workspace threads' }, 400);
-        }
-        if (project.projectKind === 'git' && !workspace) {
-          return c.json({ error: 'git project threads must belong to a workspace' }, 400);
-        }
-        if (project.projectKind === 'notes' && !workspace) {
-          return c.json({ error: 'notes project threads must belong to the vault workspace' }, 400);
-        }
 
         const sortOrder = await getTopThreadSortOrder(memory, resourceId, projectId, workspace?.id);
-        const metadata = workspace
-          ? {
-            mode: 'project',
-            projectId,
-            workspaceId: workspace.id,
-            sortOrder,
-            ...(isAdHoc ? { adHoc: true, portalId: workspace.portalId, workspacePath: workspace.path } : {}),
-          }
-          : { mode: 'project', projectId, sortOrder };
+        const metadata = {
+          mode: 'project',
+          projectId,
+          workspaceId: workspace.id,
+          sortOrder,
+          ...(isAdHoc ? { adHoc: true, portalId: workspace.portalId, workspacePath: workspace.path } : {}),
+        };
         const thread = await memory.createThread({
           resourceId,
           threadId,

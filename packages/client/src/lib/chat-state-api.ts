@@ -228,7 +228,12 @@ export const listServerThreads = async () => {
   return result.threads.map(toChatThread);
 };
 
-export const createServerThread = async (threadId: string, projectId?: string, workspaceId?: string, title = '...') => {
+export const createServerThread = async (
+  threadId: string,
+  projectId: string,
+  workspaceId: string,
+  title = '...',
+) => {
   const result = await rpcRequest('chat.thread.create', {
     threadId,
     title,
@@ -502,7 +507,7 @@ export const reorderWorkspaces = async (projectId: string, workspaceIds: string[
 export const createProjectThread = async (
   projectId: string,
   threadId: string,
-  workspaceId?: string,
+  workspaceId: string,
   title = '...',
   projectKind?: Project['projectKind'],
 ) => {

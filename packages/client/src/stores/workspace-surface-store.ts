@@ -80,7 +80,11 @@ type WorkspaceSurfaceState = {
     surface: ActiveSurface,
     thread?: ThreadSurfaceContext,
     options?: { useDefaultLayout?: boolean },) => void;
-  syncThreads: (threads: ThreadSurfaceContext[], options?: { selectThreadId?: string; workspaceRefs?: ReadonlySet<string> },
+  syncThreads: (threads: ThreadSurfaceContext[], options?: {
+    selectThreadId?: string;
+    workspaceRefs?: ReadonlySet<string>;
+    fallbackWorkspace?: { projectId: string; workspaceId: string };
+  },
   ) => void;
   reconcilePersistedSurfaces: (threadIds: ReadonlySet<string>, workspaceRefs: ReadonlySet<string>) => void;
   openPane: (pane: MainPane) => void;
@@ -309,14 +313,19 @@ const repairActiveSurface = (
   threads: ThreadSurfaceContext[],
   fallbackThreadId: string,
   workspaceRefs: ReadonlySet<string> | undefined,
+  fallbackWorkspace: { projectId: string; workspaceId: string } | undefined,
 ): ActiveSurface => {
   if (activeSurface.kind === 'workspace') {
     return !workspaceRefs || workspaceRefs.has(workspaceRefKey(activeSurface.projectId, activeSurface.workspaceId))
       ? activeSurface
+      : fallbackWorkspace
+      ? { kind: 'workspace', ...fallbackWorkspace }
       : { kind: 'thread', threadId: fallbackThreadId };
   }
   return threads.some((thread) => thread.id === activeSurface.threadId)
     ? activeSurface
+    : fallbackWorkspace
+    ? { kind: 'workspace', ...fallbackWorkspace }
     : { kind: 'thread', threadId: fallbackThreadId };
 };
 
@@ -462,7 +471,13 @@ export const useWorkspaceSurfaceStore = create<WorkspaceSurfaceState>()(
           const nextThreadId = threads.some((thread) => thread.id === state.threadId)
             ? state.threadId
             : threads[0]?.id || state.threadId;
-          const nextActiveSurface = repairActiveSurface(state.activeSurface, threads, nextThreadId, options?.workspaceRefs,);
+          const nextActiveSurface = repairActiveSurface(
+            state.activeSurface,
+            threads,
+            nextThreadId,
+            options?.workspaceRefs,
+            options?.fallbackWorkspace,
+          );
           const didRepairThreadSurface = nextActiveSurface !== state.activeSurface;
           const nextSelectedThread = nextActiveSurface.kind === 'thread'
             ? getThreadById(threads, nextActiveSurface.threadId)

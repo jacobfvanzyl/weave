@@ -3,7 +3,7 @@ import { configureMastraConnection, rpcRequest as sendRpcRequest } from '../../p
 import { cancelThreadRun, createWorkspace, deleteWorkspace, discoverWorkspaces, fetchWorkspaceGitUpstream, fetchWorkspaceRemovalPreview, getThreadRunState, listProjectBranches, listProjects, listServerThreads, listWorkspaceGitStates, pullWorkspaceGitUpstream, sendThreadSteeringMessage, updateWorkspace, type Project, type Workspace } from '../../packages/client/src/lib/chat-state-api';
 import { createWorkspaceDraftDefaults } from '../../packages/client/src/lib/workspace-create-defaults';
 import { overlayWorkspaceGitState } from '../../packages/client/src/lib/workspace-git-state';
-import { sortThreadsForDisplay } from '../../packages/client/src/lib/thread-eligibility';
+import { createThreadOpenabilityContext, isOpenableThread, sortThreadsForDisplay } from '../../packages/client/src/lib/thread-eligibility';
 import { expandPrompt, listPrompts } from '../../packages/client/src/lib/prompts-api';
 import { RpcRemoteError } from '@weave/protocol';
 
@@ -100,6 +100,20 @@ describe('chat-state Project/Workspace API client', () => {
     vi.unstubAllGlobals();
     vi.resetModules();
     configureMastraConnection({ mastraUrl: 'http://localhost:4111', authToken: null });
+  });
+
+  it('does not expose unscoped Threads as openable UI targets', () => {
+    const context = createThreadOpenabilityContext([project]);
+    expect(isOpenableThread({ projectId: undefined, workspaceId: undefined }, context)).toBe(false);
+    expect(isOpenableThread({ projectId: 'project-1', workspaceId: 'workspace-1' }, context)).toBe(true);
+    expect(isOpenableThread({ projectId: 'project-ad-hoc', workspaceId: 'workspace-ad-hoc', adHoc: true }, context))
+      .toBe(true);
+    expect(isOpenableThread({ projectId: undefined, workspaceId: undefined, adHoc: true }, context)).toBe(false);
+  });
+
+  it('starts without inventing a local unscoped Thread', async () => {
+    const { useChatStore } = await loadFreshChatStore();
+    expect(useChatStore.getState().threads).toEqual([]);
   });
 
   it('lists projects through the shared RPC connection', async () => {
@@ -706,6 +720,8 @@ describe('chat-state Project/Workspace API client', () => {
       title: 'Plan work',
       createdAt: now,
       updatedAt: now,
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
       latestPlan: {
         title: 'Plan Artifact Overhaul',
         artifactPath: '.agents/plans/bright-river.md',
@@ -718,7 +734,7 @@ describe('chat-state Project/Workspace API client', () => {
         total: 2,
         updatedAt: '2026-06-18T12:00:00.000Z',
       },
-    }]);
+    }], [project]);
 
     expect(useChatStore.getState().threadPlans['thread-1']).toMatchObject({
       title: 'Plan Artifact Overhaul',
@@ -729,7 +745,7 @@ describe('chat-state Project/Workspace API client', () => {
     });
   });
 
-  it('starts on a root draft while retaining archived, removed, and orphaned threads', async () => {
+  it('drops invalid ownership and restores an ordinary Workspace', async () => {
     const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
     const now = '2026-06-03T08:00:00.000Z';
     const projectWithMissingWorkspace: Project = {
@@ -776,34 +792,29 @@ describe('chat-state Project/Workspace API client', () => {
         projectId: 'project-1',
         workspaceId: 'workspace-1',
       },
+      {
+        id: 'ad-hoc-thread',
+        title: 'Ad-hoc',
+        createdAt: now,
+        updatedAt: now,
+        projectId: 'project-ad-hoc',
+        workspaceId: 'workspace-ad-hoc',
+        adHoc: true,
+      },
     ], [projectWithMissingWorkspace]);
 
     expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual([
       'archived-thread',
-      'removed-thread',
-      'orphan-thread',
       'valid-thread',
-      useWorkspaceSurfaceStore.getState().threadId,
+      'ad-hoc-thread',
     ]);
-    const startupThread = useChatStore.getState().threads.find(thread => thread.id === useWorkspaceSurfaceStore.getState().threadId);
-    expect(startupThread).toMatchObject({ draft: true });
-    expect(startupThread?.projectId).toBeUndefined();
-    expect(startupThread?.workspaceId).toBeUndefined();
     expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
-      activeSurface: { kind: 'thread', threadId: startupThread?.id },
-      paneVisibility: { chatOpen: true, editorOpen: false, terminalOpen: false },
-    });
-
-    await useChatStore.getState().archiveThread(startupThread!.id);
-
-    expect(useWorkspaceSurfaceStore.getState()).toMatchObject({
-      threadId: 'valid-thread',
-      activeSurface: { kind: 'thread', threadId: 'valid-thread' },
-      paneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: false },
+      activeSurface: { kind: 'workspace', projectId: 'project-1', workspaceId: 'workspace-1' },
+      paneVisibility: { chatOpen: false, editorOpen: true, terminalOpen: false },
     });
   });
 
-  it('starts on a local draft when no server threads are openable', async () => {
+  it('does not create an unscoped draft when no server Threads are openable', async () => {
     const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
     const now = '2026-06-03T08:00:00.000Z';
 
@@ -827,15 +838,12 @@ describe('chat-state Project/Workspace API client', () => {
       },
     ], [project]);
 
-    const selectedThread = useChatStore.getState().threads.find(thread => thread.id === useWorkspaceSurfaceStore.getState().threadId);
-    expect(selectedThread).toMatchObject({ draft: true });
-    expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual(expect.arrayContaining([
-      'archived-thread',
-      'orphan-thread',
-    ]));
+    expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual(['archived-thread']);
+    expect(useChatStore.getState().threads.some((thread) => thread.draft)).toBe(false);
     expect(useWorkspaceSurfaceStore.getState().activeSurface).toEqual({
-      kind: 'thread',
-      threadId: selectedThread?.id,
+      kind: 'workspace',
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
     });
   });
 
@@ -894,7 +902,7 @@ describe('chat-state Project/Workspace API client', () => {
     });
   });
 
-  it('does not send draft profileId when first persisting a plain thread', async () => {
+  it('rejects first persistence until a Workspace owner is selected', async () => {
     const { useChatStore, useWorkspaceSurfaceStore } = await loadFreshChatStore();
     const now = '2026-06-03T08:00:00.000Z';
     const rpc = installRpcMock(async () => ({
@@ -913,17 +921,16 @@ describe('chat-state Project/Workspace API client', () => {
       threads: [{ id: 'draft-thread', title: '...', createdAt: now, updatedAt: now, draft: true, profileId: 'coding' } as any],
     });
 
-    await useChatStore.getState().ensureThreadPersisted('draft-thread', 'Hello');
+    await expect(
+      useChatStore.getState().ensureThreadPersisted('draft-thread', 'Hello'),
+    ).rejects.toThrow('A Workspace is required before creating a Thread.');
 
-    expect(rpc).toHaveBeenCalledWith('chat.thread.create', {
-      threadId: 'draft-thread',
-      title: 'Hello',
-      projectId: undefined,
-      workspaceId: undefined,
-    }, undefined);
-    expect(useChatStore.getState().threads[0]).toMatchObject({ id: 'draft-thread' });
-    expect('profileId' in useChatStore.getState().threads[0]).toBe(false);
-    expect(useChatStore.getState().threads[0].draft).toBeUndefined();
+    expect(rpc).not.toHaveBeenCalled();
+    expect(useChatStore.getState().threads[0]).toMatchObject({
+      id: 'draft-thread',
+      draft: true,
+      persistenceState: undefined,
+    });
   });
 
   it('keeps a first-send thread selected until a server list observes it', async () => {
@@ -934,13 +941,21 @@ describe('chat-state Project/Workspace API client', () => {
       resolveCreate = resolve;
     });
     installRpcMock(async (method: string) => {
-      if (method !== 'chat.thread.create') throw new Error(`Unexpected RPC method: ${method}`);
+      if (method !== 'code.project.threads.create') throw new Error(`Unexpected RPC method: ${method}`);
       return await createResponse;
     });
-    useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread' });
+    useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread', workspaceId: 'workspace-1' });
     useChatStore.setState({
       resourceId: 'browser-user-test',
-      threads: [{ id: 'draft-thread', title: '...', createdAt: now, updatedAt: now, draft: true }],
+      threads: [{
+        id: 'draft-thread',
+        title: '...',
+        createdAt: now,
+        updatedAt: now,
+        draft: true,
+        projectId: 'project-1',
+        workspaceId: 'workspace-1',
+      }],
       hasInitializedThreads: true,
     });
 
@@ -950,7 +965,7 @@ describe('chat-state Project/Workspace API client', () => {
       id: 'draft-thread',
       persistenceState: 'creating',
     });
-    useChatStore.getState().setServerThreads([]);
+    useChatStore.getState().setServerThreads([], [project]);
     expect(useWorkspaceSurfaceStore.getState().threadId).toBe('draft-thread');
     expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual(['draft-thread']);
 
@@ -961,8 +976,9 @@ describe('chat-state Project/Workspace API client', () => {
         resourceId: 'browser-user-test',
         createdAt: now,
         updatedAt: now,
-        metadata: {},
+        metadata: { mode: 'project', projectId: 'project-1', workspaceId: 'workspace-1' },
       },
+      workspace,
     });
     await persist;
 
@@ -970,7 +986,7 @@ describe('chat-state Project/Workspace API client', () => {
       id: 'draft-thread',
       persistenceState: 'awaiting_server_list',
     });
-    useChatStore.getState().setServerThreads([]);
+    useChatStore.getState().setServerThreads([], [project]);
     expect(useWorkspaceSurfaceStore.getState().threadId).toBe('draft-thread');
     expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual(['draft-thread']);
 
@@ -979,7 +995,9 @@ describe('chat-state Project/Workspace API client', () => {
       title: 'Hello',
       createdAt: now,
       updatedAt: now,
-    }]);
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+    }], [project]);
     expect(useChatStore.getState().threads[0]).toMatchObject({ id: 'draft-thread', title: 'Hello' });
     expect(useChatStore.getState().threads[0].persistenceState).toBeUndefined();
     expect(useWorkspaceSurfaceStore.getState().threadId).toBe('draft-thread');
@@ -990,7 +1008,7 @@ describe('chat-state Project/Workspace API client', () => {
     const now = '2026-06-03T08:00:00.000Z';
     let attempts = 0;
     installRpcMock(async (method: string) => {
-      if (method !== 'chat.thread.create') throw new Error(`Unexpected RPC method: ${method}`);
+      if (method !== 'code.project.threads.create') throw new Error(`Unexpected RPC method: ${method}`);
       attempts += 1;
       if (attempts === 1) throw new Error('create failed');
       return {
@@ -1000,14 +1018,23 @@ describe('chat-state Project/Workspace API client', () => {
           resourceId: 'browser-user-test',
           createdAt: now,
           updatedAt: now,
-          metadata: {},
+          metadata: { mode: 'project', projectId: 'project-1', workspaceId: 'workspace-1' },
         },
+        workspace,
       };
     });
-    useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread' });
+    useWorkspaceSurfaceStore.getState().selectThread('draft-thread', { id: 'draft-thread', workspaceId: 'workspace-1' });
     useChatStore.setState({
       resourceId: 'browser-user-test',
-      threads: [{ id: 'draft-thread', title: '...', createdAt: now, updatedAt: now, draft: true }],
+      threads: [{
+        id: 'draft-thread',
+        title: '...',
+        createdAt: now,
+        updatedAt: now,
+        draft: true,
+        projectId: 'project-1',
+        workspaceId: 'workspace-1',
+      }],
       hasInitializedThreads: true,
     });
 
@@ -1015,7 +1042,7 @@ describe('chat-state Project/Workspace API client', () => {
 
     expect(useChatStore.getState().threads[0]).toMatchObject({ id: 'draft-thread', draft: true, title: 'Hello' });
     expect(useChatStore.getState().threads[0].persistenceState).toBeUndefined();
-    useChatStore.getState().setServerThreads([]);
+    useChatStore.getState().setServerThreads([], [project]);
     expect(useWorkspaceSurfaceStore.getState().threadId).toBe('draft-thread');
     expect(useChatStore.getState().threads.map(thread => thread.id)).toEqual(['draft-thread']);
 

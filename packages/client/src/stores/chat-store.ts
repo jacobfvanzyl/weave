@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { archiveServerThread, createProjectThread, createServerThread, deleteServerThread,
+import { archiveServerThread, createProjectThread, deleteServerThread,
   type RemovedWorkspaceSnapshot, renameServerThread, } from '../lib/chat-state-api';
 import { createClientAppPersistStorage, getClientAppStorageKey } from '../lib/client-app';
 import { createClientId } from '../lib/client-id';
@@ -11,14 +11,12 @@ import {
   createThreadOpenabilityContext,
   emptyThreadOpenabilityContext,
   getOpenableThreads,
-  isOpenableThread,
   type ThreadOpenabilityContext,
   type ThreadOpenabilityProject,
 } from '../lib/thread-eligibility';
 import { resolveStartupSurface } from '../lib/startup-surface-resolver';
 import { type PersistedLocalDraft, useClientSessionViewStore } from './client-session-view-store';
 import {
-  initialSurfaceThreadId,
   type ThreadSurfaceContext,
   useWorkspaceSurfaceStore,
   type WorkspaceSurfaceSnapshot,
@@ -167,7 +165,7 @@ type ChatState = {
   setGuidedTaskExpanded: (threadId: string, expanded: boolean) => void;
   setToolActivityCollapsed: (groupId: string, collapsed: boolean) => void;
   setServerThreads: (threads: ChatThread[], projects?: ThreadOpenabilityProject[]) => void;
-  newThread: (projectId?: string, workspaceId?: string) => Promise<void>;
+  newThread: (projectId: string, workspaceId: string) => Promise<void>;
   ensureThreadPersisted: (threadId: string, title?: string) => Promise<void>;
   selectThread: (threadId: string) => void;
   archiveThread: (threadId: string) => Promise<void>;
@@ -209,24 +207,13 @@ const normalizeServiceTier = (value: unknown): ServiceTier | null =>
     ? value
     : null;
 
-const initialThread = createLocalThread(initialSurfaceThreadId);
 const toSurfaceThread = (thread: ChatThread): ThreadSurfaceContext => ({ id: thread.id, workspaceId: thread.workspaceId, });
 const withOpenableThreadFallback = (
   threads: ChatThread[],
   context: ThreadOpenabilityContext,
-  fallbackCandidates: ChatThread[] = [],
 ) => {
   const openableThreads = getOpenableThreads(threads, context);
-  if (openableThreads.length > 0) return { threads, openableThreads };
-
-  const fallbackThread =
-    fallbackCandidates.find((thread) => isDraftThread(thread) && isOpenableThread(thread, context))
-    ?? threads.find((thread) => isDraftThread(thread) && isOpenableThread(thread, context))
-    ?? createLocalThread();
-  const nextThreads = threads.some((thread) => thread.id === fallbackThread.id)
-    ? threads
-    : [fallbackThread, ...threads];
-  return { threads: nextThreads, openableThreads: [fallbackThread] };
+  return { threads, openableThreads };
 };
 const getSurfaceSnapshot = (): WorkspaceSurfaceSnapshot => {
   const surface = useWorkspaceSurfaceStore.getState();
@@ -267,7 +254,7 @@ export const useChatStore = create<ChatState>()(
   persist(
     (set, get) => ({
       resourceId: createClientId('browser-user'),
-      threads: [initialThread],
+      threads: [],
       selectedModel: '',
       reasoningEffort: 'medium',
       serviceTier: null,
@@ -419,7 +406,14 @@ export const useChatStore = create<ChatState>()(
           const surface = useWorkspaceSurfaceStore.getState();
           const threadOpenabilityContext = createThreadOpenabilityContext(projects);
           const deletedThreadIds = new Set(state.deletedThreadIds);
-          const activeThreads = threads.filter((thread) => !deletedThreadIds.has(thread.id));
+          const hasWorkspaceOwner = (thread: ChatThread) => Boolean(
+            thread.projectId && thread.workspaceId &&
+            (thread.adHoc === true ||
+              threadOpenabilityContext.workspaceRefs.has(`${thread.projectId}:${thread.workspaceId}`)),
+          );
+          const activeThreads = threads.filter((thread) =>
+            !deletedThreadIds.has(thread.id) && hasWorkspaceOwner(thread)
+          );
           const mappedServerThreads = activeThreads.map((serverThread) => {
             const localThread = state.threads.find((thread) => thread.id === serverThread.id);
             const hasLocalTitle = localThread?.title && !['New chat', '...'].includes(localThread.title);
@@ -429,6 +423,7 @@ export const useChatStore = create<ChatState>()(
           const optimisticThreads = state.threads.filter((
             localThread) => {
               return ( !deletedThreadIds.has(localThread.id) &&
+                hasWorkspaceOwner(localThread) &&
                 !activeThreads.some((serverThread) => serverThread.id === localThread.id) &&
               (isDraftThread(localThread) || localThread.persistenceState !== undefined));
             }
@@ -439,24 +434,17 @@ export const useChatStore = create<ChatState>()(
             activeSurface : surface.activeSurface,
             openableThreads,
             workspaceRefs: threadOpenabilityContext.workspaceRefs,
+            fallbackWorkspace: threadOpenabilityContext.workspaceOwners[0],
           });
-          if (startupResolution.kind === 'create-root-draft') {
+          if ('discardStaleComposer' in startupResolution && startupResolution.discardStaleComposer === true) {
             const staleThreadId = surface.activeSurface.kind === 'thread' ? surface.activeSurface.threadId : undefined;
             const staleThread = staleThreadId ? nextThreads.find((thread) => thread.id === staleThreadId) : undefined;
-            if (staleThreadId && startupResolution.discardStaleComposer && staleThread?.archived !== true) {
+            if (staleThreadId && staleThread?.archived !== true) {
               useClientSessionViewStore.getState().discardThreadView(staleThreadId);
             }
             nextThreads = nextThreads.filter((thread) => !(thread.id === staleThreadId && isDraftThread(thread)));
-            const rootDraft =
-              nextThreads.find((thread) => isDraftThread(thread) && !thread.projectId && !thread.workspaceId) ??
-              createLocalThread();
-            if ( !nextThreads.some((thread) => thread.id === rootDraft.id)) {
-            nextThreads = [rootDraft, ...nextThreads];
           }
-            surface.restoreSurface({ kind: 'thread', threadId: rootDraft.id }, toSurfaceThread(rootDraft), {
-              useDefaultLayout: true,
-            });
-          } else if (startupResolution.kind === 'restore-thread') {
+          if (startupResolution.kind === 'restore-thread') {
           const thread = nextThreads.find((candidate) => candidate.id === startupResolution.threadId);
             surface.restoreSurface(
               {
@@ -474,7 +462,7 @@ export const useChatStore = create<ChatState>()(
               },
               thread ? toSurfaceThread(thread) : undefined,
             );
-          } else {
+          } else if (startupResolution.kind === 'restore-workspace') {
             surface.restoreSurface({
               kind: 'workspace',
               projectId: startupResolution.projectId,
@@ -543,9 +531,15 @@ export const useChatStore = create<ChatState>()(
 
         let serverThread: ChatThread;
         try {
-          serverThread = existing?.projectId
-            ? (await createProjectThread(existing.projectId, threadId, existing.workspaceId, threadTitle)).thread
-            : await createServerThread(threadId, undefined, undefined, threadTitle);
+          if (!existing?.projectId || !existing.workspaceId) {
+            throw new Error('A Workspace is required before creating a Thread.');
+          }
+          serverThread = (await createProjectThread(
+            existing.projectId,
+            threadId,
+            existing.workspaceId,
+            threadTitle,
+          )).thread;
         } catch (error) {
           set((state) => ({
             threads: state.threads.map((thread) =>
@@ -605,10 +599,10 @@ export const useChatStore = create<ChatState>()(
         if (isDraftThread(get().threads.find((thread) => thread.id === threadId))) {
           set((state) => {
             const threads = state.threads.filter((thread) => thread.id !== threadId);
-            const nextThreads = threads.length > 0 ? threads : [createLocalThread()];
-            const fallback = withOpenableThreadFallback(nextThreads, state.threadOpenabilityContext, state.threads);
+            const fallback = withOpenableThreadFallback(threads, state.threadOpenabilityContext);
             useWorkspaceSurfaceStore.getState().syncThreads(fallback.openableThreads.map(toSurfaceThread), {
               workspaceRefs: state.threadOpenabilityContext.workspaceRefs,
+              fallbackWorkspace: state.threadOpenabilityContext.workspaceOwners[0],
             });
             return {
               threads: fallback.threads,
@@ -622,9 +616,10 @@ export const useChatStore = create<ChatState>()(
 
         set((state) => {
           const nextThreads = state.threads.map((thread) => thread.id === threadId ? { ...thread, archived: true } : thread,);
-          const fallback = withOpenableThreadFallback(nextThreads, state.threadOpenabilityContext, state.threads);
+          const fallback = withOpenableThreadFallback(nextThreads, state.threadOpenabilityContext);
           useWorkspaceSurfaceStore.getState().syncThreads(fallback.openableThreads.map(toSurfaceThread), {
             workspaceRefs: state.threadOpenabilityContext.workspaceRefs,
+            fallbackWorkspace: state.threadOpenabilityContext.workspaceOwners[0],
           });
           return {
             threads: fallback.threads,
@@ -649,12 +644,12 @@ export const useChatStore = create<ChatState>()(
         set((state) => {
           const threads = state.threads.filter((thread) => thread.id !== threadId);
           const fallback = withOpenableThreadFallback(
-            threads.length > 0 ? threads : [createLocalThread()],
+            threads,
             state.threadOpenabilityContext,
-            state.threads,
           );
           useWorkspaceSurfaceStore.getState().syncThreads(fallback.openableThreads.map(toSurfaceThread), {
             workspaceRefs: state.threadOpenabilityContext.workspaceRefs,
+            fallbackWorkspace: state.threadOpenabilityContext.workspaceOwners[0],
           });
 
           return {

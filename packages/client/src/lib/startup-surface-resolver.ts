@@ -8,23 +8,29 @@ export type StartupSurfaceThread = {
 export type StartupSurfaceResolution =
   | { kind: 'restore-thread'; threadId: string }
   | { kind: 'restore-draft'; draftId: string }
-  | { kind: 'restore-workspace'; projectId: string; workspaceId: string }
-  | { kind: 'create-root-draft'; discardStaleComposer: boolean };
+  | { kind: 'restore-workspace'; projectId: string; workspaceId: string; discardStaleComposer?: boolean }
+  | { kind: 'unavailable'; discardStaleComposer: boolean };
 
 export const resolveStartupSurface = ({
   activeSurface,
   openableThreads,
   workspaceRefs,
+  fallbackWorkspace,
 }: {
   activeSurface: ActiveSurface;
   openableThreads: readonly StartupSurfaceThread[];
   workspaceRefs: ReadonlySet<string>;
+  fallbackWorkspace?: { projectId: string; workspaceId: string };
 }): StartupSurfaceResolution => {
+  const resolveFallback = (): StartupSurfaceResolution => fallbackWorkspace
+    ? { kind: 'restore-workspace', ...fallbackWorkspace, discardStaleComposer: true }
+    : { kind: 'unavailable', discardStaleComposer: true };
+
   if (activeSurface.kind === 'thread') {
     const thread = openableThreads.find((candidate) => candidate.id === activeSurface.threadId);
     if (thread?.draft) return { kind: 'restore-draft', draftId: thread.id };
     if (thread) return { kind: 'restore-thread', threadId: thread.id };
-    return { kind: 'create-root-draft', discardStaleComposer: true };
+    return resolveFallback();
   }
 
   const workspaceRef = `${activeSurface.projectId}:${activeSurface.workspaceId}`;
@@ -36,5 +42,5 @@ export const resolveStartupSurface = ({
     };
   }
 
-  return { kind: 'create-root-draft', discardStaleComposer: true };
+  return resolveFallback();
 };

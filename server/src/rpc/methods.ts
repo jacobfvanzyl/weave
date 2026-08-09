@@ -135,6 +135,13 @@ export const registerCoreRpcMethods = (
     portal: PortalCore;
     internal: InternalServices;
   },
+  dependencies: {
+    projects: {
+      get(ownerId: string, projectId: string): Promise<
+        { workspaces: Array<{ id: string }> } | undefined
+      >;
+    };
+  } = { projects: productProjectRepository },
 ) => {
   const chatSubscriptions = new Map<string, {
     connectionId: string;
@@ -325,13 +332,33 @@ export const registerCoreRpcMethods = (
     (params, { session }) =>
       guarded(async () => {
         const body = recordParams(params);
+        const projectId = requiredString(body.projectId, 'projectId');
+        const workspaceId = requiredString(body.workspaceId, 'workspaceId');
+        const project = await dependencies.projects.get(
+          session.ownerContext.owner.id,
+          projectId,
+        );
+        if (!project) {
+          throw new RpcApplicationError(
+            rpcErrorCode.notFound,
+            'Project was not found.',
+            { code: 'NOT_FOUND' },
+          );
+        }
+        if (!project.workspaces.some((workspace) => workspace.id === workspaceId)) {
+          throw new RpcApplicationError(
+            rpcErrorCode.notFound,
+            'Workspace was not found.',
+            { code: 'NOT_FOUND' },
+          );
+        }
         return {
           thread: await services.agent.service.createChatThread({
             resourceId: session.ownerContext.owner.id,
             threadId: optionalString(body.threadId),
             title: optionalString(body.title) ?? '...',
-            projectId: optionalString(body.projectId),
-            workspaceId: optionalString(body.workspaceId),
+            projectId,
+            workspaceId,
           }),
         };
       }),

@@ -101,6 +101,51 @@ Deno.test("protocol v2 exposes complete versioned domain views from the route re
   }
 });
 
+Deno.test("Thread creation requires a concrete Workspace owner", () => {
+  const direct = parseRpcRequestParams(
+    "client",
+    "server",
+    "chat.thread.create",
+    {
+      threadId: "thread-1",
+      title: "Workspace-bound Thread",
+      projectId: "project-1",
+      workspaceId: "workspace-1",
+    },
+  );
+  if (
+    direct.projectId !== "project-1" ||
+    direct.workspaceId !== "workspace-1"
+  ) {
+    throw new Error("expected direct Thread ownership to survive validation");
+  }
+
+  expectRejected(
+    () =>
+      parseRpcRequestParams(
+        "client",
+        "server",
+        "chat.thread.create",
+        { threadId: "thread-1", projectId: "project-1" },
+      ),
+    "expected direct Thread creation without a Workspace to be rejected",
+  );
+  expectRejected(
+    () =>
+      parseRpcRequestParams(
+        "client",
+        "server",
+        "code.project.threads.create",
+        {
+          projectId: "project-1",
+          threadId: "thread-1",
+          product: "code",
+        },
+      ),
+    "expected project Thread creation without a Workspace to be rejected",
+  );
+});
+
 Deno.test("Portal tool schemas correlate and validate args and results", () => {
   const edit = parsePortalToolArgs("edit", {
     path: "src/main.ts",

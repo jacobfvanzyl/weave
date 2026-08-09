@@ -8,18 +8,28 @@ export type ThreadOpenabilityProject = {
 export type ThreadOpenabilityContext = {
   projectIds: ReadonlySet<string>;
   workspaceRefs: ReadonlySet<string>;
+  workspaceOwners: ReadonlyArray<{ projectId: string; workspaceId: string }>;
 };
 
 export const workspaceRefKey = (projectId: string, workspaceId: string) => `${projectId}:${workspaceId}`;
 
 export const createThreadOpenabilityContext = (
   projects: ThreadOpenabilityProject[] = [],
-): ThreadOpenabilityContext => ({
-  projectIds: new Set(projects.map(project => project.id)),
-  workspaceRefs: new Set(projects.flatMap(project =>
-    project.workspaces.map(workspace => workspaceRefKey(project.id, workspace.id)),
-  )),
-});
+): ThreadOpenabilityContext => {
+  const workspaceOwners = projects.flatMap((project) =>
+    project.workspaces.map((workspace) => ({
+      projectId: project.id,
+      workspaceId: workspace.id,
+    }))
+  );
+  return {
+    projectIds: new Set(projects.map(project => project.id)),
+    workspaceRefs: new Set(workspaceOwners.map(({ projectId, workspaceId }) =>
+      workspaceRefKey(projectId, workspaceId)
+    )),
+    workspaceOwners,
+  };
+};
 
 export const emptyThreadOpenabilityContext = createThreadOpenabilityContext();
 
@@ -28,10 +38,8 @@ export const isOpenableThread = (
   context: ThreadOpenabilityContext,
 ) => {
   if (thread.archived === true || thread.removedWorkspace) return false;
-  if (thread.adHoc) return true;
-  if (!thread.projectId) return true;
-  if (thread.workspaceId) return context.workspaceRefs.has(workspaceRefKey(thread.projectId, thread.workspaceId));
-  return context.projectIds.has(thread.projectId);
+  if (!thread.projectId || !thread.workspaceId) return false;
+  return thread.adHoc === true || context.workspaceRefs.has(workspaceRefKey(thread.projectId, thread.workspaceId));
 };
 
 export const getOpenableThreads = <T extends Pick<ChatThread, 'projectId' | 'workspaceId' | 'archived' | 'adHoc' | 'removedWorkspace'>>(

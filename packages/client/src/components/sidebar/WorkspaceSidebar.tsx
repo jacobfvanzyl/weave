@@ -499,11 +499,6 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
     }
     await invalidateProjects();
   };
-  const createPlainThread = async () => {
-    await newThread();
-    await queryClient.invalidateQueries({ queryKey: ['threads', resourceId], });
-    if (closeOnSelect) onClose?.();
-  };
   const openCreateProjectDialog = () => {
     setCreateProjectError(null);
     setIsCreateProjectDialogOpen(true);
@@ -801,8 +796,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
               const isCollapsed = collapsedProjectIds.includes(project.id);
               const projectThreads = threadsByProject.get(project.id) ?? [];
               const workspaces = project.workspaces.length > 0 ? project.workspaces : [];
-              const generalProjectThreads = projectThreads.filter(
-                  (thread) => !thread.workspaceId && thread.archived !== true,);
+              const generalProjectThreads = projectThreads.filter((thread) => thread.archived !== true);
               const sortedWorkspaces = sortManual(workspaces);
               const notesWorkspace = project.projectKind === 'notes' ? sortedWorkspaces[0] : undefined;
               const notesThreads = notesWorkspace
@@ -810,7 +804,10 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                       (thread) => thread.workspaceId === notesWorkspace.id && thread.archived !== true,)
                 : [];
               const isNotesProjectActive = Boolean(notesWorkspace && isWorkspaceActive(project.id, notesWorkspace.id),);
-              const hasProjectThreadAction = project.projectKind === 'general' || project.projectKind === 'notes';
+              const projectThreadWorkspace = project.workspaces[0];
+              const hasProjectThreadAction = Boolean(
+                projectThreadWorkspace && (project.projectKind === 'general' || project.projectKind === 'notes'),
+              );
               const projectAsHeader = renderSingleVaultAsHeader && project.projectKind === 'notes';
 
               return (
@@ -912,7 +909,7 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                 variant="ghost"
                                 aria-label={`Create thread in ${project.name}`}
                                 onClick={async () => {
-                                  await newThread(project.id, project.projectKind === 'notes' ? project.workspaces[0]?.id : undefined,);
+                                  await newThread(project.id, projectThreadWorkspace!.id);
                                   await Promise.all([
                                     queryClient.invalidateQueries({ queryKey: ['threads', resourceId], }),
                                     invalidateProjects(),
@@ -955,6 +952,17 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                                     ) : null}
                                   </>
                                 ) : null}
+                                {project.projectKind === 'general' && project.workspaces.length === 0 ? (
+                                  <MenuItem onClick={async () => {
+                                    const name = window.prompt('Workspace name', project.name)?.trim();
+                                    if (!name) return;
+                                    await createWorkspace(project.id, { name });
+                                    await invalidateProjects();
+                                  }}>
+                                    <Plus size={13} />
+                                    Create Workspace
+                                  </MenuItem>
+                                ) : null}
                                 {project.projectKind !== 'git' ? (
                                   <MenuItem onClick={() => setArchivedDialogScopeId(project.projectKind === 'notes' ? ( notesWorkspace?.id ?? project.id) : project.id,)}>
                                     <Archive size={13} />
@@ -985,7 +993,10 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
                               items={generalProjectThreads.map((thread) => thread.id)}
                               onDragStart={suppressSelectionAfterDrag}
                               onDragEnd={suppressSelectionAfterDrag}
-                              onReorder={(activeId, overId) => reorderProjectThreads(project.id, activeId, overId)}
+                              onReorder={(activeId, overId) =>
+                                projectThreadWorkspace
+                                  ? reorderWorkspaceThreads(project.id, projectThreadWorkspace.id, activeId, overId)
+                                  : undefined}
                             >
                               {generalProjectThreads.map((thread) => (
                                 <SortableItem
@@ -1379,16 +1390,6 @@ export const WorkspaceSidebar = forwardRef<HTMLElement, WorkspaceSidebarProps>((
         {showPlainThreads ? ( <div className="space-y-2">
           <SidebarSectionHeader label="Threads">
             <div className="flex items-center">
-              <Button
-                className="h-5 w-6 text-foreground sm:h-5 sm:w-6"
-                size="icon-xs"
-                variant="ghost"
-                aria-label="Create Thread"
-                onClick={createPlainThread}
-                style={sidebarActionRailStyle}
-              >
-                <SquarePen size={14} />
-              </Button>
               <Menu>
                 <MenuTrigger
                   render={

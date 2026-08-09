@@ -745,16 +745,14 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
 
     if (isActiveSurfaceSupported) return;
 
-    if (activeProduct === 'code' || activeProduct === 'notes') {
-      const nextProject = projects.find(
-        (project) =>
+    const nextProject = projects.find(
+      (project) =>
         projectBelongsToProduct(project, activeProduct) && project.workspaces.length > 0,
-      );
-      const nextWorkspace = nextProject?.workspaces[0];
-      if (nextProject && nextWorkspace) {
-        selectWorkspaceSurface(nextProject.id, nextWorkspace.id);
-        return;
-      }
+    );
+    const nextWorkspace = nextProject?.workspaces[0];
+    if (nextProject && nextWorkspace) {
+      selectWorkspaceSurface(nextProject.id, nextWorkspace.id);
+      return;
     }
 
     const nextThread = threads.find((thread) => {
@@ -766,13 +764,11 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
       return;
     }
 
-    if (isProductAllowedForClientApp('chat', clientApp)) void newThread();
   }, [
     activeProduct,
     clientApp,
     isActiveSurfaceSupported,
     areThreadsLoaded,
-    newThread,
     productForThread,
     projects,
     projectsQuery.isSuccess,
@@ -800,13 +796,13 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
       ? activeSurfaceProduct
       : activeProduct;
     const projectId = activeSurface.kind === 'workspace'
-      ? creationProduct === 'chat' ? undefined : activeSurface.projectId
+      ? activeSurface.projectId
       : activeThreadProduct === creationProduct ? activeThread?.projectId : undefined;
     const workspaceId = activeSurface.kind === 'workspace'
-      ? creationProduct === 'chat' ? undefined : activeSurface.workspaceId
+      ? activeSurface.workspaceId
       : activeThreadProduct === creationProduct ? activeThread?.workspaceId : undefined;
 
-    if (creationProduct !== 'chat' && (!projectId || !workspaceId)) return;
+    if (!projectId || !workspaceId) return;
 
     void newThread(projectId, workspaceId)
       .then(() => queryClient.invalidateQueries({ queryKey: ['threads', resourceId] }))

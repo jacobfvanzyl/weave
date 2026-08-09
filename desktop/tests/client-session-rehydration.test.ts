@@ -130,7 +130,7 @@ describe('connection-scoped client session rehydration', () => {
     expect(sessionKeys.every((key) => !key.toLowerCase().includes('token'))).toBe(true);
   });
 
-  it('reloads three app installations into their own Notes, Code, and root-thread surfaces', async () => {
+  it('reloads three app installations into their own Workspace-bound surfaces', async () => {
     const identityInput = ['weave', 'https://weave.test/', 'same-owner'] as const;
     const now = '2026-07-13T10:00:00.000Z';
     const projects = [
@@ -143,6 +143,8 @@ describe('connection-scoped client session rehydration', () => {
         title: 'Phone thread',
         createdAt: now,
         updatedAt: now,
+        projectId: 'notes-project',
+        workspaceId: 'notes-workspace',
       },
     ];
 
@@ -163,7 +165,7 @@ describe('connection-scoped client session rehydration', () => {
     await iphone.activateClientSessionStores(iphone.createClientSessionIdentity(...identityInput));
     iphone.surface.useWorkspaceSurfaceStore.getState().restoreSurface(
       { kind: 'thread', threadId: 'root-thread' },
-      { id: 'root-thread' },
+      { id: 'root-thread', workspaceId: 'notes-workspace' },
       { useDefaultLayout: true },
     );
     const iphoneStorage = snapshotStorage(iphone.storage);
@@ -193,11 +195,11 @@ describe('connection-scoped client session rehydration', () => {
     restoredIphone.chat.useChatStore.getState().setServerThreads(serverThreads, projects);
     expect(restoredIphone.surface.useWorkspaceSurfaceStore.getState()).toMatchObject({
       activeSurface: { kind: 'thread', threadId: 'root-thread' },
-      paneVisibility: { chatOpen: true, editorOpen: false, terminalOpen: false },
+      paneVisibility: { chatOpen: true, editorOpen: true, terminalOpen: false },
     });
   });
 
-  it('restores an exact valid surface and falls back to one root draft for an invalid target', async () => {
+  it('restores an exact valid surface and creates no Thread when every Workspace disappears', async () => {
     const runtime = await loadSessionRuntime();
     const identity = runtime.createClientSessionIdentity('weave', 'https://weave.test', 'owner-1');
     await runtime.activateClientSessionStores(identity);
@@ -240,26 +242,11 @@ describe('connection-scoped client session rehydration', () => {
     expect(runtime.session.useClientSessionViewStore.getState().composerDrafts['draft-workspace']).toBe('keep me');
 
     runtime.chat.useChatStore.getState().setServerThreads([], []);
-    const rootDrafts = runtime.chat.useChatStore
-      .getState()
-      .threads.filter((thread) => thread.draft && !thread.projectId && !thread.workspaceId);
-    expect(rootDrafts).toHaveLength(1);
-    expect(runtime.surface.useWorkspaceSurfaceStore.getState()).toMatchObject({
-      activeSurface: { kind: 'thread', threadId: rootDrafts[0]?.id },
-      paneVisibility: {
-        chatOpen: true,
-        editorOpen: false,
-        terminalOpen: false,
-      },
-    });
+    expect(runtime.chat.useChatStore.getState().threads).toEqual([]);
     expect(runtime.session.useClientSessionViewStore.getState().composerDrafts['draft-workspace']).toBeUndefined();
 
     runtime.chat.useChatStore.getState().setServerThreads([], []);
-    expect(
-      runtime.chat.useChatStore
-        .getState()
-        .threads.filter((thread) => thread.draft && !thread.projectId && !thread.workspaceId),
-    ).toHaveLength(1);
+    expect(runtime.chat.useChatStore.getState().threads).toEqual([]);
   });
 
   it('claims legacy state for the first connected scope only', async () => {
@@ -303,7 +290,7 @@ describe('connection-scoped client session rehydration', () => {
     expect(runtime.storage.getItem('weave-surface.weave')).toBeTruthy();
   });
 
-  it('keeps archived thread view state while moving the active surface to a root draft', async () => {
+  it('removes view state for an archived legacy Thread without a Workspace', async () => {
     const runtime = await loadSessionRuntime();
     const identity = runtime.createClientSessionIdentity('weave', 'https://weave.test', 'owner-archive');
     await runtime.activateClientSessionStores(identity);
@@ -329,17 +316,11 @@ describe('connection-scoped client session rehydration', () => {
     );
 
     const restoredSurface = runtime.surface.useWorkspaceSurfaceStore.getState().activeSurface;
-    expect(restoredSurface.kind === 'thread' && restoredSurface.threadId === 'archived-thread').toBe(false);
-    expect(runtime.surface.useWorkspaceSurfaceStore.getState().surfaceLayouts['thread:archived-thread']).toMatchObject({
-      paneVisibility: {
-        chatOpen: true,
-        editorOpen: true,
-        terminalOpen: false,
-      },
-    });
-    expect(runtime.session.useClientSessionViewStore.getState().composerDrafts['archived-thread']).toBe(
-      'resume after restore',
-    );
+    expect(runtime.chat.useChatStore.getState().threads.some((thread) =>
+      restoredSurface.kind === 'thread' && thread.id === restoredSurface.threadId
+    )).toBe(false);
+    expect(runtime.surface.useWorkspaceSurfaceStore.getState().surfaceLayouts['thread:archived-thread']).toBeUndefined();
+    expect(runtime.session.useClientSessionViewStore.getState().composerDrafts['archived-thread']).toBeUndefined();
   });
 
   it('keeps a local draft when the user leaves it with composer text', async () => {
