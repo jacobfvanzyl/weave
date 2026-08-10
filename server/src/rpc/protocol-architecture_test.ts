@@ -26,6 +26,7 @@ Deno.test('protocol v2 request matrix matches server and Portal registrations', 
   const serverSources = await Promise.all([
     Deno.readTextFile(new URL('./methods.ts', import.meta.url)),
     Deno.readTextFile(new URL('../modules/code/rpc.ts', import.meta.url)),
+    Deno.readTextFile(new URL('../modules/workspace-composition/rpc.ts', import.meta.url)),
   ]);
   const serverMethods = new Set(serverSources.flatMap((source) => literalRegistrations(source, 'router')));
   for (const action of workspaceFileActions) serverMethods.add(`workspaceFile.${action}`);

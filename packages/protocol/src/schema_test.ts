@@ -8,6 +8,7 @@ import {
   parsePortalToolArgs,
   parsePortalToolResult,
   parseRpcRequestParams,
+  parseRpcRequestResult,
   portalToolNameSchema,
   rpcContracts,
   rpcContractsByDomain,
@@ -16,6 +17,7 @@ import {
   threadCompactionEventDataSchema,
   threadRunPhaseSchema,
   WEAVE_RPC_PROTOCOL_VERSION,
+  workspaceCompositionSchema,
 } from "./schema.ts";
 
 const expectRejected = (operation: () => unknown, message: string) => {
@@ -143,6 +145,125 @@ Deno.test("Thread creation requires a concrete Workspace owner", () => {
         },
       ),
     "expected project Thread creation without a Workspace to be rejected",
+  );
+});
+
+Deno.test("Workspace Composition exposes stable versioned identities through the RPC contract", () => {
+  const params = parseRpcRequestParams(
+    "client",
+    "server",
+    "workspace.composition.get",
+    { projectId: "project-1", workspaceId: "workspace-1" },
+  );
+  if (params.workspaceId !== "workspace-1") {
+    throw new Error("expected Workspace identity to survive validation");
+  }
+
+  const composition = workspaceCompositionSchema.parse({
+    workspaceId: "workspace-1",
+    schemaVersion: 1,
+    revision: 1,
+    defaultPaneType: "editor",
+    tabs: [{
+      tabId: "tab-1",
+      name: "New Tab",
+      layout: { kind: "empty", layoutId: "layout-1" },
+      panes: [],
+    }],
+  });
+  const result = parseRpcRequestResult(
+    "client",
+    "server",
+    "workspace.composition.get",
+    { composition },
+  );
+
+  if (
+    result.composition.tabs[0]?.tabId !== "tab-1" ||
+    result.composition.tabs[0]?.layout.layoutId !== "layout-1"
+  ) {
+    throw new Error("expected stable Tab and Layout identities");
+  }
+
+  expectRejected(
+    () => workspaceCompositionSchema.parse({ ...composition, revision: 0 }),
+    "expected revisions to be positive",
+  );
+  expectRejected(
+    () => workspaceCompositionSchema.parse({ ...composition, tabs: [] }),
+    "expected at least one Workspace Tab",
+  );
+  expectRejected(
+    () =>
+      workspaceCompositionSchema.parse({
+        ...composition,
+        tabs: ["tab-1", "tab-2"].map((tabId, index) => ({
+          tabId,
+          name: `Thread ${index + 1}`,
+          panes: [{
+            paneId: `pane-${index + 1}`,
+            type: "thread",
+            threadId: "thread-1",
+          }],
+          layout: {
+            kind: "pane",
+            layoutId: `layout-${index + 1}`,
+            paneId: `pane-${index + 1}`,
+          },
+        })),
+      }),
+    "expected one Thread Pane per Thread",
+  );
+  expectRejected(
+    () =>
+      workspaceCompositionSchema.parse({
+        ...composition,
+        tabs: [{
+          tabId: "tab-1",
+          name: "Invalid layout",
+          panes: [{ paneId: "pane-1", type: "editor", workingSet: [] }],
+          layout: {
+            kind: "row",
+            layoutId: "layout-root",
+            ratios: [1],
+            children: [
+              { kind: "pane", layoutId: "layout-1", paneId: "pane-1" },
+              { kind: "pane", layoutId: "layout-2", paneId: "pane-missing" },
+            ],
+          },
+        }],
+      }),
+    "expected valid layout ratios and Pane references",
+  );
+  expectRejected(
+    () =>
+      workspaceCompositionSchema.parse({
+        ...composition,
+        tabs: [{
+          tabId: "tab-1",
+          name: "Editor",
+          panes: [{
+            paneId: "pane-1",
+            type: "editor",
+            workingSet: ["README.md", "README.md"],
+          }],
+          layout: {
+            kind: "pane",
+            layoutId: "layout-1",
+            paneId: "pane-1",
+          },
+          preferredEditorPaneId: "pane-1",
+        }],
+      }),
+    "expected Editor Working Sets to reject duplicate files",
+  );
+  expectRejected(
+    () =>
+      workspaceCompositionSchema.parse({
+        ...composition,
+        tabs: [{ ...composition.tabs[0]!, name: "   " }],
+      }),
+    "expected Workspace Tab names to be non-empty after trimming",
   );
 });
 

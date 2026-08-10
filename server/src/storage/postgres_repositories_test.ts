@@ -5,6 +5,7 @@ import { PortalRepository } from '../portal/store';
 import { PostgresWorkflowRepository } from '../workflows/repository';
 import type { WorkflowDefinition } from '../workflows/definition';
 import { PgWeaveDbClient } from './postgres';
+import { WorkspaceCompositionRepository } from '../modules/workspace-composition/repository.ts';
 
 const { Pool } = pg;
 
@@ -26,11 +27,14 @@ const workflowDefinition = (): WorkflowDefinition => ({
 });
 
 const migrateWeaveSchema = async (pool: pg.Pool) => {
-  const sql = await Deno.readTextFile(new URL('../../drizzle/0000_initial_weave.sql', import.meta.url));
-  await pool.query(sql);
+  for (const migration of ['0000_initial_weave.sql', '0006_workspace_compositions.sql']) {
+    const sql = await Deno.readTextFile(new URL(`../../drizzle/${migration}`, import.meta.url));
+    await pool.query(sql);
+  }
 };
 
 const cleanupOwner = async (pool: pg.Pool, ownerId: string) => {
+  await pool.query('DELETE FROM weave.workspace_compositions WHERE owner_id = $1', [ownerId]);
   await pool.query('DELETE FROM weave.workflow_run_events WHERE owner_id = $1', [ownerId]);
   await pool.query('DELETE FROM weave.workflow_runs WHERE owner_id = $1', [ownerId]);
   await pool.query('DELETE FROM weave.workflow_definitions WHERE owner_id = $1', [ownerId]);
@@ -64,11 +68,27 @@ Deno.test('Postgres repositories exercise Weave-owned schema', async () => {
       name: 'Project 1',
       projectKind: 'git',
       repoPath: '/tmp/project-1',
-      workspaces: [],
+      workspaces: [{
+        id: 'workspace-1',
+        projectId: 'project-1',
+        workspaceKind: 'primary',
+        name: 'Workspace 1',
+        status: 'ready',
+        createdAt: now,
+        updatedAt: now,
+      }],
       createdAt: now,
       updatedAt: now,
     });
     assertEquals((await projects.get(ownerId, 'project-1', 'code'))?.name, 'Project 1');
+
+    const composition = await new WorkspaceCompositionRepository(getClient).getOrCreate(ownerId, 'workspace-1');
+    const restartedComposition = await new WorkspaceCompositionRepository(getClient).getOrCreate(
+      ownerId,
+      'workspace-1',
+    );
+    assertEquals(composition.tabs[0]?.name, 'New Tab');
+    assertEquals(restartedComposition, composition);
 
     const bindings = new PostgresServiceBindingRepository(getClient);
     const binding = await bindings.upsert({
@@ -105,8 +125,7 @@ Deno.test('Postgres repositories exercise Weave-owned schema', async () => {
           eventId: `event-${index}`,
           type: 'workflow.run.event',
           data: { index },
-        })
-      ),
+        })),
     );
     assertEquals((await workflows.listRunEvents(ownerId, 'run-1')).map((event) => event.sequence), [
       1,

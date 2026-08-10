@@ -39,6 +39,24 @@ export const productProjects = weaveSchema.table(
   ],
 );
 
+export const workspaceCompositions = weaveSchema.table(
+  'workspace_compositions',
+  {
+    ownerId: text('owner_id').notNull(),
+    workspaceId: text('workspace_id').notNull(),
+    schemaVersion: integer('schema_version').notNull(),
+    revision: integer('revision').notNull(),
+    document: jsonb('document').notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.workspaceId] }),
+    index('workspace_compositions_owner_updated_idx').on(table.ownerId, table.updatedAt),
+    check('workspace_compositions_schema_version_check', sql`${table.schemaVersion} > 0`),
+    check('workspace_compositions_revision_check', sql`${table.revision} > 0`),
+  ],
+);
+
 export const attachments = weaveSchema.table(
   'attachments',
   {

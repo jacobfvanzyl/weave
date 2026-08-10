@@ -14,6 +14,7 @@ type WorkspaceMainContentProps = {
   projectName?: string;
   rightActions?: ReactNode;
   showSidebarPreview: boolean;
+  tabStrip?: ReactNode;
   threadTitle?: string;
   workspaceName?: string;
 };
@@ -30,6 +31,7 @@ export const WorkspaceMainContent = ({
   projectName,
   rightActions,
   showSidebarPreview,
+  tabStrip,
   threadTitle,
   workspaceName,
 }: WorkspaceMainContentProps) => (
@@ -48,6 +50,7 @@ export const WorkspaceMainContent = ({
       threadTitle={threadTitle}
       rightActions={rightActions}
     />
+    {tabStrip}
     <MainPaneLayout isEmpty={isEmpty} emptyState={emptyState}>
       {panes}
     </MainPaneLayout>

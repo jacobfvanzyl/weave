@@ -278,6 +278,11 @@ export const listWorkspaceGitStates = async () => {
   return result.states;
 };
 
+export const getWorkspaceComposition = async (projectId: string, workspaceId: string) => {
+  const result = await rpcRequest('workspace.composition.get', { projectId, workspaceId });
+  return result.composition;
+};
+
 export const listProjectBranches = async (projectId: string) => {
   const result = await rpcRequest('code.project.branches.list', { projectId });
 

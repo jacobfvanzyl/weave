@@ -56,6 +56,27 @@ describe.skipIf(!runAcceptance)(
         });
         const workspace = project.workspaces[0];
         expect(workspace).toBeDefined();
+        const { composition: initialComposition } = await harness.rpc.request(
+          "workspace.composition.get",
+          { projectId: project.id, workspaceId: workspace!.id },
+        );
+        const { composition: concurrentComposition } = await harness.rpc
+          .request(
+            "workspace.composition.get",
+            { projectId: project.id, workspaceId: workspace!.id },
+          );
+        expect(initialComposition).toEqual(concurrentComposition);
+        expect(initialComposition).toMatchObject({
+          workspaceId: workspace!.id,
+          schemaVersion: 1,
+          revision: 1,
+          defaultPaneType: "editor",
+          tabs: [{
+            name: "New Tab",
+            panes: [],
+            layout: { kind: "empty" },
+          }],
+        });
 
         await expect(harness.rpc.request("chat.thread.create", {
           threadId: "unowned-thread",
@@ -84,6 +105,19 @@ describe.skipIf(!runAcceptance)(
           ).toContainText(
             "Durable acceptance thread",
           );
+          const workspaceTab = client.page.locator(
+            `[data-weave-workspace-tab-id="${
+              initialComposition.tabs[0]!.tabId
+            }"]`,
+          );
+          await playwrightExpect(workspaceTab).toContainText("New Tab");
+          await playwrightExpect(workspaceTab).toHaveAttribute(
+            "data-weave-workspace-tab-layout-id",
+            initialComposition.tabs[0]!.layout.layoutId,
+          );
+          await playwrightExpect(
+            client.page.locator("[data-weave-main-pane]"),
+          ).toHaveCount(0);
         }
 
         await firstClient.page.getByRole("button", {
@@ -137,6 +171,12 @@ describe.skipIf(!runAcceptance)(
           secondClient.refreshFromServer(),
         ]);
 
+        const { composition: restartedComposition } = await harness.rpc.request(
+          "workspace.composition.get",
+          { projectId: project.id, workspaceId: workspace!.id },
+        );
+        expect(restartedComposition).toEqual(initialComposition);
+
         const persistedThreads = await harness.rpc.request("chat.thread.list");
         expect(persistedThreads.threads).not.toEqual(
           expect.arrayContaining([
@@ -159,6 +199,12 @@ describe.skipIf(!runAcceptance)(
           await harness.database.scalar(
             "select count(*)::int from weave.product_projects where owner_id = $1 and project_id = $2",
             [harness.ownerId, project.id],
+          ),
+        ).toBe("1");
+        expect(
+          await harness.database.scalar(
+            "select count(*)::int from weave.workspace_compositions where owner_id = $1 and workspace_id = $2",
+            [harness.ownerId, workspace!.id],
           ),
         ).toBe("1");
         for (const client of [firstClient, secondClient]) {

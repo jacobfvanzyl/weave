@@ -33,6 +33,7 @@ import {
   workflowDefinitionSchema,
   workflowRunEventSchema,
   workflowRunSchema,
+  workspaceCompositionSchema,
   workspaceFileDiffPreviewResultSchema,
   workspaceFileHashResultSchema,
   workspaceFileListResultSchema,
@@ -992,6 +993,13 @@ const clientServerRequests = [
     "server",
     workspaceIdsSchema,
     workspaceRemovalPreviewSchema,
+  ),
+  request(
+    "workspace.composition.get",
+    "client",
+    "server",
+    workspaceIdsSchema,
+    z.object({ composition: workspaceCompositionSchema }).strict(),
   ),
   request(
     "workspaceFile.list",
@@ -2639,7 +2647,11 @@ export const rpcDomainForMethod = (method: string): RpcProtocolDomain => {
     return "artifacts";
   }
   if (method.startsWith("notification.")) return "notifications";
-  if (method.startsWith("code.")) return "projects-workspaces";
+  if (
+    method.startsWith("code.") || method.startsWith("workspace.composition.")
+  ) {
+    return "projects-workspaces";
+  }
   if (
     method.startsWith("chat.") || method.startsWith("agent.") ||
     method === "owner.get"

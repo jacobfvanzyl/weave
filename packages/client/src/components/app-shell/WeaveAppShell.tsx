@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, MessageSquare, PanelLeft, StickyNote, TerminalSquare } from 'lucide-react';
-import { listServerThreads } from '../../lib/chat-state-api';
+import { getWorkspaceComposition, listServerThreads } from '../../lib/chat-state-api';
 import {
   type ClientAppDefinition,
   type ClientAppInputId,
@@ -47,6 +47,7 @@ import { NotificationHost } from '../notifications/NotificationHost';
 import { PaneContentHost, type PaneContentType, type PaneHostIdentity } from '../panes/PaneContentHost';
 import { ContextBreadcrumb } from '../workspace/ContextBreadcrumb';
 import { WorkspaceMainContent } from '../workspace/WorkspaceMainContent';
+import { WorkspaceTabStrip } from '../workspace/WorkspaceTabStrip';
 import {
   chatPaneMinimumWidthPx,
   editorColumnMeasureText,
@@ -213,6 +214,12 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
     ? workspaceTargets.activeProject
     : undefined;
   const activeWorkspace = activeProject ? workspaceTargets.activeWorkspace : undefined;
+  const hasWorkspaceCompositionContext = Boolean(activeProject && activeWorkspace);
+  const workspaceCompositionQuery = useQuery({
+    queryKey: ['workspace-composition', resourceId, activeProject?.id, activeWorkspace?.id],
+    queryFn: () => getWorkspaceComposition(activeProject!.id, activeWorkspace!.id),
+    enabled: Boolean(activeProject && activeWorkspace),
+  });
   const hasCodeSurfaceContext = isActiveSurfaceSupported && activeSurfaceProduct === 'code';
   const editorTarget = hasCodeSurfaceContext ? workspaceTargets.editorTarget : undefined;
   const notesTarget = isActiveSurfaceSupported && activeSurfaceProduct === 'notes' ? workspaceTargets.notesTarget : undefined;
@@ -1197,7 +1204,7 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
       {renderGeneralTerminalButton()}
     </>
   ) : undefined;
-  const headerRightActions = (
+  const legacyHeaderRightActions = (
     <>
       {hasChatPaneTarget ? (
         <Button
@@ -1242,7 +1249,7 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
       ) : null}
     </>
   );
-  const emptyMainPaneState = (
+  const legacyEmptyMainPaneState = (
     <div className="grid min-h-0 min-w-0 flex-1 place-items-center bg-background text-xs text-muted-foreground">
       <div className="flex flex-col items-center gap-3">
         <div>No pane is open</div>
@@ -1275,6 +1282,46 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
       </div>
     </div>
   );
+  const workspaceCompositionMainPaneState = (
+    <div
+      className="grid min-h-0 min-w-0 flex-1 place-items-center bg-background text-xs text-muted-foreground"
+      data-weave-workspace-composition-canvas
+      data-weave-workspace-composition-layout-id={workspaceCompositionQuery.data?.tabs[0]?.layout.layoutId}
+      data-weave-workspace-composition-status={workspaceCompositionQuery.isError
+        ? 'error'
+        : workspaceCompositionQuery.data ? 'ready' : 'loading'}
+    >
+      {workspaceCompositionQuery.isError
+        ? 'Workspace Composition unavailable'
+        : workspaceCompositionQuery.data
+        ? workspaceCompositionQuery.data.tabs[0]!.panes.length === 0
+          ? 'New Tab has no Panes'
+          : 'Workspace Panes are unavailable in this client'
+        : 'Loading Workspace Composition…'}
+    </div>
+  );
+  const mainPaneEmptyState = hasWorkspaceCompositionContext
+    ? workspaceCompositionMainPaneState
+    : legacyEmptyMainPaneState;
+  const mainPanes = hasWorkspaceCompositionContext ? [] : orderedMainPanes;
+  const isMainPaneEmpty = hasWorkspaceCompositionContext || (!showChatPane && !showEditorPane && !showTerminalPane);
+  const headerRightActions = hasWorkspaceCompositionContext ? undefined : legacyHeaderRightActions;
+  const workspaceTabStrip = activeProject && activeWorkspace ? (
+    workspaceCompositionQuery.data ? (
+      <WorkspaceTabStrip
+        activeTabId={workspaceCompositionQuery.data.tabs[0]!.tabId}
+        composition={workspaceCompositionQuery.data}
+      />
+    ) : (
+      <nav
+        aria-label="Workspace Tabs"
+        className="shrink-0 border-b border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
+        data-weave-workspace-tabs-status={workspaceCompositionQuery.isError ? 'error' : 'loading'}
+      >
+        {workspaceCompositionQuery.isError ? 'Workspace Tabs unavailable' : 'Loading Workspace Tabs…'}
+      </nav>
+    )
+  ) : undefined;
 
 	  return (
 	    <ShortcutProvider commands={shortcutCommands}>
@@ -1326,15 +1373,16 @@ export const WeaveAppShell = ({ adoptedLocalPortalId, clientApp: clientAppInput,
       ) : null}
       <WorkspaceMainContent
         centerContent={renderAppBarCenterContent()}
-        emptyState={emptyMainPaneState}
-        isEmpty={!showChatPane && !showEditorPane && !showTerminalPane}
+        emptyState={mainPaneEmptyState}
+        isEmpty={isMainPaneEmpty}
         isSidebarAutoHidden={isSidebarAutoHidden}
         isSidebarOpen={isSidebarOpen}
         isSidebarPinnedOpen={isSidebarPinnedOpen}
         leftActions={headerLeftActions}
-        panes={orderedMainPanes}
+        panes={mainPanes}
         rightActions={headerRightActions}
         showSidebarPreview={showSidebarPreview}
+        tabStrip={workspaceTabStrip}
       />
       <GlobalTerminalOverlay
         activeTabId={activeGeneralTerminalTabId}

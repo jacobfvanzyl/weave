@@ -131,6 +131,263 @@ export const workspaceSchema = z.object({
 }).strict();
 export type Workspace = z.infer<typeof workspaceSchema>;
 
+export const workspacePaneTypeSchema = z.enum(["thread", "editor", "terminal"]);
+export type WorkspacePaneType = z.infer<typeof workspacePaneTypeSchema>;
+
+const workspaceEditorWorkingSetSchema = z.array(nonEmptyStringSchema)
+  .superRefine(
+    (paths, context) => {
+      const uniquePaths = new Set<string>();
+      paths.forEach((path, index) => {
+        if (uniquePaths.has(path)) {
+          context.addIssue({
+            code: "custom",
+            message: "Editor Working Set paths must be unique.",
+            path: [index],
+          });
+          return;
+        }
+        uniquePaths.add(path);
+      });
+    },
+  );
+
+export const workspaceCompositionPaneSchema = z.discriminatedUnion("type", [
+  z.object({
+    paneId: nonEmptyStringSchema,
+    type: z.literal("thread"),
+    threadId: nonEmptyStringSchema,
+  }).strict(),
+  z.object({
+    paneId: nonEmptyStringSchema,
+    type: z.literal("editor"),
+    workingSet: workspaceEditorWorkingSetSchema,
+  }).strict(),
+  z.object({
+    paneId: nonEmptyStringSchema,
+    type: z.literal("terminal"),
+    terminalId: nonEmptyStringSchema,
+  }).strict(),
+]);
+export type WorkspaceCompositionPane = z.infer<
+  typeof workspaceCompositionPaneSchema
+>;
+
+export type WorkspaceCompositionLayout =
+  | { kind: "empty"; layoutId: string }
+  | { kind: "pane"; layoutId: string; paneId: string }
+  | {
+    kind: "row" | "column";
+    layoutId: string;
+    children: WorkspaceCompositionLayout[];
+    ratios: number[];
+  };
+
+export const workspaceCompositionLayoutSchema: z.ZodType<
+  WorkspaceCompositionLayout
+> = z.lazy(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("empty"),
+      layoutId: nonEmptyStringSchema,
+    }).strict(),
+    z.object({
+      kind: z.literal("pane"),
+      layoutId: nonEmptyStringSchema,
+      paneId: nonEmptyStringSchema,
+    }).strict(),
+    z.object({
+      kind: z.enum(["row", "column"]),
+      layoutId: nonEmptyStringSchema,
+      children: z.array(workspaceCompositionLayoutSchema).min(2),
+      ratios: z.array(z.number().positive()).min(2),
+    }).strict(),
+  ])
+);
+
+export const workspaceCompositionTabSchema = z.object({
+  tabId: nonEmptyStringSchema,
+  name: z.string().trim().min(1).max(80),
+  layout: workspaceCompositionLayoutSchema,
+  panes: z.array(workspaceCompositionPaneSchema),
+  preferredEditorPaneId: nonEmptyStringSchema.optional(),
+}).strict();
+export type WorkspaceCompositionTab = z.infer<
+  typeof workspaceCompositionTabSchema
+>;
+
+const addCompositionIssue = (
+  context: z.RefinementCtx,
+  message: string,
+  path: Array<string | number>,
+) => context.addIssue({ code: "custom", message, path });
+
+const addUniqueIdentity = (
+  identities: Set<string>,
+  identity: string,
+  label: string,
+  context: z.RefinementCtx,
+  path: Array<string | number>,
+) => {
+  if (identities.has(identity)) {
+    addCompositionIssue(context, `${label} identities must be unique.`, path);
+    return;
+  }
+  identities.add(identity);
+};
+
+export const workspaceCompositionSchema = z.object({
+  workspaceId: nonEmptyStringSchema,
+  schemaVersion: z.literal(1),
+  revision: z.number().int().positive(),
+  defaultPaneType: workspacePaneTypeSchema,
+  tabs: z.array(workspaceCompositionTabSchema).min(1),
+}).strict().superRefine((composition, context) => {
+  const tabIds = new Set<string>();
+  const paneIds = new Set<string>();
+  const layoutIds = new Set<string>();
+  const threadIds = new Set<string>();
+
+  composition.tabs.forEach((tab, tabIndex) => {
+    const tabPath = ["tabs", tabIndex];
+    addUniqueIdentity(tabIds, tab.tabId, "Workspace Tab", context, [
+      ...tabPath,
+      "tabId",
+    ]);
+
+    const tabPanes = new Map(tab.panes.map((pane) => [pane.paneId, pane]));
+    tab.panes.forEach((pane, paneIndex) => {
+      const panePath = [...tabPath, "panes", paneIndex];
+      addUniqueIdentity(paneIds, pane.paneId, "Pane", context, [
+        ...panePath,
+        "paneId",
+      ]);
+      if (pane.type === "thread") {
+        addUniqueIdentity(
+          threadIds,
+          pane.threadId,
+          "Thread Pane resource",
+          context,
+          [...panePath, "threadId"],
+        );
+      }
+    });
+
+    if (tab.preferredEditorPaneId) {
+      const preferredPane = tabPanes.get(tab.preferredEditorPaneId);
+      if (preferredPane?.type !== "editor") {
+        addCompositionIssue(
+          context,
+          "Preferred Editor Pane must reference an Editor Pane in the same Workspace Tab.",
+          [...tabPath, "preferredEditorPaneId"],
+        );
+      }
+    }
+
+    const referencedPaneIds = new Set<string>();
+    const visitLayout = (
+      layout: WorkspaceCompositionLayout,
+      path: Array<string | number>,
+      parentKind?: "row" | "column",
+    ) => {
+      addUniqueIdentity(layoutIds, layout.layoutId, "Layout Node", context, [
+        ...path,
+        "layoutId",
+      ]);
+      if (layout.kind === "empty") {
+        if (path.length !== tabPath.length + 1) {
+          addCompositionIssue(
+            context,
+            "Only an empty Workspace Tab may contain an empty Layout Node.",
+            path,
+          );
+        }
+        return;
+      }
+      if (layout.kind === "pane") {
+        if (!tabPanes.has(layout.paneId)) {
+          addCompositionIssue(
+            context,
+            "Layout Pane must reference a Pane in the same Workspace Tab.",
+            [
+              ...path,
+              "paneId",
+            ],
+          );
+        } else if (referencedPaneIds.has(layout.paneId)) {
+          addCompositionIssue(
+            context,
+            "Each Pane must occur exactly once in its Workspace Tab layout.",
+            [
+              ...path,
+              "paneId",
+            ],
+          );
+        }
+        referencedPaneIds.add(layout.paneId);
+        return;
+      }
+      if (layout.kind === parentKind) {
+        addCompositionIssue(
+          context,
+          "Adjacent Layout containers with the same axis must be flattened.",
+          [
+            ...path,
+            "kind",
+          ],
+        );
+      }
+      if (layout.ratios.length !== layout.children.length) {
+        addCompositionIssue(
+          context,
+          "Layout ratios must correspond one-to-one with child Layout Nodes.",
+          [
+            ...path,
+            "ratios",
+          ],
+        );
+      }
+      layout.children.forEach((child, childIndex) =>
+        visitLayout(child, [...path, "children", childIndex], layout.kind)
+      );
+    };
+
+    visitLayout(tab.layout, [...tabPath, "layout"]);
+    if (tab.panes.length === 0 && tab.layout.kind !== "empty") {
+      addCompositionIssue(
+        context,
+        "A Workspace Tab without Panes must have one empty Layout Node.",
+        [
+          ...tabPath,
+          "layout",
+        ],
+      );
+    }
+    if (tab.panes.length > 0 && tab.layout.kind === "empty") {
+      addCompositionIssue(
+        context,
+        "A Workspace Tab with Panes cannot have an empty layout.",
+        [...tabPath, "layout"],
+      );
+    }
+    tab.panes.forEach((pane, paneIndex) => {
+      if (!referencedPaneIds.has(pane.paneId)) {
+        addCompositionIssue(
+          context,
+          "Each Pane must occur exactly once in its Workspace Tab layout.",
+          [
+            ...tabPath,
+            "panes",
+            paneIndex,
+            "paneId",
+          ],
+        );
+      }
+    });
+  });
+});
+export type WorkspaceComposition = z.infer<typeof workspaceCompositionSchema>;
+
 export const notesStorageMetadataSchema = z.object({
   kind: z.string(),
   bucket: z.string().optional(),
