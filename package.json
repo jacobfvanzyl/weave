@@ -10,13 +10,14 @@
     "dev:server": "bun --filter weave-server dev",
     "dev:desktop": "bun --filter weave-desktop dev",
     "dev:web": "bun --filter weave-web dev",
-    "dev:mobile": "bun --filter weave-mobile dev"
+    "dev:mobile": "bun --filter weave-mobile dev",
+    "dev:alpha": "bun --filter weave-alpha dev"
   },
   "engines": {
     "node": ">=22.13.0"
   },
   "workspaces": {
-    "packages": ["server", "web", "mobile", "desktop", "packages/*"],
+    "packages": ["server", "web", "mobile", "alpha", "desktop", "packages/*"],
     "catalog": {
       "@blocksuite/store": "0.19.5",
       "@capacitor/preferences": "^8.0.1",

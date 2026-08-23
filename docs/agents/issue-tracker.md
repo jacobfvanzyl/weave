@@ -1,7 +1,7 @@
 # Issue tracker: Linear
 
 Issues and PRDs for this repository live in the **Personal** Linear workspace
-(`jacobfvanzyl`) under the **Product** team (`PER`).
+(`jacobfvanzyl`) under the **Weave** team (`WVE`).
 
 Use the repository-pinned `@schpet/linear-cli` for all tracker operations. Do
 not use a Linear plugin, MCP connector, PATH-resolved global binary, or an
@@ -22,7 +22,7 @@ env -u LINEAR_API_KEY .agents/tools/linear/node_modules/.bin/linear
 ```
 
 The repository's secret-free `.linear.toml` identifies workspace
-`jacobfvanzyl` and team `PER`. Credentials come only from the existing macOS
+`jacobfvanzyl` and team `WVE`. Credentials come only from the existing macOS
 Keychain profile for `jacobfvanzyl`.
 
 - Keep `LINEAR_API_KEY` unset for every invocation, including reads.
@@ -44,20 +44,20 @@ Fail closed unless the command reports workspace **Personal**, slug
 
 ## Conventions
 
-- **Create an issue:** Use `issue create --team PER --title "..."
+- **Create an issue:** Use `issue create --team WVE --title "..."
   --description-file <path> --no-interactive`.
-- **Read an issue:** Use `issue view PER-123 --json`, including comments and
+- **Read an issue:** Use `issue view WVE-123 --json`, including comments and
   labels when relevant.
-- **List issues:** Use `issue query --team PER --json`; inspect `pageInfo` and
+- **List issues:** Use `issue query --team WVE --json`; inspect `pageInfo` and
   count `.nodes` because the result is an object rather than an array.
-- **Resolve statuses:** Use `team states PER --json`. In CLI 2.3.0 the team key
+- **Resolve statuses:** Use `team states WVE --json`. In CLI 2.3.0 the team key
   is positional.
-- **Comment on an issue:** Use `issue comment add PER-123 --body-file <path>`.
+- **Comment on an issue:** Use `issue comment add WVE-123 --body-file <path>`.
 - **Apply or remove labels:** Use `docs/agents/triage-labels.md`. Fetch the
   complete current label set first because `issue update --label` replaces the
   label set rather than adding one label.
 - **Close an issue:** Resolve the canonical completed or canceled state through
-  `team states PER --json`, then update the issue and add an explanatory
+  `team states WVE --json`, then update the issue and add an explanatory
   comment when appropriate.
 - Do not infer a project, cycle, priority, due date, or assignee.
 - Treat Linear's current workflow state as canonical. Do not infer it from
@@ -79,17 +79,17 @@ env -u LINEAR_API_KEY .agents/tools/linear/node_modules/.bin/linear \
 ```
 
 Check both process failure and the response's top-level `errors` field. Select
-team `PER`, distinguishing team labels (`team.key == "PER"`) from inherited
+team `WVE`, distinguishing team labels (`team.key == "WVE"`) from inherited
 workspace labels (`team == null`).
 
 ## When a skill says "publish to the issue tracker"
 
-Create a Linear issue under team `PER`, using the pinned CLI and explicit
+Create a Linear issue under team `WVE`, using the pinned CLI and explicit
 workspace selection.
 
 ## When a skill says "fetch the relevant ticket"
 
-Fetch the supplied `PER-<number>` issue with `issue view --json`.
+Fetch the supplied `WVE-<number>` issue with `issue view --json`.
 
 ## Wayfinding operations
 

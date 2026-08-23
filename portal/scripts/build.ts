@@ -15,8 +15,11 @@ const run = async (args: string[]) => {
 };
 
 const main = async () => {
+  const target = Deno.env.get('WEAVE_PORTAL_COMPILE_TARGET')?.trim();
+  const output = Deno.env.get('WEAVE_PORTAL_COMPILE_OUTPUT')?.trim() || 'dist/portal';
   await run([
     'compile',
+    ...(target ? ['--target', target] : []),
     '--allow-net',
     '--allow-read',
     '--allow-write',
@@ -26,7 +29,7 @@ const main = async () => {
     '--include',
     'npm:zod@4.4.3',
     '--output',
-    'dist/portal',
+    output,
     'src/main.ts',
   ]);
 };

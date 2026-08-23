@@ -61,6 +61,20 @@ export const getPortalRuntimePath = (env?: Record<string, string | undefined>) =
 
 export const getPortalRuntimeLockPath = (runtimePath = getPortalRuntimePath()) => `${runtimePath}.lock`;
 
+export const resolveHostStateHome = (env: Record<string, string | undefined> = Deno.env.toObject()) => {
+  const explicit = env.WEAVE_HOST_HOME?.trim();
+  if (explicit) return normalizePath(explicit);
+  const home = env.HOME?.trim() || '.';
+  const stateHome = env.XDG_STATE_HOME?.trim() || joinPath(home, '.local', 'state');
+  return normalizePath(joinPath(stateHome, 'weave-host'));
+};
+
+export const getHostSocketPath = (env?: Record<string, string | undefined>) =>
+  joinPath(resolveHostStateHome(env), 'host.sock');
+
+export const getHostThreadCatalogPath = (env?: Record<string, string | undefined>) =>
+  joinPath(resolveHostStateHome(env), 'threads.json');
+
 export const ensureParentDir = async (path: string) => {
   const slashIndex = path.lastIndexOf('/');
   if (slashIndex <= 0) return;
@@ -162,8 +176,7 @@ export const maskSecret = (value: string | undefined) => {
   return value.length <= 8 ? '********' : `${value.slice(0, 4)}...${value.slice(-4)}`;
 };
 
-export const maskPortalRuntime = (runtime: PortalRuntimeFile | undefined) =>
-  runtime ? { ...runtime } : undefined;
+export const maskPortalRuntime = (runtime: PortalRuntimeFile | undefined) => runtime ? { ...runtime } : undefined;
 
 export const normalizeHttpUrl = (server: string) => server.replace(/\/+$/, '');
 

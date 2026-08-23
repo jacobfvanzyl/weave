@@ -66,7 +66,7 @@ one-time setup, Tailscale endpoints, cutover procedure, and recovery details.
 
 ### Issue tracker
 
-Issues and PRDs are tracked in the Personal Linear workspace (`jacobfvanzyl`) under the Product team (`PER`). See `docs/agents/issue-tracker.md`.
+Issues and PRDs are tracked in the Personal Linear workspace (`jacobfvanzyl`) under the Weave team (`WVE`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

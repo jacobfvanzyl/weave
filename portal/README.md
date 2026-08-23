@@ -1,6 +1,12 @@
 # Weave Portal
 
-Portal is the Deno daemon that performs host-side tools, terminal sessions, workspace file operations, LSP, and Jupyter execution. It has no listening HTTP or WebSocket server. A running Portal owns exactly one outbound JSON-RPC WebSocket to the Weave server's `/rpc` endpoint.
+Portal is the Deno daemon that performs host-side tools, terminal sessions, workspace file operations, LSP, and Jupyter
+execution. The existing Portal mode owns one outbound JSON-RPC WebSocket to the Weave server's `/rpc` endpoint.
+
+WVE-38 adds an experimental direct Host mode alongside that existing path. Host mode does not require a Weave server: it
+owns allowlisted ACP agent processes, accepts a stable ACP stdio connector over a mode-`0600` local Unix socket, and
+exposes initial Host discovery and Thread attachment methods over authenticated `/rpc`. The draft Remote ACP endpoint is
+experimental; do not expose the local socket over a network proxy.
 
 ## Commands
 
@@ -13,6 +19,98 @@ deno task portal:stop
 deno task portal:build
 deno task portal:start
 ```
+
+`deno task build` produces a binary for the current machine. Use `deno task build:linux` for the x86-64 Linux artifact
+installed on Bazzite; do not copy the default macOS artifact to a Linux Host.
+
+## Experimental direct Host ACP proof
+
+Configure at least one root and, if the agent executables are not already on `PATH`, explicit agent commands in the
+existing Portal config:
+
+```json
+{
+  "portal": {
+    "roots": [
+      { "id": "default", "name": "Code", "path": "/absolute/path/to/code" }
+    ]
+  },
+  "host": {
+    "socketPath": "/Users/me/.local/state/weave-host/host.sock",
+    "network": {
+      "hostname": "127.0.0.1",
+      "port": 4121,
+      "tokenEnv": "WEAVE_HOST_TOKEN",
+      "agentId": "codex",
+      "workspaceId": "default",
+      "allowedOrigins": []
+    },
+    "agents": {
+      "codex": {
+        "name": "Codex",
+        "command": "/absolute/path/to/codex-acp",
+        "args": [],
+        "env": ["OPENAI_API_KEY"]
+      },
+      "opencode": {
+        "name": "OpenCode",
+        "command": "/absolute/path/to/opencode",
+        "args": ["acp"]
+      }
+    }
+  }
+}
+```
+
+`env` adds variable names to the Host's small process-environment allowlist. Values do not belong in `config.json`.
+Basic process and user configuration variables such as `HOME`, `PATH`, locale, temporary-directory, XDG, and TLS
+certificate locations are retained automatically; provider credentials are not. Omit `host.agents` to use the default
+`codex-acp` and `opencode acp` commands from `PATH`.
+
+Run the daemon and connector in separate terminals:
+
+```bash
+cd portal && deno task host:dev
+cd /absolute/path/to/code && weave-host acp connect --agent codex
+```
+
+By default, the connector sends its current working directory to the Host as an untrusted Workspace candidate. The Host
+canonicalizes it, selects the narrowest configured root that contains it, and launches the Agent in that directory. A
+missing path, symlink escape, or path outside every configured root fails with the same unavailable error. Use
+`--workspace <id>` only when an explicit configured root is required for automation or diagnostics.
+
+The connector's stdout is ACP-only; diagnostics go to stderr. After `cd portal && deno task install`, both `portal` and
+`weave-host` name the same binary. When `weave-host` is on `PATH` and every host uses the default config and socket
+locations, one global Zed custom External Agent entry works for local and Zed Remote projects:
+
+```json
+{
+  "agent_servers": {
+    "weave-codex": {
+      "type": "custom",
+      "command": "weave-host",
+      "args": ["acp", "connect", "--agent", "codex"]
+    }
+  }
+}
+```
+
+The Host Daemon, not the connector, launches the allowlisted agent. A bound ACP session is owned by the daemon and may be
+shared by simultaneous stdio and Remote ACP clients. The in-memory broker journals ordered session updates for late
+attachments, fans user prompts and Agent updates out to observers, and arbitrates one active prompt at a time. Disconnecting
+one client does not end a bound runtime. Durable on-disk event journaling, runtime restart recovery, and uncertain in-flight
+prompt delivery remain tracked by WVE-39.
+
+When `host.network` is present, Host mode also exposes the experimental draft ACP WebSocket at `/acp`. It requires an
+authentication token before WebSocket upgrade and returns `Acp-Connection-Id` on success. Native clients should use an
+`Authorization: Bearer` header. Browser clients in the current proof may pass a
+`weave-acp-token.<base64url-token>` WebSocket subprotocol; this is a bootstrap mechanism, not the final pairing flow.
+The token value comes only from `tokenEnv` and must not be placed in the config or URL.
+
+The listener defaults to loopback and refuses a non-loopback hostname unless `privateNetwork` is explicitly true.
+`privateNetwork` does not add encryption: use it only on a controlled private network, and put the loopback listener
+behind Tailscale Serve or another supported TLS terminator for ordinary remote access. Browser origins are denied unless
+listed exactly in `allowedOrigins`.
 
 Portal configuration contains one `serverUrl`. Older configuration is migrated by preferring `httpServerUrl`, ignoring `wsServerUrl`, and writing the simplified shape on the next save. Login opens a temporary owner RPC connection, calls `portal.token.issue`, saves the returned Portal credential, and closes the connection.
 

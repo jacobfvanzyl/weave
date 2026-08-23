@@ -1,6 +1,7 @@
 import { assertEquals, assertMatch } from 'jsr:@std/assert@1.0.19';
 import {
   checkPortalRuntimeHealth,
+  getHostSocketPath,
   getPortalConfigPath,
   getPortalRuntimeLockPath,
   getPortalRuntimePath,
@@ -8,6 +9,7 @@ import {
   type PortalRuntimeFile,
   readPortalRuntime,
   removePortalRuntime,
+  resolveHostStateHome,
   resolvePortalHome,
   runtimeMatchesServer,
   tryAcquirePortalRuntimeLock,
@@ -76,6 +78,19 @@ Deno.test('Portal runtime preserves XDG_CONFIG_HOME', () => {
   assertMatch(
     resolvePortalHome({ HOME: '/home/example', XDG_CONFIG_HOME: '/state/config' }),
     /^\/state\/config\/weave\/portal$/,
+  );
+});
+
+Deno.test('Host socket uses one canonical per-user state location', () => {
+  assertEquals(resolveHostStateHome({ HOME: '/Users/example' }), '/Users/example/.local/state/weave-host');
+  assertEquals(getHostSocketPath({ HOME: '/Users/example' }), '/Users/example/.local/state/weave-host/host.sock');
+  assertEquals(
+    getHostSocketPath({ HOME: '/home/example', XDG_STATE_HOME: '/state' }),
+    '/state/weave-host/host.sock',
+  );
+  assertEquals(
+    getHostSocketPath({ HOME: '/home/example', WEAVE_HOST_HOME: '/run/user/1000/weave' }),
+    '/run/user/1000/weave/host.sock',
   );
 });
 

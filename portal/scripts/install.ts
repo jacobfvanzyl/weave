@@ -17,6 +17,7 @@ const main = async () => {
 
   const portalRoot = pathFromFileUrl(new URL('..', import.meta.url));
   await copyFile(`${portalRoot}/dist/portal`, `${binDir}/portal`);
+  await copyFile(`${portalRoot}/dist/portal`, `${binDir}/weave-host`);
 };
 
 if (import.meta.main) await main();

@@ -87,6 +87,11 @@
         }
       },
       "npm:@weave/protocol@0.1.0": {},
+      "npm:weave-alpha@0.1.0": {
+        "dependencies": [
+          "npm:@capacitor/core@^8.3.4"
+        ]
+      },
       "npm:weave-desktop@0.1.0": {},
       "npm:weave-mobile@0.1.0": {
         "dependencies": [

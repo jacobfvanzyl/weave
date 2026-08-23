@@ -25,6 +25,8 @@ import { logPortalPerfEvent, startPortalPerfSampler } from './perf.ts';
 import { installBoundedConsoleLog } from './bounded-log.ts';
 import {
   checkPortalRuntimeHealth,
+  getHostSocketPath,
+  getHostThreadCatalogPath,
   getPortalConfigPath,
   getPortalRuntimePath,
   maskPortalRuntime,
@@ -59,6 +61,12 @@ import { assertToolAllowed, normalizeExecutionProfile } from './execution-policy
 import { commandSessions } from './command-sessions.ts';
 import { IdempotentExecutionCache } from './idempotency.ts';
 import { PortalBinaryTransfers } from './binary-transfers.ts';
+import { type AgentDefinition, AgentRuntimeManager } from './acp/runtime.ts';
+import { AcpSessionBroker } from './acp/session-broker.ts';
+import { runStdioAcpConnector, serveLocalAcpGateway } from './acp/local-gateway.ts';
+import { serveRemoteAcpGateway } from './acp/remote-gateway.ts';
+import { resolveHostWorkspace } from './acp/workspace.ts';
+import { FileThreadCatalog } from './acp/thread-catalog.ts';
 
 const portalToolExecutions = new IdempotentExecutionCache<unknown>();
 
@@ -88,6 +96,24 @@ type PortalConfig = {
     mounts?: PortalMount[];
     roots?: PortalRoot[];
   };
+  host?: {
+    socketPath?: string;
+    network?: {
+      hostname?: string;
+      port?: number;
+      tokenEnv: string;
+      agentId?: string;
+      workspaceId?: string;
+      allowedOrigins?: string[];
+      privateNetwork?: boolean;
+    };
+    agents?: Record<string, {
+      name?: string;
+      command: string;
+      args?: string[];
+      env?: string[];
+    }>;
+  };
 };
 
 export type ResolvedPortalConfig = {
@@ -109,6 +135,8 @@ const defaultRuntimePath = getPortalRuntimePath();
 const defaultHttpServerUrl = 'http://localhost:4111';
 const defaultName = 'Mage Portal';
 const version = '0.1.0';
+const defaultHostSocketPath = getHostSocketPath();
+const defaultHostThreadCatalogPath = getHostThreadCatalogPath();
 
 const parseArgs = (args: string[]): ParsedArgs => {
   const [command, ...rest] = args;
@@ -247,6 +275,7 @@ const writeConfig = async (path: string, config: PortalConfig) => {
       config.serverUrl ?? config.httpServerUrl ?? defaultHttpServerUrl,
     ),
     ...(config.portal ? { portal: config.portal } : {}),
+    ...(config.host ? { host: config.host } : {}),
   };
   await Deno.writeTextFile(path, `${JSON.stringify(simplified, null, 2)}\n`, {
     mode: 0o600,
@@ -2284,6 +2313,133 @@ const start = async (flags: Record<string, string | boolean>) => {
   console.log(`Runtime: ${runtimePath}`);
 };
 
+const hostAgentDefinitions = (config: PortalConfig): AgentDefinition[] => {
+  const configured = config.host?.agents ?? {
+    codex: { name: 'Codex', command: 'codex-acp', args: [] },
+    opencode: { name: 'OpenCode', command: 'opencode', args: ['acp'] },
+  };
+  const baseEnvironmentNames = [
+    'HOME',
+    'PATH',
+    'USER',
+    'LOGNAME',
+    'SHELL',
+    'TMPDIR',
+    'LANG',
+    'LC_ALL',
+    'XDG_CONFIG_HOME',
+    'XDG_CACHE_HOME',
+    'XDG_DATA_HOME',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
+  ];
+  return Object.entries(configured).map(([id, definition]) => {
+    if (!definition.command?.trim()) throw new Error(`Host Agent ${id} requires a command.`);
+    const env = Object.fromEntries(
+      [...new Set([...baseEnvironmentNames, ...(definition.env ?? [])])].flatMap((name) => {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+          throw new Error(`Invalid environment name for Agent ${id}: ${name}`);
+        }
+        const value = Deno.env.get(name);
+        return value === undefined ? [] : [[name, value]];
+      }),
+    );
+    return {
+      id,
+      name: definition.name?.trim() || id,
+      command: definition.command,
+      args: definition.args ?? [],
+      env,
+    };
+  });
+};
+
+const hostDaemon = async (flags: Record<string, string | boolean>) => {
+  const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
+  const config = await readConfig(configPath);
+  const socketPath = stringFlag(flags, 'socket') ?? config.host?.socketPath ?? defaultHostSocketPath;
+  const roots = new Map<string, string>();
+  for (const root of config.portal?.roots ?? []) {
+    if (roots.has(root.id)) throw new Error(`Duplicate Host Workspace root: ${root.id}`);
+    roots.set(root.id, await Deno.realPath(root.path));
+  }
+  if (!roots.size) throw new Error('Host Daemon requires at least one configured root. Run portal root first.');
+  await ensureParentDir(socketPath);
+  const threadCatalog = await FileThreadCatalog.open(defaultHostThreadCatalogPath);
+  const processRuntime = new AgentRuntimeManager(hostAgentDefinitions(config), {
+    threadCatalog,
+    resolveWorkspace: async (selection, principalId) => {
+      if (principalId !== 'local' && principalId !== 'remote') {
+        throw new Error('ACP connector principal is not authorized.');
+      }
+      return await resolveHostWorkspace(roots, selection);
+    },
+  });
+  const runtimeManager = new AcpSessionBroker(processRuntime);
+  const gateway = await serveLocalAcpGateway({ path: socketPath, runtimeManager });
+  const network = config.host?.network;
+  let remoteGateway: Awaited<ReturnType<typeof serveRemoteAcpGateway>> | undefined;
+  try {
+    if (network) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(network.tokenEnv)) {
+        throw new Error(`Invalid Host network token environment name: ${network.tokenEnv}`);
+      }
+      const token = Deno.env.get(network.tokenEnv);
+      if (!token) throw new Error(`Host network token is missing from ${network.tokenEnv}.`);
+      remoteGateway = await serveRemoteAcpGateway({
+        hostname: network.hostname,
+        port: network.port ?? 4121,
+        token,
+        agentId: network.agentId ?? 'codex',
+        workspaceId: network.workspaceId ?? 'default',
+        workspaces: (config.portal?.roots ?? []).map((root) => ({
+          workspaceId: root.id,
+          name: root.name,
+          path: roots.get(root.id)!,
+        })),
+        threadCatalog,
+        principalId: 'remote',
+        allowedOrigins: network.allowedOrigins,
+        privateNetwork: network.privateNetwork,
+        runtimeManager,
+      });
+    }
+  } catch (error) {
+    await gateway.close();
+    throw error;
+  }
+  let requestStop: (() => void) | undefined;
+  const stopped = new Promise<void>((resolve) => {
+    requestStop = resolve;
+  });
+  const signals: Deno.Signal[] = ['SIGINT', 'SIGTERM'];
+  for (const signal of signals) Deno.addSignalListener(signal, requestStop!);
+  console.log(`Weave Host Daemon: ${socketPath}`);
+  console.log(`Workspaces: ${[...roots.keys()].join(', ')}`);
+  console.log(`Agents: ${runtimeManager.listDefinitions().map((definition) => definition.id).join(', ')}`);
+  if (remoteGateway) console.log(`Experimental Remote ACP: ${remoteGateway.url}`);
+  try {
+    await Promise.race([stopped, gateway.finished, ...(remoteGateway ? [remoteGateway.finished] : [])]);
+  } finally {
+    for (const signal of signals) Deno.removeSignalListener(signal, requestStop!);
+    await gateway.close();
+    await remoteGateway?.close();
+    await runtimeManager.close();
+  }
+};
+
+const acpConnect = async (flags: Record<string, string | boolean>) => {
+  const configPath = stringFlag(flags, 'config') ?? defaultConfigPath;
+  const config = await readConfig(configPath);
+  const workspaceId = stringFlag(flags, 'workspace');
+  await runStdioAcpConnector({
+    path: stringFlag(flags, 'socket') ?? config.host?.socketPath ?? defaultHostSocketPath,
+    agentId: stringFlag(flags, 'agent') ?? 'codex',
+    ...(workspaceId ? { workspaceId } : { workspacePath: Deno.cwd() }),
+    principalId: 'local',
+  });
+};
+
 const usage = () => {
   console.log(`mage-portal ${version}
 
@@ -2295,6 +2451,8 @@ Commands:
   daemon [--config ~/.config/weave/portal/config.json] [--server http://localhost:4111]
          [--runtime ~/.config/weave/portal/runtime.json] [--instance-id <random-id>]
          [--log-file ~/.config/weave/portal/desktop-daemon.log] [--log-max-bytes 1000000]
+  host daemon [--config ~/.config/weave/portal/config.json] [--socket ~/.local/state/weave-host/host.sock]
+  acp connect [--agent codex] [--workspace <id>] [--config ~/.config/weave/portal/config.json]
   status [--config ~/.config/weave/portal/config.json]
   stop
 `);
@@ -2316,6 +2474,8 @@ const main = async () => {
 
   if (command === 'login') return login(flags);
   if (command === 'start') return start(flags);
+  if (command === 'host') return hostDaemon(flags);
+  if (command === 'acp') return acpConnect(flags);
   if (!command || command === 'daemon') return daemon(flags);
   if (command === 'root') return addRoot(flags);
   if (command === 'mount') return mountProject(flags);

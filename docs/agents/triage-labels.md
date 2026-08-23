@@ -1,7 +1,7 @@
 # Triage Labels
 
 The engineering skills use five canonical triage roles. Each role maps directly
-to a team-scoped label in Linear team `PER`.
+to a team-scoped label in Linear team `WVE`.
 
 | Label in mattpocock/skills | Label in Linear   | Meaning                                    |
 | -------------------------- | ----------------- | ------------------------------------------ |

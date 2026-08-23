@@ -13,6 +13,18 @@ The primary selectable working context that scopes the files, conversations, ter
 All Workspaces follow the same domain rules; there is no special personal or root Workspace.
 _Avoid_: Project, repository, worktree
 
+**Host**:
+A computer that owns one or more Workspaces and the runtime state needed to work in them. A client connects to a Host directly.
+_Avoid_: Server, Portal, node
+
+**Host Daemon**:
+The long-lived Host process that authenticates clients and owns Workspace access, Agent Runtimes, and Terminal sessions.
+_Avoid_: Central server, Portal, agent server
+
+**Agent Runtime**:
+A Host-managed execution of an ACP Agent, including its process, ACP connection, and provider-owned session state.
+_Avoid_: Thread, Agent Session, run
+
 **Workspace Tab**:
 A Workspace-local view that owns one independently arranged set of Panes. Its mutable name describes the view but does not identify it.
 _Avoid_: Project tab, global tab, layout preset
