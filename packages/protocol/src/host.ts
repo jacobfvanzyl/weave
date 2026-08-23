@@ -11,6 +11,8 @@ export const WEAVE_ACP_THREAD_ACK_METHOD =
   "_weave.dev/thread_events/ack" as const;
 export const WEAVE_ACP_THREAD_SYNC_NOTIFICATION =
   "_weave.dev/thread_events/sync" as const;
+export const WEAVE_ACP_RUNTIME_STATE_NOTIFICATION =
+  "_weave.dev/runtime/state" as const;
 
 export const weaveAcpThreadEventsCapabilitySchema = z.object({
   version: z.literal(1),
@@ -41,6 +43,36 @@ export const weaveAcpThreadSyncParamsSchema = z.object({
   sessionId: z.string().min(1),
   lastSequence: z.number().int().nonnegative(),
   fullReload: z.boolean(),
+}).strict();
+
+export const weaveAcpRuntimeRecoveryCapabilitySchema = z.object({
+  version: z.literal(1),
+  stateNotification: z.literal(WEAVE_ACP_RUNTIME_STATE_NOTIFICATION),
+}).strict();
+
+export const weaveAcpRuntimeStateSchema = z.enum([
+  "idle",
+  "prompting",
+  "awaiting_client",
+  "exited",
+  "restoring",
+  "uncertain",
+  "unavailable",
+]);
+
+export const weaveAcpRuntimeStateParamsSchema = z.object({
+  sessionId: z.string().min(1),
+  generation: z.number().int().positive(),
+  state: weaveAcpRuntimeStateSchema,
+  code: z.enum([
+    "PROCESS_EXITED",
+    "PROMPT_UNCERTAIN",
+    "RESTORING",
+    "RECOVERED",
+    "CANNOT_RESUME",
+    "RECOVERY_FAILED",
+  ]).optional(),
+  message: z.string().min(1).optional(),
 }).strict();
 
 export const hostWorkspaceSummarySchema = z.object({

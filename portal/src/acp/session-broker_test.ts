@@ -2,12 +2,14 @@ import { assertEquals, assertRejects } from 'jsr:@std/assert@1';
 import {
   type JsonRpcMessage,
   WEAVE_ACP_META_NAMESPACE,
+  WEAVE_ACP_RUNTIME_STATE_NOTIFICATION,
   WEAVE_ACP_THREAD_ACK_METHOD,
   WEAVE_ACP_THREAD_EVENT_META_KEY,
   WEAVE_ACP_THREAD_EVENTS_META_KEY,
   WEAVE_ACP_THREAD_SYNC_NOTIFICATION,
 } from '@weave/protocol';
 import type { AgentAttachInput, AgentAttachment, AgentRuntimePort } from './runtime.ts';
+import { InMemoryRuntimeStateStore } from './runtime-state.ts';
 import { AcpSessionBroker } from './session-broker.ts';
 import { InMemoryThreadEventJournal, type ThreadEventJournal } from './thread-event-journal.ts';
 
@@ -117,6 +119,7 @@ const fakeRuntime = (options: {
         workspaceId: input.workspaceId ?? 'workspace-1',
         messages,
         stderrTail: () => '',
+        finished: new Promise(() => undefined),
         receive: async (message) => {
           if (!('method' in message) || !('id' in message)) return;
           if (message.method === 'initialize') {
@@ -206,6 +209,493 @@ const fakeRuntime = (options: {
     releaseLoad: () => releaseLoad?.(),
   };
 };
+
+const recoverableFakeRuntime = (options: {
+  resume?: boolean;
+  resumeFails?: boolean;
+  load?: boolean;
+  recoveryReplay?: JsonRpcMessage[];
+  holdFirstPrompt?: boolean;
+} = {}) => {
+  type Generation = {
+    controller: ReadableStreamDefaultController<JsonRpcMessage>;
+    finish: (exit: {
+      success: boolean;
+      code: number;
+      signal?: string;
+      error?: string;
+      stderrTail: string;
+    }) => void;
+    finished: boolean;
+    closed: boolean;
+  };
+  const generations: Generation[] = [];
+  let promptCount = 0;
+  let resumeCount = 0;
+  let loadCount = 0;
+  const port: AgentRuntimePort = {
+    listDefinitions: () => [{ id: 'fake', name: 'Fake Agent', command: 'fake' }],
+    attach: (input): Promise<AgentAttachment> => {
+      let controller!: ReadableStreamDefaultController<JsonRpcMessage>;
+      const messages = new ReadableStream<JsonRpcMessage>({
+        start(nextController) {
+          controller = nextController;
+        },
+      });
+      let finish!: Generation['finish'];
+      const finished = new Promise<Awaited<AgentAttachment['finished']>>(
+        (resolve) => {
+          finish = resolve;
+        },
+      );
+      const generation: Generation = {
+        controller,
+        finish,
+        finished: false,
+        closed: false,
+      };
+      generations.push(generation);
+      const generationNumber = generations.length;
+      return Promise.resolve({
+        agentId: input.agentId,
+        workspaceId: input.workspaceId ?? 'workspace-1',
+        messages,
+        stderrTail: () => '',
+        finished,
+        receive: (message) => {
+          if (!('method' in message) || !('id' in message)) {
+            return Promise.resolve();
+          }
+          if (message.method === 'initialize') {
+            controller.enqueue({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: {
+                protocolVersion: 1,
+                agentCapabilities: {
+                  ...(options.load ? { loadSession: true } : {}),
+                  ...(options.resume ? { sessionCapabilities: { resume: {} } } : {}),
+                },
+                agentInfo: { name: 'recoverable-fake', version: '1' },
+                authMethods: [],
+              },
+            });
+            return Promise.resolve();
+          }
+          if (message.method === 'session/new') {
+            controller.enqueue({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: { sessionId: 'shared-session' },
+            });
+            return Promise.resolve();
+          }
+          if (message.method === 'session/resume') {
+            resumeCount += 1;
+            controller.enqueue(
+              options.resumeFails
+                ? {
+                  jsonrpc: '2.0',
+                  id: message.id,
+                  error: { code: -32050, message: 'resume failed' },
+                }
+                : { jsonrpc: '2.0', id: message.id, result: null },
+            );
+            return Promise.resolve();
+          }
+          if (message.method === 'session/load') {
+            loadCount += 1;
+            for (const replayed of options.recoveryReplay ?? []) {
+              controller.enqueue(replayed);
+            }
+            controller.enqueue({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: null,
+            });
+            return Promise.resolve();
+          }
+          if (message.method === 'session/prompt') {
+            promptCount += 1;
+            const text = ((message.params as {
+              prompt?: Array<{ text?: string }>;
+            }).prompt?.[0]?.text) ?? '';
+            controller.enqueue(
+              sessionUpdate('agent_message_chunk', `reply:${text}`),
+            );
+            if (
+              options.holdFirstPrompt && generationNumber === 1 &&
+              promptCount === 1
+            ) return Promise.resolve();
+            controller.enqueue({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: { stopReason: 'end_turn' },
+            });
+          }
+          return Promise.resolve();
+        },
+        close: () => {
+          if (!generation.closed) {
+            generation.closed = true;
+            controller.close();
+          }
+          if (!generation.finished) {
+            generation.finished = true;
+            finish({ success: true, code: 0, stderrTail: '' });
+          }
+          return Promise.resolve();
+        },
+      });
+    },
+  };
+  return {
+    port,
+    spawnCount: () => generations.length,
+    promptCount: () => promptCount,
+    resumeCount: () => resumeCount,
+    loadCount: () => loadCount,
+    finish: (
+      index: number,
+      exit = {
+        success: false,
+        code: 137,
+        signal: 'SIGKILL',
+        stderrTail: 'killed for acceptance',
+      },
+    ) => {
+      const generation = generations[index];
+      if (!generation || generation.finished) return;
+      generation.finished = true;
+      generation.finish(exit);
+    },
+    emit: (index: number, message: JsonRpcMessage) => generations[index]?.controller.enqueue(message),
+  };
+};
+
+Deno.test('ACP session broker replaces an idle provider generation and fences stale output', async () => {
+  const fake = recoverableFakeRuntime({ resume: true, load: true });
+  const runtimeStateStore = new InMemoryRuntimeStateStore();
+  const broker = new AcpSessionBroker(fake.port, { runtimeStateStore });
+  const attachment = await broker.attach({
+    agentId: 'fake',
+    workspaceId: 'workspace-1',
+    principalId: 'local',
+    transport: 'stdio',
+  });
+  const reader = attachment.messages.getReader();
+  const state = () =>
+    runtimeStateStore.get({
+      agentId: 'fake',
+      workspaceId: 'workspace-1',
+      acpSessionId: 'shared-session',
+    });
+  try {
+    await attachment.receive(request(1, 'initialize', {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: 'client', version: '1' },
+    }));
+    await nextMessage(reader);
+    await attachment.receive(
+      request(2, 'session/new', { cwd: '/workspace', mcpServers: [] }),
+    );
+    await nextMessage(reader);
+    assertEquals((await state())?.generation, 1);
+    await attachment.receive(request(3, 'session/prompt', {
+      sessionId: 'shared-session',
+      prompt: [{ type: 'text', text: 'seed' }],
+    }));
+    assertEquals(updateText(await nextMessage(reader)), 'reply:seed');
+    assertEquals(responseId(await nextMessage(reader)), 3);
+    await attachment.receive(request(4, 'session/load', {
+      sessionId: 'shared-session',
+      cwd: '/workspace',
+      mcpServers: [],
+      _meta: { [WEAVE_ACP_THREAD_EVENTS_META_KEY]: { afterSequence: 2 } },
+    }));
+    const initialSync = await nextMessage(reader);
+    assertEquals(
+      'method' in initialSync ? initialSync.method : undefined,
+      WEAVE_ACP_THREAD_SYNC_NOTIFICATION,
+    );
+    assertEquals(responseId(await nextMessage(reader)), 4);
+
+    fake.finish(0);
+    await waitFor(() => fake.spawnCount() === 2 && fake.resumeCount() === 1);
+    const exited = await nextMessage(reader);
+    assertEquals(
+      'method' in exited &&
+        exited.method === WEAVE_ACP_RUNTIME_STATE_NOTIFICATION
+        ? exited.params
+        : undefined,
+      {
+        sessionId: 'shared-session',
+        generation: 1,
+        state: 'exited',
+        code: 'PROCESS_EXITED',
+        message: 'The Agent process exited and will be restored.',
+      },
+    );
+    const restoring = await nextMessage(reader);
+    assertEquals(
+      'method' in restoring &&
+        restoring.method === WEAVE_ACP_RUNTIME_STATE_NOTIFICATION
+        ? restoring.params
+        : undefined,
+      {
+        sessionId: 'shared-session',
+        generation: 2,
+        state: 'restoring',
+        code: 'RESTORING',
+        message: 'The Host is restoring the ACP provider session.',
+      },
+    );
+    const recovered = await nextMessage(reader);
+    assertEquals(
+      'method' in recovered &&
+        recovered.method === WEAVE_ACP_RUNTIME_STATE_NOTIFICATION
+        ? recovered.params
+        : undefined,
+      {
+        sessionId: 'shared-session',
+        generation: 2,
+        state: 'idle',
+        code: 'RECOVERED',
+        message: 'The ACP provider session was restored.',
+      },
+    );
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if ((await state())?.state === 'idle') break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const recoveredState = await state();
+    assertEquals({
+      ...recoveredState,
+      updatedAt: '<timestamp>',
+      lastExit: recoveredState?.lastExit ? { ...recoveredState.lastExit, occurredAt: '<timestamp>' } : undefined,
+    }, {
+      agentId: 'fake',
+      workspaceId: 'workspace-1',
+      acpSessionId: 'shared-session',
+      generation: 2,
+      state: 'idle',
+      updatedAt: '<timestamp>',
+      lastExit: {
+        success: false,
+        code: 137,
+        signal: 'SIGKILL',
+        stderrTail: 'killed for acceptance',
+        occurredAt: '<timestamp>',
+      },
+    });
+    assertEquals(fake.loadCount(), 0);
+
+    fake.emit(0, sessionUpdate('agent_message_chunk', 'stale-generation'));
+    await attachment.receive(request(5, 'session/prompt', {
+      sessionId: 'shared-session',
+      prompt: [{ type: 'text', text: 'after-recovery' }],
+    }));
+    assertEquals(updateText(await nextMessage(reader)), 'after-recovery');
+    assertEquals(updateText(await nextMessage(reader)), 'reply:after-recovery');
+    assertEquals(responseId(await nextMessage(reader)), 5);
+  } finally {
+    reader.releaseLock();
+    await attachment.close();
+    await broker.close();
+  }
+});
+
+Deno.test('ACP session broker marks an interrupted prompt uncertain and recovers through load without replay fan-out', async () => {
+  const fake = recoverableFakeRuntime({
+    resume: true,
+    resumeFails: true,
+    load: true,
+    holdFirstPrompt: true,
+    recoveryReplay: [
+      sessionUpdate('user_message_chunk', 'interrupted'),
+      sessionUpdate('agent_message_chunk', 'provider-replay'),
+    ],
+  });
+  const runtimeStateStore = new InMemoryRuntimeStateStore();
+  const broker = new AcpSessionBroker(fake.port, { runtimeStateStore });
+  const attachment = await broker.attach({
+    agentId: 'fake',
+    workspaceId: 'workspace-1',
+    principalId: 'local',
+    transport: 'stdio',
+  });
+  const reader = attachment.messages.getReader();
+  try {
+    await attachment.receive(request(1, 'initialize', {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: 'client', version: '1' },
+    }));
+    await nextMessage(reader);
+    await attachment.receive(
+      request(2, 'session/new', { cwd: '/workspace', mcpServers: [] }),
+    );
+    await nextMessage(reader);
+
+    await attachment.receive(request(3, 'session/prompt', {
+      sessionId: 'shared-session',
+      prompt: [{ type: 'text', text: 'interrupted' }],
+    }));
+    assertEquals(updateText(await nextMessage(reader)), 'reply:interrupted');
+    fake.finish(0);
+    const uncertain = await nextMessage(reader);
+    assertEquals('error' in uncertain ? uncertain.error : undefined, {
+      code: -32050,
+      message: 'The Agent process exited after prompt delivery; completion is unknown.',
+      data: { code: 'PROMPT_UNCERTAIN', generation: 1 },
+    });
+
+    await waitFor(() => fake.spawnCount() === 2 && fake.loadCount() === 1);
+    await attachment.receive(request(4, 'session/prompt', {
+      sessionId: 'shared-session',
+      prompt: [{ type: 'text', text: 'explicit-retry' }],
+    }));
+    assertEquals(updateText(await nextMessage(reader)), 'reply:explicit-retry');
+    assertEquals(responseId(await nextMessage(reader)), 4);
+    assertEquals(fake.promptCount(), 2);
+    assertEquals(fake.resumeCount(), 1);
+  } finally {
+    reader.releaseLock();
+    await attachment.close();
+    await broker.close();
+  }
+});
+
+Deno.test('ACP session broker keeps the client stream open when a provider cannot resume', async () => {
+  const fake = recoverableFakeRuntime();
+  const runtimeStateStore = new InMemoryRuntimeStateStore();
+  const broker = new AcpSessionBroker(fake.port, { runtimeStateStore });
+  const attachment = await broker.attach({
+    agentId: 'fake',
+    workspaceId: 'workspace-1',
+    principalId: 'local',
+    transport: 'stdio',
+  });
+  const reader = attachment.messages.getReader();
+  try {
+    await attachment.receive(request(1, 'initialize', {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: 'client', version: '1' },
+    }));
+    await nextMessage(reader);
+    await attachment.receive(
+      request(2, 'session/new', { cwd: '/workspace', mcpServers: [] }),
+    );
+    await nextMessage(reader);
+
+    fake.finish(0);
+    await waitFor(() => fake.spawnCount() === 2);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const state = await runtimeStateStore.get({
+        agentId: 'fake',
+        workspaceId: 'workspace-1',
+        acpSessionId: 'shared-session',
+      });
+      if (state?.state === 'unavailable') break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    await attachment.receive(request(3, 'session/prompt', {
+      sessionId: 'shared-session',
+      prompt: [{ type: 'text', text: 'cannot-run' }],
+    }));
+    const unavailable = await nextMessage(reader);
+    assertEquals('error' in unavailable ? unavailable.error : undefined, {
+      code: -32050,
+      message: 'The ACP session cannot currently be resumed.',
+      data: { code: 'CANNOT_RESUME', generation: 2 },
+    });
+
+    await attachment.receive(request(4, 'initialize', {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: 'client', version: '1' },
+    }));
+    assertEquals(responseId(await nextMessage(reader)), 4);
+  } finally {
+    reader.releaseLock();
+    await attachment.close();
+    await broker.close();
+  }
+});
+
+Deno.test('ACP session broker advances the durable generation when a client reconnects after Host restart', async () => {
+  const fake = recoverableFakeRuntime({ load: true });
+  const runtimeStateStore = new InMemoryRuntimeStateStore();
+  const eventJournal = new InMemoryThreadEventJournal();
+  const input = {
+    agentId: 'fake',
+    workspaceId: 'workspace-1',
+    principalId: 'local',
+    transport: 'stdio' as const,
+  };
+  const stream = {
+    agentId: 'fake',
+    workspaceId: 'workspace-1',
+    acpSessionId: 'shared-session',
+  };
+
+  const firstBroker = new AcpSessionBroker(fake.port, {
+    eventJournal,
+    runtimeStateStore,
+  });
+  const first = await firstBroker.attach(input);
+  const firstReader = first.messages.getReader();
+  await first.receive(request(1, 'initialize', {
+    protocolVersion: 1,
+    clientCapabilities: {},
+    clientInfo: { name: 'before-restart', version: '1' },
+  }));
+  await nextMessage(firstReader);
+  await first.receive(
+    request(2, 'session/new', { cwd: '/workspace', mcpServers: [] }),
+  );
+  await nextMessage(firstReader);
+  assertEquals((await runtimeStateStore.get(stream))?.generation, 1);
+  firstReader.releaseLock();
+  await first.close();
+  await firstBroker.close();
+
+  const secondBroker = new AcpSessionBroker(fake.port, {
+    eventJournal,
+    runtimeStateStore,
+  });
+  const second = await secondBroker.attach({
+    ...input,
+    transport: 'remote-acp',
+    acpSessionId: 'shared-session',
+  });
+  const secondReader = second.messages.getReader();
+  try {
+    assertEquals((await runtimeStateStore.get(stream))?.generation, 2);
+    assertEquals((await runtimeStateStore.get(stream))?.state, 'restoring');
+    await second.receive(request(1, 'initialize', {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: 'after-restart', version: '1' },
+    }));
+    await nextMessage(secondReader);
+    await second.receive(request(2, 'session/load', {
+      sessionId: 'shared-session',
+      cwd: '/workspace',
+      mcpServers: [],
+    }));
+    assertEquals(responseId(await nextMessage(secondReader)), 2);
+    assertEquals((await runtimeStateStore.get(stream))?.generation, 2);
+    assertEquals((await runtimeStateStore.get(stream))?.state, 'idle');
+  } finally {
+    secondReader.releaseLock();
+    await second.close();
+    await secondBroker.close();
+  }
+});
 
 Deno.test('ACP session broker fans one hosted session out to simultaneous clients', async () => {
   const fake = fakeRuntime({ echoUserPrompt: true });
@@ -771,6 +1261,10 @@ Deno.test('ACP session broker exposes native cursors and forces a provider reloa
           ackMethod: WEAVE_ACP_THREAD_ACK_METHOD,
           syncNotification: WEAVE_ACP_THREAD_SYNC_NOTIFICATION,
         },
+        runtimeRecovery: {
+          version: 1,
+          stateNotification: WEAVE_ACP_RUNTIME_STATE_NOTIFICATION,
+        },
       },
     );
 
@@ -885,7 +1379,9 @@ Deno.test('ACP session broker hands replay to the live stream without losing a c
       clientInfo: { name: 'first', version: '1' },
     }));
     await nextMessage(firstReader);
-    await first.receive(request(2, 'session/new', { cwd: '/workspace', mcpServers: [] }));
+    await first.receive(
+      request(2, 'session/new', { cwd: '/workspace', mcpServers: [] }),
+    );
     await nextMessage(firstReader);
     await first.receive(request(3, 'session/prompt', {
       sessionId: 'shared-session',
@@ -894,7 +1390,11 @@ Deno.test('ACP session broker hands replay to the live stream without losing a c
     await nextMessage(firstReader);
     await nextMessage(firstReader);
 
-    const second = await broker.attach({ ...input, transport: 'remote-acp', acpSessionId: 'shared-session' });
+    const second = await broker.attach({
+      ...input,
+      transport: 'remote-acp',
+      acpSessionId: 'shared-session',
+    });
     const secondReader = second.messages.getReader();
     try {
       await second.receive(request(1, 'initialize', {
@@ -921,7 +1421,10 @@ Deno.test('ACP session broker hands replay to the live stream without losing a c
       assertEquals(updateText(await nextMessage(secondReader)), 'before');
       assertEquals(updateText(await nextMessage(secondReader)), 'reply:before');
       const sync = await nextMessage(secondReader);
-      assertEquals('method' in sync ? sync.method : undefined, WEAVE_ACP_THREAD_SYNC_NOTIFICATION);
+      assertEquals(
+        'method' in sync ? sync.method : undefined,
+        WEAVE_ACP_THREAD_SYNC_NOTIFICATION,
+      );
       const during = await nextMessage(secondReader);
       assertEquals(updateText(during), 'during');
       assertEquals(threadEventSequence(during), 3);

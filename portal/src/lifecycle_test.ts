@@ -1,6 +1,7 @@
 import { assertEquals, assertMatch } from 'jsr:@std/assert@1.0.19';
 import {
   checkPortalRuntimeHealth,
+  getHostRuntimeStatePath,
   getHostSocketPath,
   getHostThreadEventJournalPath,
   getPortalConfigPath,
@@ -88,6 +89,10 @@ Deno.test('Host socket uses one canonical per-user state location', () => {
   assertEquals(
     getHostThreadEventJournalPath({ HOME: '/Users/example' }),
     '/Users/example/.local/state/weave-host/thread-events.jsonl',
+  );
+  assertEquals(
+    getHostRuntimeStatePath({ HOME: '/Users/example' }),
+    '/Users/example/.local/state/weave-host/runtime-state.json',
   );
   assertEquals(
     getHostSocketPath({ HOME: '/home/example', XDG_STATE_HOME: '/state' }),

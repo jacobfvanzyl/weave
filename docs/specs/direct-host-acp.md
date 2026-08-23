@@ -257,6 +257,13 @@ type AgentAttachment = {
   receive(message: JsonRpcMessage): Promise<void>;
   close(reason?: string): Promise<void>;
   readonly messages: ReadableStream<JsonRpcMessage>;
+  readonly finished: Promise<{
+    success: boolean;
+    code: number;
+    signal?: string;
+    error?: string;
+    stderrTail: string;
+  }>;
 };
 ```
 
@@ -287,8 +294,9 @@ side effect of an unauthenticated connection.
 ### Supervision and continuity
 
 - A child process belongs to one runtime generation and one Agent definition.
-- Process exit records the exit status and stderr tail, closes pending requests,
-  and emits an ordered runtime-exited event.
+- Process exit records the exit status and bounded stderr tail, fails pending
+  requests without closing attached client streams, and emits an ordered
+  runtime-state notification to Weave-native clients.
 - The daemon uses bounded exponential backoff only for a runtime marked
   restartable; it must not blindly replay a prompt after uncertain delivery.
 - Every accepted prompt has an idempotency key at the Weave layer. ACP itself
@@ -298,6 +306,14 @@ side effect of an unauthenticated connection.
 - Reconnection first attempts capability-gated `session/resume`, then
   `session/load` when supported. Otherwise it exposes an explicit cannot-resume
   state instead of inventing continuity.
+- A logical hosted runtime outlives a failed provider process. Each replacement
+  process receives a new durable generation; responses and notifications from
+  an obsolete generation are ignored. Provider transcript replay produced by
+  recovery `session/load` is suppressed because the Host journal remains the
+  client-facing replay authority.
+- An interrupted `session/prompt` fails with `PROMPT_UNCERTAIN`. Recovery never
+  submits that prompt again; explicit prompt-operation idempotency remains a
+  separate Weave-native concern.
 - A detached runtime may continue only when no client request or permission is
   pending. Pending permissions default to cancellation or denial when the
   controller lease expires.
@@ -479,12 +495,14 @@ The first landed slice provides:
 - a compiled two-process smoke test plus a live initialize handshake with
   `@agentclientprotocol/codex-acp` 1.6.2.
 
-This checkpoint is not the complete vertical proof. Subsequent local and
-Bazzite Zed UI acceptance proved real Codex prompts and provider-session
-restoration after a complete Zed restart. OpenCode, inbound Host files and
-terminals, durable Agent Runtime reattachment, replay, pairing, and TLS
-packaging remain open; transparent recovery while Zed remains open is not yet
-implemented.
+This checkpoint is not the complete vertical proof. Subsequent WVE-40 work
+added the durable normalized event journal, replay cursors, compaction and
+resynchronization path, durable runtime generations, and transparent provider
+replacement behind a still-open logical client attachment. Local tests and a
+Bazzite run proved idle recovery, interrupted-stream uncertainty, obsolete
+generation fencing, and a fresh prompt after recovery. OpenCode, inbound Host
+files and terminals, durable native prompt idempotency, controller leases,
+pairing, and TLS packaging remain open.
 
 ## Migration sequence
 

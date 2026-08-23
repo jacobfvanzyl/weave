@@ -25,6 +25,7 @@ import { logPortalPerfEvent, startPortalPerfSampler } from './perf.ts';
 import { installBoundedConsoleLog } from './bounded-log.ts';
 import {
   checkPortalRuntimeHealth,
+  getHostRuntimeStatePath,
   getHostSocketPath,
   getHostThreadCatalogPath,
   getHostThreadEventJournalPath,
@@ -69,6 +70,7 @@ import { serveRemoteAcpGateway } from './acp/remote-gateway.ts';
 import { resolveHostWorkspace } from './acp/workspace.ts';
 import { FileThreadCatalog } from './acp/thread-catalog.ts';
 import { FileThreadEventJournal } from './acp/thread-event-journal.ts';
+import { FileRuntimeStateStore } from './acp/runtime-state.ts';
 
 const portalToolExecutions = new IdempotentExecutionCache<unknown>();
 
@@ -141,6 +143,7 @@ const version = '0.1.0';
 const defaultHostSocketPath = getHostSocketPath();
 const defaultHostThreadCatalogPath = getHostThreadCatalogPath();
 const defaultHostThreadEventJournalPath = getHostThreadEventJournalPath();
+const defaultHostRuntimeStatePath = getHostRuntimeStatePath();
 
 const parseArgs = (args: string[]): ParsedArgs => {
   const [command, ...rest] = args;
@@ -2373,6 +2376,7 @@ const hostDaemon = async (flags: Record<string, string | boolean>) => {
   const threadEventJournal = await FileThreadEventJournal.open(defaultHostThreadEventJournalPath, {
     maxEventsPerStream: config.host?.threadEventRetentionLimit,
   });
+  const runtimeStateStore = await FileRuntimeStateStore.open(defaultHostRuntimeStatePath);
   const processRuntime = new AgentRuntimeManager(hostAgentDefinitions(config), {
     threadCatalog,
     resolveWorkspace: async (selection, principalId) => {
@@ -2382,7 +2386,10 @@ const hostDaemon = async (flags: Record<string, string | boolean>) => {
       return await resolveHostWorkspace(roots, selection);
     },
   });
-  const runtimeManager = new AcpSessionBroker(processRuntime, { eventJournal: threadEventJournal });
+  const runtimeManager = new AcpSessionBroker(processRuntime, {
+    eventJournal: threadEventJournal,
+    runtimeStateStore,
+  });
   const gateway = await serveLocalAcpGateway({ path: socketPath, runtimeManager });
   const network = config.host?.network;
   let remoteGateway: Awaited<ReturnType<typeof serveRemoteAcpGateway>> | undefined;

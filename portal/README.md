@@ -107,8 +107,13 @@ their first provider load. A submitted prompt is not delivered to the Agent unle
 Each Thread retains its latest 10,000 events with a durable compaction watermark. Weave-native ACP clients can negotiate
 the `weave.dev` Thread-event extension for stable event metadata, replay cursors, monotonic acknowledgements, and an
 explicit `RESUME_GAP`/provider-full-reload path; ordinary ACP clients continue to receive unextended events. Disconnecting
-one client does not end a bound runtime. Automatic runtime recovery without a reconnecting client, durable runtime
-generations, and uncertain in-flight prompt delivery remain tracked by WVE-40.
+one client does not end a bound runtime. Runtime generations and lifecycle state are persisted atomically in mode-`0600`
+`${WEAVE_HOST_HOME:-${XDG_STATE_HOME:-~/.local/state}/weave-host}/runtime-state.json`. If a provider process exits, the
+logical hosted runtime keeps its client streams open, fences obsolete-generation traffic, initializes a replacement,
+prefers capability-gated `session/resume`, and falls back to `session/load` while suppressing duplicate provider replay.
+Weave-native clients receive `_weave.dev/runtime/state` recovery notifications; ordinary ACP clients receive standard
+JSON-RPC errors only. An interrupted prompt fails as `PROMPT_UNCERTAIN` and is never automatically submitted again.
+Durable native prompt idempotency and user-directed uncertainty resolution remain tracked by WVE-40 item 3.
 
 `host.threadEventRetentionLimit` overrides the positive integer per-Thread limit. Keep the default for normal use; a
 small value is useful only for explicit overflow/resynchronization acceptance.

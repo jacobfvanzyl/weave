@@ -4,23 +4,32 @@ import {
   jsonRpcMessageSchema,
   rpcErrorCode,
   WEAVE_ACP_META_NAMESPACE,
+  WEAVE_ACP_RUNTIME_STATE_NOTIFICATION,
   WEAVE_ACP_THREAD_ACK_METHOD,
   WEAVE_ACP_THREAD_EVENT_META_KEY,
   WEAVE_ACP_THREAD_EVENTS_META_KEY,
   WEAVE_ACP_THREAD_SYNC_NOTIFICATION,
+  weaveAcpRuntimeRecoveryCapabilitySchema,
+  weaveAcpRuntimeStateParamsSchema,
   weaveAcpThreadAckParamsSchema,
   weaveAcpThreadEventMetaSchema,
   weaveAcpThreadEventsCapabilitySchema,
   weaveAcpThreadEventsLoadMetaSchema,
   weaveAcpThreadSyncParamsSchema,
 } from '@weave/protocol';
-import type { AgentAttachInput, AgentAttachment, AgentRuntimePort } from './runtime.ts';
+import type { AgentAttachInput, AgentAttachment, AgentAttachmentExit, AgentRuntimePort } from './runtime.ts';
 import {
   InMemoryThreadEventJournal,
   type ThreadEventJournal,
   type ThreadEventRecord,
   type ThreadEventStream,
 } from './thread-event-journal.ts';
+import {
+  InMemoryRuntimeStateStore,
+  type RuntimeStateRecord,
+  type RuntimeStateStore,
+  type RuntimeStream,
+} from './runtime-state.ts';
 
 const idKey = (id: JsonRpcId | null) => `${typeof id}:${String(id)}`;
 
@@ -75,6 +84,10 @@ const withThreadEventsCapability = (value: unknown) => {
             version: 1,
             ackMethod: WEAVE_ACP_THREAD_ACK_METHOD,
             syncNotification: WEAVE_ACP_THREAD_SYNC_NOTIFICATION,
+          }),
+          runtimeRecovery: weaveAcpRuntimeRecoveryCapabilitySchema.parse({
+            version: 1,
+            stateNotification: WEAVE_ACP_RUNTIME_STATE_NOTIFICATION,
           }),
         },
       },
@@ -133,6 +146,8 @@ type BrokerClient = {
   readonly input: AgentAttachInput;
   readonly messages: ReadableStream<JsonRpcMessage>;
   readonly agentRequests: Map<string, JsonRpcId>;
+  readonly finished: Promise<AgentAttachmentExit>;
+  readonly finish: (exit: AgentAttachmentExit) => void;
   controller?: ReadableStreamDefaultController<JsonRpcMessage>;
   runtime?: HostedRuntime;
   observingSessionId?: string;
@@ -146,6 +161,21 @@ type PendingClientRequest = {
   readonly downstreamId: JsonRpcId;
   readonly method: string;
   readonly sessionId?: string;
+  readonly params?: unknown;
+};
+
+type PendingInternalRequest = {
+  readonly method: string;
+  readonly resolve: (message: JsonRpcMessage) => void;
+  readonly reject: (error: Error) => void;
+};
+
+type ProviderGeneration = {
+  readonly attachment: AgentAttachment;
+  generation: number;
+  intentionalClose: boolean;
+  stopped: boolean;
+  readerTask?: Promise<void>;
 };
 
 type InitializeWaiter = {
@@ -169,27 +199,46 @@ type ColdSessionLoad = {
 class HostedRuntime {
   readonly clients = new Set<BrokerClient>();
   private readonly pending = new Map<string, PendingClientRequest>();
+  private readonly internalPending = new Map<string, PendingInternalRequest>();
   private readonly initializeWaiters: InitializeWaiter[] = [];
-  private readonly readerTask: Promise<void>;
   private nextRequestId = 0;
   private nextAgentRequestId = 0;
   private initialized = false;
   private initializePending = false;
   private initializeResult: unknown;
+  private initializeParams: unknown;
+  private sessionSetupParams: unknown;
   private eventQueue = Promise.resolve();
   private activePromptClient?: BrokerClient;
   private expectedUserEchoes: unknown[] = [];
   private coldSessionLoad?: ColdSessionLoad;
   private stopped = false;
+  private recoveryState: 'ready' | 'restoring' | 'unavailable' = 'ready';
+  private recoveryTask?: Promise<void>;
+  private restoringInternally = false;
+  private provider: ProviderGeneration;
   sessionId?: string;
 
   constructor(
     private readonly broker: AcpSessionBroker,
-    readonly upstream: AgentAttachment,
+    upstream: AgentAttachment,
     private readonly eventJournal: ThreadEventJournal,
+    private readonly input: AgentAttachInput,
     readonly reservedSessionId?: string,
   ) {
-    this.readerTask = this.readUpstream();
+    this.provider = this.installProvider(upstream, 0);
+  }
+
+  get agentId() {
+    return this.provider.attachment.agentId;
+  }
+
+  get workspaceId() {
+    return this.provider.attachment.workspaceId;
+  }
+
+  get stderrTail() {
+    return this.provider.attachment.stderrTail;
   }
 
   add(client: BrokerClient) {
@@ -211,13 +260,17 @@ class HostedRuntime {
         throw new Error('Unknown ACP Agent request response.');
       }
       client.agentRequests.delete(idKey(message.id));
-      await this.upstream.receive(
+      await this.provider.attachment.receive(
         jsonRpcMessageSchema.parse({ ...message, id: upstreamId }),
+      );
+      await this.transitionRuntime(
+        this.activePromptClient ? 'prompting' : 'idle',
       );
       return;
     }
     if (!('id' in message)) {
-      await this.upstream.receive(message);
+      if (this.recoveryState !== 'ready') return;
+      await this.provider.attachment.receive(message);
       return;
     }
 
@@ -235,6 +288,10 @@ class HostedRuntime {
         return;
       }
       this.initializePending = true;
+      this.initializeParams = message.params;
+    } else if (this.recoveryState !== 'ready') {
+      this.emitRuntimeUnavailable(client, message.id);
+      return;
     }
 
     if (message.method === WEAVE_ACP_THREAD_ACK_METHOD) {
@@ -323,8 +380,8 @@ class HostedRuntime {
           return;
         }
         const target = this.broker.findSession(
-          this.upstream.agentId,
-          this.upstream.workspaceId,
+          this.agentId,
+          this.workspaceId,
           requestedSessionId,
         );
         if (target && target !== this) {
@@ -403,8 +460,9 @@ class HostedRuntime {
             downstreamId: message.id,
             method: message.method,
             sessionId: requestedSessionId,
+            params: message.params,
           });
-          await this.upstream.receive(
+          await this.provider.attachment.receive(
             jsonRpcMessageSchema.parse({ ...message, id: upstreamId }),
           );
         } catch (error) {
@@ -455,14 +513,13 @@ class HostedRuntime {
       downstreamId: message.id,
       method: message.method,
       sessionId: sessionIdFrom(message.params),
+      params: message.params,
     });
     try {
       if (message.method === 'session/prompt') {
         await this.fanOutSubmittedPrompt(client, message.params);
+        await this.transitionRuntime('prompting');
       }
-      await this.upstream.receive(
-        jsonRpcMessageSchema.parse({ ...message, id: upstreamId }),
-      );
     } catch (error) {
       this.pending.delete(idKey(upstreamId));
       if (message.method === 'initialize') this.initializePending = false;
@@ -472,7 +529,28 @@ class HostedRuntime {
       ) {
         this.activePromptClient = undefined;
         this.expectedUserEchoes = [];
+        await this.transitionRuntime('idle').catch(() => undefined);
       }
+      throw error;
+    }
+
+    const provider = this.provider;
+    try {
+      await provider.attachment.receive(
+        jsonRpcMessageSchema.parse({ ...message, id: upstreamId }),
+      );
+    } catch (error) {
+      if (this.sessionId && this.provider === provider) {
+        await this.providerStopped(provider, {
+          success: false,
+          code: 1,
+          error: error instanceof Error ? error.message : String(error),
+          stderrTail: provider.attachment.stderrTail(),
+        }, 'io');
+        return;
+      }
+      this.pending.delete(idKey(upstreamId));
+      if (message.method === 'initialize') this.initializePending = false;
       throw error;
     }
   }
@@ -480,37 +558,71 @@ class HostedRuntime {
   async close(reason: string) {
     if (this.stopped) return;
     this.stopped = true;
-    await this.upstream.close(reason).catch(() => undefined);
-    await this.readerTask.catch(() => undefined);
+    const provider = this.provider;
+    provider.intentionalClose = true;
+    await provider.attachment.close(reason).catch(() => undefined);
+    await provider.readerTask?.catch(() => undefined);
     for (const client of [...this.clients]) {
       this.detach(client);
       this.closeClientStream(client);
     }
   }
 
-  private async readUpstream() {
-    const reader = this.upstream.messages.getReader();
+  private installProvider(
+    attachment: AgentAttachment,
+    generation: number,
+  ): ProviderGeneration {
+    const provider: ProviderGeneration = {
+      attachment,
+      generation,
+      intentionalClose: false,
+      stopped: false,
+    };
+    provider.readerTask = this.readUpstream(provider);
+    void attachment.finished.then(
+      (exit) => this.providerStopped(provider, exit),
+      (error) =>
+        this.providerStopped(provider, {
+          success: false,
+          code: 1,
+          error: error instanceof Error ? error.message : String(error),
+          stderrTail: attachment.stderrTail(),
+        }, 'stream'),
+    ).catch(() => undefined);
+    return provider;
+  }
+
+  private async readUpstream(provider: ProviderGeneration) {
+    const reader = provider.attachment.messages.getReader();
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        await this.routeUpstream(jsonRpcMessageSchema.parse(value));
+        if (this.provider !== provider || provider.stopped) continue;
+        await this.routeUpstream(provider, jsonRpcMessageSchema.parse(value));
       }
-      this.finishClients();
     } catch (error) {
-      this.finishClients(error);
+      await this.providerStopped(provider, {
+        success: false,
+        code: 1,
+        error: error instanceof Error ? error.message : String(error),
+        stderrTail: provider.attachment.stderrTail(),
+      }, 'stream');
     } finally {
       reader.releaseLock();
-      this.stopped = true;
-      this.broker.runtimeStopped(this);
     }
   }
 
-  private async routeUpstream(message: JsonRpcMessage) {
+  private async routeUpstream(
+    provider: ProviderGeneration,
+    message: JsonRpcMessage,
+  ) {
+    if (this.provider !== provider || provider.stopped) return;
     if ('method' in message) {
       if (!('id' in message)) {
         if (this.consumeExpectedUserEcho(message)) return;
         if (message.method === 'session/update') {
+          if (this.restoringInternally) return;
           const sessionId = sessionIdFrom(message.params) ?? this.sessionId ??
             this.coldSessionLoad?.sessionId;
           if (sessionId) {
@@ -540,7 +652,7 @@ class HostedRuntime {
         ? this.activePromptClient
         : [...this.clients].find((candidate) => !candidate.closed);
       if (!client) {
-        await this.upstream.receive({
+        await provider.attachment.receive({
           jsonrpc: '2.0',
           id: message.id,
           error: {
@@ -552,11 +664,18 @@ class HostedRuntime {
       }
       const downstreamId = `weave-agent-${++this.nextAgentRequestId}`;
       client.agentRequests.set(idKey(downstreamId), message.id);
+      await this.transitionRuntime('awaiting_client');
       this.emit(client, { ...message, id: downstreamId });
       return;
     }
 
     if (message.id === null) return;
+    const internal = this.internalPending.get(idKey(message.id));
+    if (internal) {
+      this.internalPending.delete(idKey(message.id));
+      internal.resolve(message);
+      return;
+    }
     const pending = this.pending.get(idKey(message.id));
     if (!pending) return;
     this.pending.delete(idKey(message.id));
@@ -579,7 +698,31 @@ class HostedRuntime {
       const boundSessionId = pending.method === 'session/new' ? sessionIdFrom(message.result) : pending.sessionId;
       if (boundSessionId) {
         this.sessionId = boundSessionId;
-        this.broker.bindSession(this, boundSessionId);
+        this.sessionSetupParams = {
+          ...(objectFrom(pending.params) ?? {}),
+          sessionId: boundSessionId,
+        };
+        try {
+          await this.broker.bindSession(
+            this,
+            boundSessionId,
+            pending.method === 'session/load' ? 'restoring' : 'idle',
+          );
+        } catch {
+          this.recoveryState = 'unavailable';
+          this.sessionId = undefined;
+          this.sessionSetupParams = undefined;
+          this.emit(pending.client, {
+            jsonrpc: '2.0',
+            id: pending.downstreamId,
+            error: {
+              code: rpcErrorCode.portalUnavailable,
+              message: 'The Host could not persist the ACP runtime binding.',
+              data: { code: 'RUNTIME_STATE_UNAVAILABLE' },
+            },
+          });
+          return;
+        }
       }
     }
     if (
@@ -588,6 +731,7 @@ class HostedRuntime {
     ) {
       this.activePromptClient = undefined;
       this.expectedUserEchoes = [];
+      await this.transitionRuntime('idle');
     }
     if (
       pending.method === 'session/load' &&
@@ -672,6 +816,13 @@ class HostedRuntime {
           result: this.initializeResult,
         });
       }
+    }
+    if (
+      pending.method === 'session/load' &&
+      'result' in message &&
+      this.recoveryState === 'ready'
+    ) {
+      await this.transitionRuntime('idle');
     }
   }
 
@@ -833,8 +984,8 @@ class HostedRuntime {
 
   private eventStream(acpSessionId: string): ThreadEventStream {
     return {
-      agentId: this.upstream.agentId,
-      workspaceId: this.upstream.workspaceId,
+      agentId: this.agentId,
+      workspaceId: this.workspaceId,
       acpSessionId,
     };
   }
@@ -850,6 +1001,382 @@ class HostedRuntime {
     }
     this.expectedUserEchoes.shift();
     return true;
+  }
+
+  async bindRuntimeState(
+    acpSessionId: string,
+    state: 'idle' | 'restoring',
+  ) {
+    if (this.provider.generation > 0) return;
+    const record = await this.broker.runtimeStateStore.start(
+      this.runtimeStream(acpSessionId),
+      state,
+    );
+    this.provider.generation = record.generation;
+  }
+
+  private async transitionRuntime(
+    state:
+      | 'idle'
+      | 'prompting'
+      | 'awaiting_client'
+      | 'exited'
+      | 'restoring'
+      | 'uncertain'
+      | 'unavailable',
+    exit?: AgentAttachmentExit,
+  ) {
+    if (!this.sessionId || this.provider.generation <= 0) return;
+    await this.broker.runtimeStateStore.transition(
+      this.runtimeStream(this.sessionId),
+      this.provider.generation,
+      { state, ...(exit ? { exit } : {}) },
+    );
+  }
+
+  private runtimeStream(acpSessionId: string): RuntimeStream {
+    return {
+      agentId: this.agentId,
+      workspaceId: this.workspaceId,
+      acpSessionId,
+    };
+  }
+
+  private async providerStopped(
+    provider: ProviderGeneration,
+    exit: AgentAttachmentExit,
+    source: 'exit' | 'stream' | 'io' = 'exit',
+  ) {
+    if (
+      provider.stopped || provider.intentionalClose || this.stopped ||
+      this.provider !== provider
+    ) return;
+    provider.stopped = true;
+    if (source !== 'exit') {
+      provider.intentionalClose = true;
+      await provider.attachment.close('ACP provider transport failed.').catch(() => undefined);
+    }
+    if (this.recoveryTask && this.recoveryState === 'restoring') {
+      for (const pending of this.internalPending.values()) {
+        pending.reject(
+          new Error('Replacement Agent process exited during recovery.'),
+        );
+      }
+      this.internalPending.clear();
+      return;
+    }
+
+    const interruptedPrompt = [...this.pending.values()].some((request) => request.method === 'session/prompt');
+    try {
+      await this.transitionRuntime(
+        interruptedPrompt ? 'uncertain' : 'exited',
+        exit,
+      );
+    } catch {
+      this.recoveryState = 'unavailable';
+      this.failPendingRequests(interruptedPrompt, provider.generation);
+      this.emitRuntimeState(
+        'unavailable',
+        provider.generation,
+        'RECOVERY_FAILED',
+        'The Host could not persist the provider exit state.',
+      );
+      return;
+    }
+    this.emitRuntimeState(
+      interruptedPrompt ? 'uncertain' : 'exited',
+      provider.generation,
+      interruptedPrompt ? 'PROMPT_UNCERTAIN' : 'PROCESS_EXITED',
+      interruptedPrompt
+        ? 'The Agent process exited after prompt delivery; completion is unknown.'
+        : 'The Agent process exited and will be restored.',
+    );
+    this.failPendingRequests(interruptedPrompt, provider.generation);
+
+    if (!this.sessionId) {
+      this.stopped = true;
+      this.finishClients(
+        new Error(
+          'Hosted ACP provider exited before a session was established.',
+        ),
+      );
+      this.broker.runtimeStopped(this);
+      return;
+    }
+
+    this.recoveryState = 'restoring';
+    const recovery = this.recoverProvider(provider);
+    this.recoveryTask = recovery;
+    await recovery;
+  }
+
+  private failPendingRequests(
+    interruptedPrompt: boolean,
+    generation: number,
+  ) {
+    const coldLoadKey = this.coldSessionLoad?.upstreamRequestId === undefined
+      ? undefined
+      : idKey(this.coldSessionLoad.upstreamRequestId);
+    for (const [key, pending] of this.pending) {
+      if (key === coldLoadKey) continue;
+      const uncertain = pending.method === 'session/prompt';
+      this.emit(pending.client, {
+        jsonrpc: '2.0',
+        id: pending.downstreamId,
+        error: {
+          code: rpcErrorCode.portalUnavailable,
+          message: uncertain
+            ? 'The Agent process exited after prompt delivery; completion is unknown.'
+            : 'The Agent process exited before the request completed.',
+          data: {
+            code: uncertain ? 'PROMPT_UNCERTAIN' : 'RUNTIME_RESTARTED',
+            generation,
+          },
+        },
+      });
+    }
+    this.pending.clear();
+    for (const pending of this.internalPending.values()) {
+      pending.reject(
+        new Error(`Agent process exited during ${pending.method}.`),
+      );
+    }
+    this.internalPending.clear();
+    for (const waiter of this.initializeWaiters.splice(0)) {
+      this.emit(waiter.client, {
+        jsonrpc: '2.0',
+        id: waiter.downstreamId,
+        error: {
+          code: rpcErrorCode.portalUnavailable,
+          message: 'The Agent process exited during initialization.',
+          data: { code: 'RUNTIME_RESTARTED', generation },
+        },
+      });
+    }
+    if (this.coldSessionLoad) {
+      for (const waiter of this.coldSessionLoad.waiters) {
+        this.emit(waiter.client, {
+          jsonrpc: '2.0',
+          id: waiter.downstreamId,
+          error: {
+            code: rpcErrorCode.portalUnavailable,
+            message: 'The Agent process exited while restoring the session.',
+            data: { code: 'RUNTIME_RESTARTED', generation },
+          },
+        });
+      }
+      this.coldSessionLoad = undefined;
+    }
+    for (const client of this.clients) client.agentRequests.clear();
+    if (interruptedPrompt) {
+      this.activePromptClient = undefined;
+      this.expectedUserEchoes = [];
+    }
+    this.initializePending = false;
+  }
+
+  private async recoverProvider(previous: ProviderGeneration) {
+    const sessionId = this.sessionId!;
+    let state: RuntimeStateRecord;
+    try {
+      state = await this.broker.runtimeStateStore.start(
+        this.runtimeStream(sessionId),
+        'restoring',
+      );
+    } catch {
+      this.recoveryState = 'unavailable';
+      this.emitRuntimeState(
+        'unavailable',
+        previous.generation,
+        'RECOVERY_FAILED',
+        'The Host could not persist a replacement runtime generation.',
+      );
+      this.recoveryTask = undefined;
+      return;
+    }
+    this.emitRuntimeState(
+      'restoring',
+      state.generation,
+      'RESTORING',
+      'The Host is restoring the ACP provider session.',
+    );
+    let next: ProviderGeneration | undefined;
+    try {
+      const attachment = await this.broker.attachProvider({
+        agentId: this.agentId,
+        workspaceId: this.workspaceId,
+        acpSessionId: sessionId,
+        principalId: this.input.principalId,
+        transport: 'remote-acp',
+      });
+      next = this.installProvider(attachment, state.generation);
+      this.provider = next;
+
+      const initialized = await this.sendInternal(
+        next,
+        'initialize',
+        this.initializeParams ?? {
+          protocolVersion: 1,
+          clientCapabilities: {},
+          clientInfo: { name: 'weave-host', version: '1' },
+        },
+      );
+      if (!('result' in initialized)) {
+        throw new Error('Agent initialization failed during recovery.');
+      }
+      this.initializeResult = withThreadEventsCapability(initialized.result);
+      this.initialized = true;
+
+      const capabilities = objectFrom(
+        objectFrom(initialized.result)?.agentCapabilities,
+      );
+      const sessionCapabilities = objectFrom(
+        capabilities?.sessionCapabilities,
+      );
+      const supportsResume = objectFrom(sessionCapabilities?.resume) !==
+        undefined;
+      const supportsLoad = capabilities?.loadSession === true;
+      const params = {
+        ...(objectFrom(this.sessionSetupParams) ?? {}),
+        sessionId,
+      };
+
+      let restored = false;
+      this.restoringInternally = true;
+      try {
+        if (supportsResume) {
+          const resumed = await this.sendInternal(
+            next,
+            'session/resume',
+            params,
+          )
+            .catch(() => undefined);
+          restored = Boolean(resumed && 'result' in resumed);
+        }
+        if (!restored && supportsLoad) {
+          const loaded = await this.sendInternal(next, 'session/load', params);
+          restored = 'result' in loaded;
+        }
+      } finally {
+        this.restoringInternally = false;
+      }
+      if (!restored) {
+        throw new Error('CANNOT_RESUME');
+      }
+
+      this.recoveryState = 'ready';
+      await this.transitionRuntime('idle');
+      this.emitRuntimeState(
+        'idle',
+        state.generation,
+        'RECOVERED',
+        'The ACP provider session was restored.',
+      );
+    } catch (error) {
+      this.recoveryState = 'unavailable';
+      await this.broker.runtimeStateStore.transition(
+        this.runtimeStream(sessionId),
+        state.generation,
+        { state: 'unavailable' },
+      ).catch(() => undefined);
+      const cannotResume = error instanceof Error &&
+        error.message === 'CANNOT_RESUME';
+      this.emitRuntimeState(
+        'unavailable',
+        state.generation,
+        cannotResume ? 'CANNOT_RESUME' : 'RECOVERY_FAILED',
+        cannotResume
+          ? 'The Agent supports neither session/resume nor session/load.'
+          : 'The ACP provider session could not be restored.',
+      );
+      if (next) {
+        next.intentionalClose = true;
+        await next.attachment.close('ACP runtime recovery failed.').catch(() => undefined);
+      } else if (this.provider === previous) {
+        previous.intentionalClose = true;
+        await previous.attachment.close('ACP runtime recovery failed.').catch(
+          () => undefined,
+        );
+      }
+      this.recoveryTask = undefined;
+      return;
+    }
+    this.recoveryTask = undefined;
+  }
+
+  private sendInternal(
+    provider: ProviderGeneration,
+    method: string,
+    params: unknown,
+  ) {
+    const id = `weave-internal-${provider.generation}-${++this.nextRequestId}`;
+    return new Promise<JsonRpcMessage>((resolve, reject) => {
+      this.internalPending.set(idKey(id), { method, resolve, reject });
+      provider.attachment.receive(
+        jsonRpcMessageSchema.parse({ jsonrpc: '2.0', id, method, params }),
+      ).catch((error) => {
+        this.internalPending.delete(idKey(id));
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
+  private emitRuntimeUnavailable(client: BrokerClient, id: JsonRpcId) {
+    this.emit(client, {
+      jsonrpc: '2.0',
+      id,
+      error: {
+        code: rpcErrorCode.portalUnavailable,
+        message: this.recoveryState === 'restoring'
+          ? 'The ACP session is being restored.'
+          : 'The ACP session cannot currently be resumed.',
+        data: {
+          code: this.recoveryState === 'restoring' ? 'SESSION_RESTORING' : 'CANNOT_RESUME',
+          generation: this.provider.generation,
+        },
+      },
+    });
+  }
+
+  private emitRuntimeState(
+    state:
+      | 'idle'
+      | 'prompting'
+      | 'awaiting_client'
+      | 'exited'
+      | 'restoring'
+      | 'uncertain'
+      | 'unavailable',
+    generation: number,
+    code:
+      | 'PROCESS_EXITED'
+      | 'PROMPT_UNCERTAIN'
+      | 'RESTORING'
+      | 'RECOVERED'
+      | 'CANNOT_RESUME'
+      | 'RECOVERY_FAILED',
+    message: string,
+  ) {
+    if (!this.sessionId) return;
+    const notification = jsonRpcMessageSchema.parse({
+      jsonrpc: '2.0',
+      method: WEAVE_ACP_RUNTIME_STATE_NOTIFICATION,
+      params: weaveAcpRuntimeStateParamsSchema.parse({
+        sessionId: this.sessionId,
+        generation,
+        state,
+        code,
+        message,
+      }),
+    });
+    for (const client of this.clients) {
+      if (
+        client.threadEventsEnabled &&
+        client.observingSessionId === this.sessionId
+      ) {
+        this.emit(client, notification);
+      }
+    }
   }
 
   private finishClients(error?: unknown) {
@@ -868,6 +1395,12 @@ class HostedRuntime {
     } catch {
       // The consumer may already have cancelled its stream.
     }
+    client.finish({
+      success: !error,
+      code: error ? 1 : 0,
+      ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}),
+      stderrTail: '',
+    });
   }
 }
 
@@ -878,13 +1411,19 @@ export class AcpSessionBroker implements AgentRuntimePort {
   private closed = false;
 
   private readonly eventJournal: ThreadEventJournal;
+  readonly runtimeStateStore: RuntimeStateStore;
 
   constructor(
     private readonly upstream: AgentRuntimePort,
-    options: { eventJournal?: ThreadEventJournal } = {},
+    options: {
+      eventJournal?: ThreadEventJournal;
+      runtimeStateStore?: RuntimeStateStore;
+    } = {},
   ) {
     this.eventJournal = options.eventJournal ??
       new InMemoryThreadEventJournal();
+    this.runtimeStateStore = options.runtimeStateStore ??
+      new InMemoryRuntimeStateStore();
   }
 
   listDefinitions() {
@@ -901,11 +1440,17 @@ export class AcpSessionBroker implements AgentRuntimePort {
         ? await this.spawnReservedRuntime(input, input.acpSessionId)
         : await this.spawnRuntime(input);
     }
+    let finishClient!: (exit: AgentAttachmentExit) => void;
+    const finished = new Promise<AgentAttachmentExit>((resolve) => {
+      finishClient = resolve;
+    });
     const client: BrokerClient = {
       id: crypto.randomUUID(),
       input,
       messages: undefined as unknown as ReadableStream<JsonRpcMessage>,
       agentRequests: new Map(),
+      finished,
+      finish: finishClient,
       runtime,
       threadEventsEnabled: false,
       acknowledgedSequence: 0,
@@ -920,10 +1465,11 @@ export class AcpSessionBroker implements AgentRuntimePort {
     runtime.add(client);
 
     return {
-      agentId: runtime.upstream.agentId,
-      workspaceId: runtime.upstream.workspaceId,
+      agentId: runtime.agentId,
+      workspaceId: runtime.workspaceId,
       messages,
-      stderrTail: () => client.runtime?.upstream.stderrTail() ?? '',
+      stderrTail: () => client.runtime?.stderrTail() ?? '',
+      finished,
       receive: async (message) => {
         if (client.closed || !client.runtime) {
           throw new Error('ACP attachment is closed.');
@@ -940,6 +1486,7 @@ export class AcpSessionBroker implements AgentRuntimePort {
         } catch {
           // The consumer may already have cancelled its stream.
         }
+        client.finish({ success: true, code: 0, stderrTail: '' });
         if (current && !current.sessionId && current.clients.size === 0) {
           this.runtimes.delete(current);
           await current.close('Unbound ACP client detached.');
@@ -952,10 +1499,14 @@ export class AcpSessionBroker implements AgentRuntimePort {
     return this.sessions.get(sessionKey(agentId, workspaceId, acpSessionId));
   }
 
-  bindSession(runtime: HostedRuntime, acpSessionId: string) {
+  async bindSession(
+    runtime: HostedRuntime,
+    acpSessionId: string,
+    state: 'idle' | 'restoring' = 'idle',
+  ) {
     const key = sessionKey(
-      runtime.upstream.agentId,
-      runtime.upstream.workspaceId,
+      runtime.agentId,
+      runtime.workspaceId,
       acpSessionId,
     );
     const existing = this.sessions.get(key);
@@ -963,6 +1514,16 @@ export class AcpSessionBroker implements AgentRuntimePort {
       throw new Error(`ACP session is already hosted: ${acpSessionId}`);
     }
     this.sessions.set(key, runtime);
+    try {
+      await runtime.bindRuntimeState(acpSessionId, state);
+    } catch (error) {
+      if (this.sessions.get(key) === runtime) this.sessions.delete(key);
+      throw error;
+    }
+  }
+
+  attachProvider(input: AgentAttachInput) {
+    return this.upstream.attach(input);
   }
 
   private async spawnReservedRuntime(
@@ -994,10 +1555,19 @@ export class AcpSessionBroker implements AgentRuntimePort {
       this,
       await this.upstream.attach(input),
       this.eventJournal,
+      input,
       reservedSessionId,
     );
     this.runtimes.add(runtime);
-    if (reservedSessionId) this.bindSession(runtime, reservedSessionId);
+    if (reservedSessionId) {
+      try {
+        await this.bindSession(runtime, reservedSessionId, 'restoring');
+      } catch (error) {
+        this.runtimes.delete(runtime);
+        await runtime.close('Host runtime state is unavailable.');
+        throw error;
+      }
+    }
     return runtime;
   }
 
@@ -1024,8 +1594,8 @@ export class AcpSessionBroker implements AgentRuntimePort {
     ) {
       if (!acpSessionId) continue;
       const key = sessionKey(
-        runtime.upstream.agentId,
-        runtime.upstream.workspaceId,
+        runtime.agentId,
+        runtime.workspaceId,
         acpSessionId,
       );
       if (this.sessions.get(key) === runtime) this.sessions.delete(key);

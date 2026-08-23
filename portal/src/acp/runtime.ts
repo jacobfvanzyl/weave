@@ -18,6 +18,14 @@ export type AgentAttachInput = AgentWorkspaceSelection & {
   transport: 'stdio' | 'remote-acp';
 };
 
+export type AgentAttachmentExit = {
+  readonly success: boolean;
+  readonly code: number;
+  readonly signal?: string;
+  readonly error?: string;
+  readonly stderrTail: string;
+};
+
 export type AgentAttachment = {
   readonly agentId: string;
   readonly workspaceId: string;
@@ -25,6 +33,7 @@ export type AgentAttachment = {
   close(reason?: string): Promise<void>;
   readonly messages: ReadableStream<JsonRpcMessage>;
   readonly stderrTail: () => string;
+  readonly finished: Promise<AgentAttachmentExit>;
 };
 
 export interface AgentRuntimePort {
@@ -143,6 +152,7 @@ export class AgentRuntimeManager implements AgentRuntimePort {
     let closed = false;
     let streamController: ReadableStreamDefaultController<JsonRpcMessage> | undefined;
     let stderr = new Uint8Array();
+    let streamError: string | undefined;
 
     const messages = new ReadableStream<JsonRpcMessage>({
       start(controller) {
@@ -164,6 +174,7 @@ export class AgentRuntimeManager implements AgentRuntimePort {
           // The attachment owner may already have cancelled the stream.
         }
       } catch (error) {
+        streamError = error instanceof Error ? error.message : String(error);
         try {
           streamController?.error(error);
         } catch {
@@ -192,6 +203,16 @@ export class AgentRuntimeManager implements AgentRuntimePort {
 
     const status = process.status.finally(() => {
       closed = true;
+    });
+    const finished = status.then(async (result) => {
+      await Promise.allSettled([stdoutTask, stderrTask]);
+      return {
+        success: result.success,
+        code: result.code,
+        ...(result.signal ? { signal: result.signal } : {}),
+        ...(streamError ? { error: streamError } : {}),
+        stderrTail: decoder.decode(stderr),
+      };
     });
 
     const close = async (reason = 'ACP attachment closed.') => {
@@ -233,6 +254,7 @@ export class AgentRuntimeManager implements AgentRuntimePort {
       workspaceId: workspace.workspaceId,
       messages,
       stderrTail: () => decoder.decode(stderr),
+      finished,
       receive: async (message) => {
         if (closed) throw new Error('ACP attachment is closed.');
         const parsed = jsonRpcMessageSchema.parse(message);
