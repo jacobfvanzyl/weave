@@ -3,6 +3,45 @@ import { z } from "zod";
 export const WEAVE_HOST_RPC_PROTOCOL_VERSION = 1 as const;
 export const WEAVE_HOST_RPC_PATH = "/rpc" as const;
 export const WEAVE_HOST_ACP_PATH = "/acp" as const;
+export const WEAVE_ACP_META_NAMESPACE = "weave.dev" as const;
+export const WEAVE_ACP_THREAD_EVENTS_META_KEY =
+  "weave.dev/threadEvents" as const;
+export const WEAVE_ACP_THREAD_EVENT_META_KEY = "weave.dev/threadEvent" as const;
+export const WEAVE_ACP_THREAD_ACK_METHOD =
+  "_weave.dev/thread_events/ack" as const;
+export const WEAVE_ACP_THREAD_SYNC_NOTIFICATION =
+  "_weave.dev/thread_events/sync" as const;
+
+export const weaveAcpThreadEventsCapabilitySchema = z.object({
+  version: z.literal(1),
+  ackMethod: z.literal(WEAVE_ACP_THREAD_ACK_METHOD),
+  syncNotification: z.literal(WEAVE_ACP_THREAD_SYNC_NOTIFICATION),
+}).strict();
+
+export const weaveAcpThreadEventsLoadMetaSchema = z.object({
+  afterSequence: z.number().int().nonnegative().nullable(),
+}).strict();
+
+export const weaveAcpThreadEventMetaSchema = z.object({
+  sequence: z.number().int().positive(),
+  eventId: z.string().min(1),
+  createdAt: z.string().datetime(),
+}).strict();
+
+export const weaveAcpThreadAckParamsSchema = z.object({
+  sessionId: z.string().min(1),
+  sequence: z.number().int().nonnegative(),
+}).strict();
+
+export const weaveAcpThreadAckResultSchema = z.object({
+  acknowledgedSequence: z.number().int().nonnegative(),
+}).strict();
+
+export const weaveAcpThreadSyncParamsSchema = z.object({
+  sessionId: z.string().min(1),
+  lastSequence: z.number().int().nonnegative(),
+  fullReload: z.boolean(),
+}).strict();
 
 export const hostWorkspaceSummarySchema = z.object({
   workspaceId: z.string().min(1),

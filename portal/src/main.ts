@@ -27,6 +27,7 @@ import {
   checkPortalRuntimeHealth,
   getHostSocketPath,
   getHostThreadCatalogPath,
+  getHostThreadEventJournalPath,
   getPortalConfigPath,
   getPortalRuntimePath,
   maskPortalRuntime,
@@ -67,6 +68,7 @@ import { runStdioAcpConnector, serveLocalAcpGateway } from './acp/local-gateway.
 import { serveRemoteAcpGateway } from './acp/remote-gateway.ts';
 import { resolveHostWorkspace } from './acp/workspace.ts';
 import { FileThreadCatalog } from './acp/thread-catalog.ts';
+import { FileThreadEventJournal } from './acp/thread-event-journal.ts';
 
 const portalToolExecutions = new IdempotentExecutionCache<unknown>();
 
@@ -98,6 +100,7 @@ type PortalConfig = {
   };
   host?: {
     socketPath?: string;
+    threadEventRetentionLimit?: number;
     network?: {
       hostname?: string;
       port?: number;
@@ -137,6 +140,7 @@ const defaultName = 'Mage Portal';
 const version = '0.1.0';
 const defaultHostSocketPath = getHostSocketPath();
 const defaultHostThreadCatalogPath = getHostThreadCatalogPath();
+const defaultHostThreadEventJournalPath = getHostThreadEventJournalPath();
 
 const parseArgs = (args: string[]): ParsedArgs => {
   const [command, ...rest] = args;
@@ -2366,6 +2370,9 @@ const hostDaemon = async (flags: Record<string, string | boolean>) => {
   if (!roots.size) throw new Error('Host Daemon requires at least one configured root. Run portal root first.');
   await ensureParentDir(socketPath);
   const threadCatalog = await FileThreadCatalog.open(defaultHostThreadCatalogPath);
+  const threadEventJournal = await FileThreadEventJournal.open(defaultHostThreadEventJournalPath, {
+    maxEventsPerStream: config.host?.threadEventRetentionLimit,
+  });
   const processRuntime = new AgentRuntimeManager(hostAgentDefinitions(config), {
     threadCatalog,
     resolveWorkspace: async (selection, principalId) => {
@@ -2375,7 +2382,7 @@ const hostDaemon = async (flags: Record<string, string | boolean>) => {
       return await resolveHostWorkspace(roots, selection);
     },
   });
-  const runtimeManager = new AcpSessionBroker(processRuntime);
+  const runtimeManager = new AcpSessionBroker(processRuntime, { eventJournal: threadEventJournal });
   const gateway = await serveLocalAcpGateway({ path: socketPath, runtimeManager });
   const network = config.host?.network;
   let remoteGateway: Awaited<ReturnType<typeof serveRemoteAcpGateway>> | undefined;
@@ -2398,6 +2405,7 @@ const hostDaemon = async (flags: Record<string, string | boolean>) => {
           path: roots.get(root.id)!,
         })),
         threadCatalog,
+        threadEventJournal,
         principalId: 'remote',
         allowedOrigins: network.allowedOrigins,
         privateNetwork: network.privateNetwork,

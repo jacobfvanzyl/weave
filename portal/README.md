@@ -37,6 +37,7 @@ existing Portal config:
   },
   "host": {
     "socketPath": "/Users/me/.local/state/weave-host/host.sock",
+    "threadEventRetentionLimit": 10000,
     "network": {
       "hostname": "127.0.0.1",
       "port": 4121,
@@ -95,11 +96,22 @@ locations, one global Zed custom External Agent entry works for local and Zed Re
 }
 ```
 
-The Host Daemon, not the connector, launches the allowlisted agent. A bound ACP session is owned by the daemon and may be
-shared by simultaneous stdio and Remote ACP clients. The in-memory broker journals ordered session updates for late
-attachments, fans user prompts and Agent updates out to observers, and arbitrates one active prompt at a time. Disconnecting
-one client does not end a bound runtime. Durable on-disk event journaling, runtime restart recovery, and uncertain in-flight
-prompt delivery remain tracked by WVE-39.
+The Host Daemon, not the connector, launches the allowlisted agent. A bound ACP session is owned by the daemon and may
+be shared by simultaneous stdio and Remote ACP clients. The broker assigns stable IDs and monotonically increasing
+sequences to user-message and Agent-update events, persists them in a crash-tail-recoverable append-only mode-`0600`
+`${WEAVE_HOST_HOME:-${XDG_STATE_HOME:-~/.local/state}/weave-host}/thread-events.jsonl`, replays the recorded events to
+late attachments, reconstructs one shared provider runtime when clients load a journaled session after a daemon restart,
+fans new events out to observers, and arbitrates one active prompt at a time. The Host journal is authoritative during
+cold reconstruction, so duplicate provider replay is suppressed; sessions that predate the journal are bootstrapped from
+their first provider load. A submitted prompt is not delivered to the Agent unless its user event was persisted first.
+Each Thread retains its latest 10,000 events with a durable compaction watermark. Weave-native ACP clients can negotiate
+the `weave.dev` Thread-event extension for stable event metadata, replay cursors, monotonic acknowledgements, and an
+explicit `RESUME_GAP`/provider-full-reload path; ordinary ACP clients continue to receive unextended events. Disconnecting
+one client does not end a bound runtime. Automatic runtime recovery without a reconnecting client, durable runtime
+generations, and uncertain in-flight prompt delivery remain tracked by WVE-40.
+
+`host.threadEventRetentionLimit` overrides the positive integer per-Thread limit. Keep the default for normal use; a
+small value is useful only for explicit overflow/resynchronization acceptance.
 
 When `host.network` is present, Host mode also exposes the experimental draft ACP WebSocket at `/acp`. It requires an
 authentication token before WebSocket upgrade and returns `Acp-Connection-Id` on success. Native clients should use an

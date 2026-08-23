@@ -6,6 +6,7 @@ Canonical issue: [WVE-38: Direct host daemon with remote ACP and workspace acces
 
 Research basis:
 
+- [ACP v1 extensibility](https://agentclientprotocol.com/protocol/v1/extensibility)
 - [Open-source ACP agents and remote transports](../research/open-source-acp-agents-and-remote-transports.md)
 - [Zed remote agent protocol](../research/zed-remote-agent-protocol.md)
 - [Zed remote server and localhost](../research/zed-remote-server-and-localhost.md)
@@ -173,7 +174,7 @@ For the WebSocket form:
 - binary frames are rejected or ignored as required by the active RFD;
 - one connection may own multiple ACP sessions when the negotiated agent does;
 - closing the connection releases its controller lease; and
-- no Weave-only method is added to the ACP namespace.
+- no unprefixed Weave-only method is added to the ACP namespace.
 
 Authentication happens before ACP initialization. The connection ID is routing
 state and must never be treated as a credential. The exact RFD revision and ACP
@@ -182,6 +183,36 @@ and conformance tests.
 
 If the RFD changes incompatibly, only this adapter changes. The Agent Runtime
 module and stable stdio connector remain unchanged.
+
+#### Weave Thread event extension
+
+Weave-native clients may opt into a replay extension without changing the ACP
+behavior required by ordinary clients. This uses ACP v1's standard extension
+points: namespaced `_meta` values and methods beginning with `_`.
+
+- The proxied `initialize` result advertises `agentCapabilities._meta["weave.dev"].threadEvents`
+  with extension version `1`, the acknowledgement method, and the sync
+  notification name. Clients must ignore the extension when it is absent.
+- A native `session/load` includes
+  `params._meta["weave.dev/threadEvents"].afterSequence`. A non-negative integer
+  requests only later retained events. `null` requests an explicit full reload.
+  Omitting the metadata retains ordinary ACP full-load behavior.
+- Replayed and live journal events include their stable `sequence`, `eventId`,
+  and `createdAt` under `update._meta["weave.dev/threadEvent"]` for opted-in
+  clients only. The underlying provider event remains unchanged in the journal.
+- `_weave.dev/thread_events/sync` establishes the authoritative last sequence
+  after replay. `fullReload: true` means provider replay was required because
+  the Host journal no longer contained the complete transcript.
+- `_weave.dev/thread_events/ack` accepts `{ sessionId, sequence }` and advances
+  that connection's acknowledgement monotonically.
+- A numeric cursor at or below the journal's durable compaction watermark fails
+  with JSON-RPC code `-32060` and `data.code = "RESUME_GAP"`. The client must
+  discard its partial projection and retry with `afterSequence: null`; the Host
+  never fills a gap with only the retained suffix.
+
+Zed does not negotiate this extension. It continues to receive valid ACP
+`session/update` notifications and full `session/load` replay without needing
+to know about Host sequences or acknowledgements.
 
 ### Weave Host Protocol
 

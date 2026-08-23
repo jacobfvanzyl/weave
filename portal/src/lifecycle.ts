@@ -75,6 +75,9 @@ export const getHostSocketPath = (env?: Record<string, string | undefined>) =>
 export const getHostThreadCatalogPath = (env?: Record<string, string | undefined>) =>
   joinPath(resolveHostStateHome(env), 'threads.json');
 
+export const getHostThreadEventJournalPath = (env?: Record<string, string | undefined>) =>
+  joinPath(resolveHostStateHome(env), 'thread-events.jsonl');
+
 export const ensureParentDir = async (path: string) => {
   const slashIndex = path.lastIndexOf('/');
   if (slashIndex <= 0) return;

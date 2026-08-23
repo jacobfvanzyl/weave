@@ -16,6 +16,7 @@ import {
 } from '@weave/protocol';
 import type { AgentRuntimePort } from './runtime.ts';
 import type { HostThreadRecord, ThreadCatalog } from './thread-catalog.ts';
+import type { ThreadEventJournal } from './thread-event-journal.ts';
 
 const tokenProtocolPrefix = 'weave-acp-token.';
 
@@ -84,6 +85,7 @@ export const serveRemoteAcpGateway = async (input: {
   workspaceId: string;
   workspaces: { workspaceId: string; name: string; path: string }[];
   threadCatalog: ThreadCatalog;
+  threadEventJournal?: ThreadEventJournal;
   principalId?: string;
   allowedOrigins?: string[];
   privateNetwork?: boolean;
@@ -102,9 +104,18 @@ export const serveRemoteAcpGateway = async (input: {
   const attachments = new Set<Awaited<ReturnType<AgentRuntimePort['attach']>>>();
   const workspaceIds = new Set(input.workspaces.map((workspace) => workspace.workspaceId));
   const access = { workspaceIds };
-  const threadSummary = ({ creatorPrincipalId: _principalId, ...thread }: HostThreadRecord): HostThreadSummary => {
+  const threadSummary = async (
+    { creatorPrincipalId: _principalId, ...thread }: HostThreadRecord,
+  ): Promise<HostThreadSummary> => {
     if (thread.status === 'deleted') throw new Error('Deleted Host Thread cannot cross the discovery boundary.');
-    return { ...thread, status: thread.status };
+    const lastEventSequence = input.threadEventJournal
+      ? (await input.threadEventJournal.read({
+        agentId: thread.agentId,
+        workspaceId: thread.workspaceId,
+        acpSessionId: thread.acpSessionId,
+      })).lastSequence
+      : thread.lastEventSequence;
+    return { ...thread, status: thread.status, lastEventSequence };
   };
   const server = Deno.serve({
     hostname,
@@ -168,7 +179,7 @@ export const serveRemoteAcpGateway = async (input: {
         agents: input.runtimeManager.listDefinitions().map(({ id, name }) => ({ agentId: id, name })),
       }));
       register('thread.list', async () => ({
-        threads: (await input.threadCatalog.list(access)).map(threadSummary),
+        threads: await Promise.all((await input.threadCatalog.list(access)).map(threadSummary)),
       }));
       register('thread.get', async ({ threadId }) => ({
         thread: await input.threadCatalog.get(threadId, access).then((thread) => thread ? threadSummary(thread) : null),
@@ -179,7 +190,7 @@ export const serveRemoteAcpGateway = async (input: {
           throw new RpcApplicationError(rpcErrorCode.notFound, 'Host Thread was not found.', { code: 'NOT_FOUND' });
         }
         return {
-          thread: threadSummary(thread),
+          thread: await threadSummary(thread),
           connection: {
             path: WEAVE_HOST_ACP_PATH,
             threadId,

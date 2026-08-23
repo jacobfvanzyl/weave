@@ -3,6 +3,7 @@ import { AgentRuntimeManager } from './runtime.ts';
 import { AcpSessionBroker } from './session-broker.ts';
 import { remoteAcpGatewayInternals, serveRemoteAcpGateway } from './remote-gateway.ts';
 import { FileThreadCatalog, type ThreadCatalog } from './thread-catalog.ts';
+import { InMemoryThreadEventJournal } from './thread-event-journal.ts';
 
 const waitForOpen = (socket: WebSocket) =>
   new Promise<void>((resolve, reject) => {
@@ -13,20 +14,22 @@ const waitForOpen = (socket: WebSocket) =>
 Deno.test('draft Remote ACP WebSocket authenticates before relaying ACP', async () => {
   const directory = await Deno.makeTempDir({ prefix: 'weave-remote-acp-' });
   const threadCatalog = await FileThreadCatalog.open(`${directory}/threads.json`, { createId: () => 'thread-1' });
+  const threadEventJournal = new InMemoryThreadEventJournal();
   const fixturePath = decodeURIComponent(new URL('./test-fixtures/fake-agent.ts', import.meta.url).pathname);
   const manager = new AcpSessionBroker(
     new AgentRuntimeManager(
       [{ id: 'fake', name: 'Fake Agent', command: Deno.execPath(), args: ['run', '--quiet', fixturePath] }],
       {
-        resolveWorkspace: async (selection, principalId) => {
+        resolveWorkspace: (selection, principalId) => {
           assertEquals(selection, { workspaceId: 'workspace-1', workspacePath: undefined });
           assertEquals(principalId, 'remote-user');
-          return { workspaceId: 'workspace-1', path: directory };
+          return Promise.resolve({ workspaceId: 'workspace-1', path: directory });
         },
         threadCatalog,
         closeGraceMs: 100,
       },
     ),
+    { eventJournal: threadEventJournal },
   );
   const token = 'test-token-without-secrets';
   const gateway = await serveRemoteAcpGateway({
@@ -35,6 +38,7 @@ Deno.test('draft Remote ACP WebSocket authenticates before relaying ACP', async 
     workspaceId: 'workspace-1',
     workspaces: [{ workspaceId: 'workspace-1', name: 'Workspace One', path: directory }],
     threadCatalog,
+    threadEventJournal,
     principalId: 'remote-user',
     runtimeManager: manager,
   });
@@ -108,7 +112,7 @@ Deno.test('draft Remote ACP WebSocket authenticates before relaying ACP', async 
           status: 'active',
           createdAt: (rpcResponses[1].result as { thread: { createdAt: string } }).thread.createdAt,
           updatedAt: (rpcResponses[1].result as { thread: { updatedAt: string } }).thread.updatedAt,
-          lastEventSequence: 0,
+          lastEventSequence: 2,
         },
         connection: { path: '/acp', threadId: 'thread-1', cwd: directory },
       },
@@ -129,7 +133,7 @@ Deno.test('draft Remote ACP refuses non-loopback exposure without private-networ
     get: () => Promise.resolve(undefined),
   };
   const manager = new AgentRuntimeManager([], {
-    resolveWorkspace: async () => ({ workspaceId: 'root', path: '/' }),
+    resolveWorkspace: () => Promise.resolve({ workspaceId: 'root', path: '/' }),
   });
   await assertRejects(
     () =>
@@ -155,7 +159,7 @@ Deno.test('draft Remote ACP attaches a second live client through the shared ses
     new AgentRuntimeManager(
       [{ id: 'fake', name: 'Fake Agent', command: Deno.execPath(), args: ['run', '--quiet', fixturePath] }],
       {
-        resolveWorkspace: async () => ({ workspaceId: 'workspace-1', path: directory }),
+        resolveWorkspace: () => Promise.resolve({ workspaceId: 'workspace-1', path: directory }),
         threadCatalog,
         closeGraceMs: 100,
       },
