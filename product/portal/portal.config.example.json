@@ -1,0 +1,12 @@
+{
+  "listen": { "hostname": "127.0.0.1", "port": 4122 },
+  "accessTokenEnv": "PORTAL_ACCESS_TOKEN",
+  "allowedOrigins": ["http://localhost:5174", "capacitor://localhost"],
+  "stateDirectory": "/absolute/path/to/portal-state",
+  "workspaces": [
+    { "workspaceId": "project", "name": "Project", "path": "/absolute/path/to/project" }
+  ],
+  "agents": [
+    { "agentId": "codex", "name": "Codex", "command": "codex-acp", "args": [] }
+  ]
+}

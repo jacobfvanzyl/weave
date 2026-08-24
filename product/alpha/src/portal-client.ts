@@ -1,13 +1,14 @@
 import {
-  type HostAgentSummary,
-  type HostRpcMethod,
-  type HostRpcParams,
-  type HostRpcResult,
-  type HostThreadSummary,
-  type HostWorkspaceSummary,
-  parseHostRpcResult,
-  WEAVE_HOST_RPC_PATH,
-} from '@weave/protocol';
+  type AgentSummary,
+  type PortalRpcMethod,
+  type PortalRpcParams,
+  type PortalRpcResult,
+  type ThreadSummary,
+  type WorkspaceSummary,
+  parsePortalRpcResult,
+  PORTAL_RPC_PATH,
+  PORTAL_TOKEN_PROTOCOL_PREFIX,
+} from '@weave/product-protocol';
 
 type JsonRpcId = number;
 type PendingRequest = { method: string; resolve(value: unknown): void; reject(error: Error): void };
@@ -20,7 +21,7 @@ const base64Url = (value: string) => {
   return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 };
 
-const tokenProtocol = (token: string) => `weave-acp-token.${base64Url(token)}`;
+const tokenProtocol = (token: string) => `${PORTAL_TOKEN_PROTOCOL_PREFIX}${base64Url(token)}`;
 
 class JsonRpcWebSocket {
   private nextId = 0;
@@ -88,7 +89,7 @@ const rpcUrl = (hostUrl: string) => {
   if (url.protocol === 'http:') url.protocol = 'ws:';
   if (url.protocol === 'https:') url.protocol = 'wss:';
   if (url.protocol !== 'ws:' && url.protocol !== 'wss:') throw new Error('Host URL must use ws, wss, http, or https.');
-  url.pathname = WEAVE_HOST_RPC_PATH;
+  url.pathname = PORTAL_RPC_PATH;
   url.search = '';
   url.hash = '';
   return url;
@@ -96,9 +97,9 @@ const rpcUrl = (hostUrl: string) => {
 
 export type HostSnapshot = {
   capabilities: string[];
-  workspaces: HostWorkspaceSummary[];
-  agents: HostAgentSummary[];
-  threads: HostThreadSummary[];
+  workspaces: WorkspaceSummary[];
+  agents: AgentSummary[];
+  threads: ThreadSummary[];
 };
 
 export type ConversationItem = {
@@ -113,7 +114,7 @@ export class DirectHostClient {
   private readonly protocol: string;
   private rpc: JsonRpcWebSocket;
   private acp?: JsonRpcWebSocket;
-  private activeThread?: HostThreadSummary;
+  private activeThread?: ThreadSummary;
   private updateSequence = 0;
 
   constructor(hostUrl: string, token: string, private readonly onConversationItem: (item: ConversationItem) => void) {
@@ -125,7 +126,7 @@ export class DirectHostClient {
 
   async snapshot(): Promise<HostSnapshot> {
     const [capabilities, workspaces, agents, threads] = await Promise.all([
-      this.request('host.capabilities.get', {}),
+      this.request('portal.capabilities', {}),
       this.request('workspace.list', {}),
       this.request('agent.list', {}),
       this.request('thread.list', {}),
@@ -161,6 +162,10 @@ export class DirectHostClient {
     return prepared.thread;
   }
 
+  async createThread(workspaceId: string, agentId: string, title?: string) {
+    return (await this.request('thread.create', { workspaceId, agentId, ...(title ? { title } : {}) })).thread;
+  }
+
   async prompt(text: string) {
     if (!this.acp || !this.activeThread) throw new Error('Attach to a Thread first.');
     this.onConversationItem({ id: `local-${++this.updateSequence}`, role: 'user', text });
@@ -175,11 +180,11 @@ export class DirectHostClient {
     this.rpc.close();
   }
 
-  private async request<Method extends HostRpcMethod>(
+  private async request<Method extends PortalRpcMethod>(
     method: Method,
-    params: HostRpcParams<Method>,
-  ): Promise<HostRpcResult<Method>> {
-    return parseHostRpcResult(method, await this.rpc.request(method, params));
+    params: PortalRpcParams<Method>,
+  ): Promise<PortalRpcResult<Method>> {
+    return parsePortalRpcResult(method, await this.rpc.request(method, params));
   }
 
   private receiveSessionUpdate(value: unknown) {

@@ -1,0 +1,24 @@
+{
+  "nodeModulesDir": "manual",
+  "imports": {
+    "@weave/product-protocol": "../protocol/src/index.ts"
+  },
+  "tasks": {
+    "lint": "deno lint src scripts",
+    "check": "deno check src/main.ts src/server_test.ts",
+    "test": "deno test --allow-env --allow-net --allow-read --allow-run --allow-write src",
+    "dev": "deno run --allow-env --allow-net --allow-read --allow-run --allow-write src/main.ts serve --config portal.config.json",
+    "acceptance": "deno run --allow-env --allow-net scripts/acceptance.ts",
+    "build": "deno compile --allow-env --allow-net --allow-read --allow-run --allow-write --output dist/weave-portal src/main.ts"
+  },
+  "compilerOptions": {
+    "lib": ["deno.ns", "deno.window"]
+  },
+  "fmt": {
+    "singleQuote": true,
+    "lineWidth": 120
+  },
+  "lint": {
+    "rules": { "tags": ["recommended"] }
+  }
+}

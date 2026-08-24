@@ -56,6 +56,7 @@ code { font-family: ui-monospace, monospace; }
 .thread-sidebar { min-height: 0; display: grid; grid-template-rows: auto 1fr; background: #f4f3ed; border-right: 1px solid #d0d1c9; }
 .sidebar-heading { padding: 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #d8d8d1; }
 .sidebar-heading strong { font-size: 14px; }
+.sidebar-actions { display: flex; gap: 6px; }
 .quiet-button { border: 1px solid #cdcec5; border-radius: 9px; padding: 8px 10px; color: #4f5149; background: transparent; }
 .thread-list { min-height: 0; overflow: auto; padding: 10px; }
 .thread-row { position: relative; width: 100%; display: grid; gap: 6px; padding: 14px 13px; border: 0; border-radius: 12px; text-align: left; background: transparent; color: #77796f; font-size: 11px; }

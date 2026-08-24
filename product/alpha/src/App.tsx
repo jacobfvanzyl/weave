@@ -4,7 +4,7 @@ import {
   type ConversationItem,
   DirectHostClient,
   type HostSnapshot,
-} from './host-client';
+} from './portal-client';
 
 const shortDate = (value: string) => new Intl.DateTimeFormat(undefined, {
   month: 'short',
@@ -14,7 +14,7 @@ const shortDate = (value: string) => new Intl.DateTimeFormat(undefined, {
 }).format(new Date(value));
 
 export function App() {
-  const [hostUrl, setHostUrl] = useState('ws://127.0.0.1:4121');
+  const [hostUrl, setHostUrl] = useState('ws://127.0.0.1:4122');
   const [token, setToken] = useState('');
   const [client, setClient] = useState<DirectHostClient>();
   const [snapshot, setSnapshot] = useState<HostSnapshot>();
@@ -92,6 +92,25 @@ export function App() {
     }
   };
 
+  const createThread = async () => {
+    const workspace = snapshot?.workspaces[0];
+    const agent = snapshot?.agents[0];
+    if (!client || !workspace || !agent) return;
+    setBusy(true);
+    setError(undefined);
+    setItems([]);
+    try {
+      const thread = await client.createThread(workspace.workspaceId, agent.agentId);
+      setSnapshot(await client.snapshot());
+      await client.attach(thread.threadId);
+      setSelectedThreadId(thread.threadId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const sendPrompt = async (event: FormEvent) => {
     event.preventDefault();
     const text = prompt.trim();
@@ -115,19 +134,19 @@ export function App() {
         <div className="brand-mark">A</div>
         <div>
           <h1>Alpha</h1>
-          <p>Direct Host client · {Capacitor.getPlatform()}</p>
+          <p>Direct Portal client · {Capacitor.getPlatform()}</p>
         </div>
         <span className={`connection-dot ${snapshot ? 'connected' : ''}`} />
       </header>
 
       {!snapshot ? (
         <section className="connect-panel">
-          <p className="eyebrow">Host connection</p>
+          <p className="eyebrow">Portal connection</p>
           <h2>Your agents, where they run.</h2>
-          <p className="lede">Alpha connects to weave-host directly. The token stays in memory and is never put in the URL.</p>
+          <p className="lede">Alpha connects directly to Portal. The token stays in memory and is never put in the URL.</p>
           <form onSubmit={connect}>
             <label>
-              Host URL
+              Portal URL
               <input value={hostUrl} onChange={(event) => setHostUrl(event.target.value)} inputMode="url" />
             </label>
             <label>
@@ -140,9 +159,9 @@ export function App() {
                 placeholder="Required"
               />
             </label>
-            <button disabled={busy || !token}>{busy ? 'Connecting…' : 'Connect to Host'}</button>
+            <button disabled={busy || !token}>{busy ? 'Connecting…' : 'Connect to Portal'}</button>
           </form>
-          <p className="hint">Browser origins must be allowed by the Host. Native Alpha uses <code>capacitor://localhost</code>.</p>
+          <p className="hint">Browser origins must be allowed by Portal. Native Alpha uses <code>capacitor://localhost</code>.</p>
           {error && <p className="error">{error}</p>}
         </section>
       ) : (
@@ -150,10 +169,13 @@ export function App() {
           <aside className="thread-sidebar">
             <div className="sidebar-heading">
               <div>
-                <p className="eyebrow">Host Threads</p>
+                <p className="eyebrow">Portal Threads</p>
                 <strong>{snapshot.threads.length} available</strong>
               </div>
-              <button className="quiet-button" onClick={refresh} disabled={busy}>Refresh</button>
+              <div className="sidebar-actions">
+                <button className="quiet-button" onClick={refresh} disabled={busy}>Refresh</button>
+                <button className="quiet-button" onClick={createThread} disabled={busy || !snapshot.workspaces.length || !snapshot.agents.length}>New</button>
+              </div>
             </div>
             <div className="thread-list">
               {snapshot.threads.map((thread) => (
@@ -168,7 +190,7 @@ export function App() {
                   <span className={`status ${thread.status}`}>{thread.status}</span>
                 </button>
               ))}
-              {!snapshot.threads.length && <p className="empty">No Host-managed ACP Threads yet.</p>}
+              {!snapshot.threads.length && <p className="empty">No Portal-managed ACP Threads yet.</p>}
             </div>
           </aside>
 
