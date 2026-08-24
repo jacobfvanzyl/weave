@@ -17,6 +17,25 @@ bun run check
 
 Portal remains a Deno executable and is checked from its own directory. Alpha and the protocol use the product-local Bun workspace.
 
+### Alpha UI mocks
+
+Alpha's product shell consumes a UI controller rather than Portal directly. During
+development, append one of these scenarios to the Alpha URL to render the same
+components without a running host:
+
+```text
+?mock=disconnected
+?mock=connecting
+?mock=empty
+?mock=sidebar
+?mock=busy
+?mock=error
+```
+
+Mock mode is disabled in production builds. Actions such as search, Thread
+selection, Thread creation, connection, and disconnection remain interactive in
+the mocked shell.
+
 ## Module seams
 
 - Alpha depends on `@weave/product-protocol` and browser or Capacitor primitives only.
