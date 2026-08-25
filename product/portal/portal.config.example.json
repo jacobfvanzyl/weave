@@ -3,6 +3,7 @@
   "accessTokenEnv": "PORTAL_ACCESS_TOKEN",
   "allowedOrigins": ["http://localhost:5174", "capacitor://localhost"],
   "stateDirectory": "/absolute/path/to/portal-state",
+  "threadEventRetentionLimit": 10000,
   "workspaces": [
     { "workspaceId": "project", "name": "Project", "path": "/absolute/path/to/project" }
   ],

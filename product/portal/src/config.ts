@@ -13,6 +13,7 @@ export type PortalConfig = {
   accessToken: string;
   allowedOrigins: string[];
   stateDirectory: string;
+  threadEventRetentionLimit?: number;
   workspaces: WorkspaceDefinition[];
   agents: AgentDefinition[];
 };
@@ -49,6 +50,10 @@ export const parsePortalConfig = (value: unknown, environment = Deno.env.toObjec
 
   const stateDirectory = text(root.stateDirectory, 'stateDirectory');
   if (!isAbsolute(stateDirectory)) throw new Error('stateDirectory must be absolute.');
+  const threadEventRetentionLimit = root.threadEventRetentionLimit ?? 10_000;
+  if (!Number.isInteger(threadEventRetentionLimit) || Number(threadEventRetentionLimit) < 1) {
+    throw new Error('threadEventRetentionLimit must be a positive integer.');
+  }
 
   if (!Array.isArray(root.workspaces) || !root.workspaces.length) {
     throw new Error('workspaces must contain at least one entry.');
@@ -86,6 +91,7 @@ export const parsePortalConfig = (value: unknown, environment = Deno.env.toObjec
     accessToken,
     allowedOrigins: root.allowedOrigins === undefined ? [] : stringList(root.allowedOrigins, 'allowedOrigins'),
     stateDirectory: resolve(stateDirectory),
+    threadEventRetentionLimit: Number(threadEventRetentionLimit),
     workspaces,
     agents,
   };

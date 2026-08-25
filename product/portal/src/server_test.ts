@@ -13,6 +13,12 @@ const tokenProtocol = (token: string) => {
   return `${PORTAL_TOKEN_PROTOCOL_PREFIX}${btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')}`;
 };
 
+class RpcResponseError extends Error {
+  constructor(readonly code: number, message: string, readonly data?: unknown) {
+    super(message);
+  }
+}
+
 class RpcSocket {
   readonly #socket: WebSocket;
   readonly #pending = new Map<number, { resolve(value: unknown): void; reject(cause: unknown): void }>();
@@ -27,8 +33,9 @@ class RpcSocket {
         const pending = this.#pending.get(message.id);
         if (!pending) return;
         this.#pending.delete(message.id);
-        if (message.error) pending.reject(new Error(message.error.message));
-        else pending.resolve(message.result);
+        if (message.error) {
+          pending.reject(new RpcResponseError(message.error.code, message.error.message, message.error.data));
+        } else pending.resolve(message.result);
       } else {
         this.notifications.push(message);
       }
@@ -463,6 +470,128 @@ Deno.test('Portal gives opted-in clients stable cursor replay without changing o
   } finally {
     await server.shutdown();
     await portal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledgements', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-retention-' });
+  const workspacePath = join(root, 'workspace');
+  await Deno.mkdir(workspacePath);
+  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  const token = 'retention-token';
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    accessToken: token,
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    threadEventRetentionLimit: 2,
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{
+      agentId: 'fake',
+      name: 'Fake',
+      command: Deno.execPath(),
+      args: ['run', '--quiet', '--allow-read', fakeAgent],
+      env: {},
+    }],
+  };
+
+  let threadId = '';
+  const firstPortal = await Portal.open(config);
+  const firstServer = startPortalServer(firstPortal);
+  const firstAddress = firstServer.addr as Deno.NetAddr;
+  try {
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, token);
+    const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
+      thread: { threadId: string };
+    };
+    threadId = created.thread.threadId;
+    const attached = await rpc.request('thread.attach', { threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    const acp = await RpcSocket.open(
+      `ws://127.0.0.1:${firstAddress.port}${attached.connection.path}?threadId=${threadId}`,
+      token,
+    );
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await acp.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
+    for (const prompt of ['RETAINED_FIRST', 'RETAINED_SECOND']) {
+      await acp.request('session/prompt', {
+        sessionId: 'fake-session',
+        prompt: [{ type: 'text', text: prompt }],
+      });
+    }
+    acp.close();
+    rpc.close();
+  } finally {
+    await firstServer.shutdown();
+    await firstPortal.close();
+  }
+
+  const secondPortal = await Portal.open(config);
+  const secondServer = startPortalServer(secondPortal);
+  const secondAddress = secondServer.addr as Deno.NetAddr;
+  try {
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, token);
+    const attached = await rpc.request('thread.attach', { threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    const acpUrl = `ws://127.0.0.1:${secondAddress.port}${attached.connection.path}?threadId=${threadId}`;
+
+    const stale = await RpcSocket.open(acpUrl, token);
+    await stale.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    let gap: unknown;
+    try {
+      await stale.request('session/load', {
+        sessionId: 'fake-session',
+        cwd: workspacePath,
+        mcpServers: [],
+        _meta: { 'weave.dev/threadEvents': { afterSequence: 1 } },
+      });
+    } catch (cause) {
+      gap = cause;
+    }
+    assertEquals(gap instanceof RpcResponseError && { code: gap.code, data: gap.data }, {
+      code: -32060,
+      data: { code: 'RESUME_GAP', compactedThrough: 2, lastSequence: 4, reloadAfterSequence: null },
+    });
+    stale.close();
+
+    const resumed = await RpcSocket.open(acpUrl, token);
+    await resumed.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await resumed.request('session/load', {
+      sessionId: 'fake-session',
+      cwd: workspacePath,
+      mcpServers: [],
+      _meta: { 'weave.dev/threadEvents': { afterSequence: 2 } },
+    });
+    assertEquals(
+      resumed.notifications
+        .filter((message) => message.method === 'session/update')
+        .map((message) =>
+          (message.params as { update: { _meta: Record<string, { sequence: number }> } }).update._meta[
+            'weave.dev/threadEvent'
+          ].sequence
+        ),
+      [3, 4],
+    );
+    assertEquals(
+      await resumed.request('_weave.dev/thread_events/ack', { sessionId: 'fake-session', sequence: 4 }),
+      { acknowledgedSequence: 4 },
+    );
+    let regressed: unknown;
+    try {
+      await resumed.request('_weave.dev/thread_events/ack', { sessionId: 'fake-session', sequence: 3 });
+    } catch (cause) {
+      regressed = cause;
+    }
+    assertEquals(regressed instanceof RpcResponseError && regressed.code, -32060);
+
+    resumed.close();
+    rpc.close();
+  } finally {
+    await secondServer.shutdown();
+    await secondPortal.close();
     await Deno.remove(root, { recursive: true });
   }
 });

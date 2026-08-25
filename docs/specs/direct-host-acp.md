@@ -205,7 +205,7 @@ points: namespaced `_meta` values and methods beginning with `_`.
   the Host journal no longer contained the complete transcript.
 - `_weave.dev/thread_events/ack` accepts `{ sessionId, sequence }` and advances
   that connection's acknowledgement monotonically.
-- A numeric cursor at or below the journal's durable compaction watermark fails
+- A numeric cursor below the journal's durable compaction watermark fails
   with JSON-RPC code `-32060` and `data.code = "RESUME_GAP"`. The client must
   discard its partial projection and retry with `afterSequence: null`; the Host
   never fills a gap with only the retained suffix.

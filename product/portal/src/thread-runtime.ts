@@ -11,6 +11,7 @@ export type ThreadAttachment = {
 
 type Attachment = {
   attachmentId: string;
+  acknowledgedSequence: number;
   threadEventsEnabled: boolean;
   send(message: JsonRpcMessage): void;
 };
@@ -77,6 +78,7 @@ const THREAD_EVENTS_LOAD_META = 'weave.dev/threadEvents';
 const THREAD_EVENT_UPDATE_META = 'weave.dev/threadEvent';
 const THREAD_EVENTS_SYNC_METHOD = '_weave.dev/thread_events/sync';
 const THREAD_EVENTS_ACK_METHOD = '_weave.dev/thread_events/ack';
+const RESUME_GAP_ERROR = -32060;
 
 const objectFrom = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -114,6 +116,16 @@ const threadEventsCursorFrom = (params: unknown): { enabled: false } | { enabled
     throw new Error('Thread event cursor must be a non-negative integer or null.');
   }
   return { enabled: true, afterSequence: Number(cursor) };
+};
+
+const threadEventAckFrom = (params: unknown) => {
+  const record = objectFrom(params);
+  if (typeof record.sessionId !== 'string' || !record.sessionId || !Number.isInteger(record.sequence)) {
+    throw new Error('Invalid Thread event acknowledgement.');
+  }
+  const sequence = Number(record.sequence);
+  if (sequence < 0) throw new Error('Invalid Thread event acknowledgement.');
+  return { sessionId: record.sessionId, sequence };
 };
 
 const messageForThreadEvent = (event: ThreadEventRecord): JsonRpcMessage => {
@@ -253,7 +265,12 @@ export class HostedThread {
   }
 
   connect(send: (message: JsonRpcMessage) => void): ThreadAttachment {
-    const attachment: Attachment = { attachmentId: crypto.randomUUID(), threadEventsEnabled: false, send };
+    const attachment: Attachment = {
+      attachmentId: crypto.randomUUID(),
+      acknowledgedSequence: 0,
+      threadEventsEnabled: false,
+      send,
+    };
     this.#attachments.set(attachment.attachmentId, attachment);
     return {
       receive: async (message) => await this.#receiveClient(attachment, message),
@@ -287,6 +304,33 @@ export class HostedThread {
       attachment.send(result(message.id, withThreadEventsCapability(this.#initializeResult)));
       return;
     }
+    if (message.method === THREAD_EVENTS_ACK_METHOD) {
+      let acknowledgement: ReturnType<typeof threadEventAckFrom>;
+      try {
+        acknowledgement = threadEventAckFrom(message.params);
+      } catch (cause) {
+        attachment.send(error(message.id, -32602, cause instanceof Error ? cause.message : String(cause)));
+        return;
+      }
+      if (!attachment.threadEventsEnabled || acknowledgement.sessionId !== this.thread.acpSessionId) {
+        attachment.send(error(message.id, -32002, 'The client is not observing that Thread event stream.'));
+        return;
+      }
+      let window: Awaited<ReturnType<ThreadEventJournal['read']>>;
+      try {
+        window = await this.#journal.read(this.thread.threadId, acknowledgement.sequence);
+      } catch {
+        attachment.send(error(message.id, -32602, 'Thread event acknowledgement is out of range.'));
+        return;
+      }
+      if (acknowledgement.sequence < attachment.acknowledgedSequence || window.cursorExpired) {
+        this.#sendResumeGap(attachment, message.id, window.compactedThrough, window.lastSequence);
+        return;
+      }
+      attachment.acknowledgedSequence = acknowledgement.sequence;
+      attachment.send(result(message.id, { acknowledgedSequence: acknowledgement.sequence }));
+      return;
+    }
     if (message.method === 'session/load') {
       const requested = (message.params as { sessionId?: unknown } | undefined)?.sessionId;
       if (requested !== this.thread.acpSessionId) {
@@ -300,12 +344,23 @@ export class HostedThread {
         attachment.send(error(message.id, -32602, cause instanceof Error ? cause.message : String(cause)));
         return;
       }
-      attachment.threadEventsEnabled = cursor.enabled;
       await this.#agentMessageQueue;
-      const replay = await this.#journal.read(
-        this.thread.threadId,
-        cursor.enabled ? cursor.afterSequence : undefined,
-      );
+      let replay: Awaited<ReturnType<ThreadEventJournal['read']>>;
+      try {
+        replay = await this.#journal.read(
+          this.thread.threadId,
+          cursor.enabled ? cursor.afterSequence : undefined,
+        );
+      } catch {
+        attachment.send(error(message.id, -32602, 'Thread event cursor is out of range.'));
+        return;
+      }
+      if (cursor.enabled && cursor.afterSequence !== undefined && replay.cursorExpired) {
+        this.#sendResumeGap(attachment, message.id, replay.compactedThrough, replay.lastSequence);
+        return;
+      }
+      attachment.threadEventsEnabled = cursor.enabled;
+      attachment.acknowledgedSequence = 0;
       for (const event of replay.events) this.#sendThreadEvent(attachment, event);
       if (cursor.enabled) {
         attachment.send({
@@ -475,6 +530,15 @@ export class HostedThread {
 
   #sendThreadEvent(attachment: Attachment, event: ThreadEventRecord) {
     attachment.send(attachment.threadEventsEnabled ? messageForThreadEvent(event) : event.message);
+  }
+
+  #sendResumeGap(attachment: Attachment, id: JsonRpcId, compactedThrough: number, lastSequence: number) {
+    attachment.send(error(id, RESUME_GAP_ERROR, 'The requested Thread event cursor has expired.', {
+      code: 'RESUME_GAP',
+      compactedThrough,
+      lastSequence,
+      reloadAfterSequence: null,
+    }));
   }
 
   #captureSessionState(params: unknown) {

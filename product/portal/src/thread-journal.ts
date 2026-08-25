@@ -10,9 +10,17 @@ export type ThreadEventRecord = {
 };
 
 type StoredJournal = {
-  version: 1;
+  version: 2;
+  compactedThrough: Record<string, number>;
   events: ThreadEventRecord[];
 };
+
+type LoadedJournal = {
+  compactedThrough: Map<string, number>;
+  events: ThreadEventRecord[];
+};
+
+const DEFAULT_RETENTION_LIMIT = 10_000;
 
 const eventRecordFrom = (value: unknown): ThreadEventRecord => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -40,16 +48,30 @@ const eventRecordFrom = (value: unknown): ThreadEventRecord => {
   };
 };
 
-const journalFrom = (value: unknown): StoredJournal => {
+const journalFrom = (value: unknown): LoadedJournal => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Thread event journal must be an object.');
   }
   const record = value as Record<string, unknown>;
-  if (record.version !== 1 || !Array.isArray(record.events)) {
+  if ((record.version !== 1 && record.version !== 2) || !Array.isArray(record.events)) {
     throw new Error('Thread event journal version is unsupported.');
   }
+  const compactedThrough = new Map<string, number>();
+  if (record.version === 2) {
+    if (
+      !record.compactedThrough || typeof record.compactedThrough !== 'object' || Array.isArray(record.compactedThrough)
+    ) {
+      throw new Error('Thread event journal compaction watermarks are invalid.');
+    }
+    for (const [threadId, sequence] of Object.entries(record.compactedThrough as Record<string, unknown>)) {
+      if (!threadId || !Number.isInteger(sequence) || Number(sequence) < 0) {
+        throw new Error('Thread event journal compaction watermark is invalid.');
+      }
+      compactedThrough.set(threadId, Number(sequence));
+    }
+  }
   const events = record.events.map(eventRecordFrom);
-  const lastSequence = new Map<string, number>();
+  const lastSequence = new Map(compactedThrough);
   const eventIds = new Set<string>();
   for (const event of events) {
     if (eventIds.has(event.eventId)) throw new Error(`Duplicate Thread event ID: ${event.eventId}`);
@@ -62,27 +84,41 @@ const journalFrom = (value: unknown): StoredJournal => {
     }
     lastSequence.set(event.threadId, event.sequence);
   }
-  return { version: 1, events };
+  return { compactedThrough, events };
 };
 
 export class ThreadEventJournal {
   readonly #path: string;
+  readonly #retentionLimit: number;
+  #compactedThrough: Map<string, number>;
   #events: ThreadEventRecord[];
   #mutationQueue = Promise.resolve();
 
-  private constructor(stateDirectory: string, events: ThreadEventRecord[]) {
+  private constructor(
+    stateDirectory: string,
+    retentionLimit: number,
+    events: ThreadEventRecord[],
+    compactedThrough: Map<string, number>,
+  ) {
     this.#path = join(stateDirectory, 'thread-events.json');
+    this.#retentionLimit = retentionLimit;
     this.#events = events;
+    this.#compactedThrough = compactedThrough;
   }
 
-  static async open(stateDirectory: string) {
+  static async open(stateDirectory: string, retentionLimit = DEFAULT_RETENTION_LIMIT) {
+    if (!Number.isInteger(retentionLimit) || retentionLimit < 1) {
+      throw new Error('Thread event retention limit must be a positive integer.');
+    }
     const path = join(stateDirectory, 'thread-events.json');
     try {
       const journal = journalFrom(JSON.parse(await Deno.readTextFile(path)));
       await Deno.chmod(path, 0o600).catch(() => undefined);
-      return new ThreadEventJournal(stateDirectory, journal.events);
+      return new ThreadEventJournal(stateDirectory, retentionLimit, journal.events, journal.compactedThrough);
     } catch (cause) {
-      if (cause instanceof Deno.errors.NotFound) return new ThreadEventJournal(stateDirectory, []);
+      if (cause instanceof Deno.errors.NotFound) {
+        return new ThreadEventJournal(stateDirectory, retentionLimit, [], new Map());
+      }
       throw new Error(`Thread event journal is invalid: ${path}`, { cause });
     }
   }
@@ -90,7 +126,8 @@ export class ThreadEventJournal {
   async append(threadId: string, message: JsonRpcMessage) {
     if (!threadId) throw new Error('Thread ID is required.');
     const operation = this.#mutationQueue.then(async () => {
-      const sequence = (this.#events.findLast((event) => event.threadId === threadId)?.sequence ?? 0) + 1;
+      const sequence = (this.#events.findLast((event) => event.threadId === threadId)?.sequence ??
+        this.#compactedThrough.get(threadId) ?? 0) + 1;
       const event: ThreadEventRecord = {
         threadId,
         sequence,
@@ -98,9 +135,19 @@ export class ThreadEventJournal {
         createdAt: new Date().toISOString(),
         message: parseJsonRpcMessage(JSON.stringify(message)),
       };
-      const events = [...this.#events, event];
-      await this.#persist(events);
+      let events = [...this.#events, event];
+      const threadEvents = events.filter((candidate) => candidate.threadId === threadId);
+      const removeCount = Math.max(0, threadEvents.length - this.#retentionLimit);
+      const compactedThrough = new Map(this.#compactedThrough);
+      if (removeCount > 0) {
+        const removed = threadEvents.slice(0, removeCount);
+        const removedIds = new Set(removed.map((candidate) => candidate.eventId));
+        events = events.filter((candidate) => !removedIds.has(candidate.eventId));
+        compactedThrough.set(threadId, removed.at(-1)!.sequence);
+      }
+      await this.#persist(events, compactedThrough);
       this.#events = events;
+      this.#compactedThrough = compactedThrough;
       return event;
     });
     this.#mutationQueue = operation.then(() => undefined, () => undefined);
@@ -109,22 +156,42 @@ export class ThreadEventJournal {
 
   async read(threadId: string, afterSequence?: number) {
     await this.#mutationQueue;
+    if (afterSequence !== undefined && (!Number.isInteger(afterSequence) || afterSequence < 0)) {
+      throw new Error('Thread event cursor must be a non-negative integer.');
+    }
     const threadEvents = this.#events.filter((event) => event.threadId === threadId);
+    const compactedThrough = this.#compactedThrough.get(threadId) ?? 0;
+    const lastSequence = threadEvents.at(-1)?.sequence ?? compactedThrough;
+    if (afterSequence !== undefined && afterSequence > lastSequence) {
+      throw new Error(`Thread event cursor ${afterSequence} is ahead of sequence ${lastSequence}.`);
+    }
     return {
       events: afterSequence === undefined
         ? threadEvents
         : threadEvents.filter((event) => event.sequence > afterSequence),
-      lastSequence: threadEvents.at(-1)?.sequence ?? 0,
+      compactedThrough,
+      cursorExpired: afterSequence !== undefined && afterSequence < compactedThrough,
+      lastSequence,
     };
   }
 
-  async #persist(events: ThreadEventRecord[]) {
+  async #persist(events: ThreadEventRecord[], compactedThrough: Map<string, number>) {
     await Deno.mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
     const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`;
     try {
       await Deno.writeTextFile(
         temporary,
-        `${JSON.stringify({ version: 1, events } satisfies StoredJournal, null, 2)}\n`,
+        `${
+          JSON.stringify(
+            {
+              version: 2,
+              compactedThrough: Object.fromEntries([...compactedThrough.entries()].sort()),
+              events,
+            } satisfies StoredJournal,
+            null,
+            2,
+          )
+        }\n`,
         { mode: 0o600 },
       );
       await Deno.rename(temporary, this.#path);

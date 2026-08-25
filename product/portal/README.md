@@ -25,7 +25,7 @@ deno task test
 deno task build
 ```
 
-The test suite starts the real Portal transport and a fake ACP subprocess, then creates, lists, attaches to, and prompts a Thread. It separately verifies that an invalid token cannot open the metadata connection.
+The test suite starts the real Portal transport and a fake ACP subprocess, then creates, lists, attaches to, and prompts a Thread. It also exercises restart recovery, native replay cursors, bounded retention, acknowledgement gaps, and access-token rejection.
 
 For a real Agent acceptance against an already running Portal:
 
@@ -40,4 +40,6 @@ deno task acceptance
 
 ## Current persistence boundary
 
-Portal writes the Thread catalog atomically with mode `0600`. On restart it spawns the configured Agent and restores the provider session through `session/load`. The normalized ACP event journal is currently in memory and is reconstructed from provider replay; durable replay cursors, runtime generations, and uncertain in-flight prompt recovery remain follow-on work.
+Portal writes the Thread catalog and normalized ACP event journal atomically with mode `0600`. Journal event IDs, timestamps, per-Thread sequences, and compaction watermarks survive daemon restarts. `threadEventRetentionLimit` bounds each Thread to 10,000 retained events by default; native clients behind the durable watermark receive `RESUME_GAP` instead of a partial replay.
+
+On restart Portal currently spawns the configured Agent and restores the provider session through `session/load`. Runtime generations, provider-resume fallback, and uncertain in-flight prompt recovery remain follow-on work.

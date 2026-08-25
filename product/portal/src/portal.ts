@@ -30,7 +30,7 @@ export class Portal {
     const catalog = new ThreadCatalog(config.stateDirectory);
     const [, journal] = await Promise.all([
       catalog.load(),
-      ThreadEventJournal.open(config.stateDirectory),
+      ThreadEventJournal.open(config.stateDirectory, config.threadEventRetentionLimit),
     ]);
     return new Portal(config, catalog, journal);
   }
