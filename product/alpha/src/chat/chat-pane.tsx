@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type {
   CreateElicitationResponse,
   SessionConfigOption,
@@ -161,22 +161,34 @@ function ConfigControls({
   model: AcpTranscript;
   actions: ChatPaneActions;
 }) {
+  const hasConfigMode = model.configOptions.some(
+    (option) => option.category === 'mode' || option.id === 'mode',
+  );
+
   return (
-    <div className="flex min-w-0 items-center gap-1.5" data-slot="config-controls">
-      {model.availableModes.length > 0
+    <div
+      className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1"
+      data-slot="config-controls"
+    >
+      {!hasConfigMode && model.availableModes.length > 0
         ? (
           <Select value={model.currentModeId} onValueChange={(value) => actions.setMode(String(value))}>
             <SelectTrigger size="sm" variant="ghost" aria-label="Agent mode">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {model.availableModes.map((mode) => (
-                <SelectItem key={mode.id} value={mode.id}>{mode.name}</SelectItem>
-              ))}
+              <SelectGroup>
+                <SelectLabel>Mode</SelectLabel>
+                {model.availableModes.map((mode) => (
+                  <SelectItem key={mode.id} value={mode.id}>{mode.name}</SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
         )
-        : model.currentModeId && <Badge variant="ghost">{model.currentModeId}</Badge>}
+        : !hasConfigMode && model.currentModeId && (
+          <Badge variant="ghost">{model.currentModeId}</Badge>
+        )}
       {model.configOptions.map((option) => {
         if (option.type === 'boolean') {
           return (
@@ -240,11 +252,13 @@ function ContextUsage({ usage }: { usage: AcpTranscript['usage'] }) {
 
 function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneActions }) {
   const [text, setText] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const running = model.turn.status === 'running';
   const submit = () => {
     const prompt = text.trim();
     if (!prompt || running) return;
     setText('');
+    if (window.matchMedia?.('(max-width: 767px)').matches) textareaRef.current?.blur();
     void actions.sendPrompt(prompt);
   };
 
@@ -259,6 +273,7 @@ function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneA
         }}
       >
         <Textarea
+          ref={textareaRef}
           aria-label="Message agent"
           className="field-sizing-fixed min-h-0 resize-none overflow-y-auto px-4 pb-1 pt-3"
           placeholder="Message agent — @ to include context, / for commands"
@@ -274,11 +289,14 @@ function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneA
           }}
         />
         <div
-          className="flex min-h-8 items-center gap-1 px-3 pb-2"
+          className="flex min-h-8 items-end gap-2 px-3 pb-2"
           data-slot="composer-controls"
         >
           <ConfigControls model={model} actions={actions} />
-          <div className="ml-auto flex items-center gap-1.5">
+          <div
+            className="flex shrink-0 items-center gap-1.5"
+            data-slot="composer-actions"
+          >
             <ContextUsage usage={model.usage} />
             <Button
               size="icon-sm"

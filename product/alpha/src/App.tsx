@@ -1,5 +1,6 @@
 import { mockScenarioFromLocation, useMockAlphaController, type MockScenario } from '@/app/use-mock-alpha-controller';
 import { useLiveAlphaController } from '@/app/use-live-alpha-controller';
+import { useNativeKeyboard } from '@/app/use-native-keyboard';
 import { AlphaShell } from '@/components/alpha-shell';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -12,6 +13,7 @@ function MockAlpha({ scenario }: { scenario: MockScenario }) {
 }
 
 export function App() {
+  useNativeKeyboard();
   const mockScenario = mockScenarioFromLocation();
 
   return (

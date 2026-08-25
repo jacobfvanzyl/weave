@@ -30,6 +30,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  useSidebar,
 } from '@/components/ui/sidebar';
 
 const updatedLabel = (value: string) => {
@@ -85,6 +86,7 @@ function ThreadMenuItem({
 
 export function ThreadSidebar({ controller }: { controller: AlphaController }) {
   const { model, actions } = controller;
+  const { setOpenMobile } = useSidebar();
   const query = model.searchQuery.trim().toLocaleLowerCase();
   const projects = useMemo(() => model.projects.map((project) => ({
     ...project,
@@ -153,7 +155,10 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
                         thread={thread}
                         selected={thread.id === model.selectedThreadId}
                         busy={model.busy}
-                        onSelect={() => void actions.selectThread(thread.id)}
+                        onSelect={() => {
+                          setOpenMobile(false);
+                          void actions.selectThread(thread.id);
+                        }}
                       />
                     ))}
                     {!project.threads.length && (
@@ -184,7 +189,7 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
         )}
       </SidebarContent>
 
-      <SidebarFooter className="h-[var(--bottom-rail-height)] shrink-0 justify-center gap-0 border-t border-sidebar-border bg-status-bar px-1 py-0">
+      <SidebarFooter className="h-[var(--bottom-rail-height)] shrink-0 justify-start gap-0 border-t border-sidebar-border bg-status-bar py-0 pl-7 pr-1">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton

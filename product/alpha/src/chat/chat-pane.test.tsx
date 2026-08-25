@@ -109,6 +109,8 @@ describe('ChatPane', () => {
       'h-[var(--bottom-rail-height)]',
       'shrink-0',
     );
+    expect(container.querySelector('[data-slot="main-bottom-rail"]'))
+      .not.toHaveClass('hidden', 'sm:block');
   });
 
   it('uses a flat full-width composer with quiet controls', () => {
@@ -120,8 +122,19 @@ describe('ChatPane', () => {
       .toHaveClass('bg-chat-background');
 
     const composer = screen.getByRole('form', { name: 'Message composer' });
-    expect(composer).toHaveClass('w-full', 'bg-composer-background');
-    expect(composer).not.toHaveClass('max-w-4xl', 'rounded-lg', 'border', 'shadow-sm');
+    expect(composer).toHaveClass(
+      'w-full',
+      'bg-composer-background',
+    );
+    expect(composer).not.toHaveClass(
+      'max-w-4xl',
+      'rounded-lg',
+      'border',
+      'shadow-sm',
+      'pb-[env(safe-area-inset-bottom)]',
+      'focus-within:pb-0',
+      'sm:pb-0',
+    );
 
     expect(screen.getByRole('textbox', { name: 'Message agent' }))
       .toHaveAttribute('data-variant', 'frameless');
@@ -137,6 +150,41 @@ describe('ChatPane', () => {
     expect(screen.queryByText('1 command')).not.toBeInTheDocument();
   });
 
+  it('prefers the modern mode config option over the legacy ACP modes surface', () => {
+    const model = createAcpShowcaseTranscript();
+    model.configOptions = [
+      {
+        type: 'select',
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        currentValue: 'code',
+        options: [
+          { value: 'code', name: 'Code' },
+          { value: 'ask', name: 'Ask' },
+        ],
+      },
+      ...model.configOptions,
+    ];
+
+    render(<ChatPane model={model} actions={actions()} />);
+
+    expect(screen.queryByRole('combobox', { name: 'Agent mode' })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Mode' })).toBeInTheDocument();
+  });
+
+  it('keeps legacy ACP modes as a fallback when no modern mode option is available', () => {
+    const model = createAcpShowcaseTranscript();
+    model.availableModes = [
+      { id: 'code', name: 'Code' },
+      { id: 'ask', name: 'Ask' },
+    ];
+
+    render(<ChatPane model={model} actions={actions()} />);
+
+    expect(screen.getByRole('combobox', { name: 'Agent mode' })).toBeInTheDocument();
+  });
+
   it('uses a paper plane with a mauve enabled state for Send', async () => {
     const user = userEvent.setup();
     render(<ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />);
@@ -148,5 +196,38 @@ describe('ChatPane', () => {
 
     await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'Hello');
     expect(send).toBeEnabled();
+  });
+
+  it('wraps config controls while keeping Send aligned in normal flow', () => {
+    const { container } = render(
+      <ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />,
+    );
+
+    expect(container.querySelector('[data-slot="config-controls-scroller"]'))
+      .not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot="config-controls"]'))
+      .toHaveClass('min-w-0', 'flex-1', 'flex-wrap', 'gap-y-1');
+    expect(container.querySelector('[data-slot="composer-controls"]'))
+      .toHaveClass('flex', 'items-end', 'gap-2');
+    expect(container.querySelector('[data-slot="composer-actions"]'))
+      .toHaveClass('flex', 'shrink-0', 'items-center');
+    expect(container.querySelector('[data-slot="composer-actions"]'))
+      .not.toHaveClass('absolute', 'right-14', 'sm:right-3', 'top-0');
+  });
+
+  it('releases the iPhone composer after sending so the transcript can return to the viewport origin', async () => {
+    const user = userEvent.setup();
+    const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: true,
+    } as MediaQueryList);
+    render(<ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Message agent' });
+    await user.type(composer, 'Hello from iOS');
+    expect(composer).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(composer).not.toHaveFocus();
+
+    matchMedia.mockRestore();
   });
 });

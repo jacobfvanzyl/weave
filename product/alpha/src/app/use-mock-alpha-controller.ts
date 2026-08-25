@@ -32,7 +32,7 @@ const PROJECTS: AlphaProject[] = [
     threads: [
       {
         id: 'thread-wve-47',
-        title: 'Rework Alpha interface',
+        title: 'Rework Weave interface',
         agentName: 'weave-codex',
         hostName: 'bazzite',
         status: 'active',
@@ -102,7 +102,7 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
   const [connectionStatus, setConnectionStatus] = useState(
     scenarioConnection(scenario),
   );
-  const [hostUrl, setHostUrl] = useState('ws://bazzite:4122');
+  const [hostUrl, setHostUrl] = useState('bazzite');
   const [accessToken, setAccessToken] = useState('mock-token');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedThreadId, setSelectedThreadId] = useState(

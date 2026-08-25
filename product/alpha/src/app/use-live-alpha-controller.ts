@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import type { HostSnapshot } from '@/portal-client';
 import { DirectHostClient } from '@/portal-client';
+import { portalHostName } from '@/portal-address';
 import {
   createTranscript,
   queueOptimisticPrompt,
@@ -13,14 +14,11 @@ import type {
   AlphaProject,
   AlphaViewModel,
 } from './alpha-controller';
-
-const hostName = (hostUrl: string) => {
-  try {
-    return new URL(hostUrl).hostname || 'Portal';
-  } catch {
-    return 'Portal';
-  }
-};
+import {
+  DEFAULT_PORTAL_URL,
+  loadPortalConnection,
+  savePortalConnection,
+} from './portal-connection-storage';
 
 const mapProjects = (
   snapshot: HostSnapshot | undefined,
@@ -51,7 +49,7 @@ const mapProjects = (
 };
 
 export function useLiveAlphaController(): AlphaController {
-  const [hostUrl, setHostUrl] = useState('ws://127.0.0.1:4122');
+  const [hostUrl, setHostUrl] = useState(DEFAULT_PORTAL_URL);
   const [accessToken, setAccessToken] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [client, setClient] = useState<DirectHostClient>();
@@ -61,6 +59,21 @@ export function useLiveAlphaController(): AlphaController {
   const [connecting, setConnecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const connectionEdited = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+
+    void loadPortalConnection().then((connection) => {
+      if (!active || !connection || connectionEdited.current) return;
+      setHostUrl(connection.hostUrl);
+      setAccessToken(connection.accessToken);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => () => client?.close(), [client]);
 
@@ -94,6 +107,11 @@ export function useLiveAlphaController(): AlphaController {
         });
       });
       const nextSnapshot = await nextClient.snapshot();
+      try {
+        await savePortalConnection({ hostUrl, accessToken });
+      } catch (persistError) {
+        console.error('Unable to save the Portal connection', persistError);
+      }
       setClient(nextClient);
       setSnapshot(nextSnapshot);
       setSelectedThreadId(undefined);
@@ -177,11 +195,11 @@ export function useLiveAlphaController(): AlphaController {
     connection: {
       status: snapshot ? 'connected' : connecting ? 'connecting' : 'disconnected',
       hostUrl,
-      hostName: hostName(hostUrl),
+      hostName: portalHostName(hostUrl),
     },
     accessToken,
     searchQuery,
-    projects: mapProjects(snapshot, hostName(hostUrl)),
+    projects: mapProjects(snapshot, portalHostName(hostUrl)),
     selectedThreadId,
     transcript,
     busy,
@@ -201,8 +219,14 @@ export function useLiveAlphaController(): AlphaController {
   return {
     model,
     actions: {
-      setHostUrl,
-      setAccessToken,
+      setHostUrl: (value) => {
+        connectionEdited.current = true;
+        setHostUrl(value);
+      },
+      setAccessToken: (value) => {
+        connectionEdited.current = true;
+        setAccessToken(value);
+      },
       setSearchQuery,
       connect,
       disconnect,

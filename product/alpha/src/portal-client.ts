@@ -6,12 +6,12 @@ import {
   type ThreadSummary,
   type WorkspaceSummary,
   parsePortalRpcResult,
-  PORTAL_RPC_PATH,
   PORTAL_TOKEN_PROTOCOL_PREFIX,
 } from '@weave/product-protocol';
 import type { ContentBlock, CreateElicitationResponse } from '@agentclientprotocol/sdk';
 import { AcpSessionClient } from '@/chat/acp-client';
 import type { AcpTranscriptEvent } from '@/chat/acp-transcript';
+import { portalWebSocketUrl } from '@/portal-address';
 
 type JsonRpcId = number;
 type PendingRequest = { method: string; resolve(value: unknown): void; reject(error: Error): void };
@@ -57,7 +57,7 @@ class JsonRpcWebSocket {
   }
 
   close() {
-    this.socket.close(1000, 'Alpha disconnected.');
+    this.socket.close(1000, 'Weave disconnected.');
   }
 
   private receive(text: string) {
@@ -67,7 +67,7 @@ class JsonRpcWebSocket {
         this.socket.send(JSON.stringify({
           jsonrpc: '2.0',
           id: message.id,
-          error: { code: -32601, message: `Method not supported by Alpha: ${message.method}` },
+          error: { code: -32601, message: `Method not supported by Weave: ${message.method}` },
         }));
       } else {
         this.onNotification?.(message.method, message.params);
@@ -86,17 +86,6 @@ class JsonRpcWebSocket {
     }
   }
 }
-
-const rpcUrl = (hostUrl: string) => {
-  const url = new URL(hostUrl.trim());
-  if (url.protocol === 'http:') url.protocol = 'ws:';
-  if (url.protocol === 'https:') url.protocol = 'wss:';
-  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') throw new Error('Host URL must use ws, wss, http, or https.');
-  url.pathname = PORTAL_RPC_PATH;
-  url.search = '';
-  url.hash = '';
-  return url;
-};
 
 export type HostSnapshot = {
   capabilities: string[];
@@ -118,7 +107,7 @@ export class DirectHostClient {
     private readonly onAcpEvent: (event: AcpTranscriptEvent) => void,
   ) {
     if (!token) throw new Error('Host token is required.');
-    this.baseUrl = rpcUrl(hostUrl);
+    this.baseUrl = portalWebSocketUrl(hostUrl);
     this.protocol = tokenProtocol(token);
     this.rpc = new JsonRpcWebSocket(new WebSocket(this.baseUrl, this.protocol));
   }

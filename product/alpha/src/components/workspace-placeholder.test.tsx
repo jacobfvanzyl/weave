@@ -70,4 +70,23 @@ describe('WorkspacePlaceholder', () => {
     );
     expect(screen.getByRole('alert')).not.toHaveClass('bottom-10');
   });
+
+  it('keeps the empty-workspace bottom rail visible on mobile', () => {
+    const value = controller();
+    value.model.selectedThreadId = undefined;
+    value.model.transcript = undefined;
+    value.model.error = undefined;
+    const { container } = render(
+      <SidebarProvider>
+        <WorkspacePlaceholder controller={value} />
+      </SidebarProvider>,
+    );
+
+    expect(container.querySelector('[data-slot="main-bottom-rail"]')).toHaveClass(
+      'h-[var(--bottom-rail-height)]',
+      'shrink-0',
+    );
+    expect(container.querySelector('[data-slot="main-bottom-rail"]'))
+      .not.toHaveClass('hidden', 'sm:block');
+  });
 });

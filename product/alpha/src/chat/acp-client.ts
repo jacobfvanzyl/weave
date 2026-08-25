@@ -125,7 +125,7 @@ export class AcpSessionClient {
     const stream = createParsedWebSocketStream(options, (method, payload) => {
       this.onEvent({ type: 'protocol/unknown', method, payload });
     });
-    const app = client({ name: 'Alpha' })
+    const app = client({ name: 'Weave' })
       .onNotification(methods.client.session.update, ({ params }) => {
         this.onEvent({ type: 'session/update', update: params.update });
       })
@@ -180,7 +180,7 @@ export class AcpSessionClient {
           configOptions: { boolean: {} },
         },
       },
-      clientInfo: { name: 'Alpha', title: 'Weave Alpha', version: '0.1.0' },
+      clientInfo: { name: 'Weave', title: 'Weave', version: '0.1.0' },
     });
     const loaded = await this.agent.request(methods.agent.session.load, {
       sessionId: input.sessionId,

@@ -22,7 +22,7 @@ export function WorkspacePlaceholder({ controller }: { controller: AlphaControll
         <SidebarTrigger />
         <div className="min-w-0">
           <p className="truncate text-xs font-medium">
-            {thread?.title || 'Alpha'}
+            {thread?.title || 'Weave'}
           </p>
           <p className="truncate text-[0.625rem] text-muted-foreground">
             {thread?.hostName || model.connection.hostName}
@@ -49,6 +49,7 @@ export function WorkspacePlaceholder({ controller }: { controller: AlphaControll
         <footer
           aria-hidden="true"
           className="h-[var(--bottom-rail-height)] shrink-0 border-t bg-status-bar"
+          data-slot="main-bottom-rail"
         />
       )}
 

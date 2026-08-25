@@ -1,26 +1,15 @@
 import type { FormEvent } from 'react';
-import { HugeiconsIcon } from '@hugeicons/react';
-import { Link01Icon } from '@hugeicons/core-free-icons';
 import type { AlphaController } from '@/app/alpha-controller';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/components/ui/empty';
-import {
   Field,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
   FieldSet,
 } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import weaveIconUrl from '../../assets/app-icon.svg';
 
 export function ConnectionPlaceholder({
   controller,
@@ -36,61 +25,44 @@ export function ConnectionPlaceholder({
   };
 
   return (
-    <main className="flex min-h-svh items-center justify-center bg-background p-4 text-foreground">
-      <Empty className="max-w-md p-8">
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <HugeiconsIcon icon={Link01Icon} strokeWidth={2} />
-          </EmptyMedia>
-          <EmptyTitle>Connect Alpha to Portal</EmptyTitle>
-          <EmptyDescription>
-            This temporary surface preserves the direct-host connection while
-            the product shell is rebuilt.
-          </EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          <form className="w-full" onSubmit={submit}>
-            <FieldSet disabled={connecting}>
-              <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="portal-url">Portal URL</FieldLabel>
-                  <Input
-                    id="portal-url"
-                    inputMode="url"
-                    value={model.connection.hostUrl}
-                    onChange={(event) => actions.setHostUrl(event.target.value)}
-                  />
-                </Field>
-                <Field data-invalid={Boolean(model.error)}>
-                  <FieldLabel htmlFor="portal-token">Access token</FieldLabel>
-                  <Input
-                    id="portal-token"
-                    type="password"
-                    autoComplete="off"
-                    placeholder="Required"
-                    value={model.accessToken}
-                    aria-invalid={Boolean(model.error)}
-                    onChange={(event) => actions.setAccessToken(event.target.value)}
-                  />
-                  <FieldDescription>
-                    The token stays in memory and is never placed in the URL.
-                  </FieldDescription>
-                  {model.error && <FieldError>{model.error}</FieldError>}
-                </Field>
-                <Button type="submit" disabled={connecting || !model.accessToken}>
-                  {connecting ? 'Connecting…' : 'Connect to Portal'}
-                </Button>
-              </FieldGroup>
-            </FieldSet>
-          </form>
-          {model.error && (
-            <Alert variant="destructive">
-              <AlertTitle>Connection failed</AlertTitle>
-              <AlertDescription>{model.error}</AlertDescription>
-            </Alert>
-          )}
-        </EmptyContent>
-      </Empty>
+    <main className="flex min-h-[var(--alpha-viewport-height,100dvh)] items-center justify-center bg-background p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-foreground">
+      <form className="flex w-full max-w-sm flex-col items-center gap-6 p-8" onSubmit={submit}>
+        <img className="size-16" src={weaveIconUrl} alt="Weave" />
+        <FieldSet className="w-full" disabled={connecting}>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="portal-url">
+                Portal URL
+              </FieldLabel>
+              <Input
+                id="portal-url"
+                inputMode="url"
+                value={model.connection.hostUrl}
+                onChange={(event) => actions.setHostUrl(event.target.value)}
+              />
+            </Field>
+            <Field data-invalid={Boolean(model.error)}>
+              <FieldLabel htmlFor="portal-token">
+                Access token
+              </FieldLabel>
+              <Input
+                id="portal-token"
+                type="password"
+                autoComplete="off"
+                value={model.accessToken}
+                aria-invalid={Boolean(model.error)}
+                onChange={(event) => actions.setAccessToken(event.target.value)}
+              />
+              {model.error && (
+                <FieldError className="sr-only">{model.error}</FieldError>
+              )}
+            </Field>
+            <Button type="submit" disabled={connecting || !model.accessToken}>
+              Connect
+            </Button>
+          </FieldGroup>
+        </FieldSet>
+      </form>
     </main>
   );
 }

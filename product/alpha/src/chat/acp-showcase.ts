@@ -263,7 +263,7 @@ const events: AcpTranscriptEvent[] = [
         type: 'object',
         required: ['name'],
         properties: {
-          name: { type: 'string', title: 'Name', default: 'Alpha' },
+          name: { type: 'string', title: 'Name', default: 'Weave' },
           email: { type: 'string', title: 'Email', format: 'email' },
           retries: { type: 'integer', title: 'Retries', default: 2 },
           ratio: { type: 'number', title: 'Ratio', default: 0.5 },

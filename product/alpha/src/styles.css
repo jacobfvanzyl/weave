@@ -236,12 +236,21 @@
   html,
   body,
   #root {
+    width: 100%;
+    height: 100%;
     min-width: 320px;
-    min-height: 100%;
+    overflow: hidden;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior: none;
+    text-size-adjust: 100%;
   }
 
   body {
-    @apply m-0 bg-background font-sans text-foreground antialiased;
+    @apply fixed inset-0 m-0 bg-background font-sans text-foreground antialiased;
+    overscroll-behavior: none;
   }
 
   ::selection {
