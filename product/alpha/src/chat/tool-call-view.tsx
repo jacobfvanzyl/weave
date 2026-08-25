@@ -86,8 +86,8 @@ export function ToolCallView({
   return (
     <div className="overflow-hidden rounded-md border bg-card/50">
       <Collapsible defaultOpen={tool.status !== 'completed'}>
-        <CollapsibleTrigger className="flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left">
-          <HugeiconsIcon icon={statusIcon[tool.status]} strokeWidth={1.75} className="size-3.5 text-muted-foreground" />
+        <CollapsibleTrigger className="flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
+          <HugeiconsIcon data-icon="inline-start" icon={statusIcon[tool.status]} strokeWidth={1.75} />
           <span className="min-w-0 flex-1 truncate text-xs font-medium">{tool.title}</span>
           <Badge variant={tool.status === 'failed' ? 'destructive' : 'outline'}>
             {tool.status.replace('_', ' ')}

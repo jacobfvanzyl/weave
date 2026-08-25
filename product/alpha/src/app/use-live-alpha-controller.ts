@@ -20,6 +20,17 @@ import {
   savePortalConnection,
 } from './portal-connection-storage';
 
+export const HOST_SNAPSHOT_REFRESH_INTERVAL_MS = 5_000;
+
+type HostClientFactory = (
+  hostUrl: string,
+  accessToken: string,
+  onEvent: ConstructorParameters<typeof DirectHostClient>[2],
+  onUnexpectedClose: (error: Error) => void,
+) => DirectHostClient;
+
+const createHostClient: HostClientFactory = (...args) => new DirectHostClient(...args);
+
 const mapProjects = (
   snapshot: HostSnapshot | undefined,
   currentHostName: string,
@@ -48,7 +59,9 @@ const mapProjects = (
   }));
 };
 
-export function useLiveAlphaController(): AlphaController {
+export function useLiveAlphaController(
+  clientFactory: HostClientFactory = createHostClient,
+): AlphaController {
   const [hostUrl, setHostUrl] = useState(DEFAULT_PORTAL_URL);
   const [accessToken, setAccessToken] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -60,6 +73,8 @@ export function useLiveAlphaController(): AlphaController {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const connectionEdited = useRef(false);
+  const clientRef = useRef<DirectHostClient | undefined>(undefined);
+  const refreshErrorRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
@@ -76,6 +91,39 @@ export function useLiveAlphaController(): AlphaController {
   }, []);
 
   useEffect(() => () => client?.close(), [client]);
+
+  useEffect(() => {
+    if (!client) return;
+    let refreshing = false;
+    const refreshSilently = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        setSnapshot(await client.snapshot());
+        const recoveredError = refreshErrorRef.current;
+        refreshErrorRef.current = undefined;
+        if (recoveredError) {
+          setError((current) => current === recoveredError ? undefined : current);
+        }
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        refreshErrorRef.current = message;
+        setError(message);
+      } finally {
+        refreshing = false;
+      }
+    };
+    const interval = window.setInterval(
+      () => void refreshSilently(),
+      HOST_SNAPSHOT_REFRESH_INTERVAL_MS,
+    );
+    const onFocus = () => void refreshSilently();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [client]);
 
   const refresh = async (activeClient = client) => {
     if (!activeClient) return;
@@ -96,28 +144,45 @@ export function useLiveAlphaController(): AlphaController {
     client?.close();
     let nextClient: DirectHostClient | undefined;
     try {
-      nextClient = new DirectHostClient(hostUrl, accessToken, (event) => {
-        setTranscript((current) => {
-          if (!current) {
-            return event.type === 'history/reset'
-              ? createTranscript(event.sessionId ?? 'unattached')
-              : current;
-          }
-          return reduceAcpEvent(current, event);
-        });
-      });
+      nextClient = clientFactory(
+        hostUrl,
+        accessToken,
+        (event) => {
+          setTranscript((current) => {
+            if (!current) {
+              return event.type === 'history/reset'
+                ? createTranscript(event.sessionId ?? 'unattached')
+                : current;
+            }
+            return reduceAcpEvent(current, event);
+          });
+        },
+        (closeError) => {
+          if (clientRef.current !== nextClient) return;
+          clientRef.current = undefined;
+          setClient(undefined);
+          setSnapshot(undefined);
+          setSelectedThreadId(undefined);
+          setTranscript(undefined);
+          setBusy(false);
+          refreshErrorRef.current = undefined;
+          setError(closeError.message);
+        },
+      );
       const nextSnapshot = await nextClient.snapshot();
       try {
         await savePortalConnection({ hostUrl, accessToken });
       } catch (persistError) {
         console.error('Unable to save the Portal connection', persistError);
       }
+      clientRef.current = nextClient;
       setClient(nextClient);
       setSnapshot(nextSnapshot);
       setSelectedThreadId(undefined);
       setTranscript(undefined);
     } catch (cause) {
       nextClient?.close();
+      if (clientRef.current === nextClient) clientRef.current = undefined;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setConnecting(false);
@@ -125,6 +190,8 @@ export function useLiveAlphaController(): AlphaController {
   };
 
   const disconnect = () => {
+    clientRef.current = undefined;
+    refreshErrorRef.current = undefined;
     client?.close();
     setClient(undefined);
     setSnapshot(undefined);

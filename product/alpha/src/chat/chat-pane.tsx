@@ -30,6 +30,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
+import { Empty, EmptyDescription, EmptyHeader } from '@/components/ui/empty';
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
 import {
   Message,
@@ -54,6 +56,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 
 export type ChatPaneActions = {
   sendPrompt(text: string): Promise<void> | void;
@@ -74,8 +77,8 @@ function MessageEntryView({ message }: { message: TranscriptMessage }) {
             if (chunk.kind === 'thought') {
               return (
                 <Collapsible key={`${chunk.messageId ?? 'thought'}-${index}`} defaultOpen>
-                  <CollapsibleTrigger className="flex items-center gap-2 text-[0.6875rem] text-muted-foreground hover:text-foreground">
-                    <HugeiconsIcon icon={AiBrainIcon} strokeWidth={1.75} className="size-3.5" />
+                  <CollapsibleTrigger className="flex items-center gap-2 text-[0.6875rem] text-muted-foreground hover:text-foreground [&_svg]:size-3.5">
+                    <HugeiconsIcon data-icon="inline-start" icon={AiBrainIcon} strokeWidth={1.75} />
                     Thinking
                   </CollapsibleTrigger>
                   <CollapsibleContent className="mt-1 border-l pl-3 text-muted-foreground">
@@ -89,7 +92,7 @@ function MessageEntryView({ message }: { message: TranscriptMessage }) {
                 key={`${chunk.messageId ?? 'message'}-${index}`}
                 align={isUser ? 'end' : 'start'}
                 variant={isUser ? 'outline' : 'ghost'}
-                className={isUser ? 'max-w-[90%]' : undefined}
+                className={cn(isUser && 'max-w-[90%]')}
               >
                 <BubbleContent>
                   <ContentBlocksView blocks={chunk.content} />
@@ -144,7 +147,7 @@ function EntryView({
       return <ElicitationView entry={entry} onRespond={actions.respondToElicitation} />;
     case 'diagnostic':
       return (
-        <Marker variant="border" className={entry.severity === 'error' ? 'text-destructive' : undefined}>
+        <Marker variant="border" className={cn(entry.severity === 'error' && 'text-destructive')}>
           <MarkerContent>{entry.title}{entry.detail ? ` — ${entry.detail}` : ''}</MarkerContent>
         </Marker>
       );
@@ -164,27 +167,38 @@ function ConfigControls({
   const hasConfigMode = model.configOptions.some(
     (option) => option.category === 'mode' || option.id === 'mode',
   );
+  const modeItems = model.availableModes.map((mode) => ({
+    label: mode.name,
+    value: mode.id,
+  }));
 
   return (
-    <div
-      className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1"
+    <FieldGroup
+      className="flex min-w-0 flex-1 flex-row flex-wrap items-center gap-x-1.5 gap-y-1"
       data-slot="config-controls"
     >
       {!hasConfigMode && model.availableModes.length > 0
         ? (
-          <Select value={model.currentModeId} onValueChange={(value) => actions.setMode(String(value))}>
-            <SelectTrigger size="sm" variant="ghost" aria-label="Agent mode">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectLabel>Mode</SelectLabel>
-                {model.availableModes.map((mode) => (
-                  <SelectItem key={mode.id} value={mode.id}>{mode.name}</SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <Field className="w-auto gap-0">
+            <FieldLabel className="sr-only" htmlFor="composer-agent-mode">Agent mode</FieldLabel>
+            <Select
+              items={modeItems}
+              value={model.currentModeId}
+              onValueChange={(value) => actions.setMode(String(value))}
+            >
+              <SelectTrigger id="composer-agent-mode" size="sm" variant="ghost" aria-label="Agent mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel>Mode</SelectLabel>
+                  {model.availableModes.map((mode) => (
+                    <SelectItem key={mode.id} value={mode.id}>{mode.name}</SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
         )
         : !hasConfigMode && model.currentModeId && (
           <Badge variant="ghost">{model.currentModeId}</Badge>
@@ -192,40 +206,62 @@ function ConfigControls({
       {model.configOptions.map((option) => {
         if (option.type === 'boolean') {
           return (
-            <label
+            <Field
               key={option.id}
-              className="flex items-center gap-1.5 px-1 text-xs/relaxed text-muted-foreground"
+              orientation="horizontal"
+              className="w-auto gap-1.5 px-1"
               data-slot="config-boolean-control"
             >
               <Checkbox
+                id={`composer-config-${option.id}`}
                 checked={option.currentValue}
                 onCheckedChange={(checked) => actions.setConfigOption(option.id, Boolean(checked))}
               />
-              {option.name}
-            </label>
+              <FieldLabel
+                htmlFor={`composer-config-${option.id}`}
+                className="text-xs/relaxed font-normal text-muted-foreground"
+              >
+                {option.name}
+              </FieldLabel>
+            </Field>
           );
         }
+        const choices = selectOptions(option);
+        const items = choices.map((choice) => ({
+          label: choice.name,
+          value: choice.value,
+        }));
         return (
-          <Select
-            key={option.id}
-            value={option.currentValue}
-            onValueChange={(value) => actions.setConfigOption(option.id, String(value))}
-          >
-            <SelectTrigger size="sm" variant="ghost" aria-label={option.name}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectLabel>{option.name}</SelectLabel>
-                {selectOptions(option).map((choice) => (
-                  <SelectItem key={choice.value} value={choice.value}>{choice.name}</SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <Field key={option.id} className="w-auto gap-0">
+            <FieldLabel className="sr-only" htmlFor={`composer-config-${option.id}`}>
+              {option.name}
+            </FieldLabel>
+            <Select
+              items={items}
+              value={option.currentValue}
+              onValueChange={(value) => actions.setConfigOption(option.id, String(value))}
+            >
+              <SelectTrigger
+                id={`composer-config-${option.id}`}
+                size="sm"
+                variant="ghost"
+                aria-label={option.name}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel>{option.name}</SelectLabel>
+                  {choices.map((choice) => (
+                    <SelectItem key={choice.value} value={choice.value}>{choice.name}</SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
         );
       })}
-    </div>
+    </FieldGroup>
   );
 }
 
@@ -272,49 +308,55 @@ function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneA
           submit();
         }}
       >
-        <Textarea
-          ref={textareaRef}
-          aria-label="Message agent"
-          className="field-sizing-fixed min-h-0 resize-none overflow-y-auto px-4 pb-1 pt-3"
-          placeholder="Message agent — @ to include context, / for commands"
-          rows={composerRows(text)}
-          variant="frameless"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              submit();
-            }
-          }}
-        />
-        <div
-          className="flex min-h-8 items-end gap-2 px-3 pb-2"
-          data-slot="composer-controls"
-        >
-          <ConfigControls model={model} actions={actions} />
+        <FieldGroup className="gap-0">
+          <Field className="gap-0">
+            <FieldLabel className="sr-only" htmlFor="composer-message">Message agent</FieldLabel>
+            <Textarea
+              ref={textareaRef}
+              id="composer-message"
+              aria-label="Message agent"
+              className="field-sizing-fixed min-h-0 resize-none overflow-y-auto px-4 pb-1 pt-3 text-xs/relaxed"
+              placeholder="Message agent — @ to include context, / for commands"
+              rows={composerRows(text)}
+              variant="frameless"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
+            />
+          </Field>
           <div
-            className="flex shrink-0 items-center gap-1.5"
-            data-slot="composer-actions"
+            className="flex min-h-8 items-end gap-2 px-3 pb-2"
+            data-slot="composer-controls"
           >
-            <ContextUsage usage={model.usage} />
-            <Button
-              size="icon-sm"
-              type={running ? 'button' : 'submit'}
-              aria-label={running ? 'Stop response' : 'Send message'}
-              onClick={running ? () => void actions.cancelPrompt() : undefined}
-              disabled={!running && text.trim().length === 0}
-              variant={running ? 'secondary' : 'send'}
+            <ConfigControls model={model} actions={actions} />
+            <div
+              className="flex shrink-0 items-center gap-1.5"
+              data-slot="composer-actions"
             >
-              <HugeiconsIcon
-                data-icon="inline-start"
-                data-symbol={running ? 'cancel' : 'paper-plane'}
-                icon={running ? Cancel01Icon : SendIcon}
-                strokeWidth={2}
-              />
-            </Button>
+              <ContextUsage usage={model.usage} />
+              <Button
+                size="icon-sm"
+                type={running ? 'button' : 'submit'}
+                aria-label={running ? 'Stop response' : 'Send message'}
+                onClick={running ? () => void actions.cancelPrompt() : undefined}
+                disabled={!running && text.trim().length === 0}
+                variant={running ? 'secondary' : 'send'}
+              >
+                <HugeiconsIcon
+                  data-icon="inline-start"
+                  data-symbol={running ? 'cancel' : 'paper-plane'}
+                  icon={running ? Cancel01Icon : SendIcon}
+                  strokeWidth={2}
+                />
+              </Button>
+            </div>
           </div>
-        </div>
+        </FieldGroup>
       </form>
     </div>
   );
@@ -337,12 +379,19 @@ export function ChatPane({
   model: AcpTranscript;
   actions: ChatPaneActions;
 }) {
+  const running = model.turn.status === 'running';
   return (
     <div
+      aria-busy={running}
       className="flex min-h-0 flex-1 flex-col bg-chat-background"
       data-slot="chat-pane"
     >
-      <MessageScrollerProvider>
+      {running && (
+        <span className="sr-only" role="status" aria-live="polite">
+          Agent response in progress.
+        </span>
+      )}
+      <MessageScrollerProvider autoScroll>
         <MessageScroller>
           <MessageScrollerViewport>
             <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-4 px-3 py-5">
@@ -352,9 +401,11 @@ export function ChatPane({
                 </MessageScrollerItem>
               ))}
               {model.entries.length === 0 && (
-                <div className="flex min-h-48 items-center justify-center text-xs text-muted-foreground">
-                  Start a conversation with the agent.
-                </div>
+                <Empty className="min-h-48 rounded-none p-0">
+                  <EmptyHeader>
+                    <EmptyDescription>Start a conversation with the agent.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               )}
             </MessageScrollerContent>
           </MessageScrollerViewport>

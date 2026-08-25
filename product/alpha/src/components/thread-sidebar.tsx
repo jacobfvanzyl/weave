@@ -139,6 +139,7 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
                 />
               </SidebarGroupLabel>
               <SidebarGroupAction
+                className="top-3 right-2.5 w-6"
                 title={`New thread in ${project.name}`}
                 disabled={model.busy}
                 onClick={() => void actions.createThread(project.id)}

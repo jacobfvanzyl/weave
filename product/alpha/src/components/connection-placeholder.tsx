@@ -30,18 +30,19 @@ export function ConnectionPlaceholder({
         <img className="size-16" src={weaveIconUrl} alt="Weave" />
         <FieldSet className="w-full" disabled={connecting}>
           <FieldGroup>
-            <Field>
+            <Field data-disabled={connecting}>
               <FieldLabel htmlFor="portal-url">
                 Portal URL
               </FieldLabel>
               <Input
                 id="portal-url"
+                disabled={connecting}
                 inputMode="url"
                 value={model.connection.hostUrl}
                 onChange={(event) => actions.setHostUrl(event.target.value)}
               />
             </Field>
-            <Field data-invalid={Boolean(model.error)}>
+            <Field data-disabled={connecting} data-invalid={Boolean(model.error)}>
               <FieldLabel htmlFor="portal-token">
                 Access token
               </FieldLabel>
@@ -49,6 +50,7 @@ export function ConnectionPlaceholder({
                 id="portal-token"
                 type="password"
                 autoComplete="off"
+                disabled={connecting}
                 value={model.accessToken}
                 aria-invalid={Boolean(model.error)}
                 onChange={(event) => actions.setAccessToken(event.target.value)}
@@ -60,6 +62,11 @@ export function ConnectionPlaceholder({
             <Button type="submit" disabled={connecting || !model.accessToken}>
               Connect
             </Button>
+            {connecting && (
+              <span className="sr-only" role="status" aria-live="polite">
+                Connecting to Portal.
+              </span>
+            )}
           </FieldGroup>
         </FieldSet>
       </form>

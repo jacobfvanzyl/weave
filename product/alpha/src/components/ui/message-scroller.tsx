@@ -108,7 +108,7 @@ function MessageScrollerButton({
     >
       {children ?? (
         <>
-          <HugeiconsIcon icon={ArrowDown02Icon} strokeWidth={2} />
+          <HugeiconsIcon data-icon="inline-start" icon={ArrowDown02Icon} strokeWidth={2} />
           <span className="sr-only">
             {direction === "end" ? "Scroll to end" : "Scroll to start"}
           </span>

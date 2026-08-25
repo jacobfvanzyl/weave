@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ElicitationSchema } from '@agentclientprotocol/sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { createAcpShowcaseTranscript } from './acp-showcase';
 import { ChatPane, type ChatPaneActions } from './chat-pane';
@@ -76,6 +77,95 @@ describe('ChatPane', () => {
     );
   });
 
+  it('resolves URL elicitation when the user consents to open the external flow', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
+    render(<ChatPane model={createAcpShowcaseTranscript()} actions={handlers} />);
+
+    const open = screen.getByRole('button', { name: /Open/ });
+    open.addEventListener('click', (event) => event.preventDefault());
+    await user.click(open);
+
+    expect(handlers.respondToElicitation).toHaveBeenCalledWith(
+      'url-showcase',
+      { action: 'accept' },
+    );
+  });
+
+  it('does not submit form elicitation values that violate the requested ACP schema', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
+    const model = createAcpShowcaseTranscript();
+    const elicitation = model.entries.find((entry) => (
+      entry.kind === 'elicitation' && entry.request.mode === 'form'
+    ));
+    if (!elicitation || elicitation.kind !== 'elicitation' || elicitation.request.mode !== 'form') {
+      throw new Error('The showcase form elicitation is missing.');
+    }
+    const schema = elicitation.request.requestedSchema as ElicitationSchema;
+    schema.properties = {
+      ...schema.properties,
+      name: { type: 'string', title: 'Name', minLength: 3 },
+      retries: { type: 'integer', title: 'Retries', minimum: 1, maximum: 3, default: 2 },
+      tags: {
+        type: 'array',
+        title: 'Tags',
+        minItems: 2,
+        items: { type: 'string', enum: ['ui', 'protocol'] },
+        default: ['ui'],
+      },
+    };
+
+    render(<ChatPane model={model} actions={handlers} />);
+    const form = screen.getByRole('form', { name: 'Configure acceptance' });
+    await user.clear(within(form).getByLabelText('Name'));
+    await user.type(within(form).getByLabelText('Name'), 'x');
+    await user.clear(within(form).getByLabelText('Retries'));
+    await user.type(within(form).getByLabelText('Retries'), '9');
+    fireEvent.submit(form);
+
+    expect(handlers.respondToElicitation).not.toHaveBeenCalledWith(
+      'form-showcase',
+      expect.objectContaining({ action: 'accept' }),
+    );
+    expect(screen.getByText('Name must be at least 3 characters.')).toBeVisible();
+    expect(screen.getByText('Retries must be at most 3.')).toBeVisible();
+    expect(screen.getByText('Select at least 2 Tags options.')).toBeVisible();
+  });
+
+  it('omits optional ACP form properties that have no declared value or default', () => {
+    const handlers = actions();
+    const model = createAcpShowcaseTranscript();
+    const elicitation = model.entries.find((entry) => (
+      entry.kind === 'elicitation' && entry.request.mode === 'form'
+    ));
+    if (!elicitation || elicitation.kind !== 'elicitation' || elicitation.request.mode !== 'form') {
+      throw new Error('The showcase form elicitation is missing.');
+    }
+    const schema = elicitation.request.requestedSchema as ElicitationSchema;
+    schema.properties = {
+      ...schema.properties,
+      optionalRetries: {
+        type: 'integer',
+        title: 'Optional retries',
+        minimum: 1,
+      },
+    };
+
+    render(<ChatPane model={model} actions={handlers} />);
+    fireEvent.submit(screen.getByRole('form', { name: 'Configure acceptance' }));
+
+    expect(Array.from(document.querySelectorAll('[data-slot="field-error"]'))
+      .map((element) => element.textContent)).toEqual([]);
+    expect(handlers.respondToElicitation).toHaveBeenCalledWith(
+      'form-showcase',
+      expect.objectContaining({
+        action: 'accept',
+        content: expect.not.objectContaining({ optionalRetries: expect.anything() }),
+      }),
+    );
+  });
+
   it('grows the composer from two rows to a maximum of eight after multiline input', async () => {
     const user = userEvent.setup();
     render(<ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />);
@@ -138,6 +228,13 @@ describe('ChatPane', () => {
 
     expect(screen.getByRole('textbox', { name: 'Message agent' }))
       .toHaveAttribute('data-variant', 'frameless');
+    expect(composer.querySelector(':scope > [data-slot="field-group"]')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Message agent' })
+      .closest('[data-slot="field"]')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Message agent' }))
+      .toHaveClass('text-xs/relaxed');
+    expect(screen.getByRole('textbox', { name: 'Message agent' }))
+      .not.toHaveClass('text-base');
 
     expect(screen.getByText('code')).toHaveClass('text-xs/relaxed');
     expect(screen.getByRole('combobox', { name: 'Model' })).toHaveClass('text-xs/relaxed');
@@ -148,6 +245,16 @@ describe('ChatPane', () => {
     expect(container.querySelectorAll('[data-slot="select-trigger"][data-variant="ghost"]'))
       .toHaveLength(1);
     expect(screen.queryByText('1 command')).not.toBeInTheDocument();
+  });
+
+  it('uses the shadcn empty state when a Thread has no transcript entries', () => {
+    const model = createAcpShowcaseTranscript();
+    model.entries = [];
+
+    const { container } = render(<ChatPane model={model} actions={actions()} />);
+
+    expect(container.querySelector('[data-slot="empty"]')).toBeInTheDocument();
+    expect(screen.getByText('Start a conversation with the agent.')).toBeVisible();
   });
 
   it('prefers the modern mode config option over the legacy ACP modes surface', () => {
@@ -196,6 +303,17 @@ describe('ChatPane', () => {
 
     await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'Hello');
     expect(send).toBeEnabled();
+  });
+
+  it('announces an active Agent response without adding visible chat chrome', () => {
+    const model = createAcpShowcaseTranscript();
+    model.turn = { status: 'running' };
+
+    const { container } = render(<ChatPane model={model} actions={actions()} />);
+
+    expect(container.querySelector('[data-slot="chat-pane"]')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('Agent response in progress.');
+    expect(screen.getByRole('status')).toHaveClass('sr-only');
   });
 
   it('wraps config controls while keeping Send aligned in normal flow', () => {

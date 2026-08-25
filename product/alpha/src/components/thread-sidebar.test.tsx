@@ -110,4 +110,15 @@ describe('ThreadSidebar', () => {
       'pb-[max(1rem,env(safe-area-inset-bottom))]',
     );
   });
+
+  it('keeps every new-thread action at least 24px square', () => {
+    render(
+      <SidebarProvider>
+        <ThreadSidebar controller={controller()} />
+      </SidebarProvider>,
+    );
+
+    expect(screen.getByRole('button', { name: 'New thread in weave' }))
+      .toHaveClass('w-6');
+  });
 });

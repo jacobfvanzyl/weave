@@ -313,4 +313,4 @@ const events: AcpTranscriptEvent[] = [
 ];
 
 export const createAcpShowcaseTranscript = (): AcpTranscript =>
-  events.reduce(reduceAcpEvent, createTranscript('showcase'));
+  structuredClone(events).reduce(reduceAcpEvent, createTranscript('showcase'));

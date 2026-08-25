@@ -30,10 +30,12 @@ class JsonRpcWebSocket {
   private nextId = 0;
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
   private opened: Promise<void>;
+  private closedByClient = false;
 
   constructor(
     private readonly socket: WebSocket,
     private readonly onNotification?: NotificationHandler,
+    private readonly onUnexpectedClose?: (error: Error) => void,
   ) {
     this.opened = new Promise<void>((resolve, reject) => {
       socket.onopen = () => resolve();
@@ -44,6 +46,7 @@ class JsonRpcWebSocket {
       const error = new Error(event.reason || `The Host WebSocket closed (${event.code}).`);
       for (const request of this.pending.values()) request.reject(error);
       this.pending.clear();
+      if (!this.closedByClient) this.onUnexpectedClose?.(error);
     };
   }
 
@@ -57,6 +60,7 @@ class JsonRpcWebSocket {
   }
 
   close() {
+    this.closedByClient = true;
     this.socket.close(1000, 'Weave disconnected.');
   }
 
@@ -105,11 +109,16 @@ export class DirectHostClient {
     hostUrl: string,
     token: string,
     private readonly onAcpEvent: (event: AcpTranscriptEvent) => void,
+    onUnexpectedClose?: (error: Error) => void,
   ) {
     if (!token) throw new Error('Host token is required.');
     this.baseUrl = portalWebSocketUrl(hostUrl);
     this.protocol = tokenProtocol(token);
-    this.rpc = new JsonRpcWebSocket(new WebSocket(this.baseUrl, this.protocol));
+    this.rpc = new JsonRpcWebSocket(
+      new WebSocket(this.baseUrl, this.protocol),
+      undefined,
+      onUnexpectedClose,
+    );
   }
 
   async snapshot(): Promise<HostSnapshot> {

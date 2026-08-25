@@ -71,7 +71,7 @@ function SheetContent({
               />
             }
           >
-            <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+            <HugeiconsIcon data-icon="inline-start" icon={Cancel01Icon} strokeWidth={2} />
             <span className="sr-only">Close</span>
           </SheetPrimitive.Close>
         )}
