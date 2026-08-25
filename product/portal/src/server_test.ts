@@ -236,6 +236,90 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
   }
 });
 
+Deno.test('Portal replays durable Thread events after a daemon restart', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-restart-' });
+  const workspacePath = join(root, 'workspace');
+  await Deno.mkdir(workspacePath);
+  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  const token = 'restart-token';
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    accessToken: token,
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{
+      agentId: 'fake',
+      name: 'Fake',
+      command: Deno.execPath(),
+      args: ['run', '--quiet', '--allow-read', fakeAgent],
+      env: {},
+    }],
+  };
+
+  let threadId = '';
+  const firstPortal = await Portal.open(config);
+  const firstServer = startPortalServer(firstPortal);
+  const firstAddress = firstServer.addr as Deno.NetAddr;
+  try {
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, token);
+    const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
+      thread: { threadId: string; acpSessionId: string };
+    };
+    threadId = created.thread.threadId;
+    const attached = await rpc.request('thread.attach', { threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    const acp = await RpcSocket.open(
+      `ws://127.0.0.1:${firstAddress.port}${attached.connection.path}?threadId=${threadId}`,
+      token,
+    );
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await acp.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
+    await acp.request('session/prompt', {
+      sessionId: 'fake-session',
+      prompt: [{ type: 'text', text: 'BEFORE_RESTART' }],
+    });
+    await waitFor(() =>
+      acp.notifications.some((message) => JSON.stringify(message).includes('FAKE_AGENT:BEFORE_RESTART'))
+    );
+    acp.close();
+    rpc.close();
+  } finally {
+    await firstServer.shutdown();
+    await firstPortal.close();
+  }
+
+  const secondPortal = await Portal.open(config);
+  const secondServer = startPortalServer(secondPortal);
+  const secondAddress = secondServer.addr as Deno.NetAddr;
+  try {
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, token);
+    const attached = await rpc.request('thread.attach', { threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    const acp = await RpcSocket.open(
+      `ws://127.0.0.1:${secondAddress.port}${attached.connection.path}?threadId=${threadId}`,
+      token,
+    );
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await acp.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
+    assertEquals(
+      acp.notifications
+        .map((message) => JSON.stringify(message))
+        .filter((message) => message.includes('BEFORE_RESTART'))
+        .map((message) => message.includes('user_message_chunk') ? 'user' : 'agent'),
+      ['user', 'agent'],
+    );
+    acp.close();
+    rpc.close();
+  } finally {
+    await secondServer.shutdown();
+    await secondPortal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test('Portal rejects an invalid access token before exposing metadata', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-auth-' });
   const config: PortalConfig = {

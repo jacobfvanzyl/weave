@@ -9,24 +9,30 @@ import {
 import { ThreadCatalog } from './catalog.ts';
 import type { AgentDefinition, PortalConfig, WorkspaceDefinition } from './config.ts';
 import type { JsonRpcMessage } from './json-rpc.ts';
+import { ThreadEventJournal } from './thread-journal.ts';
 import { HostedThread, type ThreadAttachment } from './thread-runtime.ts';
 
 export class Portal {
   readonly #catalog: ThreadCatalog;
+  readonly #journal: ThreadEventJournal;
   readonly #workspaces: Map<string, WorkspaceDefinition>;
   readonly #agents: Map<string, AgentDefinition>;
   readonly #runtimes = new Map<string, Promise<HostedThread>>();
 
-  private constructor(readonly config: PortalConfig, catalog: ThreadCatalog) {
+  private constructor(readonly config: PortalConfig, catalog: ThreadCatalog, journal: ThreadEventJournal) {
     this.#catalog = catalog;
+    this.#journal = journal;
     this.#workspaces = new Map(config.workspaces.map((workspace) => [workspace.workspaceId, workspace]));
     this.#agents = new Map(config.agents.map((agent) => [agent.agentId, agent]));
   }
 
   static async open(config: PortalConfig) {
     const catalog = new ThreadCatalog(config.stateDirectory);
-    await catalog.load();
-    return new Portal(config, catalog);
+    const [, journal] = await Promise.all([
+      catalog.load(),
+      ThreadEventJournal.open(config.stateDirectory),
+    ]);
+    return new Portal(config, catalog, journal);
   }
 
   async request<Method extends PortalRpcMethod>(
@@ -58,6 +64,7 @@ export class Portal {
           agent,
           input.title,
           (thread) => void this.#catalog.put(thread),
+          this.#journal,
         );
         this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
         await this.#catalog.put(runtime.thread);
@@ -115,6 +122,7 @@ export class Portal {
         this.#workspace(thread.workspaceId),
         this.#agent(thread.agentId),
         (changed) => void this.#catalog.put(changed),
+        this.#journal,
       );
       this.#runtimes.set(threadId, runtime);
       runtime.catch(() => this.#runtimes.delete(threadId));

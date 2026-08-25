@@ -2,6 +2,7 @@ import type { ThreadSummary } from '@weave/product-protocol';
 import { AgentProcess } from './agent-process.ts';
 import type { AgentDefinition, WorkspaceDefinition } from './config.ts';
 import { error, idKey, type JsonRpcId, type JsonRpcMessage, result } from './json-rpc.ts';
+import { ThreadEventJournal } from './thread-journal.ts';
 
 export type ThreadAttachment = {
   receive(message: JsonRpcMessage): Promise<void>;
@@ -78,13 +79,14 @@ export class HostedThread {
   readonly #initializeResult: unknown;
   #sessionLoadResult: Record<string, unknown>;
   readonly #attachments = new Map<string, Attachment>();
-  readonly #journal: JsonRpcMessage[] = [];
+  readonly #journal: ThreadEventJournal;
   readonly #clientPending = new Map<string, ClientPending>();
   readonly #agentPending = new Map<string, AgentPending>();
   readonly #onThreadChanged: (thread: ThreadSummary) => void;
   #activePromptAttachmentId?: string;
   #submittedPromptEchoes: string[] = [];
   #nextForwardedId = 0;
+  #agentMessageQueue = Promise.resolve();
 
   private constructor(
     readonly thread: ThreadSummary,
@@ -92,11 +94,13 @@ export class HostedThread {
     initializeResult: unknown,
     sessionLoadResult: Record<string, unknown>,
     onThreadChanged: (thread: ThreadSummary) => void,
+    journal: ThreadEventJournal,
   ) {
     this.#process = process;
     this.#initializeResult = initializeResult;
     this.#sessionLoadResult = sessionLoadResult;
     this.#onThreadChanged = onThreadChanged;
+    this.#journal = journal;
   }
 
   static async create(
@@ -104,6 +108,7 @@ export class HostedThread {
     agent: AgentDefinition,
     title: string | undefined,
     onThreadChanged: (thread: ThreadSummary) => void,
+    journal: ThreadEventJournal,
   ) {
     const buffered: JsonRpcMessage[] = [];
     const holder: { hosted?: HostedThread } = {};
@@ -134,6 +139,7 @@ export class HostedThread {
       initializeResult,
       sessionLoadStateFrom(sessionResult),
       onThreadChanged,
+      journal,
     );
     holder.hosted = hosted;
     for (const message of buffered) hosted.#receiveAgent(message);
@@ -145,6 +151,7 @@ export class HostedThread {
     workspace: WorkspaceDefinition,
     agent: AgentDefinition,
     onThreadChanged: (thread: ThreadSummary) => void,
+    journal: ThreadEventJournal,
   ) {
     const buffered: JsonRpcMessage[] = [];
     const holder: { hosted?: HostedThread } = {};
@@ -169,6 +176,7 @@ export class HostedThread {
       initializeResult,
       sessionLoadStateFrom(sessionLoadResult),
       onThreadChanged,
+      journal,
     );
     holder.hosted = hosted;
     for (const message of buffered) hosted.#receiveAgent(message);
@@ -188,6 +196,7 @@ export class HostedThread {
 
   async close() {
     await this.#process.close();
+    await this.#agentMessageQueue;
     this.#attachments.clear();
   }
 
@@ -215,7 +224,8 @@ export class HostedThread {
         attachment.send(error(message.id, -32602, 'Thread ACP session does not match.'));
         return;
       }
-      for (const update of this.#journal) attachment.send(update);
+      await this.#agentMessageQueue;
+      for (const event of await this.#journal.list(this.thread.threadId)) attachment.send(event.message);
       attachment.send(result(message.id, this.#sessionLoadResult));
       return;
     }
@@ -225,15 +235,21 @@ export class HostedThread {
         return;
       }
       this.#activePromptAttachmentId = attachment.attachmentId;
-      this.#fanOutSubmittedPrompt(attachment, message.params);
-      const providerId = `client:${++this.#nextForwardedId}`;
-      this.#clientPending.set(idKey(providerId), {
-        attachment,
-        clientId: message.id,
-        method: message.method,
-        isPrompt: true,
-      });
-      await this.#process.send({ ...message, id: providerId });
+      try {
+        await this.#fanOutSubmittedPrompt(attachment, message.params);
+        const providerId = `client:${++this.#nextForwardedId}`;
+        this.#clientPending.set(idKey(providerId), {
+          attachment,
+          clientId: message.id,
+          method: message.method,
+          isPrompt: true,
+        });
+        await this.#process.send({ ...message, id: providerId });
+      } catch (cause) {
+        this.#activePromptAttachmentId = undefined;
+        this.#submittedPromptEchoes = [];
+        throw cause;
+      }
       return;
     }
     if (FORWARDED_ATTACHMENT_REQUESTS.has(message.method)) {
@@ -252,6 +268,10 @@ export class HostedThread {
   }
 
   #receiveAgent(message: JsonRpcMessage) {
+    this.#agentMessageQueue = this.#agentMessageQueue.then(() => this.#handleAgentMessage(message));
+  }
+
+  async #handleAgentMessage(message: JsonRpcMessage) {
     if (message.method && message.id !== undefined) {
       const controller = this.#activePromptAttachmentId
         ? this.#attachments.get(this.#activePromptAttachmentId)
@@ -280,7 +300,7 @@ export class HostedThread {
         };
       }
       if (!message.error && pending.requestedModeId) {
-        this.#confirmMode(pending.requestedModeId);
+        await this.#confirmMode(pending.requestedModeId);
       }
       pending.attachment.send({ ...message, id: pending.clientId });
       this.thread.updatedAt = new Date().toISOString();
@@ -290,14 +310,14 @@ export class HostedThread {
     if (message.method) {
       if (message.method === 'session/update') {
         if (this.#consumeSubmittedPromptEcho(message.params)) return;
-        this.#journal.push(message);
+        await this.#journal.append(this.thread.threadId, message);
         this.#captureSessionState(message.params);
       }
       for (const attachment of this.#attachments.values()) attachment.send(message);
     }
   }
 
-  #fanOutSubmittedPrompt(origin: Attachment, params: unknown) {
+  async #fanOutSubmittedPrompt(origin: Attachment, params: unknown) {
     const messageId = crypto.randomUUID();
     const contentBlocks = promptContentFrom(params);
     this.#submittedPromptEchoes = contentBlocks.map(promptEchoKey);
@@ -314,7 +334,7 @@ export class HostedThread {
           },
         },
       };
-      this.#journal.push(update);
+      await this.#journal.append(this.thread.threadId, update);
       for (const client of this.#attachments.values()) {
         if (client !== origin) client.send(update);
       }
@@ -334,7 +354,7 @@ export class HostedThread {
     return true;
   }
 
-  #confirmMode(modeId: string) {
+  async #confirmMode(modeId: string) {
     const modes = this.#sessionLoadResult.modes;
     if (
       modes &&
@@ -350,7 +370,7 @@ export class HostedThread {
         update: { sessionUpdate: 'current_mode_update', currentModeId: modeId },
       },
     };
-    this.#journal.push(update);
+    await this.#journal.append(this.thread.threadId, update);
     this.#captureSessionState(update.params);
     for (const client of this.#attachments.values()) client.send(update);
   }
