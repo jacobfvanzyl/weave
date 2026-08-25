@@ -107,9 +107,15 @@ export class ThreadEventJournal {
     return await operation;
   }
 
-  async list(threadId: string) {
+  async read(threadId: string, afterSequence?: number) {
     await this.#mutationQueue;
-    return this.#events.filter((event) => event.threadId === threadId);
+    const threadEvents = this.#events.filter((event) => event.threadId === threadId);
+    return {
+      events: afterSequence === undefined
+        ? threadEvents
+        : threadEvents.filter((event) => event.sequence > afterSequence),
+      lastSequence: threadEvents.at(-1)?.sequence ?? 0,
+    };
   }
 
   async #persist(events: ThreadEventRecord[]) {

@@ -2,14 +2,18 @@ import type { ThreadSummary } from '@weave/product-protocol';
 import { AgentProcess } from './agent-process.ts';
 import type { AgentDefinition, WorkspaceDefinition } from './config.ts';
 import { error, idKey, type JsonRpcId, type JsonRpcMessage, result } from './json-rpc.ts';
-import { ThreadEventJournal } from './thread-journal.ts';
+import { ThreadEventJournal, type ThreadEventRecord } from './thread-journal.ts';
 
 export type ThreadAttachment = {
   receive(message: JsonRpcMessage): Promise<void>;
   close(): void;
 };
 
-type Attachment = { attachmentId: string; send(message: JsonRpcMessage): void };
+type Attachment = {
+  attachmentId: string;
+  threadEventsEnabled: boolean;
+  send(message: JsonRpcMessage): void;
+};
 type ClientPending = {
   attachment: Attachment;
   clientId: JsonRpcId;
@@ -67,6 +71,71 @@ const PROXIED_CLIENT_CAPABILITIES = {
     compaction: {},
     configOptions: { boolean: {} },
   },
+};
+
+const THREAD_EVENTS_LOAD_META = 'weave.dev/threadEvents';
+const THREAD_EVENT_UPDATE_META = 'weave.dev/threadEvent';
+const THREAD_EVENTS_SYNC_METHOD = '_weave.dev/thread_events/sync';
+const THREAD_EVENTS_ACK_METHOD = '_weave.dev/thread_events/ack';
+
+const objectFrom = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+const withThreadEventsCapability = (value: unknown) => {
+  const initialize = objectFrom(value);
+  const agentCapabilities = objectFrom(initialize.agentCapabilities);
+  const meta = objectFrom(agentCapabilities._meta);
+  const weave = objectFrom(meta['weave.dev']);
+  return {
+    ...initialize,
+    agentCapabilities: {
+      ...agentCapabilities,
+      _meta: {
+        ...meta,
+        'weave.dev': {
+          ...weave,
+          threadEvents: {
+            version: 1,
+            ackMethod: THREAD_EVENTS_ACK_METHOD,
+            syncNotification: THREAD_EVENTS_SYNC_METHOD,
+          },
+        },
+      },
+    },
+  };
+};
+
+const threadEventsCursorFrom = (params: unknown): { enabled: false } | { enabled: true; afterSequence?: number } => {
+  const extension = objectFrom(objectFrom(objectFrom(params)._meta)[THREAD_EVENTS_LOAD_META]);
+  if (!Object.keys(extension).length) return { enabled: false };
+  const cursor = extension.afterSequence;
+  if (cursor === null) return { enabled: true };
+  if (!Number.isInteger(cursor) || Number(cursor) < 0) {
+    throw new Error('Thread event cursor must be a non-negative integer or null.');
+  }
+  return { enabled: true, afterSequence: Number(cursor) };
+};
+
+const messageForThreadEvent = (event: ThreadEventRecord): JsonRpcMessage => {
+  const params = objectFrom(event.message.params);
+  const update = objectFrom(params.update);
+  return {
+    ...event.message,
+    params: {
+      ...params,
+      update: {
+        ...update,
+        _meta: {
+          ...objectFrom(update._meta),
+          [THREAD_EVENT_UPDATE_META]: {
+            sequence: event.sequence,
+            eventId: event.eventId,
+            createdAt: event.createdAt,
+          },
+        },
+      },
+    },
+  };
 };
 
 const FORWARDED_ATTACHMENT_REQUESTS = new Set([
@@ -184,7 +253,7 @@ export class HostedThread {
   }
 
   connect(send: (message: JsonRpcMessage) => void): ThreadAttachment {
-    const attachment: Attachment = { attachmentId: crypto.randomUUID(), send };
+    const attachment: Attachment = { attachmentId: crypto.randomUUID(), threadEventsEnabled: false, send };
     this.#attachments.set(attachment.attachmentId, attachment);
     return {
       receive: async (message) => await this.#receiveClient(attachment, message),
@@ -215,7 +284,7 @@ export class HostedThread {
       return;
     }
     if (message.method === 'initialize') {
-      attachment.send(result(message.id, this.#initializeResult));
+      attachment.send(result(message.id, withThreadEventsCapability(this.#initializeResult)));
       return;
     }
     if (message.method === 'session/load') {
@@ -224,8 +293,31 @@ export class HostedThread {
         attachment.send(error(message.id, -32602, 'Thread ACP session does not match.'));
         return;
       }
+      let cursor: ReturnType<typeof threadEventsCursorFrom>;
+      try {
+        cursor = threadEventsCursorFrom(message.params);
+      } catch (cause) {
+        attachment.send(error(message.id, -32602, cause instanceof Error ? cause.message : String(cause)));
+        return;
+      }
+      attachment.threadEventsEnabled = cursor.enabled;
       await this.#agentMessageQueue;
-      for (const event of await this.#journal.list(this.thread.threadId)) attachment.send(event.message);
+      const replay = await this.#journal.read(
+        this.thread.threadId,
+        cursor.enabled ? cursor.afterSequence : undefined,
+      );
+      for (const event of replay.events) this.#sendThreadEvent(attachment, event);
+      if (cursor.enabled) {
+        attachment.send({
+          jsonrpc: '2.0',
+          method: THREAD_EVENTS_SYNC_METHOD,
+          params: {
+            sessionId: this.thread.acpSessionId,
+            lastSequence: replay.lastSequence,
+            fullReload: false,
+          },
+        });
+      }
       attachment.send(result(message.id, this.#sessionLoadResult));
       return;
     }
@@ -310,8 +402,10 @@ export class HostedThread {
     if (message.method) {
       if (message.method === 'session/update') {
         if (this.#consumeSubmittedPromptEcho(message.params)) return;
-        await this.#journal.append(this.thread.threadId, message);
+        const event = await this.#journal.append(this.thread.threadId, message);
         this.#captureSessionState(message.params);
+        this.#fanOutThreadEvent(event);
+        return;
       }
       for (const attachment of this.#attachments.values()) attachment.send(message);
     }
@@ -334,9 +428,9 @@ export class HostedThread {
           },
         },
       };
-      await this.#journal.append(this.thread.threadId, update);
+      const event = await this.#journal.append(this.thread.threadId, update);
       for (const client of this.#attachments.values()) {
-        if (client !== origin) client.send(update);
+        if (client !== origin || client.threadEventsEnabled) this.#sendThreadEvent(client, event);
       }
     }
   }
@@ -370,9 +464,17 @@ export class HostedThread {
         update: { sessionUpdate: 'current_mode_update', currentModeId: modeId },
       },
     };
-    await this.#journal.append(this.thread.threadId, update);
+    const event = await this.#journal.append(this.thread.threadId, update);
     this.#captureSessionState(update.params);
-    for (const client of this.#attachments.values()) client.send(update);
+    this.#fanOutThreadEvent(event);
+  }
+
+  #fanOutThreadEvent(event: ThreadEventRecord) {
+    for (const attachment of this.#attachments.values()) this.#sendThreadEvent(attachment, event);
+  }
+
+  #sendThreadEvent(attachment: Attachment, event: ThreadEventRecord) {
+    attachment.send(attachment.threadEventsEnabled ? messageForThreadEvent(event) : event.message);
   }
 
   #captureSessionState(params: unknown) {

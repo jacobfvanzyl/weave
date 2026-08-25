@@ -320,6 +320,153 @@ Deno.test('Portal replays durable Thread events after a daemon restart', async (
   }
 });
 
+Deno.test('Portal gives opted-in clients stable cursor replay without changing ordinary ACP replay', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-cursor-' });
+  const workspacePath = join(root, 'workspace');
+  await Deno.mkdir(workspacePath);
+  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  const token = 'cursor-token';
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    accessToken: token,
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{
+      agentId: 'fake',
+      name: 'Fake',
+      command: Deno.execPath(),
+      args: ['run', '--quiet', '--allow-read', fakeAgent],
+      env: {},
+    }],
+  };
+  const portal = await Portal.open(config);
+  const server = startPortalServer(portal);
+  const address = server.addr as Deno.NetAddr;
+  const baseUrl = `ws://127.0.0.1:${address.port}`;
+  try {
+    const rpc = await RpcSocket.open(`${baseUrl}/rpc`, token);
+    const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
+      thread: { threadId: string };
+    };
+    const attached = await rpc.request('thread.attach', { threadId: created.thread.threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    const acpUrl = `${baseUrl}${attached.connection.path}?threadId=${attached.connection.threadId}`;
+
+    const author = await RpcSocket.open(acpUrl, token);
+    await author.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await author.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
+    await author.request('session/prompt', {
+      sessionId: 'fake-session',
+      prompt: [{ type: 'text', text: 'FIRST_CURSOR_TURN' }],
+    });
+
+    const native = await RpcSocket.open(acpUrl, token);
+    const initialized = await native.request('initialize', {
+      protocolVersion: 1,
+      clientCapabilities: {},
+    }) as { agentCapabilities: { _meta: Record<string, unknown> } };
+    assertEquals(initialized.agentCapabilities._meta['weave.dev'], {
+      threadEvents: {
+        version: 1,
+        ackMethod: '_weave.dev/thread_events/ack',
+        syncNotification: '_weave.dev/thread_events/sync',
+      },
+    });
+    await native.request('session/load', {
+      sessionId: 'fake-session',
+      cwd: workspacePath,
+      mcpServers: [],
+      _meta: { 'weave.dev/threadEvents': { afterSequence: 0 } },
+    });
+    const firstReplay = native.notifications.filter((message) => message.method === 'session/update');
+    assertEquals(firstReplay.length, 2);
+    assertEquals(
+      firstReplay.map((message) =>
+        (message.params as { update: { _meta: Record<string, unknown> } }).update._meta['weave.dev/threadEvent']
+      ),
+      [
+        {
+          sequence: 1,
+          eventId: (firstReplay[0].params as { update: { _meta: Record<string, { eventId: string }> } }).update
+            ._meta['weave.dev/threadEvent'].eventId,
+          createdAt: (firstReplay[0].params as { update: { _meta: Record<string, { createdAt: string }> } }).update
+            ._meta['weave.dev/threadEvent'].createdAt,
+        },
+        {
+          sequence: 2,
+          eventId: (firstReplay[1].params as { update: { _meta: Record<string, { eventId: string }> } }).update
+            ._meta['weave.dev/threadEvent'].eventId,
+          createdAt: (firstReplay[1].params as { update: { _meta: Record<string, { createdAt: string }> } }).update
+            ._meta['weave.dev/threadEvent'].createdAt,
+        },
+      ],
+    );
+    const firstSync = native.notifications.find((message) => message.method === '_weave.dev/thread_events/sync');
+    assertEquals(firstSync?.params, { sessionId: 'fake-session', lastSequence: 2, fullReload: false });
+    native.notifications.splice(0);
+
+    await author.request('session/prompt', {
+      sessionId: 'fake-session',
+      prompt: [{ type: 'text', text: 'SECOND_CURSOR_TURN' }],
+    });
+    await waitFor(() => native.notifications.filter((message) => message.method === 'session/update').length === 2);
+    const liveSecondTurn = native.notifications.filter((message) => message.method === 'session/update');
+    const liveMetadata = liveSecondTurn.map((message) =>
+      (message.params as { update: { _meta: Record<string, unknown> } }).update._meta['weave.dev/threadEvent']
+    );
+    assertEquals(liveMetadata.map((value) => (value as { sequence: number }).sequence), [3, 4]);
+    native.close();
+
+    const resumed = await RpcSocket.open(acpUrl, token);
+    await resumed.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await resumed.request('session/load', {
+      sessionId: 'fake-session',
+      cwd: workspacePath,
+      mcpServers: [],
+      _meta: { 'weave.dev/threadEvents': { afterSequence: 2 } },
+    });
+    const resumedUpdates = resumed.notifications.filter((message) => message.method === 'session/update');
+    assertEquals(resumedUpdates.length, 2);
+    assertEquals(
+      resumedUpdates.map((message) =>
+        (message.params as { update: { _meta: Record<string, unknown> } }).update._meta['weave.dev/threadEvent']
+      ),
+      liveMetadata,
+    );
+    assertEquals(
+      resumed.notifications.find((message) => message.method === '_weave.dev/thread_events/sync')?.params,
+      { sessionId: 'fake-session', lastSequence: 4, fullReload: false },
+    );
+
+    const ordinary = await RpcSocket.open(acpUrl, token);
+    await ordinary.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await ordinary.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
+    const ordinaryUpdates = ordinary.notifications.filter((message) => message.method === 'session/update');
+    assertEquals(ordinaryUpdates.length, 4);
+    assertEquals(
+      ordinaryUpdates.every((message) =>
+        (message.params as { update: { _meta?: unknown } }).update._meta === undefined
+      ),
+      true,
+    );
+    assertEquals(
+      ordinary.notifications.some((message) => message.method === '_weave.dev/thread_events/sync'),
+      false,
+    );
+
+    ordinary.close();
+    resumed.close();
+    author.close();
+    rpc.close();
+  } finally {
+    await server.shutdown();
+    await portal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test('Portal rejects an invalid access token before exposing metadata', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-auth-' });
   const config: PortalConfig = {
