@@ -9,30 +9,39 @@ import {
 import { ThreadCatalog } from './catalog.ts';
 import type { AgentDefinition, PortalConfig, WorkspaceDefinition } from './config.ts';
 import type { JsonRpcMessage } from './json-rpc.ts';
+import { RuntimeStateStore } from './runtime-state.ts';
 import { ThreadEventJournal } from './thread-journal.ts';
 import { HostedThread, type ThreadAttachment } from './thread-runtime.ts';
 
 export class Portal {
   readonly #catalog: ThreadCatalog;
   readonly #journal: ThreadEventJournal;
+  readonly #runtimeStates: RuntimeStateStore;
   readonly #workspaces: Map<string, WorkspaceDefinition>;
   readonly #agents: Map<string, AgentDefinition>;
   readonly #runtimes = new Map<string, Promise<HostedThread>>();
 
-  private constructor(readonly config: PortalConfig, catalog: ThreadCatalog, journal: ThreadEventJournal) {
+  private constructor(
+    readonly config: PortalConfig,
+    catalog: ThreadCatalog,
+    journal: ThreadEventJournal,
+    runtimeStates: RuntimeStateStore,
+  ) {
     this.#catalog = catalog;
     this.#journal = journal;
+    this.#runtimeStates = runtimeStates;
     this.#workspaces = new Map(config.workspaces.map((workspace) => [workspace.workspaceId, workspace]));
     this.#agents = new Map(config.agents.map((agent) => [agent.agentId, agent]));
   }
 
   static async open(config: PortalConfig) {
     const catalog = new ThreadCatalog(config.stateDirectory);
-    const [, journal] = await Promise.all([
+    const [, journal, runtimeStates] = await Promise.all([
       catalog.load(),
       ThreadEventJournal.open(config.stateDirectory, config.threadEventRetentionLimit),
+      RuntimeStateStore.open(config.stateDirectory),
     ]);
-    return new Portal(config, catalog, journal);
+    return new Portal(config, catalog, journal, runtimeStates);
   }
 
   async request<Method extends PortalRpcMethod>(
@@ -65,6 +74,7 @@ export class Portal {
           input.title,
           (thread) => void this.#catalog.put(thread),
           this.#journal,
+          this.#runtimeStates,
         );
         this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
         await this.#catalog.put(runtime.thread);
@@ -123,6 +133,7 @@ export class Portal {
         this.#agent(thread.agentId),
         (changed) => void this.#catalog.put(changed),
         this.#journal,
+        this.#runtimeStates,
       );
       this.#runtimes.set(threadId, runtime);
       runtime.catch(() => this.#runtimes.delete(threadId));

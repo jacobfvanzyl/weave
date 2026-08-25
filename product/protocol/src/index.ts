@@ -2,6 +2,12 @@ export const PORTAL_PROTOCOL_VERSION = 1 as const;
 export const PORTAL_RPC_PATH = '/rpc' as const;
 export const PORTAL_ACP_PATH = '/acp' as const;
 export const PORTAL_TOKEN_PROTOCOL_PREFIX = 'weave-portal-token.' as const;
+export const WEAVE_ACP_META_NAMESPACE = 'weave.dev' as const;
+export const WEAVE_ACP_THREAD_EVENTS_LOAD_META = 'weave.dev/threadEvents' as const;
+export const WEAVE_ACP_THREAD_EVENT_META = 'weave.dev/threadEvent' as const;
+export const WEAVE_ACP_THREAD_EVENTS_ACK_METHOD = '_weave.dev/thread_events/ack' as const;
+export const WEAVE_ACP_THREAD_EVENTS_SYNC_METHOD = '_weave.dev/thread_events/sync' as const;
+export const WEAVE_ACP_RUNTIME_STATE_METHOD = '_weave.dev/runtime/state' as const;
 
 export type WorkspaceSummary = { workspaceId: string; name: string };
 export type AgentSummary = { agentId: string; name: string };

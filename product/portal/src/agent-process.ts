@@ -4,6 +4,13 @@ import { readLines } from './line-stream.ts';
 
 type Pending = { resolve(value: unknown): void; reject(cause: unknown): void };
 
+export type AgentProcessExit = {
+  success: boolean;
+  code: number;
+  signal?: string;
+  stderrTail?: string;
+};
+
 const inheritedEnvironment = () => {
   const names = [
     'PATH',
@@ -34,11 +41,20 @@ export class AgentProcess {
   readonly #pending = new Map<string, Pending>();
   readonly #encoder = new TextEncoder();
   readonly #onMessage: (message: JsonRpcMessage) => void;
+  readonly #onExit: (exit: AgentProcessExit) => void;
+  readonly #stderrTail: string[] = [];
   #nextId = 0;
   #closed = false;
+  #intentionalClose = false;
 
-  constructor(agent: AgentDefinition, cwd: string, onMessage: (message: JsonRpcMessage) => void) {
+  constructor(
+    agent: AgentDefinition,
+    cwd: string,
+    onMessage: (message: JsonRpcMessage) => void,
+    onExit: (exit: AgentProcessExit) => void = () => undefined,
+  ) {
     this.#onMessage = onMessage;
+    this.#onExit = onExit;
     this.#child = new Deno.Command(agent.command, {
       args: agent.args,
       cwd,
@@ -68,6 +84,7 @@ export class AgentProcess {
 
   async close() {
     if (this.#closed) return;
+    this.#intentionalClose = true;
     this.#closed = true;
     try {
       this.#child.kill('SIGTERM');
@@ -101,16 +118,28 @@ export class AgentProcess {
 
   async #readStderr() {
     for await (const line of readLines(this.#child.stderr)) {
-      if (line) console.error(`[agent] ${line}`);
+      if (line) {
+        this.#stderrTail.push(line);
+        if (this.#stderrTail.length > 20) this.#stderrTail.shift();
+        console.error(`[agent] ${line}`);
+      }
     }
   }
 
   async #watchExit() {
     const status = await this.#child.status;
+    const intentional = this.#intentionalClose;
     this.#closed = true;
+    const exit: AgentProcessExit = {
+      success: status.success,
+      code: status.code,
+      ...(status.signal ? { signal: status.signal } : {}),
+      ...(this.#stderrTail.length ? { stderrTail: this.#stderrTail.join('\n') } : {}),
+    };
     this.#failPending(
       new Error(`Agent exited with status ${status.code}${status.signal ? ` (${status.signal})` : ''}.`),
     );
+    if (!intentional) this.#onExit(exit);
   }
 
   #failPending(cause: unknown) {

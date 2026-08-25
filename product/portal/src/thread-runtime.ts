@@ -1,7 +1,26 @@
 import type { ThreadSummary } from '@weave/product-protocol';
-import { AgentProcess } from './agent-process.ts';
+import {
+  messageForThreadEvent,
+  RESUME_GAP_ERROR,
+  RUNTIME_STATE_METHOD,
+  RUNTIME_UNAVAILABLE_ERROR,
+  THREAD_EVENTS_ACK_METHOD,
+  THREAD_EVENTS_SYNC_METHOD,
+  threadEventAckFrom,
+  threadEventsCursorFrom,
+  withWeaveCapabilities,
+} from './acp-extension.ts';
+import { AgentProcess, type AgentProcessExit } from './agent-process.ts';
 import type { AgentDefinition, WorkspaceDefinition } from './config.ts';
 import { error, idKey, type JsonRpcId, type JsonRpcMessage, result } from './json-rpc.ts';
+import {
+  ACP_INITIALIZE_PARAMS,
+  restoreProviderSession,
+  sessionIdFrom,
+  sessionLoadStateFrom,
+  supportsSessionLoad,
+} from './provider-protocol.ts';
+import { RuntimeStateStore } from './runtime-state.ts';
 import { ThreadEventJournal, type ThreadEventRecord } from './thread-journal.ts';
 
 export type ThreadAttachment = {
@@ -23,25 +42,6 @@ type ClientPending = {
   requestedModeId?: string;
 };
 type AgentPending = { attachmentId: string; providerId: JsonRpcId };
-
-const sessionIdFrom = (value: unknown) => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Agent returned an invalid session/new result.');
-  }
-  const sessionId = (value as { sessionId?: unknown }).sessionId;
-  if (typeof sessionId !== 'string' || !sessionId) throw new Error('Agent returned no ACP session ID.');
-  return sessionId;
-};
-
-const sessionLoadStateFrom = (value: unknown): Record<string, unknown> => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const record = value as Record<string, unknown>;
-  return {
-    ...(record.modes === undefined ? {} : { modes: record.modes }),
-    ...(record.configOptions === undefined ? {} : { configOptions: record.configOptions }),
-    ...(record._meta === undefined ? {} : { _meta: record._meta }),
-  };
-};
 
 const promptContentFrom = (params: unknown): unknown[] => {
   if (!params || typeof params !== 'object' || Array.isArray(params)) return [];
@@ -65,102 +65,20 @@ const promptEchoKey = (content: unknown) => {
   return JSON.stringify(content);
 };
 
-const PROXIED_CLIENT_CAPABILITIES = {
-  elicitation: { form: {}, url: {} },
-  plan: {},
-  session: {
-    compaction: {},
-    configOptions: { boolean: {} },
-  },
-};
-
-const THREAD_EVENTS_LOAD_META = 'weave.dev/threadEvents';
-const THREAD_EVENT_UPDATE_META = 'weave.dev/threadEvent';
-const THREAD_EVENTS_SYNC_METHOD = '_weave.dev/thread_events/sync';
-const THREAD_EVENTS_ACK_METHOD = '_weave.dev/thread_events/ack';
-const RESUME_GAP_ERROR = -32060;
-
-const objectFrom = (value: unknown): Record<string, unknown> =>
-  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-
-const withThreadEventsCapability = (value: unknown) => {
-  const initialize = objectFrom(value);
-  const agentCapabilities = objectFrom(initialize.agentCapabilities);
-  const meta = objectFrom(agentCapabilities._meta);
-  const weave = objectFrom(meta['weave.dev']);
-  return {
-    ...initialize,
-    agentCapabilities: {
-      ...agentCapabilities,
-      _meta: {
-        ...meta,
-        'weave.dev': {
-          ...weave,
-          threadEvents: {
-            version: 1,
-            ackMethod: THREAD_EVENTS_ACK_METHOD,
-            syncNotification: THREAD_EVENTS_SYNC_METHOD,
-          },
-        },
-      },
-    },
-  };
-};
-
-const threadEventsCursorFrom = (params: unknown): { enabled: false } | { enabled: true; afterSequence?: number } => {
-  const extension = objectFrom(objectFrom(objectFrom(params)._meta)[THREAD_EVENTS_LOAD_META]);
-  if (!Object.keys(extension).length) return { enabled: false };
-  const cursor = extension.afterSequence;
-  if (cursor === null) return { enabled: true };
-  if (!Number.isInteger(cursor) || Number(cursor) < 0) {
-    throw new Error('Thread event cursor must be a non-negative integer or null.');
-  }
-  return { enabled: true, afterSequence: Number(cursor) };
-};
-
-const threadEventAckFrom = (params: unknown) => {
-  const record = objectFrom(params);
-  if (typeof record.sessionId !== 'string' || !record.sessionId || !Number.isInteger(record.sequence)) {
-    throw new Error('Invalid Thread event acknowledgement.');
-  }
-  const sequence = Number(record.sequence);
-  if (sequence < 0) throw new Error('Invalid Thread event acknowledgement.');
-  return { sessionId: record.sessionId, sequence };
-};
-
-const messageForThreadEvent = (event: ThreadEventRecord): JsonRpcMessage => {
-  const params = objectFrom(event.message.params);
-  const update = objectFrom(params.update);
-  return {
-    ...event.message,
-    params: {
-      ...params,
-      update: {
-        ...update,
-        _meta: {
-          ...objectFrom(update._meta),
-          [THREAD_EVENT_UPDATE_META]: {
-            sequence: event.sequence,
-            eventId: event.eventId,
-            createdAt: event.createdAt,
-          },
-        },
-      },
-    },
-  };
-};
-
 const FORWARDED_ATTACHMENT_REQUESTS = new Set([
   'session/set_mode',
   'session/set_config_option',
 ]);
 
 export class HostedThread {
-  readonly #process: AgentProcess;
-  readonly #initializeResult: unknown;
+  #process: AgentProcess;
+  #initializeResult: unknown;
   #sessionLoadResult: Record<string, unknown>;
+  readonly #workspace: WorkspaceDefinition;
+  readonly #agent: AgentDefinition;
   readonly #attachments = new Map<string, Attachment>();
   readonly #journal: ThreadEventJournal;
+  readonly #runtimeStates: RuntimeStateStore;
   readonly #clientPending = new Map<string, ClientPending>();
   readonly #agentPending = new Map<string, AgentPending>();
   readonly #onThreadChanged: (thread: ThreadSummary) => void;
@@ -168,20 +86,34 @@ export class HostedThread {
   #submittedPromptEchoes: string[] = [];
   #nextForwardedId = 0;
   #agentMessageQueue = Promise.resolve();
+  #providerReplayCapture?: JsonRpcMessage[];
+  #providerReplayTask?: Promise<{ messages: JsonRpcMessage[]; state: Record<string, unknown> }>;
+  #generation: number;
+  #recoveryState: 'ready' | 'restoring' | 'unavailable' = 'ready';
+  #restoringInternally = false;
+  #closing = false;
 
   private constructor(
     readonly thread: ThreadSummary,
+    workspace: WorkspaceDefinition,
+    agent: AgentDefinition,
     process: AgentProcess,
+    generation: number,
     initializeResult: unknown,
     sessionLoadResult: Record<string, unknown>,
     onThreadChanged: (thread: ThreadSummary) => void,
     journal: ThreadEventJournal,
+    runtimeStates: RuntimeStateStore,
   ) {
+    this.#workspace = workspace;
+    this.#agent = agent;
     this.#process = process;
+    this.#generation = generation;
     this.#initializeResult = initializeResult;
     this.#sessionLoadResult = sessionLoadResult;
     this.#onThreadChanged = onThreadChanged;
     this.#journal = journal;
+    this.#runtimeStates = runtimeStates;
   }
 
   static async create(
@@ -190,24 +122,27 @@ export class HostedThread {
     title: string | undefined,
     onThreadChanged: (thread: ThreadSummary) => void,
     journal: ThreadEventJournal,
+    runtimeStates: RuntimeStateStore,
   ) {
+    const threadId = crypto.randomUUID();
+    const runtimeState = await runtimeStates.start(threadId, 'idle');
     const buffered: JsonRpcMessage[] = [];
     const holder: { hosted?: HostedThread } = {};
     const process = new AgentProcess(
       agent,
       workspace.path,
-      (message) => holder.hosted ? holder.hosted.#receiveAgent(message) : buffered.push(message),
+      (message) =>
+        holder.hosted ? holder.hosted.#receiveAgent(runtimeState.generation, message) : buffered.push(message),
+      (exit) => {
+        if (holder.hosted) void holder.hosted.#providerStopped(runtimeState.generation, exit);
+      },
     );
-    const initializeResult = await process.request('initialize', {
-      protocolVersion: 1,
-      clientCapabilities: PROXIED_CLIENT_CAPABILITIES,
-      clientInfo: { name: 'Weave Portal', version: '0.1.0' },
-    });
+    const initializeResult = await process.request('initialize', ACP_INITIALIZE_PARAMS);
     const sessionResult = await process.request('session/new', { cwd: workspace.path, mcpServers: [] });
     const now = new Date().toISOString();
     const hosted = new HostedThread(
       {
-        threadId: crypto.randomUUID(),
+        threadId,
         workspaceId: workspace.workspaceId,
         agentId: agent.agentId,
         acpSessionId: sessionIdFrom(sessionResult),
@@ -216,14 +151,18 @@ export class HostedThread {
         createdAt: now,
         updatedAt: now,
       },
+      workspace,
+      agent,
       process,
+      runtimeState.generation,
       initializeResult,
       sessionLoadStateFrom(sessionResult),
       onThreadChanged,
       journal,
+      runtimeStates,
     );
     holder.hosted = hosted;
-    for (const message of buffered) hosted.#receiveAgent(message);
+    for (const message of buffered) hosted.#receiveAgent(runtimeState.generation, message);
     return hosted;
   }
 
@@ -233,34 +172,43 @@ export class HostedThread {
     agent: AgentDefinition,
     onThreadChanged: (thread: ThreadSummary) => void,
     journal: ThreadEventJournal,
+    runtimeStates: RuntimeStateStore,
   ) {
+    const runtimeState = await runtimeStates.start(thread.threadId, 'restoring');
     const buffered: JsonRpcMessage[] = [];
     const holder: { hosted?: HostedThread } = {};
     const process = new AgentProcess(
       agent,
       workspace.path,
-      (message) => holder.hosted ? holder.hosted.#receiveAgent(message) : buffered.push(message),
+      (message) =>
+        holder.hosted ? holder.hosted.#receiveAgent(runtimeState.generation, message) : buffered.push(message),
+      (exit) => {
+        if (holder.hosted) void holder.hosted.#providerStopped(runtimeState.generation, exit);
+      },
     );
-    const initializeResult = await process.request('initialize', {
-      protocolVersion: 1,
-      clientCapabilities: PROXIED_CLIENT_CAPABILITIES,
-      clientInfo: { name: 'Weave Portal', version: '0.1.0' },
-    });
-    const sessionLoadResult = await process.request('session/load', {
+    const initializeResult = await process.request('initialize', ACP_INITIALIZE_PARAMS);
+    const sessionLoadResult = await restoreProviderSession(process, initializeResult, {
       sessionId: thread.acpSessionId,
       cwd: workspace.path,
       mcpServers: [],
     });
+    await runtimeStates.transition(thread.threadId, runtimeState.generation, 'idle');
     const hosted = new HostedThread(
       thread,
+      workspace,
+      agent,
       process,
+      runtimeState.generation,
       initializeResult,
       sessionLoadStateFrom(sessionLoadResult),
       onThreadChanged,
       journal,
+      runtimeStates,
     );
     holder.hosted = hosted;
-    for (const message of buffered) hosted.#receiveAgent(message);
+    for (const message of buffered) {
+      if (message.method !== 'session/update') hosted.#receiveAgent(runtimeState.generation, message);
+    }
     return hosted;
   }
 
@@ -281,6 +229,7 @@ export class HostedThread {
   }
 
   async close() {
+    this.#closing = true;
     await this.#process.close();
     await this.#agentMessageQueue;
     this.#attachments.clear();
@@ -301,7 +250,7 @@ export class HostedThread {
       return;
     }
     if (message.method === 'initialize') {
-      attachment.send(result(message.id, withThreadEventsCapability(this.#initializeResult)));
+      attachment.send(result(message.id, withWeaveCapabilities(this.#initializeResult)));
       return;
     }
     if (message.method === THREAD_EVENTS_ACK_METHOD) {
@@ -361,7 +310,32 @@ export class HostedThread {
       }
       attachment.threadEventsEnabled = cursor.enabled;
       attachment.acknowledgedSequence = 0;
-      for (const event of replay.events) this.#sendThreadEvent(attachment, event);
+      const needsProviderReplay = replay.compactedThrough > 0 &&
+        (!cursor.enabled || cursor.afterSequence === undefined);
+      if (needsProviderReplay) {
+        if (this.#recoveryState !== 'ready') {
+          attachment.send(error(message.id, RUNTIME_UNAVAILABLE_ERROR, 'The ACP session cannot be fully reloaded.', {
+            code: 'CANNOT_RESUME',
+            generation: this.#generation,
+          }));
+          return;
+        }
+        try {
+          const providerReplay = await this.#loadProviderReplay();
+          this.#sessionLoadResult = { ...this.#sessionLoadResult, ...providerReplay.state };
+          for (const providerMessage of providerReplay.messages) attachment.send(providerMessage);
+        } catch {
+          attachment.send(
+            error(message.id, RUNTIME_UNAVAILABLE_ERROR, 'The ACP provider transcript cannot be loaded.', {
+              code: 'CANNOT_RESUME',
+              generation: this.#generation,
+            }),
+          );
+          return;
+        }
+      } else {
+        for (const event of replay.events) this.#sendThreadEvent(attachment, event);
+      }
       if (cursor.enabled) {
         attachment.send({
           jsonrpc: '2.0',
@@ -369,11 +343,18 @@ export class HostedThread {
           params: {
             sessionId: this.thread.acpSessionId,
             lastSequence: replay.lastSequence,
-            fullReload: false,
+            fullReload: needsProviderReplay,
           },
         });
       }
       attachment.send(result(message.id, this.#sessionLoadResult));
+      return;
+    }
+    if (this.#recoveryState !== 'ready') {
+      attachment.send(error(message.id, RUNTIME_UNAVAILABLE_ERROR, 'The ACP session is not currently available.', {
+        code: this.#recoveryState === 'restoring' ? 'SESSION_RESTORING' : 'CANNOT_RESUME',
+        generation: this.#generation,
+      }));
       return;
     }
     if (message.method === 'session/prompt') {
@@ -414,8 +395,143 @@ export class HostedThread {
     attachment.send(error(message.id, -32601, `Portal does not support ${message.method}.`));
   }
 
-  #receiveAgent(message: JsonRpcMessage) {
-    this.#agentMessageQueue = this.#agentMessageQueue.then(() => this.#handleAgentMessage(message));
+  #receiveAgent(generation: number, message: JsonRpcMessage) {
+    if (generation !== this.#generation) return;
+    if (this.#providerReplayCapture && message.method === 'session/update') {
+      this.#providerReplayCapture.push(message);
+      return;
+    }
+    if (this.#restoringInternally && message.method === 'session/update') return;
+    this.#agentMessageQueue = this.#agentMessageQueue.then(async () => {
+      if (generation === this.#generation) await this.#handleAgentMessage(message);
+    });
+  }
+
+  async #providerStopped(generation: number, exit: AgentProcessExit) {
+    if (this.#closing || generation !== this.#generation) return;
+    if (this.#recoveryState === 'restoring') {
+      this.#recoveryState = 'unavailable';
+      await this.#runtimeStates.transition(this.thread.threadId, generation, 'unavailable', exit).catch(() =>
+        undefined
+      );
+      this.#emitRuntimeState(
+        'unavailable',
+        generation,
+        'RECOVERY_FAILED',
+        'The replacement Agent process exited during recovery.',
+      );
+      return;
+    }
+
+    const interruptedPrompt = [...this.#clientPending.values()].some((pending) => pending.isPrompt);
+    const state = interruptedPrompt ? 'uncertain' : 'exited';
+    await this.#runtimeStates.transition(this.thread.threadId, generation, state, exit).catch(() => undefined);
+    this.#emitRuntimeState(
+      state,
+      generation,
+      interruptedPrompt ? 'PROMPT_UNCERTAIN' : 'PROCESS_EXITED',
+      interruptedPrompt
+        ? 'The Agent process exited after prompt delivery; completion is unknown.'
+        : 'The Agent process exited and will be restored.',
+    );
+    this.#failPendingProviderRequests(generation);
+    this.#recoveryState = 'restoring';
+    await this.#recoverProvider();
+  }
+
+  #failPendingProviderRequests(generation: number) {
+    for (const pending of this.#clientPending.values()) {
+      pending.attachment.send(error(
+        pending.clientId,
+        RUNTIME_UNAVAILABLE_ERROR,
+        pending.isPrompt
+          ? 'The Agent process exited after prompt delivery; completion is unknown.'
+          : 'The Agent process exited before the request completed.',
+        { code: pending.isPrompt ? 'PROMPT_UNCERTAIN' : 'RUNTIME_RESTARTED', generation },
+      ));
+    }
+    this.#clientPending.clear();
+    this.#agentPending.clear();
+    this.#activePromptAttachmentId = undefined;
+    this.#submittedPromptEchoes = [];
+  }
+
+  async #recoverProvider() {
+    let generation = this.#generation;
+    let replacement: AgentProcess | undefined;
+    try {
+      const state = await this.#runtimeStates.start(this.thread.threadId, 'restoring');
+      generation = state.generation;
+      this.#generation = generation;
+      this.#emitRuntimeState('restoring', generation, 'RESTORING', 'The Host is restoring the ACP provider session.');
+
+      const process = new AgentProcess(
+        this.#agent,
+        this.#workspace.path,
+        (message) => this.#receiveAgent(generation, message),
+        (exit) => void this.#providerStopped(generation, exit),
+      );
+      replacement = process;
+      this.#process = process;
+      this.#restoringInternally = true;
+      const initializeResult = await process.request('initialize', ACP_INITIALIZE_PARAMS);
+      const sessionLoadResult = await restoreProviderSession(process, initializeResult, {
+        sessionId: this.thread.acpSessionId,
+        cwd: this.#workspace.path,
+        mcpServers: [],
+      });
+      this.#initializeResult = initializeResult;
+      this.#sessionLoadResult = {
+        ...this.#sessionLoadResult,
+        ...sessionLoadStateFrom(sessionLoadResult),
+      };
+      this.#restoringInternally = false;
+      await this.#agentMessageQueue;
+      await this.#runtimeStates.transition(this.thread.threadId, generation, 'idle');
+      this.#recoveryState = 'ready';
+      this.#emitRuntimeState('idle', generation, 'RECOVERED', 'The ACP provider session was restored.');
+    } catch (cause) {
+      this.#restoringInternally = false;
+      this.#recoveryState = 'unavailable';
+      await this.#runtimeStates.transition(this.thread.threadId, generation, 'unavailable').catch(() => undefined);
+      const cannotResume = cause instanceof Error && cause.message === 'CANNOT_RESUME';
+      this.#emitRuntimeState(
+        'unavailable',
+        generation,
+        cannotResume ? 'CANNOT_RESUME' : 'RECOVERY_FAILED',
+        cannotResume
+          ? 'The Agent supports neither session/resume nor session/load.'
+          : 'The ACP provider session could not be restored.',
+      );
+      await replacement?.close().catch(() => undefined);
+    }
+  }
+
+  #loadProviderReplay() {
+    if (this.#providerReplayTask) return this.#providerReplayTask;
+    const operation = (async () => {
+      if (!supportsSessionLoad(this.#initializeResult)) throw new Error('CANNOT_RESUME');
+      if (this.#activePromptAttachmentId) throw new Error('SESSION_BUSY');
+      const messages: JsonRpcMessage[] = [];
+      this.#providerReplayCapture = messages;
+      try {
+        const loaded = await this.#process.request('session/load', {
+          sessionId: this.thread.acpSessionId,
+          cwd: this.#workspace.path,
+          mcpServers: [],
+        });
+        return { messages, state: sessionLoadStateFrom(loaded) };
+      } finally {
+        if (this.#providerReplayCapture === messages) this.#providerReplayCapture = undefined;
+      }
+    })();
+    this.#providerReplayTask = operation;
+    void operation.then(() => {
+      if (this.#providerReplayTask === operation) this.#providerReplayTask = undefined;
+    }, () => {
+      if (this.#providerReplayTask === operation) this.#providerReplayTask = undefined;
+    });
+    return operation;
   }
 
   async #handleAgentMessage(message: JsonRpcMessage) {
@@ -539,6 +655,22 @@ export class HostedThread {
       lastSequence,
       reloadAfterSequence: null,
     }));
+  }
+
+  #emitRuntimeState(
+    state: 'idle' | 'exited' | 'restoring' | 'uncertain' | 'unavailable',
+    generation: number,
+    code: 'PROCESS_EXITED' | 'PROMPT_UNCERTAIN' | 'RESTORING' | 'RECOVERED' | 'CANNOT_RESUME' | 'RECOVERY_FAILED',
+    message: string,
+  ) {
+    const notification: JsonRpcMessage = {
+      jsonrpc: '2.0',
+      method: RUNTIME_STATE_METHOD,
+      params: { sessionId: this.thread.acpSessionId, generation, state, code, message },
+    };
+    for (const attachment of this.#attachments.values()) {
+      if (attachment.threadEventsEnabled) attachment.send(notification);
+    }
   }
 
   #captureSessionState(params: unknown) {

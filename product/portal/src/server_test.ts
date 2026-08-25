@@ -380,6 +380,10 @@ Deno.test('Portal gives opted-in clients stable cursor replay without changing o
         ackMethod: '_weave.dev/thread_events/ack',
         syncNotification: '_weave.dev/thread_events/sync',
       },
+      runtimeRecovery: {
+        version: 1,
+        stateNotification: '_weave.dev/runtime/state',
+      },
     });
     await native.request('session/load', {
       sessionId: 'fake-session',
@@ -491,7 +495,7 @@ Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledg
       agentId: 'fake',
       name: 'Fake',
       command: Deno.execPath(),
-      args: ['run', '--quiet', '--allow-read', fakeAgent],
+      args: ['run', '--quiet', '--allow-read', fakeAgent, '--replay-transcript'],
       env: {},
     }],
   };
@@ -521,6 +525,27 @@ Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledg
         prompt: [{ type: 'text', text: prompt }],
       });
     }
+    const acpUrl = `ws://127.0.0.1:${firstAddress.port}${attached.connection.path}?threadId=${threadId}`;
+    const ordinary = await RpcSocket.open(acpUrl, token);
+    await ordinary.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await ordinary.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
+    assertEquals(ordinary.notifications.filter((message) => message.method === 'session/update').length, 4);
+
+    const native = await RpcSocket.open(acpUrl, token);
+    await native.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await native.request('session/load', {
+      sessionId: 'fake-session',
+      cwd: workspacePath,
+      mcpServers: [],
+      _meta: { 'weave.dev/threadEvents': { afterSequence: null } },
+    });
+    assertEquals(native.notifications.filter((message) => message.method === 'session/update').length, 4);
+    assertEquals(
+      native.notifications.find((message) => message.method === '_weave.dev/thread_events/sync')?.params,
+      { sessionId: 'fake-session', lastSequence: 4, fullReload: true },
+    );
+    native.close();
+    ordinary.close();
     acp.close();
     rpc.close();
   } finally {
@@ -592,6 +617,261 @@ Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledg
   } finally {
     await secondServer.shutdown();
     await secondPortal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test('Portal recovers an uncertain prompt with durable fenced runtime generations', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-recovery-' });
+  const workspacePath = join(root, 'workspace');
+  await Deno.mkdir(workspacePath);
+  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  const token = 'recovery-token';
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    accessToken: token,
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{
+      agentId: 'fake',
+      name: 'Fake',
+      command: Deno.execPath(),
+      args: ['run', '--quiet', '--allow-read', '--allow-run', fakeAgent, '--recovery=resume-fails-then-load'],
+      env: {},
+    }],
+  };
+
+  let threadId = '';
+  const firstPortal = await Portal.open(config);
+  const firstServer = startPortalServer(firstPortal);
+  const firstAddress = firstServer.addr as Deno.NetAddr;
+  try {
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, token);
+    const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
+      thread: { threadId: string };
+    };
+    threadId = created.thread.threadId;
+    const attached = await rpc.request('thread.attach', { threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    const acp = await RpcSocket.open(
+      `ws://127.0.0.1:${firstAddress.port}${attached.connection.path}?threadId=${threadId}`,
+      token,
+    );
+    const initialized = await acp.request('initialize', {
+      protocolVersion: 1,
+      clientCapabilities: {},
+    }) as { agentCapabilities: { _meta: Record<string, { runtimeRecovery: unknown }> } };
+    assertEquals(initialized.agentCapabilities._meta['weave.dev'].runtimeRecovery, {
+      version: 1,
+      stateNotification: '_weave.dev/runtime/state',
+    });
+    await acp.request('session/load', {
+      sessionId: 'fake-session',
+      cwd: workspacePath,
+      mcpServers: [],
+      _meta: { 'weave.dev/threadEvents': { afterSequence: 0 } },
+    });
+    assertEquals(
+      acp.notifications.some((message) => JSON.stringify(message).includes('PROVIDER_REPLAY_SHOULD_NOT_ESCAPE')),
+      false,
+    );
+
+    let uncertain: unknown;
+    try {
+      await acp.request('session/prompt', {
+        sessionId: 'fake-session',
+        prompt: [{ type: 'text', text: 'CRASH_WITH_STALE_OUTPUT' }],
+      });
+    } catch (cause) {
+      uncertain = cause;
+    }
+    assertEquals(uncertain instanceof RpcResponseError && { code: uncertain.code, data: uncertain.data }, {
+      code: -32050,
+      data: { code: 'PROMPT_UNCERTAIN', generation: 1 },
+    });
+    await waitFor(() =>
+      acp.notifications.filter((message) => message.method === '_weave.dev/runtime/state').length === 3
+    );
+    assertEquals(
+      acp.notifications
+        .filter((message) => message.method === '_weave.dev/runtime/state')
+        .map((message) => {
+          const params = message.params as { generation: number; state: string; code: string };
+          return { generation: params.generation, state: params.state, code: params.code };
+        }),
+      [
+        { generation: 1, state: 'uncertain', code: 'PROMPT_UNCERTAIN' },
+        { generation: 2, state: 'restoring', code: 'RESTORING' },
+        { generation: 2, state: 'idle', code: 'RECOVERED' },
+      ],
+    );
+    assertEquals(
+      acp.notifications.some((message) => JSON.stringify(message).includes('PROVIDER_REPLAY_SHOULD_NOT_ESCAPE')),
+      false,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    assertEquals(
+      acp.notifications.some((message) => JSON.stringify(message).includes('OBSOLETE_PROVIDER_EVENT')),
+      false,
+    );
+    await acp.request('session/prompt', {
+      sessionId: 'fake-session',
+      prompt: [{ type: 'text', text: 'AFTER_RECOVERY' }],
+    });
+    await waitFor(() =>
+      acp.notifications.some((message) =>
+        JSON.stringify(message).includes('FAKE_AGENT_LOAD_AFTER_RESUME:AFTER_RECOVERY')
+      )
+    );
+    acp.close();
+    rpc.close();
+  } finally {
+    await firstServer.shutdown();
+    await firstPortal.close();
+  }
+
+  const secondPortal = await Portal.open(config);
+  const secondServer = startPortalServer(secondPortal);
+  const secondAddress = secondServer.addr as Deno.NetAddr;
+  try {
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, token);
+    const attached = await rpc.request('thread.attach', { threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    const acp = await RpcSocket.open(
+      `ws://127.0.0.1:${secondAddress.port}${attached.connection.path}?threadId=${threadId}`,
+      token,
+    );
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await acp.request('session/load', {
+      sessionId: 'fake-session',
+      cwd: workspacePath,
+      mcpServers: [],
+      _meta: { 'weave.dev/threadEvents': { afterSequence: 0 } },
+    });
+    assertEquals(
+      acp.notifications.some((message) => JSON.stringify(message).includes('PROVIDER_REPLAY_SHOULD_NOT_ESCAPE')),
+      false,
+    );
+    let uncertain: unknown;
+    try {
+      await acp.request('session/prompt', {
+        sessionId: 'fake-session',
+        prompt: [{ type: 'text', text: 'CRASH_AFTER_RESTART' }],
+      });
+    } catch (cause) {
+      uncertain = cause;
+    }
+    assertEquals(
+      uncertain instanceof RpcResponseError && (uncertain.data as { generation?: unknown }).generation,
+      3,
+    );
+    await waitFor(() =>
+      acp.notifications.some((message) =>
+        message.method === '_weave.dev/runtime/state' &&
+        (message.params as { generation?: unknown; code?: unknown }).generation === 4 &&
+        (message.params as { generation?: unknown; code?: unknown }).code === 'RECOVERED'
+      )
+    );
+    acp.close();
+    rpc.close();
+  } finally {
+    await secondServer.shutdown();
+    await secondPortal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test('Portal exposes an explicit unavailable state when an Agent cannot resume', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-cannot-resume-' });
+  const workspacePath = join(root, 'workspace');
+  await Deno.mkdir(workspacePath);
+  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  const token = 'cannot-resume-token';
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    accessToken: token,
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{
+      agentId: 'fake',
+      name: 'Fake',
+      command: Deno.execPath(),
+      args: ['run', '--quiet', '--allow-read', fakeAgent, '--recovery=none'],
+      env: {},
+    }],
+  };
+  const portal = await Portal.open(config);
+  const server = startPortalServer(portal);
+  const address = server.addr as Deno.NetAddr;
+  try {
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, token);
+    const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
+      thread: { threadId: string };
+    };
+    const attached = await rpc.request('thread.attach', { threadId: created.thread.threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    const acp = await RpcSocket.open(
+      `ws://127.0.0.1:${address.port}${attached.connection.path}?threadId=${attached.connection.threadId}`,
+      token,
+    );
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await acp.request('session/load', {
+      sessionId: 'fake-session',
+      cwd: workspacePath,
+      mcpServers: [],
+      _meta: { 'weave.dev/threadEvents': { afterSequence: 0 } },
+    });
+    try {
+      await acp.request('session/prompt', {
+        sessionId: 'fake-session',
+        prompt: [{ type: 'text', text: 'CRASH_AFTER_NO_RECOVERY' }],
+      });
+    } catch {
+      // The explicit runtime state below is the contract under test.
+    }
+    await waitFor(() =>
+      acp.notifications.some((message) =>
+        message.method === '_weave.dev/runtime/state' &&
+        (message.params as { code?: unknown }).code === 'CANNOT_RESUME'
+      )
+    );
+    assertEquals(
+      acp.notifications
+        .filter((message) => message.method === '_weave.dev/runtime/state')
+        .map((message) => {
+          const params = message.params as { generation: number; state: string; code: string };
+          return { generation: params.generation, state: params.state, code: params.code };
+        }),
+      [
+        { generation: 1, state: 'uncertain', code: 'PROMPT_UNCERTAIN' },
+        { generation: 2, state: 'restoring', code: 'RESTORING' },
+        { generation: 2, state: 'unavailable', code: 'CANNOT_RESUME' },
+      ],
+    );
+    let unavailable: unknown;
+    try {
+      await acp.request('session/prompt', {
+        sessionId: 'fake-session',
+        prompt: [{ type: 'text', text: 'MUST_NOT_RUN' }],
+      });
+    } catch (cause) {
+      unavailable = cause;
+    }
+    assertEquals(unavailable instanceof RpcResponseError && { code: unavailable.code, data: unavailable.data }, {
+      code: -32050,
+      data: { code: 'CANNOT_RESUME', generation: 2 },
+    });
+
+    acp.close();
+    rpc.close();
+  } finally {
+    await server.shutdown();
+    await portal.close();
     await Deno.remove(root, { recursive: true });
   }
 });
