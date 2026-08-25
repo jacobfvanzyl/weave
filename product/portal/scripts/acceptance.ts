@@ -76,6 +76,18 @@ const waitFor = async (predicate: () => boolean) => {
   }
 };
 
+const notificationText = (messages: JsonRpcMessage[]) =>
+  messages.map((message) => {
+    const params = message.params;
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return '';
+    const update = (params as { update?: unknown }).update;
+    if (!update || typeof update !== 'object' || Array.isArray(update)) return '';
+    const content = (update as { content?: unknown }).content;
+    if (!content || typeof content !== 'object' || Array.isArray(content)) return '';
+    const text = (content as { text?: unknown }).text;
+    return typeof text === 'string' ? text : '';
+  }).join('');
+
 const baseUrl = required('PORTAL_URL').replace(/\/$/, '');
 const token = required('PORTAL_ACCESS_TOKEN');
 const workspaceId = required('PORTAL_WORKSPACE_ID');
@@ -123,8 +135,9 @@ try {
       sessionId: thread.acpSessionId,
       prompt: [{ type: 'text', text: `Reply with exactly ${marker}` }],
     });
-    const transcript = acp.notifications.map((message) => JSON.stringify(message)).join('\n');
-    if (!transcript.includes(marker)) throw new Error(`Agent transcript did not contain ${marker}.`);
+    if (!notificationText(acp.notifications).includes(marker)) {
+      throw new Error(`Agent transcript did not contain ${marker}.`);
+    }
     if (recovery) {
       let uncertain: unknown;
       try {
@@ -163,7 +176,7 @@ try {
         sessionId: thread.acpSessionId,
         prompt: [{ type: 'text', text: recoveredMarker }],
       });
-      if (!acp.notifications.some((message) => JSON.stringify(message).includes(recoveredMarker))) {
+      if (!notificationText(acp.notifications).includes(recoveredMarker)) {
         throw new Error('Fresh prompt did not complete after provider recovery.');
       }
 
@@ -179,7 +192,7 @@ try {
           mcpServers: [],
           _meta: { 'weave.dev/threadEvents': { afterSequence: baseSequence + 3 } },
         });
-        if (!reattached.notifications.some((message) => JSON.stringify(message).includes(recoveredMarker))) {
+        if (!notificationText(reattached.notifications).includes(recoveredMarker)) {
           throw new Error('Cursor reattachment did not replay the recovered turn.');
         }
       } finally {
