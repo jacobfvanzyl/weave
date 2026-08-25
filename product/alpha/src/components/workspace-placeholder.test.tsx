@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { AlphaController } from '@/app/alpha-controller';
 import { createTranscript } from '@/chat/acp-transcript';
@@ -15,7 +16,7 @@ const controller = (): AlphaController => ({
     },
     accessToken: 'test',
     searchQuery: '',
-    projects: [{
+    workspaces: [{
       id: 'weave',
       name: 'weave',
       threads: [{
@@ -25,7 +26,7 @@ const controller = (): AlphaController => ({
         hostName: 'bazzite',
         status: 'active',
         updatedAt: '2026-08-25T00:00:00.000Z',
-        projectId: 'weave',
+        workspaceId: 'weave',
       }],
     }],
     selectedThreadId: 'thread-1',
@@ -42,6 +43,11 @@ const controller = (): AlphaController => ({
     refresh: vi.fn(),
     createThread: vi.fn(),
     selectThread: vi.fn(),
+    openWorkspaceDirectory: vi.fn(),
+    openWorkspaceFile: vi.fn(),
+    activateWorkspaceFile: vi.fn(),
+    closeWorkspaceFile: vi.fn(),
+    reloadWorkspaceFile: vi.fn(),
     sendPrompt: vi.fn(),
     cancelPrompt: vi.fn(),
     respondToPermission: vi.fn(),
@@ -55,7 +61,7 @@ describe('WorkspacePlaceholder', () => {
   it('anchors errors below the title bar and within phone-width gutters', () => {
     const { container } = render(
       <SidebarProvider>
-        <WorkspacePlaceholder controller={controller()} />
+        <WorkspacePlaceholder controller={controller()} onToggleThreads={vi.fn()} />
       </SidebarProvider>,
     );
 
@@ -78,7 +84,7 @@ describe('WorkspacePlaceholder', () => {
     value.model.error = undefined;
     const { container } = render(
       <SidebarProvider>
-        <WorkspacePlaceholder controller={value} />
+        <WorkspacePlaceholder controller={value} onToggleThreads={vi.fn()} />
       </SidebarProvider>,
     );
 
@@ -88,5 +94,22 @@ describe('WorkspacePlaceholder', () => {
     );
     expect(container.querySelector('[data-slot="main-bottom-rail"]'))
       .not.toHaveClass('hidden', 'sm:block');
+  });
+
+  it('restores a hidden Project Pane from an icon-only bottom-rail control', async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <SidebarProvider defaultOpen={false}>
+        <WorkspacePlaceholder controller={controller()} onToggleThreads={vi.fn()} />
+      </SidebarProvider>,
+    );
+
+    const toggle = screen.getByRole('button', { name: 'Show Project Pane' });
+    expect(toggle).toHaveTextContent('');
+    expect(toggle).toHaveClass('size-7', 'items-center', 'justify-center');
+    expect(toggle.querySelector('[data-symbol="project-pane"]')).toBeInTheDocument();
+    await user.click(toggle);
+    expect(screen.queryByRole('button', { name: 'Show Project Pane' })).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot="main-bottom-rail"]')).toBeInTheDocument();
   });
 });

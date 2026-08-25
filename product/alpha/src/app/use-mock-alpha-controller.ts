@@ -1,16 +1,12 @@
 import { useMemo, useState } from 'react';
 import { createAcpShowcaseTranscript } from '@/chat/acp-showcase';
-import {
-  createTranscript,
-  queueOptimisticPrompt,
-  reduceAcpEvent,
-  type AcpTranscript,
-} from '@/chat/acp-transcript';
+import { type AcpTranscript, createTranscript, queueOptimisticPrompt, reduceAcpEvent } from '@/chat/acp-transcript';
 import type {
   AlphaConnectionStatus,
   AlphaController,
-  AlphaProject,
+  AlphaWorkspace,
   AlphaViewModel,
+  AlphaWorkspaceFiles,
 } from './alpha-controller';
 
 export const MOCK_SCENARIOS = [
@@ -25,7 +21,7 @@ export const MOCK_SCENARIOS = [
 
 export type MockScenario = typeof MOCK_SCENARIOS[number];
 
-const PROJECTS: AlphaProject[] = [
+const WORKSPACES: AlphaWorkspace[] = [
   {
     id: 'workspace-weave',
     name: 'weave',
@@ -37,7 +33,7 @@ const PROJECTS: AlphaProject[] = [
         hostName: 'bazzite',
         status: 'active',
         updatedAt: '2026-08-24T08:54:00.000Z',
-        projectId: 'workspace-weave',
+        workspaceId: 'workspace-weave',
       },
       {
         id: 'thread-acp-host',
@@ -46,7 +42,7 @@ const PROJECTS: AlphaProject[] = [
         hostName: 'macbook',
         status: 'closed',
         updatedAt: '2026-08-23T17:22:00.000Z',
-        projectId: 'workspace-weave',
+        workspaceId: 'workspace-weave',
       },
     ],
   },
@@ -61,7 +57,7 @@ const PROJECTS: AlphaProject[] = [
         hostName: 'bazzite',
         status: 'closed',
         updatedAt: '2026-08-23T11:05:00.000Z',
-        projectId: 'workspace-odin',
+        workspaceId: 'workspace-odin',
       },
       {
         id: 'thread-release',
@@ -70,11 +66,27 @@ const PROJECTS: AlphaProject[] = [
         hostName: 'macbook',
         status: 'closed',
         updatedAt: '2026-08-22T14:30:00.000Z',
-        projectId: 'workspace-odin',
+        workspaceId: 'workspace-odin',
       },
     ],
   },
 ];
+
+const MOCK_WORKSPACE_ENTRIES: Record<
+  string,
+  AlphaWorkspaceFiles['directories'][string]['entries']
+> = {
+  '': [
+    { name: 'src', path: 'src', type: 'directory' },
+    { name: 'README.md', path: 'README.md', type: 'file', size: 36 },
+  ],
+  src: [{ name: 'main.ts', path: 'src/main.ts', type: 'file', size: 44 }],
+};
+
+const MOCK_FILE_CONTENT: Record<string, string> = {
+  'README.md': '# Mock Workspace\n\nBrowse files locally.\n',
+  'src/main.ts': "export const marker = 'WVE42_MOCK_WORKSPACE';\n",
+};
 
 const scenarioConnection = (scenario: MockScenario): AlphaConnectionStatus => {
   if (scenario === 'disconnected') return 'disconnected';
@@ -87,9 +99,7 @@ const scenarioTranscript = (scenario: MockScenario) => {
     return undefined;
   }
   const transcript = createAcpShowcaseTranscript();
-  return scenario === 'busy'
-    ? reduceAcpEvent(transcript, { type: 'turn/started' })
-    : transcript;
+  return scenario === 'busy' ? reduceAcpEvent(transcript, { type: 'turn/started' }) : transcript;
 };
 
 export const mockScenarioFromLocation = (): MockScenario | undefined => {
@@ -113,8 +123,20 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
   const [transcript, setTranscript] = useState<AcpTranscript | undefined>(
     () => scenarioTranscript(scenario),
   );
-  const [projects, setProjects] = useState<AlphaProject[]>(
-    scenario === 'empty' ? PROJECTS.map((project) => ({ ...project, threads: [] })) : PROJECTS,
+  const [workspaceFiles, setWorkspaceFiles] = useState<AlphaWorkspaceFiles | undefined>(() =>
+    selectedThreadId
+      ? {
+        workspaceId: 'workspace-weave',
+        workspaceName: 'weave',
+        openFiles: [],
+        directories: {
+          '': { entries: MOCK_WORKSPACE_ENTRIES[''], truncated: false },
+        },
+      }
+      : undefined
+  );
+  const [workspaces, setWorkspaces] = useState<AlphaWorkspace[]>(
+    scenario === 'empty' ? WORKSPACES.map((workspace) => ({ ...workspace, threads: [] })) : WORKSPACES,
   );
 
   const model = useMemo<AlphaViewModel>(() => ({
@@ -126,9 +148,10 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
     },
     accessToken,
     searchQuery,
-    projects,
+    workspaces,
     selectedThreadId,
     transcript,
+    workspaceFiles,
     busy: scenario === 'busy',
     error: scenario === 'error' ? 'Portal lost the connection to this host.' : undefined,
   }), [
@@ -139,7 +162,8 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
     searchQuery,
     selectedThreadId,
     transcript,
-    projects,
+    workspaceFiles,
+    workspaces,
   ]);
 
   return {
@@ -149,69 +173,172 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
       setAccessToken,
       setSearchQuery,
       connect: () => setConnectionStatus('connected'),
-      disconnect: () => setConnectionStatus('disconnected'),
+      disconnect: () => {
+        setConnectionStatus('disconnected');
+        setWorkspaceFiles(undefined);
+      },
       refresh: () => undefined,
-      createThread: (projectId) => {
-        const targetId = projectId || projects[0]?.id;
+      createThread: (workspaceId) => {
+        const targetId = workspaceId || workspaces[0]?.id;
         if (!targetId) return;
         const id = `mock-thread-${Date.now()}`;
-        setProjects((current) => current.map((project) =>
-          project.id === targetId
-            ? {
-              ...project,
-              threads: [{
-                id,
-                title: 'New thread',
-                agentName: 'weave-codex',
-                hostName: 'bazzite',
-                status: 'active',
-                updatedAt: new Date().toISOString(),
-                projectId: project.id,
-              }, ...project.threads],
-            }
-            : project,
-        ));
+        setWorkspaces((current) =>
+          current.map((workspace) =>
+            workspace.id === targetId
+              ? {
+                ...workspace,
+                threads: [{
+                  id,
+                  title: 'New thread',
+                  agentName: 'weave-codex',
+                  hostName: 'bazzite',
+                  status: 'active',
+                  updatedAt: new Date().toISOString(),
+                  workspaceId: workspace.id,
+                }, ...workspace.threads],
+              }
+              : workspace
+          )
+        );
         setSelectedThreadId(id);
         setTranscript(createTranscript(id));
+        const workspace = workspaces.find((candidate) => candidate.id === targetId);
+        if (workspace) {
+          setWorkspaceFiles({
+            workspaceId: workspace.id,
+            workspaceName: workspace.name,
+            openFiles: [],
+            directories: {
+              '': { entries: MOCK_WORKSPACE_ENTRIES[''], truncated: false },
+            },
+          });
+        }
       },
       selectThread: (threadId) => {
+        const thread = workspaces.flatMap((workspace) => workspace.threads)
+          .find((candidate) => candidate.id === threadId);
+        const workspace = workspaces.find((candidate) => candidate.id === thread?.workspaceId);
         setSelectedThreadId(threadId);
         setTranscript(createAcpShowcaseTranscript());
+        setWorkspaceFiles(workspace
+          ? {
+            workspaceId: workspace.id,
+            workspaceName: workspace.name,
+            openFiles: [],
+            directories: {
+              '': { entries: MOCK_WORKSPACE_ENTRIES[''], truncated: false },
+            },
+          }
+          : undefined);
       },
-      sendPrompt: (text) => setTranscript((current) => current
-        ? reduceAcpEvent(
-            queueOptimisticPrompt(
-              current,
-              `mock-local-${Date.now()}`,
-              [{ type: 'text', text }],
+      openWorkspaceDirectory: (path) => {
+        setWorkspaceFiles((current) => current
+          ? {
+            ...current,
+            directories: current.directories[path]
+              ? current.directories
+              : {
+                ...current.directories,
+                [path]: { entries: MOCK_WORKSPACE_ENTRIES[path] ?? [], truncated: false },
+              },
+          }
+          : current);
+      },
+      openWorkspaceFile: (path) => {
+        const content = MOCK_FILE_CONTENT[path];
+        if (content === undefined) return;
+        setWorkspaceFiles((current) => current
+          ? {
+            ...current,
+            openFiles: current.openFiles.some((file) => file.path === path)
+              ? current.openFiles
+              : [...current.openFiles, {
+                kind: 'text',
+                path,
+                content,
+                contentHash: '0'.repeat(64),
+                size: new TextEncoder().encode(content).byteLength,
+                changed: false,
+              }],
+            activeFilePath: path,
+          }
+          : current);
+      },
+      activateWorkspaceFile: (path) => {
+        setWorkspaceFiles((current) => current?.openFiles.some((file) => file.path === path)
+          ? { ...current, activeFilePath: path }
+          : current);
+      },
+      closeWorkspaceFile: (path) => {
+        setWorkspaceFiles((current) => {
+          if (!current) return current;
+          const closingIndex = current.openFiles.findIndex((file) => file.path === path);
+          if (closingIndex === -1) return current;
+          return {
+            ...current,
+            openFiles: current.openFiles.filter((file) => file.path !== path),
+            activeFilePath: current.activeFilePath === path
+              ? current.openFiles[closingIndex + 1]?.path ?? current.openFiles[closingIndex - 1]?.path
+              : current.activeFilePath,
+          };
+        });
+      },
+      reloadWorkspaceFile: () => {
+        setWorkspaceFiles((current) => current
+          ? {
+            ...current,
+            openFiles: current.openFiles.map((file) =>
+              file.kind === 'text' && file.path === current.activeFilePath
+                ? { ...file, changed: false }
+                : file
             ),
-            { type: 'turn/started' },
-          )
-        : current),
-      cancelPrompt: () => setTranscript((current) => current
-        ? reduceAcpEvent(current, { type: 'turn/stopped', stopReason: 'cancelled' })
-        : current),
-      respondToPermission: (requestId, optionId) => setTranscript((current) => current
-        ? reduceAcpEvent(current, { type: 'permission/resolved', requestId, optionId })
-        : current),
-      respondToElicitation: (requestId, response) => setTranscript((current) => current
-        ? reduceAcpEvent(current, { type: 'elicitation/resolved', requestId, response })
-        : current),
-      setMode: (modeId) => setTranscript((current) => current
-        ? reduceAcpEvent(current, {
-            type: 'session/update',
-            update: { sessionUpdate: 'current_mode_update', currentModeId: modeId },
-          })
-        : current),
-      setConfigOption: (optionId, value) => setTranscript((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          configOptions: current.configOptions.map((option) => option.id === optionId
-            ? { ...option, currentValue: value } as typeof option
-            : option),
-        };
-      }),
+          }
+          : current);
+      },
+      sendPrompt: (text) =>
+        setTranscript((current) =>
+          current
+            ? reduceAcpEvent(
+              queueOptimisticPrompt(
+                current,
+                `mock-local-${Date.now()}`,
+                [{ type: 'text', text }],
+              ),
+              { type: 'turn/started' },
+            )
+            : current
+        ),
+      cancelPrompt: () =>
+        setTranscript((current) =>
+          current ? reduceAcpEvent(current, { type: 'turn/stopped', stopReason: 'cancelled' }) : current
+        ),
+      respondToPermission: (requestId, optionId) =>
+        setTranscript((current) =>
+          current ? reduceAcpEvent(current, { type: 'permission/resolved', requestId, optionId }) : current
+        ),
+      respondToElicitation: (requestId, response) =>
+        setTranscript((current) =>
+          current ? reduceAcpEvent(current, { type: 'elicitation/resolved', requestId, response }) : current
+        ),
+      setMode: (modeId) =>
+        setTranscript((current) =>
+          current
+            ? reduceAcpEvent(current, {
+              type: 'session/update',
+              update: { sessionUpdate: 'current_mode_update', currentModeId: modeId },
+            })
+            : current
+        ),
+      setConfigOption: (optionId, value) =>
+        setTranscript((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            configOptions: current.configOptions.map((option) =>
+              option.id === optionId ? { ...option, currentValue: value } as typeof option : option
+            ),
+          };
+        }),
     },
   };
 }

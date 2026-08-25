@@ -3,22 +3,10 @@ import { Capacitor } from '@capacitor/core';
 import type { HostSnapshot } from '@/portal-client';
 import { DirectHostClient } from '@/portal-client';
 import { portalHostName } from '@/portal-address';
-import {
-  createTranscript,
-  queueOptimisticPrompt,
-  reduceAcpEvent,
-  type AcpTranscript,
-} from '@/chat/acp-transcript';
-import type {
-  AlphaController,
-  AlphaProject,
-  AlphaViewModel,
-} from './alpha-controller';
-import {
-  DEFAULT_PORTAL_URL,
-  loadPortalConnection,
-  savePortalConnection,
-} from './portal-connection-storage';
+import { type AcpTranscript, createTranscript, queueOptimisticPrompt, reduceAcpEvent } from '@/chat/acp-transcript';
+import type { AlphaController, AlphaWorkspace, AlphaViewModel } from './alpha-controller';
+import { DEFAULT_PORTAL_URL, loadPortalConnection, savePortalConnection } from './portal-connection-storage';
+import { useWorkspaceFileBrowser } from './use-workspace-file-browser';
 
 export const HOST_SNAPSHOT_REFRESH_INTERVAL_MS = 5_000;
 
@@ -31,10 +19,10 @@ type HostClientFactory = (
 
 const createHostClient: HostClientFactory = (...args) => new DirectHostClient(...args);
 
-const mapProjects = (
+const mapWorkspaces = (
   snapshot: HostSnapshot | undefined,
   currentHostName: string,
-): AlphaProject[] => {
+): AlphaWorkspace[] => {
   if (!snapshot) return [];
 
   const agents = new Map(
@@ -54,7 +42,7 @@ const mapProjects = (
         hostName: currentHostName,
         status: thread.status,
         updatedAt: thread.updatedAt,
-        projectId: workspace.workspaceId,
+        workspaceId: workspace.workspaceId,
       })),
   }));
 };
@@ -75,6 +63,7 @@ export function useLiveAlphaController(
   const connectionEdited = useRef(false);
   const clientRef = useRef<DirectHostClient | undefined>(undefined);
   const refreshErrorRef = useRef<string | undefined>(undefined);
+  const workspaceFileBrowser = useWorkspaceFileBrowser(client);
 
   useEffect(() => {
     let active = true;
@@ -150,9 +139,7 @@ export function useLiveAlphaController(
         (event) => {
           setTranscript((current) => {
             if (!current) {
-              return event.type === 'history/reset'
-                ? createTranscript(event.sessionId ?? 'unattached')
-                : current;
+              return event.type === 'history/reset' ? createTranscript(event.sessionId ?? 'unattached') : current;
             }
             return reduceAcpEvent(current, event);
           });
@@ -164,6 +151,7 @@ export function useLiveAlphaController(
           setSnapshot(undefined);
           setSelectedThreadId(undefined);
           setTranscript(undefined);
+          workspaceFileBrowser.close();
           setBusy(false);
           refreshErrorRef.current = undefined;
           setError(closeError.message);
@@ -180,6 +168,7 @@ export function useLiveAlphaController(
       setSnapshot(nextSnapshot);
       setSelectedThreadId(undefined);
       setTranscript(undefined);
+      workspaceFileBrowser.close();
     } catch (cause) {
       nextClient?.close();
       if (clientRef.current === nextClient) clientRef.current = undefined;
@@ -193,6 +182,7 @@ export function useLiveAlphaController(
     clientRef.current = undefined;
     refreshErrorRef.current = undefined;
     client?.close();
+    workspaceFileBrowser.close();
     setClient(undefined);
     setSnapshot(undefined);
     setSelectedThreadId(undefined);
@@ -212,19 +202,28 @@ export function useLiveAlphaController(
   const sendPrompt = async (text: string) => {
     if (!client || !transcript) return;
     const content = [{ type: 'text' as const, text }];
-    setTranscript((current) => current
-      ? queueOptimisticPrompt(current, `local-${crypto.randomUUID()}`, content)
-      : current);
+    setTranscript((current) =>
+      current ? queueOptimisticPrompt(current, `local-${crypto.randomUUID()}`, content) : current
+    );
     await performAcpAction(async () => await client.prompt(content));
   };
 
   const selectThread = async (threadId: string) => {
     if (!client) return;
+    const thread = snapshot?.threads.find((candidate) => candidate.threadId === threadId);
+    const workspace = snapshot?.workspaces.find(
+      (candidate) => candidate.workspaceId === thread?.workspaceId,
+    );
     setBusy(true);
     setError(undefined);
     try {
       await client.attach(threadId);
       setSelectedThreadId(threadId);
+      if (workspace) {
+        await workspaceFileBrowser.open(workspace.workspaceId, workspace.name);
+      } else {
+        workspaceFileBrowser.close();
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -232,10 +231,10 @@ export function useLiveAlphaController(
     }
   };
 
-  const createThread = async (projectId?: string) => {
+  const createThread = async (workspaceId?: string) => {
     if (!client || !snapshot) return;
     const workspace = snapshot.workspaces.find(
-      (candidate) => candidate.workspaceId === projectId,
+      (candidate) => candidate.workspaceId === workspaceId,
     ) || snapshot.workspaces[0];
     const agent = snapshot.agents[0];
     if (!workspace || !agent) return;
@@ -250,6 +249,7 @@ export function useLiveAlphaController(
       setSnapshot(await client.snapshot());
       await client.attach(thread.threadId);
       setSelectedThreadId(thread.threadId);
+      await workspaceFileBrowser.open(workspace.workspaceId, workspace.name);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -266,11 +266,12 @@ export function useLiveAlphaController(
     },
     accessToken,
     searchQuery,
-    projects: mapProjects(snapshot, portalHostName(hostUrl)),
+    workspaces: mapWorkspaces(snapshot, portalHostName(hostUrl)),
     selectedThreadId,
     transcript,
-    busy,
-    error,
+    workspaceFiles: workspaceFileBrowser.files,
+    busy: busy || workspaceFileBrowser.busy,
+    error: workspaceFileBrowser.error ?? error,
   }), [
     accessToken,
     busy,
@@ -281,6 +282,9 @@ export function useLiveAlphaController(
     selectedThreadId,
     snapshot,
     transcript,
+    workspaceFileBrowser.busy,
+    workspaceFileBrowser.error,
+    workspaceFileBrowser.files,
   ]);
 
   return {
@@ -300,6 +304,11 @@ export function useLiveAlphaController(
       refresh,
       createThread,
       selectThread,
+      openWorkspaceDirectory: workspaceFileBrowser.openDirectory,
+      openWorkspaceFile: workspaceFileBrowser.openFile,
+      activateWorkspaceFile: workspaceFileBrowser.activateFile,
+      closeWorkspaceFile: workspaceFileBrowser.closeFile,
+      reloadWorkspaceFile: workspaceFileBrowser.reloadFile,
       sendPrompt,
       cancelPrompt: () => performAcpAction(async () => await client?.cancelPrompt()),
       respondToPermission: (requestId, optionId) => {
@@ -309,9 +318,10 @@ export function useLiveAlphaController(
         client?.respondToElicitation(requestId, response);
       },
       setMode: (modeId) => performAcpAction(async () => await client?.setMode(modeId)),
-      setConfigOption: (optionId, value) => performAcpAction(
-        async () => await client?.setConfigOption(optionId, value),
-      ),
+      setConfigOption: (optionId, value) =>
+        performAcpAction(
+          async () => await client?.setConfigOption(optionId, value),
+        ),
     },
   };
 }

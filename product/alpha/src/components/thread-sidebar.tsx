@@ -1,21 +1,10 @@
 import { useMemo } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import {
-  Add01Icon,
-  ArrowRight01Icon,
-  Folder01Icon,
-  Search01Icon,
-  Settings01Icon,
-} from '@hugeicons/core-free-icons';
+import { Add01Icon, ArrowRight01Icon, Folder01Icon, Search01Icon, Settings01Icon } from '@hugeicons/core-free-icons';
 import type { AlphaController, AlphaThread } from '@/app/alpha-controller';
 import { CodexIcon } from '@/components/codex-icon';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from '@/components/ui/empty';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import {
   Sidebar,
   SidebarContent,
@@ -29,9 +18,12 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { cn } from '@/lib/utils';
+
+const isCapacitorPlatform = (platform: string) =>
+  platform === 'ios' || platform === 'android';
 
 const updatedLabel = (value: string) => {
   const elapsedMinutes = Math.max(
@@ -58,25 +50,25 @@ function ThreadMenuItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        size="lg"
+        size='lg'
         isActive={selected}
         disabled={busy}
         tooltip={thread.title}
-        className="h-auto min-h-12 items-start py-2"
+        className='h-auto min-h-12 items-start py-2'
         onClick={onSelect}
       >
         <CodexIcon />
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="truncate font-medium text-sidebar-foreground">
+        <span className='flex min-w-0 flex-1 flex-col gap-1'>
+          <span className='flex min-w-0 items-center gap-2'>
+            <span className='truncate font-medium text-sidebar-foreground'>
               {thread.title}
             </span>
-            <span className="ml-auto shrink-0 text-[0.6875rem] text-muted-foreground">
+            <span className='ml-auto shrink-0 text-[0.6875rem] text-muted-foreground'>
               {updatedLabel(thread.updatedAt)}
             </span>
           </span>
-          <span className="text-[0.6875rem] text-muted-foreground">
-            <span className="truncate">{thread.hostName}</span>
+          <span className='text-[0.6875rem] text-muted-foreground'>
+            <span className='truncate'>{thread.hostName}</span>
           </span>
         </span>
       </SidebarMenuButton>
@@ -87,70 +79,72 @@ function ThreadMenuItem({
 export function ThreadSidebar({ controller }: { controller: AlphaController }) {
   const { model, actions } = controller;
   const { setOpenMobile } = useSidebar();
+  const capacitorPlatform = isCapacitorPlatform(model.platform);
   const query = model.searchQuery.trim().toLocaleLowerCase();
-  const projects = useMemo(() => model.projects.map((project) => ({
-    ...project,
-    threads: project.threads.filter((thread) =>
-      !query
-      || thread.title.toLocaleLowerCase().includes(query)
-      || thread.hostName.toLocaleLowerCase().includes(query)
-      || project.name.toLocaleLowerCase().includes(query),
-    ),
-  })).filter((project) => !query || project.threads.length > 0), [model.projects, query]);
+  const workspaces = useMemo(() =>
+    model.workspaces.map((workspace) => ({
+      ...workspace,
+      threads: workspace.threads.filter((thread) =>
+        !query ||
+        thread.title.toLocaleLowerCase().includes(query) ||
+        thread.hostName.toLocaleLowerCase().includes(query) ||
+        workspace.name.toLocaleLowerCase().includes(query)
+      ),
+    })).filter((workspace) => !query || workspace.threads.length > 0), [model.workspaces, query]);
 
   return (
-    <Sidebar collapsible="offcanvas">
-      <SidebarHeader className="h-11 shrink-0 justify-center gap-0 border-b border-sidebar-border bg-title-bar px-2 py-0">
-        <div className="relative [&_svg]:size-3.5">
+    <Sidebar collapsible='offcanvas' position='inline'>
+      <SidebarHeader className='h-11 shrink-0 justify-center gap-0 border-b border-sidebar-border bg-title-bar px-2 py-0'>
+        <div className='relative [&_svg]:size-3.5'>
           <HugeiconsIcon
             icon={Search01Icon}
             strokeWidth={2}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-icon-muted"
+            className='pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-icon-muted'
           />
           <SidebarInput
-            type="search"
-            aria-label="Search threads"
-            placeholder="Search threads…"
+            type='search'
+            aria-label='Search threads'
+            placeholder='Search threads…'
             value={model.searchQuery}
-            className="pl-7"
+            className='pl-7'
             onChange={(event) => actions.setSearchQuery(event.target.value)}
           />
         </div>
       </SidebarHeader>
 
       <SidebarContent>
-        {projects.map((project) => (
-          <Collapsible key={project.id} defaultOpen className="group/project">
-            <SidebarGroup className="py-1">
+        {workspaces.map((workspace) => (
+          <Collapsible key={workspace.id} defaultOpen className='group/workspace'>
+            <SidebarGroup className='py-1'>
               <SidebarGroupLabel
                 render={<CollapsibleTrigger />}
-                className="gap-1.5 pr-7"
+                className='gap-1.5 pr-7'
               >
                 <HugeiconsIcon
                   icon={Folder01Icon}
                   strokeWidth={2}
-                  className="mr-0.5 shrink-0"
+                  className='mr-0.5 shrink-0'
                 />
-                <span className="truncate">{project.name}</span>
+                <span className='truncate'>{workspace.name}</span>
                 <HugeiconsIcon
                   icon={ArrowRight01Icon}
                   strokeWidth={2}
-                  className="shrink-0 transition-transform group-data-open/project:rotate-90"
+                  className='shrink-0 transition-transform group-data-open/workspace:rotate-90'
                 />
               </SidebarGroupLabel>
               <SidebarGroupAction
-                className="top-3 right-2.5 w-6"
-                title={`New thread in ${project.name}`}
+                className='top-3 right-2.5 w-6'
+                title={`New thread in ${workspace.name}`}
                 disabled={model.busy}
-                onClick={() => void actions.createThread(project.id)}
+                onClick={() => void actions.createThread(workspace.id)}
               >
                 <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-                <span className="sr-only">New thread in {project.name}</span>
+                <span className='sr-only'>New thread in {workspace.name}</span>
               </SidebarGroupAction>
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {project.threads.map((thread) => (
+                    {workspace.threads.map((thread) => (
                       <ThreadMenuItem
                         key={thread.id}
                         thread={thread}
@@ -162,13 +156,13 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
                         }}
                       />
                     ))}
-                    {!project.threads.length && (
+                    {!workspace.threads.length && (
                       <li>
-                        <Empty className="gap-1 p-3">
+                        <Empty className='gap-1 p-3'>
                           <EmptyHeader>
                             <EmptyTitle>No threads yet</EmptyTitle>
                             <EmptyDescription>
-                              Create the first thread in this project.
+                              Create the first thread in this workspace.
                             </EmptyDescription>
                           </EmptyHeader>
                         </Empty>
@@ -180,8 +174,8 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
             </SidebarGroup>
           </Collapsible>
         ))}
-        {!projects.length && (
-          <Empty className="gap-1 p-4">
+        {!workspaces.length && (
+          <Empty className='gap-1 p-4'>
             <EmptyHeader>
               <EmptyTitle>No matching threads</EmptyTitle>
               <EmptyDescription>Try a different search.</EmptyDescription>
@@ -190,15 +184,20 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
         )}
       </SidebarContent>
 
-      <SidebarFooter className="h-[var(--bottom-rail-height)] shrink-0 justify-start gap-0 border-t border-sidebar-border bg-status-bar py-0 pl-7 pr-1">
+      <SidebarFooter
+        className={cn(
+          'h-[var(--bottom-rail-height)] shrink-0 justify-start gap-0 border-t border-sidebar-border bg-status-bar py-0 pr-1',
+          capacitorPlatform ? 'pl-7' : 'pl-1',
+        )}
+      >
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              size="sm"
-              type="button"
-              aria-label="Settings"
-              tooltip="Settings"
-              className="w-fit"
+              size='sm'
+              type='button'
+              aria-label='Settings'
+              tooltip='Settings'
+              className='w-fit'
               onClick={() => undefined}
             >
               <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} />
@@ -206,7 +205,6 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
-      <SidebarRail />
     </Sidebar>
   );
 }

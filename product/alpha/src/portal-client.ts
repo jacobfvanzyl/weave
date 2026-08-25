@@ -1,12 +1,17 @@
 import {
   type AgentSummary,
+  parsePortalRpcResult,
+  parseWorkspaceFileErrorData,
+  parseWorkspaceFileWatchNotification,
+  PORTAL_TOKEN_PROTOCOL_PREFIX,
   type PortalRpcMethod,
   type PortalRpcParams,
   type PortalRpcResult,
   type ThreadSummary,
+  WORKSPACE_FILE_WATCH_EVENT_METHOD,
+  type WorkspaceFileErrorData,
+  type WorkspaceFileWatchEvent,
   type WorkspaceSummary,
-  parsePortalRpcResult,
-  PORTAL_TOKEN_PROTOCOL_PREFIX,
 } from '@weave/product-protocol';
 import type { ContentBlock, CreateElicitationResponse } from '@agentclientprotocol/sdk';
 import { AcpSessionClient } from '@/chat/acp-client';
@@ -16,6 +21,13 @@ import { portalWebSocketUrl } from '@/portal-address';
 type JsonRpcId = number;
 type PendingRequest = { method: string; resolve(value: unknown): void; reject(error: Error): void };
 type NotificationHandler = (method: string, params: unknown) => void;
+
+export class PortalRpcError extends Error {
+  constructor(readonly code: number, message: string, readonly data?: WorkspaceFileErrorData | unknown) {
+    super(message);
+    this.name = 'PortalRpcError';
+  }
+}
 
 const base64Url = (value: string) => {
   const bytes = new TextEncoder().encode(value);
@@ -83,8 +95,22 @@ class JsonRpcWebSocket {
     if (!pending) return;
     this.pending.delete(message.id);
     if (message.error && typeof message.error === 'object') {
-      const error = message.error as { message?: unknown };
-      pending.reject(new Error(typeof error.message === 'string' ? error.message : `${pending.method} failed.`));
+      const error = message.error as { code?: unknown; message?: unknown; data?: unknown };
+      let data = error.data;
+      try {
+        if ((data as { domain?: unknown } | undefined)?.domain === 'workspace-filesystem') {
+          data = parseWorkspaceFileErrorData(data);
+        }
+      } catch {
+        // Preserve malformed remote error data as opaque evidence.
+      }
+      pending.reject(
+        new PortalRpcError(
+          typeof error.code === 'number' ? error.code : -32000,
+          typeof error.message === 'string' ? error.message : `${pending.method} failed.`,
+          data,
+        ),
+      );
     } else {
       pending.resolve(message.result);
     }
@@ -104,6 +130,7 @@ export class DirectHostClient {
   private rpc: JsonRpcWebSocket;
   private acp?: AcpSessionClient;
   private activeThread?: ThreadSummary;
+  private readonly workspaceFileWatchListeners = new Map<string, (event: WorkspaceFileWatchEvent) => void>();
 
   constructor(
     hostUrl: string,
@@ -116,7 +143,7 @@ export class DirectHostClient {
     this.protocol = tokenProtocol(token);
     this.rpc = new JsonRpcWebSocket(
       new WebSocket(this.baseUrl, this.protocol),
-      undefined,
+      (method, params) => this.handleNotification(method, params),
       onUnexpectedClose,
     );
   }
@@ -163,6 +190,88 @@ export class DirectHostClient {
     return (await this.request('thread.create', { workspaceId, agentId, ...(title ? { title } : {}) })).thread;
   }
 
+  listWorkspaceFiles(workspaceId: string, path: string) {
+    return this.request('workspace.file.list', { workspaceId, path });
+  }
+
+  readWorkspaceFile(workspaceId: string, path: string) {
+    return this.request('workspace.file.read', { workspaceId, path });
+  }
+
+  hashWorkspaceFile(workspaceId: string, path: string) {
+    return this.request('workspace.file.hash', { workspaceId, path });
+  }
+
+  writeWorkspaceFile(workspaceId: string, path: string, content: string, expectedContentHash: string | null) {
+    return this.request('workspace.file.write', { workspaceId, path, content, expectedContentHash });
+  }
+
+  createWorkspaceDirectory(workspaceId: string, path: string) {
+    return this.request('workspace.directory.create', { workspaceId, path });
+  }
+
+  moveWorkspaceFile(workspaceId: string, fromPath: string, toPath: string, overwrite?: boolean) {
+    return this.request('workspace.file.move', {
+      workspaceId,
+      fromPath,
+      toPath,
+      ...(overwrite === undefined ? {} : { overwrite }),
+    });
+  }
+
+  deleteWorkspaceFile(workspaceId: string, path: string, recursive?: boolean) {
+    return this.request('workspace.file.delete', {
+      workspaceId,
+      path,
+      ...(recursive === undefined ? {} : { recursive }),
+    });
+  }
+
+  searchWorkspaceFiles(
+    workspaceId: string,
+    path: string,
+    query: string,
+    scope: 'path' | 'content' | 'both' = 'both',
+    limit?: number,
+  ) {
+    return this.request('workspace.file.search', {
+      workspaceId,
+      path,
+      query,
+      scope,
+      ...(limit === undefined ? {} : { limit }),
+    });
+  }
+
+  async watchWorkspaceFiles(
+    workspaceId: string,
+    paths: string[],
+    onEvent: (event: WorkspaceFileWatchEvent) => void,
+  ) {
+    const started = await this.request('workspace.file.watch.start', { workspaceId, paths });
+    this.workspaceFileWatchListeners.set(started.subscriptionId, onEvent);
+    let closed = false;
+    return {
+      subscriptionId: started.subscriptionId,
+      paths: started.paths,
+      update: async (nextPaths: string[]) => {
+        const updated = await this.request('workspace.file.watch.update', {
+          subscriptionId: started.subscriptionId,
+          paths: nextPaths,
+        });
+        return updated.paths;
+      },
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        this.workspaceFileWatchListeners.delete(started.subscriptionId);
+        await this.request('workspace.file.watch.stop', { subscriptionId: started.subscriptionId }).catch(() =>
+          undefined
+        );
+      },
+    };
+  }
+
   async prompt(content: ContentBlock[]) {
     if (!this.acp || !this.activeThread) throw new Error('Attach to a Thread first.');
     await this.acp.prompt(content);
@@ -192,8 +301,15 @@ export class DirectHostClient {
   }
 
   close() {
+    this.workspaceFileWatchListeners.clear();
     this.acp?.close();
     this.rpc.close();
+  }
+
+  private handleNotification(method: string, params: unknown) {
+    if (method !== WORKSPACE_FILE_WATCH_EVENT_METHOD) return;
+    const notification = parseWorkspaceFileWatchNotification(method, params);
+    this.workspaceFileWatchListeners.get(notification.subscriptionId)?.(notification.event);
   }
 
   private async request<Method extends PortalRpcMethod>(
@@ -202,5 +318,4 @@ export class DirectHostClient {
   ): Promise<PortalRpcResult<Method>> {
     return parsePortalRpcResult(method, await this.rpc.request(method, params));
   }
-
 }

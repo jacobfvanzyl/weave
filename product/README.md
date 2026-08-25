@@ -43,6 +43,6 @@ the mocked shell.
 - The protocol contains wire types, constants, and response validation. It contains no Portal or Alpha behavior.
 - `scripts/check-boundary.ts` rejects imports that escape this directory and dependencies on the earlier Weave packages.
 
-The current vertical slice supports authenticated Portal discovery, Workspace and Agent listing, durable Thread identity, ACP Thread creation and restoration, concurrent attachments, prompt serialization, Agent request routing, and update fan-out. Filesystem and persistent user-terminal modules are intentionally not present yet; they will be ported behind new product interfaces rather than pulled in as legacy dependencies.
+The current product supports authenticated Portal discovery, Workspace and Agent listing, durable Thread identity and ACP recovery, plus Workspace-scoped filesystem browsing, UTF-8 reads, full content hashes, conditional writes, directory and file mutations, bounded search, and connection-scoped change observation. Alpha exposes the filesystem through a read-only Workspace browser. Persistent user terminals remain a follow-on slice and will be introduced behind a new product interface rather than pulled in as a legacy dependency.
 
 See `portal/README.md` for local configuration and direct acceptance.

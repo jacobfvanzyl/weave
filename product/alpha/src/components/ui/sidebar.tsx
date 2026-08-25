@@ -56,6 +56,8 @@ function SidebarProvider({
   defaultOpen = true,
   open: openProp,
   onOpenChange: setOpenProp,
+  cookieName = SIDEBAR_COOKIE_NAME,
+  keyboardShortcut = SIDEBAR_KEYBOARD_SHORTCUT,
   className,
   style,
   children,
@@ -64,6 +66,8 @@ function SidebarProvider({
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  cookieName?: string | false
+  keyboardShortcut?: string | false
 }) {
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
@@ -82,9 +86,11 @@ function SidebarProvider({
       }
 
       // This sets the cookie to keep the sidebar state.
-      document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+      if (cookieName) {
+        document.cookie = `${cookieName}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+      }
     },
-    [setOpenProp, open]
+    [cookieName, setOpenProp, open]
   )
 
   // Helper to toggle the sidebar.
@@ -94,9 +100,10 @@ function SidebarProvider({
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
+    if (!keyboardShortcut) return
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
-        event.key === SIDEBAR_KEYBOARD_SHORTCUT &&
+        event.key === keyboardShortcut &&
         (event.metaKey || event.ctrlKey)
       ) {
         event.preventDefault()
@@ -106,7 +113,7 @@ function SidebarProvider({
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [toggleSidebar])
+  }, [keyboardShortcut, toggleSidebar])
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.
@@ -152,6 +159,7 @@ function Sidebar({
   side = "left",
   variant = "sidebar",
   collapsible = "offcanvas",
+  position = "fixed",
   className,
   children,
   dir,
@@ -160,6 +168,7 @@ function Sidebar({
   side?: "left" | "right"
   variant?: "sidebar" | "floating" | "inset"
   collapsible?: "offcanvas" | "icon" | "none"
+  position?: "fixed" | "inline"
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
 
@@ -201,6 +210,33 @@ function Sidebar({
           <div className="flex h-full w-full flex-col">{children}</div>
         </SheetContent>
       </Sheet>
+    )
+  }
+
+  if (position === "inline") {
+    if (state === "collapsed" && collapsible === "offcanvas") return null
+
+    return (
+      <div
+        className={cn(
+          "group peer hidden h-full w-full min-w-0 flex-col text-sidebar-foreground md:flex",
+          className
+        )}
+        data-state={state}
+        data-collapsible={state === "collapsed" ? collapsible : ""}
+        data-variant={variant}
+        data-side={side}
+        data-slot="sidebar"
+        {...props}
+      >
+        <div
+          data-sidebar="sidebar"
+          data-slot="sidebar-inner"
+          className="flex size-full min-w-0 flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:shadow-sm group-data-[variant=floating]:ring-1 group-data-[variant=floating]:ring-sidebar-border"
+        >
+          {children}
+        </div>
+      </div>
     )
   }
 

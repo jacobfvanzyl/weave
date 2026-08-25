@@ -54,6 +54,10 @@ _Avoid_: Agent Session, run, invocation
 A region within a Workspace Tab that presents one type of Workspace content, such as a Thread, file editor, or terminal.
 _Avoid_: Sidebar, window
 
+**Project Pane**:
+The optional right-side Pane that presents the active Thread's Workspace directory. When hidden, it is absent from the Workspace layout and is restored from the bottom rail.
+_Avoid_: File tree, file sidebar, artifacts pane, Workspace files pane
+
 **Pane Identity**:
 The durable identity of one Pane, preserved while the Pane moves or swaps and ended when the Pane is closed or replaced.
 _Avoid_: Pane position, content identity, layout identity

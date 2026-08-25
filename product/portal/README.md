@@ -1,6 +1,6 @@
 # Portal
 
-Portal is the host-side Weave product. It runs beside project files and Agent credentials, exposes an authenticated
+Portal is the host-side Weave product. It runs beside Workspace files and Agent credentials, exposes an authenticated
 WebSocket interface to Alpha, and owns ACP Agent processes and Thread identity.
 
 It has no source or package dependency on the earlier Weave server or Portal implementation.
@@ -29,19 +29,42 @@ deno task build
 ```
 
 The test suite starts the real Portal transport and a fake ACP subprocess, then creates, lists, attaches to, and prompts
-a Thread. It also exercises restart recovery, native replay cursors, bounded retention, acknowledgement gaps, and
-access-token rejection.
+a Thread. It also exercises restart recovery, native replay cursors, bounded retention, acknowledgement gaps,
+access-token rejection, and the Workspace filesystem contract.
+
+Workspace filesystem paths are canonical relative paths; absolute, traversal, Windows-style, and symbolic-link paths
+are rejected without exposing Host paths. Text writes are create-only or conditioned on the current full SHA-256 hash.
+Reads and writes are bounded UTF-8 payloads, while listing, hashing, moving, deleting, bounded search, and change
+observation are available through the same authenticated RPC connection.
+
+Conditional writes provide optimistic concurrency across authenticated Portal requests. Portal serializes mutations
+within each Workspace, rechecks the expected hash immediately before replacing the file, and installs the replacement
+with a same-directory atomic rename. A separately privileged local process can still race portable pathname APIs after
+that final check, so Host filesystem permissions remain part of the trust boundary.
 
 For a real Agent acceptance against an already running Portal:
 
 ```bash
 PORTAL_URL=ws://127.0.0.1:4122 \
 PORTAL_ACCESS_TOKEN="$PORTAL_ACCESS_TOKEN" \
-PORTAL_WORKSPACE_ID=project \
+PORTAL_WORKSPACE_ID=workspace \
 PORTAL_AGENT_ID=codex \
 PORTAL_ACCEPTANCE_MARKER=PORTAL_ACCEPTANCE_OK \
 deno task acceptance
 ```
+
+The filesystem acceptance is Agent-independent and creates and removes only a uniquely named directory below
+`.weave-acceptance/` in the selected Workspace:
+
+```bash
+PORTAL_URL=ws://127.0.0.1:4122 \
+PORTAL_ACCESS_TOKEN="$PORTAL_ACCESS_TOKEN" \
+PORTAL_WORKSPACE_ID=workspace \
+deno task acceptance:filesystem
+```
+
+The same command can target a Portal running on Bazzite by changing `PORTAL_URL`; packaging and service installation
+remain separate from this acceptance.
 
 ## Current persistence boundary
 

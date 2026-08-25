@@ -28,4 +28,32 @@ describe('useMockAlphaController', () => {
       optimistic: true,
     });
   });
+
+  it('keeps the active Thread selected while browsing its Workspace without a Host', async () => {
+    const { result } = renderHook(() => useMockAlphaController('chat'));
+
+    expect(result.current.model.selectedThreadId).toBe('thread-wve-47');
+    expect(result.current.model.workspaceFiles?.directories['']?.entries.map((entry) => entry.path)).toEqual([
+      'src',
+      'README.md',
+    ]);
+
+    await act(async () => result.current.actions.openWorkspaceDirectory('src'));
+    expect(result.current.model.workspaceFiles?.directories.src?.entries.map((entry) => entry.path)).toEqual([
+      'src/main.ts',
+    ]);
+    expect(result.current.model.workspaceFiles?.directories['']?.entries.map((entry) => entry.path)).toEqual([
+      'src',
+      'README.md',
+    ]);
+
+    await act(async () => result.current.actions.openWorkspaceFile('src/main.ts'));
+    expect(result.current.model.workspaceFiles?.openFiles[0]).toMatchObject({
+      kind: 'text',
+      path: 'src/main.ts',
+      content: expect.stringContaining('WVE42_MOCK_WORKSPACE'),
+    });
+    expect(result.current.model.workspaceFiles?.activeFilePath).toBe('src/main.ts');
+    expect(result.current.model.selectedThreadId).toBe('thread-wve-47');
+  });
 });

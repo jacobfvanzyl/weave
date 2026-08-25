@@ -182,8 +182,8 @@ describe('ChatPane', () => {
     expect(composer).toHaveAttribute('rows', '8');
   });
 
-  it('places circular context usage before Send and preserves the empty bottom rail', () => {
-    const { container } = render(
+  it('places circular context usage before Send', () => {
+    render(
       <ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />,
     );
 
@@ -195,12 +195,6 @@ describe('ChatPane', () => {
     expect(screen.queryByText('4,096 / 32,768')).not.toBeInTheDocument();
     expect(screen.queryByText('$0.42')).not.toBeInTheDocument();
 
-    expect(container.querySelector('[data-slot="main-bottom-rail"]')).toHaveClass(
-      'h-[var(--bottom-rail-height)]',
-      'shrink-0',
-    );
-    expect(container.querySelector('[data-slot="main-bottom-rail"]'))
-      .not.toHaveClass('hidden', 'sm:block');
   });
 
   it('uses a flat full-width composer with quiet controls', () => {

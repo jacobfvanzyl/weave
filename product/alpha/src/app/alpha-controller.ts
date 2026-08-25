@@ -1,4 +1,5 @@
 import type { CreateElicitationResponse } from '@agentclientprotocol/sdk';
+import type { WorkspaceFileEntry, WorkspaceFileMetadata } from '@weave/product-protocol';
 import type { AcpTranscript } from '@/chat/acp-transcript';
 
 export type AlphaConnectionStatus =
@@ -13,13 +14,36 @@ export type AlphaThread = {
   hostName: string;
   status: 'active' | 'closed';
   updatedAt: string;
-  projectId: string;
+  workspaceId: string;
 };
 
-export type AlphaProject = {
+export type AlphaWorkspace = {
   id: string;
   name: string;
   threads: AlphaThread[];
+};
+
+export type AlphaWorkspaceFileTab =
+  | (WorkspaceFileMetadata & {
+    kind: 'text';
+    content: string;
+    changed: boolean;
+  })
+  | {
+    kind: 'unavailable';
+    path: string;
+    reason: 'unsupported' | 'too-large';
+  };
+
+export type AlphaWorkspaceFiles = {
+  workspaceId: string;
+  workspaceName: string;
+  directories: Record<string, {
+    entries: WorkspaceFileEntry[];
+    truncated: boolean;
+  }>;
+  openFiles: AlphaWorkspaceFileTab[];
+  activeFilePath?: string;
 };
 
 export type AlphaViewModel = {
@@ -31,9 +55,10 @@ export type AlphaViewModel = {
   };
   accessToken: string;
   searchQuery: string;
-  projects: AlphaProject[];
+  workspaces: AlphaWorkspace[];
   selectedThreadId?: string;
   transcript?: AcpTranscript;
+  workspaceFiles?: AlphaWorkspaceFiles;
   busy: boolean;
   error?: string;
 };
@@ -45,8 +70,13 @@ export type AlphaActions = {
   connect(): Promise<void> | void;
   disconnect(): void;
   refresh(): Promise<void> | void;
-  createThread(projectId?: string): Promise<void> | void;
+  createThread(workspaceId?: string): Promise<void> | void;
   selectThread(threadId: string): Promise<void> | void;
+  openWorkspaceDirectory(path: string): Promise<void> | void;
+  openWorkspaceFile(path: string): Promise<void> | void;
+  activateWorkspaceFile(path: string): void;
+  closeWorkspaceFile(path: string): void;
+  reloadWorkspaceFile(): Promise<void> | void;
   sendPrompt(text: string): Promise<void> | void;
   cancelPrompt(): Promise<void> | void;
   respondToPermission(requestId: string, optionId: string): void;
@@ -61,6 +91,6 @@ export type AlphaController = {
 };
 
 export const selectedThread = (model: AlphaViewModel) =>
-  model.projects
-    .flatMap((project) => project.threads)
+  model.workspaces
+    .flatMap((workspace) => workspace.threads)
     .find((thread) => thread.id === model.selectedThreadId);

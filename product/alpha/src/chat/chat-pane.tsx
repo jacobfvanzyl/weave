@@ -362,16 +362,6 @@ function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneA
   );
 }
 
-function BottomRail() {
-  return (
-    <div
-      aria-hidden="true"
-      className="h-[var(--bottom-rail-height)] shrink-0 border-t bg-status-bar"
-      data-slot="main-bottom-rail"
-    />
-  );
-}
-
 export function ChatPane({
   model,
   actions,
@@ -413,7 +403,6 @@ export function ChatPane({
         </MessageScroller>
       </MessageScrollerProvider>
       <Composer model={model} actions={actions} />
-      <BottomRail />
     </div>
   );
 }

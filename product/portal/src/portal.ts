@@ -5,6 +5,8 @@ import {
   type PortalRpcParams,
   type PortalRpcResult,
   type ThreadSummary,
+  WORKSPACE_FILE_RPC_METHODS,
+  type WorkspaceFileWatchNotification,
 } from '@weave/product-protocol';
 import { ThreadCatalog } from './catalog.ts';
 import type { AgentDefinition, PortalConfig, WorkspaceDefinition } from './config.ts';
@@ -12,11 +14,53 @@ import type { JsonRpcMessage } from './json-rpc.ts';
 import { RuntimeStateStore } from './runtime-state.ts';
 import { ThreadEventJournal } from './thread-journal.ts';
 import { HostedThread, type ThreadAttachment } from './thread-runtime.ts';
+import { WorkspaceFileService, type WorkspaceFileWatchSession } from './workspace-files.ts';
+
+export class PortalRpcSession {
+  readonly #portal: Portal;
+  readonly #watches: WorkspaceFileWatchSession;
+  #closed = false;
+
+  constructor(portal: Portal, watches: WorkspaceFileWatchSession) {
+    this.#portal = portal;
+    this.#watches = watches;
+  }
+
+  async request<Method extends PortalRpcMethod>(
+    method: Method,
+    params: PortalRpcParams<Method>,
+  ): Promise<PortalRpcResult<Method>> {
+    if (this.#closed) throw new Error('Portal RPC session is closed.');
+    if (method === 'workspace.file.watch.start') {
+      return await this.#watches.start(params as PortalRpcParams<'workspace.file.watch.start'>) as PortalRpcResult<
+        Method
+      >;
+    }
+    if (method === 'workspace.file.watch.update') {
+      return await this.#watches.update(params as PortalRpcParams<'workspace.file.watch.update'>) as PortalRpcResult<
+        Method
+      >;
+    }
+    if (method === 'workspace.file.watch.stop') {
+      return await this.#watches.stop(params as PortalRpcParams<'workspace.file.watch.stop'>) as PortalRpcResult<
+        Method
+      >;
+    }
+    return await this.#portal.request(method, params);
+  }
+
+  close() {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#watches.close();
+  }
+}
 
 export class Portal {
   readonly #catalog: ThreadCatalog;
   readonly #journal: ThreadEventJournal;
   readonly #runtimeStates: RuntimeStateStore;
+  readonly #workspaceFiles: WorkspaceFileService;
   readonly #workspaces: Map<string, WorkspaceDefinition>;
   readonly #agents: Map<string, AgentDefinition>;
   readonly #runtimes = new Map<string, Promise<HostedThread>>();
@@ -26,22 +70,25 @@ export class Portal {
     catalog: ThreadCatalog,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
+    workspaceFiles: WorkspaceFileService,
   ) {
     this.#catalog = catalog;
     this.#journal = journal;
     this.#runtimeStates = runtimeStates;
+    this.#workspaceFiles = workspaceFiles;
     this.#workspaces = new Map(config.workspaces.map((workspace) => [workspace.workspaceId, workspace]));
     this.#agents = new Map(config.agents.map((agent) => [agent.agentId, agent]));
   }
 
   static async open(config: PortalConfig) {
     const catalog = new ThreadCatalog(config.stateDirectory);
-    const [, journal, runtimeStates] = await Promise.all([
+    const [, journal, runtimeStates, workspaceFiles] = await Promise.all([
       catalog.load(),
       ThreadEventJournal.open(config.stateDirectory, config.threadEventRetentionLimit),
       RuntimeStateStore.open(config.stateDirectory),
+      WorkspaceFileService.open(config.workspaces),
     ]);
-    return new Portal(config, catalog, journal, runtimeStates);
+    return new Portal(config, catalog, journal, runtimeStates, workspaceFiles);
   }
 
   async request<Method extends PortalRpcMethod>(
@@ -52,7 +99,15 @@ export class Portal {
       case 'portal.capabilities':
         return {
           protocolVersion: PORTAL_PROTOCOL_VERSION,
-          capabilities: ['workspace.list', 'agent.list', 'thread.list', 'thread.create', 'thread.attach', 'acp.v1'],
+          capabilities: [
+            'workspace.list',
+            'agent.list',
+            'thread.list',
+            'thread.create',
+            'thread.attach',
+            ...WORKSPACE_FILE_RPC_METHODS,
+            'acp.v1',
+          ],
         } as PortalRpcResult<Method>;
       case 'workspace.list':
         return {
@@ -92,7 +147,49 @@ export class Portal {
           },
         } as PortalRpcResult<Method>;
       }
+      case 'workspace.file.list':
+        return await this.#workspaceFiles.list(params as PortalRpcParams<'workspace.file.list'>) as PortalRpcResult<
+          Method
+        >;
+      case 'workspace.file.read':
+        return await this.#workspaceFiles.read(params as PortalRpcParams<'workspace.file.read'>) as PortalRpcResult<
+          Method
+        >;
+      case 'workspace.file.hash':
+        return await this.#workspaceFiles.hash(params as PortalRpcParams<'workspace.file.hash'>) as PortalRpcResult<
+          Method
+        >;
+      case 'workspace.file.write':
+        return await this.#workspaceFiles.write(params as PortalRpcParams<'workspace.file.write'>) as PortalRpcResult<
+          Method
+        >;
+      case 'workspace.directory.create':
+        return await this.#workspaceFiles.createDirectory(
+          params as PortalRpcParams<'workspace.directory.create'>,
+        ) as PortalRpcResult<Method>;
+      case 'workspace.file.move':
+        return await this.#workspaceFiles.move(params as PortalRpcParams<'workspace.file.move'>) as PortalRpcResult<
+          Method
+        >;
+      case 'workspace.file.delete':
+        return await this.#workspaceFiles.delete(params as PortalRpcParams<'workspace.file.delete'>) as PortalRpcResult<
+          Method
+        >;
+      case 'workspace.file.search':
+        return await this.#workspaceFiles.search(params as PortalRpcParams<'workspace.file.search'>) as PortalRpcResult<
+          Method
+        >;
+      case 'workspace.file.watch.start':
+      case 'workspace.file.watch.update':
+      case 'workspace.file.watch.stop':
+        throw new Error('Workspace file watches require an RPC session.');
+      default:
+        throw new Error(`Unknown Portal method: ${String(method)}`);
     }
+  }
+
+  connectRpc(send: (notification: WorkspaceFileWatchNotification) => void) {
+    return new PortalRpcSession(this, this.#workspaceFiles.openWatchSession(send));
   }
 
   async connectThread(threadId: string, send: (message: JsonRpcMessage) => void): Promise<ThreadAttachment> {
@@ -103,6 +200,7 @@ export class Portal {
     const runtimes = await Promise.allSettled(this.#runtimes.values());
     await Promise.all(runtimes.flatMap((result) => result.status === 'fulfilled' ? [result.value.close()] : []));
     this.#runtimes.clear();
+    this.#workspaceFiles.close();
   }
 
   #thread(threadId: string): ThreadSummary {

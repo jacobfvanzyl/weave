@@ -1,79 +1,10 @@
-import { PORTAL_TOKEN_PROTOCOL_PREFIX } from '@weave/product-protocol';
+import { WORKSPACE_FILE_WATCH_EVENT_METHOD } from '@weave/product-protocol';
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.14';
 import { dirname, fromFileUrl, join } from 'jsr:@std/path@1.1.2';
 import type { PortalConfig } from './config.ts';
-import { type JsonRpcMessage, parseJsonRpcMessage } from './json-rpc.ts';
 import { Portal } from './portal.ts';
 import { startPortalServer } from './server.ts';
-
-const tokenProtocol = (token: string) => {
-  const bytes = new TextEncoder().encode(token);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return `${PORTAL_TOKEN_PROTOCOL_PREFIX}${btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')}`;
-};
-
-class RpcResponseError extends Error {
-  constructor(readonly code: number, message: string, readonly data?: unknown) {
-    super(message);
-  }
-}
-
-class RpcSocket {
-  readonly #socket: WebSocket;
-  readonly #pending = new Map<number, { resolve(value: unknown): void; reject(cause: unknown): void }>();
-  readonly notifications: JsonRpcMessage[] = [];
-  #nextId = 0;
-
-  private constructor(socket: WebSocket) {
-    this.#socket = socket;
-    socket.onmessage = (event) => {
-      const message = parseJsonRpcMessage(String(event.data));
-      if (typeof message.id === 'number' && message.method === undefined) {
-        const pending = this.#pending.get(message.id);
-        if (!pending) return;
-        this.#pending.delete(message.id);
-        if (message.error) {
-          pending.reject(new RpcResponseError(message.error.code, message.error.message, message.error.data));
-        } else pending.resolve(message.result);
-      } else {
-        this.notifications.push(message);
-      }
-    };
-    socket.onclose = (event) => {
-      for (const pending of this.#pending.values()) pending.reject(new Error(event.reason || 'WebSocket closed.'));
-      this.#pending.clear();
-    };
-  }
-
-  static async open(url: string, token: string) {
-    const socket = new WebSocket(url, tokenProtocol(token));
-    await new Promise<void>((resolve, reject) => {
-      socket.onopen = () => resolve();
-      socket.onerror = () => reject(new Error('WebSocket failed to open.'));
-    });
-    return new RpcSocket(socket);
-  }
-
-  request(method: string, params: unknown = {}) {
-    const id = ++this.#nextId;
-    const response = new Promise<unknown>((resolve, reject) => this.#pending.set(id, { resolve, reject }));
-    this.#socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
-    return response;
-  }
-
-  close() {
-    this.#socket.close();
-  }
-}
-
-const waitFor = async (predicate: () => boolean) => {
-  const deadline = Date.now() + 2_000;
-  while (!predicate()) {
-    if (Date.now() > deadline) throw new Error('Timed out waiting for condition.');
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-};
+import { RpcResponseError, RpcSocket, waitFor } from '../scripts/rpc-client.ts';
 
 Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the product protocol', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-' });
@@ -892,6 +823,104 @@ Deno.test('Portal rejects an invalid access token before exposing metadata', asy
   try {
     await assertRejects(() => RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, 'incorrect'));
   } finally {
+    await server.shutdown();
+    await portal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test('Alpha-facing Portal exposes typed Workspace file operations and connection-scoped changes', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-files-rpc-' });
+  const workspacePath = join(root, 'workspace');
+  await Deno.mkdir(workspacePath);
+  await Deno.writeTextFile(join(workspacePath, 'README.md'), '# WVE-42\n');
+  const token = 'filesystem-token';
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    accessToken: token,
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{ agentId: 'fake', name: 'Fake', command: 'false', args: [], env: {} }],
+  };
+  const portal = await Portal.open(config);
+  const server = startPortalServer(portal);
+  const address = server.addr as Deno.NetAddr;
+  const rpc = await RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, token);
+  try {
+    const capabilities = await rpc.request('portal.capabilities') as { capabilities: string[] };
+    assertEquals(capabilities.capabilities.includes('workspace.file.read'), true);
+
+    const listed = await rpc.request('workspace.file.list', { workspaceId: 'workspace', path: '' }) as {
+      entries: Array<{ path: string }>;
+    };
+    assertEquals(listed.entries.map((entry) => entry.path), ['README.md']);
+    const read = await rpc.request('workspace.file.read', { workspaceId: 'workspace', path: 'README.md' }) as {
+      content: string;
+      contentHash: string;
+    };
+    assertEquals(read.content, '# WVE-42\n');
+
+    let stale: unknown;
+    try {
+      await rpc.request('workspace.file.write', {
+        workspaceId: 'workspace',
+        path: 'README.md',
+        content: 'stale',
+        expectedContentHash: '0'.repeat(64),
+      });
+    } catch (cause) {
+      stale = cause;
+    }
+    assertEquals(stale instanceof RpcResponseError && { code: stale.code, data: stale.data }, {
+      code: -32010,
+      data: {
+        domain: 'workspace-filesystem',
+        code: 'STALE_CONTENT',
+        path: 'README.md',
+        expectedContentHash: '0'.repeat(64),
+        actualContentHash: read.contentHash,
+      },
+    });
+
+    await rpc.request('workspace.directory.create', { workspaceId: 'workspace', path: 'non-empty' });
+    await rpc.request('workspace.file.write', {
+      workspaceId: 'workspace',
+      path: 'non-empty/file.txt',
+      content: 'content',
+      expectedContentHash: null,
+    });
+    let nonEmpty: unknown;
+    try {
+      await rpc.request('workspace.file.delete', { workspaceId: 'workspace', path: 'non-empty' });
+    } catch (cause) {
+      nonEmpty = cause;
+    }
+    assertEquals(nonEmpty instanceof RpcResponseError && { code: nonEmpty.code, data: nonEmpty.data }, {
+      code: -32010,
+      data: { domain: 'workspace-filesystem', code: 'DIRECTORY_NOT_EMPTY', path: 'non-empty' },
+    });
+    assertEquals(JSON.stringify(nonEmpty).includes(workspacePath), false);
+
+    const watch = await rpc.request('workspace.file.watch.start', { workspaceId: 'workspace', paths: [''] }) as {
+      subscriptionId: string;
+    };
+    await rpc.request('workspace.file.write', {
+      workspaceId: 'workspace',
+      path: 'created.txt',
+      content: 'created',
+      expectedContentHash: null,
+    });
+    await waitFor(() =>
+      rpc.notifications.some((message) =>
+        message.method === WORKSPACE_FILE_WATCH_EVENT_METHOD && JSON.stringify(message.params).includes('created.txt')
+      )
+    );
+    assertEquals(await rpc.request('workspace.file.watch.stop', { subscriptionId: watch.subscriptionId }), {
+      ok: true,
+    });
+  } finally {
+    rpc.close();
     await server.shutdown();
     await portal.close();
     await Deno.remove(root, { recursive: true });

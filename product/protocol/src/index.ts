@@ -9,6 +9,34 @@ export const WEAVE_ACP_THREAD_EVENTS_ACK_METHOD = '_weave.dev/thread_events/ack'
 export const WEAVE_ACP_THREAD_EVENTS_SYNC_METHOD = '_weave.dev/thread_events/sync' as const;
 export const WEAVE_ACP_RUNTIME_STATE_METHOD = '_weave.dev/runtime/state' as const;
 
+export {
+  parseWorkspaceFileErrorData,
+  parseWorkspaceFileRpcParams,
+  parseWorkspaceFileRpcResult,
+  parseWorkspaceFileWatchNotification,
+  WORKSPACE_FILE_ERROR_CODES,
+  WORKSPACE_FILE_RPC_METHODS,
+  WORKSPACE_FILE_WATCH_EVENT_METHOD,
+} from './workspace-files.ts';
+export type {
+  WorkspaceFileEntry,
+  WorkspaceFileErrorCode,
+  WorkspaceFileErrorData,
+  WorkspaceFileMetadata,
+  WorkspaceFileRpcContracts,
+  WorkspaceFileRpcMethod,
+  WorkspaceFileSearchMatch,
+  WorkspaceFileWatchEvent,
+  WorkspaceFileWatchNotification,
+} from './workspace-files.ts';
+import {
+  parseWorkspaceFileRpcParams,
+  parseWorkspaceFileRpcResult,
+  WORKSPACE_FILE_RPC_METHODS,
+  type WorkspaceFileRpcContracts,
+  type WorkspaceFileRpcMethod,
+} from './workspace-files.ts';
+
 export type WorkspaceSummary = { workspaceId: string; name: string };
 export type AgentSummary = { agentId: string; name: string };
 export type ThreadSummary = {
@@ -22,7 +50,7 @@ export type ThreadSummary = {
   updatedAt: string;
 };
 
-export type PortalRpcContracts = {
+type BasePortalRpcContracts = {
   'portal.capabilities': {
     params: Record<string, never>;
     result: { protocolVersion: typeof PORTAL_PROTOCOL_VERSION; capabilities: string[] };
@@ -43,6 +71,8 @@ export type PortalRpcContracts = {
   };
 };
 
+export type PortalRpcContracts = BasePortalRpcContracts & WorkspaceFileRpcContracts;
+
 export type PortalRpcMethod = keyof PortalRpcContracts;
 export const PORTAL_RPC_METHODS = [
   'portal.capabilities',
@@ -51,9 +81,37 @@ export const PORTAL_RPC_METHODS = [
   'thread.list',
   'thread.create',
   'thread.attach',
+  ...WORKSPACE_FILE_RPC_METHODS,
 ] as const satisfies readonly PortalRpcMethod[];
 export type PortalRpcParams<Method extends PortalRpcMethod> = PortalRpcContracts[Method]['params'];
 export type PortalRpcResult<Method extends PortalRpcMethod> = PortalRpcContracts[Method]['result'];
+
+export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
+  method: Method,
+  value: unknown,
+): PortalRpcParams<Method> => {
+  if (WORKSPACE_FILE_RPC_METHODS.includes(method as WorkspaceFileRpcMethod)) {
+    return parseWorkspaceFileRpcParams(method as WorkspaceFileRpcMethod, value) as PortalRpcParams<Method>;
+  }
+  const params = object(value, `${String(method)} params`);
+  switch (method) {
+    case 'portal.capabilities':
+    case 'workspace.list':
+    case 'agent.list':
+    case 'thread.list':
+      return {} as PortalRpcParams<Method>;
+    case 'thread.create':
+      return {
+        workspaceId: string(params.workspaceId, 'workspaceId'),
+        agentId: string(params.agentId, 'agentId'),
+        ...(params.title === undefined ? {} : { title: string(params.title, 'title') }),
+      } as PortalRpcParams<Method>;
+    case 'thread.attach':
+      return { threadId: string(params.threadId, 'threadId') } as PortalRpcParams<Method>;
+    default:
+      throw new Error(`Unknown Portal method: ${String(method)}`);
+  }
+};
 
 const object = (value: unknown, context: string): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${context} must be an object.`);
@@ -103,7 +161,10 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
   method: Method,
   value: unknown,
 ): PortalRpcResult<Method> => {
-  const result = object(value, `${method} result`);
+  if (WORKSPACE_FILE_RPC_METHODS.includes(method as WorkspaceFileRpcMethod)) {
+    return parseWorkspaceFileRpcResult(method as WorkspaceFileRpcMethod, value) as PortalRpcResult<Method>;
+  }
+  const result = object(value, `${String(method)} result`);
   switch (method) {
     case 'portal.capabilities':
       if (result.protocolVersion !== PORTAL_PROTOCOL_VERSION) {
@@ -136,5 +197,7 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
         },
       } as PortalRpcResult<Method>;
     }
+    default:
+      throw new Error(`Unknown Portal method: ${String(method)}`);
   }
 };

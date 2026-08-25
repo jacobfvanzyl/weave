@@ -1,12 +1,16 @@
 import {
+  parsePortalRpcParams,
   PORTAL_ACP_PATH,
   PORTAL_RPC_METHODS,
   PORTAL_RPC_PATH,
   PORTAL_TOKEN_PROTOCOL_PREFIX,
   type PortalRpcMethod,
+  WORKSPACE_FILE_RPC_METHODS,
+  WORKSPACE_FILE_WATCH_EVENT_METHOD,
 } from '@weave/product-protocol';
 import { error, type JsonRpcMessage, parseJsonRpcMessage, result } from './json-rpc.ts';
 import { Portal } from './portal.ts';
+import { WorkspaceFileError } from './workspace-files.ts';
 
 const tokenProtocol = (token: string) => {
   const bytes = new TextEncoder().encode(token);
@@ -41,6 +45,13 @@ const websocket = (request: Request, portal: Portal) => {
 
   const upgraded = Deno.upgradeWebSocket(request, { protocol: expectedProtocol });
   if (url.pathname === PORTAL_RPC_PATH) {
+    const session = portal.connectRpc((notification) =>
+      send(upgraded.socket, {
+        jsonrpc: '2.0',
+        method: WORKSPACE_FILE_WATCH_EVENT_METHOD,
+        params: notification,
+      })
+    );
     upgraded.socket.onmessage = async (event) => {
       let message: JsonRpcMessage;
       try {
@@ -58,12 +69,29 @@ const websocket = (request: Request, portal: Portal) => {
         return;
       }
       try {
-        const value = await portal.request(message.method as PortalRpcMethod, (message.params ?? {}) as never);
+        const method = message.method as PortalRpcMethod;
+        const params = parsePortalRpcParams(method, message.params ?? {});
+        const value = await session.request(method, params);
         send(upgraded.socket, result(message.id, value));
       } catch (cause) {
-        send(upgraded.socket, error(message.id, -32000, cause instanceof Error ? cause.message : String(cause)));
+        const filesystemRequest = WORKSPACE_FILE_RPC_METHODS.includes(message.method as never);
+        send(
+          upgraded.socket,
+          cause instanceof WorkspaceFileError
+            ? error(message.id, -32010, cause.message, cause.data)
+            : error(
+              message.id,
+              -32000,
+              filesystemRequest
+                ? 'Workspace filesystem request failed.'
+                : cause instanceof Error
+                ? cause.message
+                : String(cause),
+            ),
+        );
       }
     };
+    upgraded.socket.onclose = () => session.close();
     return upgraded.response;
   }
 
