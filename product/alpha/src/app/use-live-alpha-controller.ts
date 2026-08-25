@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import type { HostSnapshot } from '@/portal-client';
 import { DirectHostClient } from '@/portal-client';
+import {
+  createTranscript,
+  queueOptimisticPrompt,
+  reduceAcpEvent,
+  type AcpTranscript,
+} from '@/chat/acp-transcript';
 import type {
   AlphaController,
   AlphaProject,
@@ -51,6 +57,7 @@ export function useLiveAlphaController(): AlphaController {
   const [client, setClient] = useState<DirectHostClient>();
   const [snapshot, setSnapshot] = useState<HostSnapshot>();
   const [selectedThreadId, setSelectedThreadId] = useState<string>();
+  const [transcript, setTranscript] = useState<AcpTranscript>();
   const [connecting, setConnecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -76,14 +83,21 @@ export function useLiveAlphaController(): AlphaController {
     client?.close();
     let nextClient: DirectHostClient | undefined;
     try {
-      nextClient = new DirectHostClient(hostUrl, accessToken, () => {
-        // Conversation rendering is deliberately paused behind the workspace
-        // placeholder while the new chat surface is built from shadcn primitives.
+      nextClient = new DirectHostClient(hostUrl, accessToken, (event) => {
+        setTranscript((current) => {
+          if (!current) {
+            return event.type === 'history/reset'
+              ? createTranscript(event.sessionId ?? 'unattached')
+              : current;
+          }
+          return reduceAcpEvent(current, event);
+        });
       });
       const nextSnapshot = await nextClient.snapshot();
       setClient(nextClient);
       setSnapshot(nextSnapshot);
       setSelectedThreadId(undefined);
+      setTranscript(undefined);
     } catch (cause) {
       nextClient?.close();
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -97,7 +111,26 @@ export function useLiveAlphaController(): AlphaController {
     setClient(undefined);
     setSnapshot(undefined);
     setSelectedThreadId(undefined);
+    setTranscript(undefined);
     setError(undefined);
+  };
+
+  const performAcpAction = async (action: () => Promise<void>) => {
+    setError(undefined);
+    try {
+      await action();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const sendPrompt = async (text: string) => {
+    if (!client || !transcript) return;
+    const content = [{ type: 'text' as const, text }];
+    setTranscript((current) => current
+      ? queueOptimisticPrompt(current, `local-${crypto.randomUUID()}`, content)
+      : current);
+    await performAcpAction(async () => await client.prompt(content));
   };
 
   const selectThread = async (threadId: string) => {
@@ -150,6 +183,7 @@ export function useLiveAlphaController(): AlphaController {
     searchQuery,
     projects: mapProjects(snapshot, hostName(hostUrl)),
     selectedThreadId,
+    transcript,
     busy,
     error,
   }), [
@@ -161,6 +195,7 @@ export function useLiveAlphaController(): AlphaController {
     searchQuery,
     selectedThreadId,
     snapshot,
+    transcript,
   ]);
 
   return {
@@ -174,6 +209,18 @@ export function useLiveAlphaController(): AlphaController {
       refresh,
       createThread,
       selectThread,
+      sendPrompt,
+      cancelPrompt: () => performAcpAction(async () => await client?.cancelPrompt()),
+      respondToPermission: (requestId, optionId) => {
+        client?.respondToPermission(requestId, optionId);
+      },
+      respondToElicitation: (requestId, response) => {
+        client?.respondToElicitation(requestId, response);
+      },
+      setMode: (modeId) => performAcpAction(async () => await client?.setMode(modeId)),
+      setConfigOption: (optionId, value) => performAcpAction(
+        async () => await client?.setConfigOption(optionId, value),
+      ),
     },
   };
 }

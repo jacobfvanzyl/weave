@@ -112,13 +112,66 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
       token,
     );
     await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
-    await acp.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
+    const loaded = await acp.request('session/load', {
+      sessionId: 'fake-session',
+      cwd: workspacePath,
+      mcpServers: [],
+    });
+    assertEquals(loaded, {
+      modes: {
+        currentModeId: 'ask',
+        availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'code', name: 'Code' }],
+      },
+      configOptions: [{
+        type: 'boolean',
+        id: 'fast',
+        name: 'Fast mode',
+        currentValue: false,
+      }],
+    });
+    const mode = await acp.request('session/set_mode', {
+      sessionId: 'fake-session',
+      modeId: 'code',
+    });
+    assertEquals(mode, {});
+    const configured = await acp.request('session/set_config_option', {
+      sessionId: 'fake-session',
+      configId: 'fast',
+      type: 'boolean',
+      value: true,
+    });
+    assertEquals(configured, {
+      configOptions: [{
+        type: 'boolean',
+        id: 'fast',
+        name: 'Fast mode',
+        currentValue: true,
+      }],
+    });
     const observer = await RpcSocket.open(
       `${baseUrl}${attached.connection.path}?threadId=${attached.connection.threadId}`,
       token,
     );
     await observer.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
-    await observer.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
+    assertEquals(
+      await observer.request('session/load', {
+        sessionId: 'fake-session',
+        cwd: workspacePath,
+        mcpServers: [],
+      }),
+      {
+        modes: {
+          currentModeId: 'code',
+          availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'code', name: 'Code' }],
+        },
+        configOptions: [{
+          type: 'boolean',
+          id: 'fast',
+          name: 'Fast mode',
+          currentValue: true,
+        }],
+      },
+    );
     const prompting = acp.request('session/prompt', {
       sessionId: 'fake-session',
       prompt: [{ type: 'text', text: 'SLOW' }],

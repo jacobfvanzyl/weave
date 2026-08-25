@@ -18,11 +18,64 @@ for await (const line of readLines(Deno.stdin.readable)) {
     continue;
   }
   if (message.method === 'session/new') {
-    await send(result(message.id, { sessionId: 'fake-session' }));
+    await send(result(message.id, {
+      sessionId: 'fake-session',
+      modes: {
+        currentModeId: 'ask',
+        availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'code', name: 'Code' }],
+      },
+      configOptions: [{
+        type: 'boolean',
+        id: 'fast',
+        name: 'Fast mode',
+        currentValue: false,
+      }],
+    }));
     continue;
   }
   if (message.method === 'session/load') {
-    await send(result(message.id, null));
+    await send(result(message.id, {
+      modes: {
+        currentModeId: 'ask',
+        availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'code', name: 'Code' }],
+      },
+      configOptions: [{
+        type: 'boolean',
+        id: 'fast',
+        name: 'Fast mode',
+        currentValue: false,
+      }],
+    }));
+    continue;
+  }
+  if (message.method === 'session/set_mode') {
+    await send({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: 'fake-session',
+        update: { sessionUpdate: 'current_mode_update', currentModeId: 'code' },
+      },
+    });
+    await send(result(message.id, {}));
+    continue;
+  }
+  if (message.method === 'session/set_config_option') {
+    const configOptions = [{
+      type: 'boolean',
+      id: 'fast',
+      name: 'Fast mode',
+      currentValue: true,
+    }];
+    await send({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: 'fake-session',
+        update: { sessionUpdate: 'config_option_update', configOptions },
+      },
+    });
+    await send(result(message.id, { configOptions }));
     continue;
   }
   if (message.method === 'session/prompt') {

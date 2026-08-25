@@ -1,4 +1,11 @@
 import { useMemo, useState } from 'react';
+import { createAcpShowcaseTranscript } from '@/chat/acp-showcase';
+import {
+  createTranscript,
+  queueOptimisticPrompt,
+  reduceAcpEvent,
+  type AcpTranscript,
+} from '@/chat/acp-transcript';
 import type {
   AlphaConnectionStatus,
   AlphaController,
@@ -11,6 +18,7 @@ export const MOCK_SCENARIOS = [
   'connecting',
   'empty',
   'sidebar',
+  'chat',
   'busy',
   'error',
 ] as const;
@@ -88,8 +96,13 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
   const [accessToken, setAccessToken] = useState('mock-token');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedThreadId, setSelectedThreadId] = useState(
-    scenario === 'sidebar' || scenario === 'busy' || scenario === 'error'
+    scenario === 'sidebar' || scenario === 'chat' || scenario === 'busy' || scenario === 'error'
       ? 'thread-wve-47'
+      : undefined,
+  );
+  const [transcript, setTranscript] = useState<AcpTranscript | undefined>(
+    scenario === 'sidebar' || scenario === 'chat' || scenario === 'busy' || scenario === 'error'
+      ? createAcpShowcaseTranscript()
       : undefined,
   );
   const [projects, setProjects] = useState<AlphaProject[]>(
@@ -107,6 +120,7 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
     searchQuery,
     projects,
     selectedThreadId,
+    transcript,
     busy: scenario === 'busy',
     error: scenario === 'error' ? 'Portal lost the connection to this host.' : undefined,
   }), [
@@ -116,6 +130,7 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
     scenario,
     searchQuery,
     selectedThreadId,
+    transcript,
     projects,
   ]);
 
@@ -149,8 +164,43 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
             : project,
         ));
         setSelectedThreadId(id);
+        setTranscript(createTranscript(id));
       },
-      selectThread: setSelectedThreadId,
+      selectThread: (threadId) => {
+        setSelectedThreadId(threadId);
+        setTranscript(createAcpShowcaseTranscript());
+      },
+      sendPrompt: (text) => setTranscript((current) => current
+        ? queueOptimisticPrompt(
+            current,
+            `mock-local-${Date.now()}`,
+            [{ type: 'text', text }],
+          )
+        : current),
+      cancelPrompt: () => setTranscript((current) => current
+        ? reduceAcpEvent(current, { type: 'turn/stopped', stopReason: 'cancelled' })
+        : current),
+      respondToPermission: (requestId, optionId) => setTranscript((current) => current
+        ? reduceAcpEvent(current, { type: 'permission/resolved', requestId, optionId })
+        : current),
+      respondToElicitation: (requestId, response) => setTranscript((current) => current
+        ? reduceAcpEvent(current, { type: 'elicitation/resolved', requestId, response })
+        : current),
+      setMode: (modeId) => setTranscript((current) => current
+        ? reduceAcpEvent(current, {
+            type: 'session/update',
+            update: { sessionUpdate: 'current_mode_update', currentModeId: modeId },
+          })
+        : current),
+      setConfigOption: (optionId, value) => setTranscript((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          configOptions: current.configOptions.map((option) => option.id === optionId
+            ? { ...option, currentValue: value } as typeof option
+            : option),
+        };
+      }),
     },
   };
 }

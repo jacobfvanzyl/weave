@@ -9,10 +9,11 @@
     "check:boundary": "bun scripts/check-boundary.ts",
     "test:boundary": "bun test scripts/check-boundary.test.ts",
     "test:protocol": "bun test protocol/src",
+    "test:alpha": "cd alpha && bun run test",
     "dev:alpha": "cd alpha && bun run dev",
     "build:alpha": "cd alpha && bun run build",
     "check:portal": "cd portal && deno task lint && deno task check",
     "test:portal": "cd portal && deno task test",
-    "check": "bun run check:boundary && bun run test:boundary && bun run test:protocol && bun run build:alpha && bun run check:portal && bun run test:portal"
+    "check": "bun run check:boundary && bun run test:boundary && bun run test:protocol && bun run test:alpha && bun run build:alpha && bun run check:portal && bun run test:portal"
   }
 }

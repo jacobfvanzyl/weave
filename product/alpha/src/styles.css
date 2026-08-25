@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "streamdown/styles.css";
+@source "../node_modules/streamdown/dist/*.js";
 
 @font-face {
   font-family: "JetBrains Mono Nerd Font";
@@ -97,6 +99,11 @@
   --zed-error-background: #f38ba81f;
   --zed-success: #a6e3a1;
   --zed-success-background: #a6e3a11f;
+  --zed-sidebar-background: color-mix(
+    in srgb,
+    var(--zed-rail-background) 75%,
+    var(--zed-panel-background) 25%
+  );
 
   /* shadcn semantic roles mapped onto the corresponding Zed roles. */
   --background: var(--zed-editor-background);
@@ -120,6 +127,8 @@
   --border: var(--zed-border);
   --input: var(--border);
   --input-background: var(--zed-element-background);
+  --chat-background: var(--zed-panel-background);
+  --composer-background: var(--zed-editor-background);
   --ring: var(--zed-focus);
   --placeholder: var(--zed-text-placeholder);
   --disabled: var(--zed-text-disabled);
@@ -139,7 +148,7 @@
   --chart-4: #a6e3a1;
   --chart-5: #f9e2af;
   --radius: 0.375rem;
-  --sidebar: var(--zed-panel-background);
+  --sidebar: var(--zed-sidebar-background);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
@@ -171,6 +180,8 @@
   --color-icon-muted: var(--icon-muted);
   --color-disabled: var(--disabled);
   --color-placeholder: var(--placeholder);
+  --color-chat-background: var(--chat-background);
+  --color-composer-background: var(--composer-background);
   --color-input-background: var(--input-background);
   --color-destructive-background: var(--destructive-background);
   --color-active: var(--active);

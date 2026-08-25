@@ -9,6 +9,9 @@ import {
   PORTAL_RPC_PATH,
   PORTAL_TOKEN_PROTOCOL_PREFIX,
 } from '@weave/product-protocol';
+import type { ContentBlock, CreateElicitationResponse } from '@agentclientprotocol/sdk';
+import { AcpSessionClient } from '@/chat/acp-client';
+import type { AcpTranscriptEvent } from '@/chat/acp-transcript';
 
 type JsonRpcId = number;
 type PendingRequest = { method: string; resolve(value: unknown): void; reject(error: Error): void };
@@ -102,22 +105,18 @@ export type HostSnapshot = {
   threads: ThreadSummary[];
 };
 
-export type ConversationItem = {
-  id: string;
-  role: 'user' | 'agent' | 'tool' | 'system';
-  text: string;
-  append?: boolean;
-};
-
 export class DirectHostClient {
   private readonly baseUrl: URL;
   private readonly protocol: string;
   private rpc: JsonRpcWebSocket;
-  private acp?: JsonRpcWebSocket;
+  private acp?: AcpSessionClient;
   private activeThread?: ThreadSummary;
-  private updateSequence = 0;
 
-  constructor(hostUrl: string, token: string, private readonly onConversationItem: (item: ConversationItem) => void) {
+  constructor(
+    hostUrl: string,
+    token: string,
+    private readonly onAcpEvent: (event: AcpTranscriptEvent) => void,
+  ) {
     if (!token) throw new Error('Host token is required.');
     this.baseUrl = rpcUrl(hostUrl);
     this.protocol = tokenProtocol(token);
@@ -143,21 +142,21 @@ export class DirectHostClient {
     const prepared = await this.request('thread.attach', { threadId });
     this.acp?.close();
     this.activeThread = prepared.thread;
+    this.onAcpEvent({
+      type: 'history/reset',
+      sessionId: prepared.thread.acpSessionId,
+    });
     const url = new URL(this.baseUrl);
     url.pathname = prepared.connection.path;
     url.searchParams.set('threadId', prepared.connection.threadId);
-    this.acp = new JsonRpcWebSocket(new WebSocket(url, this.protocol), (method, params) => {
-      if (method === 'session/update') this.receiveSessionUpdate(params);
+    this.acp = new AcpSessionClient({
+      url: url.toString(),
+      protocols: [this.protocol],
+      onEvent: this.onAcpEvent,
     });
-    await this.acp.request('initialize', {
-      protocolVersion: 1,
-      clientCapabilities: {},
-      clientInfo: { name: 'Alpha', version: '0.1.0' },
-    });
-    await this.acp.request('session/load', {
+    await this.acp.initializeAndLoad({
       sessionId: prepared.thread.acpSessionId,
       cwd: prepared.connection.cwd,
-      mcpServers: [],
     });
     return prepared.thread;
   }
@@ -166,13 +165,32 @@ export class DirectHostClient {
     return (await this.request('thread.create', { workspaceId, agentId, ...(title ? { title } : {}) })).thread;
   }
 
-  async prompt(text: string) {
+  async prompt(content: ContentBlock[]) {
     if (!this.acp || !this.activeThread) throw new Error('Attach to a Thread first.');
-    this.onConversationItem({ id: `local-${++this.updateSequence}`, role: 'user', text });
-    await this.acp.request('session/prompt', {
-      sessionId: this.activeThread.acpSessionId,
-      prompt: [{ type: 'text', text }],
-    });
+    await this.acp.prompt(content);
+  }
+
+  async cancelPrompt() {
+    await this.acp?.cancel();
+  }
+
+  respondToPermission(requestId: string, optionId: string) {
+    return this.acp?.respondToPermission(requestId, {
+      outcome: 'selected',
+      optionId,
+    }) ?? false;
+  }
+
+  respondToElicitation(requestId: string, response: CreateElicitationResponse) {
+    return this.acp?.respondToElicitation(requestId, response) ?? false;
+  }
+
+  async setMode(modeId: string) {
+    await this.acp?.setMode(modeId);
+  }
+
+  async setConfigOption(optionId: string, value: string | boolean) {
+    await this.acp?.setConfigOption(optionId, value);
   }
 
   close() {
@@ -187,24 +205,4 @@ export class DirectHostClient {
     return parsePortalRpcResult(method, await this.rpc.request(method, params));
   }
 
-  private receiveSessionUpdate(value: unknown) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
-    const update = (value as { update?: unknown }).update;
-    if (!update || typeof update !== 'object' || Array.isArray(update)) return;
-    const record = update as Record<string, unknown>;
-    const kind = typeof record.sessionUpdate === 'string' ? record.sessionUpdate : 'update';
-    const content = record.content && typeof record.content === 'object' ? record.content as Record<string, unknown> : undefined;
-    const text = typeof content?.text === 'string'
-      ? content.text
-      : typeof record.title === 'string'
-      ? record.title
-      : kind.replaceAll('_', ' ');
-    const role = kind.includes('user_message') ? 'user' : kind.includes('agent_message') ? 'agent' : 'tool';
-    this.onConversationItem({
-      id: `update-${++this.updateSequence}`,
-      role,
-      text,
-      append: kind.endsWith('_chunk'),
-    });
-  }
 }

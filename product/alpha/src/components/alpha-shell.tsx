@@ -21,7 +21,7 @@ export function AlphaShell({ controller }: { controller: AlphaController }) {
     >
       <ThreadSidebar controller={controller} />
       <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
-        <WorkspacePlaceholder model={controller.model} />
+        <WorkspacePlaceholder controller={controller} />
       </SidebarInset>
     </SidebarProvider>
   );

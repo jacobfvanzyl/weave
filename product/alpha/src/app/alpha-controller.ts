@@ -1,3 +1,6 @@
+import type { CreateElicitationResponse } from '@agentclientprotocol/sdk';
+import type { AcpTranscript } from '@/chat/acp-transcript';
+
 export type AlphaConnectionStatus =
   | 'disconnected'
   | 'connecting'
@@ -30,6 +33,7 @@ export type AlphaViewModel = {
   searchQuery: string;
   projects: AlphaProject[];
   selectedThreadId?: string;
+  transcript?: AcpTranscript;
   busy: boolean;
   error?: string;
 };
@@ -43,6 +47,12 @@ export type AlphaActions = {
   refresh(): Promise<void> | void;
   createThread(projectId?: string): Promise<void> | void;
   selectThread(threadId: string): Promise<void> | void;
+  sendPrompt(text: string): Promise<void> | void;
+  cancelPrompt(): Promise<void> | void;
+  respondToPermission(requestId: string, optionId: string): void;
+  respondToElicitation(requestId: string, response: CreateElicitationResponse): void;
+  setMode(modeId: string): Promise<void> | void;
+  setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
 };
 
 export type AlphaController = {

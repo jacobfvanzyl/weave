@@ -1,4 +1,4 @@
-import type { AlphaViewModel } from '@/app/alpha-controller';
+import type { AlphaController } from '@/app/alpha-controller';
 import { selectedThread } from '@/app/alpha-controller';
 import { CodexIcon } from '@/components/codex-icon';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -10,8 +10,10 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 import { SidebarTrigger } from '@/components/ui/sidebar';
+import { ChatPane } from '@/chat/chat-pane';
 
-export function WorkspacePlaceholder({ model }: { model: AlphaViewModel }) {
+export function WorkspacePlaceholder({ controller }: { controller: AlphaController }) {
+  const { model, actions } = controller;
   const thread = selectedThread(model);
 
   return (
@@ -28,35 +30,34 @@ export function WorkspacePlaceholder({ model }: { model: AlphaViewModel }) {
         </div>
       </header>
 
-      <section className="relative flex min-h-0 flex-1 items-center justify-center p-6">
-        <Empty className="max-w-sm">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <CodexIcon />
-            </EmptyMedia>
-            <EmptyTitle>
-              {thread ? 'Conversation surface paused' : 'Choose a thread'}
-            </EmptyTitle>
-            <EmptyDescription>
-              {thread
-                ? 'The hand-rolled chat has been removed. The next slice will rebuild it with shadcn message and composer primitives.'
-                : 'The new sidebar is live. Select a Portal-managed ACP thread to attach to it.'}
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
+      {thread && model.transcript
+        ? <ChatPane model={model.transcript} actions={actions} />
+        : <section className="relative flex min-h-0 flex-1 items-center justify-center p-6">
+          <Empty className="max-w-sm">
+            <EmptyHeader>
+              <EmptyMedia variant="icon"><CodexIcon /></EmptyMedia>
+              <EmptyTitle>Choose a thread</EmptyTitle>
+              <EmptyDescription>
+                Select a Portal-managed ACP thread to attach to it.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
 
-        {model.error && (
-          <Alert variant="destructive" className="absolute bottom-4 right-4 max-w-sm">
-            <AlertTitle>Portal error</AlertTitle>
-            <AlertDescription>{model.error}</AlertDescription>
-          </Alert>
-        )}
-      </section>
+        </section>}
 
-      <footer
-        aria-hidden="true"
-        className="h-[var(--bottom-rail-height)] shrink-0 border-t bg-status-bar"
-      />
+      {(!thread || !model.transcript) && (
+        <footer
+          aria-hidden="true"
+          className="h-[var(--bottom-rail-height)] shrink-0 border-t bg-status-bar"
+        />
+      )}
+
+      {model.error && (
+        <Alert variant="destructive" className="absolute bottom-10 right-4 z-50 max-w-sm">
+          <AlertTitle>Portal error</AlertTitle>
+          <AlertDescription>{model.error}</AlertDescription>
+        </Alert>
+      )}
     </div>
   );
 }

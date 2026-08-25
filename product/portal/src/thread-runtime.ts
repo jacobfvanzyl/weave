@@ -9,7 +9,12 @@ export type ThreadAttachment = {
 };
 
 type Attachment = { attachmentId: string; send(message: JsonRpcMessage): void };
-type ClientPending = { attachment: Attachment; clientId: JsonRpcId };
+type ClientPending = {
+  attachment: Attachment;
+  clientId: JsonRpcId;
+  method: string;
+  isPrompt: boolean;
+};
 type AgentPending = { attachmentId: string; providerId: JsonRpcId };
 
 const sessionIdFrom = (value: unknown) => {
@@ -21,9 +26,36 @@ const sessionIdFrom = (value: unknown) => {
   return sessionId;
 };
 
+const sessionLoadStateFrom = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const record = value as Record<string, unknown>;
+  return {
+    ...(record.modes === undefined ? {} : { modes: record.modes }),
+    ...(record.configOptions === undefined
+      ? {}
+      : { configOptions: record.configOptions }),
+    ...(record._meta === undefined ? {} : { _meta: record._meta }),
+  };
+};
+
+const PROXIED_CLIENT_CAPABILITIES = {
+  elicitation: { form: {}, url: {} },
+  plan: {},
+  session: {
+    compaction: {},
+    configOptions: { boolean: {} },
+  },
+};
+
+const FORWARDED_ATTACHMENT_REQUESTS = new Set([
+  'session/set_mode',
+  'session/set_config_option',
+]);
+
 export class HostedThread {
   readonly #process: AgentProcess;
   readonly #initializeResult: unknown;
+  #sessionLoadResult: Record<string, unknown>;
   readonly #attachments = new Map<string, Attachment>();
   readonly #journal: JsonRpcMessage[] = [];
   readonly #clientPending = new Map<string, ClientPending>();
@@ -36,10 +68,12 @@ export class HostedThread {
     readonly thread: ThreadSummary,
     process: AgentProcess,
     initializeResult: unknown,
+    sessionLoadResult: Record<string, unknown>,
     onThreadChanged: (thread: ThreadSummary) => void,
   ) {
     this.#process = process;
     this.#initializeResult = initializeResult;
+    this.#sessionLoadResult = sessionLoadResult;
     this.#onThreadChanged = onThreadChanged;
   }
 
@@ -58,7 +92,7 @@ export class HostedThread {
     );
     const initializeResult = await process.request('initialize', {
       protocolVersion: 1,
-      clientCapabilities: {},
+      clientCapabilities: PROXIED_CLIENT_CAPABILITIES,
       clientInfo: { name: 'Weave Portal', version: '0.1.0' },
     });
     const sessionResult = await process.request('session/new', { cwd: workspace.path, mcpServers: [] });
@@ -76,6 +110,7 @@ export class HostedThread {
       },
       process,
       initializeResult,
+      sessionLoadStateFrom(sessionResult),
       onThreadChanged,
     );
     holder.hosted = hosted;
@@ -98,11 +133,21 @@ export class HostedThread {
     );
     const initializeResult = await process.request('initialize', {
       protocolVersion: 1,
-      clientCapabilities: {},
+      clientCapabilities: PROXIED_CLIENT_CAPABILITIES,
       clientInfo: { name: 'Weave Portal', version: '0.1.0' },
     });
-    await process.request('session/load', { sessionId: thread.acpSessionId, cwd: workspace.path, mcpServers: [] });
-    const hosted = new HostedThread(thread, process, initializeResult, onThreadChanged);
+    const sessionLoadResult = await process.request('session/load', {
+      sessionId: thread.acpSessionId,
+      cwd: workspace.path,
+      mcpServers: [],
+    });
+    const hosted = new HostedThread(
+      thread,
+      process,
+      initializeResult,
+      sessionLoadStateFrom(sessionLoadResult),
+      onThreadChanged,
+    );
     holder.hosted = hosted;
     for (const message of buffered) hosted.#receiveAgent(message);
     return hosted;
@@ -149,7 +194,7 @@ export class HostedThread {
         return;
       }
       for (const update of this.#journal) attachment.send(update);
-      attachment.send(result(message.id, null));
+      attachment.send(result(message.id, this.#sessionLoadResult));
       return;
     }
     if (message.method === 'session/prompt') {
@@ -159,7 +204,23 @@ export class HostedThread {
       }
       this.#activePromptAttachmentId = attachment.attachmentId;
       const providerId = `client:${++this.#nextForwardedId}`;
-      this.#clientPending.set(idKey(providerId), { attachment, clientId: message.id });
+      this.#clientPending.set(idKey(providerId), {
+        attachment,
+        clientId: message.id,
+        method: message.method,
+        isPrompt: true,
+      });
+      await this.#process.send({ ...message, id: providerId });
+      return;
+    }
+    if (FORWARDED_ATTACHMENT_REQUESTS.has(message.method)) {
+      const providerId = `client:${++this.#nextForwardedId}`;
+      this.#clientPending.set(idKey(providerId), {
+        attachment,
+        clientId: message.id,
+        method: message.method,
+        isPrompt: false,
+      });
       await this.#process.send({ ...message, id: providerId });
       return;
     }
@@ -184,15 +245,54 @@ export class HostedThread {
       const pending = this.#clientPending.get(idKey(message.id));
       if (!pending) return;
       this.#clientPending.delete(idKey(message.id));
-      this.#activePromptAttachmentId = undefined;
+      if (pending.isPrompt && this.#activePromptAttachmentId === pending.attachment.attachmentId) {
+        this.#activePromptAttachmentId = undefined;
+      }
+      if (pending.method === 'session/set_config_option') {
+        this.#sessionLoadResult = {
+          ...this.#sessionLoadResult,
+          ...sessionLoadStateFrom(message.result),
+        };
+      }
       pending.attachment.send({ ...message, id: pending.clientId });
       this.thread.updatedAt = new Date().toISOString();
       this.#onThreadChanged(this.thread);
       return;
     }
     if (message.method) {
-      if (message.method === 'session/update') this.#journal.push(message);
+      if (message.method === 'session/update') {
+        this.#journal.push(message);
+        this.#captureSessionState(message.params);
+      }
       for (const attachment of this.#attachments.values()) attachment.send(message);
+    }
+  }
+
+  #captureSessionState(params: unknown) {
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return;
+    const update = (params as { update?: unknown }).update;
+    if (!update || typeof update !== 'object' || Array.isArray(update)) return;
+    const record = update as Record<string, unknown>;
+    if (
+      record.sessionUpdate === 'current_mode_update'
+      && typeof record.currentModeId === 'string'
+    ) {
+      const modes = this.#sessionLoadResult.modes;
+      if (modes && typeof modes === 'object' && !Array.isArray(modes)) {
+        this.#sessionLoadResult = {
+          ...this.#sessionLoadResult,
+          modes: { ...modes, currentModeId: record.currentModeId },
+        };
+      }
+    }
+    if (
+      record.sessionUpdate === 'config_option_update'
+      && Array.isArray(record.configOptions)
+    ) {
+      this.#sessionLoadResult = {
+        ...this.#sessionLoadResult,
+        configOptions: record.configOptions,
+      };
     }
   }
 }
