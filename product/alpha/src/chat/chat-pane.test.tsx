@@ -15,10 +15,13 @@ const actions = (): ChatPaneActions => ({
 
 describe('ChatPane', () => {
   it('renders every ACP transcript family without flattening rich payloads', () => {
-    render(<ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />);
+    const { container } = render(
+      <ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />,
+    );
 
     expect(screen.getByText('Exercise the complete ACP renderer.')).toBeInTheDocument();
     expect(screen.getByText('Checking every content family.')).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="message-header"]')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'ACP rich content' })).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'memory://pixel.png' })).toBeInTheDocument();
     expect(screen.getByLabelText('Audio content')).toBeInTheDocument();

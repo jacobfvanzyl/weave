@@ -134,6 +134,10 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
       modeId: 'code',
     });
     assertEquals(mode, {});
+    assertEquals(
+      acp.notifications.filter((message) => JSON.stringify(message).includes('current_mode_update')).length,
+      1,
+    );
     const configured = await acp.request('session/set_config_option', {
       sessionId: 'fake-session',
       configId: 'fast',
@@ -191,8 +195,39 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
         client.notifications.some((message) => JSON.stringify(message).includes('FAKE_AGENT:SLOW'))
       )
     );
+    assertEquals(
+      acp.notifications.filter((message) =>
+        JSON.stringify(message).includes('user_message_chunk') &&
+        JSON.stringify(message).includes('SLOW')
+      ).length,
+      0,
+    );
+    assertEquals(
+      observer.notifications.filter((message) =>
+        JSON.stringify(message).includes('user_message_chunk') &&
+        JSON.stringify(message).includes('SLOW')
+      ).length,
+      1,
+    );
     observer.close();
     acp.close();
+
+    const reattached = await RpcSocket.open(
+      `${baseUrl}${attached.connection.path}?threadId=${attached.connection.threadId}`,
+      token,
+    );
+    await reattached.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await reattached.request('session/load', {
+      sessionId: 'fake-session',
+      cwd: workspacePath,
+      mcpServers: [],
+    });
+    assertEquals(
+      reattached.notifications.map((message) => JSON.stringify(message)).filter((message) => message.includes('SLOW'))
+        .map((message) => message.includes('user_message_chunk') ? 'user' : 'agent'),
+      ['user', 'agent'],
+    );
+    reattached.close();
     rpc.close();
   } finally {
     await server.shutdown();

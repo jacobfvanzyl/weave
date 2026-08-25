@@ -34,7 +34,6 @@ import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
 import {
   Message,
   MessageContent,
-  MessageHeader,
 } from '@/components/ui/message';
 import {
   MessageScroller,
@@ -70,7 +69,6 @@ function MessageEntryView({ message }: { message: TranscriptMessage }) {
   return (
     <Message align={isUser ? 'end' : 'start'}>
       <MessageContent>
-        <MessageHeader>{isUser ? 'You' : 'Agent'}</MessageHeader>
         <BubbleGroup>
           {message.chunks.map((chunk, index) => {
             if (chunk.kind === 'thought') {

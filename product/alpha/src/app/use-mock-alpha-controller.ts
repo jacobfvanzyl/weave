@@ -82,6 +82,16 @@ const scenarioConnection = (scenario: MockScenario): AlphaConnectionStatus => {
   return 'connected';
 };
 
+const scenarioTranscript = (scenario: MockScenario) => {
+  if (scenario !== 'sidebar' && scenario !== 'chat' && scenario !== 'busy' && scenario !== 'error') {
+    return undefined;
+  }
+  const transcript = createAcpShowcaseTranscript();
+  return scenario === 'busy'
+    ? reduceAcpEvent(transcript, { type: 'turn/started' })
+    : transcript;
+};
+
 export const mockScenarioFromLocation = (): MockScenario | undefined => {
   if (!import.meta.env.DEV) return undefined;
   const requested = new URLSearchParams(window.location.search).get('mock');
@@ -101,9 +111,7 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
       : undefined,
   );
   const [transcript, setTranscript] = useState<AcpTranscript | undefined>(
-    scenario === 'sidebar' || scenario === 'chat' || scenario === 'busy' || scenario === 'error'
-      ? createAcpShowcaseTranscript()
-      : undefined,
+    () => scenarioTranscript(scenario),
   );
   const [projects, setProjects] = useState<AlphaProject[]>(
     scenario === 'empty' ? PROJECTS.map((project) => ({ ...project, threads: [] })) : PROJECTS,
@@ -171,10 +179,13 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
         setTranscript(createAcpShowcaseTranscript());
       },
       sendPrompt: (text) => setTranscript((current) => current
-        ? queueOptimisticPrompt(
-            current,
-            `mock-local-${Date.now()}`,
-            [{ type: 'text', text }],
+        ? reduceAcpEvent(
+            queueOptimisticPrompt(
+              current,
+              `mock-local-${Date.now()}`,
+              [{ type: 'text', text }],
+            ),
+            { type: 'turn/started' },
           )
         : current),
       cancelPrompt: () => setTranscript((current) => current

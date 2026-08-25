@@ -118,6 +118,77 @@ describe('ACP transcript message reduction', () => {
       },
     ]);
   });
+
+  it('acknowledges a matching optimistic prompt even after another entry arrives', () => {
+    const optimistic = queueOptimisticPrompt(
+      createTranscript('session-1'),
+      'local-1',
+      [{ type: 'text', text: 'Typed prompt' }],
+    );
+    const interleaved = reduceAcpEvent(optimistic, {
+      type: 'protocol/unknown',
+      method: 'session/update',
+      payload: { update: { sessionUpdate: '_vendor_progress' } },
+    });
+
+    const acknowledged = reduceAcpEvent(interleaved, {
+      type: 'session/update',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        messageId: 'user-1',
+        content: { type: 'text', text: 'Typed prompt' },
+      },
+    });
+
+    expect(acknowledged.entries).toHaveLength(2);
+    expect(acknowledged.entries[0]).toMatchObject({
+      kind: 'message',
+      role: 'user',
+      messageId: 'user-1',
+      optimistic: false,
+    });
+  });
+
+  it.each(['end_turn', 'cancelled'] as const)(
+    'settles and retains an optimistic prompt when a turn stops with %s',
+    (stopReason) => {
+      const optimistic = queueOptimisticPrompt(
+        createTranscript('session-1'),
+        'local-1',
+        [{ type: 'text', text: 'Keep this prompt' }],
+      );
+
+      const stopped = reduceAcpEvent(optimistic, {
+        type: 'turn/stopped',
+        stopReason,
+      });
+
+      expect(stopped.entries).toMatchObject([{
+        kind: 'message',
+        role: 'user',
+        optimistic: false,
+        chunks: [{ content: [{ type: 'text', text: 'Keep this prompt' }] }],
+      }]);
+      expect(stopped.turn).toEqual({ status: 'stopped', stopReason });
+    },
+  );
+
+  it('settles and retains an optimistic prompt when a turn fails', () => {
+    const failed = reduceAcpEvent(
+      queueOptimisticPrompt(
+        createTranscript('session-1'),
+        'local-1',
+        [{ type: 'text', text: 'Keep failed prompt' }],
+      ),
+      { type: 'turn/failed', error: 'Agent stopped.' },
+    );
+
+    expect(failed.entries).toMatchObject([{
+      kind: 'message',
+      optimistic: false,
+      chunks: [{ content: [{ type: 'text', text: 'Keep failed prompt' }] }],
+    }]);
+  });
 });
 
 describe('ACP transcript structured updates', () => {

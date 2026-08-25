@@ -177,23 +177,34 @@ const appendProtocolMessage = (
   const entries = [...model.entries];
   const last = entries.at(-1);
 
-  if (role === 'user' && last?.kind === 'message' && last.role === 'user') {
-    const matchesOptimisticEcho = last.optimistic
-      && (last.messageId == null || last.messageId === messageId)
-      && last.chunks.some((chunk) =>
-        chunk.content.some((block) => contentEquals(block, content)));
-
-    if (matchesOptimisticEcho) {
-      entries[entries.length - 1] = {
-        ...last,
+  if (role === 'user') {
+    let optimisticIndex = -1;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (
+        entry.kind === 'message'
+        && entry.role === 'user'
+        && entry.optimistic
+        && (entry.messageId == null || entry.messageId === messageId)
+        && entry.chunks.some((chunk) =>
+          chunk.content.some((block) => contentEquals(block, content)))
+      ) {
+        optimisticIndex = index;
+        break;
+      }
+    }
+    if (optimisticIndex !== -1) {
+      const optimistic = entries[optimisticIndex] as TranscriptMessage;
+      entries[optimisticIndex] = {
+        ...optimistic,
         messageId,
         optimistic: false,
-        chunks: last.chunks.map((chunk) => ({ ...chunk, messageId })),
+        chunks: optimistic.chunks.map((chunk) => ({ ...chunk, messageId })),
       };
       return { ...model, entries };
     }
 
-    if (!last.optimistic && last.messageId === messageId) {
+    if (last?.kind === 'message' && last.role === 'user' && !last.optimistic && last.messageId === messageId) {
       const chunks = [...last.chunks];
       const lastChunk = chunks.at(-1);
       if (lastChunk?.kind === chunkKind && lastChunk.messageId === messageId) {
@@ -588,6 +599,15 @@ export const queueOptimisticPrompt = (
   ],
 });
 
+const settleOptimisticPrompts = (model: AcpTranscript): AcpTranscript => ({
+  ...model,
+  entries: model.entries.map((entry) =>
+    entry.kind === 'message' && entry.role === 'user' && entry.optimistic
+      ? { ...entry, optimistic: false }
+      : entry
+  ),
+});
+
 export const reduceAcpEvent = (
   model: AcpTranscript,
   event: AcpTranscriptEvent,
@@ -624,11 +644,14 @@ export const reduceAcpEvent = (
       return { ...model, turn: { status: 'running' } };
     case 'turn/stopped':
       return {
-        ...model,
+        ...settleOptimisticPrompts(model),
         turn: { status: 'stopped', stopReason: event.stopReason },
       };
     case 'turn/failed':
-      return { ...model, turn: { status: 'failed', error: event.error } };
+      return {
+        ...settleOptimisticPrompts(model),
+        turn: { status: 'failed', error: event.error },
+      };
     case 'permission/requested':
       return requestPermission(model, event.requestId, event.request);
     case 'permission/resolved':

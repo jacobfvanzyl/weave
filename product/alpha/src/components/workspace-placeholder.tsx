@@ -17,7 +17,7 @@ export function WorkspacePlaceholder({ controller }: { controller: AlphaControll
   const thread = selectedThread(model);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
+    <div className="relative flex min-h-0 flex-1 flex-col bg-background">
       <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-title-bar px-2">
         <SidebarTrigger />
         <div className="min-w-0">
@@ -53,7 +53,10 @@ export function WorkspacePlaceholder({ controller }: { controller: AlphaControll
       )}
 
       {model.error && (
-        <Alert variant="destructive" className="absolute bottom-10 right-4 z-50 max-w-sm">
+        <Alert
+          variant="destructive"
+          className="absolute inset-x-3 top-14 z-50 w-auto sm:left-auto sm:right-4 sm:w-full sm:max-w-sm"
+        >
           <AlertTitle>Portal error</AlertTitle>
           <AlertDescription>{model.error}</AlertDescription>
         </Alert>

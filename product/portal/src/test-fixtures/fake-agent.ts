@@ -49,14 +49,6 @@ for await (const line of readLines(Deno.stdin.readable)) {
     continue;
   }
   if (message.method === 'session/set_mode') {
-    await send({
-      jsonrpc: '2.0',
-      method: 'session/update',
-      params: {
-        sessionId: 'fake-session',
-        update: { sessionUpdate: 'current_mode_update', currentModeId: 'code' },
-      },
-    });
     await send(result(message.id, {}));
     continue;
   }
@@ -83,6 +75,22 @@ for await (const line of readLines(Deno.stdin.readable)) {
       ?.map((content) => typeof content.text === 'string' ? content.text : '')
       .join('') ?? '';
     if (prompt.includes('SLOW')) await new Promise((resolve) => setTimeout(resolve, 100));
+    await send({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: 'fake-session',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          messageId: 'provider-user-message',
+          content: {
+            type: 'text',
+            text: prompt,
+            annotations: { audience: ['assistant'] },
+          },
+        },
+      },
+    });
     await send({
       jsonrpc: '2.0',
       method: 'session/update',

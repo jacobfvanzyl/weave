@@ -14,6 +14,7 @@ type ClientPending = {
   clientId: JsonRpcId;
   method: string;
   isPrompt: boolean;
+  requestedModeId?: string;
 };
 type AgentPending = { attachmentId: string; providerId: JsonRpcId };
 
@@ -31,11 +32,31 @@ const sessionLoadStateFrom = (value: unknown): Record<string, unknown> => {
   const record = value as Record<string, unknown>;
   return {
     ...(record.modes === undefined ? {} : { modes: record.modes }),
-    ...(record.configOptions === undefined
-      ? {}
-      : { configOptions: record.configOptions }),
+    ...(record.configOptions === undefined ? {} : { configOptions: record.configOptions }),
     ...(record._meta === undefined ? {} : { _meta: record._meta }),
   };
+};
+
+const promptContentFrom = (params: unknown): unknown[] => {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return [];
+  const prompt = (params as { prompt?: unknown }).prompt;
+  return Array.isArray(prompt) ? prompt : [];
+};
+
+const requestedModeIdFrom = (params: unknown) => {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return;
+  const modeId = (params as { modeId?: unknown }).modeId;
+  return typeof modeId === 'string' && modeId ? modeId : undefined;
+};
+
+const promptEchoKey = (content: unknown) => {
+  if (content && typeof content === 'object' && !Array.isArray(content)) {
+    const record = content as Record<string, unknown>;
+    if (record.type === 'text' && typeof record.text === 'string') {
+      return JSON.stringify({ type: 'text', text: record.text });
+    }
+  }
+  return JSON.stringify(content);
 };
 
 const PROXIED_CLIENT_CAPABILITIES = {
@@ -62,6 +83,7 @@ export class HostedThread {
   readonly #agentPending = new Map<string, AgentPending>();
   readonly #onThreadChanged: (thread: ThreadSummary) => void;
   #activePromptAttachmentId?: string;
+  #submittedPromptEchoes: string[] = [];
   #nextForwardedId = 0;
 
   private constructor(
@@ -203,6 +225,7 @@ export class HostedThread {
         return;
       }
       this.#activePromptAttachmentId = attachment.attachmentId;
+      this.#fanOutSubmittedPrompt(attachment, message.params);
       const providerId = `client:${++this.#nextForwardedId}`;
       this.#clientPending.set(idKey(providerId), {
         attachment,
@@ -220,6 +243,7 @@ export class HostedThread {
         clientId: message.id,
         method: message.method,
         isPrompt: false,
+        ...(message.method === 'session/set_mode' ? { requestedModeId: requestedModeIdFrom(message.params) } : {}),
       });
       await this.#process.send({ ...message, id: providerId });
       return;
@@ -247,12 +271,16 @@ export class HostedThread {
       this.#clientPending.delete(idKey(message.id));
       if (pending.isPrompt && this.#activePromptAttachmentId === pending.attachment.attachmentId) {
         this.#activePromptAttachmentId = undefined;
+        this.#submittedPromptEchoes = [];
       }
       if (pending.method === 'session/set_config_option') {
         this.#sessionLoadResult = {
           ...this.#sessionLoadResult,
           ...sessionLoadStateFrom(message.result),
         };
+      }
+      if (!message.error && pending.requestedModeId) {
+        this.#confirmMode(pending.requestedModeId);
       }
       pending.attachment.send({ ...message, id: pending.clientId });
       this.thread.updatedAt = new Date().toISOString();
@@ -261,11 +289,70 @@ export class HostedThread {
     }
     if (message.method) {
       if (message.method === 'session/update') {
+        if (this.#consumeSubmittedPromptEcho(message.params)) return;
         this.#journal.push(message);
         this.#captureSessionState(message.params);
       }
       for (const attachment of this.#attachments.values()) attachment.send(message);
     }
+  }
+
+  #fanOutSubmittedPrompt(origin: Attachment, params: unknown) {
+    const messageId = crypto.randomUUID();
+    const contentBlocks = promptContentFrom(params);
+    this.#submittedPromptEchoes = contentBlocks.map(promptEchoKey);
+    for (const content of contentBlocks) {
+      const update: JsonRpcMessage = {
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: this.thread.acpSessionId,
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            messageId,
+            content,
+          },
+        },
+      };
+      this.#journal.push(update);
+      for (const client of this.#attachments.values()) {
+        if (client !== origin) client.send(update);
+      }
+    }
+  }
+
+  #consumeSubmittedPromptEcho(params: unknown) {
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return false;
+    const update = (params as { update?: unknown }).update;
+    if (!update || typeof update !== 'object' || Array.isArray(update)) return false;
+    const record = update as Record<string, unknown>;
+    if (record.sessionUpdate !== 'user_message_chunk' || record.content === undefined) return false;
+    const serialized = promptEchoKey(record.content);
+    const index = this.#submittedPromptEchoes.indexOf(serialized);
+    if (index === -1) return false;
+    this.#submittedPromptEchoes.splice(index, 1);
+    return true;
+  }
+
+  #confirmMode(modeId: string) {
+    const modes = this.#sessionLoadResult.modes;
+    if (
+      modes &&
+      typeof modes === 'object' &&
+      !Array.isArray(modes) &&
+      (modes as { currentModeId?: unknown }).currentModeId === modeId
+    ) return;
+    const update: JsonRpcMessage = {
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: this.thread.acpSessionId,
+        update: { sessionUpdate: 'current_mode_update', currentModeId: modeId },
+      },
+    };
+    this.#journal.push(update);
+    this.#captureSessionState(update.params);
+    for (const client of this.#attachments.values()) client.send(update);
   }
 
   #captureSessionState(params: unknown) {
@@ -274,8 +361,8 @@ export class HostedThread {
     if (!update || typeof update !== 'object' || Array.isArray(update)) return;
     const record = update as Record<string, unknown>;
     if (
-      record.sessionUpdate === 'current_mode_update'
-      && typeof record.currentModeId === 'string'
+      record.sessionUpdate === 'current_mode_update' &&
+      typeof record.currentModeId === 'string'
     ) {
       const modes = this.#sessionLoadResult.modes;
       if (modes && typeof modes === 'object' && !Array.isArray(modes)) {
@@ -286,8 +373,8 @@ export class HostedThread {
       }
     }
     if (
-      record.sessionUpdate === 'config_option_update'
-      && Array.isArray(record.configOptions)
+      record.sessionUpdate === 'config_option_update' &&
+      Array.isArray(record.configOptions)
     ) {
       this.#sessionLoadResult = {
         ...this.#sessionLoadResult,
