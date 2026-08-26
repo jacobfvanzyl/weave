@@ -10,12 +10,13 @@ import {
 import type { TranscriptToolCall } from './acp-transcript';
 import { ContentBlockView } from './content-block-view';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
+  Confirmation,
+  ConfirmationAction,
+  ConfirmationActions,
+  ConfirmationTitle,
+} from '@/components/ai-elements/confirmation';
+import { Tool, ToolContent, ToolHeader } from '@/components/ai-elements/tool';
 
 const statusIcon = {
   pending: Clock01Icon,
@@ -24,7 +25,7 @@ const statusIcon = {
   failed: AlertCircleIcon,
 } as const;
 
-function ToolContent({ tool }: { tool: TranscriptToolCall }) {
+function AcpToolContent({ tool }: { tool: TranscriptToolCall }) {
   return (
     <div className="flex flex-col gap-2 border-t px-3 py-2">
       {tool.locations.map((location) => (
@@ -84,34 +85,33 @@ export function ToolCallView({
 }) {
   const permission = tool.permission;
   return (
-    <div className="overflow-hidden rounded-md border bg-card/50">
-      <Collapsible defaultOpen={tool.status !== 'completed'}>
-        <CollapsibleTrigger className="flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
-          <HugeiconsIcon data-icon="inline-start" icon={statusIcon[tool.status]} strokeWidth={1.75} />
-          <span className="min-w-0 flex-1 truncate text-xs font-medium">{tool.title}</span>
-          <Badge variant={tool.status === 'failed' ? 'destructive' : 'outline'}>
-            {tool.status.replace('_', ' ')}
-          </Badge>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <ToolContent tool={tool} />
-        </CollapsibleContent>
-      </Collapsible>
+    <Tool defaultOpen={tool.status !== 'completed'}>
+      <ToolHeader className="min-h-8 gap-2 px-3 py-1.5 [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
+        <HugeiconsIcon data-icon="inline-start" icon={statusIcon[tool.status]} strokeWidth={1.75} />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">{tool.title}</span>
+        <Badge variant={tool.status === 'failed' ? 'destructive' : 'outline'}>
+          {tool.status.replace('_', ' ')}
+        </Badge>
+      </ToolHeader>
+      <ToolContent>
+        <AcpToolContent tool={tool} />
+      </ToolContent>
       {permission?.status === 'pending' && (
-        <div className="flex flex-wrap items-center gap-1.5 border-t bg-warning-background px-3 py-2">
-          <span className="mr-auto text-[0.6875rem] text-warning">Permission required</span>
-          {permission.options.map((option) => (
-            <Button
-              key={option.optionId}
-              size="sm"
-              variant={option.kind.startsWith('reject') ? 'ghost' : 'outline'}
-              onClick={() => onPermission(permission.requestId, option.optionId)}
-            >
-              {option.name}
-            </Button>
-          ))}
-        </div>
+        <Confirmation>
+          <ConfirmationTitle>Permission required</ConfirmationTitle>
+          <ConfirmationActions>
+            {permission.options.map((option) => (
+              <ConfirmationAction
+                key={option.optionId}
+                variant={option.kind.startsWith('reject') ? 'ghost' : 'outline'}
+                onClick={() => onPermission(permission.requestId, option.optionId)}
+              >
+                {option.name}
+              </ConfirmationAction>
+            ))}
+          </ConfirmationActions>
+        </Confirmation>
       )}
-    </div>
+    </Tool>
   );
 }

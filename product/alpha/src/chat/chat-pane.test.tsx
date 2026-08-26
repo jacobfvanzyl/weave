@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ElicitationSchema } from '@agentclientprotocol/sdk';
 import { describe, expect, it, vi } from 'vitest';
@@ -168,7 +168,8 @@ describe('ChatPane', () => {
 
   it('grows the composer from two rows to a maximum of eight after multiline input', async () => {
     const user = userEvent.setup();
-    render(<ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />);
+    const model = { ...createAcpShowcaseTranscript(), sessionId: 'composer-rows' };
+    render(<ChatPane model={model} actions={actions()} />);
 
     const composer = screen.getByRole('textbox', { name: 'Message agent' });
     expect(composer).toHaveAttribute('rows', '2');
@@ -288,7 +289,8 @@ describe('ChatPane', () => {
 
   it('uses a paper plane with a mauve enabled state for Send', async () => {
     const user = userEvent.setup();
-    render(<ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />);
+    const model = { ...createAcpShowcaseTranscript(), sessionId: 'composer-send-style' };
+    render(<ChatPane model={model} actions={actions()} />);
 
     const send = screen.getByRole('button', { name: 'Send message' });
     expect(send).toBeDisabled();
@@ -332,7 +334,8 @@ describe('ChatPane', () => {
     const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue({
       matches: true,
     } as MediaQueryList);
-    render(<ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />);
+    const model = { ...createAcpShowcaseTranscript(), sessionId: 'composer-mobile' };
+    render(<ChatPane model={model} actions={actions()} />);
 
     const composer = screen.getByRole('textbox', { name: 'Message agent' });
     await user.type(composer, 'Hello from iOS');
@@ -341,5 +344,68 @@ describe('ChatPane', () => {
     expect(composer).not.toHaveFocus();
 
     matchMedia.mockRestore();
+  });
+
+  it('keeps a separate draft for each Thread when the active transcript changes', async () => {
+    const user = userEvent.setup();
+    const first = { ...createAcpShowcaseTranscript(), sessionId: 'draft-first' };
+    const second = { ...createAcpShowcaseTranscript(), sessionId: 'draft-second' };
+    const view = render(<ChatPane model={first} actions={actions()} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Message agent' });
+    await user.type(composer, 'First Thread draft');
+
+    view.rerender(<ChatPane model={second} actions={actions()} />);
+    expect(screen.getByRole('textbox', { name: 'Message agent' })).toHaveValue('');
+    await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'Second Thread draft');
+
+    view.rerender(<ChatPane model={first} actions={actions()} />);
+    expect(screen.getByRole('textbox', { name: 'Message agent' })).toHaveValue('First Thread draft');
+  });
+
+  it('does not replace newly typed text when an earlier send fails', async () => {
+    const user = userEvent.setup();
+    let rejectSend: ((reason?: unknown) => void) | undefined;
+    const handlers = actions();
+    handlers.sendPrompt = vi.fn(() => new Promise<void>((_resolve, reject) => {
+      rejectSend = reject;
+    }));
+    const model = { ...createAcpShowcaseTranscript(), sessionId: 'send-new-text' };
+    render(<ChatPane model={model} actions={handlers} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Message agent' });
+    await user.type(composer, 'First attempt');
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    await user.type(composer, 'Keep this retry');
+    await act(async () => rejectSend?.(new Error('offline')));
+
+    expect(composer).toHaveValue('Keep this retry');
+  });
+
+  it('restores a submitted draft when sending rejects before replacement text is entered', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
+    handlers.sendPrompt = vi.fn(() => Promise.reject(new Error('offline')));
+    const model = { ...createAcpShowcaseTranscript(), sessionId: 'send-rejected' };
+    render(<ChatPane model={model} actions={handlers} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Message agent' });
+    await user.type(composer, 'Retry this prompt');
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => expect(composer).toHaveValue('Retry this prompt'));
+  });
+
+  it('routes Stop immediately while a turn is running', async () => {
+    const user = userEvent.setup();
+    const model = createAcpShowcaseTranscript();
+    model.turn = { status: 'running' };
+    const handlers = actions();
+    render(<ChatPane model={model} actions={handlers} />);
+
+    await user.click(screen.getByRole('button', { name: 'Stop response' }));
+
+    expect(handlers.cancelPrompt).toHaveBeenCalledOnce();
+    expect(handlers.sendPrompt).not.toHaveBeenCalled();
   });
 });

@@ -22,14 +22,21 @@ import { ElicitationView } from './elicitation-view';
 import { PlanView } from './plan-view';
 import { ToolCallView } from './tool-call-view';
 import { Badge } from '@/components/ui/badge';
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputTextarea,
+  PromptInputTools,
+} from '@/components/ai-elements/prompt-input';
 import { Bubble, BubbleContent, BubbleGroup } from '@/components/ui/bubble';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
+  Reasoning,
+  ReasoningContent,
+  ReasoningTrigger,
+} from '@/components/ai-elements/reasoning';
 import { Empty, EmptyDescription, EmptyHeader } from '@/components/ui/empty';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
@@ -45,7 +52,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
-import { CircularProgress } from '@/components/ui/progress';
+import { Context, ContextContent, ContextTrigger } from '@/components/ai-elements/context';
 import {
   Select,
   SelectContent,
@@ -55,7 +62,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 export type ChatPaneActions = {
@@ -67,7 +73,13 @@ export type ChatPaneActions = {
   setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
 };
 
-function MessageEntryView({ message }: { message: TranscriptMessage }) {
+function MessageEntryView({
+  message,
+  isStreaming,
+}: {
+  message: TranscriptMessage;
+  isStreaming: boolean;
+}) {
   const isUser = message.role === 'user';
   return (
     <Message align={isUser ? 'end' : 'start'}>
@@ -76,15 +88,18 @@ function MessageEntryView({ message }: { message: TranscriptMessage }) {
           {message.chunks.map((chunk, index) => {
             if (chunk.kind === 'thought') {
               return (
-                <Collapsible key={`${chunk.messageId ?? 'thought'}-${index}`} defaultOpen>
-                  <CollapsibleTrigger className="flex items-center gap-2 text-[0.6875rem] text-muted-foreground hover:text-foreground [&_svg]:size-3.5">
+                <Reasoning
+                  key={`${chunk.messageId ?? 'thought'}-${index}`}
+                  isStreaming={isStreaming}
+                >
+                  <ReasoningTrigger>
                     <HugeiconsIcon data-icon="inline-start" icon={AiBrainIcon} strokeWidth={1.75} />
                     Thinking
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="mt-1 border-l pl-3 text-muted-foreground">
+                  </ReasoningTrigger>
+                  <ReasoningContent>
                     <ContentBlocksView blocks={chunk.content} />
-                  </CollapsibleContent>
-                </Collapsible>
+                  </ReasoningContent>
+                </Reasoning>
               );
             }
             return (
@@ -130,13 +145,15 @@ function CompactionView({ entry }: { entry: TranscriptCompaction }) {
 function EntryView({
   entry,
   actions,
+  isStreaming,
 }: {
   entry: TranscriptEntry;
   actions: ChatPaneActions;
+  isStreaming: boolean;
 }) {
   switch (entry.kind) {
     case 'message':
-      return <MessageEntryView message={entry} />;
+      return <MessageEntryView message={entry} isStreaming={isStreaming} />;
     case 'tool':
       return <ToolCallView tool={entry} onPermission={actions.respondToPermission} />;
     case 'plan':
@@ -270,70 +287,77 @@ const composerRows = (text: string) => {
   return lineCount === 1 ? 2 : Math.min(8, Math.max(3, lineCount));
 };
 
+const composerDrafts = new Map<string, string>();
+
 function ContextUsage({ usage }: { usage: AcpTranscript['usage'] }) {
   if (!usage) return null;
-  const percentage = usage.size > 0
-    ? Math.min(100, (usage.used / usage.size) * 100)
-    : 0;
-  const description = `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} context tokens used`;
   return (
-    <CircularProgress
-      aria-label="Context usage"
-      aria-valuetext={description}
-      title={description}
-      value={percentage}
-    />
+    <Context cost={usage.cost} maxTokens={usage.size} usedTokens={usage.used}>
+      <ContextTrigger />
+      <ContextContent />
+    </Context>
   );
 }
 
 function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneActions }) {
-  const [text, setText] = useState('');
+  const [text, setTextState] = useState(() => composerDrafts.get(model.sessionId) ?? '');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const running = model.turn.status === 'running';
-  const submit = () => {
+  const setText = (next: string) => {
+    if (next) composerDrafts.set(model.sessionId, next);
+    else composerDrafts.delete(model.sessionId);
+    setTextState(next);
+  };
+  const submit = async () => {
     const prompt = text.trim();
     if (!prompt || running) return;
     setText('');
     if (window.matchMedia?.('(max-width: 767px)').matches) textareaRef.current?.blur();
-    void actions.sendPrompt(prompt);
+    try {
+      await actions.sendPrompt(prompt);
+    } catch {
+      setTextState((current) => {
+        if (current) return current;
+        composerDrafts.set(model.sessionId, text);
+        return text;
+      });
+    }
   };
 
   return (
     <div className="shrink-0 border-t bg-background">
-      <form
+      <PromptInput
         aria-label="Message composer"
         className="w-full bg-composer-background"
         onSubmit={(event) => {
           event.preventDefault();
-          submit();
+          void submit();
         }}
       >
         <FieldGroup className="gap-0">
-          <Field className="gap-0">
-            <FieldLabel className="sr-only" htmlFor="composer-message">Message agent</FieldLabel>
-            <Textarea
-              ref={textareaRef}
-              id="composer-message"
-              aria-label="Message agent"
-              className="field-sizing-fixed min-h-0 resize-none overflow-y-auto px-4 pb-1 pt-3 text-xs/relaxed"
-              placeholder="Message agent — @ to include context, / for commands"
-              rows={composerRows(text)}
-              variant="frameless"
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-            />
-          </Field>
-          <div
+          <PromptInputBody>
+            <Field className="gap-0">
+              <FieldLabel className="sr-only" htmlFor="composer-message">Message agent</FieldLabel>
+              <PromptInputTextarea
+                ref={textareaRef}
+                id="composer-message"
+                aria-label="Message agent"
+                className="field-sizing-fixed min-h-0 resize-none overflow-y-auto px-4 pb-1 pt-3 text-xs/relaxed"
+                placeholder="Message agent — @ to include context, / for commands"
+                rows={composerRows(text)}
+                variant="frameless"
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+              />
+            </Field>
+          </PromptInputBody>
+          <PromptInputFooter
             className="flex min-h-8 items-end gap-2 px-3 pb-2"
             data-slot="composer-controls"
           >
-            <ConfigControls model={model} actions={actions} />
+            <PromptInputTools className="min-w-0 flex-1 flex-wrap">
+              <ConfigControls model={model} actions={actions} />
+            </PromptInputTools>
             <div
               className="flex shrink-0 items-center gap-1.5"
               data-slot="composer-actions"
@@ -355,9 +379,9 @@ function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneA
                 />
               </Button>
             </div>
-          </div>
+          </PromptInputFooter>
         </FieldGroup>
-      </form>
+      </PromptInput>
     </div>
   );
 }
@@ -387,7 +411,11 @@ export function ChatPane({
             <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-4 px-3 py-5">
               {model.entries.map((entry) => (
                 <MessageScrollerItem key={entry.id} scrollAnchor={entry.kind === 'message' && entry.role === 'user'}>
-                  <EntryView entry={entry} actions={actions} />
+                  <EntryView
+                    entry={entry}
+                    actions={actions}
+                    isStreaming={running && entry.id === model.entries.at(-1)?.id}
+                  />
                 </MessageScrollerItem>
               ))}
               {model.entries.length === 0 && (
@@ -402,7 +430,7 @@ export function ChatPane({
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      <Composer model={model} actions={actions} />
+      <Composer key={model.sessionId} model={model} actions={actions} />
     </div>
   );
 }

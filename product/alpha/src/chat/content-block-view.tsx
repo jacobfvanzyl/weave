@@ -6,7 +6,6 @@ import {
   AiImageIcon,
   Link01Icon,
 } from '@hugeicons/core-free-icons';
-import { Streamdown } from 'streamdown';
 import {
   Attachment,
   AttachmentContent,
@@ -14,6 +13,7 @@ import {
   AttachmentMedia,
   AttachmentTitle,
 } from '@/components/ui/attachment';
+import { MessageResponse } from '@/components/ai-elements/message';
 
 const fileName = (uri: string) => {
   const tail = uri.split('/').filter(Boolean).at(-1);
@@ -97,9 +97,9 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
   switch (block.type) {
     case 'text':
       return (
-        <Streamdown className="min-w-0 text-xs/relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+        <MessageResponse>
           {block.text}
-        </Streamdown>
+        </MessageResponse>
       );
     case 'image':
       return (
