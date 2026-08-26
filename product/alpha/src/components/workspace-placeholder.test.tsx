@@ -94,6 +94,9 @@ describe('WorkspacePlaceholder', () => {
     );
     expect(container.querySelector('[data-slot="main-bottom-rail"]'))
       .not.toHaveClass('hidden', 'sm:block');
+    expect(container.querySelector('[data-slot="thread-top-rail"]')).toBeEmptyDOMElement();
+    expect(container.querySelector('[data-slot="thread-content"]')).toBeEmptyDOMElement();
+    expect(screen.getByRole('button', { name: 'Show Project Pane' })).toBeDisabled();
   });
 
   it('restores a hidden Project Pane from an icon-only bottom-rail control', async () => {

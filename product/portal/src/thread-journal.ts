@@ -22,6 +22,24 @@ type LoadedJournal = {
 
 const DEFAULT_RETENTION_LIMIT = 10_000;
 
+const NON_CONVERSATIONAL_SESSION_UPDATES = new Set([
+  'available_commands_update',
+  'config_option_update',
+  'current_mode_update',
+  'session_info_update',
+  'usage_update',
+]);
+
+const isNonConversationalEvent = (event: ThreadEventRecord) => {
+  if (event.message.method !== 'session/update') return false;
+  const params = event.message.params;
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return false;
+  const update = (params as { update?: unknown }).update;
+  if (!update || typeof update !== 'object' || Array.isArray(update)) return false;
+  const sessionUpdate = (update as { sessionUpdate?: unknown }).sessionUpdate;
+  return typeof sessionUpdate === 'string' && NON_CONVERSATIONAL_SESSION_UPDATES.has(sessionUpdate);
+};
+
 const eventRecordFrom = (value: unknown): ThreadEventRecord => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Thread event record must be an object.');
@@ -173,6 +191,26 @@ export class ThreadEventJournal {
       cursorExpired: afterSequence !== undefined && afterSequence < compactedThrough,
       lastSequence,
     };
+  }
+
+  async clearIfNoConversation(threadId: string) {
+    if (!threadId) throw new Error('Thread ID is required.');
+    const operation = this.#mutationQueue.then(async () => {
+      if ((this.#compactedThrough.get(threadId) ?? 0) > 0) return false;
+      const threadEvents = this.#events.filter((event) => event.threadId === threadId);
+      if (threadEvents.some((event) => !isNonConversationalEvent(event))) return false;
+      if (threadEvents.length === 0) return true;
+
+      const events = this.#events.filter((event) => event.threadId !== threadId);
+      const compactedThrough = new Map(this.#compactedThrough);
+      compactedThrough.delete(threadId);
+      await this.#persist(events, compactedThrough);
+      this.#events = events;
+      this.#compactedThrough = compactedThrough;
+      return true;
+    });
+    this.#mutationQueue = operation.then(() => undefined, () => undefined);
+    return await operation;
   }
 
   async #persist(events: ThreadEventRecord[], compactedThrough: Map<string, number>) {

@@ -6,9 +6,19 @@ const writer = Deno.stdout.writable.getWriter();
 const send = async (message: JsonRpcMessage) => await writer.write(encoder.encode(`${JSON.stringify(message)}\n`));
 const recoveryMode = Deno.args.find((value) => value.startsWith('--recovery='))?.slice('--recovery='.length) ?? 'load';
 const replaysTranscript = Deno.args.includes('--replay-transcript');
+const processLog = Deno.args.find((value) => value.startsWith('--process-log='))?.slice('--process-log='.length);
 const transcript: JsonRpcMessage[] = [];
 let resumeAttempted = false;
 let restoredWith = '';
+let activeSessionId = 'fake-session';
+
+if (processLog) {
+  await Deno.writeTextFile(processLog, `start ${Deno.pid}\n`, { append: true, create: true });
+  Deno.addSignalListener('SIGTERM', async () => {
+    await Deno.writeTextFile(processLog, `stop ${Deno.pid}\n`, { append: true, create: true });
+    Deno.exit();
+  });
+}
 
 for await (const line of readLines(Deno.stdin.readable)) {
   if (!line.trim()) continue;
@@ -26,8 +36,9 @@ for await (const line of readLines(Deno.stdin.readable)) {
     continue;
   }
   if (message.method === 'session/new') {
+    activeSessionId = recoveryMode === 'missing-session' ? 'replacement-session' : 'fake-session';
     await send(result(message.id, {
-      sessionId: 'fake-session',
+      sessionId: activeSessionId,
       modes: {
         currentModeId: 'ask',
         availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'code', name: 'Code' }],
@@ -43,10 +54,20 @@ for await (const line of readLines(Deno.stdin.readable)) {
   }
   if (message.method === 'session/resume') {
     resumeAttempted = true;
+    if (recoveryMode === 'missing-session') {
+      await send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'Fake session is missing.' } });
+      continue;
+    }
+    activeSessionId = (message.params as { sessionId?: string } | undefined)?.sessionId ?? activeSessionId;
     await send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'Fake resume failed.' } });
     continue;
   }
   if (message.method === 'session/load') {
+    if (recoveryMode === 'missing-session') {
+      await send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'Fake session is missing.' } });
+      continue;
+    }
+    activeSessionId = (message.params as { sessionId?: string } | undefined)?.sessionId ?? activeSessionId;
     restoredWith = resumeAttempted ? 'LOAD_AFTER_RESUME' : 'LOAD';
     if (replaysTranscript) {
       for (const update of transcript) await send(update);
@@ -56,7 +77,7 @@ for await (const line of readLines(Deno.stdin.readable)) {
         jsonrpc: '2.0',
         method: 'session/update',
         params: {
-          sessionId: 'fake-session',
+          sessionId: activeSessionId,
           update: {
             sessionUpdate: 'agent_message_chunk',
             content: { type: 'text', text: 'PROVIDER_REPLAY_SHOULD_NOT_ESCAPE' },
@@ -93,7 +114,7 @@ for await (const line of readLines(Deno.stdin.readable)) {
       jsonrpc: '2.0',
       method: 'session/update',
       params: {
-        sessionId: 'fake-session',
+        sessionId: activeSessionId,
         update: { sessionUpdate: 'config_option_update', configOptions },
       },
     });
@@ -108,7 +129,7 @@ for await (const line of readLines(Deno.stdin.readable)) {
       new Deno.Command(Deno.execPath(), {
         args: [
           'eval',
-          `await new Promise((resolve) => setTimeout(resolve, 75)); console.log(JSON.stringify({jsonrpc:'2.0',method:'session/update',params:{sessionId:'fake-session',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'OBSOLETE_PROVIDER_EVENT'}}}}));`,
+          `await new Promise((resolve) => setTimeout(resolve, 75)); console.log(JSON.stringify({jsonrpc:'2.0',method:'session/update',params:{sessionId:'${activeSessionId}',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'OBSOLETE_PROVIDER_EVENT'}}}}));`,
         ],
         stdin: 'null',
         stdout: 'inherit',
@@ -122,7 +143,7 @@ for await (const line of readLines(Deno.stdin.readable)) {
       jsonrpc: '2.0',
       method: 'session/update',
       params: {
-        sessionId: 'fake-session',
+        sessionId: activeSessionId,
         update: {
           sessionUpdate: 'user_message_chunk',
           messageId: 'provider-user-message',
@@ -138,7 +159,7 @@ for await (const line of readLines(Deno.stdin.readable)) {
       jsonrpc: '2.0',
       method: 'session/update',
       params: {
-        sessionId: 'fake-session',
+        sessionId: activeSessionId,
         update: {
           sessionUpdate: 'agent_message_chunk',
           content: { type: 'text', text: `FAKE_AGENT${restoredWith ? `_${restoredWith}` : ''}:${prompt}` },
@@ -150,4 +171,8 @@ for await (const line of readLines(Deno.stdin.readable)) {
     await send(agentUpdate);
     await send(result(message.id, { stopReason: 'end_turn' }));
   }
+}
+
+if (processLog) {
+  await Deno.writeTextFile(processLog, `stop ${Deno.pid}\n`, { append: true, create: true });
 }

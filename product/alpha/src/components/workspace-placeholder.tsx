@@ -28,50 +28,62 @@ export function WorkspacePlaceholder({
     state: projectPaneState,
     toggleSidebar: toggleProjectPane,
   } = useSidebar();
-  const projectPaneVisible = isMobile ? openMobile : projectPaneState === 'expanded';
+  const projectPaneVisible = Boolean(thread) && (isMobile ? openMobile : projectPaneState === 'expanded');
 
   return (
     <div
       className={cn('relative flex min-h-0 min-w-0 flex-1 flex-col bg-background', className)}
       data-slot='thread-pane'
     >
-      <header className='flex h-11 shrink-0 items-center gap-2 border-b bg-title-bar px-2'>
-        <Button
-          type='button'
-          size='icon-sm'
-          variant='ghost'
-          aria-label='Toggle threads'
-          onClick={onToggleThreads}
-        >
-          <HugeiconsIcon data-icon='inline-start' icon={SidebarLeftIcon} strokeWidth={2} />
-        </Button>
-        <div className='min-w-0'>
-          <p className='truncate text-xs font-medium'>
-            {thread?.title || 'Weave'}
-          </p>
-          <p className='truncate text-[0.625rem] text-muted-foreground'>
-            {thread?.hostName || model.connection.hostName}
-          </p>
-        </div>
+      <header
+        className='flex h-11 shrink-0 items-center gap-2 border-b bg-title-bar px-2'
+        data-slot='thread-top-rail'
+      >
+        {thread && (
+          <>
+            <Button
+              type='button'
+              size='icon-sm'
+              variant='ghost'
+              aria-label='Toggle threads'
+              onClick={onToggleThreads}
+            >
+              <HugeiconsIcon data-icon='inline-start' icon={SidebarLeftIcon} strokeWidth={2} />
+            </Button>
+            <div className='min-w-0'>
+              <p className='truncate text-xs font-medium'>
+                {thread.title || 'Weave'}
+              </p>
+              <p className='truncate text-[0.625rem] text-muted-foreground'>
+                {thread.hostName || model.connection.hostName}
+              </p>
+            </div>
+          </>
+        )}
       </header>
 
-      {thread && model.transcript
-        ? <ChatPane model={model.transcript} actions={actions} />
-        : (
-          <section className='relative flex min-h-0 flex-1 items-center justify-center p-6'>
-            <Empty className='max-w-sm'>
-              <EmptyHeader>
-                <EmptyMedia variant='icon'>
-                  <CodexIcon />
-                </EmptyMedia>
-                <EmptyTitle>Choose a thread</EmptyTitle>
-                <EmptyDescription>
-                  Select a Portal-managed ACP thread to attach to it.
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          </section>
-        )}
+      {thread
+        ? model.transcript
+          ? <ChatPane model={model.transcript} actions={actions} />
+          : (
+            <section
+              className='relative flex min-h-0 flex-1 items-center justify-center p-6'
+              data-slot='thread-content'
+            >
+              <Empty className='max-w-sm'>
+                <EmptyHeader>
+                  <EmptyMedia variant='icon'>
+                    <CodexIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>Choose a thread</EmptyTitle>
+                  <EmptyDescription>
+                    Select a Portal-managed ACP thread to attach to it.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            </section>
+          )
+        : <section className='min-h-0 flex-1' data-slot='thread-content' />}
 
       <footer
         className='flex h-[var(--bottom-rail-height)] shrink-0 items-center border-t bg-status-bar px-1'
@@ -79,7 +91,7 @@ export function WorkspacePlaceholder({
       >
         {!projectPaneVisible && (
           <div className='ml-auto'>
-            <ProjectPaneToggle action='Show' onClick={toggleProjectPane} />
+            <ProjectPaneToggle action='Show' disabled={!thread} onClick={toggleProjectPane} />
           </div>
         )}
       </footer>

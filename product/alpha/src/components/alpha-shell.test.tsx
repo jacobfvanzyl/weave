@@ -42,6 +42,20 @@ const controller = (): AlphaController => ({
 describe('AlphaShell', () => {
   it('places a tabbed Editor Pane between the Thread and Project Panes', () => {
     const value = controller();
+    value.model.selectedThreadId = 'thread-1';
+    value.model.workspaces = [{
+      id: 'weave',
+      name: 'Weave',
+      threads: [{
+        id: 'thread-1',
+        title: 'Selected Thread',
+        agentName: 'Codex',
+        hostName: 'bazzite',
+        status: 'active',
+        updatedAt: '2026-08-26T00:00:00.000Z',
+        workspaceId: 'weave',
+      }],
+    }];
     value.model.workspaceFiles = {
       workspaceId: 'weave',
       workspaceName: 'Weave',
@@ -84,6 +98,36 @@ describe('AlphaShell', () => {
     );
   });
 
+  it('shows only the sidebar and a blank Thread Pane when no Thread is selected', () => {
+    const value = controller();
+    value.model.workspaceFiles = {
+      workspaceId: 'weave',
+      workspaceName: 'Weave',
+      activeFilePath: 'README.md',
+      openFiles: [{
+        kind: 'text',
+        path: 'README.md',
+        content: '# Hidden without a Thread\n',
+        contentHash: '0'.repeat(64),
+        size: 26,
+        changed: false,
+      }],
+      directories: {},
+    };
+
+    const { container } = render(<AlphaShell controller={value} />);
+    const paneRow = container.querySelector('[data-slot="alpha-pane-row"]');
+
+    expect(Array.from(paneRow?.querySelectorAll(':scope > [data-slot="resizable-panel"]') ?? [])
+      .map((panel) => panel.id))
+      .toEqual(['threads', 'thread']);
+    expect(container.querySelector('[data-slot="editor-pane"]')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot="project-pane"]')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot="thread-top-rail"]')).toBeEmptyDOMElement();
+    expect(container.querySelector('[data-slot="thread-content"]')).toBeEmptyDOMElement();
+    expect(container.querySelector('[data-symbol="project-pane"]')?.closest('button')).toBeDisabled();
+  });
+
   it('sizes the native shell to the visible viewport without duplicating the top safe area', () => {
     const originalViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport');
     const events = new EventTarget();
@@ -98,7 +142,23 @@ describe('AlphaShell', () => {
       value: viewport,
     });
 
-    const { container, unmount } = render(<AlphaShell controller={controller()} />);
+    const value = controller();
+    value.model.selectedThreadId = 'thread-1';
+    value.model.workspaces = [{
+      id: 'weave',
+      name: 'Weave',
+      threads: [{
+        id: 'thread-1',
+        title: 'Selected Thread',
+        agentName: 'Codex',
+        hostName: 'bazzite',
+        status: 'active',
+        updatedAt: '2026-08-26T00:00:00.000Z',
+        workspaceId: 'weave',
+      }],
+    }];
+
+    const { container, unmount } = render(<AlphaShell controller={value} />);
     const shell = container.querySelector('[data-slot="sidebar-wrapper"]');
 
     expect(document.documentElement.style.getPropertyValue('--alpha-viewport-height')).toBe('640px');

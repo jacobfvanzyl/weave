@@ -31,8 +31,10 @@ try {
     }).thread;
   if (!thread) throw new Error(`Acceptance Thread is unavailable: ${existingThreadId}`);
   const attachment = await rpc.request('thread.attach', { threadId: thread.threadId }) as {
+    thread: { threadId: string; acpSessionId: string };
     connection: { path: string; threadId: string; cwd: string };
   };
+  const attachedThread = attachment.thread;
   const acp = await RpcSocket.open(
     `${baseUrl}${attachment.connection.path}?threadId=${encodeURIComponent(attachment.connection.threadId)}`,
     token,
@@ -43,7 +45,7 @@ try {
       throw new Error('Portal did not advertise runtime recovery.');
     }
     await acp.request('session/load', {
-      sessionId: thread.acpSessionId,
+      sessionId: attachedThread.acpSessionId,
       cwd: attachment.connection.cwd,
       mcpServers: [],
       ...(recovery ? { _meta: { 'weave.dev/threadEvents': { afterSequence: 0 } } } : {}),
@@ -57,7 +59,7 @@ try {
       : 0;
     if (recovery && !Number.isInteger(baseSequence)) throw new Error('Portal did not establish a replay cursor.');
     await acp.request('session/prompt', {
-      sessionId: thread.acpSessionId,
+      sessionId: attachedThread.acpSessionId,
       prompt: [{ type: 'text', text: `Reply with exactly ${marker}` }],
     });
     if (!notificationText(acp.notifications).includes(marker)) {
@@ -67,7 +69,7 @@ try {
       let uncertain: unknown;
       try {
         await acp.request('session/prompt', {
-          sessionId: thread.acpSessionId,
+          sessionId: attachedThread.acpSessionId,
           prompt: [{ type: 'text', text: 'CRASH_WITH_STALE_REMOTE_ACCEPTANCE' }],
         });
       } catch (cause) {
@@ -98,7 +100,7 @@ try {
 
       const recoveredMarker = `${marker}_RECOVERED`;
       await acp.request('session/prompt', {
-        sessionId: thread.acpSessionId,
+        sessionId: attachedThread.acpSessionId,
         prompt: [{ type: 'text', text: recoveredMarker }],
       });
       if (!notificationText(acp.notifications).includes(recoveredMarker)) {
@@ -112,7 +114,7 @@ try {
       try {
         await reattached.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
         await reattached.request('session/load', {
-          sessionId: thread.acpSessionId,
+          sessionId: attachedThread.acpSessionId,
           cwd: attachment.connection.cwd,
           mcpServers: [],
           _meta: { 'weave.dev/threadEvents': { afterSequence: baseSequence + 3 } },

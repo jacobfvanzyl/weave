@@ -4,9 +4,11 @@ import { Button } from '@/components/ui/button';
 
 export function ProjectPaneToggle({
   action,
+  disabled = false,
   onClick,
 }: {
   action: 'Show' | 'Hide';
+  disabled?: boolean;
   onClick(): void;
 }) {
   return (
@@ -15,6 +17,7 @@ export function ProjectPaneToggle({
       size='icon'
       variant='ghost'
       aria-label={`${action} Project Pane`}
+      disabled={disabled}
       onClick={onClick}
     >
       <HugeiconsIcon

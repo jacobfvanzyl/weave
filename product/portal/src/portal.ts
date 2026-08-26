@@ -127,7 +127,7 @@ export class Portal {
           workspace,
           agent,
           input.title,
-          (thread) => void this.#catalog.put(thread),
+          (thread) => this.#catalog.put(thread),
           this.#journal,
           this.#runtimeStates,
         );
@@ -137,7 +137,7 @@ export class Portal {
       }
       case 'thread.attach': {
         const input = params as PortalRpcParams<'thread.attach'>;
-        const thread = this.#thread(input.threadId);
+        const thread = (await this.#runtime(input.threadId)).thread;
         return {
           thread,
           connection: {
@@ -229,7 +229,7 @@ export class Portal {
         thread,
         this.#workspace(thread.workspaceId),
         this.#agent(thread.agentId),
-        (changed) => void this.#catalog.put(changed),
+        (changed) => this.#catalog.put(changed),
         this.#journal,
         this.#runtimeStates,
       );

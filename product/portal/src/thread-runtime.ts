@@ -42,6 +42,7 @@ type ClientPending = {
   requestedModeId?: string;
 };
 type AgentPending = { attachmentId: string; providerId: JsonRpcId };
+type ThreadChanged = (thread: ThreadSummary) => Promise<void>;
 
 const promptContentFrom = (params: unknown): unknown[] => {
   if (!params || typeof params !== 'object' || Array.isArray(params)) return [];
@@ -81,7 +82,7 @@ export class HostedThread {
   readonly #runtimeStates: RuntimeStateStore;
   readonly #clientPending = new Map<string, ClientPending>();
   readonly #agentPending = new Map<string, AgentPending>();
-  readonly #onThreadChanged: (thread: ThreadSummary) => void;
+  readonly #onThreadChanged: ThreadChanged;
   #activePromptAttachmentId?: string;
   #submittedPromptEchoes: string[] = [];
   #nextForwardedId = 0;
@@ -101,7 +102,7 @@ export class HostedThread {
     generation: number,
     initializeResult: unknown,
     sessionLoadResult: Record<string, unknown>,
-    onThreadChanged: (thread: ThreadSummary) => void,
+    onThreadChanged: ThreadChanged,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
   ) {
@@ -120,7 +121,7 @@ export class HostedThread {
     workspace: WorkspaceDefinition,
     agent: AgentDefinition,
     title: string | undefined,
-    onThreadChanged: (thread: ThreadSummary) => void,
+    onThreadChanged: ThreadChanged,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
   ) {
@@ -170,46 +171,77 @@ export class HostedThread {
     thread: ThreadSummary,
     workspace: WorkspaceDefinition,
     agent: AgentDefinition,
-    onThreadChanged: (thread: ThreadSummary) => void,
+    onThreadChanged: ThreadChanged,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
   ) {
     const runtimeState = await runtimeStates.start(thread.threadId, 'restoring');
     const buffered: JsonRpcMessage[] = [];
     const holder: { hosted?: HostedThread } = {};
-    const process = new AgentProcess(
-      agent,
-      workspace.path,
-      (message) =>
-        holder.hosted ? holder.hosted.#receiveAgent(runtimeState.generation, message) : buffered.push(message),
-      (exit) => {
-        if (holder.hosted) void holder.hosted.#providerStopped(runtimeState.generation, exit);
-      },
-    );
-    const initializeResult = await process.request('initialize', ACP_INITIALIZE_PARAMS);
-    const sessionLoadResult = await restoreProviderSession(process, initializeResult, {
-      sessionId: thread.acpSessionId,
-      cwd: workspace.path,
-      mcpServers: [],
-    });
-    await runtimeStates.transition(thread.threadId, runtimeState.generation, 'idle');
-    const hosted = new HostedThread(
-      thread,
-      workspace,
-      agent,
-      process,
-      runtimeState.generation,
-      initializeResult,
-      sessionLoadStateFrom(sessionLoadResult),
-      onThreadChanged,
-      journal,
-      runtimeStates,
-    );
-    holder.hosted = hosted;
-    for (const message of buffered) {
-      if (message.method !== 'session/update') hosted.#receiveAgent(runtimeState.generation, message);
+    const spawn = () =>
+      new AgentProcess(
+        agent,
+        workspace.path,
+        (message) =>
+          holder.hosted ? holder.hosted.#receiveAgent(runtimeState.generation, message) : buffered.push(message),
+        (exit) => {
+          if (holder.hosted) void holder.hosted.#providerStopped(runtimeState.generation, exit);
+        },
+      );
+    let process = spawn();
+    let restoredThread = thread;
+    let replacedSession = false;
+    try {
+      let initializeResult = await process.request('initialize', ACP_INITIALIZE_PARAMS);
+      let sessionLoadResult: unknown;
+      try {
+        sessionLoadResult = await restoreProviderSession(process, initializeResult, {
+          sessionId: thread.acpSessionId,
+          cwd: workspace.path,
+          mcpServers: [],
+        });
+      } catch (restoreCause) {
+        await process.close().catch(() => undefined);
+        if (!await journal.clearIfNoConversation(thread.threadId)) throw restoreCause;
+
+        buffered.length = 0;
+        process = spawn();
+        initializeResult = await process.request('initialize', ACP_INITIALIZE_PARAMS);
+        sessionLoadResult = await process.request('session/new', { cwd: workspace.path, mcpServers: [] });
+        restoredThread = {
+          ...thread,
+          acpSessionId: sessionIdFrom(sessionLoadResult),
+          updatedAt: new Date().toISOString(),
+        };
+        await onThreadChanged(restoredThread);
+        replacedSession = true;
+      }
+
+      await runtimeStates.transition(thread.threadId, runtimeState.generation, 'idle');
+      const hosted = new HostedThread(
+        restoredThread,
+        workspace,
+        agent,
+        process,
+        runtimeState.generation,
+        initializeResult,
+        sessionLoadStateFrom(sessionLoadResult),
+        onThreadChanged,
+        journal,
+        runtimeStates,
+      );
+      holder.hosted = hosted;
+      for (const message of buffered) {
+        if (replacedSession || message.method !== 'session/update') {
+          hosted.#receiveAgent(runtimeState.generation, message);
+        }
+      }
+      return hosted;
+    } catch (cause) {
+      await process.close().catch(() => undefined);
+      await runtimeStates.transition(thread.threadId, runtimeState.generation, 'unavailable').catch(() => undefined);
+      throw cause;
     }
-    return hosted;
   }
 
   connect(send: (message: JsonRpcMessage) => void): ThreadAttachment {
@@ -567,7 +599,7 @@ export class HostedThread {
       }
       pending.attachment.send({ ...message, id: pending.clientId });
       this.thread.updatedAt = new Date().toISOString();
-      this.#onThreadChanged(this.thread);
+      await this.#onThreadChanged(this.thread);
       return;
     }
     if (message.method) {

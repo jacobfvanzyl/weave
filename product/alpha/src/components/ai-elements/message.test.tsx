@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { MessageResponse } from './message';
 
 describe('MessageResponse', () => {
+  it('wraps at word boundaries unless an unbroken token would overflow', () => {
+    const { container } = render(
+      <MessageResponse>A normal user message with readable word boundaries.</MessageResponse>,
+    );
+    const response = container.firstElementChild;
+
+    expect(response).toHaveClass('[overflow-wrap:break-word]');
+    expect(response).not.toHaveClass('[overflow-wrap:anywhere]');
+  });
+
   it('renders streaming markdown and repairs an incomplete code fence', () => {
     const { container, rerender } = render(
       <MessageResponse mode="streaming">{'A **split'}</MessageResponse>,

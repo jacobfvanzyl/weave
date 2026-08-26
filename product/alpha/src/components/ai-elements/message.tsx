@@ -12,7 +12,7 @@ export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
-        'min-w-0 max-w-full text-xs/relaxed [overflow-wrap:anywhere] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
+        'min-w-0 max-w-full text-xs/relaxed [overflow-wrap:break-word] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
         className,
       )}
       data-slot="message-response"

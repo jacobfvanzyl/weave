@@ -51,8 +51,9 @@ function PaneRow({
   >(undefined);
   const acceptedRowKeyRef = useRef<string | undefined>(undefined);
   const openFiles = model.workspaceFiles?.openFiles ?? [];
-  const editorOpen = openFiles.length > 0;
-  const projectVisible = isMobile ? openMobile : projectState === 'expanded';
+  const hasActiveThread = Boolean(model.selectedThreadId);
+  const editorOpen = hasActiveThread && openFiles.length > 0;
+  const projectVisible = hasActiveThread && (isMobile ? openMobile : projectState === 'expanded');
 
   useEffect(() => {
     const clearActiveResizePair = () => {
@@ -103,7 +104,7 @@ function PaneRow({
             />
           )}
         </div>
-        {projectPane}
+        {hasActiveThread && projectPane}
       </>
     );
   }
@@ -272,10 +273,13 @@ function WorkspaceFrame({
   onThreadSidebarVisibleChange(visible: boolean): void;
   paneLayouts: PaneLayouts;
 }) {
+  const hasActiveThread = Boolean(controller.model.selectedThreadId);
   return (
     <SidebarProvider
-      open={paneLayouts.snapshot.visible.project}
-      onOpenChange={paneLayouts.setProjectVisible}
+      open={hasActiveThread && paneLayouts.snapshot.visible.project}
+      onOpenChange={(visible) => {
+        if (hasActiveThread) paneLayouts.setProjectVisible(visible);
+      }}
       cookieName='project_pane_state'
       keyboardShortcut={false}
       className='min-h-0 min-w-0 flex-1 overflow-hidden'
@@ -334,11 +338,14 @@ function ResponsiveShell({
 
 function ConnectedShell({ controller }: { controller: AlphaController }) {
   const paneLayouts = useAlphaPaneLayouts(controller.model.selectedThreadId);
+  const hasActiveThread = Boolean(controller.model.selectedThreadId);
 
   return (
     <SidebarProvider
-      open={paneLayouts.snapshot.visible.threads}
-      onOpenChange={paneLayouts.setThreadsVisible}
+      open={!hasActiveThread || paneLayouts.snapshot.visible.threads}
+      onOpenChange={(visible) => {
+        if (hasActiveThread) paneLayouts.setThreadsVisible(visible);
+      }}
       className='fixed inset-x-0 top-[var(--alpha-viewport-top,0px)] h-[var(--alpha-viewport-height,100dvh)] min-h-0 overflow-hidden'
       style={{
         '--sidebar-width': '19rem',

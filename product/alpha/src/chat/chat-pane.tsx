@@ -84,7 +84,7 @@ function MessageEntryView({
   return (
     <Message align={isUser ? 'end' : 'start'}>
       <MessageContent>
-        <BubbleGroup>
+        <BubbleGroup className={cn(isUser && 'w-full')}>
           {message.chunks.map((chunk, index) => {
             if (chunk.kind === 'thought') {
               return (
@@ -107,9 +107,9 @@ function MessageEntryView({
                 key={`${chunk.messageId ?? 'message'}-${index}`}
                 align={isUser ? 'end' : 'start'}
                 variant={isUser ? 'outline' : 'ghost'}
-                className={cn(isUser && 'max-w-[90%]')}
+                className={cn(isUser && 'w-max max-w-[90%]')}
               >
-                <BubbleContent>
+                <BubbleContent className={cn(isUser && 'w-max')}>
                   <ContentBlocksView blocks={chunk.content} />
                 </BubbleContent>
               </Bubble>

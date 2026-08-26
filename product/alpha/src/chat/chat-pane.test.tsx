@@ -15,6 +15,21 @@ const actions = (): ChatPaneActions => ({
 });
 
 describe('ChatPane', () => {
+  it('lets user bubbles grow to their responsive cap before wrapping', () => {
+    render(<ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />);
+
+    const userBubble = screen.getByText('Exercise the complete ACP renderer.')
+      .closest('[data-slot="bubble"]');
+    const userBubbleGroup = userBubble?.closest('[data-slot="bubble-group"]');
+    const userBubbleContent = userBubble?.querySelector('[data-slot="bubble-content"]');
+
+    expect(userBubbleGroup).toHaveClass('w-full');
+    expect(userBubble).toHaveClass('w-max', 'max-w-[90%]');
+    expect(userBubble).not.toHaveClass('w-fit');
+    expect(userBubbleContent).toHaveClass('w-max', 'max-w-full');
+    expect(userBubbleContent).not.toHaveClass('w-fit');
+  });
+
   it('renders every ACP transcript family without flattening rich payloads', () => {
     const { container } = render(
       <ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />,

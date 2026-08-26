@@ -258,6 +258,101 @@ Deno.test('Portal replays durable Thread events after a daemon restart', async (
   }
 });
 
+Deno.test('Portal replaces a missing empty ACP session and closes the failed provider', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-empty-session-' });
+  const workspacePath = join(root, 'workspace');
+  const stateDirectory = join(root, 'state');
+  const processLog = join(root, 'processes.log');
+  await Deno.mkdir(workspacePath);
+  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  const token = 'empty-session-token';
+  const config = (recovery: 'load' | 'missing-session'): PortalConfig => ({
+    listen: { hostname: '127.0.0.1', port: 0 },
+    accessToken: token,
+    allowedOrigins: [],
+    stateDirectory,
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{
+      agentId: 'fake',
+      name: 'Fake',
+      command: Deno.execPath(),
+      args: [
+        'run',
+        '--quiet',
+        '--allow-read',
+        `--allow-write=${processLog}`,
+        fakeAgent,
+        `--recovery=${recovery}`,
+        `--process-log=${processLog}`,
+      ],
+      env: {},
+    }],
+  });
+
+  let threadId = '';
+  const firstPortal = await Portal.open(config('load'));
+  const firstServer = startPortalServer(firstPortal);
+  const firstAddress = firstServer.addr as Deno.NetAddr;
+  try {
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, token);
+    const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
+      thread: { threadId: string; acpSessionId: string };
+    };
+    threadId = created.thread.threadId;
+    assertEquals(created.thread.acpSessionId, 'fake-session');
+    rpc.close();
+  } finally {
+    await firstServer.shutdown();
+    await firstPortal.close();
+  }
+
+  const secondPortal = await Portal.open(config('missing-session'));
+  const secondServer = startPortalServer(secondPortal);
+  const secondAddress = secondServer.addr as Deno.NetAddr;
+  try {
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, token);
+    const attached = await rpc.request('thread.attach', { threadId }) as {
+      thread: { threadId: string; acpSessionId: string };
+      connection: { path: string; threadId: string; cwd: string };
+    };
+    assertEquals(
+      { threadId: attached.thread.threadId, acpSessionId: attached.thread.acpSessionId },
+      { threadId, acpSessionId: 'replacement-session' },
+    );
+    const listed = await rpc.request('thread.list') as {
+      threads: Array<{ threadId: string; acpSessionId: string }>;
+    };
+    assertEquals(listed.threads.map(({ threadId, acpSessionId }) => ({ threadId, acpSessionId })), [{
+      threadId,
+      acpSessionId: 'replacement-session',
+    }]);
+
+    const acp = await RpcSocket.open(
+      `ws://127.0.0.1:${secondAddress.port}${attached.connection.path}?threadId=${threadId}`,
+      token,
+    );
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await acp.request('session/load', {
+      sessionId: 'replacement-session',
+      cwd: workspacePath,
+      mcpServers: [],
+    });
+
+    await waitFor(() => {
+      const lines = Deno.readTextFileSync(processLog).trim().split('\n');
+      const starts = lines.filter((line) => line.startsWith('start '));
+      const stopped = new Set(lines.filter((line) => line.startsWith('stop ')).map((line) => line.slice(5)));
+      return starts.length >= 3 && stopped.has(starts[1].slice(6));
+    });
+    acp.close();
+    rpc.close();
+  } finally {
+    await secondServer.shutdown();
+    await secondPortal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test('Portal gives opted-in clients stable cursor replay without changing ordinary ACP replay', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-cursor-' });
   const workspacePath = join(root, 'workspace');
