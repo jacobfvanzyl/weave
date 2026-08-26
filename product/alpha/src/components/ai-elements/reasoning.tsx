@@ -7,7 +7,6 @@ import {
 import { cn } from '@/lib/utils';
 
 type ReasoningState = {
-  isOpen: boolean;
   isStreaming: boolean;
 };
 
@@ -29,7 +28,7 @@ export function Reasoning({
 }: ReasoningProps) {
   const [localOpen, setLocalOpen] = useState(defaultOpen);
   const isOpen = open ?? localOpen;
-  const context = useMemo(() => ({ isOpen, isStreaming }), [isOpen, isStreaming]);
+  const context = useMemo(() => ({ isStreaming }), [isStreaming]);
 
   return (
     <ReasoningContext.Provider value={context}>

@@ -382,6 +382,48 @@ describe('ChatPane', () => {
     expect(composer).toHaveValue('Keep this retry');
   });
 
+  it('does not resurrect a failed prompt after replacement text was typed and cleared', async () => {
+    const user = userEvent.setup();
+    let rejectSend: ((reason?: unknown) => void) | undefined;
+    const handlers = actions();
+    handlers.sendPrompt = vi.fn(() => new Promise<void>((_resolve, reject) => {
+      rejectSend = reject;
+    }));
+    const model = { ...createAcpShowcaseTranscript(), sessionId: 'send-cleared-replacement' };
+    render(<ChatPane model={model} actions={handlers} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Message agent' });
+    await user.type(composer, 'First attempt');
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    await user.type(composer, 'Replacement');
+    await user.clear(composer);
+    await act(async () => rejectSend?.(new Error('offline')));
+
+    expect(composer).toHaveValue('');
+  });
+
+  it('restores a failed prompt to its Thread after the user switches away', async () => {
+    const user = userEvent.setup();
+    let rejectSend: ((reason?: unknown) => void) | undefined;
+    const handlers = actions();
+    handlers.sendPrompt = vi.fn(() => new Promise<void>((_resolve, reject) => {
+      rejectSend = reject;
+    }));
+    const first = { ...createAcpShowcaseTranscript(), sessionId: 'send-switch-first' };
+    const second = { ...createAcpShowcaseTranscript(), sessionId: 'send-switch-second' };
+    const view = render(<ChatPane model={first} actions={handlers} />);
+
+    await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'Restore here');
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    view.rerender(<ChatPane model={second} actions={handlers} />);
+    view.rerender(<ChatPane model={first} actions={handlers} />);
+    const restoredComposer = screen.getByRole('textbox', { name: 'Message agent' });
+    expect(restoredComposer).toHaveValue('');
+    await act(async () => rejectSend?.(new Error('offline')));
+
+    expect(restoredComposer).toHaveValue('Restore here');
+  });
+
   it('restores a submitted draft when sending rejects before replacement text is entered', async () => {
     const user = userEvent.setup();
     const handlers = actions();
@@ -407,5 +449,28 @@ describe('ChatPane', () => {
 
     expect(handlers.cancelPrompt).toHaveBeenCalledOnce();
     expect(handlers.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('preserves a manual scroll position while the last response streams', () => {
+    const model = createAcpShowcaseTranscript();
+    model.turn = { status: 'running' };
+    const view = render(<ChatPane model={model} actions={actions()} />);
+    const viewport = screen.getByRole('region', { name: 'Messages' });
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1_000 },
+    });
+    viewport.scrollTop = 300;
+    fireEvent.wheel(viewport, { deltaY: -100 });
+
+    const updated = structuredClone(model);
+    const lastMessage = [...updated.entries].reverse().find((entry) => entry.kind === 'message');
+    if (!lastMessage || lastMessage.kind !== 'message') {
+      throw new Error('The showcase assistant message is missing.');
+    }
+    lastMessage.chunks.at(-1)?.content.push({ type: 'text', text: 'Streaming continuation' });
+    view.rerender(<ChatPane model={updated} actions={actions()} />);
+
+    expect(viewport.scrollTop).toBe(300);
   });
 });

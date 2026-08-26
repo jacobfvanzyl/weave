@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   CreateElicitationResponse,
   SessionConfigOption,
@@ -287,7 +287,18 @@ const composerRows = (text: string) => {
   return lineCount === 1 ? 2 : Math.min(8, Math.max(3, lineCount));
 };
 
-const composerDrafts = new Map<string, string>();
+type ComposerDraft = {
+  revision: number;
+  text: string;
+};
+
+const composerDrafts = new Map<string, ComposerDraft>();
+const composerDraftListeners = new Map<string, Set<(draft: ComposerDraft) => void>>();
+
+const writeComposerDraft = (sessionId: string, draft: ComposerDraft) => {
+  composerDrafts.set(sessionId, draft);
+  composerDraftListeners.get(sessionId)?.forEach((listener) => listener(draft));
+};
 
 function ContextUsage({ usage }: { usage: AcpTranscript['usage'] }) {
   if (!usage) return null;
@@ -300,27 +311,47 @@ function ContextUsage({ usage }: { usage: AcpTranscript['usage'] }) {
 }
 
 function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneActions }) {
-  const [text, setTextState] = useState(() => composerDrafts.get(model.sessionId) ?? '');
+  const [draft, setDraft] = useState<ComposerDraft>(
+    () => composerDrafts.get(model.sessionId) ?? { revision: 0, text: '' },
+  );
+  const draftRef = useRef(draft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const running = model.turn.status === 'running';
+  const text = draft.text;
+  useEffect(() => {
+    const listeners = composerDraftListeners.get(model.sessionId) ?? new Set();
+    const updateDraft = (nextDraft: ComposerDraft) => {
+      draftRef.current = nextDraft;
+      setDraft(nextDraft);
+    };
+    listeners.add(updateDraft);
+    composerDraftListeners.set(model.sessionId, listeners);
+    return () => {
+      listeners.delete(updateDraft);
+      if (listeners.size === 0) composerDraftListeners.delete(model.sessionId);
+    };
+  }, [model.sessionId]);
   const setText = (next: string) => {
-    if (next) composerDrafts.set(model.sessionId, next);
-    else composerDrafts.delete(model.sessionId);
-    setTextState(next);
+    const updated = { revision: draftRef.current.revision + 1, text: next };
+    writeComposerDraft(model.sessionId, updated);
   };
   const submit = async () => {
     const prompt = text.trim();
     if (!prompt || running) return;
-    setText('');
+    const submittedDraft = draftRef.current;
+    const clearedDraft = { revision: submittedDraft.revision + 1, text: '' };
+    writeComposerDraft(model.sessionId, clearedDraft);
     if (window.matchMedia?.('(max-width: 767px)').matches) textareaRef.current?.blur();
     try {
       await actions.sendPrompt(prompt);
     } catch {
-      setTextState((current) => {
-        if (current) return current;
-        composerDrafts.set(model.sessionId, text);
-        return text;
-      });
+      const currentDraft = composerDrafts.get(model.sessionId);
+      if (currentDraft?.revision !== clearedDraft.revision) return;
+      const restoredDraft = {
+        revision: currentDraft.revision + 1,
+        text: submittedDraft.text,
+      };
+      writeComposerDraft(model.sessionId, restoredDraft);
     }
   };
 

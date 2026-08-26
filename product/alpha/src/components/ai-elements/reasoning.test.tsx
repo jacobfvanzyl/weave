@@ -37,4 +37,46 @@ describe('Reasoning', () => {
     expect(container.querySelector('[data-slot="reasoning-content"]'))
       .toHaveClass('motion-reduce:transition-none');
   });
+
+  it('marks streaming completion without overriding the disclosure choice', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <Reasoning isStreaming>
+        <ReasoningTrigger>Thinking</ReasoningTrigger>
+        <ReasoningContent>Split thought</ReasoningContent>
+      </Reasoning>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Thinking' });
+    expect(trigger).toHaveAttribute('data-streaming', 'true');
+    await user.click(trigger);
+    rerender(
+      <Reasoning isStreaming={false}>
+        <ReasoningTrigger>Thinking</ReasoningTrigger>
+        <ReasoningContent>Split thought. Complete.</ReasoningContent>
+      </Reasoning>,
+    );
+
+    expect(trigger).not.toHaveAttribute('data-streaming');
+    expect(screen.queryByText('Split thought. Complete.')).not.toBeInTheDocument();
+  });
+
+  it('restores the accepted open presentation after a reload', () => {
+    const first = render(
+      <Reasoning>
+        <ReasoningTrigger>Thinking</ReasoningTrigger>
+        <ReasoningContent>Reloaded thought</ReasoningContent>
+      </Reasoning>,
+    );
+    first.unmount();
+
+    render(
+      <Reasoning>
+        <ReasoningTrigger>Thinking</ReasoningTrigger>
+        <ReasoningContent>Reloaded thought</ReasoningContent>
+      </Reasoning>,
+    );
+
+    expect(screen.getByText('Reloaded thought')).toBeVisible();
+  });
 });

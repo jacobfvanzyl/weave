@@ -190,12 +190,16 @@ export function useLiveAlphaController(
     setError(undefined);
   };
 
-  const performAcpAction = async (action: () => Promise<void>) => {
+  const performAcpAction = async (
+    action: () => Promise<void>,
+    rethrow = false,
+  ) => {
     setError(undefined);
     try {
       await action();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+      if (rethrow) throw cause;
     }
   };
 
@@ -205,7 +209,7 @@ export function useLiveAlphaController(
     setTranscript((current) =>
       current ? queueOptimisticPrompt(current, `local-${crypto.randomUUID()}`, content) : current
     );
-    await performAcpAction(async () => await client.prompt(content));
+    await performAcpAction(async () => await client.prompt(content), true);
   };
 
   const selectThread = async (threadId: string) => {

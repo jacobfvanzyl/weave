@@ -30,6 +30,6 @@ Measurements are from `bun run build` in `product/alpha`. Each row is the output
 | `Tool` | 1,217.19 kB | 372.05 kB | 123.69 kB | 19.59 kB | +0.29 / +0.05 kB | 0 / 0 kB |
 | `Plan` | 1,218.41 kB | 372.23 kB | 123.74 kB | 19.59 kB | +1.22 / +0.18 kB | +0.05 / 0 kB |
 | `Confirmation` | 1,218.91 kB | 372.32 kB | 123.74 kB | 19.59 kB | +0.50 / +0.09 kB | 0 / 0 kB |
-| Composer durability and final hardening | 1,219.01 kB | 372.41 kB | 123.74 kB | 19.59 kB | +0.10 / +0.09 kB | 0 / 0 kB |
+| Composer durability and final hardening | 1,219.49 kB | 372.56 kB | 123.74 kB | 19.59 kB | +0.58 / +0.24 kB | 0 / 0 kB |
 
-The cumulative change is +5.47 kB main JavaScript (+1.37 kB gzip) and +0.63 kB CSS (+0.06 kB gzip). No Alpha dependency or lockfile entry was added for `ai`, Lucide, `tokenlens`, `nanoid`, Shiki, CJK, math, or Mermaid.
+The cumulative change is +5.95 kB main JavaScript (+1.52 kB gzip) and +0.63 kB CSS (+0.06 kB gzip). No Alpha dependency or lockfile entry was added for `ai`, Lucide, `tokenlens`, `nanoid`, Shiki, CJK, math, or Mermaid.

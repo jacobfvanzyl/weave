@@ -30,6 +30,38 @@ afterEach(() => {
 });
 
 describe('useLiveAlphaController', () => {
+  it('reports prompt failures and rejects so the composer can restore its draft', async () => {
+    let onEvent: ConstructorParameters<typeof DirectHostClient>[2] | undefined;
+    const client = {
+      snapshot: vi.fn(async () => snapshot),
+      prompt: vi.fn(async () => {
+        throw new Error('Portal unavailable.');
+      }),
+      close: vi.fn(),
+    } as unknown as DirectHostClient;
+    const createClient = vi.fn((
+      _hostUrl: string,
+      _token: string,
+      nextOnEvent: ConstructorParameters<typeof DirectHostClient>[2],
+    ) => {
+      onEvent = nextOnEvent;
+      return client;
+    });
+    const { result } = renderHook(() => useLiveAlphaController(createClient));
+
+    act(() => result.current.actions.setAccessToken('test-token'));
+    await act(async () => result.current.actions.connect());
+    act(() => onEvent?.({ type: 'history/reset', sessionId: 'session-1' }));
+
+    await act(async () => {
+      await expect(result.current.actions.sendPrompt('Keep my draft'))
+        .rejects.toThrow('Portal unavailable.');
+    });
+
+    expect(result.current.model.error).toBe('Portal unavailable.');
+    expect(client.prompt).toHaveBeenCalledWith([{ type: 'text', text: 'Keep my draft' }]);
+  });
+
   it('silently refreshes a connected Portal and demotes stale state when the transport closes', async () => {
     vi.useFakeTimers();
     let connectionClosed: ((error: Error) => void) | undefined;
