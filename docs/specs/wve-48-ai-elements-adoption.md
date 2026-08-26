@@ -16,6 +16,8 @@ Alpha adopts source-owned AI Elements presentation primitives without adding an 
 
 The current AI Elements registry does not publish `Question`, so Alpha retains its complete schema-driven and URL-mode elicitation renderer. AI Elements `Attachments` is not adopted because its AI SDK file-part model is narrower than the existing ACP content-block adapters. The existing shadcn `MessageScroller`, `Message`, `Bubble`, `Attachment`, and `Marker` components remain in place.
 
+Steering remains deliberately unavailable in Alpha: stable ACP v1 has no inject/steer operation, and the current Portal rejects a second `session/prompt` while one is active. This presentation migration therefore preserves the existing running-turn Stop action instead of inventing an unacknowledged steering path. Existing transcript-reducer coverage continues to prove optimistic prompt acknowledgement and settlement; a steering UI requires a separate durable Portal/protocol contract.
+
 ## Production bundle record
 
 Measurements are from `bun run build` in `product/alpha`. Each row is the output immediately after adding that named component; deltas are relative to the preceding row. Vite's separately emitted `highlighted-body` and `web` chunks remained approximately 0.46 kB and 1.25 kB throughout.
