@@ -24,10 +24,14 @@ export type MockScenario = typeof MOCK_SCENARIOS[number];
 const WORKSPACES: AlphaWorkspace[] = [
   {
     id: 'workspace-weave',
+    workspaceId: 'workspace-weave',
+    hostId: 'mock-host',
     name: 'weave',
     threads: [
       {
         id: 'thread-wve-47',
+        threadId: 'thread-wve-47',
+        hostId: 'mock-host',
         title: 'Rework Weave interface',
         agentName: 'weave-codex',
         hostName: 'bazzite',
@@ -37,6 +41,8 @@ const WORKSPACES: AlphaWorkspace[] = [
       },
       {
         id: 'thread-acp-host',
+        threadId: 'thread-acp-host',
+        hostId: 'mock-host',
         title: 'Direct ACP host acceptance',
         agentName: 'weave-codex',
         hostName: 'macbook',
@@ -48,10 +54,14 @@ const WORKSPACES: AlphaWorkspace[] = [
   },
   {
     id: 'workspace-odin',
+    workspaceId: 'workspace-odin',
+    hostId: 'mock-host',
     name: 'odin',
     threads: [
       {
         id: 'thread-spray-upload',
+        threadId: 'thread-spray-upload',
+        hostId: 'mock-host',
         title: 'Diagnose Spray Instruction upload',
         agentName: 'weave-codex',
         hostName: 'bazzite',
@@ -61,6 +71,8 @@ const WORKSPACES: AlphaWorkspace[] = [
       },
       {
         id: 'thread-release',
+        threadId: 'thread-release',
+        hostId: 'mock-host',
         title: 'Upcoming release changes',
         agentName: 'weave-codex',
         hostName: 'macbook',
@@ -112,8 +124,8 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
   const [connectionStatus, setConnectionStatus] = useState(
     scenarioConnection(scenario),
   );
-  const [hostUrl, setHostUrl] = useState('bazzite');
-  const [accessToken, setAccessToken] = useState('mock-token');
+  const hostUrl = 'bazzite';
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedThreadId, setSelectedThreadId] = useState(
     scenario === 'sidebar' || scenario === 'chat' || scenario === 'busy' || scenario === 'error'
@@ -141,12 +153,20 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
 
   const model = useMemo<AlphaViewModel>(() => ({
     platform: 'mock',
+    connectionsLoaded: true,
+    connectionsOpen,
+    connections: [{
+      hostId: 'mock-host',
+      displayName: 'bazzite',
+      hostUrl,
+      status: connectionStatus,
+      selected: true,
+    }],
     connection: {
       status: connectionStatus,
       hostUrl,
       hostName: 'bazzite',
     },
-    accessToken,
     searchQuery,
     workspaces,
     selectedThreadId,
@@ -155,8 +175,8 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
     busy: scenario === 'busy',
     error: scenario === 'error' ? 'Portal lost the connection to this host.' : undefined,
   }), [
-    accessToken,
     connectionStatus,
+    connectionsOpen,
     hostUrl,
     scenario,
     searchQuery,
@@ -169,9 +189,12 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
   return {
     model,
     actions: {
-      setHostUrl,
-      setAccessToken,
       setSearchQuery,
+      openConnections: () => setConnectionsOpen(true),
+      closeConnections: () => setConnectionsOpen(false),
+      pairHost: () => undefined,
+      selectHost: () => undefined,
+      forgetHost: () => undefined,
       connect: () => setConnectionStatus('connected'),
       disconnect: () => {
         setConnectionStatus('disconnected');
@@ -189,6 +212,8 @@ export function useMockAlphaController(scenario: MockScenario): AlphaController 
                 ...workspace,
                 threads: [{
                   id,
+                  threadId: id,
+                  hostId: 'mock-host',
                   title: 'New thread',
                   agentName: 'weave-codex',
                   hostName: 'bazzite',

@@ -9,6 +9,8 @@ export type AlphaConnectionStatus =
 
 export type AlphaThread = {
   id: string;
+  threadId: string;
+  hostId: string;
   title: string;
   agentName: string;
   hostName: string;
@@ -19,8 +21,18 @@ export type AlphaThread = {
 
 export type AlphaWorkspace = {
   id: string;
+  workspaceId: string;
+  hostId: string;
   name: string;
   threads: AlphaThread[];
+};
+
+export type AlphaHostConnection = {
+  hostId: string;
+  displayName: string;
+  hostUrl: string;
+  status: AlphaConnectionStatus;
+  selected: boolean;
 };
 
 export type AlphaWorkspaceFileTab =
@@ -48,12 +60,14 @@ export type AlphaWorkspaceFiles = {
 
 export type AlphaViewModel = {
   platform: string;
+  connectionsLoaded: boolean;
+  connectionsOpen: boolean;
+  connections: AlphaHostConnection[];
   connection: {
     status: AlphaConnectionStatus;
     hostUrl: string;
     hostName: string;
   };
-  accessToken: string;
   searchQuery: string;
   workspaces: AlphaWorkspace[];
   selectedThreadId?: string;
@@ -64,9 +78,12 @@ export type AlphaViewModel = {
 };
 
 export type AlphaActions = {
-  setHostUrl(value: string): void;
-  setAccessToken(value: string): void;
   setSearchQuery(value: string): void;
+  openConnections(): void;
+  closeConnections(): void;
+  pairHost(input: { pairingCode: string; hostUrl?: string; deviceLabel: string }): Promise<void> | void;
+  selectHost(hostId: string): Promise<void> | void;
+  forgetHost(hostId: string): Promise<void> | void;
   connect(): Promise<void> | void;
   disconnect(): void;
   refresh(): Promise<void> | void;

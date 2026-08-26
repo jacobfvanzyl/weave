@@ -7,6 +7,7 @@ import {
   layoutChangesOnlyPanePair,
   layoutForPaneSet,
   paneSetKey,
+  projectPaneStateCookieName,
   useAlphaPaneLayouts,
   type AlphaPaneId,
 } from '@/app/alpha-pane-layout';
@@ -16,7 +17,7 @@ import {
   ResizablePanelGroup,
 } from '@/components/ui/resizable';
 import { SidebarInset, SidebarProvider, useSidebar } from '@/components/ui/sidebar';
-import { ConnectionPlaceholder } from './connection-placeholder';
+import { ConnectionsDialog } from './connections-dialog';
 import { EditorPane } from './editor-pane';
 import { ProjectPane } from './project-pane';
 import { ThreadSidebar } from './thread-sidebar';
@@ -280,7 +281,7 @@ function WorkspaceFrame({
       onOpenChange={(visible) => {
         if (hasActiveThread) paneLayouts.setProjectVisible(visible);
       }}
-      cookieName='project_pane_state'
+      cookieName={projectPaneStateCookieName}
       keyboardShortcut={false}
       className='min-h-0 min-w-0 flex-1 overflow-hidden'
       style={{
@@ -410,9 +411,12 @@ export function AlphaShell({ controller }: { controller: AlphaController }) {
     };
   }, [controller.model.connection.status]);
 
-  if (controller.model.connection.status !== 'connected') {
-    return <ConnectionPlaceholder controller={controller} />;
-  }
-
-  return <ConnectedShell controller={controller} />;
+  if (!controller.model.connectionsLoaded) return null;
+  if (!controller.model.connections.length) return <ConnectionsDialog controller={controller} />;
+  return (
+    <>
+      <ConnectedShell controller={controller} />
+      <ConnectionsDialog controller={controller} />
+    </>
+  );
 }

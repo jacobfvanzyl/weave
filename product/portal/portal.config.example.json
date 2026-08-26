@@ -1,6 +1,11 @@
 {
-  "listen": { "hostname": "127.0.0.1", "port": 4122 },
-  "accessTokenEnv": "PORTAL_ACCESS_TOKEN",
+  "listen": { "hostname": "0.0.0.0", "port": 4122 },
+  "displayName": "My Mac",
+  "publicUrl": "wss://my-mac.example.ts.net:4122",
+  "tls": {
+    "certificateFile": "/absolute/path/to/my-mac.example.ts.net.crt",
+    "privateKeyFile": "/absolute/path/to/my-mac.example.ts.net.key"
+  },
   "allowedOrigins": ["http://localhost:5174", "capacitor://localhost"],
   "stateDirectory": "/absolute/path/to/portal-state",
   "threadEventRetentionLimit": 10000,

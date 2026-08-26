@@ -1,5 +1,5 @@
 import type { JsonRpcMessage } from '../src/json-rpc.ts';
-import { required, RpcResponseError, RpcSocket, waitFor } from './rpc-client.ts';
+import { pairPortalCredential, required, RpcResponseError, RpcSocket, waitFor } from './rpc-client.ts';
 
 const notificationText = (messages: JsonRpcMessage[]) =>
   messages.map((message) => {
@@ -14,14 +14,14 @@ const notificationText = (messages: JsonRpcMessage[]) =>
   }).join('');
 
 const baseUrl = required('PORTAL_URL').replace(/\/$/, '');
-const token = required('PORTAL_ACCESS_TOKEN');
+const credential = await pairPortalCredential(baseUrl, required('PORTAL_PAIRING_CODE'), 'Portal acceptance');
 const workspaceId = required('PORTAL_WORKSPACE_ID');
 const agentId = required('PORTAL_AGENT_ID');
 const marker = required('PORTAL_ACCEPTANCE_MARKER');
 const recovery = Deno.env.get('PORTAL_ACCEPTANCE_RECOVERY') === 'true';
 const existingThreadId = Deno.env.get('PORTAL_ACCEPTANCE_THREAD_ID')?.trim();
 const expectedGeneration = Deno.env.get('PORTAL_ACCEPTANCE_EXPECTED_GENERATION')?.trim();
-const rpc = await RpcSocket.open(`${baseUrl}/rpc`, token);
+const rpc = await RpcSocket.open(`${baseUrl}/rpc`, credential);
 try {
   const thread = existingThreadId
     ? ((await rpc.request('thread.list') as { threads: Array<{ threadId: string; acpSessionId: string }> }).threads
@@ -37,7 +37,7 @@ try {
   const attachedThread = attachment.thread;
   const acp = await RpcSocket.open(
     `${baseUrl}${attachment.connection.path}?threadId=${encodeURIComponent(attachment.connection.threadId)}`,
-    token,
+    credential,
   );
   try {
     const initialized = await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
@@ -109,7 +109,7 @@ try {
 
       const reattached = await RpcSocket.open(
         `${baseUrl}${attachment.connection.path}?threadId=${encodeURIComponent(attachment.connection.threadId)}`,
-        token,
+        credential,
       );
       try {
         await reattached.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
@@ -131,5 +131,6 @@ try {
     acp.close();
   }
 } finally {
+  await rpc.request('credential.revoke').catch(() => undefined);
   rpc.close();
 }

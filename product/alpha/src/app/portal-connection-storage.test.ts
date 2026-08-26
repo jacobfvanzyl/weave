@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  loadPortalConnection,
-  savePortalConnection,
-} from './portal-connection-storage';
+import { loadPortalConnections, savePortalConnections } from './portal-connection-storage';
 
 const connection = {
+  hostId: 'host-1',
+  displayName: 'Bazzite',
   hostUrl: 'wss://bazzite.example.test:4122',
-  accessToken: 'secret-token',
+  credentialId: 'credential-1',
+  keyId: 'key-1',
 };
 
 function preferences(value: string | null = null) {
@@ -17,40 +17,41 @@ function preferences(value: string | null = null) {
 }
 
 describe('Portal connection storage', () => {
-  it('restores a complete iOS connection', async () => {
-    const store = preferences(JSON.stringify(connection));
+  it('restores Host metadata without storing credential secrets', async () => {
+    const stored = { connections: [connection], selectedHostId: connection.hostId };
+    const store = preferences(JSON.stringify(stored));
 
-    await expect(loadPortalConnection('ios', store)).resolves.toEqual(connection);
-    expect(store.get).toHaveBeenCalledWith({ key: 'weave.portal.connection.v1' });
+    await expect(loadPortalConnections(store)).resolves.toEqual(stored);
+    expect(store.get).toHaveBeenCalledWith({ key: 'weave.portal.connections.v2' });
+    expect(JSON.stringify(stored)).not.toContain('privateKey');
   });
 
-  it('persists the host and token together on iOS', async () => {
+  it('persists multiple Hosts and the selected Host', async () => {
     const store = preferences();
+    const stored = { connections: [connection], selectedHostId: connection.hostId };
 
-    await savePortalConnection(connection, 'ios', store);
+    await savePortalConnections(stored, store);
 
     expect(store.set).toHaveBeenCalledWith({
-      key: 'weave.portal.connection.v1',
-      value: JSON.stringify(connection),
+      key: 'weave.portal.connections.v2',
+      value: JSON.stringify(stored),
     });
   });
 
   it.each([
     null,
     'not-json',
-    JSON.stringify({ hostUrl: connection.hostUrl }),
-    JSON.stringify({ hostUrl: '', accessToken: connection.accessToken }),
-  ])('ignores missing or malformed stored values', async (value) => {
-    await expect(loadPortalConnection('ios', preferences(value))).resolves.toBeUndefined();
+    JSON.stringify({ connections: [{ hostId: connection.hostId }] }),
+  ])('fails closed for missing or malformed metadata', async (value) => {
+    await expect(loadPortalConnections(preferences(value))).resolves.toEqual({ connections: [] });
   });
 
-  it('does not read or write native credentials in a browser', async () => {
-    const store = preferences(JSON.stringify(connection));
-
-    await expect(loadPortalConnection('web', store)).resolves.toBeUndefined();
-    await savePortalConnection(connection, 'web', store);
-
-    expect(store.get).not.toHaveBeenCalled();
-    expect(store.set).not.toHaveBeenCalled();
+  it('deduplicates Hosts and repairs an invalid selection', async () => {
+    const duplicate = { ...connection, displayName: 'Latest name' };
+    const store = preferences(JSON.stringify({ connections: [connection, duplicate], selectedHostId: 'missing' }));
+    await expect(loadPortalConnections(store)).resolves.toEqual({
+      connections: [duplicate],
+      selectedHostId: connection.hostId,
+    });
   });
 });

@@ -5,7 +5,7 @@
   },
   "tasks": {
     "lint": "deno lint src scripts",
-    "check": "deno check src/main.ts src/server_test.ts",
+    "check": "deno check src/main.ts src/config_test.ts src/server_test.ts src/security_test.ts",
     "test": "deno test --allow-env --allow-net --allow-read --allow-run --allow-write src",
     "dev": "deno run --allow-env --allow-net --allow-read --allow-run --allow-write src/main.ts serve --config portal.config.json",
     "acceptance": "deno run --allow-env --allow-net scripts/acceptance.ts",

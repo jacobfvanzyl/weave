@@ -2,44 +2,50 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import type { HostSnapshot } from '@/portal-client';
 import { DirectHostClient } from '@/portal-client';
-import { portalHostName } from '@/portal-address';
+import { portalCredentialSigner, type PortalCredentialSigner, deletePortalCredentialKey } from '@/portal-credential';
+import { pairPortalHost, parsePortalPairingCode } from '@/portal-pairing';
 import { type AcpTranscript, createTranscript, queueOptimisticPrompt, reduceAcpEvent } from '@/chat/acp-transcript';
 import type { AlphaController, AlphaWorkspace, AlphaViewModel } from './alpha-controller';
-import { DEFAULT_PORTAL_URL, loadPortalConnection, savePortalConnection } from './portal-connection-storage';
+import {
+  loadPortalConnections,
+  type PersistedPortalConnection,
+  savePortalConnections,
+} from './portal-connection-storage';
 import { useWorkspaceFileBrowser } from './use-workspace-file-browser';
 
 export const HOST_SNAPSHOT_REFRESH_INTERVAL_MS = 5_000;
 
 type HostClientFactory = (
   hostUrl: string,
-  accessToken: string,
+  credential: PortalCredentialSigner,
   onEvent: ConstructorParameters<typeof DirectHostClient>[2],
   onUnexpectedClose: (error: Error) => void,
 ) => DirectHostClient;
 
 const createHostClient: HostClientFactory = (...args) => new DirectHostClient(...args);
+const resourceId = (hostId: string, id: string) => `${hostId}:${id}`;
 
 const mapWorkspaces = (
   snapshot: HostSnapshot | undefined,
-  currentHostName: string,
+  connection: PersistedPortalConnection | undefined,
 ): AlphaWorkspace[] => {
-  if (!snapshot) return [];
-
-  const agents = new Map(
-    snapshot.agents.map((agent) => [agent.agentId, agent.name]),
-  );
-
+  if (!snapshot || !connection) return [];
+  const agents = new Map(snapshot.agents.map((agent) => [agent.agentId, agent.name]));
   return snapshot.workspaces.map((workspace) => ({
-    id: workspace.workspaceId,
+    id: resourceId(connection.hostId, workspace.workspaceId),
+    workspaceId: workspace.workspaceId,
+    hostId: connection.hostId,
     name: workspace.name,
     threads: snapshot.threads
       .filter((thread) => thread.workspaceId === workspace.workspaceId)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .map((thread) => ({
-        id: thread.threadId,
+        id: resourceId(connection.hostId, thread.threadId),
+        threadId: thread.threadId,
+        hostId: connection.hostId,
         title: thread.title || workspace.name,
         agentName: agents.get(thread.agentId) || thread.agentId,
-        hostName: currentHostName,
+        hostName: connection.displayName,
         status: thread.status,
         updatedAt: thread.updatedAt,
         workspaceId: workspace.workspaceId,
@@ -50,8 +56,10 @@ const mapWorkspaces = (
 export function useLiveAlphaController(
   clientFactory: HostClientFactory = createHostClient,
 ): AlphaController {
-  const [hostUrl, setHostUrl] = useState(DEFAULT_PORTAL_URL);
-  const [accessToken, setAccessToken] = useState('');
+  const [connections, setConnections] = useState<PersistedPortalConnection[]>([]);
+  const [connectionsLoaded, setConnectionsLoaded] = useState(false);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [selectedHostId, setSelectedHostId] = useState<string>();
   const [searchQuery, setSearchQuery] = useState('');
   const [client, setClient] = useState<DirectHostClient>();
   const [snapshot, setSnapshot] = useState<HostSnapshot>();
@@ -60,20 +68,32 @@ export function useLiveAlphaController(
   const [connecting, setConnecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const connectionEdited = useRef(false);
   const clientRef = useRef<DirectHostClient | undefined>(undefined);
   const refreshErrorRef = useRef<string | undefined>(undefined);
+  const autoConnectRef = useRef<string | undefined>(undefined);
   const workspaceFileBrowser = useWorkspaceFileBrowser(client);
+  const selectedConnection = connections.find(({ hostId }) => hostId === selectedHostId);
+
+  const persist = async (nextConnections: PersistedPortalConnection[], nextSelectedHostId?: string) => {
+    try {
+      await savePortalConnections({
+        connections: nextConnections,
+        ...(nextSelectedHostId ? { selectedHostId: nextSelectedHostId } : {}),
+      });
+    } catch (cause) {
+      console.error('Unable to save Portal connections', cause);
+    }
+  };
 
   useEffect(() => {
     let active = true;
-
-    void loadPortalConnection().then((connection) => {
-      if (!active || !connection || connectionEdited.current) return;
-      setHostUrl(connection.hostUrl);
-      setAccessToken(connection.accessToken);
+    void loadPortalConnections().then((stored) => {
+      if (!active) return;
+      setConnections(stored.connections);
+      setSelectedHostId(stored.selectedHostId);
+      setConnectionsOpen(stored.connections.length === 0);
+      setConnectionsLoaded(true);
     });
-
     return () => {
       active = false;
     };
@@ -91,9 +111,7 @@ export function useLiveAlphaController(
         setSnapshot(await client.snapshot());
         const recoveredError = refreshErrorRef.current;
         refreshErrorRef.current = undefined;
-        if (recoveredError) {
-          setError((current) => current === recoveredError ? undefined : current);
-        }
+        if (recoveredError) setError((current) => current === recoveredError ? undefined : current);
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
         refreshErrorRef.current = message;
@@ -102,10 +120,7 @@ export function useLiveAlphaController(
         refreshing = false;
       }
     };
-    const interval = window.setInterval(
-      () => void refreshSilently(),
-      HOST_SNAPSHOT_REFRESH_INTERVAL_MS,
-    );
+    const interval = window.setInterval(() => void refreshSilently(), HOST_SNAPSHOT_REFRESH_INTERVAL_MS);
     const onFocus = () => void refreshSilently();
     window.addEventListener('focus', onFocus);
     return () => {
@@ -113,6 +128,68 @@ export function useLiveAlphaController(
       window.removeEventListener('focus', onFocus);
     };
   }, [client]);
+
+  const clearHostView = () => {
+    workspaceFileBrowser.close();
+    setSnapshot(undefined);
+    setSelectedThreadId(undefined);
+    setTranscript(undefined);
+    setBusy(false);
+  };
+
+  const connectToHost = async (connection: PersistedPortalConnection) => {
+    setConnecting(true);
+    setError(undefined);
+    clientRef.current = undefined;
+    client?.close();
+    setClient(undefined);
+    clearHostView();
+    let nextClient: DirectHostClient | undefined;
+    try {
+      nextClient = clientFactory(
+        connection.hostUrl,
+        portalCredentialSigner(connection),
+        (event) => {
+          setTranscript((current) => {
+            if (!current) return event.type === 'history/reset' ? createTranscript(event.sessionId ?? 'unattached') : current;
+            return reduceAcpEvent(current, event);
+          });
+        },
+        (closeError) => {
+          if (clientRef.current !== nextClient) return;
+          clientRef.current = undefined;
+          setClient(undefined);
+          clearHostView();
+          refreshErrorRef.current = undefined;
+          setError(closeError.message);
+        },
+      );
+      const nextSnapshot = await nextClient.snapshot();
+      if (nextSnapshot.hostId !== connection.hostId) throw new Error('Portal Host identity changed. Pair this Host again.');
+      clientRef.current = nextClient;
+      setClient(nextClient);
+      setSnapshot(nextSnapshot);
+      if (nextSnapshot.displayName !== connection.displayName) {
+        const updated = connections.map((candidate) =>
+          candidate.hostId === connection.hostId ? { ...candidate, displayName: nextSnapshot.displayName } : candidate
+        );
+        setConnections(updated);
+        void persist(updated, connection.hostId);
+      }
+    } catch (cause) {
+      nextClient?.close();
+      if (clientRef.current === nextClient) clientRef.current = undefined;
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!connectionsLoaded || !selectedConnection || autoConnectRef.current === selectedConnection.hostId) return;
+    autoConnectRef.current = selectedConnection.hostId;
+    void connectToHost(selectedConnection);
+  }, [connectionsLoaded, selectedConnection?.hostId]);
 
   const refresh = async (activeClient = client) => {
     if (!activeClient) return;
@@ -127,73 +204,16 @@ export function useLiveAlphaController(
     }
   };
 
-  const connect = async () => {
-    setConnecting(true);
-    setError(undefined);
-    client?.close();
-    let nextClient: DirectHostClient | undefined;
-    try {
-      nextClient = clientFactory(
-        hostUrl,
-        accessToken,
-        (event) => {
-          setTranscript((current) => {
-            if (!current) {
-              return event.type === 'history/reset' ? createTranscript(event.sessionId ?? 'unattached') : current;
-            }
-            return reduceAcpEvent(current, event);
-          });
-        },
-        (closeError) => {
-          if (clientRef.current !== nextClient) return;
-          clientRef.current = undefined;
-          setClient(undefined);
-          setSnapshot(undefined);
-          setSelectedThreadId(undefined);
-          setTranscript(undefined);
-          workspaceFileBrowser.close();
-          setBusy(false);
-          refreshErrorRef.current = undefined;
-          setError(closeError.message);
-        },
-      );
-      const nextSnapshot = await nextClient.snapshot();
-      try {
-        await savePortalConnection({ hostUrl, accessToken });
-      } catch (persistError) {
-        console.error('Unable to save the Portal connection', persistError);
-      }
-      clientRef.current = nextClient;
-      setClient(nextClient);
-      setSnapshot(nextSnapshot);
-      setSelectedThreadId(undefined);
-      setTranscript(undefined);
-      workspaceFileBrowser.close();
-    } catch (cause) {
-      nextClient?.close();
-      if (clientRef.current === nextClient) clientRef.current = undefined;
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setConnecting(false);
-    }
-  };
-
   const disconnect = () => {
     clientRef.current = undefined;
     refreshErrorRef.current = undefined;
     client?.close();
-    workspaceFileBrowser.close();
     setClient(undefined);
-    setSnapshot(undefined);
-    setSelectedThreadId(undefined);
-    setTranscript(undefined);
+    clearHostView();
     setError(undefined);
   };
 
-  const performAcpAction = async (
-    action: () => Promise<void>,
-    rethrow = false,
-  ) => {
+  const performAcpAction = async (action: () => Promise<void>, rethrow = false) => {
     setError(undefined);
     try {
       await action();
@@ -212,22 +232,18 @@ export function useLiveAlphaController(
     await performAcpAction(async () => await client.prompt(content), true);
   };
 
-  const selectThread = async (threadId: string) => {
+  const selectThread = async (id: string) => {
     if (!client) return;
-    const thread = snapshot?.threads.find((candidate) => candidate.threadId === threadId);
-    const workspace = snapshot?.workspaces.find(
-      (candidate) => candidate.workspaceId === thread?.workspaceId,
-    );
+    const thread = modelWorkspaces.flatMap((workspace) => workspace.threads).find((candidate) => candidate.id === id);
+    const workspace = snapshot?.workspaces.find((candidate) => candidate.workspaceId === thread?.workspaceId);
+    if (!thread) return;
     setBusy(true);
     setError(undefined);
     try {
-      await client.attach(threadId);
-      setSelectedThreadId(threadId);
-      if (workspace) {
-        await workspaceFileBrowser.open(workspace.workspaceId, workspace.name);
-      } else {
-        workspaceFileBrowser.close();
-      }
+      await client.attach(thread.threadId);
+      setSelectedThreadId(id);
+      if (workspace) await workspaceFileBrowser.open(workspace.workspaceId, workspace.name);
+      else workspaceFileBrowser.close();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -236,23 +252,18 @@ export function useLiveAlphaController(
   };
 
   const createThread = async (workspaceId?: string) => {
-    if (!client || !snapshot) return;
-    const workspace = snapshot.workspaces.find(
-      (candidate) => candidate.workspaceId === workspaceId,
-    ) || snapshot.workspaces[0];
+    if (!client || !snapshot || !selectedConnection) return;
+    const workspaceModel = modelWorkspaces.find((candidate) => candidate.id === workspaceId) || modelWorkspaces[0];
+    const workspace = snapshot.workspaces.find((candidate) => candidate.workspaceId === workspaceModel?.workspaceId);
     const agent = snapshot.agents[0];
     if (!workspace || !agent) return;
-
     setBusy(true);
     setError(undefined);
     try {
-      const thread = await client.createThread(
-        workspace.workspaceId,
-        agent.agentId,
-      );
+      const thread = await client.createThread(workspace.workspaceId, agent.agentId);
       setSnapshot(await client.snapshot());
+      setSelectedThreadId(resourceId(selectedConnection.hostId, thread.threadId));
       await client.attach(thread.threadId);
-      setSelectedThreadId(thread.threadId);
       await workspaceFileBrowser.open(workspace.workspaceId, workspace.name);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -261,28 +272,42 @@ export function useLiveAlphaController(
     }
   };
 
+  const modelWorkspaces = mapWorkspaces(snapshot, selectedConnection);
   const model = useMemo<AlphaViewModel>(() => ({
     platform: Capacitor.getPlatform(),
+    connectionsLoaded,
+    connectionsOpen,
+    connections: connections.map((connection) => ({
+      hostId: connection.hostId,
+      displayName: connection.displayName,
+      hostUrl: connection.hostUrl,
+      selected: connection.hostId === selectedHostId,
+      status: connection.hostId === selectedHostId
+        ? snapshot ? 'connected' : connecting ? 'connecting' : 'disconnected'
+        : 'disconnected',
+    })),
     connection: {
       status: snapshot ? 'connected' : connecting ? 'connecting' : 'disconnected',
-      hostUrl,
-      hostName: portalHostName(hostUrl),
+      hostUrl: selectedConnection?.hostUrl ?? '',
+      hostName: selectedConnection?.displayName ?? 'Portal',
     },
-    accessToken,
     searchQuery,
-    workspaces: mapWorkspaces(snapshot, portalHostName(hostUrl)),
+    workspaces: modelWorkspaces,
     selectedThreadId,
     transcript,
     workspaceFiles: workspaceFileBrowser.files,
     busy: busy || workspaceFileBrowser.busy,
     error: workspaceFileBrowser.error ?? error,
   }), [
-    accessToken,
     busy,
     connecting,
+    connections,
+    connectionsLoaded,
+    connectionsOpen,
     error,
-    hostUrl,
     searchQuery,
+    selectedConnection,
+    selectedHostId,
     selectedThreadId,
     snapshot,
     transcript,
@@ -294,16 +319,54 @@ export function useLiveAlphaController(
   return {
     model,
     actions: {
-      setHostUrl: (value) => {
-        connectionEdited.current = true;
-        setHostUrl(value);
-      },
-      setAccessToken: (value) => {
-        connectionEdited.current = true;
-        setAccessToken(value);
-      },
       setSearchQuery,
-      connect,
+      openConnections: () => setConnectionsOpen(true),
+      closeConnections: () => {
+        if (connections.length) setConnectionsOpen(false);
+      },
+      pairHost: async (input) => {
+        setBusy(true);
+        setError(undefined);
+        try {
+          const code = parsePortalPairingCode(input.pairingCode);
+          if (connections.some(({ hostId }) => hostId === code.hostId)) throw new Error('This Host is already configured.');
+          const paired = await pairPortalHost(input);
+          const updated = [...connections, paired];
+          setConnections(updated);
+          setSelectedHostId(paired.hostId);
+          setConnectionsOpen(false);
+          autoConnectRef.current = paired.hostId;
+          await persist(updated, paired.hostId);
+          await connectToHost(paired);
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+          throw cause;
+        } finally {
+          setBusy(false);
+        }
+      },
+      selectHost: async (hostId) => {
+        const connection = connections.find((candidate) => candidate.hostId === hostId);
+        if (!connection) return;
+        setSelectedHostId(hostId);
+        autoConnectRef.current = hostId;
+        await persist(connections, hostId);
+        await connectToHost(connection);
+      },
+      forgetHost: async (hostId) => {
+        const forgotten = connections.find((connection) => connection.hostId === hostId);
+        if (!forgotten) return;
+        if (hostId === selectedHostId) disconnect();
+        const updated = connections.filter((connection) => connection.hostId !== hostId);
+        const nextHostId = hostId === selectedHostId ? updated[0]?.hostId : selectedHostId;
+        setConnections(updated);
+        setSelectedHostId(nextHostId);
+        setConnectionsOpen(updated.length === 0);
+        autoConnectRef.current = undefined;
+        await persist(updated, nextHostId);
+        await deletePortalCredentialKey(forgotten.keyId).catch(() => undefined);
+      },
+      connect: () => selectedConnection && connectToHost(selectedConnection),
       disconnect,
       refresh,
       createThread,
@@ -315,17 +378,11 @@ export function useLiveAlphaController(
       reloadWorkspaceFile: workspaceFileBrowser.reloadFile,
       sendPrompt,
       cancelPrompt: () => performAcpAction(async () => await client?.cancelPrompt()),
-      respondToPermission: (requestId, optionId) => {
-        client?.respondToPermission(requestId, optionId);
-      },
-      respondToElicitation: (requestId, response) => {
-        client?.respondToElicitation(requestId, response);
-      },
+      respondToPermission: (requestId, optionId) => client?.respondToPermission(requestId, optionId),
+      respondToElicitation: (requestId, response) => client?.respondToElicitation(requestId, response),
       setMode: (modeId) => performAcpAction(async () => await client?.setMode(modeId)),
       setConfigOption: (optionId, value) =>
-        performAcpAction(
-          async () => await client?.setConfigOption(optionId, value),
-        ),
+        performAcpAction(async () => await client?.setConfigOption(optionId, value)),
     },
   };
 }

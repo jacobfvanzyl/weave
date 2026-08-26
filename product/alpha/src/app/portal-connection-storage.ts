@@ -1,12 +1,16 @@
-import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
-import { DEFAULT_PORTAL_ADDRESS } from '@/portal-address';
-
-export const DEFAULT_PORTAL_URL = DEFAULT_PORTAL_ADDRESS;
 
 export type PersistedPortalConnection = {
+  hostId: string;
+  displayName: string;
   hostUrl: string;
-  accessToken: string;
+  credentialId: string;
+  keyId: string;
+};
+
+export type PersistedPortalConnections = {
+  connections: PersistedPortalConnection[];
+  selectedHostId?: string;
 };
 
 interface PortalConnectionPreferences {
@@ -14,58 +18,50 @@ interface PortalConnectionPreferences {
   set(options: { key: string; value: string }): Promise<void>;
 }
 
-const PORTAL_CONNECTION_STORAGE_KEY = 'weave.portal.connection.v1';
+const PORTAL_CONNECTION_STORAGE_KEY = 'weave.portal.connections.v2';
 
-const parseConnection = (value: string | null): PersistedPortalConnection | undefined => {
-  if (!value) return undefined;
+const connection = (value: unknown): PersistedPortalConnection | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const input = value as Record<string, unknown>;
+  const fields = ['hostId', 'displayName', 'hostUrl', 'credentialId', 'keyId'] as const;
+  if (fields.some((field) => typeof input[field] !== 'string' || !input[field])) return;
+  return Object.fromEntries(fields.map((field) => [field, input[field]])) as PersistedPortalConnection;
+};
 
+const parseConnections = (value: string | null): PersistedPortalConnections => {
+  if (!value) return { connections: [] };
   try {
-    const candidate = JSON.parse(value) as unknown;
-    if (
-      !candidate
-      || typeof candidate !== 'object'
-      || !('hostUrl' in candidate)
-      || !('accessToken' in candidate)
-      || typeof candidate.hostUrl !== 'string'
-      || typeof candidate.accessToken !== 'string'
-      || !candidate.hostUrl
-      || !candidate.accessToken
-    ) {
-      return undefined;
-    }
-
-    return {
-      hostUrl: candidate.hostUrl,
-      accessToken: candidate.accessToken,
-    };
+    const input = JSON.parse(value) as Record<string, unknown>;
+    if (!input || !Array.isArray(input.connections)) return { connections: [] };
+    const connections = input.connections
+      .map(connection)
+      .filter((item): item is PersistedPortalConnection => Boolean(item));
+    const unique = [...new Map(connections.map((item) => [item.hostId, item])).values()];
+    const selectedHostId = typeof input.selectedHostId === 'string' &&
+        unique.some(({ hostId }) => hostId === input.selectedHostId)
+      ? input.selectedHostId
+      : unique[0]?.hostId;
+    return { connections: unique, ...(selectedHostId ? { selectedHostId } : {}) };
   } catch {
-    return undefined;
+    return { connections: [] };
   }
 };
 
-export async function loadPortalConnection(
-  platform = Capacitor.getPlatform(),
-  preferences: PortalConnectionPreferences = Preferences,
-) {
-  if (platform !== 'ios') return undefined;
-
+export async function loadPortalConnections(preferences: PortalConnectionPreferences = Preferences) {
   try {
     const { value } = await preferences.get({ key: PORTAL_CONNECTION_STORAGE_KEY });
-    return parseConnection(value);
+    return parseConnections(value);
   } catch {
-    return undefined;
+    return { connections: [] };
   }
 }
 
-export async function savePortalConnection(
-  connection: PersistedPortalConnection,
-  platform = Capacitor.getPlatform(),
+export async function savePortalConnections(
+  connections: PersistedPortalConnections,
   preferences: PortalConnectionPreferences = Preferences,
 ) {
-  if (platform !== 'ios') return;
-
   await preferences.set({
     key: PORTAL_CONNECTION_STORAGE_KEY,
-    value: JSON.stringify(connection),
+    value: JSON.stringify(connections),
   });
 }

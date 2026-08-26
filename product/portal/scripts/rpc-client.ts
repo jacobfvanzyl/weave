@@ -1,4 +1,14 @@
-import { PORTAL_TOKEN_PROTOCOL_PREFIX } from '@weave/product-protocol';
+import {
+  PORTAL_AUTH_CHALLENGE_TYPE,
+  PORTAL_AUTH_RESPONSE_TYPE,
+  PORTAL_AUTHENTICATED_TYPE,
+  PORTAL_PAIR_PATH,
+  PORTAL_PAIR_REQUEST_TYPE,
+  PORTAL_PAIR_RESULT_TYPE,
+  PORTAL_WEBSOCKET_PROTOCOL,
+  type PortalAuthChallenge,
+  portalAuthChallengePayload,
+} from '@weave/product-protocol';
 import { idKey, type JsonRpcMessage, parseJsonRpcMessage } from '../src/json-rpc.ts';
 
 export const required = (name: string) => {
@@ -7,11 +17,145 @@ export const required = (name: string) => {
   return value;
 };
 
-const tokenProtocol = (token: string) => {
-  const bytes = new TextEncoder().encode(token);
+const encodeBase64Url = (bytes: Uint8Array) => {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return `${PORTAL_TOKEN_PROTOCOL_PREFIX}${btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')}`;
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(
+    /=+$/,
+    '',
+  );
+};
+
+export type PortalCredentialSigner = {
+  credentialId: string;
+  publicKey: string;
+  sign(payload: string): Promise<string>;
+};
+
+export type UnpairedPortalKey = Omit<PortalCredentialSigner, 'credentialId'>;
+
+export const generatePortalKey = async (): Promise<UnpairedPortalKey> => {
+  const pair = await crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const publicKey = encodeBase64Url(
+    new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)),
+  );
+  return {
+    publicKey,
+    sign: async (payload) =>
+      encodeBase64Url(
+        new Uint8Array(
+          await crypto.subtle.sign(
+            { name: 'ECDSA', hash: 'SHA-256' },
+            pair.privateKey,
+            new TextEncoder().encode(payload),
+          ),
+        ),
+      ),
+  };
+};
+
+export const pairPortalCredential = async (
+  baseUrl: string,
+  pairingCode: string,
+  label: string,
+) => {
+  const offer = JSON.parse(pairingCode) as {
+    hostId?: unknown;
+    offerId?: unknown;
+    secret?: unknown;
+  };
+  if (
+    typeof offer.hostId !== 'string' || typeof offer.offerId !== 'string' ||
+    typeof offer.secret !== 'string'
+  ) throw new Error('Pairing code is invalid.');
+  const key = await generatePortalKey();
+  const socket = new WebSocket(
+    `${baseUrl.replace(/\/$/, '')}${PORTAL_PAIR_PATH}`,
+    PORTAL_WEBSOCKET_PROTOCOL,
+  );
+  const paired = await new Promise<{ principal: { credentialId: string } }>(
+    (resolve, reject) => {
+      socket.onopen = () =>
+        socket.send(JSON.stringify({
+          type: PORTAL_PAIR_REQUEST_TYPE,
+          hostId: offer.hostId,
+          offerId: offer.offerId,
+          secret: offer.secret,
+          label,
+          publicKey: key.publicKey,
+        }));
+      socket.onerror = () => reject(new Error('Could not open the Portal pairing connection.'));
+      socket.onclose = (event) => {
+        if (event.code !== 1000) {
+          reject(new Error(event.reason || 'Portal pairing failed.'));
+        }
+      };
+      socket.onmessage = (event) => {
+        const result = JSON.parse(String(event.data)) as {
+          type?: unknown;
+          principal?: { credentialId?: unknown };
+        };
+        if (
+          result.type !== PORTAL_PAIR_RESULT_TYPE ||
+          typeof result.principal?.credentialId !== 'string'
+        ) {
+          reject(new Error('Portal pairing result is invalid.'));
+          return;
+        }
+        resolve(result as { principal: { credentialId: string } });
+      };
+    },
+  ).finally(() => socket.close());
+  return { ...key, credentialId: paired.principal.credentialId };
+};
+
+const authentication = async (
+  socket: WebSocket,
+  credential: PortalCredentialSigner,
+) => {
+  const nextMessage = () =>
+    new Promise<MessageEvent>((resolve, reject) => {
+      const onMessage = (event: MessageEvent) => {
+        cleanup();
+        resolve(event);
+      };
+      const onClose = (event: CloseEvent) => {
+        cleanup();
+        reject(
+          new Error(
+            event.reason || 'WebSocket closed during Portal authentication.',
+          ),
+        );
+      };
+      const cleanup = () => {
+        socket.removeEventListener('message', onMessage);
+        socket.removeEventListener('close', onClose);
+      };
+      socket.addEventListener('message', onMessage, { once: true });
+      socket.addEventListener('close', onClose, { once: true });
+    });
+
+  const challenge = JSON.parse(
+    String((await nextMessage()).data),
+  ) as PortalAuthChallenge;
+  if (challenge.type !== PORTAL_AUTH_CHALLENGE_TYPE) {
+    throw new Error('Portal did not send an authentication challenge.');
+  }
+  socket.send(JSON.stringify({
+    type: PORTAL_AUTH_RESPONSE_TYPE,
+    credentialId: credential.credentialId,
+    signature: await credential.sign(portalAuthChallengePayload(challenge)),
+  }));
+  const authenticated = JSON.parse(String((await nextMessage()).data)) as {
+    type?: string;
+  };
+  if (authenticated.type !== PORTAL_AUTHENTICATED_TYPE) {
+    throw new Error('Portal authentication did not complete.');
+  }
 };
 
 export class RpcResponseError extends Error {
@@ -22,7 +166,10 @@ export class RpcResponseError extends Error {
 
 export class RpcSocket {
   readonly #socket: WebSocket;
-  readonly #pending = new Map<string, { resolve(value: unknown): void; reject(cause: unknown): void }>();
+  readonly #pending = new Map<
+    string,
+    { resolve(value: unknown): void; reject(cause: unknown): void }
+  >();
   readonly notifications: JsonRpcMessage[] = [];
   #nextId = 0;
 
@@ -35,24 +182,33 @@ export class RpcSocket {
         if (!pending) return;
         this.#pending.delete(idKey(message.id));
         if (message.error) {
-          pending.reject(new RpcResponseError(message.error.code, message.error.message, message.error.data));
+          pending.reject(
+            new RpcResponseError(
+              message.error.code,
+              message.error.message,
+              message.error.data,
+            ),
+          );
         } else pending.resolve(message.result);
       } else {
         this.notifications.push(message);
       }
     };
     socket.onclose = (event) => {
-      for (const pending of this.#pending.values()) pending.reject(new Error(event.reason || 'WebSocket closed.'));
+      for (const pending of this.#pending.values()) {
+        pending.reject(new Error(event.reason || 'WebSocket closed.'));
+      }
       this.#pending.clear();
     };
   }
 
-  static async open(url: string, token: string) {
-    const socket = new WebSocket(url, tokenProtocol(token));
+  static async open(url: string, credential: PortalCredentialSigner) {
+    const socket = new WebSocket(url, PORTAL_WEBSOCKET_PROTOCOL);
     await new Promise<void>((resolve, reject) => {
       socket.onopen = () => resolve();
       socket.onerror = () => reject(new Error(`Could not open ${url}.`));
     });
+    await authentication(socket, credential);
     return new RpcSocket(socket);
   }
 
@@ -71,7 +227,9 @@ export class RpcSocket {
 export const waitFor = async (predicate: () => boolean, timeoutMs = 5_000) => {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
-    if (Date.now() > deadline) throw new Error('Timed out waiting for the acceptance condition.');
+    if (Date.now() > deadline) {
+      throw new Error('Timed out waiting for the acceptance condition.');
+    }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 };

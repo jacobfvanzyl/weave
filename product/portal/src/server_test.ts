@@ -1,20 +1,36 @@
-import { WORKSPACE_FILE_WATCH_EVENT_METHOD } from '@weave/product-protocol';
+import { PORTAL_PAIR_REQUEST_TYPE, WORKSPACE_FILE_WATCH_EVENT_METHOD } from '@weave/product-protocol';
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.14';
 import { dirname, fromFileUrl, join } from 'jsr:@std/path@1.1.2';
 import type { PortalConfig } from './config.ts';
 import { Portal } from './portal.ts';
 import { startPortalServer } from './server.ts';
-import { RpcResponseError, RpcSocket, waitFor } from '../scripts/rpc-client.ts';
+import { generatePortalKey, type PortalCredentialSigner, RpcResponseError, RpcSocket, waitFor } from '../scripts/rpc-client.ts';
+
+const pairTestCredential = async (
+  portal: Portal,
+  label = 'Portal test client',
+): Promise<PortalCredentialSigner> => {
+  const key = await generatePortalKey();
+  const offer = await portal.security.createPairingOffer(label);
+  const paired = await portal.security.redeemPairing({
+    type: PORTAL_PAIR_REQUEST_TYPE,
+    hostId: offer.hostId,
+    offerId: offer.offerId,
+    secret: offer.secret,
+    label,
+    publicKey: key.publicKey,
+  });
+  return { ...key, credentialId: paired.principal.credentialId };
+};
 
 Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the product protocol', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-' });
   const workspacePath = join(root, 'workspace');
   await Deno.mkdir(workspacePath);
   const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
-  const token = 'acceptance-token';
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
-    accessToken: token,
+    displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
     workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
@@ -27,11 +43,12 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
     }],
   };
   const portal = await Portal.open(config);
+  const credential = await pairTestCredential(portal);
   const server = startPortalServer(portal);
   const address = server.addr as Deno.NetAddr;
   const baseUrl = `ws://127.0.0.1:${address.port}`;
   try {
-    const rpc = await RpcSocket.open(`${baseUrl}/rpc`, token);
+    const rpc = await RpcSocket.open(`${baseUrl}/rpc`, credential);
     const capabilities = await rpc.request('portal.capabilities') as { capabilities: string[] };
     assertEquals(capabilities.capabilities.includes('thread.create'), true);
 
@@ -47,7 +64,7 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
     };
     const acp = await RpcSocket.open(
       `${baseUrl}${attached.connection.path}?threadId=${attached.connection.threadId}`,
-      token,
+      credential,
     );
     await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     const loaded = await acp.request('session/load', {
@@ -92,7 +109,7 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
     });
     const observer = await RpcSocket.open(
       `${baseUrl}${attached.connection.path}?threadId=${attached.connection.threadId}`,
-      token,
+      credential,
     );
     await observer.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     assertEquals(
@@ -152,7 +169,7 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
 
     const reattached = await RpcSocket.open(
       `${baseUrl}${attached.connection.path}?threadId=${attached.connection.threadId}`,
-      token,
+      credential,
     );
     await reattached.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await reattached.request('session/load', {
@@ -173,16 +190,14 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
     await Deno.remove(root, { recursive: true });
   }
 });
-
 Deno.test('Portal replays durable Thread events after a daemon restart', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-restart-' });
   const workspacePath = join(root, 'workspace');
   await Deno.mkdir(workspacePath);
   const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
-  const token = 'restart-token';
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
-    accessToken: token,
+    displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
     workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
@@ -197,10 +212,11 @@ Deno.test('Portal replays durable Thread events after a daemon restart', async (
 
   let threadId = '';
   const firstPortal = await Portal.open(config);
+  const credential = await pairTestCredential(firstPortal);
   const firstServer = startPortalServer(firstPortal);
   const firstAddress = firstServer.addr as Deno.NetAddr;
   try {
-    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, token);
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, credential);
     const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
       thread: { threadId: string; acpSessionId: string };
     };
@@ -210,7 +226,7 @@ Deno.test('Portal replays durable Thread events after a daemon restart', async (
     };
     const acp = await RpcSocket.open(
       `ws://127.0.0.1:${firstAddress.port}${attached.connection.path}?threadId=${threadId}`,
-      token,
+      credential,
     );
     await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await acp.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
@@ -232,13 +248,13 @@ Deno.test('Portal replays durable Thread events after a daemon restart', async (
   const secondServer = startPortalServer(secondPortal);
   const secondAddress = secondServer.addr as Deno.NetAddr;
   try {
-    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, token);
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, credential);
     const attached = await rpc.request('thread.attach', { threadId }) as {
       connection: { path: string; threadId: string };
     };
     const acp = await RpcSocket.open(
       `ws://127.0.0.1:${secondAddress.port}${attached.connection.path}?threadId=${threadId}`,
-      token,
+      credential,
     );
     await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await acp.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
@@ -265,10 +281,9 @@ Deno.test('Portal replaces a missing empty ACP session and closes the failed pro
   const processLog = join(root, 'processes.log');
   await Deno.mkdir(workspacePath);
   const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
-  const token = 'empty-session-token';
   const config = (recovery: 'load' | 'missing-session'): PortalConfig => ({
     listen: { hostname: '127.0.0.1', port: 0 },
-    accessToken: token,
+    displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory,
     workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
@@ -291,10 +306,11 @@ Deno.test('Portal replaces a missing empty ACP session and closes the failed pro
 
   let threadId = '';
   const firstPortal = await Portal.open(config('load'));
+  const credential = await pairTestCredential(firstPortal);
   const firstServer = startPortalServer(firstPortal);
   const firstAddress = firstServer.addr as Deno.NetAddr;
   try {
-    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, token);
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, credential);
     const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
       thread: { threadId: string; acpSessionId: string };
     };
@@ -310,7 +326,7 @@ Deno.test('Portal replaces a missing empty ACP session and closes the failed pro
   const secondServer = startPortalServer(secondPortal);
   const secondAddress = secondServer.addr as Deno.NetAddr;
   try {
-    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, token);
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, credential);
     const attached = await rpc.request('thread.attach', { threadId }) as {
       thread: { threadId: string; acpSessionId: string };
       connection: { path: string; threadId: string; cwd: string };
@@ -329,7 +345,7 @@ Deno.test('Portal replaces a missing empty ACP session and closes the failed pro
 
     const acp = await RpcSocket.open(
       `ws://127.0.0.1:${secondAddress.port}${attached.connection.path}?threadId=${threadId}`,
-      token,
+      credential,
     );
     await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await acp.request('session/load', {
@@ -358,10 +374,9 @@ Deno.test('Portal gives opted-in clients stable cursor replay without changing o
   const workspacePath = join(root, 'workspace');
   await Deno.mkdir(workspacePath);
   const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
-  const token = 'cursor-token';
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
-    accessToken: token,
+    displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
     workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
@@ -374,11 +389,12 @@ Deno.test('Portal gives opted-in clients stable cursor replay without changing o
     }],
   };
   const portal = await Portal.open(config);
+  const credential = await pairTestCredential(portal);
   const server = startPortalServer(portal);
   const address = server.addr as Deno.NetAddr;
   const baseUrl = `ws://127.0.0.1:${address.port}`;
   try {
-    const rpc = await RpcSocket.open(`${baseUrl}/rpc`, token);
+    const rpc = await RpcSocket.open(`${baseUrl}/rpc`, credential);
     const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
       thread: { threadId: string };
     };
@@ -387,7 +403,7 @@ Deno.test('Portal gives opted-in clients stable cursor replay without changing o
     };
     const acpUrl = `${baseUrl}${attached.connection.path}?threadId=${attached.connection.threadId}`;
 
-    const author = await RpcSocket.open(acpUrl, token);
+    const author = await RpcSocket.open(acpUrl, credential);
     await author.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await author.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
     await author.request('session/prompt', {
@@ -395,7 +411,7 @@ Deno.test('Portal gives opted-in clients stable cursor replay without changing o
       prompt: [{ type: 'text', text: 'FIRST_CURSOR_TURN' }],
     });
 
-    const native = await RpcSocket.open(acpUrl, token);
+    const native = await RpcSocket.open(acpUrl, credential);
     const initialized = await native.request('initialize', {
       protocolVersion: 1,
       clientCapabilities: {},
@@ -456,7 +472,7 @@ Deno.test('Portal gives opted-in clients stable cursor replay without changing o
     assertEquals(liveMetadata.map((value) => (value as { sequence: number }).sequence), [3, 4]);
     native.close();
 
-    const resumed = await RpcSocket.open(acpUrl, token);
+    const resumed = await RpcSocket.open(acpUrl, credential);
     await resumed.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await resumed.request('session/load', {
       sessionId: 'fake-session',
@@ -477,7 +493,7 @@ Deno.test('Portal gives opted-in clients stable cursor replay without changing o
       { sessionId: 'fake-session', lastSequence: 4, fullReload: false },
     );
 
-    const ordinary = await RpcSocket.open(acpUrl, token);
+    const ordinary = await RpcSocket.open(acpUrl, credential);
     await ordinary.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await ordinary.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
     const ordinaryUpdates = ordinary.notifications.filter((message) => message.method === 'session/update');
@@ -509,10 +525,9 @@ Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledg
   const workspacePath = join(root, 'workspace');
   await Deno.mkdir(workspacePath);
   const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
-  const token = 'retention-token';
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
-    accessToken: token,
+    displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
     threadEventRetentionLimit: 2,
@@ -528,10 +543,11 @@ Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledg
 
   let threadId = '';
   const firstPortal = await Portal.open(config);
+  const credential = await pairTestCredential(firstPortal);
   const firstServer = startPortalServer(firstPortal);
   const firstAddress = firstServer.addr as Deno.NetAddr;
   try {
-    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, token);
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, credential);
     const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
       thread: { threadId: string };
     };
@@ -541,7 +557,7 @@ Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledg
     };
     const acp = await RpcSocket.open(
       `ws://127.0.0.1:${firstAddress.port}${attached.connection.path}?threadId=${threadId}`,
-      token,
+      credential,
     );
     await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await acp.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
@@ -552,12 +568,12 @@ Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledg
       });
     }
     const acpUrl = `ws://127.0.0.1:${firstAddress.port}${attached.connection.path}?threadId=${threadId}`;
-    const ordinary = await RpcSocket.open(acpUrl, token);
+    const ordinary = await RpcSocket.open(acpUrl, credential);
     await ordinary.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await ordinary.request('session/load', { sessionId: 'fake-session', cwd: workspacePath, mcpServers: [] });
     assertEquals(ordinary.notifications.filter((message) => message.method === 'session/update').length, 4);
 
-    const native = await RpcSocket.open(acpUrl, token);
+    const native = await RpcSocket.open(acpUrl, credential);
     await native.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await native.request('session/load', {
       sessionId: 'fake-session',
@@ -583,13 +599,13 @@ Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledg
   const secondServer = startPortalServer(secondPortal);
   const secondAddress = secondServer.addr as Deno.NetAddr;
   try {
-    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, token);
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, credential);
     const attached = await rpc.request('thread.attach', { threadId }) as {
       connection: { path: string; threadId: string };
     };
     const acpUrl = `ws://127.0.0.1:${secondAddress.port}${attached.connection.path}?threadId=${threadId}`;
 
-    const stale = await RpcSocket.open(acpUrl, token);
+    const stale = await RpcSocket.open(acpUrl, credential);
     await stale.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     let gap: unknown;
     try {
@@ -608,7 +624,7 @@ Deno.test('Portal persists bounded replay gaps and enforces monotonic acknowledg
     });
     stale.close();
 
-    const resumed = await RpcSocket.open(acpUrl, token);
+    const resumed = await RpcSocket.open(acpUrl, credential);
     await resumed.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await resumed.request('session/load', {
       sessionId: 'fake-session',
@@ -652,10 +668,9 @@ Deno.test('Portal recovers an uncertain prompt with durable fenced runtime gener
   const workspacePath = join(root, 'workspace');
   await Deno.mkdir(workspacePath);
   const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
-  const token = 'recovery-token';
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
-    accessToken: token,
+    displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
     workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
@@ -670,10 +685,11 @@ Deno.test('Portal recovers an uncertain prompt with durable fenced runtime gener
 
   let threadId = '';
   const firstPortal = await Portal.open(config);
+  const credential = await pairTestCredential(firstPortal);
   const firstServer = startPortalServer(firstPortal);
   const firstAddress = firstServer.addr as Deno.NetAddr;
   try {
-    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, token);
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${firstAddress.port}/rpc`, credential);
     const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
       thread: { threadId: string };
     };
@@ -683,7 +699,7 @@ Deno.test('Portal recovers an uncertain prompt with durable fenced runtime gener
     };
     const acp = await RpcSocket.open(
       `ws://127.0.0.1:${firstAddress.port}${attached.connection.path}?threadId=${threadId}`,
-      token,
+      credential,
     );
     const initialized = await acp.request('initialize', {
       protocolVersion: 1,
@@ -762,13 +778,13 @@ Deno.test('Portal recovers an uncertain prompt with durable fenced runtime gener
   const secondServer = startPortalServer(secondPortal);
   const secondAddress = secondServer.addr as Deno.NetAddr;
   try {
-    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, token);
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${secondAddress.port}/rpc`, credential);
     const attached = await rpc.request('thread.attach', { threadId }) as {
       connection: { path: string; threadId: string };
     };
     const acp = await RpcSocket.open(
       `ws://127.0.0.1:${secondAddress.port}${attached.connection.path}?threadId=${threadId}`,
-      token,
+      credential,
     );
     await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await acp.request('session/load', {
@@ -815,10 +831,9 @@ Deno.test('Portal exposes an explicit unavailable state when an Agent cannot res
   const workspacePath = join(root, 'workspace');
   await Deno.mkdir(workspacePath);
   const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
-  const token = 'cannot-resume-token';
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
-    accessToken: token,
+    displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
     workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
@@ -831,10 +846,11 @@ Deno.test('Portal exposes an explicit unavailable state when an Agent cannot res
     }],
   };
   const portal = await Portal.open(config);
+  const credential = await pairTestCredential(portal);
   const server = startPortalServer(portal);
   const address = server.addr as Deno.NetAddr;
   try {
-    const rpc = await RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, token);
+    const rpc = await RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, credential);
     const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
       thread: { threadId: string };
     };
@@ -843,7 +859,7 @@ Deno.test('Portal exposes an explicit unavailable state when an Agent cannot res
     };
     const acp = await RpcSocket.open(
       `ws://127.0.0.1:${address.port}${attached.connection.path}?threadId=${attached.connection.threadId}`,
-      token,
+      credential,
     );
     await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     await acp.request('session/load', {
@@ -902,11 +918,11 @@ Deno.test('Portal exposes an explicit unavailable state when an Agent cannot res
   }
 });
 
-Deno.test('Portal rejects an invalid access token before exposing metadata', async () => {
+Deno.test('Portal rejects an unpaired key before exposing metadata', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-auth-' });
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
-    accessToken: 'correct',
+    displayName: 'Authentication Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
     workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: root }],
@@ -916,8 +932,42 @@ Deno.test('Portal rejects an invalid access token before exposing metadata', asy
   const server = startPortalServer(portal);
   const address = server.addr as Deno.NetAddr;
   try {
-    await assertRejects(() => RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, 'incorrect'));
+    const unpaired = await generatePortalKey();
+    await assertRejects(() =>
+      RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, {
+        ...unpaired,
+        credentialId: crypto.randomUUID(),
+      })
+    );
   } finally {
+    await server.shutdown();
+    await portal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test('Portal revocation rejects active requests and new key proofs', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-revocation-' });
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    displayName: 'Revocation Portal',
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: root }],
+    agents: [{ agentId: 'fake', name: 'Fake', command: 'false', args: [], env: {} }],
+  };
+  const portal = await Portal.open(config);
+  const credential = await pairTestCredential(portal);
+  const server = startPortalServer(portal);
+  const address = server.addr as Deno.NetAddr;
+  const url = `ws://127.0.0.1:${address.port}/rpc`;
+  const active = await RpcSocket.open(url, credential);
+  try {
+    assertEquals(await portal.security.revokeCredential(credential.credentialId), true);
+    await assertRejects(() => active.request('portal.capabilities'), Error, 'CREDENTIAL_REVOKED');
+    await assertRejects(() => RpcSocket.open(url, credential));
+  } finally {
+    active.close();
     await server.shutdown();
     await portal.close();
     await Deno.remove(root, { recursive: true });
@@ -929,19 +979,19 @@ Deno.test('Alpha-facing Portal exposes typed Workspace file operations and conne
   const workspacePath = join(root, 'workspace');
   await Deno.mkdir(workspacePath);
   await Deno.writeTextFile(join(workspacePath, 'README.md'), '# WVE-42\n');
-  const token = 'filesystem-token';
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
-    accessToken: token,
+    displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
     workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
     agents: [{ agentId: 'fake', name: 'Fake', command: 'false', args: [], env: {} }],
   };
   const portal = await Portal.open(config);
+  const credential = await pairTestCredential(portal);
   const server = startPortalServer(portal);
   const address = server.addr as Deno.NetAddr;
-  const rpc = await RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, token);
+  const rpc = await RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, credential);
   try {
     const capabilities = await rpc.request('portal.capabilities') as { capabilities: string[] };
     assertEquals(capabilities.capabilities.includes('workspace.file.read'), true);

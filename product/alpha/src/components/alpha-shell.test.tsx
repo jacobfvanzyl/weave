@@ -1,4 +1,5 @@
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { AlphaController } from '@/app/alpha-controller';
 import { AlphaShell } from './alpha-shell';
@@ -6,20 +7,31 @@ import { AlphaShell } from './alpha-shell';
 const controller = (): AlphaController => ({
   model: {
     platform: 'test',
+    connectionsLoaded: true,
+    connectionsOpen: false,
+    connections: [{
+      hostId: 'host-1',
+      displayName: 'bazzite',
+      hostUrl: 'ws://bazzite:4122',
+      status: 'connected',
+      selected: true,
+    }],
     connection: {
       status: 'connected',
       hostUrl: 'ws://bazzite:4122',
       hostName: 'bazzite',
     },
-    accessToken: 'test',
     searchQuery: '',
     workspaces: [],
     busy: false,
   },
   actions: {
-    setHostUrl: vi.fn(),
-    setAccessToken: vi.fn(),
     setSearchQuery: vi.fn(),
+    openConnections: vi.fn(),
+    closeConnections: vi.fn(),
+    pairHost: vi.fn(),
+    selectHost: vi.fn(),
+    forgetHost: vi.fn(),
     connect: vi.fn(),
     disconnect: vi.fn(),
     refresh: vi.fn(),
@@ -40,14 +52,39 @@ const controller = (): AlphaController => ({
 });
 
 describe('AlphaShell', () => {
+  it('shows only the undismissable Connections dialog when no Hosts are configured', () => {
+    const value = controller();
+    value.model.connections = [];
+    value.model.connectionsOpen = true;
+    const { container } = render(<AlphaShell controller={value} />);
+
+    expect(screen.getByRole('dialog', { name: 'Connections' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot="sidebar-wrapper"]')).not.toBeInTheDocument();
+  });
+
+  it('keeps the shell available when a configured Host is offline', () => {
+    const value = controller();
+    value.model.connection.status = 'disconnected';
+    value.model.connections[0].status = 'disconnected';
+    const { container } = render(<AlphaShell controller={value} />);
+
+    expect(container.querySelector('[data-slot="sidebar-wrapper"]')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Connections' })).not.toBeInTheDocument();
+  });
+
   it('places a tabbed Editor Pane between the Thread and Project Panes', () => {
     const value = controller();
     value.model.selectedThreadId = 'thread-1';
     value.model.workspaces = [{
       id: 'weave',
+      workspaceId: 'weave',
+      hostId: 'host-1',
       name: 'Weave',
       threads: [{
         id: 'thread-1',
+        threadId: 'thread-1',
+        hostId: 'host-1',
         title: 'Selected Thread',
         agentName: 'Codex',
         hostName: 'bazzite',
@@ -128,6 +165,43 @@ describe('AlphaShell', () => {
     expect(container.querySelector('[data-symbol="project-pane"]')?.closest('button')).toBeDisabled();
   });
 
+  it('restores the hidden Project Pane state after an app reload', async () => {
+    const selectedController = () => {
+      const value = controller();
+      value.model.selectedThreadId = 'thread-1';
+      value.model.workspaces = [{
+        id: 'weave',
+        workspaceId: 'weave',
+        hostId: 'host-1',
+        name: 'Weave',
+        threads: [{
+          id: 'thread-1',
+          threadId: 'thread-1',
+          hostId: 'host-1',
+          title: 'Selected Thread',
+          agentName: 'Codex',
+          hostName: 'bazzite',
+          status: 'active',
+          updatedAt: '2026-08-26T00:00:00.000Z',
+          workspaceId: 'weave',
+        }],
+      }];
+      return value;
+    };
+    const user = userEvent.setup();
+    const initial = render(<AlphaShell controller={selectedController()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Hide Project Pane' }));
+    expect(document.cookie).toContain('project_pane_state=false');
+    initial.unmount();
+
+    const restored = render(<AlphaShell controller={selectedController()} />);
+    expect(restored.container.querySelector('[data-slot="project-pane"]')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show Project Pane' })).toBeEnabled();
+
+    document.cookie = 'project_pane_state=; path=/; max-age=0';
+  });
+
   it('sizes the native shell to the visible viewport without duplicating the top safe area', () => {
     const originalViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport');
     const events = new EventTarget();
@@ -146,9 +220,13 @@ describe('AlphaShell', () => {
     value.model.selectedThreadId = 'thread-1';
     value.model.workspaces = [{
       id: 'weave',
+      workspaceId: 'weave',
+      hostId: 'host-1',
       name: 'Weave',
       threads: [{
         id: 'thread-1',
+        threadId: 'thread-1',
+        hostId: 'host-1',
         title: 'Selected Thread',
         agentName: 'Codex',
         hostName: 'bazzite',

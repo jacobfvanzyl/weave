@@ -48,18 +48,32 @@ export type AlphaThreadPaneLayout = {
   rowLayouts: Record<string, AlphaPaneRowLayout>;
 };
 
+export const projectPaneStateCookieName = 'project_pane_state';
+
+const projectPaneVisibleFromCookie = () => {
+  if (typeof document === 'undefined') return true;
+  const prefix = `${projectPaneStateCookieName}=`;
+  const value = document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+    ?.slice(prefix.length);
+  return value !== 'false';
+};
+
 const threadKey = (threadId: string | undefined) => threadId ?? '__no-active-thread__';
 
 export const paneSetKey = (paneIds: readonly AlphaPaneId[]) => paneIds.join(':');
 
 export const createAlphaThreadPaneLayout = (
   threadId: string | undefined,
+  projectVisible = true,
 ): AlphaThreadPaneLayout => ({
   schemaVersion: 1,
   threadId: threadId ?? null,
   visible: {
     threads: true,
-    project: true,
+    project: projectVisible,
   },
   rowLayouts: {},
 });
@@ -71,20 +85,23 @@ export const layoutForPaneSet = (
 
 export function useAlphaPaneLayouts(activeThreadId: string | undefined) {
   const activeKey = threadKey(activeThreadId);
+  const defaultProjectVisible = projectPaneVisibleFromCookie();
   const [snapshots, setSnapshots] = useState<Record<string, AlphaThreadPaneLayout>>({});
   const snapshot = useMemo(
-    () => snapshots[activeKey] ?? createAlphaThreadPaneLayout(activeThreadId),
-    [activeKey, activeThreadId, snapshots],
+    () => snapshots[activeKey]
+      ?? createAlphaThreadPaneLayout(activeThreadId, defaultProjectVisible),
+    [activeKey, activeThreadId, defaultProjectVisible, snapshots],
   );
 
   const updateSnapshot = useCallback((
     update: (current: AlphaThreadPaneLayout) => AlphaThreadPaneLayout,
   ) => {
     setSnapshots((current) => {
-      const existing = current[activeKey] ?? createAlphaThreadPaneLayout(activeThreadId);
+      const existing = current[activeKey]
+        ?? createAlphaThreadPaneLayout(activeThreadId, defaultProjectVisible);
       return { ...current, [activeKey]: update(existing) };
     });
-  }, [activeKey, activeThreadId]);
+  }, [activeKey, activeThreadId, defaultProjectVisible]);
 
   const setThreadsVisible = useCallback((visible: boolean) => {
     updateSnapshot((current) => ({

@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  parsePortalAuthChallenge,
+  parsePortalAuthenticated,
+  parsePortalPairRequest,
+  parsePortalPairResult,
   parsePortalRpcParams,
   parsePortalRpcResult,
   parseWorkspaceFileErrorData,
@@ -9,6 +13,40 @@ import {
 } from './index';
 
 describe('Portal protocol', () => {
+  test('parses the key-authentication and pairing envelopes', () => {
+    expect(parsePortalAuthChallenge({
+      type: 'weave.portal.auth.challenge',
+      challengeId: 'challenge-1',
+      hostId: 'host-1',
+      nonce: 'nonce',
+      audience: '/rpc',
+      origin: 'capacitor://localhost',
+      expiresAt: '2026-08-26T00:00:00.000Z',
+    })).toMatchObject({ hostId: 'host-1', audience: '/rpc' });
+    expect(parsePortalAuthenticated({
+      type: 'weave.portal.auth.authenticated',
+      principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Jaco’s iPad' },
+    }).principal).toEqual({ principalId: 'principal-1', credentialId: 'credential-1', label: 'Jaco’s iPad' });
+    expect(parsePortalPairRequest({
+      type: 'weave.portal.pair.request',
+      hostId: 'host-1',
+      offerId: 'offer-1',
+      secret: 'secret',
+      label: 'Jaco’s iPad',
+      publicKey: 'public-key',
+    }).offerId).toBe('offer-1');
+    expect(parsePortalPairResult({
+      type: 'weave.portal.pair.result',
+      hostId: 'host-1',
+      displayName: 'Portal',
+      principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Jaco’s iPad' },
+    }).hostId).toBe('host-1');
+    expect(() => parsePortalAuthChallenge({
+      type: 'weave.portal.auth.challenge',
+      audience: '/admin',
+    })).toThrow('audience');
+  });
+
   test('parses an attachment without leaking implementation details', () => {
     expect(
       parsePortalRpcResult('thread.attach', {
@@ -24,6 +62,30 @@ describe('Portal protocol', () => {
         connection: { path: PORTAL_ACP_PATH, threadId: 'thread-1', cwd: '/workspace' },
       }).connection,
     ).toEqual({ path: '/acp', threadId: 'thread-1', cwd: '/workspace' });
+  });
+
+  test('binds capabilities to a stable Host and authenticated principal', () => {
+    expect(parsePortalRpcResult('portal.capabilities', {
+      protocolVersion: 2,
+      hostId: 'host-1',
+      displayName: 'Portal',
+      principal: {
+        principalId: 'principal-1',
+        credentialId: 'credential-1',
+        label: 'Jaco’s iPad',
+      },
+      capabilities: ['thread.list'],
+    })).toEqual({
+      protocolVersion: 2,
+      hostId: 'host-1',
+      displayName: 'Portal',
+      principal: {
+        principalId: 'principal-1',
+        credentialId: 'credential-1',
+        label: 'Jaco’s iPad',
+      },
+      capabilities: ['thread.list'],
+    });
   });
 
   test('rejects malformed Thread state', () => {

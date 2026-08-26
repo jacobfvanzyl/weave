@@ -3,7 +3,6 @@ import {
   parsePortalRpcResult,
   parseWorkspaceFileErrorData,
   parseWorkspaceFileWatchNotification,
-  PORTAL_TOKEN_PROTOCOL_PREFIX,
   type PortalRpcMethod,
   type PortalRpcParams,
   type PortalRpcResult,
@@ -17,6 +16,8 @@ import type { ContentBlock, CreateElicitationResponse } from '@agentclientprotoc
 import { AcpSessionClient } from '@/chat/acp-client';
 import type { AcpTranscriptEvent } from '@/chat/acp-transcript';
 import { portalWebSocketUrl } from '@/portal-address';
+import { authenticatedPortalWebSocket } from '@/portal-authenticated-websocket';
+import type { PortalCredentialSigner } from '@/portal-credential';
 
 type JsonRpcId = number;
 type PendingRequest = { method: string; resolve(value: unknown): void; reject(error: Error): void };
@@ -28,15 +29,6 @@ export class PortalRpcError extends Error {
     this.name = 'PortalRpcError';
   }
 }
-
-const base64Url = (value: string) => {
-  const bytes = new TextEncoder().encode(value);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-};
-
-const tokenProtocol = (token: string) => `${PORTAL_TOKEN_PROTOCOL_PREFIX}${base64Url(token)}`;
 
 class JsonRpcWebSocket {
   private nextId = 0;
@@ -118,6 +110,8 @@ class JsonRpcWebSocket {
 }
 
 export type HostSnapshot = {
+  hostId: string;
+  displayName: string;
   capabilities: string[];
   workspaces: WorkspaceSummary[];
   agents: AgentSummary[];
@@ -126,7 +120,7 @@ export type HostSnapshot = {
 
 export class DirectHostClient {
   private readonly baseUrl: URL;
-  private readonly protocol: string;
+  private readonly WebSocket: ReturnType<typeof authenticatedPortalWebSocket>;
   private rpc: JsonRpcWebSocket;
   private acp?: AcpSessionClient;
   private activeThread?: ThreadSummary;
@@ -134,15 +128,14 @@ export class DirectHostClient {
 
   constructor(
     hostUrl: string,
-    token: string,
+    credential: PortalCredentialSigner,
     private readonly onAcpEvent: (event: AcpTranscriptEvent) => void,
     onUnexpectedClose?: (error: Error) => void,
   ) {
-    if (!token) throw new Error('Host token is required.');
     this.baseUrl = portalWebSocketUrl(hostUrl);
-    this.protocol = tokenProtocol(token);
+    this.WebSocket = authenticatedPortalWebSocket(credential);
     this.rpc = new JsonRpcWebSocket(
-      new WebSocket(this.baseUrl, this.protocol),
+      new this.WebSocket(this.baseUrl.toString()) as unknown as WebSocket,
       (method, params) => this.handleNotification(method, params),
       onUnexpectedClose,
     );
@@ -156,6 +149,8 @@ export class DirectHostClient {
       this.request('thread.list', {}),
     ]);
     return {
+      hostId: capabilities.hostId,
+      displayName: capabilities.displayName,
       capabilities: capabilities.capabilities,
       workspaces: workspaces.workspaces,
       agents: agents.agents,
@@ -176,7 +171,7 @@ export class DirectHostClient {
     url.searchParams.set('threadId', prepared.connection.threadId);
     this.acp = new AcpSessionClient({
       url: url.toString(),
-      protocols: [this.protocol],
+      WebSocket: this.WebSocket,
       onEvent: this.onAcpEvent,
     });
     await this.acp.initializeAndLoad({

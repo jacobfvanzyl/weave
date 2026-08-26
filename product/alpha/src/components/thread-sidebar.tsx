@@ -198,7 +198,7 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
               aria-label='Settings'
               tooltip='Settings'
               className='w-fit'
-              onClick={() => undefined}
+              onClick={actions.openConnections}
             >
               <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} />
             </SidebarMenuButton>

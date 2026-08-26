@@ -8,18 +8,24 @@ import { ThreadSidebar } from './thread-sidebar';
 const controller = (platform = 'ios'): AlphaController => ({
   model: {
     platform,
+    connectionsLoaded: true,
+    connectionsOpen: false,
+    connections: [{ hostId: 'host-1', displayName: 'bazzite', hostUrl: 'bazzite', status: 'connected', selected: true }],
     connection: {
       status: 'connected',
       hostUrl: 'bazzite',
       hostName: 'bazzite',
     },
-    accessToken: 'test',
     searchQuery: '',
     workspaces: [{
       id: 'weave',
+      workspaceId: 'weave',
+      hostId: 'host-1',
       name: 'weave',
       threads: [{
         id: 'thread-1',
+        threadId: 'thread-1',
+        hostId: 'host-1',
         title: 'Acceptance',
         agentName: 'Codex',
         hostName: 'bazzite',
@@ -31,9 +37,12 @@ const controller = (platform = 'ios'): AlphaController => ({
     busy: false,
   },
   actions: {
-    setHostUrl: vi.fn(),
-    setAccessToken: vi.fn(),
     setSearchQuery: vi.fn(),
+    openConnections: vi.fn(),
+    closeConnections: vi.fn(),
+    pairHost: vi.fn(),
+    selectHost: vi.fn(),
+    forgetHost: vi.fn(),
     connect: vi.fn(),
     disconnect: vi.fn(),
     refresh: vi.fn(),
@@ -115,6 +124,18 @@ describe('ThreadSidebar', () => {
     expect(container.querySelector('[data-slot="sidebar-footer"]')).not.toHaveClass(
       'pb-[max(1rem,env(safe-area-inset-bottom))]',
     );
+  });
+
+  it('opens central Connections from Settings', async () => {
+    const value = controller();
+    render(
+      <SidebarProvider>
+        <ThreadSidebar controller={value} />
+      </SidebarProvider>,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(value.actions.openConnections).toHaveBeenCalledOnce();
   });
 
   it('removes the Capacitor-only settings offset on the web', () => {

@@ -7,18 +7,30 @@ It has no source or package dependency on the earlier Weave server or Portal imp
 
 ## Configure
 
-Copy `portal.config.example.json` to the ignored `portal.config.json` and set absolute state and Workspace paths. Agent
-commands are explicit so installation and version policy stay outside the runtime.
+Copy `portal.config.example.json` to the ignored `portal.config.json` and set absolute state, certificate, key, and
+Workspace paths. Agent commands are explicit so installation and version policy stay outside the runtime. A listener
+that is not loopback-only must use TLS and an explicit browser-origin allowlist.
 
-Set the access token in the environment variable named by `accessTokenEnv`:
+Start Portal, then create a short-lived, one-time pairing code for the device:
 
 ```bash
-export PORTAL_ACCESS_TOKEN='replace-with-a-long-random-token'
 deno task dev
+deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json --name "Jaco's iPad"
 ```
 
-The token is carried in the WebSocket subprotocol, not in a URL. Browser origins are denied unless they appear in
-`allowedOrigins`; clients without an `Origin` header still require the token.
+Paste the complete JSON output into Alpha's Connections dialog. Alpha generates a P-256 key on the device and sends
+only its public key to Portal. On iOS the private key is stored in the Secure Enclave when available, with a
+ThisDeviceOnly Keychain fallback. Portal stores public credentials, grants, and audit records in its state directory.
+It never rotates a device credential automatically.
+
+List or revoke paired credentials from the Host:
+
+```bash
+deno run --allow-read --allow-write src/main.ts credential list --config portal.config.json
+deno run --allow-read --allow-write src/main.ts credential revoke --config portal.config.json <credential-id>
+```
+
+See [Portal security](./SECURITY.md) for the trust model, rollover behavior, and TLS requirements.
 
 ## Verify
 
@@ -30,7 +42,7 @@ deno task build
 
 The test suite starts the real Portal transport and a fake ACP subprocess, then creates, lists, attaches to, and prompts
 a Thread. It also exercises restart recovery, native replay cursors, bounded retention, acknowledgement gaps,
-access-token rejection, and the Workspace filesystem contract.
+unpaired-key rejection, explicit credential rollover, and the Workspace filesystem contract.
 
 Workspace filesystem paths are canonical relative paths; absolute, traversal, Windows-style, and symbolic-link paths
 are rejected without exposing Host paths. Text writes are create-only or conditioned on the current full SHA-256 hash.
@@ -46,7 +58,7 @@ For a real Agent acceptance against an already running Portal:
 
 ```bash
 PORTAL_URL=ws://127.0.0.1:4122 \
-PORTAL_ACCESS_TOKEN="$PORTAL_ACCESS_TOKEN" \
+PORTAL_PAIRING_CODE="$(deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json --name acceptance)" \
 PORTAL_WORKSPACE_ID=workspace \
 PORTAL_AGENT_ID=codex \
 PORTAL_ACCEPTANCE_MARKER=PORTAL_ACCEPTANCE_OK \
@@ -58,7 +70,7 @@ The filesystem acceptance is Agent-independent and creates and removes only a un
 
 ```bash
 PORTAL_URL=ws://127.0.0.1:4122 \
-PORTAL_ACCESS_TOKEN="$PORTAL_ACCESS_TOKEN" \
+PORTAL_PAIRING_CODE="$(deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json --name filesystem-acceptance)" \
 PORTAL_WORKSPACE_ID=workspace \
 deno task acceptance:filesystem
 ```

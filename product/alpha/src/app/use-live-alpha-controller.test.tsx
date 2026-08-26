@@ -4,12 +4,22 @@ import { PortalRpcError, type DirectHostClient, type HostSnapshot } from '@/port
 import { useLiveAlphaController } from './use-live-alpha-controller';
 
 vi.mock('./portal-connection-storage', () => ({
-  DEFAULT_PORTAL_URL: 'ws://127.0.0.1:4122',
-  loadPortalConnection: vi.fn(async () => undefined),
-  savePortalConnection: vi.fn(async () => undefined),
+  loadPortalConnections: vi.fn(async () => ({
+    connections: [{
+      hostId: 'host-1',
+      displayName: 'Bazzite',
+      hostUrl: 'wss://bazzite.test:4122',
+      credentialId: 'credential-1',
+      keyId: 'key-1',
+    }],
+    selectedHostId: 'host-1',
+  })),
+  savePortalConnections: vi.fn(async () => undefined),
 }));
 
 const snapshot: HostSnapshot = {
+  hostId: 'host-1',
+  displayName: 'Bazzite',
   capabilities: [],
   workspaces: [{ workspaceId: 'weave', name: 'Weave' }],
   agents: [{ agentId: 'codex', name: 'Codex' }],
@@ -41,7 +51,7 @@ describe('useLiveAlphaController', () => {
     } as unknown as DirectHostClient;
     const createClient = vi.fn((
       _hostUrl: string,
-      _token: string,
+      _credential: unknown,
       nextOnEvent: ConstructorParameters<typeof DirectHostClient>[2],
     ) => {
       onEvent = nextOnEvent;
@@ -49,8 +59,10 @@ describe('useLiveAlphaController', () => {
     });
     const { result } = renderHook(() => useLiveAlphaController(createClient));
 
-    act(() => result.current.actions.setAccessToken('test-token'));
-    await act(async () => result.current.actions.connect());
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     act(() => onEvent?.({ type: 'history/reset', sessionId: 'session-1' }));
 
     await act(async () => {
@@ -72,7 +84,7 @@ describe('useLiveAlphaController', () => {
     } as unknown as DirectHostClient;
     const createClient = vi.fn((
       _hostUrl: string,
-      _token: string,
+      _credential: unknown,
       _onEvent: ConstructorParameters<typeof DirectHostClient>[2],
       onClose: (error: Error) => void,
     ) => {
@@ -81,8 +93,10 @@ describe('useLiveAlphaController', () => {
     });
     const { result } = renderHook(() => useLiveAlphaController(createClient));
 
-    act(() => result.current.actions.setAccessToken('test-token'));
-    await act(async () => result.current.actions.connect());
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     expect(result.current.model.connection.status).toBe('connected');
     expect(client.snapshot).toHaveBeenCalledTimes(1);
 
@@ -145,9 +159,11 @@ describe('useLiveAlphaController', () => {
     const createClient = vi.fn(() => client);
     const { result } = renderHook(() => useLiveAlphaController(createClient));
 
-    act(() => result.current.actions.setAccessToken('test-token'));
-    await act(async () => result.current.actions.connect());
-    await act(async () => result.current.actions.selectThread('thread-1'));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => result.current.actions.selectThread('host-1:thread-1'));
     expect(result.current.model.workspaceFiles).toMatchObject({
       workspaceId: 'weave',
       workspaceName: 'Weave',
@@ -200,7 +216,7 @@ describe('useLiveAlphaController', () => {
 
     await act(async () => result.current.actions.reloadWorkspaceFile());
     expect(result.current.model.workspaceFiles?.openFiles[0]).toMatchObject({ changed: false });
-    expect(result.current.model.selectedThreadId).toBe('thread-1');
+    expect(result.current.model.selectedThreadId).toBe('host-1:thread-1');
   });
 
   it('turns binary and oversized read errors into preview-unavailable state', async () => {
@@ -225,9 +241,11 @@ describe('useLiveAlphaController', () => {
     } as unknown as DirectHostClient;
     const { result } = renderHook(() => useLiveAlphaController(vi.fn(() => client)));
 
-    act(() => result.current.actions.setAccessToken('test-token'));
-    await act(async () => result.current.actions.connect());
-    await act(async () => result.current.actions.selectThread('thread-1'));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => result.current.actions.selectThread('host-1:thread-1'));
     await act(async () => result.current.actions.openWorkspaceFile('image.bin'));
 
     expect(result.current.model.workspaceFiles?.openFiles).toEqual([{

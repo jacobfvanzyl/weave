@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DirectHostClient } from './portal-client';
 
+const credential = {
+  hostId: 'host-1',
+  credentialId: 'credential-1',
+  sign: vi.fn(async () => 'signature'),
+};
+
 class FakeWebSocket {
   static instance: FakeWebSocket;
 
@@ -37,13 +43,13 @@ describe('DirectHostClient', () => {
   it('reports an unexpected Portal transport closure without reporting an intentional disconnect', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const onClose = vi.fn();
-    const first = new DirectHostClient('127.0.0.1', 'token', vi.fn(), onClose);
+    const first = new DirectHostClient('127.0.0.1', credential, vi.fn(), onClose);
 
     FakeWebSocket.instance.onclose?.({ code: 1006, reason: 'Portal stopped' });
     expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ message: 'Portal stopped' }));
 
     onClose.mockClear();
-    const second = new DirectHostClient('127.0.0.1', 'token', vi.fn(), onClose);
+    const second = new DirectHostClient('127.0.0.1', credential, vi.fn(), onClose);
     second.close();
     expect(onClose).not.toHaveBeenCalled();
     first.close();
@@ -51,12 +57,26 @@ describe('DirectHostClient', () => {
 
   it('parses Workspace file results and preserves typed Portal errors', async () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
-    const client = new DirectHostClient('127.0.0.1', 'token', vi.fn());
+    const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
     const socket = FakeWebSocket.instance;
     const list = client.listWorkspaceFiles('weave', '');
-    socket.open();
+    socket.receive({
+      type: 'weave.portal.auth.challenge',
+      challengeId: 'challenge-1',
+      hostId: 'host-1',
+      nonce: 'nonce',
+      audience: '/rpc',
+      origin: '-',
+      expiresAt: new Date(Date.now() + 10_000).toISOString(),
+    });
     await Promise.resolve();
-    const request = JSON.parse(socket.sent[0]);
+    await Promise.resolve();
+    socket.receive({
+      type: 'weave.portal.auth.authenticated',
+      principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' },
+    });
+    await Promise.resolve();
+    const request = JSON.parse(socket.sent[1]);
     expect(request).toMatchObject({ method: 'workspace.file.list', params: { workspaceId: 'weave', path: '' } });
     socket.receive({
       jsonrpc: '2.0',
@@ -71,7 +91,7 @@ describe('DirectHostClient', () => {
 
     const write = client.writeWorkspaceFile('weave', 'README.md', 'stale', '0'.repeat(64));
     await Promise.resolve();
-    const writeRequest = JSON.parse(socket.sent[1]);
+    const writeRequest = JSON.parse(socket.sent[2]);
     socket.receive({
       jsonrpc: '2.0',
       id: writeRequest.id,

@@ -9,18 +9,24 @@ import { WorkspacePlaceholder } from './workspace-placeholder';
 const controller = (): AlphaController => ({
   model: {
     platform: 'test',
+    connectionsLoaded: true,
+    connectionsOpen: false,
+    connections: [{ hostId: 'host-1', displayName: 'bazzite', hostUrl: 'bazzite', status: 'connected', selected: true }],
     connection: {
       status: 'connected',
       hostUrl: 'ws://bazzite:4122',
       hostName: 'bazzite',
     },
-    accessToken: 'test',
     searchQuery: '',
     workspaces: [{
       id: 'weave',
+      workspaceId: 'weave',
+      hostId: 'host-1',
       name: 'weave',
       threads: [{
         id: 'thread-1',
+        threadId: 'thread-1',
+        hostId: 'host-1',
         title: 'Acceptance',
         agentName: 'Codex',
         hostName: 'bazzite',
@@ -35,9 +41,12 @@ const controller = (): AlphaController => ({
     error: 'Portal lost the connection to this host.',
   },
   actions: {
-    setHostUrl: vi.fn(),
-    setAccessToken: vi.fn(),
     setSearchQuery: vi.fn(),
+    openConnections: vi.fn(),
+    closeConnections: vi.fn(),
+    pairHost: vi.fn(),
+    selectHost: vi.fn(),
+    forgetHost: vi.fn(),
     connect: vi.fn(),
     disconnect: vi.fn(),
     refresh: vi.fn(),

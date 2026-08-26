@@ -1,15 +1,15 @@
 import { WORKSPACE_FILE_RPC_METHODS, WORKSPACE_FILE_WATCH_EVENT_METHOD } from '@weave/product-protocol';
-import { required, RpcResponseError, RpcSocket, waitFor } from './rpc-client.ts';
+import { pairPortalCredential, required, RpcResponseError, RpcSocket, waitFor } from './rpc-client.ts';
 
 const baseUrl = required('PORTAL_URL').replace(/\/$/, '');
-const token = required('PORTAL_ACCESS_TOKEN');
+const credential = await pairPortalCredential(baseUrl, required('PORTAL_PAIRING_CODE'), 'Filesystem acceptance');
 const workspaceId = required('PORTAL_WORKSPACE_ID');
 const marker = Deno.env.get('PORTAL_FILESYSTEM_ACCEPTANCE_MARKER')?.trim() || `WVE42_${crypto.randomUUID()}`;
 const fixture = `.weave-acceptance/wve-42-${crypto.randomUUID()}`;
 const originalPath = `${fixture}/original.txt`;
 const movedPath = `${fixture}/moved.txt`;
 const observedPath = `${fixture}/observed.txt`;
-const rpc = await RpcSocket.open(`${baseUrl}/rpc`, token);
+const rpc = await RpcSocket.open(`${baseUrl}/rpc`, credential);
 let fixtureCreated = false;
 
 try {
@@ -122,5 +122,6 @@ try {
   console.log(JSON.stringify({ ok: true, workspaceId, fixture, marker }));
 } finally {
   if (fixtureCreated) await rpc.request('workspace.file.delete', { workspaceId, path: fixture, recursive: true });
+  await rpc.request('credential.revoke').catch(() => undefined);
   rpc.close();
 }
