@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import type { WorkspaceFileWatchEvent } from '@weave/product-protocol';
-import { DirectHostClient, PortalRpcError } from '@/portal-client';
+import { DirectHostClient, PortalRpcError, PortalTransportError } from '@/portal-client';
 import type { AlphaWorkspaceFiles } from './alpha-controller';
 
 type WorkspaceFileWatch = Awaited<ReturnType<DirectHostClient['watchWorkspaceFiles']>>;
 
-export function useWorkspaceFileBrowser(client: DirectHostClient | undefined) {
+export function useWorkspaceFileBrowser() {
   const [files, setFiles] = useState<AlphaWorkspaceFiles>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const filesRef = useRef<AlphaWorkspaceFiles | undefined>(undefined);
   const watchRef = useRef<WorkspaceFileWatch | undefined>(undefined);
   const watchGeneration = useRef(0);
+  const clientRef = useRef<DirectHostClient | undefined>(undefined);
 
   const replaceFiles = (next: AlphaWorkspaceFiles | undefined) => {
     filesRef.current = next;
@@ -30,9 +31,10 @@ export function useWorkspaceFileBrowser(client: DirectHostClient | undefined) {
     replaceFiles(undefined);
     setBusy(false);
     setError(undefined);
+    clientRef.current = undefined;
   };
 
-  useEffect(() => () => disposeWatch(), [client]);
+  useEffect(() => () => disposeWatch(), []);
 
   const refreshFromWatch = async (
     activeClient: DirectHostClient,
@@ -64,7 +66,9 @@ export function useWorkspaceFileBrowser(client: DirectHostClient | undefined) {
         ),
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (!(cause instanceof PortalTransportError)) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
     }
   };
 
@@ -85,23 +89,29 @@ export function useWorkspaceFileBrowser(client: DirectHostClient | undefined) {
     action: (activeClient: DirectHostClient) => Promise<Result>,
     handleError?: (cause: unknown) => boolean,
   ) => {
+    const client = clientRef.current;
     if (!client) return;
     setBusy(true);
     setError(undefined);
     try {
       return await action(client);
     } catch (cause) {
-      if (!handleError?.(cause)) setError(cause instanceof Error ? cause.message : String(cause));
+      if (!(cause instanceof PortalTransportError) && !handleError?.(cause)) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
       setBusy(false);
     }
   };
 
-  const open = async (workspaceId: string, workspaceName: string) => {
+  const open = async (client: DirectHostClient, workspaceId: string, workspaceName: string) => {
     disposeWatch();
+    const generation = watchGeneration.current;
+    clientRef.current = client;
     replaceFiles(undefined);
     return await perform(async (activeClient) => {
       const listed = await activeClient.listWorkspaceFiles(workspaceId, '');
+      if (generation !== watchGeneration.current) return;
       replaceFiles({
         workspaceId,
         workspaceName,

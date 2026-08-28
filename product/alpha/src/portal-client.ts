@@ -12,7 +12,10 @@ import {
   type WorkspaceFileWatchEvent,
   type WorkspaceSummary,
 } from '@weave/product-protocol';
-import type { ContentBlock, CreateElicitationResponse } from '@agentclientprotocol/sdk';
+import type {
+  ContentBlock,
+  CreateElicitationResponse,
+} from '@agentclientprotocol/sdk';
 import { AcpSessionClient } from '@/chat/acp-client';
 import type { AcpTranscriptEvent } from '@/chat/acp-transcript';
 import { portalWebSocketUrl } from '@/portal-address';
@@ -20,13 +23,31 @@ import { authenticatedPortalWebSocket } from '@/portal-authenticated-websocket';
 import type { PortalCredentialSigner } from '@/portal-credential';
 
 type JsonRpcId = number;
-type PendingRequest = { method: string; resolve(value: unknown): void; reject(error: Error): void };
+type PendingRequest = {
+  method: string;
+  resolve(value: unknown): void;
+  reject(error: Error): void;
+};
 type NotificationHandler = (method: string, params: unknown) => void;
 
 export class PortalRpcError extends Error {
-  constructor(readonly code: number, message: string, readonly data?: WorkspaceFileErrorData | unknown) {
+  constructor(
+    readonly code: number,
+    message: string,
+    readonly data?: WorkspaceFileErrorData | unknown,
+  ) {
     super(message);
     this.name = 'PortalRpcError';
+  }
+}
+
+export class PortalTransportError extends Error {
+  constructor(
+    message: string,
+    readonly closeCode?: number,
+  ) {
+    super(message);
+    this.name = 'PortalTransportError';
   }
 }
 
@@ -43,11 +64,19 @@ class JsonRpcWebSocket {
   ) {
     this.opened = new Promise<void>((resolve, reject) => {
       socket.onopen = () => resolve();
-      socket.onerror = () => reject(new Error('The Host WebSocket could not be opened.'));
+      socket.onerror = () =>
+        reject(
+          new PortalTransportError(
+            'The Host WebSocket could not be opened.',
+          ),
+        );
     });
     socket.onmessage = (event) => this.receive(String(event.data));
     socket.onclose = (event) => {
-      const error = new Error(event.reason || `The Host WebSocket closed (${event.code}).`);
+      const error = new PortalTransportError(
+        event.reason || `The Host WebSocket closed (${event.code}).`,
+        event.code,
+      );
       for (const request of this.pending.values()) request.reject(error);
       this.pending.clear();
       if (!this.closedByClient) this.onUnexpectedClose?.(error);
@@ -59,7 +88,14 @@ class JsonRpcWebSocket {
     const id = ++this.nextId;
     return await new Promise((resolve, reject) => {
       this.pending.set(id, { method, resolve, reject });
-      this.socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) }));
+      this.socket.send(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          method,
+          ...(params === undefined ? {} : { params }),
+        }),
+      );
     });
   }
 
@@ -72,11 +108,16 @@ class JsonRpcWebSocket {
     const message = JSON.parse(text) as Record<string, unknown>;
     if (typeof message.method === 'string') {
       if (typeof message.id === 'number') {
-        this.socket.send(JSON.stringify({
-          jsonrpc: '2.0',
-          id: message.id,
-          error: { code: -32601, message: `Method not supported by Weave: ${message.method}` },
-        }));
+        this.socket.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: -32601,
+              message: `Method not supported by Weave: ${message.method}`,
+            },
+          }),
+        );
       } else {
         this.onNotification?.(message.method, message.params);
       }
@@ -87,10 +128,17 @@ class JsonRpcWebSocket {
     if (!pending) return;
     this.pending.delete(message.id);
     if (message.error && typeof message.error === 'object') {
-      const error = message.error as { code?: unknown; message?: unknown; data?: unknown };
+      const error = message.error as {
+        code?: unknown;
+        message?: unknown;
+        data?: unknown;
+      };
       let data = error.data;
       try {
-        if ((data as { domain?: unknown } | undefined)?.domain === 'workspace-filesystem') {
+        if (
+          (data as { domain?: unknown } | undefined)?.domain ===
+          'workspace-filesystem'
+        ) {
           data = parseWorkspaceFileErrorData(data);
         }
       } catch {
@@ -99,7 +147,9 @@ class JsonRpcWebSocket {
       pending.reject(
         new PortalRpcError(
           typeof error.code === 'number' ? error.code : -32000,
-          typeof error.message === 'string' ? error.message : `${pending.method} failed.`,
+          typeof error.message === 'string'
+            ? error.message
+            : `${pending.method} failed.`,
           data,
         ),
       );
@@ -116,6 +166,7 @@ export type HostSnapshot = {
   workspaces: WorkspaceSummary[];
   agents: AgentSummary[];
   threads: ThreadSummary[];
+  archivedThreads: ThreadSummary[];
 };
 
 export class DirectHostClient {
@@ -124,7 +175,10 @@ export class DirectHostClient {
   private rpc: JsonRpcWebSocket;
   private acp?: AcpSessionClient;
   private activeThread?: ThreadSummary;
-  private readonly workspaceFileWatchListeners = new Map<string, (event: WorkspaceFileWatchEvent) => void>();
+  private readonly workspaceFileWatchListeners = new Map<
+    string,
+    (event: WorkspaceFileWatchEvent) => void
+  >();
 
   constructor(
     hostUrl: string,
@@ -142,11 +196,17 @@ export class DirectHostClient {
   }
 
   async snapshot(): Promise<HostSnapshot> {
-    const [capabilities, workspaces, agents, threads] = await Promise.all([
-      this.request('portal.capabilities', {}),
+    const capabilities = await this.request('portal.capabilities', {});
+    const supportsThreadLifecycle =
+      capabilities.capabilities.includes('thread.archive') &&
+      capabilities.capabilities.includes('thread.restore');
+    const [workspaces, agents, threads, archivedThreads] = await Promise.all([
       this.request('workspace.list', {}),
       this.request('agent.list', {}),
-      this.request('thread.list', {}),
+      this.request('thread.list', { status: 'active' }),
+      supportsThreadLifecycle
+        ? this.request('thread.list', { status: 'archived' })
+        : Promise.resolve({ threads: [] }),
     ]);
     return {
       hostId: capabilities.hostId,
@@ -155,6 +215,7 @@ export class DirectHostClient {
       workspaces: workspaces.workspaces,
       agents: agents.agents,
       threads: threads.threads,
+      archivedThreads: archivedThreads.threads,
     };
   }
 
@@ -182,7 +243,60 @@ export class DirectHostClient {
   }
 
   async createThread(workspaceId: string, agentId: string, title?: string) {
-    return (await this.request('thread.create', { workspaceId, agentId, ...(title ? { title } : {}) })).thread;
+    return (
+      await this.request('thread.create', {
+        workspaceId,
+        agentId,
+        ...(title ? { title } : {}),
+      })
+    ).thread;
+  }
+
+  async createThreadDraft(
+    workspaceId: string,
+    agentId: string,
+    title?: string,
+  ) {
+    return (
+      await this.request('thread.draft.create', {
+        workspaceId,
+        agentId,
+        ...(title ? { title } : {}),
+      })
+    ).thread;
+  }
+
+  async discardThreadDraft(threadId: string) {
+    if (this.activeThread?.threadId === threadId) {
+      this.acp?.close();
+      this.acp = undefined;
+      this.activeThread = undefined;
+    }
+    await this.request('thread.draft.discard', { threadId });
+  }
+
+  async addWorkspace(path: string, name?: string) {
+    return (
+      await this.request('workspace.add', {
+        path,
+        ...(name ? { name } : {}),
+      })
+    ).workspace;
+  }
+
+  async archiveThread(threadId: string) {
+    const archived = (await this.request('thread.archive', { threadId }))
+      .thread;
+    if (this.activeThread?.threadId === threadId) {
+      this.acp?.close();
+      this.acp = undefined;
+      this.activeThread = undefined;
+    }
+    return archived;
+  }
+
+  async restoreThread(threadId: string) {
+    return (await this.request('thread.restore', { threadId })).thread;
   }
 
   listWorkspaceFiles(workspaceId: string, path: string) {
@@ -197,15 +311,30 @@ export class DirectHostClient {
     return this.request('workspace.file.hash', { workspaceId, path });
   }
 
-  writeWorkspaceFile(workspaceId: string, path: string, content: string, expectedContentHash: string | null) {
-    return this.request('workspace.file.write', { workspaceId, path, content, expectedContentHash });
+  writeWorkspaceFile(
+    workspaceId: string,
+    path: string,
+    content: string,
+    expectedContentHash: string | null,
+  ) {
+    return this.request('workspace.file.write', {
+      workspaceId,
+      path,
+      content,
+      expectedContentHash,
+    });
   }
 
   createWorkspaceDirectory(workspaceId: string, path: string) {
     return this.request('workspace.directory.create', { workspaceId, path });
   }
 
-  moveWorkspaceFile(workspaceId: string, fromPath: string, toPath: string, overwrite?: boolean) {
+  moveWorkspaceFile(
+    workspaceId: string,
+    fromPath: string,
+    toPath: string,
+    overwrite?: boolean,
+  ) {
     return this.request('workspace.file.move', {
       workspaceId,
       fromPath,
@@ -243,7 +372,10 @@ export class DirectHostClient {
     paths: string[],
     onEvent: (event: WorkspaceFileWatchEvent) => void,
   ) {
-    const started = await this.request('workspace.file.watch.start', { workspaceId, paths });
+    const started = await this.request('workspace.file.watch.start', {
+      workspaceId,
+      paths,
+    });
     this.workspaceFileWatchListeners.set(started.subscriptionId, onEvent);
     let closed = false;
     return {
@@ -260,15 +392,16 @@ export class DirectHostClient {
         if (closed) return;
         closed = true;
         this.workspaceFileWatchListeners.delete(started.subscriptionId);
-        await this.request('workspace.file.watch.stop', { subscriptionId: started.subscriptionId }).catch(() =>
-          undefined
-        );
+        await this.request('workspace.file.watch.stop', {
+          subscriptionId: started.subscriptionId,
+        }).catch(() => undefined);
       },
     };
   }
 
   async prompt(content: ContentBlock[]) {
-    if (!this.acp || !this.activeThread) throw new Error('Attach to a Thread first.');
+    if (!this.acp || !this.activeThread)
+      throw new Error('Attach to a Thread first.');
     await this.acp.prompt(content);
   }
 
@@ -277,10 +410,12 @@ export class DirectHostClient {
   }
 
   respondToPermission(requestId: string, optionId: string) {
-    return this.acp?.respondToPermission(requestId, {
-      outcome: 'selected',
-      optionId,
-    }) ?? false;
+    return (
+      this.acp?.respondToPermission(requestId, {
+        outcome: 'selected',
+        optionId,
+      }) ?? false
+    );
   }
 
   respondToElicitation(requestId: string, response: CreateElicitationResponse) {
@@ -304,7 +439,9 @@ export class DirectHostClient {
   private handleNotification(method: string, params: unknown) {
     if (method !== WORKSPACE_FILE_WATCH_EVENT_METHOD) return;
     const notification = parseWorkspaceFileWatchNotification(method, params);
-    this.workspaceFileWatchListeners.get(notification.subscriptionId)?.(notification.event);
+    this.workspaceFileWatchListeners.get(notification.subscriptionId)?.(
+      notification.event,
+    );
   }
 
   private async request<Method extends PortalRpcMethod>(

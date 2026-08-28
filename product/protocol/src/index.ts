@@ -8,6 +8,9 @@ export const PORTAL_AUTH_RESPONSE_TYPE = 'weave.portal.auth.response' as const;
 export const PORTAL_AUTHENTICATED_TYPE = 'weave.portal.auth.authenticated' as const;
 export const PORTAL_PAIR_REQUEST_TYPE = 'weave.portal.pair.request' as const;
 export const PORTAL_PAIR_RESULT_TYPE = 'weave.portal.pair.result' as const;
+export const PORTAL_PAIRING_TOKEN_ALGORITHM = 'HS256' as const;
+export const PORTAL_PAIRING_TOKEN_AUDIENCE = 'weave-alpha-pairing' as const;
+export const PORTAL_PAIRING_TOKEN_TYPE = 'weave-pairing+jwt' as const;
 export const WEAVE_ACP_META_NAMESPACE = 'weave.dev' as const;
 export const WEAVE_ACP_THREAD_EVENTS_LOAD_META = 'weave.dev/threadEvents' as const;
 export const WEAVE_ACP_THREAD_EVENT_META = 'weave.dev/threadEvent' as const;
@@ -35,9 +38,29 @@ export type {
   WorkspaceFileWatchEvent,
   WorkspaceFileWatchNotification,
 } from './workspace-files.ts';
-import { parseWorkspaceFileRpcParams, parseWorkspaceFileRpcResult, WORKSPACE_FILE_RPC_METHODS, type WorkspaceFileRpcContracts, type WorkspaceFileRpcMethod } from './workspace-files.ts';
+import {
+  parseWorkspaceFileRpcParams,
+  parseWorkspaceFileRpcResult,
+  WORKSPACE_FILE_RPC_METHODS,
+  type WorkspaceFileRpcContracts,
+  type WorkspaceFileRpcMethod,
+} from './workspace-files.ts';
 
-export type WorkspaceSummary = { workspaceId: string; name: string };
+export type RepositoryIdentity = {
+  canonicalKey: string;
+  locator: {
+    source: 'git-remote';
+    remoteName: string;
+    remoteUrl: string;
+  };
+  displayName?: string;
+  name?: string;
+};
+export type WorkspaceSummary = {
+  workspaceId: string;
+  name: string;
+  repositoryIdentity?: RepositoryIdentity;
+};
 export type AgentSummary = { agentId: string; name: string };
 export type PortalPrincipalSummary = {
   principalId: string;
@@ -68,9 +91,7 @@ export type PortalAuthenticated = {
 
 export type PortalPairRequest = {
   type: typeof PORTAL_PAIR_REQUEST_TYPE;
-  hostId: string;
-  offerId: string;
-  secret: string;
+  token: string;
   label: string;
   publicKey: string;
 };
@@ -139,9 +160,7 @@ export const parsePortalPairRequest = (value: unknown): PortalPairRequest => {
   }
   return {
     type: PORTAL_PAIR_REQUEST_TYPE,
-    hostId: string(record.hostId, 'hostId'),
-    offerId: string(record.offerId, 'offerId'),
-    secret: string(record.secret, 'secret'),
+    token: string(record.token, 'token'),
     label: string(record.label, 'label'),
     publicKey: string(record.publicKey, 'publicKey'),
   };
@@ -172,15 +191,17 @@ export const parsePortalPairResult = (value: unknown): PortalPairResult => {
     principal: principal(record.principal),
   };
 };
+export type ThreadStatus = 'active' | 'archived' | 'closed';
 export type ThreadSummary = {
   threadId: string;
   agentId: string;
   workspaceId: string;
   acpSessionId: string;
   title?: string;
-  status: 'active' | 'closed';
+  status: ThreadStatus;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 };
 
 type BasePortalRpcContracts = {
@@ -198,17 +219,29 @@ type BasePortalRpcContracts = {
     params: Record<string, never>;
     result: { workspaces: WorkspaceSummary[] };
   };
+  'workspace.add': {
+    params: { path: string; name?: string };
+    result: { workspace: WorkspaceSummary };
+  };
   'agent.list': {
     params: Record<string, never>;
     result: { agents: AgentSummary[] };
   };
   'thread.list': {
-    params: Record<string, never>;
+    params: { status?: 'active' | 'archived' | 'all' };
     result: { threads: ThreadSummary[] };
   };
   'thread.create': {
     params: { workspaceId: string; agentId: string; title?: string };
     result: { thread: ThreadSummary };
+  };
+  'thread.draft.create': {
+    params: { workspaceId: string; agentId: string; title?: string };
+    result: { thread: ThreadSummary };
+  };
+  'thread.draft.discard': {
+    params: { threadId: string };
+    result: { discarded: true };
   };
   'thread.attach': {
     params: { threadId: string };
@@ -220,6 +253,14 @@ type BasePortalRpcContracts = {
         cwd: string;
       };
     };
+  };
+  'thread.archive': {
+    params: { threadId: string };
+    result: { thread: ThreadSummary };
+  };
+  'thread.restore': {
+    params: { threadId: string };
+    result: { thread: ThreadSummary };
   };
   'credential.rotate': {
     params: { publicKey: string; label?: string };
@@ -239,10 +280,15 @@ export type PortalRpcMethod = keyof PortalRpcContracts;
 export const PORTAL_RPC_METHODS = [
   'portal.capabilities',
   'workspace.list',
+  'workspace.add',
   'agent.list',
   'thread.list',
   'thread.create',
+  'thread.draft.create',
+  'thread.draft.discard',
   'thread.attach',
+  'thread.archive',
+  'thread.restore',
   'credential.rotate',
   'credential.revoke',
   ...WORKSPACE_FILE_RPC_METHODS,
@@ -265,15 +311,35 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
     case 'portal.capabilities':
     case 'workspace.list':
     case 'agent.list':
-    case 'thread.list':
       return {} as PortalRpcParams<Method>;
+    case 'workspace.add':
+      return {
+        path: string(params.path, 'path'),
+        ...(params.name === undefined ? {} : { name: string(params.name, 'name') }),
+      } as PortalRpcParams<Method>;
+    case 'thread.list': {
+      const status = params.status;
+      if (
+        status !== undefined && status !== 'active' && status !== 'archived' &&
+        status !== 'all'
+      ) {
+        throw new Error('thread.list status is invalid.');
+      }
+      return (status === undefined ? {} : { status }) as PortalRpcParams<
+        Method
+      >;
+    }
     case 'thread.create':
+    case 'thread.draft.create':
       return {
         workspaceId: string(params.workspaceId, 'workspaceId'),
         agentId: string(params.agentId, 'agentId'),
         ...(params.title === undefined ? {} : { title: string(params.title, 'title') }),
       } as PortalRpcParams<Method>;
     case 'thread.attach':
+    case 'thread.draft.discard':
+    case 'thread.archive':
+    case 'thread.restore':
       return {
         threadId: string(params.threadId, 'threadId'),
       } as PortalRpcParams<Method>;
@@ -313,6 +379,46 @@ const workspace = (value: unknown): WorkspaceSummary => {
   return {
     workspaceId: string(record.workspaceId, 'workspace.workspaceId'),
     name: string(record.name, 'workspace.name'),
+    ...(record.repositoryIdentity === undefined
+      ? {}
+      : { repositoryIdentity: repositoryIdentity(record.repositoryIdentity) }),
+  };
+};
+
+const repositoryIdentity = (value: unknown): RepositoryIdentity => {
+  const record = object(value, 'workspace.repositoryIdentity');
+  const locator = object(
+    record.locator,
+    'workspace.repositoryIdentity.locator',
+  );
+  if (locator.source !== 'git-remote') {
+    throw new Error('workspace.repositoryIdentity.locator.source is invalid.');
+  }
+  return {
+    canonicalKey: string(
+      record.canonicalKey,
+      'workspace.repositoryIdentity.canonicalKey',
+    ),
+    locator: {
+      source: 'git-remote',
+      remoteName: string(
+        locator.remoteName,
+        'workspace.repositoryIdentity.locator.remoteName',
+      ),
+      remoteUrl: string(
+        locator.remoteUrl,
+        'workspace.repositoryIdentity.locator.remoteUrl',
+      ),
+    },
+    ...(record.displayName === undefined ? {} : {
+      displayName: string(
+        record.displayName,
+        'workspace.repositoryIdentity.displayName',
+      ),
+    }),
+    ...(record.name === undefined ? {} : {
+      name: string(record.name, 'workspace.repositoryIdentity.name'),
+    }),
   };
 };
 
@@ -327,8 +433,12 @@ const agent = (value: unknown): AgentSummary => {
 const thread = (value: unknown): ThreadSummary => {
   const record = object(value, 'thread');
   const status = string(record.status, 'thread.status');
-  if (status !== 'active' && status !== 'closed') {
+  if (status !== 'active' && status !== 'archived' && status !== 'closed') {
     throw new Error('thread.status is invalid.');
+  }
+  const archivedAt = record.archivedAt === undefined ? undefined : string(record.archivedAt, 'thread.archivedAt');
+  if (archivedAt !== undefined && !Number.isFinite(Date.parse(archivedAt))) {
+    throw new Error('thread.archivedAt is invalid.');
   }
   return {
     threadId: string(record.threadId, 'thread.threadId'),
@@ -339,6 +449,7 @@ const thread = (value: unknown): ThreadSummary => {
     status,
     createdAt: string(record.createdAt, 'thread.createdAt'),
     updatedAt: string(record.updatedAt, 'thread.updatedAt'),
+    ...(archivedAt === undefined ? {} : { archivedAt }),
   };
 };
 
@@ -372,6 +483,10 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
       return {
         workspaces: result.workspaces.map(workspace),
       } as PortalRpcResult<Method>;
+    case 'workspace.add':
+      return { workspace: workspace(result.workspace) } as PortalRpcResult<
+        Method
+      >;
     case 'agent.list':
       if (!Array.isArray(result.agents)) {
         throw new Error('agents must be an array.');
@@ -383,7 +498,13 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
       }
       return { threads: result.threads.map(thread) } as PortalRpcResult<Method>;
     case 'thread.create':
+    case 'thread.draft.create':
       return { thread: thread(result.thread) } as PortalRpcResult<Method>;
+    case 'thread.draft.discard':
+      if (result.discarded !== true) {
+        throw new Error('thread.draft.discard result is invalid.');
+      }
+      return { discarded: true } as PortalRpcResult<Method>;
     case 'thread.attach': {
       const connection = object(result.connection, 'connection');
       if (connection.path !== PORTAL_ACP_PATH) {
@@ -398,6 +519,9 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
         },
       } as PortalRpcResult<Method>;
     }
+    case 'thread.archive':
+    case 'thread.restore':
+      return { thread: thread(result.thread) } as PortalRpcResult<Method>;
     case 'credential.rotate':
       return {
         credentialId: string(result.credentialId, 'credentialId'),

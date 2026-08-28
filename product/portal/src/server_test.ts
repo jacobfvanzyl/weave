@@ -4,24 +4,91 @@ import { dirname, fromFileUrl, join } from 'jsr:@std/path@1.1.2';
 import type { PortalConfig } from './config.ts';
 import { Portal } from './portal.ts';
 import { startPortalServer } from './server.ts';
-import { generatePortalKey, type PortalCredentialSigner, RpcResponseError, RpcSocket, waitFor } from '../scripts/rpc-client.ts';
+import {
+  generatePortalKey,
+  type PortalCredentialSigner,
+  RpcResponseError,
+  RpcSocket,
+  waitFor,
+} from '../scripts/rpc-client.ts';
 
 const pairTestCredential = async (
   portal: Portal,
   label = 'Portal test client',
 ): Promise<PortalCredentialSigner> => {
   const key = await generatePortalKey();
-  const offer = await portal.security.createPairingOffer(label);
+  const token = await portal.security.createPairingToken();
   const paired = await portal.security.redeemPairing({
     type: PORTAL_PAIR_REQUEST_TYPE,
-    hostId: offer.hostId,
-    offerId: offer.offerId,
-    secret: offer.secret,
+    token,
     label,
     publicKey: key.publicKey,
   });
   return { ...key, credentialId: paired.principal.credentialId };
 };
+
+Deno.test('Alpha registers a durable project through its chosen Portal', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-project-' });
+  const projectPath = join(root, 'project');
+  await Deno.mkdir(projectPath);
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    displayName: 'Project Portal',
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [],
+    agents: [{
+      agentId: 'fake',
+      name: 'Fake',
+      command: 'false',
+      args: [],
+      env: {},
+    }],
+  };
+  let portal = await Portal.open(config);
+  const credential = await pairTestCredential(portal);
+  let server = startPortalServer(portal);
+  try {
+    let address = server.addr as Deno.NetAddr;
+    let rpc = await RpcSocket.open(
+      `ws://127.0.0.1:${address.port}/rpc`,
+      credential,
+    );
+    const added = await rpc.request('workspace.add', {
+      path: projectPath,
+      name: 'Project',
+    }) as { workspace: { workspaceId: string; name: string } };
+    assertEquals(added.workspace.name, 'Project');
+    assertEquals(
+      (await rpc.request('workspace.list') as {
+        workspaces: Array<{ workspaceId: string }>;
+      }).workspaces.map(({ workspaceId }) => workspaceId),
+      [added.workspace.workspaceId],
+    );
+    rpc.close();
+    await server.shutdown();
+    await portal.close();
+
+    portal = await Portal.open(config);
+    server = startPortalServer(portal);
+    address = server.addr as Deno.NetAddr;
+    rpc = await RpcSocket.open(
+      `ws://127.0.0.1:${address.port}/rpc`,
+      credential,
+    );
+    assertEquals(
+      (await rpc.request('workspace.list') as {
+        workspaces: Array<{ workspaceId: string; name: string }>;
+      }).workspaces,
+      [{ workspaceId: added.workspace.workspaceId, name: 'Project' }],
+    );
+    rpc.close();
+  } finally {
+    await server.shutdown().catch(() => undefined);
+    await portal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
 
 Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the product protocol', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-' });
@@ -190,6 +257,273 @@ Deno.test('Alpha-facing Portal creates and prompts an ACP Thread over the produc
     await Deno.remove(root, { recursive: true });
   }
 });
+
+Deno.test('Portal preflights draft config without listing it and promotes the same session on first prompt', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-draft-' });
+  const workspacePath = join(root, 'workspace');
+  await Deno.mkdir(workspacePath);
+  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    displayName: 'Draft Portal',
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{
+      agentId: 'fake',
+      name: 'Fake',
+      command: Deno.execPath(),
+      args: ['run', '--quiet', '--allow-read', fakeAgent],
+      env: {},
+    }],
+  };
+  const portal = await Portal.open(config);
+  const credential = await pairTestCredential(portal);
+  const server = startPortalServer(portal);
+  const address = server.addr as Deno.NetAddr;
+  const baseUrl = `ws://127.0.0.1:${address.port}`;
+  try {
+    const rpc = await RpcSocket.open(`${baseUrl}/rpc`, credential);
+    const capabilities = await rpc.request('portal.capabilities') as { capabilities: string[] };
+    assertEquals(capabilities.capabilities.includes('thread.draft'), true);
+
+    const disposable = await rpc.request('thread.draft.create', {
+      workspaceId: 'workspace',
+      agentId: 'fake',
+    }) as { thread: { threadId: string } };
+    assertEquals((await rpc.request('thread.list') as { threads: unknown[] }).threads, []);
+    await rpc.request('thread.draft.discard', { threadId: disposable.thread.threadId });
+    await assertRejects(
+      () => rpc.request('thread.attach', { threadId: disposable.thread.threadId }),
+      RpcResponseError,
+      'Resource is unavailable.',
+    );
+
+    const prepared = await rpc.request('thread.draft.create', {
+      workspaceId: 'workspace',
+      agentId: 'fake',
+    }) as { thread: { threadId: string; acpSessionId: string } };
+    const attached = await rpc.request('thread.attach', {
+      threadId: prepared.thread.threadId,
+    }) as { connection: { path: string; threadId: string; cwd: string } };
+    const acp = await RpcSocket.open(
+      `${baseUrl}${attached.connection.path}?threadId=${attached.connection.threadId}`,
+      credential,
+    );
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    const loaded = await acp.request('session/load', {
+      sessionId: prepared.thread.acpSessionId,
+      cwd: attached.connection.cwd,
+      mcpServers: [],
+    }) as { configOptions: unknown[] };
+    assertEquals(loaded.configOptions, [{
+      type: 'boolean',
+      id: 'fast',
+      name: 'Fast mode',
+      currentValue: false,
+    }]);
+    await acp.request('session/set_config_option', {
+      sessionId: prepared.thread.acpSessionId,
+      configId: 'fast',
+      type: 'boolean',
+      value: true,
+    });
+    assertEquals((await rpc.request('thread.list') as { threads: unknown[] }).threads, []);
+
+    await acp.request('session/prompt', {
+      sessionId: prepared.thread.acpSessionId,
+      prompt: [{ type: 'text', text: 'PROMOTE_DRAFT' }],
+    });
+    const listed = await rpc.request('thread.list') as {
+      threads: Array<{ threadId: string; acpSessionId: string }>;
+    };
+    assertEquals(listed.threads, [{
+      ...listed.threads[0],
+      threadId: prepared.thread.threadId,
+      acpSessionId: prepared.thread.acpSessionId,
+    }]);
+    acp.close();
+    rpc.close();
+  } finally {
+    await server.shutdown();
+    await portal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test('Portal archives and restores durable Threads without conflating active prompts or ACP deletion', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-archive-' });
+  const workspacePath = join(root, 'workspace');
+  await Deno.mkdir(workspacePath);
+  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    displayName: 'Archive Portal',
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{
+      agentId: 'fake',
+      name: 'Fake',
+      command: Deno.execPath(),
+      args: ['run', '--quiet', '--allow-read', fakeAgent],
+      env: {},
+    }],
+  };
+
+  let portal = await Portal.open(config);
+  const credential = await pairTestCredential(portal);
+  let server = startPortalServer(portal);
+  let rpc: RpcSocket | undefined;
+  let acp: RpcSocket | undefined;
+  try {
+    let address = server.addr as Deno.NetAddr;
+    rpc = await RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, credential);
+    const capabilities = await rpc.request('portal.capabilities') as { capabilities: string[] };
+    assertEquals(capabilities.capabilities.includes('thread.archive'), true);
+    assertEquals(capabilities.capabilities.includes('thread.restore'), true);
+
+    const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as {
+      thread: { threadId: string; acpSessionId: string };
+    };
+    const unknown = await assertRejects(
+      () => rpc!.request('thread.archive', { threadId: crypto.randomUUID() }),
+      RpcResponseError,
+      'Resource is unavailable.',
+    );
+    const restrictedKey = await generatePortalKey();
+    const restrictedGrants = portal.security.defaultGrants();
+    restrictedGrants.workspaceIds = [];
+    const restrictedToken = await portal.security.createPairingToken(60_000, restrictedGrants);
+    const restrictedPairing = await portal.security.redeemPairing({
+      type: PORTAL_PAIR_REQUEST_TYPE,
+      token: restrictedToken,
+      label: 'Restricted archive client',
+      publicKey: restrictedKey.publicKey,
+    });
+    const restricted = await RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, {
+      ...restrictedKey,
+      credentialId: restrictedPairing.principal.credentialId,
+    });
+    const unauthorized = await assertRejects(
+      () => restricted.request('thread.archive', { threadId: created.thread.threadId }),
+      RpcResponseError,
+      'Resource is unavailable.',
+    );
+    restricted.close();
+    assertEquals(
+      {
+        message: unauthorized.message,
+        code: unauthorized.code,
+        resourceCode: (unauthorized.data as { code?: string }).code,
+      },
+      { message: unknown.message, code: unknown.code, resourceCode: (unknown.data as { code?: string }).code },
+    );
+    const attachment = await rpc.request('thread.attach', { threadId: created.thread.threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    acp = await RpcSocket.open(
+      `ws://127.0.0.1:${address.port}${attachment.connection.path}?threadId=${created.thread.threadId}`,
+      credential,
+    );
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await acp.request('session/load', { sessionId: created.thread.acpSessionId, cwd: workspacePath, mcpServers: [] });
+
+    const prompting = acp.request('session/prompt', {
+      sessionId: created.thread.acpSessionId,
+      prompt: [{ type: 'text', text: 'SLOW ARCHIVE' }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const busy = await assertRejects(
+      () => rpc!.request('thread.archive', { threadId: created.thread.threadId }),
+      RpcResponseError,
+      'Stop the active prompt',
+    );
+    assertEquals(busy.code, -32011);
+    assertEquals(busy.data, { domain: 'thread-lifecycle', code: 'THREAD_BUSY' });
+    await prompting;
+
+    const archived = await rpc.request('thread.archive', { threadId: created.thread.threadId }) as {
+      thread: { threadId: string; acpSessionId: string; status: string; archivedAt?: string };
+    };
+    assertEquals(archived.thread.threadId, created.thread.threadId);
+    assertEquals(archived.thread.acpSessionId, created.thread.acpSessionId);
+    assertEquals(archived.thread.status, 'archived');
+    assertEquals(typeof archived.thread.archivedAt, 'string');
+    assertEquals((await rpc.request('thread.list') as { threads: unknown[] }).threads, []);
+    assertEquals(
+      (await rpc.request('thread.list', { status: 'archived' }) as { threads: Array<{ threadId: string }> }).threads
+        .map(({ threadId }) => threadId),
+      [created.thread.threadId],
+    );
+    await assertRejects(
+      () => rpc!.request('thread.attach', { threadId: created.thread.threadId }),
+      RpcResponseError,
+      'Resource is unavailable.',
+    );
+    rpc.close();
+    rpc = undefined;
+    acp.close();
+    acp = undefined;
+    await server.shutdown();
+    await portal.close();
+
+    portal = await Portal.open(config);
+    server = startPortalServer(portal);
+    address = server.addr as Deno.NetAddr;
+    rpc = await RpcSocket.open(`ws://127.0.0.1:${address.port}/rpc`, credential);
+    const afterRestart = await rpc.request('thread.list', { status: 'archived' }) as {
+      threads: Array<{ threadId: string; acpSessionId: string; status: string }>;
+    };
+    assertEquals(
+      afterRestart.threads.map(({ threadId, acpSessionId, status }) => ({
+        threadId,
+        acpSessionId,
+        status,
+      })),
+      [{
+        threadId: created.thread.threadId,
+        acpSessionId: created.thread.acpSessionId,
+        status: 'archived',
+      }],
+    );
+
+    const restored = await rpc.request('thread.restore', { threadId: created.thread.threadId }) as {
+      thread: { threadId: string; acpSessionId: string; status: string; archivedAt?: string };
+    };
+    assertEquals(restored.thread.status, 'active');
+    assertEquals(restored.thread.acpSessionId, created.thread.acpSessionId);
+    assertEquals(restored.thread.archivedAt, undefined);
+    const reattached = await rpc.request('thread.attach', { threadId: created.thread.threadId }) as {
+      connection: { path: string; threadId: string };
+    };
+    acp = await RpcSocket.open(
+      `ws://127.0.0.1:${address.port}${reattached.connection.path}?threadId=${created.thread.threadId}`,
+      credential,
+    );
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await acp.request('session/load', { sessionId: created.thread.acpSessionId, cwd: workspacePath, mcpServers: [] });
+    await waitFor(() => acp!.notifications.some((message) => JSON.stringify(message).includes('SLOW ARCHIVE')));
+
+    const audits = (await Deno.readTextFile(join(config.stateDirectory, 'security-audit.jsonl')))
+      .trim().split('\n').map((line) => JSON.parse(line) as { event?: string; threadId?: string });
+    assertEquals(
+      audits.some((audit) => audit.event === 'thread.archived' && audit.threadId === created.thread.threadId),
+      true,
+    );
+    assertEquals(
+      audits.some((audit) => audit.event === 'thread.restored' && audit.threadId === created.thread.threadId),
+      true,
+    );
+  } finally {
+    rpc?.close();
+    acp?.close();
+    await server.shutdown().catch(() => undefined);
+    await portal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test('Portal replays durable Thread events after a daemon restart', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-restart-' });
   const workspacePath = join(root, 'workspace');

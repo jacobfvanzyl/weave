@@ -36,6 +36,27 @@ const files: AlphaWorkspaceFiles = {
 };
 
 describe('ProjectPane', () => {
+  it('replaces the Project tree with skeletons while its Host reconnects', () => {
+    const { container } = render(
+      <SidebarProvider>
+        <ProjectPane
+          files={files}
+          reconnecting
+          busy={false}
+          onOpenDirectory={vi.fn()}
+          onOpenFile={vi.fn()}
+        />
+      </SidebarProvider>,
+    );
+
+    expect(screen.getByLabelText('Reconnecting project')).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="project-pane"]'))
+      .toHaveAttribute('aria-busy', 'true');
+    expect(container.querySelectorAll('[data-slot="sidebar-menu-skeleton"]'))
+      .toHaveLength(6);
+    expect(screen.queryByText('README.md')).not.toBeInTheDocument();
+  });
+
   it('expands directories in place with nesting guides without presenting file content', async () => {
     const user = userEvent.setup();
     const openDirectory = vi.fn();

@@ -15,14 +15,19 @@ Host discovery, account recovery, cloud credential backup, or cross-Host synchro
 
 ## Pairing and authentication
 
-1. A Host administrator runs `weave-portal pairing create`. Portal creates a random, one-time offer that expires after
-   five minutes by default and persists only its SHA-256 hash.
-2. Alpha generates a P-256 key pair. iOS requests a Secure Enclave key and falls back to a non-exportable,
+1. A Host administrator runs `weave-portal pairing create`. Portal creates a one-time server-side offer that expires
+   after five minutes by default and emits a compact Pairing Token JWT.
+2. The Pairing Token uses only a protected `alg: HS256` and `typ: weave-pairing+jwt` header plus `iss`, `aud`, `jti`,
+   `iat`, and `exp` claims. It contains no Host display name, device label, URL, grants, Workspace IDs, or Agent IDs.
+   Portal verifies the exact algorithm, type, Host issuer, `weave-alpha-pairing` audience, timestamps, signature, and
+   live single-use offer before redemption. The token is signed, not encrypted, and must be handled as a bearer secret.
+3. Alpha generates a P-256 key pair. iOS requests a Secure Enclave key and falls back to a non-exportable,
    ThisDeviceOnly Keychain key when the enclave is unavailable. Browser builds use a non-exportable Web Crypto key in
    IndexedDB. Connection metadata contains only opaque Host, principal, credential, and key identifiers.
-3. Alpha redeems the offer over `/pair` with the public key. Portal consumes the offer atomically and issues stable,
-   opaque principal and credential IDs.
-4. Every `/rpc` or `/acp` connection receives a fresh, 15-second challenge bound to Host ID, nonce, transport
+4. Alpha sends only the Pairing Token, its device label, and the new public key over `/pair`. The Portal Host URL is a
+   separate user input and is not trusted from an unverified JWT claim. Portal consumes the offer atomically and issues
+   stable, opaque principal and credential IDs.
+5. Every `/rpc` or `/acp` connection receives a fresh, 15-second challenge bound to Host ID, nonce, transport
    audience, browser origin, challenge ID, and expiry. Alpha signs the canonical challenge. Portal verifies the
    signature before exposing capabilities or attaching an ACP Thread.
 
@@ -45,7 +50,14 @@ for every RPC request and ACP Thread attachment. Lists are filtered to authorize
 returns the same `RESOURCE_UNAVAILABLE` result so it cannot be used to enumerate configured resources.
 
 Clients scope Workspace and Thread keys by stable Host ID. Equal raw IDs from two Hosts are distinct resources. WVE-51
-owns the future aggregate presentation across those Host-scoped resources.
+groups physical Workspaces only when Portal reports the same normalized Git remote identity. It does not merge
+non-Git Workspaces by display name or Host-local path.
+
+`workspace.manage` authorizes a paired principal to register an existing absolute directory as a new Workspace root.
+Registration never creates or clones a directory. Portal grants the new Workspace only to administrative credentials
+that carry `workspace.manage`; restricted credentials retain their existing resource list. Existing credentials that
+held the complete pre-registration administrative action and Agent set are upgraded once so a product update does not
+force already paired devices to pair again.
 
 ## Revocation, forgetting, and rollover
 
@@ -57,7 +69,7 @@ owns the future aggregate presentation across those Host-scoped resources.
   proof from the replacement activates it and revokes the old credential atomically. Portal never rotates credentials
   on a timer or as a side effect of reconnection.
 
-If Alpha loses a private key, create a new pairing offer and then revoke the abandoned credential from the Host.
+If Alpha loses a private key, create a new Pairing Token and then revoke the abandoned credential from the Host.
 
 ## ACP compatibility
 
@@ -68,7 +80,23 @@ understand Portal pairing. Weave's namespaced replay metadata remains optional a
 
 ## Persistence and audit
 
-`security.json` stores Host identity, public credentials, grants, and hashed live pairing offers with mode `0600`.
+`security.json` stores Host identity, public credentials, grants, and live one-time offer metadata with mode `0600`.
+`pairing-token.key` stores the random 256-bit HMAC signing key separately with mode `0600`. Losing that key invalidates
+only outstanding Pairing Tokens; Portal generates a replacement on its next start, while existing paired device
+credentials remain valid. Restoring `security.json` without its matching key therefore requires creating fresh tokens.
 `security-audit.jsonl` records pairing, authentication, authorization denial, rollover, and revocation events without
-private keys, pairing secrets, signatures, or Workspace paths. Back up these files only with the same care as the rest
-of the Portal state directory.
+private keys, Pairing Tokens, signatures, or Workspace paths. Workspace registration audit entries contain only the
+principal, credential, and opaque Workspace IDs. Back up these files only with the same care as the rest
+of the Portal state directory. Never put Pairing Tokens or the signing key in logs, shell history, URLs, or repository files.
+
+## macOS code identity and privacy grants
+
+Release and installed development builds on macOS must use a stable Apple code-signing identity and the permanent
+identifier `xyz.veezee.weave.portal`. An ad-hoc Deno compile identifies itself by its exact code hash, so macOS cannot
+carry Files & Folders decisions across rebuilds and may ask for Documents access again. `deno task
+build:macos-signed` signs and verifies the compiled binary when `WEAVE_PORTAL_CODESIGN_IDENTITY` names an available
+Keychain identity. The ordinary `build` task remains unsigned and must not replace an installed signed Portal.
+
+Signing does not pre-authorize protected folders: an unmanaged Mac still requires the first user decision. Device
+management can pre-authorize a stable signed identity through PPPC. Headless unmanaged installations should configure
+Workspaces outside Documents, Desktop, and Downloads when a prompt is unacceptable.

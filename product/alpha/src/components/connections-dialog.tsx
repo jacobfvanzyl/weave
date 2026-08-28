@@ -14,6 +14,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -30,7 +31,7 @@ import { Textarea } from '@/components/ui/textarea';
 
 export function ConnectionsDialog({ controller }: { controller: AlphaController }) {
   const { model, actions } = controller;
-  const [pairingCode, setPairingCode] = useState('');
+  const [pairingToken, setPairingToken] = useState('');
   const [hostUrl, setHostUrl] = useState('');
   const [deviceLabel, setDeviceLabel] = useState(`Weave on ${model.platform === 'ios' ? 'iPad' : model.platform}`);
   const [pairingError, setPairingError] = useState<string>();
@@ -41,8 +42,8 @@ export function ConnectionsDialog({ controller }: { controller: AlphaController 
     event.preventDefault();
     setPairingError(undefined);
     try {
-      await actions.pairHost({ pairingCode, hostUrl, deviceLabel });
-      setPairingCode('');
+      await actions.pairHost({ pairingToken, hostUrl, deviceLabel });
+      setPairingToken('');
       setHostUrl('');
     } catch (cause) {
       setPairingError(cause instanceof Error ? cause.message : String(cause));
@@ -84,14 +85,10 @@ export function ConnectionsDialog({ controller }: { controller: AlphaController 
                     </span>
                     <span className='block truncate text-muted-foreground'>{connection.hostUrl}</span>
                   </span>
-                  {connection.selected && connection.status !== 'connected' ? (
-                    <Button variant='outline' disabled={model.busy} onClick={() => void actions.connect()}>
+                  {connection.status === 'disconnected' && !connection.error ? (
+                    <Button variant='outline' disabled={model.busy} onClick={() => void actions.reconnectHost(connection.hostId)}>
                       <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} />
                       Reconnect
-                    </Button>
-                  ) : !connection.selected ? (
-                    <Button variant='outline' disabled={model.busy} onClick={() => void actions.selectHost(connection.hostId)}>
-                      Use Host
                     </Button>
                   ) : null}
                   <AlertDialog>
@@ -114,6 +111,22 @@ export function ConnectionsDialog({ controller }: { controller: AlphaController 
                     </AlertDialogContent>
                   </AlertDialog>
                 </CardContent>
+                {connection.status === 'disconnected' && connection.error && (
+                  <Alert variant='destructive' className='mx-3 mb-3 w-auto'>
+                    <AlertTitle>Host unavailable</AlertTitle>
+                    <AlertDescription>{connection.error}</AlertDescription>
+                    <AlertAction>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        disabled={model.busy}
+                        onClick={() => void actions.reconnectHost(connection.hostId)}
+                      >
+                        Retry
+                      </Button>
+                    </AlertAction>
+                  </Alert>
+                )}
               </Card>
             ))}
           </div>
@@ -125,19 +138,19 @@ export function ConnectionsDialog({ controller }: { controller: AlphaController 
             Pair a Host
           </div>
           <div className='grid gap-1.5'>
-            <Label htmlFor='pairing-code'>Pairing code</Label>
+            <Label htmlFor='pairing-token'>Pairing Token</Label>
             <Textarea
-              id='pairing-code'
+              id='pairing-token'
               required
-              rows={4}
-              value={pairingCode}
-              placeholder='Paste the JSON from `weave-portal pairing create`'
-              onChange={(event) => setPairingCode(event.target.value)}
+              rows={3}
+              value={pairingToken}
+              placeholder='Paste the Pairing Token from `weave-portal pairing create`'
+              onChange={(event) => setPairingToken(event.target.value)}
             />
           </div>
           <div className='grid gap-1.5 sm:grid-cols-2'>
             <div className='grid gap-1.5'>
-              <Label htmlFor='host-url'>Host URL (if omitted by code)</Label>
+              <Label htmlFor='host-url'>Host URL</Label>
               <Input
                 id='host-url'
                 value={hostUrl}
@@ -155,11 +168,14 @@ export function ConnectionsDialog({ controller }: { controller: AlphaController 
               />
             </div>
           </div>
-          {(pairingError || model.error) && (
-            <p className='text-destructive' role='alert'>{pairingError || model.error}</p>
+          {pairingError && (
+            <Alert variant='destructive'>
+              <AlertTitle>Couldn’t pair this Host</AlertTitle>
+              <AlertDescription>{pairingError}</AlertDescription>
+            </Alert>
           )}
           <DialogFooter>
-            <Button type='submit' disabled={model.busy || !pairingCode.trim()}>
+            <Button type='submit' disabled={model.busy || !pairingToken.trim()}>
               Pair and Connect
             </Button>
           </DialogFooter>

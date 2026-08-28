@@ -1,29 +1,43 @@
-import { HugeiconsIcon } from '@hugeicons/react';
+import type { ReactNode } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
   AiFile01Icon,
   ArrowLeft01Icon,
   Cancel01Icon,
-} from '@hugeicons/core-free-icons';
-import type { AlphaWorkspaceFileTab } from '@/app/alpha-controller';
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { cn } from '@/lib/utils';
+} from "@hugeicons/core-free-icons";
+import type { AlphaWorkspaceFileTab } from "@/app/alpha-controller";
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 
-const fileName = (path: string) => path.split('/').at(-1) || path;
+const fileName = (path: string) => path.split("/").at(-1) || path;
 
-function FileContent({ file }: { file: Extract<AlphaWorkspaceFileTab, { kind: 'text' }> }) {
+function FileContent(
+  { file }: { file: Extract<AlphaWorkspaceFileTab, { kind: "text" }> },
+) {
   return (
     <div
-      className='min-h-0 flex-1 overflow-auto bg-background px-3 py-2 font-mono text-xs/6'
-      role='region'
+      className="min-h-0 flex-1 overflow-auto bg-background px-3 py-2 font-mono text-xs/6"
+      role="region"
       aria-label={`${file.path} read-only preview`}
     >
-      <ol className='min-w-max list-decimal pl-10 marker:select-none marker:text-muted-foreground'>
-        {file.content.split('\n').map((line, index) => (
-          <li key={index} className='pl-4 pr-8'>
-            <code className='whitespace-pre'>{line || '\u00a0'}</code>
+      <ol className="min-w-max list-decimal pl-10 marker:select-none marker:text-muted-foreground">
+        {file.content.split("\n").map((line, index) => (
+          <li key={index} className="pl-4 pr-8">
+            <code className="whitespace-pre">{line || "\u00a0"}</code>
           </li>
         ))}
       </ol>
@@ -31,19 +45,21 @@ function FileContent({ file }: { file: Extract<AlphaWorkspaceFileTab, { kind: 't
   );
 }
 
-function UnavailableContent({ file }: { file: Extract<AlphaWorkspaceFileTab, { kind: 'unavailable' }> }) {
+function UnavailableContent(
+  { file }: { file: Extract<AlphaWorkspaceFileTab, { kind: "unavailable" }> },
+) {
   return (
-    <div className='flex min-h-0 flex-1 items-center justify-center p-6'>
-      <Empty className='max-w-sm'>
+    <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+      <Empty className="max-w-sm">
         <EmptyHeader>
-          <EmptyMedia variant='icon'>
+          <EmptyMedia variant="icon">
             <HugeiconsIcon icon={AiFile01Icon} strokeWidth={1.75} />
           </EmptyMedia>
           <EmptyTitle>Preview unavailable</EmptyTitle>
           <EmptyDescription>
-            {file.reason === 'unsupported'
-              ? 'This file is not UTF-8 text.'
-              : 'This file is too large to preview.'}
+            {file.reason === "unsupported"
+              ? "This file is not UTF-8 text."
+              : "This file is too large to preview."}
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -60,6 +76,7 @@ export function EditorPane({
   onCloseFile,
   onReloadFile,
   onReturnToThread,
+  footerActions,
 }: {
   files: AlphaWorkspaceFileTab[];
   activeFilePath?: string;
@@ -69,68 +86,86 @@ export function EditorPane({
   onCloseFile(path: string): void;
   onReloadFile(): void;
   onReturnToThread(): void;
+  footerActions?: ReactNode;
 }) {
-  const activeFile = files.find((file) => file.path === activeFilePath) ?? files[0];
+  const activeFile = files.find((file) => file.path === activeFilePath) ??
+    files[0];
   if (!activeFile) return null;
 
   return (
     <Tabs
       value={activeFile.path}
       onValueChange={onActivateFile}
-      className={cn('min-h-0 min-w-0 flex-1 gap-0 border-l bg-background', className)}
-      role='region'
-      aria-label='Editor Pane'
-      data-slot='editor-pane'
+      className={cn(
+        "min-h-0 min-w-0 flex-1 gap-0 border-l bg-background",
+        className,
+      )}
+      role="region"
+      aria-label="Editor Pane"
+      data-slot="editor-pane"
     >
-      <header className='flex h-11 shrink-0 items-center border-b bg-title-bar'>
+      <header className="flex h-11 shrink-0 items-center border-b bg-title-bar">
         <Button
-          type='button'
-          size='icon-sm'
-          variant='ghost'
-          className='ml-1 md:hidden'
-          aria-label='Return to Thread'
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="ml-1 md:hidden"
+          aria-label="Return to Thread"
           onClick={onReturnToThread}
         >
-          <HugeiconsIcon data-icon='inline-start' icon={ArrowLeft01Icon} strokeWidth={2} />
+          <HugeiconsIcon
+            data-icon="inline-start"
+            icon={ArrowLeft01Icon}
+            strokeWidth={2}
+          />
         </Button>
         <div
-          className='scrollbar-none h-full min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden'
-          data-slot='editor-tab-rail'
+          className="scrollbar-none h-full min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
+          data-slot="editor-tab-rail"
         >
           <TabsList
-            variant='editor'
-            className='h-full! w-max'
-            aria-label='Open files'
+            variant="editor"
+            className="h-full! w-max"
+            aria-label="Open files"
           >
             {files.map((file) => (
               <div
                 key={file.path}
-                data-slot='editor-tab'
-                data-active={file.path === activeFile.path ? '' : undefined}
+                data-slot="editor-tab"
+                data-active={file.path === activeFile.path ? "" : undefined}
                 className={cn(
-                  'flex h-full min-w-0 items-center',
-                  file.path === activeFile.path && 'bg-background',
+                  "flex h-full min-w-0 items-center",
+                  file.path === activeFile.path && "bg-background",
                 )}
               >
                 <TabsTrigger
                   value={file.path}
                   title={file.path}
-                  className='max-w-48 flex-none'
+                  className="max-w-48 flex-none"
                 >
-                  <span className='truncate'>{fileName(file.path)}</span>
-                  {file.kind === 'text' && file.changed && (
-                    <span className='text-muted-foreground' aria-label='Changed on the Host'>●</span>
+                  <span className="truncate">{fileName(file.path)}</span>
+                  {file.kind === "text" && file.changed && (
+                    <span
+                      className="text-muted-foreground"
+                      aria-label="Changed on the Host"
+                    >
+                      ●
+                    </span>
                   )}
                 </TabsTrigger>
                 <Button
-                  type='button'
-                  size='icon-xs'
-                  variant='ghost'
-                  className='mr-1'
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  className="mr-1"
                   aria-label={`Close ${file.path}`}
                   onClick={() => onCloseFile(file.path)}
                 >
-                  <HugeiconsIcon data-icon='inline-start' icon={Cancel01Icon} strokeWidth={2} />
+                  <HugeiconsIcon
+                    data-icon="inline-start"
+                    icon={Cancel01Icon}
+                    strokeWidth={2}
+                  />
                 </Button>
               </div>
             ))}
@@ -138,17 +173,22 @@ export function EditorPane({
         </div>
       </header>
 
-      <TabsContent value={activeFile.path} className='flex min-h-0 flex-1 flex-col overflow-hidden'>
-        {activeFile.kind === 'text' && activeFile.changed && (
-          <Alert className='m-2 w-auto shrink-0'>
+      <TabsContent
+        value={activeFile.path}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
+        {activeFile.kind === "text" && activeFile.changed && (
+          <Alert className="m-2 w-auto shrink-0">
             <AlertTitle>File changed on the Host</AlertTitle>
-            <AlertDescription>Reload to see the latest content.</AlertDescription>
+            <AlertDescription>
+              Reload to see the latest content.
+            </AlertDescription>
             <AlertAction>
               <Button
-                type='button'
-                size='xs'
-                variant='outline'
-                aria-label='Reload file'
+                type="button"
+                size="xs"
+                variant="outline"
+                aria-label="Reload file"
                 disabled={busy}
                 onClick={onReloadFile}
               >
@@ -157,15 +197,17 @@ export function EditorPane({
             </AlertAction>
           </Alert>
         )}
-        {activeFile.kind === 'text'
+        {activeFile.kind === "text"
           ? <FileContent file={activeFile} />
           : <UnavailableContent file={activeFile} />}
       </TabsContent>
 
       <footer
-        className='h-[var(--bottom-rail-height)] shrink-0 border-t bg-status-bar'
-        data-slot='editor-bottom-rail'
-      />
+        className="flex h-[var(--bottom-rail-height)] shrink-0 items-center border-t bg-status-bar px-1"
+        data-slot="editor-bottom-rail"
+      >
+        {footerActions && <div className="ml-auto">{footerActions}</div>}
+      </footer>
     </Tabs>
   );
 }

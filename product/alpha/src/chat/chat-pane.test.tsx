@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ElicitationSchema } from '@agentclientprotocol/sdk';
+import { Capacitor } from '@capacitor/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createAcpShowcaseTranscript } from './acp-showcase';
+import { createTranscript } from './acp-transcript';
 import { ChatPane, type ChatPaneActions } from './chat-pane';
 
 const actions = (): ChatPaneActions => ({
@@ -15,6 +17,22 @@ const actions = (): ChatPaneActions => ({
 });
 
 describe('ChatPane', () => {
+  it('focuses the composer when a new focus request arrives', () => {
+    const model = createTranscript('draft-thread');
+    const handlers = actions();
+    const { rerender } = render(
+      <ChatPane model={model} actions={handlers} />,
+    );
+    const composer = screen.getByRole('textbox', { name: 'Message agent' });
+    expect(composer).not.toHaveFocus();
+
+    rerender(
+      <ChatPane model={model} actions={handlers} focusRequest={1} />,
+    );
+
+    expect(composer).toHaveFocus();
+  });
+
   it('lets user bubbles grow to their responsive cap before wrapping', () => {
     render(<ChatPane model={createAcpShowcaseTranscript()} actions={actions()} />);
 
@@ -246,13 +264,17 @@ describe('ChatPane', () => {
     expect(screen.getByRole('textbox', { name: 'Message agent' }))
       .not.toHaveClass('text-base');
 
-    expect(screen.getByText('code')).toHaveClass('text-xs/relaxed');
-    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveClass('text-xs/relaxed');
-    expect(screen.getByText('Fast mode').closest('label')).toHaveClass('text-xs/relaxed');
+    const settings = screen.getByRole('button', {
+      name: 'Composer settings: GPT · Fast',
+    });
+    expect(settings).toHaveClass('text-xs/relaxed');
+    expect(settings).toHaveTextContent('GPT · Fast');
+    expect(screen.queryByRole('combobox', { name: 'Model' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Fast mode' })).not.toBeInTheDocument();
 
     const controls = container.querySelector('[data-slot="composer-controls"]');
     expect(controls).not.toHaveClass('border-t');
-    expect(container.querySelectorAll('[data-slot="select-trigger"][data-variant="ghost"]'))
+    expect(container.querySelectorAll('[data-slot="dropdown-menu-trigger"]'))
       .toHaveLength(1);
     expect(screen.queryByText('1 command')).not.toBeInTheDocument();
   });
@@ -267,7 +289,8 @@ describe('ChatPane', () => {
     expect(screen.getByText('Start a conversation with the agent.')).toBeVisible();
   });
 
-  it('prefers the modern mode config option over the legacy ACP modes surface', () => {
+  it('prefers the modern mode config option over the legacy ACP modes surface', async () => {
+    const user = userEvent.setup();
     const model = createAcpShowcaseTranscript();
     model.configOptions = [
       {
@@ -286,11 +309,12 @@ describe('ChatPane', () => {
 
     render(<ChatPane model={model} actions={actions()} />);
 
-    expect(screen.queryByRole('combobox', { name: 'Agent mode' })).not.toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'Mode' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Composer settings/ }));
+    expect(screen.getAllByRole('menuitem', { name: /Mode\s+Code/ })).toHaveLength(1);
   });
 
-  it('keeps legacy ACP modes as a fallback when no modern mode option is available', () => {
+  it('keeps legacy ACP modes as a fallback when no modern mode option is available', async () => {
+    const user = userEvent.setup();
     const model = createAcpShowcaseTranscript();
     model.availableModes = [
       { id: 'code', name: 'Code' },
@@ -299,7 +323,29 @@ describe('ChatPane', () => {
 
     render(<ChatPane model={model} actions={actions()} />);
 
-    expect(screen.getByRole('combobox', { name: 'Agent mode' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Composer settings/ }));
+    expect(screen.getByRole('menuitem', { name: /Mode\s+Code/ })).toBeInTheDocument();
+  });
+
+  it('routes select and boolean composer settings through one popup', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
+    render(<ChatPane model={createAcpShowcaseTranscript()} actions={handlers} />);
+
+    await user.click(screen.getByRole('button', {
+      name: 'Composer settings: GPT · Fast',
+    }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Fast mode' }))
+      .toBeChecked();
+
+    await user.click(screen.getByRole('menuitem', { name: /Model\s+GPT/ }));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Claude' }));
+    expect(handlers.setConfigOption).toHaveBeenCalledWith('model', 'claude');
+
+    await user.click(screen.getByRole('button', { name: /Composer settings/ }));
+    await user.click(screen.getByRole('menuitemcheckbox', { name: 'Fast mode' }));
+    expect(handlers.setConfigOption).toHaveBeenCalledWith('fast', false);
   });
 
   it('uses a paper plane with a mauve enabled state for Send', async () => {
@@ -335,7 +381,9 @@ describe('ChatPane', () => {
     expect(container.querySelector('[data-slot="config-controls-scroller"]'))
       .not.toBeInTheDocument();
     expect(container.querySelector('[data-slot="config-controls"]'))
-      .toHaveClass('min-w-0', 'flex-1', 'flex-wrap', 'gap-y-1');
+      .toHaveClass('min-w-0', 'max-w-full');
+    expect(container.querySelector('[data-slot="config-controls"]'))
+      .not.toHaveClass('flex-wrap', 'gap-y-1');
     expect(container.querySelector('[data-slot="composer-controls"]'))
       .toHaveClass('flex', 'items-end', 'gap-2');
     expect(container.querySelector('[data-slot="composer-actions"]'))
@@ -358,6 +406,25 @@ describe('ChatPane', () => {
     await user.click(screen.getByRole('button', { name: 'Send message' }));
     expect(composer).not.toHaveFocus();
 
+    matchMedia.mockRestore();
+  });
+
+  it('releases the native iPad composer after sending at tablet widths', async () => {
+    const user = userEvent.setup();
+    const nativePlatform = vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true);
+    const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: false,
+    } as MediaQueryList);
+    const model = { ...createAcpShowcaseTranscript(), sessionId: 'composer-native-tablet' };
+    render(<ChatPane model={model} actions={actions()} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Message agent' });
+    await user.type(composer, 'Hello from iPadOS');
+    expect(composer).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(composer).not.toHaveFocus();
+
+    nativePlatform.mockRestore();
     matchMedia.mockRestore();
   });
 

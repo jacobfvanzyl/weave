@@ -60,18 +60,11 @@ export const generatePortalKey = async (): Promise<UnpairedPortalKey> => {
 
 export const pairPortalCredential = async (
   baseUrl: string,
-  pairingCode: string,
+  pairingToken: string,
   label: string,
 ) => {
-  const offer = JSON.parse(pairingCode) as {
-    hostId?: unknown;
-    offerId?: unknown;
-    secret?: unknown;
-  };
-  if (
-    typeof offer.hostId !== 'string' || typeof offer.offerId !== 'string' ||
-    typeof offer.secret !== 'string'
-  ) throw new Error('Pairing code is invalid.');
+  const token = pairingToken.trim();
+  if (token.split('.').length !== 3) throw new Error('Pairing Token is invalid.');
   const key = await generatePortalKey();
   const socket = new WebSocket(
     `${baseUrl.replace(/\/$/, '')}${PORTAL_PAIR_PATH}`,
@@ -82,9 +75,7 @@ export const pairPortalCredential = async (
       socket.onopen = () =>
         socket.send(JSON.stringify({
           type: PORTAL_PAIR_REQUEST_TYPE,
-          hostId: offer.hostId,
-          offerId: offer.offerId,
-          secret: offer.secret,
+          token,
           label,
           publicKey: key.publicKey,
         }));

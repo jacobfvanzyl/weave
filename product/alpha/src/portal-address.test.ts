@@ -4,8 +4,10 @@ import { portalHostName, portalWebSocketUrl } from './portal-address';
 describe('Portal address', () => {
   it.each([
     ['127.0.0.1', 'ws://127.0.0.1:4122/rpc'],
-    ['bazzite', 'ws://bazzite:4122/rpc'],
-    ['bazzite:5000', 'ws://bazzite:5000/rpc'],
+    ['localhost', 'ws://localhost:4122/rpc'],
+    ['bazzite', 'wss://bazzite:4122/rpc'],
+    ['bazzite:5000', 'wss://bazzite:5000/rpc'],
+    ['jacos-macbook-air-1.tail4228ce.ts.net', 'wss://jacos-macbook-air-1.tail4228ce.ts.net:4122/rpc'],
     ['ws://bazzite', 'ws://bazzite:4122/rpc'],
     ['http://bazzite', 'ws://bazzite:4122/rpc'],
     ['https://portal.example.test', 'wss://portal.example.test:4122/rpc'],

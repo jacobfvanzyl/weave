@@ -11,15 +11,27 @@ Copy `portal.config.example.json` to the ignored `portal.config.json` and set ab
 Workspace paths. Agent commands are explicit so installation and version policy stay outside the runtime. A listener
 that is not loopback-only must use TLS and an explicit browser-origin allowlist.
 
-Start Portal, then create a short-lived, one-time pairing code for the device:
+Configured Workspaces seed the Portal project catalog, but the list may be empty. A paired administrative Alpha can
+choose this Portal and add an existing Host-local directory from the Projects sidebar. Portal validates and
+canonicalizes the absolute path, persists the resulting Workspace in `workspaces.json`, and makes it available without
+rewriting the config file. Registration does not clone repositories or create missing directories.
+
+For Git Workspaces, Portal resolves the repository top-level and fetch remotes, preferring `upstream`, then `origin`,
+then the first remote alphabetically. SSH and HTTP(S) remote URLs normalize to the same lowercase
+`host/owner/repository` identity. Alpha uses that identity to present matching physical Workspaces from several Hosts
+as one logical Project while retaining each Host-specific Workspace as an execution and filesystem target. Non-Git
+Workspaces remain Host-scoped.
+
+Start Portal, then create a short-lived, one-time Pairing Token for the device:
 
 ```bash
 deno task dev
-deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json --name "Jaco's iPad"
+deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json
 ```
 
-Paste the complete JSON output into Alpha's Connections dialog. Alpha generates a P-256 key on the device and sends
-only its public key to Portal. On iOS the private key is stored in the Secure Enclave when available, with a
+Paste the compact JWT output into Alpha's Connections dialog and enter the Portal Host URL separately. The URL is
+deliberately not embedded in the bearer token, so altered unverified routing data cannot redirect it to another Host.
+Alpha generates a P-256 key on the device and sends only its public key to Portal. On iOS the private key is stored in the Secure Enclave when available, with a
 ThisDeviceOnly Keychain fallback. Portal stores public credentials, grants, and audit records in its state directory.
 It never rotates a device credential automatically.
 
@@ -32,6 +44,43 @@ deno run --allow-read --allow-write src/main.ts credential revoke --config porta
 
 See [Portal security](./SECURITY.md) for the trust model, rollover behavior, and TLS requirements.
 
+## Zed External Agent
+
+While `weave-portal serve` is running, Portal also exposes a mode-`0600` host-local Unix socket for standard ACP
+clients. Configure Zed with the compiled `weave-portal` command and the same Portal config used by the daemon:
+
+```json
+{
+  "agent_servers": {
+    "weave-product-codex": {
+      "type": "custom",
+      "command": "/absolute/path/to/weave-portal",
+      "args": [
+        "acp",
+        "connect",
+        "--config",
+        "/absolute/path/to/portal.config.json",
+        "--agent",
+        "codex"
+      ]
+    }
+  }
+}
+```
+
+Zed launches the command in the current project directory. Portal canonicalizes that path, chooses the narrowest
+configured Workspace containing it, and rejects paths outside every configured Workspace. Pass `--workspace <id>`
+after the Agent ID only for an explicit configured Workspace selection.
+
+The adapter advertises standard ACP session list, load, resume, and close capabilities. Listed session IDs are stable,
+opaque identities scoped by the Portal Host and logical Thread; provider session replacement during recovery does not
+change them. Load replays Portal's journal, resume reattaches without replay, and close only detaches Zed. The adapter
+does not advertise or implement ACP delete, and Zed archive state does not change Portal archive state. Portal-archived
+Threads remain discoverable but must be restored in Alpha before Zed can attach to them.
+
+Open Zed's Threads Sidebar, switch to Thread History, and choose **Import Threads**. Only sessions whose configured
+Workspace has a valid path in that Zed context can be imported. Use `dev: open acp logs` in Zed to inspect the exchange.
+
 ## Verify
 
 ```bash
@@ -40,9 +89,25 @@ deno task test
 deno task build
 ```
 
-The test suite starts the real Portal transport and a fake ACP subprocess, then creates, lists, attaches to, and prompts
-a Thread. It also exercises restart recovery, native replay cursors, bounded retention, acknowledgement gaps,
-unpaired-key rejection, explicit credential rollover, and the Workspace filesystem contract.
+On macOS, create a build whose privacy grants survive compatible Portal upgrades by signing it with a stable Apple
+code-signing identity and identifier:
+
+```bash
+WEAVE_PORTAL_CODESIGN_IDENTITY="Apple Development: developer@example.com (TEAMID)" \
+  deno task build:macos-signed
+```
+
+The signed task uses `xyz.veezee.weave.portal` by default. Override it only when packaging under another permanent
+product identity by setting `WEAVE_PORTAL_CODESIGN_IDENTIFIER`. The portable `build` task deliberately remains
+unsigned for CI and non-Mac development. Verify an installed binary with
+`codesign --verify --strict --verbose=2 /path/to/weave-portal` and
+`codesign --display --requirements - /path/to/weave-portal`.
+
+The test suite starts the real Portal transport and a fake ACP subprocess, then registers and reloads Projects and
+creates, lists, attaches to, prompts,
+archives, and restores a Thread. It also exercises lifecycle authorization and audit records, busy-prompt rejection,
+restart recovery, native replay cursors, bounded retention, acknowledgement gaps, unpaired-key rejection, explicit
+credential rollover, and the Workspace filesystem contract.
 
 Workspace filesystem paths are canonical relative paths; absolute, traversal, Windows-style, and symbolic-link paths
 are rejected without exposing Host paths. Text writes are create-only or conditioned on the current full SHA-256 hash.
@@ -58,7 +123,7 @@ For a real Agent acceptance against an already running Portal:
 
 ```bash
 PORTAL_URL=ws://127.0.0.1:4122 \
-PORTAL_PAIRING_CODE="$(deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json --name acceptance)" \
+PORTAL_PAIRING_TOKEN="$(deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json)" \
 PORTAL_WORKSPACE_ID=workspace \
 PORTAL_AGENT_ID=codex \
 PORTAL_ACCEPTANCE_MARKER=PORTAL_ACCEPTANCE_OK \
@@ -70,7 +135,7 @@ The filesystem acceptance is Agent-independent and creates and removes only a un
 
 ```bash
 PORTAL_URL=ws://127.0.0.1:4122 \
-PORTAL_PAIRING_CODE="$(deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json --name filesystem-acceptance)" \
+PORTAL_PAIRING_TOKEN="$(deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json)" \
 PORTAL_WORKSPACE_ID=workspace \
 deno task acceptance:filesystem
 ```
@@ -85,7 +150,17 @@ timestamps, per-Thread sequences, and compaction watermarks survive daemon resta
 each Thread to 10,000 retained events by default; native clients behind the durable watermark receive `RESUME_GAP`
 instead of a partial replay.
 
+Portal also writes Alpha-registered Workspaces to `workspaces.json` with mode `0600`. Configured Workspaces remain
+authoritative seeds; dynamic entries retain stable Workspace IDs across restarts and are loaded into the same bounded
+filesystem and Thread runtime services.
+
 Portal persists each provider generation separately from the Thread catalog. A failed provider is fenced, an interrupted
 prompt returns `PROMPT_UNCERTAIN`, and recovery attempts advertised `session/resume` before falling back to
 `session/load`. Provider transcript replay during recovery is suppressed because the Host journal remains authoritative.
 Agents that support neither operation leave the logical Thread attached but explicitly unavailable with `CANNOT_RESUME`.
+
+Archived Threads remain in the catalog and journal but are omitted from the default active list. Portal rejects archive
+while a prompt is active, disconnects idle attachments when archiving, and refuses new attachments until restoration.
+Restoring preserves the same Thread and provider session identities so the normal recovery path can resume its history.
+Archive and restore use the existing Thread attachment grant and write audit records containing stable identifiers,
+never prompt or transcript content.

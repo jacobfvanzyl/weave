@@ -14,7 +14,7 @@ import {
   WORKSPACE_FILE_WATCH_EVENT_METHOD,
 } from '@weave/product-protocol';
 import { error, type JsonRpcMessage, parseJsonRpcMessage, result } from './json-rpc.ts';
-import { Portal } from './portal.ts';
+import { Portal, PortalThreadLifecycleError } from './portal.ts';
 import { type PortalPrincipal, PortalSecurityError } from './security.ts';
 import { WorkspaceFileError } from './workspace-files.ts';
 
@@ -185,6 +185,8 @@ const rpcWebSocket = (request: Request, portal: Portal) => {
         upgraded.socket,
         cause instanceof WorkspaceFileError
           ? error(message.id, -32010, cause.message, cause.data)
+          : cause instanceof PortalThreadLifecycleError
+          ? error(message.id, -32011, cause.message, cause.data)
           : cause instanceof PortalSecurityError
           ? error(message.id, -32003, cause.message, {
             code: cause.code,
@@ -235,6 +237,7 @@ const acpWebSocket = (request: Request, portal: Portal) => {
           principal,
           threadId,
           (message) => send(upgraded.socket, message),
+          (reason) => upgraded.socket.close(1000, reason),
         );
         stopMonitor = activeCredentialMonitor(
           portal,

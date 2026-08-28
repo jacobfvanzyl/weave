@@ -125,6 +125,30 @@ for await (const line of readLines(Deno.stdin.readable)) {
     const prompt = (message.params as { prompt?: Array<{ text?: unknown }> } | undefined)?.prompt
       ?.map((content) => typeof content.text === 'string' ? content.text : '')
       .join('') ?? '';
+    const renamedTitle = prompt.startsWith('RENAME_TO:') ? prompt.slice('RENAME_TO:'.length) : undefined;
+    const titleUpdate = renamedTitle !== undefined
+      ? { sessionId: activeSessionId, title: renamedTitle }
+      : prompt === 'CLEAR_TITLE'
+      ? { sessionId: activeSessionId, title: null }
+      : prompt.startsWith('RENAME_WRONG_SESSION_TO:')
+      ? {
+        sessionId: 'wrong-session',
+        title: prompt.slice('RENAME_WRONG_SESSION_TO:'.length),
+      }
+      : undefined;
+    if (titleUpdate) {
+      await send({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: titleUpdate.sessionId,
+          update: {
+            sessionUpdate: 'session_info_update',
+            title: titleUpdate.title,
+          },
+        },
+      });
+    }
     if (prompt.includes('CRASH_WITH_STALE')) {
       new Deno.Command(Deno.execPath(), {
         args: [

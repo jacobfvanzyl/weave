@@ -6,6 +6,7 @@ type StoredCatalog = { version: 1; threads: ThreadSummary[] };
 export class ThreadCatalog {
   readonly #path: string;
   readonly #threads = new Map<string, ThreadSummary>();
+  #mutationQueue = Promise.resolve();
 
   constructor(stateDirectory: string) {
     this.#path = join(stateDirectory, 'threads.json');
@@ -24,8 +25,10 @@ export class ThreadCatalog {
     }
   }
 
-  list() {
-    return [...this.#threads.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  list(status: 'active' | 'archived' | 'all' = 'all') {
+    return [...this.#threads.values()]
+      .filter((thread) => status === 'all' || thread.status === status)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   get(threadId: string) {
@@ -33,8 +36,38 @@ export class ThreadCatalog {
   }
 
   async put(thread: ThreadSummary) {
-    this.#threads.set(thread.threadId, thread);
-    await this.#persist();
+    await this.#mutate(() => this.#threads.set(thread.threadId, thread));
+  }
+
+  async setArchived(threadId: string, archived: boolean) {
+    let changed: ThreadSummary | undefined;
+    await this.#mutate(() => {
+      const current = this.#threads.get(threadId);
+      if (!current) return;
+      const status = archived ? 'archived' as const : 'active' as const;
+      if (current.status === status) {
+        changed = current;
+        return;
+      }
+      const now = new Date().toISOString();
+      changed = {
+        ...current,
+        status,
+        updatedAt: now,
+        ...(archived ? { archivedAt: now } : { archivedAt: undefined }),
+      };
+      this.#threads.set(threadId, changed);
+    });
+    return changed;
+  }
+
+  async #mutate(operation: () => void) {
+    const result = this.#mutationQueue.then(async () => {
+      operation();
+      await this.#persist();
+    });
+    this.#mutationQueue = result.then(() => undefined, () => undefined);
+    await result;
   }
 
   async #persist() {

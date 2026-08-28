@@ -8,13 +8,15 @@ import {
   WORKSPACE_FILE_RPC_METHODS,
   type WorkspaceFileWatchNotification,
 } from '@weave/product-protocol';
+import { isAbsolute, relative } from 'jsr:@std/path@1.1.2';
 import { ThreadCatalog } from './catalog.ts';
 import type { AgentDefinition, PortalConfig, WorkspaceDefinition } from './config.ts';
 import type { JsonRpcMessage } from './json-rpc.ts';
 import { RuntimeStateStore } from './runtime-state.ts';
 import { type PortalAction, type PortalPrincipal, PortalSecurity, PortalSecurityError } from './security.ts';
 import { ThreadEventJournal } from './thread-journal.ts';
-import { HostedThread, type ThreadAttachment } from './thread-runtime.ts';
+import { HostedThread, type ThreadAttachment, ThreadPromptActiveError } from './thread-runtime.ts';
+import { type RegisteredWorkspace, WorkspaceCatalog, workspaceSummary } from './workspace-catalog.ts';
 import { WorkspaceFileService, type WorkspaceFileWatchSession } from './workspace-files.ts';
 
 export class PortalRpcSession {
@@ -68,31 +70,57 @@ export class PortalRpcSession {
   }
 }
 
+export class PortalThreadLifecycleError extends Error {
+  readonly data: { domain: 'thread-lifecycle'; code: 'THREAD_BUSY' };
+
+  constructor() {
+    super('Stop the active prompt before archiving this Thread.');
+    this.name = 'PortalThreadLifecycleError';
+    this.data = { domain: 'thread-lifecycle', code: 'THREAD_BUSY' };
+  }
+}
+
+export type LocalAcpContext = {
+  hostId: string;
+  agentId: string;
+  agentName: string;
+  workspaceId: string;
+  workspaceName: string;
+  cwd: string;
+};
+
 export class Portal {
   readonly #catalog: ThreadCatalog;
   readonly #journal: ThreadEventJournal;
   readonly #runtimeStates: RuntimeStateStore;
   readonly #workspaceFiles: WorkspaceFileService;
+  readonly #workspaceCatalog: WorkspaceCatalog;
   readonly security: PortalSecurity;
-  readonly #workspaces: Map<string, WorkspaceDefinition>;
+  readonly #workspaces: Map<string, RegisteredWorkspace>;
   readonly #agents: Map<string, AgentDefinition>;
   readonly #runtimes = new Map<string, Promise<HostedThread>>();
+  readonly #drafts = new Map<string, ThreadSummary>();
+  #lifecycleQueue = Promise.resolve();
 
   private constructor(
     readonly config: PortalConfig,
     catalog: ThreadCatalog,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
+    workspaceCatalog: WorkspaceCatalog,
     workspaceFiles: WorkspaceFileService,
     security: PortalSecurity,
   ) {
     this.#catalog = catalog;
     this.#journal = journal;
     this.#runtimeStates = runtimeStates;
+    this.#workspaceCatalog = workspaceCatalog;
     this.#workspaceFiles = workspaceFiles;
     this.security = security;
     this.#workspaces = new Map(
-      config.workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+      workspaceCatalog.list().map((
+        workspace,
+      ) => [workspace.workspaceId, workspace]),
     );
     this.#agents = new Map(
       config.agents.map((agent) => [agent.agentId, agent]),
@@ -101,6 +129,11 @@ export class Portal {
 
   static async open(config: PortalConfig) {
     const catalog = new ThreadCatalog(config.stateDirectory);
+    const workspaceCatalog = await WorkspaceCatalog.open(
+      config.stateDirectory,
+      config.workspaces,
+    );
+    const workspaces = workspaceCatalog.list();
     const [, journal, runtimeStates, workspaceFiles, security] = await Promise
       .all([
         catalog.load(),
@@ -109,14 +142,18 @@ export class Portal {
           config.threadEventRetentionLimit,
         ),
         RuntimeStateStore.open(config.stateDirectory),
-        WorkspaceFileService.open(config.workspaces),
-        PortalSecurity.open(config),
+        WorkspaceFileService.open(workspaces),
+        PortalSecurity.open(
+          config,
+          workspaces.map(({ workspaceId }) => workspaceId),
+        ),
       ]);
     return new Portal(
       config,
       catalog,
       journal,
       runtimeStates,
+      workspaceCatalog,
       workspaceFiles,
       security,
     );
@@ -142,10 +179,14 @@ export class Portal {
           },
           capabilities: [
             'workspace.list',
+            'workspace.add',
             'agent.list',
             'thread.list',
             'thread.create',
+            'thread.draft',
             'thread.attach',
+            'thread.archive',
+            'thread.restore',
             'credential.rotate',
             'credential.revoke',
             ...WORKSPACE_FILE_RPC_METHODS,
@@ -154,14 +195,26 @@ export class Portal {
         } as PortalRpcResult<Method>;
       case 'workspace.list':
         return {
-          workspaces: this.config.workspaces
+          workspaces: [...this.#workspaces.values()]
             .filter(({ workspaceId }) =>
               this.security.allows(principal, 'workspace.inspect', {
                 workspaceId,
               })
             )
-            .map(({ workspaceId, name }) => ({ workspaceId, name })),
+            .map(workspaceSummary),
         } as PortalRpcResult<Method>;
+      case 'workspace.add': {
+        const input = params as PortalRpcParams<'workspace.add'>;
+        const workspace = await this.#workspaceCatalog.add(input);
+        if (!this.#workspaces.has(workspace.workspaceId)) {
+          await this.#workspaceFiles.addRoot(workspace);
+          this.#workspaces.set(workspace.workspaceId, workspace);
+        }
+        await this.security.registerWorkspace(principal, workspace.workspaceId);
+        return { workspace: workspaceSummary(workspace) } as PortalRpcResult<
+          Method
+        >;
+      }
       case 'agent.list':
         return {
           agents: this.config.agents
@@ -172,7 +225,9 @@ export class Portal {
         >;
       case 'thread.list':
         return {
-          threads: this.#catalog.list().filter((thread) =>
+          threads: this.#catalog.list(
+            (params as PortalRpcParams<'thread.list'>).status ?? 'active',
+          ).filter((thread) =>
             this.security.allows(principal, 'thread.inspect', {
               threadId: thread.threadId,
               workspaceId: thread.workspaceId,
@@ -182,19 +237,28 @@ export class Portal {
         } as PortalRpcResult<Method>;
       case 'thread.create': {
         const input = params as PortalRpcParams<'thread.create'>;
-        const workspace = this.#workspace(input.workspaceId);
-        const agent = this.#agent(input.agentId);
-        const runtime = await HostedThread.create(
-          workspace,
-          agent,
-          input.title,
-          (thread) => this.#catalog.put(thread),
-          this.#journal,
-          this.#runtimeStates,
-        );
-        this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
-        await this.#catalog.put(runtime.thread);
-        return { thread: runtime.thread } as PortalRpcResult<Method>;
+        return {
+          thread: await this.#createThread(
+            input.workspaceId,
+            input.agentId,
+            input.title,
+          ),
+        } as PortalRpcResult<Method>;
+      }
+      case 'thread.draft.create': {
+        const input = params as PortalRpcParams<'thread.draft.create'>;
+        return {
+          thread: await this.#createDraftThread(
+            input.workspaceId,
+            input.agentId,
+            input.title,
+          ),
+        } as PortalRpcResult<Method>;
+      }
+      case 'thread.draft.discard': {
+        const input = params as PortalRpcParams<'thread.draft.discard'>;
+        await this.#discardDraftThread(input.threadId);
+        return { discarded: true } as PortalRpcResult<Method>;
       }
       case 'thread.attach': {
         const input = params as PortalRpcParams<'thread.attach'>;
@@ -207,6 +271,52 @@ export class Portal {
             cwd: this.#workspace(thread.workspaceId).path,
           },
         } as PortalRpcResult<Method>;
+      }
+      case 'thread.archive': {
+        const input = params as PortalRpcParams<'thread.archive'>;
+        return await this.#mutateLifecycle(async () => {
+          const current = this.#catalogThread(input.threadId);
+          const changed = current.status !== 'archived';
+          if (changed) {
+            const runtime = this.#runtimes.get(input.threadId);
+            if (runtime) {
+              try {
+                await (await runtime).archive();
+              } catch (cause) {
+                if (cause instanceof ThreadPromptActiveError) {
+                  throw new PortalThreadLifecycleError();
+                }
+                throw cause;
+              }
+              this.#runtimes.delete(input.threadId);
+            }
+          }
+          const thread = changed ? await this.#catalog.setArchived(input.threadId, true) : current;
+          if (!thread) throw new Error('Thread is unavailable.');
+          await this.security.auditThreadLifecycle(
+            principal,
+            'thread.archived',
+            thread,
+            changed,
+          );
+          return { thread } as PortalRpcResult<Method>;
+        });
+      }
+      case 'thread.restore': {
+        const input = params as PortalRpcParams<'thread.restore'>;
+        return await this.#mutateLifecycle(async () => {
+          const current = this.#catalogThread(input.threadId);
+          const changed = current.status === 'archived';
+          const thread = changed ? await this.#catalog.setArchived(input.threadId, false) : current;
+          if (!thread) throw new Error('Thread is unavailable.');
+          await this.security.auditThreadLifecycle(
+            principal,
+            'thread.restored',
+            thread,
+            changed,
+          );
+          return { thread } as PortalRpcResult<Method>;
+        });
       }
       case 'credential.rotate': {
         const input = params as PortalRpcParams<'credential.rotate'>;
@@ -286,17 +396,26 @@ export class Portal {
       agentId?: string;
       threadId?: string;
     };
-    if (method === 'thread.create') {
+    if (method === 'thread.create' || method === 'thread.draft.create') {
       await this.security.authorize(principal, 'thread.create', input);
       await this.security.authorize(principal, 'agent.use', input);
       return;
     }
-    if (method === 'thread.attach') {
+    if (
+      method === 'thread.attach' || method === 'thread.draft.discard' ||
+      method === 'thread.archive' ||
+      method === 'thread.restore'
+    ) {
       let thread: ThreadSummary;
       try {
-        thread = this.#thread(input.threadId ?? '');
+        thread = method === 'thread.attach' || method === 'thread.draft.discard'
+          ? this.#thread(input.threadId ?? '')
+          : this.#catalogThread(input.threadId ?? '');
       } catch {
-        throw new PortalSecurityError('RESOURCE_UNAVAILABLE', 'Resource is unavailable.');
+        throw new PortalSecurityError(
+          'RESOURCE_UNAVAILABLE',
+          'Resource is unavailable.',
+        );
       }
       await this.security.authorize(principal, 'thread.attach', {
         threadId: thread.threadId,
@@ -309,6 +428,8 @@ export class Portal {
       ? 'portal.inspect'
       : method === 'workspace.list'
       ? 'workspace.inspect'
+      : method === 'workspace.add'
+      ? 'workspace.manage'
       : method === 'agent.list'
       ? 'agent.use'
       : method === 'thread.list'
@@ -343,6 +464,7 @@ export class Portal {
     principal: PortalPrincipal,
     threadId: string,
     send: (message: JsonRpcMessage) => void,
+    disconnect?: (reason: string) => void,
   ): Promise<ThreadAttachment> {
     const thread = this.#thread(threadId);
     await this.security.authorize(principal, 'thread.attach', {
@@ -350,7 +472,81 @@ export class Portal {
       workspaceId: thread.workspaceId,
       agentId: thread.agentId,
     });
-    return (await this.#runtime(threadId)).connect(send);
+    return (await this.#runtime(threadId)).connect(send, disconnect);
+  }
+
+  async resolveLocalAcpContext(input: {
+    agentId: string;
+    workspaceId?: string;
+    workspacePath?: string;
+  }): Promise<LocalAcpContext> {
+    const agent = this.#agent(input.agentId);
+    let workspace: WorkspaceDefinition | undefined;
+    if (input.workspaceId) {
+      workspace = this.#workspace(input.workspaceId);
+    } else if (input.workspacePath) {
+      const path = await Deno.realPath(input.workspacePath);
+      const candidates = await Promise.all(
+        [...this.#workspaces.values()].map(async (candidate) => ({
+          definition: candidate,
+          path: await Deno.realPath(candidate.path),
+        })),
+      );
+      workspace = candidates
+        .filter((candidate) => {
+          const fromRoot = relative(candidate.path, path);
+          return fromRoot === '' ||
+            (!fromRoot.startsWith('..') && !isAbsolute(fromRoot));
+        })
+        .sort((left, right) => right.path.length - left.path.length)[0]
+        ?.definition;
+    }
+    if (!workspace) throw new Error('Workspace is unavailable.');
+    return {
+      hostId: this.security.hostId,
+      agentId: agent.agentId,
+      agentName: agent.name,
+      workspaceId: workspace.workspaceId,
+      workspaceName: workspace.name,
+      cwd: workspace.path,
+    };
+  }
+
+  listLocalAcpThreads(context: LocalAcpContext) {
+    this.#assertLocalAcpContext(context);
+    return this.#catalog.list('all').filter((thread) =>
+      thread.status !== 'closed' &&
+      thread.agentId === context.agentId &&
+      thread.workspaceId === context.workspaceId
+    );
+  }
+
+  async createLocalAcpThread(context: LocalAcpContext, title?: string) {
+    this.#assertLocalAcpContext(context);
+    return await this.#createThread(
+      context.workspaceId,
+      context.agentId,
+      title,
+    );
+  }
+
+  async connectLocalAcpThread(
+    context: LocalAcpContext,
+    threadId: string,
+    send: (message: JsonRpcMessage) => void,
+  ) {
+    this.#assertLocalAcpContext(context);
+    const thread = this.#thread(threadId);
+    if (
+      thread.workspaceId !== context.workspaceId ||
+      thread.agentId !== context.agentId
+    ) {
+      throw new Error('Thread is unavailable.');
+    }
+    const runtime = await this.#runtime(threadId);
+    return Object.assign(runtime.connect(send), {
+      acpSessionId: runtime.thread.acpSessionId,
+    });
   }
 
   async close() {
@@ -359,15 +555,37 @@ export class Portal {
       runtimes.flatMap((result) => result.status === 'fulfilled' ? [result.value.close()] : []),
     );
     this.#runtimes.clear();
+    const draftIds = [...this.#drafts.keys()];
+    this.#drafts.clear();
+    await Promise.all(draftIds.map(async (threadId) => {
+      await this.#journal.clearIfNoConversation(threadId).catch(() => undefined);
+      await this.#runtimeStates.delete(threadId).catch(() => undefined);
+    }));
     this.#workspaceFiles.close();
   }
 
   #thread(threadId: string): ThreadSummary {
-    const thread = this.#catalog.get(threadId);
-    if (!thread || thread.status !== 'active') {
+    const draft = this.#drafts.get(threadId);
+    if (draft) return draft;
+    const thread = this.#catalogThread(threadId);
+    if (thread.status !== 'active') {
       throw new Error(`Thread is unavailable: ${threadId}`);
     }
     return thread;
+  }
+
+  #catalogThread(threadId: string): ThreadSummary {
+    const thread = this.#catalog.get(threadId);
+    if (!thread || thread.status === 'closed') {
+      throw new Error(`Thread is unavailable: ${threadId}`);
+    }
+    return thread;
+  }
+
+  async #mutateLifecycle<Result>(operation: () => Promise<Result>) {
+    const result = this.#lifecycleQueue.then(operation);
+    this.#lifecycleQueue = result.then(() => undefined, () => undefined);
+    return await result;
   }
 
   #workspace(workspaceId: string) {
@@ -380,6 +598,75 @@ export class Portal {
     const agent = this.#agents.get(agentId);
     if (!agent) throw new Error(`Agent is unavailable: ${agentId}`);
     return agent;
+  }
+
+  #assertLocalAcpContext(context: LocalAcpContext) {
+    if (
+      context.hostId !== this.security.hostId ||
+      this.#workspace(context.workspaceId).path !== context.cwd ||
+      this.#agent(context.agentId).name !== context.agentName
+    ) {
+      throw new Error('Local ACP context is unavailable.');
+    }
+  }
+
+  async #createThread(workspaceId: string, agentId: string, title?: string) {
+    const workspace = this.#workspace(workspaceId);
+    const agent = this.#agent(agentId);
+    const runtime = await HostedThread.create(
+      workspace,
+      agent,
+      title,
+      (thread) => this.#catalog.put(thread),
+      this.#journal,
+      this.#runtimeStates,
+    );
+    this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
+    await this.#catalog.put(runtime.thread);
+    return runtime.thread;
+  }
+
+  async #createDraftThread(workspaceId: string, agentId: string, title?: string) {
+    const workspace = this.#workspace(workspaceId);
+    const agent = this.#agent(agentId);
+    const runtime = await HostedThread.create(
+      workspace,
+      agent,
+      title,
+      async (thread) => {
+        if (this.#catalog.get(thread.threadId)) await this.#catalog.put(thread);
+      },
+      this.#journal,
+      this.#runtimeStates,
+      (thread) => this.#promoteDraftThread(thread),
+    );
+    this.#drafts.set(runtime.thread.threadId, runtime.thread);
+    this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
+    return runtime.thread;
+  }
+
+  async #promoteDraftThread(thread: ThreadSummary) {
+    await this.#mutateLifecycle(async () => {
+      if (!this.#drafts.delete(thread.threadId)) return;
+      thread.updatedAt = new Date().toISOString();
+      await this.#catalog.put(thread);
+    });
+  }
+
+  async #discardDraftThread(threadId: string) {
+    await this.#mutateLifecycle(async () => {
+      if (!this.#drafts.has(threadId)) {
+        throw new Error(`Thread draft is unavailable: ${threadId}`);
+      }
+      const runtime = this.#runtimes.get(threadId);
+      if (runtime) await (await runtime).close('Thread draft was discarded.');
+      this.#runtimes.delete(threadId);
+      this.#drafts.delete(threadId);
+      if (!await this.#journal.clearIfNoConversation(threadId)) {
+        throw new Error(`Thread draft contains conversation data: ${threadId}`);
+      }
+      await this.#runtimeStates.delete(threadId);
+    });
   }
 
   #runtime(threadId: string) {

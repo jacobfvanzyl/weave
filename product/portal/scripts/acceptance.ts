@@ -14,7 +14,7 @@ const notificationText = (messages: JsonRpcMessage[]) =>
   }).join('');
 
 const baseUrl = required('PORTAL_URL').replace(/\/$/, '');
-const credential = await pairPortalCredential(baseUrl, required('PORTAL_PAIRING_CODE'), 'Portal acceptance');
+const credential = await pairPortalCredential(baseUrl, required('PORTAL_PAIRING_TOKEN'), 'Portal acceptance');
 const workspaceId = required('PORTAL_WORKSPACE_ID');
 const agentId = required('PORTAL_AGENT_ID');
 const marker = required('PORTAL_ACCEPTANCE_MARKER');

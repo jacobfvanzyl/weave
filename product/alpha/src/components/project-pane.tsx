@@ -127,12 +127,16 @@ function ProjectTreeEntry({
 export function ProjectPane({
   files,
   hasActiveThread = true,
+  reconnecting = false,
+  capacitorPlatform = false,
   busy,
   onOpenDirectory,
   onOpenFile,
 }: {
   files?: AlphaWorkspaceFiles;
   hasActiveThread?: boolean;
+  reconnecting?: boolean;
+  capacitorPlatform?: boolean;
   busy: boolean;
   onOpenDirectory(path: string): Promise<void> | void;
   onOpenFile(path: string): void;
@@ -168,6 +172,7 @@ export function ProjectPane({
       aria-label={files ? `${files.workspaceName} Project Pane` : 'Project Pane'}
       data-slot='project-pane'
       className='border-l-0'
+      aria-busy={reconnecting}
     >
       <SidebarHeader className='h-11 shrink-0 justify-center gap-0 border-b border-l border-sidebar-border bg-title-bar px-2 py-0'>
         <div className='flex min-w-0 items-center gap-1'>
@@ -177,14 +182,30 @@ export function ProjectPane({
             strokeWidth={1.75}
             className='shrink-0 text-icon-muted'
           />
-          <span className='min-w-0 flex-1 truncate text-xs font-medium'>
-            {files?.workspaceName || 'Project'}
-          </span>
+          {reconnecting
+            ? <SidebarMenuSkeleton className='h-6 flex-1 px-1' />
+            : (
+              <span className='min-w-0 flex-1 truncate text-xs font-medium'>
+                {files?.workspaceName || 'Project'}
+              </span>
+            )}
         </div>
       </SidebarHeader>
 
       <SidebarContent className='border-l border-sidebar-border'>
-        {files
+        {reconnecting
+          ? (
+            <SidebarGroup data-slot='reconnecting-project-pane' aria-label='Reconnecting project'>
+              <SidebarGroupContent className='space-y-1'>
+                <SidebarMenuSkeleton showIcon />
+                <SidebarMenuSkeleton showIcon />
+                <SidebarMenuSkeleton showIcon />
+                <SidebarMenuSkeleton showIcon />
+                <SidebarMenuSkeleton showIcon />
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )
+          : files
           ? (
             <>
               <SidebarGroup>
@@ -242,7 +263,11 @@ export function ProjectPane({
 
       <SidebarFooter className='h-[var(--bottom-rail-height)] shrink-0 justify-center gap-0 border-t border-sidebar-border bg-status-bar p-0'>
         <div className='flex justify-end px-1'>
-          <ProjectPaneToggle action='Hide' onClick={toggleSidebar} />
+          <ProjectPaneToggle
+            action='Hide'
+            capacitorInset={capacitorPlatform}
+            onClick={toggleSidebar}
+          />
         </div>
       </SidebarFooter>
     </Sidebar>

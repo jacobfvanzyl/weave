@@ -28,11 +28,19 @@ export type ThreadAttachment = {
   close(): void;
 };
 
+export class ThreadPromptActiveError extends Error {
+  constructor() {
+    super('Stop the active prompt before archiving this Thread.');
+    this.name = 'ThreadPromptActiveError';
+  }
+}
+
 type Attachment = {
   attachmentId: string;
   acknowledgedSequence: number;
   threadEventsEnabled: boolean;
   send(message: JsonRpcMessage): void;
+  disconnect(reason: string): void;
 };
 type ClientPending = {
   attachment: Attachment;
@@ -43,6 +51,7 @@ type ClientPending = {
 };
 type AgentPending = { attachmentId: string; providerId: JsonRpcId };
 type ThreadChanged = (thread: ThreadSummary) => Promise<void>;
+type ThreadPromoted = (thread: ThreadSummary) => Promise<void>;
 
 const promptContentFrom = (params: unknown): unknown[] => {
   if (!params || typeof params !== 'object' || Array.isArray(params)) return [];
@@ -83,6 +92,7 @@ export class HostedThread {
   readonly #clientPending = new Map<string, ClientPending>();
   readonly #agentPending = new Map<string, AgentPending>();
   readonly #onThreadChanged: ThreadChanged;
+  #onFirstPrompt?: ThreadPromoted;
   #activePromptAttachmentId?: string;
   #submittedPromptEchoes: string[] = [];
   #nextForwardedId = 0;
@@ -92,6 +102,7 @@ export class HostedThread {
   #generation: number;
   #recoveryState: 'ready' | 'restoring' | 'unavailable' = 'ready';
   #restoringInternally = false;
+  #accepting = true;
   #closing = false;
 
   private constructor(
@@ -105,6 +116,7 @@ export class HostedThread {
     onThreadChanged: ThreadChanged,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
+    onFirstPrompt?: ThreadPromoted,
   ) {
     this.#workspace = workspace;
     this.#agent = agent;
@@ -115,6 +127,7 @@ export class HostedThread {
     this.#onThreadChanged = onThreadChanged;
     this.#journal = journal;
     this.#runtimeStates = runtimeStates;
+    this.#onFirstPrompt = onFirstPrompt;
   }
 
   static async create(
@@ -124,6 +137,7 @@ export class HostedThread {
     onThreadChanged: ThreadChanged,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
+    onFirstPrompt?: ThreadPromoted,
   ) {
     const threadId = crypto.randomUUID();
     const runtimeState = await runtimeStates.start(threadId, 'idle');
@@ -161,6 +175,7 @@ export class HostedThread {
       onThreadChanged,
       journal,
       runtimeStates,
+      onFirstPrompt,
     );
     holder.hosted = hosted;
     for (const message of buffered) hosted.#receiveAgent(runtimeState.generation, message);
@@ -244,12 +259,17 @@ export class HostedThread {
     }
   }
 
-  connect(send: (message: JsonRpcMessage) => void): ThreadAttachment {
+  connect(
+    send: (message: JsonRpcMessage) => void,
+    disconnect: (reason: string) => void = () => undefined,
+  ): ThreadAttachment {
+    if (!this.#accepting) throw new Error('Thread is unavailable.');
     const attachment: Attachment = {
       attachmentId: crypto.randomUUID(),
       acknowledgedSequence: 0,
       threadEventsEnabled: false,
       send,
+      disconnect,
     };
     this.#attachments.set(attachment.attachmentId, attachment);
     return {
@@ -260,8 +280,16 @@ export class HostedThread {
     };
   }
 
-  async close() {
+  async archive() {
+    if (this.#activePromptAttachmentId) throw new ThreadPromptActiveError();
+    await this.close('Thread archived.');
+  }
+
+  async close(reason = 'Portal is shutting down.') {
+    if (this.#closing) return;
+    this.#accepting = false;
     this.#closing = true;
+    for (const attachment of [...this.#attachments.values()]) attachment.disconnect(reason);
     await this.#process.close();
     await this.#agentMessageQueue;
     this.#attachments.clear();
@@ -277,6 +305,12 @@ export class HostedThread {
       return;
     }
     if (!message.method) return;
+    if (!this.#accepting) {
+      if (message.id !== undefined) {
+        attachment.send(error(message.id, -32002, 'Thread is unavailable.'));
+      }
+      return;
+    }
     if (message.id === undefined) {
       await this.#process.send(message);
       return;
@@ -382,6 +416,17 @@ export class HostedThread {
       attachment.send(result(message.id, this.#sessionLoadResult));
       return;
     }
+    if (message.method === 'session/resume') {
+      const requested = (message.params as { sessionId?: unknown } | undefined)?.sessionId;
+      if (requested !== this.thread.acpSessionId) {
+        attachment.send(error(message.id, -32602, 'Thread ACP session does not match.'));
+        return;
+      }
+      attachment.threadEventsEnabled = false;
+      attachment.acknowledgedSequence = 0;
+      attachment.send(result(message.id, this.#sessionLoadResult));
+      return;
+    }
     if (this.#recoveryState !== 'ready') {
       attachment.send(error(message.id, RUNTIME_UNAVAILABLE_ERROR, 'The ACP session is not currently available.', {
         code: this.#recoveryState === 'restoring' ? 'SESSION_RESTORING' : 'CANNOT_RESUME',
@@ -393,6 +438,11 @@ export class HostedThread {
       if (this.#activePromptAttachmentId) {
         attachment.send(error(message.id, -32002, 'Another prompt is already active.'));
         return;
+      }
+      const onFirstPrompt = this.#onFirstPrompt;
+      if (onFirstPrompt) {
+        await onFirstPrompt(this.thread);
+        this.#onFirstPrompt = undefined;
       }
       this.#activePromptAttachmentId = attachment.attachmentId;
       try {
@@ -606,7 +656,7 @@ export class HostedThread {
       if (message.method === 'session/update') {
         if (this.#consumeSubmittedPromptEcho(message.params)) return;
         const event = await this.#journal.append(this.thread.threadId, message);
-        this.#captureSessionState(message.params);
+        await this.#captureSessionState(message.params);
         this.#fanOutThreadEvent(event);
         return;
       }
@@ -668,7 +718,7 @@ export class HostedThread {
       },
     };
     const event = await this.#journal.append(this.thread.threadId, update);
-    this.#captureSessionState(update.params);
+    await this.#captureSessionState(update.params);
     this.#fanOutThreadEvent(event);
   }
 
@@ -705,8 +755,9 @@ export class HostedThread {
     }
   }
 
-  #captureSessionState(params: unknown) {
+  async #captureSessionState(params: unknown) {
     if (!params || typeof params !== 'object' || Array.isArray(params)) return;
+    const sessionId = (params as { sessionId?: unknown }).sessionId;
     const update = (params as { update?: unknown }).update;
     if (!update || typeof update !== 'object' || Array.isArray(update)) return;
     const record = update as Record<string, unknown>;
@@ -730,6 +781,31 @@ export class HostedThread {
         ...this.#sessionLoadResult,
         configOptions: record.configOptions,
       };
+    }
+    if (
+      record.sessionUpdate === 'session_info_update' &&
+      sessionId === this.thread.acpSessionId
+    ) {
+      const hasTitle = Object.prototype.hasOwnProperty.call(record, 'title');
+      const validTitle = record.title === null || typeof record.title === 'string';
+      const validUpdatedAt = typeof record.updatedAt === 'string' &&
+        Number.isFinite(Date.parse(record.updatedAt));
+      let changed = false;
+      if (hasTitle && validTitle) {
+        const title = typeof record.title === 'string' ? record.title : undefined;
+        if (this.thread.title !== title) {
+          if (title === undefined) delete this.thread.title;
+          else this.thread.title = title;
+          changed = true;
+        }
+      }
+      if (validUpdatedAt && this.thread.updatedAt !== record.updatedAt) {
+        this.thread.updatedAt = record.updatedAt as string;
+        changed = true;
+      } else if (changed && !validUpdatedAt) {
+        this.thread.updatedAt = new Date().toISOString();
+      }
+      if (changed) await this.#onThreadChanged(this.thread);
     }
   }
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DirectHostClient } from './portal-client';
+import { DirectHostClient, PortalTransportError } from './portal-client';
 
 const credential = {
   hostId: 'host-1',
@@ -40,13 +40,84 @@ class FakeWebSocket {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('DirectHostClient', () => {
+  it('does not reinterpret active Threads from a pre-lifecycle Portal as archived', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
+    const socket = FakeWebSocket.instance;
+    const snapshot = client.snapshot();
+    socket.receive({
+      type: 'weave.portal.auth.challenge',
+      challengeId: 'challenge-1',
+      hostId: 'host-1',
+      nonce: 'nonce',
+      audience: '/rpc',
+      origin: '-',
+      expiresAt: new Date(Date.now() + 10_000).toISOString(),
+    });
+    for (let attempt = 0; attempt < 20 && socket.sent.length < 1; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    socket.receive({
+      type: 'weave.portal.auth.authenticated',
+      principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' },
+    });
+    for (let attempt = 0; attempt < 20 && socket.sent.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const capabilitiesRequest = JSON.parse(socket.sent[1]);
+    socket.receive({
+      jsonrpc: '2.0',
+      id: capabilitiesRequest.id,
+      result: {
+        protocolVersion: 2,
+        hostId: 'host-1',
+        displayName: 'Old Portal',
+        principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' },
+        capabilities: ['workspace.list', 'agent.list', 'thread.list', 'thread.attach'],
+      },
+    });
+    for (let attempt = 0; attempt < 20 && socket.sent.length < 5; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const requests = socket.sent.slice(2).map((value) => JSON.parse(value));
+    expect(requests.filter(({ method }) => method === 'thread.list')).toHaveLength(1);
+    for (const request of requests) {
+      const result = request.method === 'workspace.list'
+        ? { workspaces: [{ workspaceId: 'weave', name: 'Weave' }] }
+        : request.method === 'agent.list'
+        ? { agents: [{ agentId: 'codex', name: 'Codex' }] }
+        : {
+          threads: [{
+            threadId: 'thread-1',
+            agentId: 'codex',
+            workspaceId: 'weave',
+            acpSessionId: 'session-1',
+            status: 'active',
+            createdAt: '2026-08-26T00:00:00.000Z',
+            updatedAt: '2026-08-26T00:00:00.000Z',
+          }],
+        };
+      socket.receive({ jsonrpc: '2.0', id: request.id, result });
+    }
+
+    await expect(snapshot).resolves.toMatchObject({
+      threads: [{ threadId: 'thread-1', status: 'active' }],
+      archivedThreads: [],
+    });
+    client.close();
+  });
+
   it('reports an unexpected Portal transport closure without reporting an intentional disconnect', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const onClose = vi.fn();
     const first = new DirectHostClient('127.0.0.1', credential, vi.fn(), onClose);
 
     FakeWebSocket.instance.onclose?.({ code: 1006, reason: 'Portal stopped' });
-    expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ message: 'Portal stopped' }));
+    expect(onClose).toHaveBeenCalledWith(expect.any(PortalTransportError));
+    expect(onClose).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Portal stopped',
+      closeCode: 1006,
+    }));
 
     onClose.mockClear();
     const second = new DirectHostClient('127.0.0.1', credential, vi.fn(), onClose);

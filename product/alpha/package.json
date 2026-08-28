@@ -15,6 +15,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
     "@base-ui/react": "^1.7.0",
+    "@capacitor/app": "^8.1.1",
     "@capacitor/core": "^8.3.4",
     "@capacitor/keyboard": "8.0.5",
     "@capacitor/preferences": "8.0.1",

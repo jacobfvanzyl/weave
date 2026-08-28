@@ -8,7 +8,7 @@ export const alphaPaneIds = {
   project: 'project',
 } as const;
 
-export type AlphaPaneId = typeof alphaPaneIds[keyof typeof alphaPaneIds];
+export type AlphaPaneId = (typeof alphaPaneIds)[keyof typeof alphaPaneIds];
 
 export const alphaPaneMinimumWidths = {
   [alphaPaneIds.threads]: '11rem',
@@ -25,9 +25,11 @@ export const layoutChangesOnlyPanePair = (
   panePair: readonly [AlphaPaneId, AlphaPaneId],
 ) => {
   const paneIds = new Set([...Object.keys(previous), ...Object.keys(next)]);
-  return [...paneIds].every((paneId) =>
-    panePair.includes(paneId as AlphaPaneId)
-    || Math.abs((previous[paneId] ?? 0) - (next[paneId] ?? 0)) <= layoutChangeTolerance
+  return [...paneIds].every(
+    (paneId) =>
+      panePair.includes(paneId as AlphaPaneId) ||
+      Math.abs((previous[paneId] ?? 0) - (next[paneId] ?? 0)) <=
+        layoutChangeTolerance,
   );
 };
 
@@ -51,23 +53,25 @@ export type AlphaThreadPaneLayout = {
 export const projectPaneStateCookieName = 'project_pane_state';
 
 const projectPaneVisibleFromCookie = () => {
-  if (typeof document === 'undefined') return true;
+  if (typeof document === 'undefined') return false;
   const prefix = `${projectPaneStateCookieName}=`;
   const value = document.cookie
     .split(';')
     .map((part) => part.trim())
     .find((part) => part.startsWith(prefix))
     ?.slice(prefix.length);
-  return value !== 'false';
+  return value === 'true';
 };
 
-const threadKey = (threadId: string | undefined) => threadId ?? '__no-active-thread__';
+const threadKey = (threadId: string | undefined) =>
+  threadId ?? '__no-active-thread__';
 
-export const paneSetKey = (paneIds: readonly AlphaPaneId[]) => paneIds.join(':');
+export const paneSetKey = (paneIds: readonly AlphaPaneId[]) =>
+  paneIds.join(':');
 
 export const createAlphaThreadPaneLayout = (
   threadId: string | undefined,
-  projectVisible = true,
+  projectVisible = false,
 ): AlphaThreadPaneLayout => ({
   schemaVersion: 1,
   threadId: threadId ?? null,
@@ -86,55 +90,66 @@ export const layoutForPaneSet = (
 export function useAlphaPaneLayouts(activeThreadId: string | undefined) {
   const activeKey = threadKey(activeThreadId);
   const defaultProjectVisible = projectPaneVisibleFromCookie();
-  const [snapshots, setSnapshots] = useState<Record<string, AlphaThreadPaneLayout>>({});
+  const [snapshots, setSnapshots] = useState<
+    Record<string, AlphaThreadPaneLayout>
+  >({});
   const snapshot = useMemo(
-    () => snapshots[activeKey]
-      ?? createAlphaThreadPaneLayout(activeThreadId, defaultProjectVisible),
+    () =>
+      snapshots[activeKey] ??
+      createAlphaThreadPaneLayout(activeThreadId, defaultProjectVisible),
     [activeKey, activeThreadId, defaultProjectVisible, snapshots],
   );
 
-  const updateSnapshot = useCallback((
-    update: (current: AlphaThreadPaneLayout) => AlphaThreadPaneLayout,
-  ) => {
-    setSnapshots((current) => {
-      const existing = current[activeKey]
-        ?? createAlphaThreadPaneLayout(activeThreadId, defaultProjectVisible);
-      return { ...current, [activeKey]: update(existing) };
-    });
-  }, [activeKey, activeThreadId, defaultProjectVisible]);
+  const updateSnapshot = useCallback(
+    (update: (current: AlphaThreadPaneLayout) => AlphaThreadPaneLayout) => {
+      setSnapshots((current) => {
+        const existing =
+          current[activeKey] ??
+          createAlphaThreadPaneLayout(activeThreadId, defaultProjectVisible);
+        return { ...current, [activeKey]: update(existing) };
+      });
+    },
+    [activeKey, activeThreadId, defaultProjectVisible],
+  );
 
-  const setThreadsVisible = useCallback((visible: boolean) => {
-    updateSnapshot((current) => ({
-      ...current,
-      visible: { ...current.visible, threads: visible },
-    }));
-  }, [updateSnapshot]);
+  const setThreadsVisible = useCallback(
+    (visible: boolean) => {
+      updateSnapshot((current) => ({
+        ...current,
+        visible: { ...current.visible, threads: visible },
+      }));
+    },
+    [updateSnapshot],
+  );
 
-  const setProjectVisible = useCallback((visible: boolean) => {
-    updateSnapshot((current) => ({
-      ...current,
-      visible: { ...current.visible, project: visible },
-    }));
-  }, [updateSnapshot]);
+  const setProjectVisible = useCallback(
+    (visible: boolean) => {
+      updateSnapshot((current) => ({
+        ...current,
+        visible: { ...current.visible, project: visible },
+      }));
+    },
+    [updateSnapshot],
+  );
 
-  const rememberRowLayout = useCallback((
-    paneIds: readonly AlphaPaneId[],
-    layout: Layout,
-  ) => {
-    const key = paneSetKey(paneIds);
-    updateSnapshot((current) => ({
-      ...current,
-      rowLayouts: {
-        ...current.rowLayouts,
-        [key]: {
-          kind: 'row',
-          layoutId: 'alpha-pane-row',
-          paneIds: [...paneIds],
-          ratios: { ...layout },
+  const rememberRowLayout = useCallback(
+    (paneIds: readonly AlphaPaneId[], layout: Layout) => {
+      const key = paneSetKey(paneIds);
+      updateSnapshot((current) => ({
+        ...current,
+        rowLayouts: {
+          ...current.rowLayouts,
+          [key]: {
+            kind: 'row',
+            layoutId: 'alpha-pane-row',
+            paneIds: [...paneIds],
+            ratios: { ...layout },
+          },
         },
-      },
-    }));
-  }, [updateSnapshot]);
+      }));
+    },
+    [updateSnapshot],
+  );
 
   return {
     snapshot,

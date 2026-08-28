@@ -2,7 +2,7 @@ import type { AgentDefinition } from './config.ts';
 import { idKey, type JsonRpcMessage, parseJsonRpcMessage, request } from './json-rpc.ts';
 import { readLines } from './line-stream.ts';
 
-type Pending = { resolve(value: unknown): void; reject(cause: unknown): void };
+type Pending = { method: string; resolve(value: unknown): void; reject(cause: unknown): void };
 
 export type AgentProcessExit = {
   success: boolean;
@@ -72,8 +72,12 @@ export class AgentProcess {
 
   async request(method: string, params?: unknown) {
     const id = `portal:${++this.#nextId}`;
-    const response = new Promise<unknown>((resolve, reject) => this.#pending.set(idKey(id), { resolve, reject }));
+    const response = new Promise<unknown>((resolve, reject) =>
+      this.#pending.set(idKey(id), { method, resolve, reject })
+    );
+    console.error(`[agent] request ${method}`);
     await this.send(request(id, method, params));
+    console.error(`[agent] wrote ${method}`);
     return await response;
   }
 
@@ -104,6 +108,7 @@ export class AgentProcess {
           const pending = this.#pending.get(idKey(message.id));
           if (pending) {
             this.#pending.delete(idKey(message.id));
+            console.error(`[agent] response ${pending.method}${message.error ? ' error' : ''}`);
             if (message.error) pending.reject(new Error(message.error.message));
             else pending.resolve(message.result);
             continue;

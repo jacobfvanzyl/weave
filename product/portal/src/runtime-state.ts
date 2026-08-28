@@ -128,8 +128,21 @@ export class RuntimeStateStore {
     });
   }
 
+  async delete(threadId: string) {
+    await this.#mutate(async () => {
+      if (!this.#records.has(threadId)) return;
+      const records = new Map(this.#records);
+      records.delete(threadId);
+      await this.#write(records);
+    });
+  }
+
   async #put(record: RuntimeStateRecord) {
     const records = new Map(this.#records).set(record.threadId, record);
+    await this.#write(records);
+  }
+
+  async #write(records: Map<string, RuntimeStateRecord>) {
     await Deno.mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
     const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`;
     try {

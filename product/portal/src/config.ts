@@ -15,7 +15,6 @@ export type AgentDefinition = {
 export type PortalConfig = {
   listen: { hostname: string; port: number };
   displayName: string;
-  publicUrl?: string;
   tls?: { certificateFile: string; privateKeyFile: string };
   allowedOrigins: string[];
   stateDirectory: string;
@@ -59,18 +58,6 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
   }
 
   const displayName = text(root.displayName ?? hostname, 'displayName');
-  let publicUrl: string | undefined;
-  if (root.publicUrl !== undefined) {
-    const parsed = new URL(text(root.publicUrl, 'publicUrl'));
-    if (parsed.protocol !== 'wss:' && parsed.protocol !== 'ws:') {
-      throw new Error('publicUrl must use ws or wss.');
-    }
-    parsed.pathname = '';
-    parsed.search = '';
-    parsed.hash = '';
-    publicUrl = parsed.toString().replace(/\/$/, '');
-  }
-
   let tls: PortalConfig['tls'];
   if (root.tls !== undefined) {
     const input = object(root.tls, 'tls');
@@ -92,9 +79,6 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
   if (!loopback && !tls) {
     throw new Error('A non-loopback Portal listener requires TLS.');
   }
-  if (!loopback && publicUrl && !publicUrl.startsWith('wss://')) {
-    throw new Error('A non-loopback Portal publicUrl must use wss.');
-  }
   if (!loopback && root.allowedOrigins === undefined) {
     throw new Error(
       'A non-loopback Portal listener requires an explicit allowedOrigins list.',
@@ -113,8 +97,8 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
     throw new Error('threadEventRetentionLimit must be a positive integer.');
   }
 
-  if (!Array.isArray(root.workspaces) || !root.workspaces.length) {
-    throw new Error('workspaces must contain at least one entry.');
+  if (!Array.isArray(root.workspaces)) {
+    throw new Error('workspaces must be an array.');
   }
   const workspaces = root.workspaces.map((value, index) => {
     const workspace = object(value, `workspaces[${index}]`);
@@ -156,7 +140,6 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
   return {
     listen: { hostname, port: Number(port) },
     displayName,
-    ...(publicUrl ? { publicUrl } : {}),
     ...(tls ? { tls } : {}),
     allowedOrigins: root.allowedOrigins === undefined ? [] : stringList(root.allowedOrigins, 'allowedOrigins'),
     stateDirectory: resolve(stateDirectory),

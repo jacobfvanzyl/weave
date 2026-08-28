@@ -25,18 +25,30 @@ describe('useAlphaPaneLayouts', () => {
     const previous = { threads: 20, thread: 30, editor: 30, project: 20 };
     const panePair = [alphaPaneIds.threads, alphaPaneIds.thread] as const;
 
-    expect(layoutChangesOnlyPanePair(previous, {
-      threads: 25,
-      thread: 25,
-      editor: 30,
-      project: 20,
-    }, panePair)).toBe(true);
-    expect(layoutChangesOnlyPanePair(previous, {
-      threads: 25,
-      thread: 30,
-      editor: 25,
-      project: 20,
-    }, panePair)).toBe(false);
+    expect(
+      layoutChangesOnlyPanePair(
+        previous,
+        {
+          threads: 25,
+          thread: 25,
+          editor: 30,
+          project: 20,
+        },
+        panePair,
+      ),
+    ).toBe(true);
+    expect(
+      layoutChangesOnlyPanePair(
+        previous,
+        {
+          threads: 25,
+          thread: 30,
+          editor: 25,
+          project: 20,
+        },
+        panePair,
+      ),
+    ).toBe(false);
   });
 
   it('keeps versioned serializable layout snapshots independent by Thread without persistence', () => {
@@ -61,11 +73,13 @@ describe('useAlphaPaneLayouts', () => {
     expect(firstThreadSnapshot.schemaVersion).toBe(1);
     expect(firstThreadSnapshot.threadId).toBe('thread-one');
     expect(firstThreadSnapshot.visible.project).toBe(false);
-    expect(JSON.parse(JSON.stringify(firstThreadSnapshot))).toEqual(firstThreadSnapshot);
+    expect(JSON.parse(JSON.stringify(firstThreadSnapshot))).toEqual(
+      firstThreadSnapshot,
+    );
 
     rerender({ threadId: 'thread-two' });
     expect(result.current.snapshot.threadId).toBe('thread-two');
-    expect(result.current.snapshot.visible.project).toBe(true);
+    expect(result.current.snapshot.visible.project).toBe(false);
     expect(layoutForPaneSet(result.current.snapshot, allPanes)).toBeUndefined();
 
     act(() => result.current.setThreadsVisible(false));

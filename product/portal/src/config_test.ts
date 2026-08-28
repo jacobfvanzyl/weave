@@ -15,6 +15,10 @@ Deno.test('Portal permits a loopback-only development listener without TLS', () 
   assertEquals(config.allowedOrigins, []);
 });
 
+Deno.test('Portal can start without preconfigured projects', () => {
+  assertEquals(parsePortalConfig({ ...base, workspaces: [] }).workspaces, []);
+});
+
 Deno.test('Portal requires TLS and an explicit origin policy for non-loopback listeners', () => {
   assertThrows(
     () => parsePortalConfig({ ...base, listen: { hostname: '0.0.0.0', port: 4122 } }),
@@ -31,28 +35,14 @@ Deno.test('Portal requires TLS and an explicit origin policy for non-loopback li
     Error,
     'allowedOrigins',
   );
-  assertThrows(
-    () =>
-      parsePortalConfig({
-        ...base,
-        listen: { hostname: '0.0.0.0', port: 4122 },
-        publicUrl: 'ws://test.example:4122',
-        tls: { certificateFile: '/tmp/cert.pem', privateKeyFile: '/tmp/key.pem' },
-        allowedOrigins: [],
-      }),
-    Error,
-    'must use wss',
-  );
 });
 
-Deno.test('Portal accepts an explicit WSS endpoint and TLS files', () => {
+Deno.test('Portal accepts TLS files and an explicit browser-origin policy', () => {
   const config = parsePortalConfig({
     ...base,
     listen: { hostname: '0.0.0.0', port: 4122 },
-    publicUrl: 'wss://test.example:4122/rpc?ignored=true',
     tls: { certificateFile: '/tmp/cert.pem', privateKeyFile: '/tmp/key.pem' },
     allowedOrigins: ['capacitor://localhost'],
   });
-  assertEquals(config.publicUrl, 'wss://test.example:4122');
   assertEquals(config.allowedOrigins, ['capacitor://localhost']);
 });

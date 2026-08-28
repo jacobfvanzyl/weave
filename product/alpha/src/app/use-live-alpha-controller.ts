@@ -1,19 +1,38 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Capacitor } from '@capacitor/core';
-import type { HostSnapshot } from '@/portal-client';
-import { DirectHostClient } from '@/portal-client';
-import { portalCredentialSigner, type PortalCredentialSigner, deletePortalCredentialKey } from '@/portal-credential';
-import { pairPortalHost, parsePortalPairingCode } from '@/portal-pairing';
-import { type AcpTranscript, createTranscript, queueOptimisticPrompt, reduceAcpEvent } from '@/chat/acp-transcript';
-import type { AlphaController, AlphaWorkspace, AlphaViewModel } from './alpha-controller';
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Capacitor } from "@capacitor/core";
+import type { HostSnapshot } from "@/portal-client";
+import { DirectHostClient, PortalTransportError } from "@/portal-client";
+import {
+  deletePortalCredentialKey,
+  type PortalCredentialSigner,
+  portalCredentialSigner,
+} from "@/portal-credential";
+import { pairPortalHost, parsePortalPairingToken } from "@/portal-pairing";
+import {
+  type AcpTranscriptEvent,
+  type AcpTranscript,
+  createTranscript,
+  queueOptimisticPrompt,
+  reduceAcpEvent,
+} from "@/chat/acp-transcript";
+import type {
+  AlphaConnectionStatus,
+  AlphaController,
+  AlphaThread,
+  AlphaViewModel,
+  AlphaWorkspace,
+  AlphaWorkspacePlacement,
+} from "./alpha-controller";
 import {
   loadPortalConnections,
   type PersistedPortalConnection,
   savePortalConnections,
-} from './portal-connection-storage';
-import { useWorkspaceFileBrowser } from './use-workspace-file-browser';
+} from "./portal-connection-storage";
+import { useWorkspaceFileBrowser } from "./use-workspace-file-browser";
+import { useAppResume } from "./use-app-resume";
 
 export const HOST_SNAPSHOT_REFRESH_INTERVAL_MS = 5_000;
+export const HOST_RECONNECT_TIMEOUT_MS = 10_000;
 
 type HostClientFactory = (
   hostUrl: string,
@@ -22,66 +41,533 @@ type HostClientFactory = (
   onUnexpectedClose: (error: Error) => void,
 ) => DirectHostClient;
 
-const createHostClient: HostClientFactory = (...args) => new DirectHostClient(...args);
-const resourceId = (hostId: string, id: string) => `${hostId}:${id}`;
+type HostStatuses = Record<string, AlphaConnectionStatus>;
+type HostErrors = Record<string, string | undefined>;
+type ConnectionAttempt = "connect" | "reconnect";
+type LocalThreadDraft = {
+  projectId: string;
+  placement: AlphaWorkspacePlacement;
+  agentId: string;
+  prepared?: HostSnapshot["threads"][number];
+  thread: AlphaThread;
+};
 
-const mapWorkspaces = (
+const createHostClient: HostClientFactory = (...args) =>
+  new DirectHostClient(...args);
+const resourceId = (hostId: string, id: string) =>
+  `${encodeURIComponent(hostId)}:${encodeURIComponent(id)}`;
+const belongsToHost = (id: string | undefined, hostId: string) =>
+  id?.startsWith(`${encodeURIComponent(hostId)}:`) ?? false;
+const hostFailureMessage = (cause: unknown) =>
+  cause instanceof Error && cause.message.includes("identity changed")
+    ? "This Portal Host changed identity. Pair it again to reconnect safely."
+    : "Couldn’t reconnect to this Portal Host. Check that Portal is running and try again.";
+
+const withTimeout = async <Value,>(
+  promise: Promise<Value>,
+  timeoutMs: number,
+): Promise<Value> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("Portal Host reconnection timed out.")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+};
+
+const mapThread = (
+  thread: HostSnapshot["threads"][number],
+  workspaceName: string,
+  connection: PersistedPortalConnection,
+  agents: Map<string, string>,
+  supportsThreadLifecycle: boolean,
+  projectId?: string,
+): AlphaThread => ({
+  id: resourceId(connection.hostId, thread.threadId),
+  threadId: thread.threadId,
+  hostId: connection.hostId,
+  title: thread.title || workspaceName,
+  agentName: agents.get(thread.agentId) || thread.agentId,
+  hostName: connection.displayName,
+  supportsThreadLifecycle,
+  status: thread.status,
+  updatedAt: thread.updatedAt,
+  ...(thread.archivedAt ? { archivedAt: thread.archivedAt } : {}),
+  workspaceId: thread.workspaceId,
+  ...(projectId ? { projectId } : {}),
+});
+
+const logicalProjectId = (
+  workspace: HostSnapshot["workspaces"][number],
+  connection: PersistedPortalConnection,
+) =>
+  workspace.repositoryIdentity
+    ? `repository:${workspace.repositoryIdentity.canonicalKey}`
+    : `workspace:${resourceId(connection.hostId, workspace.workspaceId)}`;
+
+const mapHostWorkspaces = (
   snapshot: HostSnapshot | undefined,
-  connection: PersistedPortalConnection | undefined,
+  connection: PersistedPortalConnection,
 ): AlphaWorkspace[] => {
-  if (!snapshot || !connection) return [];
-  const agents = new Map(snapshot.agents.map((agent) => [agent.agentId, agent.name]));
-  return snapshot.workspaces.map((workspace) => ({
-    id: resourceId(connection.hostId, workspace.workspaceId),
-    workspaceId: workspace.workspaceId,
-    hostId: connection.hostId,
-    name: workspace.name,
-    threads: snapshot.threads
-      .filter((thread) => thread.workspaceId === workspace.workspaceId)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .map((thread) => ({
-        id: resourceId(connection.hostId, thread.threadId),
-        threadId: thread.threadId,
-        hostId: connection.hostId,
-        title: thread.title || workspace.name,
-        agentName: agents.get(thread.agentId) || thread.agentId,
-        hostName: connection.displayName,
-        status: thread.status,
-        updatedAt: thread.updatedAt,
-        workspaceId: workspace.workspaceId,
-      })),
-  }));
+  if (!snapshot) return [];
+  const agents = new Map(
+    snapshot.agents.map((agent) => [agent.agentId, agent.name]),
+  );
+  const supportsThreadLifecycle =
+    snapshot.capabilities.includes("thread.archive") &&
+    snapshot.capabilities.includes("thread.restore");
+  return snapshot.workspaces.map((workspace) => {
+    const projectId = logicalProjectId(workspace, connection);
+    return {
+      id: projectId,
+      workspaceId: workspace.workspaceId,
+      hostId: connection.hostId,
+      hostName: connection.displayName,
+      name: workspace.name,
+      placements: [
+        {
+          id: resourceId(connection.hostId, workspace.workspaceId),
+          workspaceId: workspace.workspaceId,
+          hostId: connection.hostId,
+          hostName: connection.displayName,
+        },
+      ],
+      threads: snapshot.threads
+        .filter((thread) => thread.workspaceId === workspace.workspaceId)
+        .map((thread) =>
+          mapThread(
+            thread,
+            workspace.name,
+            connection,
+            agents,
+            supportsThreadLifecycle,
+            projectId,
+          )
+        )
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+      repositoryIdentity: workspace.repositoryIdentity,
+    };
+  });
+};
+
+const groupHostWorkspaces = (workspaces: AlphaWorkspace[]) => {
+  const groups = new Map<string, AlphaWorkspace[]>();
+  for (const workspace of workspaces) {
+    groups.set(workspace.id, [...(groups.get(workspace.id) ?? []), workspace]);
+  }
+  return [...groups.entries()].map(([id, members]) => {
+    const representative = members[0]!;
+    const names = [
+      ...new Set(members.map(({ name }) => name.trim()).filter(Boolean)),
+    ];
+    const repositoryIdentity = members.find(
+      ({ repositoryIdentity }) => repositoryIdentity,
+    )?.repositoryIdentity;
+    const name = names.length === 1
+      ? names[0]!
+      : repositoryIdentity?.displayName ||
+        repositoryIdentity?.name ||
+        representative.name;
+    return {
+      ...representative,
+      id,
+      name,
+      placements: members.flatMap(({ placements }) => placements ?? []),
+      threads: members
+        .flatMap(({ threads }) => threads)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    };
+  });
+};
+
+const mapHostArchivedThreads = (
+  snapshot: HostSnapshot | undefined,
+  connection: PersistedPortalConnection,
+): AlphaThread[] => {
+  if (!snapshot) return [];
+  const agents = new Map(
+    snapshot.agents.map((agent) => [agent.agentId, agent.name]),
+  );
+  const workspaces = new Map(
+    snapshot.workspaces.map((workspace) => [
+      workspace.workspaceId,
+      workspace.name,
+    ]),
+  );
+  return snapshot.archivedThreads.map((thread) =>
+    mapThread(
+      thread,
+      workspaces.get(thread.workspaceId) || thread.workspaceId,
+      connection,
+      agents,
+      true,
+    )
+  );
+};
+
+const workspaceRecency = (workspace: AlphaWorkspace) =>
+  workspace.threads[0]?.updatedAt ?? "";
+
+type SessionInfoUpdate = Extract<
+  Extract<AcpTranscriptEvent, { type: "session/update" }>["update"],
+  { sessionUpdate: "session_info_update" }
+>;
+
+const sessionInfoUpdatedAt = (
+  update: SessionInfoUpdate,
+  titleChanged: boolean,
+) =>
+  typeof update.updatedAt === "string" &&
+      Number.isFinite(Date.parse(update.updatedAt))
+    ? update.updatedAt
+    : titleChanged
+    ? new Date().toISOString()
+    : undefined;
+
+const applySessionInfoToThread = (
+  thread: HostSnapshot["threads"][number],
+  update: SessionInfoUpdate,
+) => {
+  const hasTitle = update.title !== undefined;
+  const nextTitle = update.title === null ? undefined : update.title;
+  const titleChanged = hasTitle && thread.title !== nextTitle;
+  const updatedAt = sessionInfoUpdatedAt(update, titleChanged);
+  if (!titleChanged && (!updatedAt || updatedAt === thread.updatedAt)) {
+    return thread;
+  }
+  const next = {
+    ...thread,
+    ...(updatedAt ? { updatedAt } : {}),
+    ...(nextTitle === undefined ? {} : { title: nextTitle }),
+  };
+  if (hasTitle && nextTitle === undefined) delete next.title;
+  return next;
 };
 
 export function useLiveAlphaController(
   clientFactory: HostClientFactory = createHostClient,
 ): AlphaController {
-  const [connections, setConnections] = useState<PersistedPortalConnection[]>([]);
+  const [connections, setConnections] = useState<PersistedPortalConnection[]>(
+    [],
+  );
   const [connectionsLoaded, setConnectionsLoaded] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
-  const [selectedHostId, setSelectedHostId] = useState<string>();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [client, setClient] = useState<DirectHostClient>();
-  const [snapshot, setSnapshot] = useState<HostSnapshot>();
+  const [archivedThreadsOpen, setArchivedThreadsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [snapshots, setSnapshots] = useState<
+    Record<string, HostSnapshot | undefined>
+  >({});
+  const [statuses, setStatuses] = useState<HostStatuses>({});
+  const [hostErrors, setHostErrors] = useState<HostErrors>({});
   const [selectedThreadId, setSelectedThreadId] = useState<string>();
-  const [transcript, setTranscript] = useState<AcpTranscript>();
-  const [connecting, setConnecting] = useState(false);
+  const [loadingThreadId, setLoadingThreadId] = useState<string>();
+  const [creatingThreadWorkspaceId, setCreatingThreadWorkspaceId] = useState<
+    string
+  >();
+  const [localThreadDraft, setLocalThreadDraft] = useState<LocalThreadDraft>();
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const [composerFocusThreadId, setComposerFocusThreadId] = useState<string>();
+  const [transcripts, setTranscripts] = useState<
+    Record<string, AcpTranscript | undefined>
+  >({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const clientRef = useRef<DirectHostClient | undefined>(undefined);
-  const refreshErrorRef = useRef<string | undefined>(undefined);
-  const autoConnectRef = useRef<string | undefined>(undefined);
-  const workspaceFileBrowser = useWorkspaceFileBrowser(client);
-  const selectedConnection = connections.find(({ hostId }) => hostId === selectedHostId);
+  const clientsRef = useRef(new Map<string, DirectHostClient>());
+  const activeThreadIdsRef = useRef(new Map<string, string>());
+  const selectedThreadIdRef = useRef<string | undefined>(undefined);
+  const localThreadDraftRef = useRef<LocalThreadDraft | undefined>(undefined);
+  const connectionAttemptRef = useRef(new Map<string, number>());
+  const creatingThreadRef = useRef(false);
+  const autoConnectRef = useRef(new Set<string>());
+  const refreshingRef = useRef(new Set<string>());
+  const workspaceFileBrowser = useWorkspaceFileBrowser();
+  const reportActionError = (cause: unknown) => {
+    if (cause instanceof PortalTransportError) return;
+    setError(cause instanceof Error ? cause.message : String(cause));
+  };
 
-  const persist = async (nextConnections: PersistedPortalConnection[], nextSelectedHostId?: string) => {
+  const persist = async (nextConnections: PersistedPortalConnection[]) => {
     try {
       await savePortalConnections({
         connections: nextConnections,
-        ...(nextSelectedHostId ? { selectedHostId: nextSelectedHostId } : {}),
+        ...(nextConnections[0]
+          ? { selectedHostId: nextConnections[0].hostId }
+          : {}),
       });
     } catch (cause) {
-      console.error('Unable to save Portal connections', cause);
+      console.error("Unable to save Portal connections", cause);
+    }
+  };
+
+  const updateSnapshot = (hostId: string, snapshot: HostSnapshot) => {
+    setSnapshots((current) => ({ ...current, [hostId]: snapshot }));
+    setStatuses((current) => ({ ...current, [hostId]: "connected" }));
+    setHostErrors((current) => ({ ...current, [hostId]: undefined }));
+  };
+
+  useEffect(() => {
+    selectedThreadIdRef.current = selectedThreadId;
+  }, [selectedThreadId]);
+
+  const focusComposer = (threadId: string) => {
+    setComposerFocusThreadId(threadId);
+    setComposerFocusRequest((current) => current + 1);
+  };
+
+  const discardLocalThreadDraft = async () => {
+    const draft = localThreadDraftRef.current;
+    if (!draft) return;
+    localThreadDraftRef.current = undefined;
+    setLocalThreadDraft(undefined);
+    setTranscripts((current) => {
+      if (!(draft.thread.id in current)) return current;
+      const next = { ...current };
+      delete next[draft.thread.id];
+      return next;
+    });
+    if (draft.prepared) {
+      try {
+        await clientsRef.current
+          .get(draft.placement.hostId)
+          ?.discardThreadDraft(draft.thread.threadId);
+      } catch (cause) {
+        if (!(cause instanceof PortalTransportError)) {
+          console.warn('Unable to discard the provisional Thread.', cause);
+        }
+      }
+    }
+  };
+
+  const connectToHost = async (
+    connection: PersistedPortalConnection,
+    attempt: ConnectionAttempt = "connect",
+  ): Promise<boolean> => {
+    const generation = (connectionAttemptRef.current.get(connection.hostId) ??
+      0) + 1;
+    connectionAttemptRef.current.set(connection.hostId, generation);
+    setStatuses((current) => ({
+      ...current,
+      [connection.hostId]: attempt === "reconnect"
+        ? "reconnecting"
+        : "connecting",
+    }));
+    setHostErrors((current) => ({
+      ...current,
+      [connection.hostId]: undefined,
+    }));
+    clientsRef.current.get(connection.hostId)?.close();
+    clientsRef.current.delete(connection.hostId);
+    let nextClient: DirectHostClient | undefined;
+    try {
+      nextClient = clientFactory(
+        connection.hostUrl,
+        portalCredentialSigner(connection),
+        (event) => {
+          const id = activeThreadIdsRef.current.get(connection.hostId);
+          if (!id) return;
+          if (
+            event.type === "session/update" &&
+            event.update.sessionUpdate === "session_info_update"
+          ) {
+            const update = event.update;
+            setSnapshots((current) => {
+              const snapshot = current[connection.hostId];
+              if (!snapshot) return current;
+              let changed = false;
+              const apply = (thread: HostSnapshot["threads"][number]) => {
+                if (resourceId(connection.hostId, thread.threadId) !== id) {
+                  return thread;
+                }
+                const next = applySessionInfoToThread(thread, update);
+                changed ||= next !== thread;
+                return next;
+              };
+              const threads = snapshot.threads.map(apply);
+              const archivedThreads = snapshot.archivedThreads.map(apply);
+              return changed
+                ? {
+                  ...current,
+                  [connection.hostId]: {
+                    ...snapshot,
+                    threads,
+                    archivedThreads,
+                  },
+                }
+                : current;
+            });
+            const draft = localThreadDraftRef.current;
+            if (
+              draft?.placement.hostId === connection.hostId &&
+              draft.thread.id === id
+            ) {
+              const titleChanged = update.title !== undefined &&
+                draft.thread.title !== update.title;
+              const updatedAt = sessionInfoUpdatedAt(update, titleChanged);
+              const nextDraft: LocalThreadDraft = {
+                ...draft,
+                ...(draft.prepared
+                  ? { prepared: applySessionInfoToThread(draft.prepared, update) }
+                  : {}),
+                thread: {
+                  ...draft.thread,
+                  ...(update.title === undefined
+                    ? {}
+                    : { title: update.title ?? "New thread" }),
+                  ...(updatedAt ? { updatedAt } : {}),
+                },
+              };
+              localThreadDraftRef.current = nextDraft;
+              setLocalThreadDraft(nextDraft);
+            }
+          }
+          setTranscripts((current) => {
+            const transcript = current[id];
+            const next = transcript
+              ? reduceAcpEvent(transcript, event)
+              : event.type === "history/reset"
+              ? createTranscript(event.sessionId ?? "unattached")
+              : transcript;
+            return next === transcript ? current : { ...current, [id]: next };
+          });
+        },
+        (closeError) => {
+          if (clientsRef.current.get(connection.hostId) !== nextClient) return;
+          clientsRef.current.delete(connection.hostId);
+          console.info(
+            `Portal Host ${connection.hostId} disconnected; reconnecting.`,
+            closeError,
+          );
+          void connectToHost(connection, "reconnect");
+        },
+      );
+      const snapshot = await withTimeout(
+        nextClient.snapshot(),
+        HOST_RECONNECT_TIMEOUT_MS,
+      );
+      if (connectionAttemptRef.current.get(connection.hostId) !== generation) {
+        nextClient.close();
+        return false;
+      }
+      if (snapshot.hostId !== connection.hostId) {
+        throw new Error("Portal Host identity changed. Pair this Host again.");
+      }
+      const activeThreadId = activeThreadIdsRef.current.get(connection.hostId);
+      if (
+        attempt === "reconnect" && activeThreadId &&
+        activeThreadId === selectedThreadIdRef.current
+      ) {
+        const draft = localThreadDraftRef.current;
+        const preparedDraft = draft?.prepared &&
+            draft.placement.hostId === connection.hostId &&
+            draft.thread.id === activeThreadId
+          ? draft
+          : undefined;
+        const thread = preparedDraft?.thread ?? snapshot.threads.find(
+          (candidate) =>
+            resourceId(connection.hostId, candidate.threadId) ===
+              activeThreadId,
+        );
+        const workspace = snapshot.workspaces.find((candidate) =>
+          candidate.workspaceId ===
+            (preparedDraft?.placement.workspaceId ?? thread?.workspaceId)
+        );
+        if (!thread || !workspace) {
+          throw new Error("The active Thread is no longer available.");
+        }
+        await withTimeout(
+          (async () => {
+            await nextClient.attach(thread.threadId);
+            const opened = await workspaceFileBrowser.open(
+              nextClient,
+              workspace.workspaceId,
+              workspace.name,
+            );
+            if (opened !== true) {
+              throw new Error("The active Project could not be loaded.");
+            }
+          })(),
+          HOST_RECONNECT_TIMEOUT_MS,
+        );
+      }
+      if (connectionAttemptRef.current.get(connection.hostId) !== generation) {
+        nextClient.close();
+        return false;
+      }
+      clientsRef.current.set(connection.hostId, nextClient);
+      updateSnapshot(connection.hostId, snapshot);
+      if (snapshot.displayName !== connection.displayName) {
+        setConnections((current) => {
+          const updated = current.map((candidate) =>
+            candidate.hostId === connection.hostId
+              ? { ...candidate, displayName: snapshot.displayName }
+              : candidate
+          );
+          void persist(updated);
+          return updated;
+        });
+      }
+      return true;
+    } catch (cause) {
+      nextClient?.close();
+      if (clientsRef.current.get(connection.hostId) === nextClient) {
+        clientsRef.current.delete(connection.hostId);
+      }
+      if (connectionAttemptRef.current.get(connection.hostId) === generation) {
+        console.warn(`Unable to connect Portal Host ${connection.hostId}.`, cause);
+        setStatuses((current) => ({
+          ...current,
+          [connection.hostId]: "disconnected",
+        }));
+        setHostErrors((current) => ({
+          ...current,
+          [connection.hostId]: hostFailureMessage(cause),
+        }));
+        const activeThreadId = activeThreadIdsRef.current.get(connection.hostId);
+        const draft = localThreadDraftRef.current;
+        if (draft?.placement.hostId === connection.hostId) {
+          void discardLocalThreadDraft();
+          activeThreadIdsRef.current.delete(connection.hostId);
+          if (selectedThreadIdRef.current === draft.thread.id) {
+            selectedThreadIdRef.current = undefined;
+            setSelectedThreadId(undefined);
+            setLoadingThreadId(undefined);
+            workspaceFileBrowser.close();
+          }
+        }
+        if (
+          activeThreadId &&
+          activeThreadId === selectedThreadIdRef.current &&
+          belongsToHost(activeThreadId, connection.hostId)
+        ) {
+          activeThreadIdsRef.current.delete(connection.hostId);
+          selectedThreadIdRef.current = undefined;
+          setSelectedThreadId(undefined);
+          setLoadingThreadId(undefined);
+          workspaceFileBrowser.close();
+        }
+      }
+      return false;
+    }
+  };
+
+  const refreshHost = async (hostId: string) => {
+    const client = clientsRef.current.get(hostId);
+    if (!client || refreshingRef.current.has(hostId)) return;
+    refreshingRef.current.add(hostId);
+    try {
+      updateSnapshot(hostId, await client.snapshot());
+    } catch (cause) {
+      console.warn(`Unable to refresh Portal Host ${hostId}.`, cause);
+    } finally {
+      refreshingRef.current.delete(hostId);
     }
   };
 
@@ -90,7 +576,11 @@ export function useLiveAlphaController(
     void loadPortalConnections().then((stored) => {
       if (!active) return;
       setConnections(stored.connections);
-      setSelectedHostId(stored.selectedHostId);
+      setStatuses(
+        Object.fromEntries(
+          stored.connections.map(({ hostId }) => [hostId, "disconnected"]),
+        ),
+      );
       setConnectionsOpen(stored.connections.length === 0);
       setConnectionsLoaded(true);
     });
@@ -99,222 +589,371 @@ export function useLiveAlphaController(
     };
   }, []);
 
-  useEffect(() => () => client?.close(), [client]);
+  useEffect(() => {
+    if (!connectionsLoaded) return;
+    for (const connection of connections) {
+      if (autoConnectRef.current.has(connection.hostId)) continue;
+      autoConnectRef.current.add(connection.hostId);
+      void connectToHost(connection);
+    }
+  }, [connectionsLoaded, connections]);
 
   useEffect(() => {
-    if (!client) return;
-    let refreshing = false;
-    const refreshSilently = async () => {
-      if (refreshing) return;
-      refreshing = true;
-      try {
-        setSnapshot(await client.snapshot());
-        const recoveredError = refreshErrorRef.current;
-        refreshErrorRef.current = undefined;
-        if (recoveredError) setError((current) => current === recoveredError ? undefined : current);
-      } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        refreshErrorRef.current = message;
-        setError(message);
-      } finally {
-        refreshing = false;
-      }
+    if (!connectionsLoaded) return;
+    const refreshAll = () => {
+      for (const hostId of clientsRef.current.keys()) void refreshHost(hostId);
     };
-    const interval = window.setInterval(() => void refreshSilently(), HOST_SNAPSHOT_REFRESH_INTERVAL_MS);
-    const onFocus = () => void refreshSilently();
-    window.addEventListener('focus', onFocus);
+    const interval = window.setInterval(
+      refreshAll,
+      HOST_SNAPSHOT_REFRESH_INTERVAL_MS,
+    );
+    window.addEventListener("focus", refreshAll);
     return () => {
       window.clearInterval(interval);
-      window.removeEventListener('focus', onFocus);
+      window.removeEventListener("focus", refreshAll);
     };
-  }, [client]);
+  }, [connectionsLoaded]);
 
-  const clearHostView = () => {
-    workspaceFileBrowser.close();
-    setSnapshot(undefined);
-    setSelectedThreadId(undefined);
-    setTranscript(undefined);
-    setBusy(false);
-  };
+  useAppResume(() => {
+    if (!connectionsLoaded) return;
+    for (const connection of connections) {
+      void connectToHost(connection, "reconnect");
+    }
+  });
 
-  const connectToHost = async (connection: PersistedPortalConnection) => {
-    setConnecting(true);
-    setError(undefined);
-    clientRef.current = undefined;
-    client?.close();
-    setClient(undefined);
-    clearHostView();
-    let nextClient: DirectHostClient | undefined;
-    try {
-      nextClient = clientFactory(
-        connection.hostUrl,
-        portalCredentialSigner(connection),
-        (event) => {
-          setTranscript((current) => {
-            if (!current) return event.type === 'history/reset' ? createTranscript(event.sessionId ?? 'unattached') : current;
-            return reduceAcpEvent(current, event);
-          });
-        },
-        (closeError) => {
-          if (clientRef.current !== nextClient) return;
-          clientRef.current = undefined;
-          setClient(undefined);
-          clearHostView();
-          refreshErrorRef.current = undefined;
-          setError(closeError.message);
-        },
-      );
-      const nextSnapshot = await nextClient.snapshot();
-      if (nextSnapshot.hostId !== connection.hostId) throw new Error('Portal Host identity changed. Pair this Host again.');
-      clientRef.current = nextClient;
-      setClient(nextClient);
-      setSnapshot(nextSnapshot);
-      if (nextSnapshot.displayName !== connection.displayName) {
-        const updated = connections.map((candidate) =>
-          candidate.hostId === connection.hostId ? { ...candidate, displayName: nextSnapshot.displayName } : candidate
-        );
-        setConnections(updated);
-        void persist(updated, connection.hostId);
+  useEffect(
+    () => () => {
+      for (const [hostId, generation] of connectionAttemptRef.current) {
+        connectionAttemptRef.current.set(hostId, generation + 1);
       }
-    } catch (cause) {
-      nextClient?.close();
-      if (clientRef.current === nextClient) clientRef.current = undefined;
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setConnecting(false);
-    }
-  };
+      for (const client of clientsRef.current.values()) client.close();
+      clientsRef.current.clear();
+    },
+    [],
+  );
 
-  useEffect(() => {
-    if (!connectionsLoaded || !selectedConnection || autoConnectRef.current === selectedConnection.hostId) return;
-    autoConnectRef.current = selectedConnection.hostId;
-    void connectToHost(selectedConnection);
-  }, [connectionsLoaded, selectedConnection?.hostId]);
+  const persistedWorkspaces = useMemo(
+    () =>
+      groupHostWorkspaces(
+        connections.flatMap((connection) =>
+          statuses[connection.hostId] === "connected" ||
+              statuses[connection.hostId] === "reconnecting"
+            ? mapHostWorkspaces(snapshots[connection.hostId], connection)
+            : []
+        ),
+      ).sort((left, right) =>
+        workspaceRecency(right).localeCompare(workspaceRecency(left))
+      ),
+    [connections, snapshots, statuses],
+  );
 
-  const refresh = async (activeClient = client) => {
-    if (!activeClient) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      setSnapshot(await activeClient.snapshot());
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const modelWorkspaces = useMemo(
+    () =>
+      persistedWorkspaces.map((workspace) =>
+        localThreadDraft?.projectId === workspace.id
+          ? {
+            ...workspace,
+            threads: [
+              localThreadDraft.thread,
+              ...workspace.threads.filter(
+                ({ id }) => id !== localThreadDraft.thread.id,
+              ),
+            ],
+          }
+          : workspace
+      ),
+    [localThreadDraft, persistedWorkspaces],
+  );
 
-  const disconnect = () => {
-    clientRef.current = undefined;
-    refreshErrorRef.current = undefined;
-    client?.close();
-    setClient(undefined);
-    clearHostView();
-    setError(undefined);
-  };
+  const modelArchivedThreads = useMemo(
+    () =>
+      connections
+        .flatMap((connection) =>
+          statuses[connection.hostId] === "connected" ||
+              statuses[connection.hostId] === "reconnecting"
+            ? mapHostArchivedThreads(snapshots[connection.hostId], connection)
+            : []
+        )
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    [connections, snapshots, statuses],
+  );
 
-  const performAcpAction = async (action: () => Promise<void>, rethrow = false) => {
+  const allThreads = modelWorkspaces.flatMap((workspace) => workspace.threads);
+  const selected = allThreads.find((thread) => thread.id === selectedThreadId);
+  const selectedConnection = connections.find(
+    (connection) => connection.hostId === selected?.hostId,
+  );
+  const selectedHostReconnecting = selected
+    ? statuses[selected.hostId] === "reconnecting"
+    : false;
+  const aggregateStatus = Object.values(statuses).includes("connected")
+    ? ("connected" as const)
+    : Object.values(statuses).some((status) =>
+        status === "connecting" || status === "reconnecting"
+      )
+    ? ("connecting" as const)
+    : ("disconnected" as const);
+
+  const performAcpAction = async (
+    action: () => Promise<void>,
+    rethrow = false,
+  ) => {
     setError(undefined);
     try {
       await action();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      reportActionError(cause);
       if (rethrow) throw cause;
     }
   };
 
-  const sendPrompt = async (text: string) => {
-    if (!client || !transcript) return;
-    const content = [{ type: 'text' as const, text }];
-    setTranscript((current) =>
-      current ? queueOptimisticPrompt(current, `local-${crypto.randomUUID()}`, content) : current
-    );
-    await performAcpAction(async () => await client.prompt(content), true);
-  };
-
   const selectThread = async (id: string) => {
-    if (!client) return;
-    const thread = modelWorkspaces.flatMap((workspace) => workspace.threads).find((candidate) => candidate.id === id);
-    const workspace = snapshot?.workspaces.find((candidate) => candidate.workspaceId === thread?.workspaceId);
-    if (!thread) return;
+    const draft = localThreadDraftRef.current;
+    if (id === draft?.thread.id) {
+      selectedThreadIdRef.current = id;
+      setSelectedThreadId(id);
+      focusComposer(id);
+      return;
+    }
+    if (id === selectedThreadId && !loadingThreadId) return;
+    const thread = allThreads.find((candidate) => candidate.id === id);
+    const client = thread ? clientsRef.current.get(thread.hostId) : undefined;
+    const snapshot = thread ? snapshots[thread.hostId] : undefined;
+    const workspace = snapshot?.workspaces.find(
+      (candidate) => candidate.workspaceId === thread?.workspaceId,
+    );
+    if (!thread || !client) return;
+    const previousSelectedThreadId = selectedThreadId === draft?.thread.id
+      ? undefined
+      : selectedThreadId;
+    const previousActiveThreadId = selectedThreadId === draft?.thread.id
+      ? undefined
+      : activeThreadIdsRef.current.get(thread.hostId);
     setBusy(true);
     setError(undefined);
+    selectedThreadIdRef.current = id;
+    setSelectedThreadId(id);
+    setLoadingThreadId(id);
+    workspaceFileBrowser.close();
+    activeThreadIdsRef.current.set(thread.hostId, id);
     try {
+      if (draft) await discardLocalThreadDraft();
       await client.attach(thread.threadId);
-      setSelectedThreadId(id);
-      if (workspace) await workspaceFileBrowser.open(workspace.workspaceId, workspace.name);
-      else workspaceFileBrowser.close();
+      if (workspace) {
+        await workspaceFileBrowser.open(
+          client,
+          workspace.workspaceId,
+          workspace.name,
+        );
+      } else workspaceFileBrowser.close();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      selectedThreadIdRef.current = previousSelectedThreadId;
+      setSelectedThreadId(previousSelectedThreadId);
+      if (previousActiveThreadId) {
+        activeThreadIdsRef.current.set(thread.hostId, previousActiveThreadId);
+      } else activeThreadIdsRef.current.delete(thread.hostId);
+      reportActionError(cause);
     } finally {
+      setLoadingThreadId((current) => current === id ? undefined : current);
       setBusy(false);
     }
   };
 
   const createThread = async (workspaceId?: string) => {
-    if (!client || !snapshot || !selectedConnection) return;
-    const workspaceModel = modelWorkspaces.find((candidate) => candidate.id === workspaceId) || modelWorkspaces[0];
-    const workspace = snapshot.workspaces.find((candidate) => candidate.workspaceId === workspaceModel?.workspaceId);
-    const agent = snapshot.agents[0];
-    if (!workspace || !agent) return;
+    const workspaceModel =
+      persistedWorkspaces.find((candidate) => candidate.id === workspaceId) ||
+      persistedWorkspaces[0];
+    if (!workspaceModel) return;
+    const existingDraft = localThreadDraftRef.current;
+    if (existingDraft?.projectId === workspaceModel.id) {
+      selectedThreadIdRef.current = existingDraft.thread.id;
+      setSelectedThreadId(existingDraft.thread.id);
+      focusComposer(existingDraft.thread.id);
+      return;
+    }
+    if (creatingThreadRef.current) return;
+    const placements = workspaceModel.placements ?? [
+      {
+        id: resourceId(workspaceModel.hostId, workspaceModel.workspaceId),
+        hostId: workspaceModel.hostId,
+        hostName: workspaceModel.hostName,
+        workspaceId: workspaceModel.workspaceId,
+      },
+    ];
+    const placement = placements.find(
+      ({ hostId, workspaceId }) =>
+        selected?.projectId === workspaceModel.id &&
+        selected.hostId === hostId &&
+        selected.workspaceId === workspaceId,
+    ) ??
+      placements.find(({ hostId }) => statuses[hostId] === "connected") ??
+      placements[0];
+    if (!placement) return;
+    const client = clientsRef.current.get(placement.hostId);
+    const snapshot = snapshots[placement.hostId];
+    const workspace = snapshot?.workspaces.find(
+      (candidate) => candidate.workspaceId === placement.workspaceId,
+    );
+    const agent = snapshot?.agents[0];
+    if (!client || !workspace || !agent) return;
+    const supportsDrafts = snapshot.capabilities.includes("thread.draft");
+    const previousSelectedThreadId = selectedThreadIdRef.current;
+    const previousActiveThreadId = activeThreadIdsRef.current.get(
+      placement.hostId,
+    );
+    creatingThreadRef.current = true;
+    setCreatingThreadWorkspaceId(workspaceModel.id);
     setBusy(true);
     setError(undefined);
     try {
-      const thread = await client.createThread(workspace.workspaceId, agent.agentId);
-      setSnapshot(await client.snapshot());
-      setSelectedThreadId(resourceId(selectedConnection.hostId, thread.threadId));
-      await client.attach(thread.threadId);
-      await workspaceFileBrowser.open(workspace.workspaceId, workspace.name);
+      await discardLocalThreadDraft();
+      const prepared = supportsDrafts
+        ? await client.createThreadDraft(
+          placement.workspaceId,
+          agent.agentId,
+        )
+        : undefined;
+      const id = prepared
+        ? resourceId(placement.hostId, prepared.threadId)
+        : `draft:${crypto.randomUUID()}`;
+      const draft: LocalThreadDraft = {
+        projectId: workspaceModel.id,
+        placement,
+        agentId: agent.agentId,
+        ...(prepared ? { prepared } : {}),
+        thread: {
+          id,
+          threadId: prepared?.threadId ?? id,
+          hostId: placement.hostId,
+          title: "New thread",
+          agentName: agent.name,
+          hostName: placement.hostName,
+          supportsThreadLifecycle: false,
+          status: "active",
+          updatedAt: prepared?.updatedAt ?? new Date().toISOString(),
+          workspaceId: placement.workspaceId,
+          projectId: workspaceModel.id,
+          draft: true,
+        },
+      };
+      localThreadDraftRef.current = draft;
+      setLocalThreadDraft(draft);
+      selectedThreadIdRef.current = id;
+      setSelectedThreadId(id);
+      setLoadingThreadId(prepared ? id : undefined);
+      setTranscripts((current) => ({
+        ...current,
+        [id]: createTranscript(prepared?.acpSessionId ?? id),
+      }));
+      if (prepared) {
+        activeThreadIdsRef.current.set(placement.hostId, id);
+        await client.attach(prepared.threadId);
+      }
+      await workspaceFileBrowser.open(
+        client,
+        workspace.workspaceId,
+        workspace.name,
+      );
+      focusComposer(id);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      await discardLocalThreadDraft();
+      selectedThreadIdRef.current = previousSelectedThreadId;
+      setSelectedThreadId(previousSelectedThreadId);
+      if (previousActiveThreadId) {
+        activeThreadIdsRef.current.set(
+          placement.hostId,
+          previousActiveThreadId,
+        );
+      } else activeThreadIdsRef.current.delete(placement.hostId);
+      reportActionError(cause);
+    } finally {
+      setLoadingThreadId(undefined);
+      creatingThreadRef.current = false;
+      setCreatingThreadWorkspaceId(undefined);
+      setBusy(false);
+    }
+  };
+
+  const archiveThread = async (id: string) => {
+    const thread = allThreads.find((candidate) => candidate.id === id);
+    const client = thread ? clientsRef.current.get(thread.hostId) : undefined;
+    if (!thread || !client) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await client.archiveThread(thread.threadId);
+      updateSnapshot(thread.hostId, await client.snapshot());
+      if (selectedThreadId === id) {
+        selectedThreadIdRef.current = undefined;
+        setSelectedThreadId(undefined);
+        workspaceFileBrowser.close();
+      }
+    } catch (cause) {
+      reportActionError(cause);
+      throw cause;
     } finally {
       setBusy(false);
     }
   };
 
-  const modelWorkspaces = mapWorkspaces(snapshot, selectedConnection);
-  const model = useMemo<AlphaViewModel>(() => ({
+  const restoreThread = async (id: string) => {
+    const thread = modelArchivedThreads.find(
+      (candidate) => candidate.id === id,
+    );
+    const client = thread ? clientsRef.current.get(thread.hostId) : undefined;
+    if (!thread || !client) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await client.restoreThread(thread.threadId);
+      updateSnapshot(thread.hostId, await client.snapshot());
+    } catch (cause) {
+      reportActionError(cause);
+      throw cause;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const model: AlphaViewModel = {
     platform: Capacitor.getPlatform(),
     connectionsLoaded,
     connectionsOpen,
+    archivedThreadsOpen,
     connections: connections.map((connection) => ({
       hostId: connection.hostId,
       displayName: connection.displayName,
       hostUrl: connection.hostUrl,
-      selected: connection.hostId === selectedHostId,
-      status: connection.hostId === selectedHostId
-        ? snapshot ? 'connected' : connecting ? 'connecting' : 'disconnected'
-        : 'disconnected',
+      selected: connection.hostId === selected?.hostId,
+      status: statuses[connection.hostId] ?? "disconnected",
+      error: hostErrors[connection.hostId],
+      supportsProjectRegistration: Boolean(
+        snapshots[connection.hostId]?.capabilities.includes("workspace.add"),
+      ),
     })),
     connection: {
-      status: snapshot ? 'connected' : connecting ? 'connecting' : 'disconnected',
-      hostUrl: selectedConnection?.hostUrl ?? '',
-      hostName: selectedConnection?.displayName ?? 'Portal',
+      status: aggregateStatus,
+      hostUrl: selectedConnection?.hostUrl ?? "",
+      hostName: selectedConnection?.displayName ?? "Portal Hosts",
     },
     searchQuery,
     workspaces: modelWorkspaces,
+    archivedThreads: modelArchivedThreads,
+    showHostIdentity: connections.length > 1,
     selectedThreadId,
-    transcript,
+    loadingThreadId,
+    creatingThreadWorkspaceId,
+    composerFocusRequest,
+    composerFocusThreadId,
+    transcript: selectedThreadId && loadingThreadId !== selectedThreadId
+      ? transcripts[selectedThreadId]
+      : undefined,
     workspaceFiles: workspaceFileBrowser.files,
     busy: busy || workspaceFileBrowser.busy,
-    error: workspaceFileBrowser.error ?? error,
-  }), [
-    busy,
-    connecting,
-    connections,
-    connectionsLoaded,
-    connectionsOpen,
-    error,
-    searchQuery,
-    selectedConnection,
-    selectedHostId,
-    selectedThreadId,
-    snapshot,
-    transcript,
-    workspaceFileBrowser.busy,
-    workspaceFileBrowser.error,
-    workspaceFileBrowser.files,
-  ]);
+    error: selectedHostReconnecting
+      ? undefined
+      : workspaceFileBrowser.error ?? error,
+  };
 
   return {
     model,
@@ -324,65 +963,319 @@ export function useLiveAlphaController(
       closeConnections: () => {
         if (connections.length) setConnectionsOpen(false);
       },
+      openArchivedThreads: () => setArchivedThreadsOpen(true),
+      closeArchivedThreads: () => setArchivedThreadsOpen(false),
       pairHost: async (input) => {
         setBusy(true);
         setError(undefined);
         try {
-          const code = parsePortalPairingCode(input.pairingCode);
-          if (connections.some(({ hostId }) => hostId === code.hostId)) throw new Error('This Host is already configured.');
+          const pairing = parsePortalPairingToken(input.pairingToken);
+          if (connections.some(({ hostId }) => hostId === pairing.hostId)) {
+            throw new Error("This Host is already configured.");
+          }
           const paired = await pairPortalHost(input);
           const updated = [...connections, paired];
           setConnections(updated);
-          setSelectedHostId(paired.hostId);
           setConnectionsOpen(false);
-          autoConnectRef.current = paired.hostId;
-          await persist(updated, paired.hostId);
+          autoConnectRef.current.add(paired.hostId);
+          await persist(updated);
           await connectToHost(paired);
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : String(cause));
-          throw cause;
         } finally {
           setBusy(false);
         }
       },
-      selectHost: async (hostId) => {
-        const connection = connections.find((candidate) => candidate.hostId === hostId);
-        if (!connection) return;
-        setSelectedHostId(hostId);
-        autoConnectRef.current = hostId;
-        await persist(connections, hostId);
-        await connectToHost(connection);
-      },
       forgetHost: async (hostId) => {
-        const forgotten = connections.find((connection) => connection.hostId === hostId);
+        const forgotten = connections.find(
+          (connection) => connection.hostId === hostId,
+        );
         if (!forgotten) return;
-        if (hostId === selectedHostId) disconnect();
-        const updated = connections.filter((connection) => connection.hostId !== hostId);
-        const nextHostId = hostId === selectedHostId ? updated[0]?.hostId : selectedHostId;
+        connectionAttemptRef.current.set(
+          hostId,
+          (connectionAttemptRef.current.get(hostId) ?? 0) + 1,
+        );
+        clientsRef.current.get(hostId)?.close();
+        clientsRef.current.delete(hostId);
+        activeThreadIdsRef.current.delete(hostId);
+        autoConnectRef.current.delete(hostId);
+        const draft = localThreadDraftRef.current;
+        if (draft?.placement.hostId === hostId) await discardLocalThreadDraft();
+        if (selected?.hostId === hostId) {
+          selectedThreadIdRef.current = undefined;
+          setSelectedThreadId(undefined);
+          setLoadingThreadId(undefined);
+          workspaceFileBrowser.close();
+        }
+        setSnapshots((current) => ({ ...current, [hostId]: undefined }));
+        setStatuses((current) => ({ ...current, [hostId]: "disconnected" }));
+        setHostErrors((current) => ({ ...current, [hostId]: undefined }));
+        const updated = connections.filter(
+          (connection) => connection.hostId !== hostId,
+        );
         setConnections(updated);
-        setSelectedHostId(nextHostId);
         setConnectionsOpen(updated.length === 0);
-        autoConnectRef.current = undefined;
-        await persist(updated, nextHostId);
+        await persist(updated);
         await deletePortalCredentialKey(forgotten.keyId).catch(() => undefined);
       },
-      connect: () => selectedConnection && connectToHost(selectedConnection),
-      disconnect,
-      refresh,
+      reconnectHost: async (hostId) => {
+        const connection = connections.find(
+          (candidate) => candidate.hostId === hostId,
+        );
+        if (connection) await connectToHost(connection, "reconnect");
+      },
+      refresh: async () => {
+        setBusy(true);
+        await Promise.all(
+          [...clientsRef.current.keys()].map((hostId) => refreshHost(hostId)),
+        );
+        setBusy(false);
+      },
+      addProject: async ({ hostId, path, name }) => {
+        const client = clientsRef.current.get(hostId);
+        if (!client) throw new Error("The selected Portal is not connected.");
+        if (!snapshots[hostId]?.capabilities.includes("workspace.add")) {
+          throw new Error(
+            "The selected Portal must be updated before it can add projects.",
+          );
+        }
+        setBusy(true);
+        setError(undefined);
+        try {
+          await client.addWorkspace(path, name);
+          updateSnapshot(hostId, await client.snapshot());
+        } finally {
+          setBusy(false);
+        }
+      },
       createThread,
       selectThread,
+      archiveThread,
+      restoreThread,
       openWorkspaceDirectory: workspaceFileBrowser.openDirectory,
       openWorkspaceFile: workspaceFileBrowser.openFile,
       activateWorkspaceFile: workspaceFileBrowser.activateFile,
       closeWorkspaceFile: workspaceFileBrowser.closeFile,
       reloadWorkspaceFile: workspaceFileBrowser.reloadFile,
-      sendPrompt,
-      cancelPrompt: () => performAcpAction(async () => await client?.cancelPrompt()),
-      respondToPermission: (requestId, optionId) => client?.respondToPermission(requestId, optionId),
-      respondToElicitation: (requestId, response) => client?.respondToElicitation(requestId, response),
-      setMode: (modeId) => performAcpAction(async () => await client?.setMode(modeId)),
+      sendPrompt: async (text) => {
+        const selectedId = selectedThreadIdRef.current;
+        const draft = localThreadDraftRef.current;
+        const content = [{ type: "text" as const, text }];
+        if (draft && selectedId === draft.thread.id) {
+          if (creatingThreadRef.current) return;
+          const client = clientsRef.current.get(draft.placement.hostId);
+          const snapshot = snapshots[draft.placement.hostId];
+          if (!client || !snapshot) return;
+          const localPromptId = `local-${crypto.randomUUID()}`;
+          if (draft.prepared) {
+            creatingThreadRef.current = true;
+            setBusy(true);
+            setError(undefined);
+            setTranscripts((current) => {
+              const transcript = current[draft.thread.id];
+              return {
+                ...current,
+                [draft.thread.id]: transcript
+                  ? queueOptimisticPrompt(
+                    transcript,
+                    localPromptId,
+                    content,
+                  )
+                  : transcript,
+              };
+            });
+            updateSnapshot(draft.placement.hostId, {
+              ...snapshot,
+              threads: [
+                draft.prepared,
+                ...snapshot.threads.filter(
+                  ({ threadId }) => threadId !== draft.prepared?.threadId,
+                ),
+              ],
+            });
+            localThreadDraftRef.current = undefined;
+            setLocalThreadDraft(undefined);
+            try {
+              await client.prompt(content);
+              void refreshHost(draft.placement.hostId);
+            } catch (cause) {
+              setTranscripts((current) => ({
+                ...current,
+                [draft.thread.id]: current[draft.thread.id]
+                  ? reduceAcpEvent(current[draft.thread.id]!, {
+                    type: "turn/failed",
+                    error: cause instanceof Error
+                      ? cause.message
+                      : String(cause),
+                  })
+                  : current[draft.thread.id],
+              }));
+              reportActionError(cause);
+              throw cause;
+            } finally {
+              creatingThreadRef.current = false;
+              setBusy(false);
+            }
+            return;
+          }
+          const previousActiveThreadId = activeThreadIdsRef.current.get(
+            draft.placement.hostId,
+          );
+          let remoteId: string | undefined;
+          creatingThreadRef.current = true;
+          setCreatingThreadWorkspaceId(draft.projectId);
+          setBusy(true);
+          setError(undefined);
+          setTranscripts((current) => {
+            const transcript = current[draft.thread.id];
+            return {
+              ...current,
+              [draft.thread.id]: transcript
+                ? queueOptimisticPrompt(transcript, localPromptId, content)
+                : transcript,
+            };
+          });
+          try {
+            const created = await client.createThread(
+              draft.placement.workspaceId,
+              draft.agentId,
+            );
+            remoteId = resourceId(draft.placement.hostId, created.threadId);
+            updateSnapshot(draft.placement.hostId, {
+              ...snapshot,
+              threads: [
+                created,
+                ...snapshot.threads.filter(
+                  ({ threadId }) => threadId !== created.threadId,
+                ),
+              ],
+            });
+            localThreadDraftRef.current = undefined;
+            setLocalThreadDraft(undefined);
+            activeThreadIdsRef.current.set(draft.placement.hostId, remoteId);
+            selectedThreadIdRef.current = remoteId;
+            setSelectedThreadId(remoteId);
+            setTranscripts((current) => {
+              const next = { ...current };
+              const draftTranscript = next[draft.thread.id] ??
+                createTranscript(created.acpSessionId);
+              delete next[draft.thread.id];
+              next[remoteId!] = {
+                ...draftTranscript,
+                sessionId: created.acpSessionId,
+              };
+              return next;
+            });
+            await client.attach(created.threadId);
+            setTranscripts((current) => {
+              const transcript = current[remoteId!] ??
+                createTranscript(created.acpSessionId);
+              return transcript.entries.some(({ id }) => id === localPromptId)
+                ? current
+                : {
+                  ...current,
+                  [remoteId!]: queueOptimisticPrompt(
+                    transcript,
+                    localPromptId,
+                    content,
+                  ),
+                };
+            });
+            void refreshHost(draft.placement.hostId);
+          } catch (cause) {
+            if (!remoteId) {
+              if (previousActiveThreadId) {
+                activeThreadIdsRef.current.set(
+                  draft.placement.hostId,
+                  previousActiveThreadId,
+                );
+              } else activeThreadIdsRef.current.delete(draft.placement.hostId);
+              setTranscripts((current) => ({
+                ...current,
+                [draft.thread.id]: createTranscript(draft.thread.id),
+              }));
+            } else {
+              setTranscripts((current) => ({
+                ...current,
+                [remoteId!]: current[remoteId!]
+                  ? reduceAcpEvent(current[remoteId!]!, {
+                    type: "turn/failed",
+                    error: cause instanceof Error
+                      ? cause.message
+                      : String(cause),
+                  })
+                  : current[remoteId!],
+              }));
+            }
+            reportActionError(cause);
+            throw cause;
+          } finally {
+            creatingThreadRef.current = false;
+            setCreatingThreadWorkspaceId(undefined);
+            setBusy(false);
+          }
+          try {
+            await client.prompt(content);
+          } catch (cause) {
+            setTranscripts((current) => ({
+              ...current,
+              [remoteId!]: current[remoteId!]
+                ? reduceAcpEvent(current[remoteId!]!, {
+                  type: "turn/failed",
+                  error: cause instanceof Error ? cause.message : String(cause),
+                })
+                : current[remoteId!],
+            }));
+            reportActionError(cause);
+            throw cause;
+          }
+          return;
+        }
+        if (!selectedId || !selected) return;
+        const client = clientsRef.current.get(selected.hostId);
+        if (!client || !transcripts[selectedId]) return;
+        setTranscripts((current) => ({
+          ...current,
+          [selectedId]: current[selectedId]
+            ? queueOptimisticPrompt(
+              current[selectedId],
+              `local-${crypto.randomUUID()}`,
+              content,
+            )
+            : current[selectedId],
+        }));
+        await performAcpAction(async () => await client.prompt(content), true);
+      },
+      cancelPrompt: () =>
+        performAcpAction(async () => {
+          if (selected) {
+            await clientsRef.current.get(selected.hostId)?.cancelPrompt();
+          }
+        }),
+      respondToPermission: (requestId, optionId) =>
+        selected
+          ? clientsRef.current
+            .get(selected.hostId)
+            ?.respondToPermission(requestId, optionId)
+          : undefined,
+      respondToElicitation: (requestId, response) =>
+        selected
+          ? clientsRef.current
+            .get(selected.hostId)
+            ?.respondToElicitation(requestId, response)
+          : undefined,
+      setMode: (modeId) =>
+        performAcpAction(async () => {
+          if (selected) {
+            await clientsRef.current.get(selected.hostId)?.setMode(modeId);
+          }
+        }),
       setConfigOption: (optionId, value) =>
-        performAcpAction(async () => await client?.setConfigOption(optionId, value)),
+        performAcpAction(async () => {
+          if (selected) {
+            await clientsRef.current
+              .get(selected.hostId)
+              ?.setConfigOption(optionId, value);
+          }
+        }),
     },
   };
 }

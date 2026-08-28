@@ -33,8 +33,8 @@ components without a running host:
 ```
 
 Mock mode is disabled in production builds. Actions such as search, Thread
-selection, Thread creation, connection, and disconnection remain interactive in
-the mocked shell.
+selection, Thread creation, archiving, restoration, connection, and disconnection
+remain interactive in the mocked shell.
 
 ## Module seams
 
@@ -43,6 +43,23 @@ the mocked shell.
 - The protocol contains wire types, constants, and response validation. It contains no Portal or Alpha behavior.
 - `scripts/check-boundary.ts` rejects imports that escape this directory and dependencies on the earlier Weave packages.
 
-The current product supports authenticated Portal discovery, Workspace and Agent listing, durable Thread identity and ACP recovery, plus Workspace-scoped filesystem browsing, UTF-8 reads, full content hashes, conditional writes, directory and file mutations, bounded search, and connection-scoped change observation. Alpha exposes the filesystem through a read-only Workspace browser. Persistent user terminals remain a follow-on slice and will be introduced behind a new product interface rather than pulled in as a legacy dependency.
+The current product supports concurrent authenticated connections to multiple Portal Hosts. Alpha groups physical
+Workspaces that share a normalized Git remote into logical Projects, merges their active Threads by recency while
+retaining Host-scoped identity and routing, keeps cached Host state visible through partial outages, and reconnects
+Hosts independently. A Project can be registered from Alpha by choosing a connected Portal and an existing absolute
+path on that Host. Hosts that advertise the Thread lifecycle capabilities also expose archive and restore controls;
+older Hosts remain usable without a broken lifecycle action.
+
+Hosts that advertise `thread.draft` can preflight one provisional ACP session for Alpha's empty Thread. Alpha attaches
+to it immediately so Agent-owned model, reasoning, mode, and other config controls are available before the first
+prompt. Portal keeps that runtime out of Thread listings and durable catalogs until the first prompt promotes the same
+session; abandoning the empty Thread closes and removes the provisional runtime. Alpha retains its client-only draft
+fallback for older Hosts.
+
+Portal provides Workspace and Agent listing, durable Thread identity, explicit archive and restore, and ACP recovery,
+plus Workspace-scoped filesystem browsing, UTF-8 reads, full content hashes, conditional writes, directory and file
+mutations, bounded search, and connection-scoped change observation. Alpha exposes the filesystem through a read-only
+Workspace browser. Persistent user terminals remain a follow-on slice and will be introduced behind a new product
+interface rather than pulled in as a legacy dependency.
 
 See `portal/README.md` for local configuration and direct acceptance.

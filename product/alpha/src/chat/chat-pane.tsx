@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import type {
   CreateElicitationResponse,
   SessionConfigOption,
@@ -6,6 +7,9 @@ import type {
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
   AiBrainIcon,
+  ArrowDown01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
   Cancel01Icon,
   CheckmarkCircle02Icon,
   Loading03Icon,
@@ -31,7 +35,17 @@ import {
 } from '@/components/ai-elements/prompt-input';
 import { Bubble, BubbleContent, BubbleGroup } from '@/components/ui/bubble';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Reasoning,
   ReasoningContent,
@@ -53,15 +67,6 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
 import { Context, ContextContent, ContextTrigger } from '@/components/ai-elements/context';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 
 export type ChatPaneActions = {
@@ -174,6 +179,12 @@ function EntryView({
 const selectOptions = (option: Extract<SessionConfigOption, { type: 'select' }>) =>
   option.options.flatMap((item) => 'options' in item ? item.options : [item]);
 
+const selectedOptionName = (
+  option: Extract<SessionConfigOption, { type: 'select' }>,
+) => selectOptions(option).find(({ value }) => value === option.currentValue)?.name ?? option.currentValue;
+
+const compactBooleanName = (name: string) => name.replace(/\s+mode$/i, '');
+
 function ConfigControls({
   model,
   actions,
@@ -181,104 +192,173 @@ function ConfigControls({
   model: AcpTranscript;
   actions: ChatPaneActions;
 }) {
+  const legacyModeControlId = '__legacy-mode__';
+  const [activeSelectId, setActiveSelectId] = useState<string | null>(null);
   const hasConfigMode = model.configOptions.some(
     (option) => option.category === 'mode' || option.id === 'mode',
   );
-  const modeItems = model.availableModes.map((mode) => ({
-    label: mode.name,
-    value: mode.id,
-  }));
+  const legacyMode = !hasConfigMode && model.availableModes.length > 0
+    ? model.availableModes.find(({ id }) => id === model.currentModeId)
+    : undefined;
+  const hasLegacyModeControl = !hasConfigMode && model.availableModes.length > 0;
+  const activeSelect = model.configOptions.find(
+    (option): option is Extract<SessionConfigOption, { type: 'select' }> =>
+      option.type === 'select' && option.id === activeSelectId,
+  );
+  const isLegacyModeActive = hasLegacyModeControl && activeSelectId === legacyModeControlId;
+  const summary = [
+    ...model.configOptions
+      .filter((option): option is Extract<SessionConfigOption, { type: 'select' }> =>
+        option.type === 'select'
+      )
+      .map(selectedOptionName),
+    ...(legacyMode ? [legacyMode.name] : []),
+    ...model.configOptions
+      .filter((option) => option.type === 'boolean' && option.currentValue)
+      .map((option) => compactBooleanName(option.name)),
+  ].join(' · ') || 'Agent settings';
+
+  if (!hasLegacyModeControl && model.configOptions.length === 0) {
+    return model.currentModeId
+      ? (
+        <div className="min-w-0" data-slot="config-controls">
+          <Badge variant="ghost">{model.currentModeId}</Badge>
+        </div>
+      )
+      : null;
+  }
 
   return (
-    <FieldGroup
-      className="flex min-w-0 flex-1 flex-row flex-wrap items-center gap-x-1.5 gap-y-1"
-      data-slot="config-controls"
-    >
-      {!hasConfigMode && model.availableModes.length > 0
-        ? (
-          <Field className="w-auto gap-0">
-            <FieldLabel className="sr-only" htmlFor="composer-agent-mode">Agent mode</FieldLabel>
-            <Select
-              items={modeItems}
-              value={model.currentModeId}
-              onValueChange={(value) => actions.setMode(String(value))}
-            >
-              <SelectTrigger id="composer-agent-mode" size="sm" variant="ghost" aria-label="Agent mode">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectLabel>Mode</SelectLabel>
+    <div className="min-w-0 max-w-full" data-slot="config-controls">
+      <DropdownMenu
+        onOpenChange={(open) => {
+          if (!open) setActiveSelectId(null);
+        }}
+      >
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="min-w-0 max-w-full justify-start"
+              aria-label={`Composer settings: ${summary}`}
+            />
+          }
+        >
+          <span className="truncate">{summary}</span>
+          <HugeiconsIcon
+            data-icon="inline-end"
+            icon={ArrowDown01Icon}
+            strokeWidth={2}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          side="top"
+          sideOffset={6}
+          className="w-64 max-w-[calc(100vw-1rem)]"
+        >
+          {isLegacyModeActive
+            ? (
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  closeOnClick={false}
+                  onClick={() => setActiveSelectId(null)}
+                >
+                  <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
+                  Back
+                </DropdownMenuItem>
+                <DropdownMenuLabel>Mode</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={model.currentModeId}>
                   {model.availableModes.map((mode) => (
-                    <SelectItem key={mode.id} value={mode.id}>{mode.name}</SelectItem>
+                    <DropdownMenuRadioItem
+                      key={mode.id}
+                      value={mode.id}
+                      closeOnClick
+                      onClick={() => actions.setMode(mode.id)}
+                    >
+                      {mode.name}
+                    </DropdownMenuRadioItem>
                   ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-        )
-        : !hasConfigMode && model.currentModeId && (
-          <Badge variant="ghost">{model.currentModeId}</Badge>
-        )}
-      {model.configOptions.map((option) => {
-        if (option.type === 'boolean') {
-          return (
-            <Field
-              key={option.id}
-              orientation="horizontal"
-              className="w-auto gap-1.5 px-1"
-              data-slot="config-boolean-control"
-            >
-              <Checkbox
-                id={`composer-config-${option.id}`}
-                checked={option.currentValue}
-                onCheckedChange={(checked) => actions.setConfigOption(option.id, Boolean(checked))}
-              />
-              <FieldLabel
-                htmlFor={`composer-config-${option.id}`}
-                className="text-xs/relaxed font-normal text-muted-foreground"
-              >
-                {option.name}
-              </FieldLabel>
-            </Field>
-          );
-        }
-        const choices = selectOptions(option);
-        const items = choices.map((choice) => ({
-          label: choice.name,
-          value: choice.value,
-        }));
-        return (
-          <Field key={option.id} className="w-auto gap-0">
-            <FieldLabel className="sr-only" htmlFor={`composer-config-${option.id}`}>
-              {option.name}
-            </FieldLabel>
-            <Select
-              items={items}
-              value={option.currentValue}
-              onValueChange={(value) => actions.setConfigOption(option.id, String(value))}
-            >
-              <SelectTrigger
-                id={`composer-config-${option.id}`}
-                size="sm"
-                variant="ghost"
-                aria-label={option.name}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectLabel>{option.name}</SelectLabel>
-                  {choices.map((choice) => (
-                    <SelectItem key={choice.value} value={choice.value}>{choice.name}</SelectItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+            )
+            : activeSelect
+            ? (
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  closeOnClick={false}
+                  onClick={() => setActiveSelectId(null)}
+                >
+                  <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
+                  Back
+                </DropdownMenuItem>
+                <DropdownMenuLabel>{activeSelect.name}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={activeSelect.currentValue}>
+                  {selectOptions(activeSelect).map((choice) => (
+                    <DropdownMenuRadioItem
+                      key={choice.value}
+                      value={choice.value}
+                      closeOnClick
+                      onClick={() =>
+                        actions.setConfigOption(activeSelect.id, choice.value)
+                      }
+                    >
+                      {choice.name}
+                    </DropdownMenuRadioItem>
                   ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-        );
-      })}
-    </FieldGroup>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+            )
+            : (
+              <DropdownMenuGroup>
+                {hasLegacyModeControl && (
+                  <DropdownMenuItem
+                    closeOnClick={false}
+                    onClick={() => setActiveSelectId(legacyModeControlId)}
+                  >
+                    <span className="flex-1">Mode</span>
+                    <span className="text-muted-foreground">
+                      {legacyMode?.name ?? model.currentModeId}
+                    </span>
+                    <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} />
+                  </DropdownMenuItem>
+                )}
+                {model.configOptions.map((option) => {
+                  if (option.type === 'boolean') {
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={option.id}
+                        checked={option.currentValue}
+                        closeOnClick={false}
+                        onCheckedChange={(checked) =>
+                          actions.setConfigOption(option.id, checked)
+                        }
+                      >
+                        {option.name}
+                      </DropdownMenuCheckboxItem>
+                    );
+                  }
+                  return (
+                    <DropdownMenuItem
+                      key={option.id}
+                      closeOnClick={false}
+                      onClick={() => setActiveSelectId(option.id)}
+                    >
+                      <span className="flex-1">{option.name}</span>
+                      <span className="text-muted-foreground">
+                        {selectedOptionName(option)}
+                      </span>
+                      <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} />
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuGroup>
+            )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 
@@ -310,7 +390,17 @@ function ContextUsage({ usage }: { usage: AcpTranscript['usage'] }) {
   );
 }
 
-function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneActions }) {
+function Composer({
+  model,
+  actions,
+  focusRequest,
+  discardDraftOnUnmount,
+}: {
+  model: AcpTranscript;
+  actions: ChatPaneActions;
+  focusRequest?: number;
+  discardDraftOnUnmount?: boolean;
+}) {
   const [draft, setDraft] = useState<ComposerDraft>(
     () => composerDrafts.get(model.sessionId) ?? { revision: 0, text: '' },
   );
@@ -329,8 +419,12 @@ function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneA
     return () => {
       listeners.delete(updateDraft);
       if (listeners.size === 0) composerDraftListeners.delete(model.sessionId);
+      if (discardDraftOnUnmount) composerDrafts.delete(model.sessionId);
     };
-  }, [model.sessionId]);
+  }, [discardDraftOnUnmount, model.sessionId]);
+  useEffect(() => {
+    if (focusRequest !== undefined) textareaRef.current?.focus();
+  }, [focusRequest]);
   const setText = (next: string) => {
     const updated = { revision: draftRef.current.revision + 1, text: next };
     writeComposerDraft(model.sessionId, updated);
@@ -341,7 +435,12 @@ function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneA
     const submittedDraft = draftRef.current;
     const clearedDraft = { revision: submittedDraft.revision + 1, text: '' };
     writeComposerDraft(model.sessionId, clearedDraft);
-    if (window.matchMedia?.('(max-width: 767px)').matches) textareaRef.current?.blur();
+    if (
+      Capacitor.isNativePlatform() ||
+      window.matchMedia?.('(max-width: 767px)').matches
+    ) {
+      textareaRef.current?.blur();
+    }
     try {
       await actions.sendPrompt(prompt);
     } catch {
@@ -420,9 +519,13 @@ function Composer({ model, actions }: { model: AcpTranscript; actions: ChatPaneA
 export function ChatPane({
   model,
   actions,
+  focusRequest,
+  discardDraftOnUnmount,
 }: {
   model: AcpTranscript;
   actions: ChatPaneActions;
+  focusRequest?: number;
+  discardDraftOnUnmount?: boolean;
 }) {
   const running = model.turn.status === 'running';
   return (
@@ -461,7 +564,13 @@ export function ChatPane({
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      <Composer key={model.sessionId} model={model} actions={actions} />
+      <Composer
+        key={model.sessionId}
+        model={model}
+        actions={actions}
+        focusRequest={focusRequest}
+        discardDraftOnUnmount={discardDraftOnUnmount}
+      />
     </div>
   );
 }

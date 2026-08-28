@@ -1,7 +1,10 @@
-export async function* readLines(stream: ReadableStream<Uint8Array>) {
+export async function* readLines(stream: ReadableStream<Uint8Array>, signal?: AbortSignal) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffered = '';
+  const abort = () => void reader.cancel(signal?.reason).catch(() => undefined);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
   try {
     while (true) {
       const { value, done } = await reader.read();
@@ -17,6 +20,7 @@ export async function* readLines(stream: ReadableStream<Uint8Array>) {
     }
     if (buffered) yield buffered.replace(/\r$/, '');
   } finally {
+    signal?.removeEventListener('abort', abort);
     reader.releaseLock();
   }
 }
