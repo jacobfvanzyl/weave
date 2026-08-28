@@ -10,6 +10,7 @@ import {
   PORTAL_WEBSOCKET_PROTOCOL,
   type PortalPrincipalSummary,
   type PortalRpcMethod,
+  TERMINAL_EVENT_METHOD,
   WORKSPACE_FILE_RPC_METHODS,
   WORKSPACE_FILE_WATCH_EVENT_METHOD,
 } from '@weave/product-protocol';
@@ -17,6 +18,7 @@ import { error, type JsonRpcMessage, parseJsonRpcMessage, result } from './json-
 import { Portal, PortalThreadLifecycleError } from './portal.ts';
 import { type PortalPrincipal, PortalSecurityError } from './security.ts';
 import { WorkspaceFileError } from './workspace-files.ts';
+import { PortalTerminalError } from './terminals.ts';
 
 const protocols = (request: Request) =>
   (request.headers.get('sec-websocket-protocol') ?? '')
@@ -31,6 +33,24 @@ const sendJson = (socket: WebSocket, message: unknown) => {
 };
 
 const send = (socket: WebSocket, message: JsonRpcMessage) => sendJson(socket, message);
+
+const TERMINAL_SOCKET_BACKLOG_LIMIT = 256 * 1024;
+export const sendTerminal = (
+  socket: Pick<WebSocket, 'readyState' | 'bufferedAmount' | 'send' | 'close'>,
+  message: JsonRpcMessage,
+) => {
+  if (socket.readyState !== WebSocket.OPEN) return false;
+  const encoded = JSON.stringify(message);
+  if (
+    socket.bufferedAmount + new TextEncoder().encode(encoded).byteLength >
+      TERMINAL_SOCKET_BACKLOG_LIMIT
+  ) {
+    socket.close(1013, 'Terminal stream fell behind; reconnect to resync.');
+    return false;
+  }
+  socket.send(encoded);
+  return true;
+};
 
 const principalSummary = (
   principal: PortalPrincipal,
@@ -130,6 +150,12 @@ const rpcWebSocket = (request: Request, portal: Portal) => {
               method: WORKSPACE_FILE_WATCH_EVENT_METHOD,
               params: notification,
             }),
+          (notification) =>
+            sendTerminal(upgraded.socket, {
+              jsonrpc: '2.0',
+              method: TERMINAL_EVENT_METHOD,
+              params: notification,
+            }),
         );
         stopMonitor = activeCredentialMonitor(
           portal,
@@ -187,6 +213,8 @@ const rpcWebSocket = (request: Request, portal: Portal) => {
           ? error(message.id, -32010, cause.message, cause.data)
           : cause instanceof PortalThreadLifecycleError
           ? error(message.id, -32011, cause.message, cause.data)
+          : cause instanceof PortalTerminalError
+          ? error(message.id, -32012, cause.message, cause.data)
           : cause instanceof PortalSecurityError
           ? error(message.id, -32003, cause.message, {
             code: cause.code,

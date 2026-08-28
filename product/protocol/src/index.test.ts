@@ -6,9 +6,11 @@ import {
   parsePortalPairResult,
   parsePortalRpcParams,
   parsePortalRpcResult,
+  parseTerminalNotification,
   parseWorkspaceFileErrorData,
   parseWorkspaceFileWatchNotification,
   PORTAL_ACP_PATH,
+  TERMINAL_EVENT_METHOD,
   WORKSPACE_FILE_WATCH_EVENT_METHOD,
 } from './index';
 
@@ -234,6 +236,30 @@ describe('Portal protocol', () => {
         scope: 'both',
       })
     ).toThrow('256');
+  });
+
+  test('routes Terminal contracts through the Portal protocol', () => {
+    expect(parsePortalRpcParams('terminal.list', {
+      workspaceId: 'workspace-1',
+    })).toEqual({ workspaceId: 'workspace-1' });
+    expect(parsePortalRpcResult('terminal.create', {
+      terminal: {
+        terminalId: 'terminal-1',
+        workspaceId: 'workspace-1',
+        title: 'zsh',
+        status: 'running',
+        cols: 80,
+        rows: 24,
+      },
+    }).terminal.terminalId).toBe('terminal-1');
+    expect(parseTerminalNotification(TERMINAL_EVENT_METHOD, {
+      attachmentId: 'attachment-1',
+      terminalId: 'terminal-1',
+      workspaceId: 'workspace-1',
+      generation: 'generation-1',
+      sequence: 1,
+      event: { type: 'output', data: 'ready' },
+    }).event).toEqual({ type: 'output', data: 'ready' });
   });
 
   test('requires conditional writes and validates watch notifications and typed errors', () => {

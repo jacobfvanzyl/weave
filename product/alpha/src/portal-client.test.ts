@@ -178,4 +178,212 @@ describe('DirectHostClient', () => {
     });
     client.close();
   });
+
+  it('buffers Terminal notifications that race the attach snapshot and applies later sequences once', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onTerminalEvent = vi.fn();
+    const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
+    const socket = FakeWebSocket.instance;
+    const attached = client.attachTerminal(
+      'weave',
+      'terminal-1',
+      'control',
+      onTerminalEvent,
+    );
+    socket.receive({
+      type: 'weave.portal.auth.challenge',
+      challengeId: 'challenge-1',
+      hostId: 'host-1',
+      nonce: 'nonce',
+      audience: '/rpc',
+      origin: '-',
+      expiresAt: new Date(Date.now() + 10_000).toISOString(),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    socket.receive({
+      type: 'weave.portal.auth.authenticated',
+      principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' },
+    });
+    await Promise.resolve();
+    const request = JSON.parse(socket.sent[1]);
+    expect(request).toMatchObject({
+      method: 'terminal.attach',
+      params: { workspaceId: 'weave', terminalId: 'terminal-1', mode: 'control' },
+    });
+
+    socket.receive({
+      jsonrpc: '2.0',
+      method: 'terminal.event',
+      params: {
+        attachmentId: 'attachment-1',
+        workspaceId: 'weave',
+        terminalId: 'terminal-1',
+        generation: 'generation-1',
+        sequence: 5,
+        event: { type: 'output', data: 'after snapshot' },
+      },
+    });
+    socket.receive({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        attachment: { attachmentId: 'attachment-1', mode: 'control' },
+        snapshot: {
+          terminal: {
+            terminalId: 'terminal-1',
+            workspaceId: 'weave',
+            title: 'zsh',
+            status: 'running',
+            cols: 80,
+            rows: 24,
+          },
+          generation: 'generation-1',
+          cursor: 4,
+          retainedFrom: 1,
+          data: 'snapshot',
+          controller: { controlled: true, attachmentId: 'attachment-1' },
+        },
+      },
+    });
+    const result = await attached;
+    expect(result).toMatchObject({
+      attachment: { attachmentId: 'attachment-1' },
+      snapshot: { cursor: 4, data: 'snapshot' },
+    });
+    expect(onTerminalEvent).not.toHaveBeenCalled();
+    result.startEvents();
+    expect(onTerminalEvent).toHaveBeenCalledTimes(1);
+    expect(onTerminalEvent).toHaveBeenCalledWith(expect.objectContaining({
+      sequence: 5,
+      event: { type: 'output', data: 'after snapshot' },
+    }));
+
+    socket.receive({
+      jsonrpc: '2.0',
+      method: 'terminal.event',
+      params: {
+        attachmentId: 'attachment-1',
+        workspaceId: 'weave',
+        terminalId: 'terminal-1',
+        generation: 'generation-1',
+        sequence: 4,
+        event: { type: 'output', data: 'duplicate' },
+      },
+    });
+    expect(onTerminalEvent).toHaveBeenCalledTimes(1);
+    client.close();
+  });
+
+  it('forces a fresh snapshot when attach-time Terminal notifications overflow', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onTerminalEvent = vi.fn();
+    const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
+    const socket = FakeWebSocket.instance;
+    const attached = client.attachTerminal('weave', 'terminal-1', 'control', onTerminalEvent);
+    socket.receive({
+      type: 'weave.portal.auth.challenge',
+      challengeId: 'challenge-1',
+      hostId: 'host-1',
+      nonce: 'nonce',
+      audience: '/rpc',
+      origin: '-',
+      expiresAt: new Date(Date.now() + 10_000).toISOString(),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    socket.receive({
+      type: 'weave.portal.auth.authenticated',
+      principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' },
+    });
+    await Promise.resolve();
+    const request = JSON.parse(socket.sent[1]);
+    for (let sequence = 1; sequence <= 257; sequence += 1) {
+      socket.receive({
+        jsonrpc: '2.0',
+        method: 'terminal.event',
+        params: {
+          attachmentId: 'attachment-1',
+          workspaceId: 'weave',
+          terminalId: 'terminal-1',
+          generation: 'generation-1',
+          sequence,
+          event: { type: 'output', data: 'x' },
+        },
+      });
+    }
+    socket.receive({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        attachment: { attachmentId: 'attachment-1', mode: 'control' },
+        snapshot: {
+          terminal: {
+            terminalId: 'terminal-1',
+            workspaceId: 'weave',
+            title: 'zsh',
+            status: 'running',
+            cols: 80,
+            rows: 24,
+          },
+          generation: 'generation-1',
+          cursor: 0,
+          retainedFrom: 1,
+          data: '',
+          controller: { controlled: true, attachmentId: 'attachment-1' },
+        },
+      },
+    });
+
+    const result = await attached;
+    result.startEvents();
+    expect(onTerminalEvent).toHaveBeenCalledOnce();
+    expect(onTerminalEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: { type: 'resync', retainedFrom: 1 },
+    }));
+    client.close();
+  });
+
+  it('preserves typed Terminal control errors', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
+    const socket = FakeWebSocket.instance;
+    const attaching = client.attachTerminal('weave', 'terminal-1', 'control', vi.fn());
+    socket.receive({
+      type: 'weave.portal.auth.challenge',
+      challengeId: 'challenge-1',
+      hostId: 'host-1',
+      nonce: 'nonce',
+      audience: '/rpc',
+      origin: '-',
+      expiresAt: new Date(Date.now() + 10_000).toISOString(),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    socket.receive({
+      type: 'weave.portal.auth.authenticated',
+      principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' },
+    });
+    await Promise.resolve();
+    const request = JSON.parse(socket.sent[1]);
+    socket.receive({
+      jsonrpc: '2.0',
+      id: request.id,
+      error: {
+        code: -32012,
+        message: 'Terminal is controlled by another attachment.',
+        data: {
+          domain: 'terminal',
+          code: 'TERMINAL_CONTROLLED',
+          workspaceId: 'weave',
+          terminalId: 'terminal-1',
+        },
+      },
+    });
+    await expect(attaching).rejects.toMatchObject({
+      code: -32012,
+      data: { domain: 'terminal', code: 'TERMINAL_CONTROLLED' },
+    });
+    client.close();
+  });
 });

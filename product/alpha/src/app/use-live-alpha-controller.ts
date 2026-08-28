@@ -30,6 +30,7 @@ import {
 } from "./portal-connection-storage";
 import { useWorkspaceFileBrowser } from "./use-workspace-file-browser";
 import { useAppResume } from "./use-app-resume";
+import { useAlphaTerminals } from "./use-alpha-terminals";
 
 export const HOST_SNAPSHOT_REFRESH_INTERVAL_MS = 5_000;
 export const HOST_RECONNECT_TIMEOUT_MS = 10_000;
@@ -686,6 +687,22 @@ export function useLiveAlphaController(
   const selectedHostReconnecting = selected
     ? statuses[selected.hostId] === "reconnecting"
     : false;
+  const terminalController = useAlphaTerminals({
+    target: selected
+      ? {
+        hostId: selected.hostId,
+        workspaceId: selected.workspaceId,
+        supported: Boolean(
+          snapshots[selected.hostId]?.capabilities.includes(
+            "terminal.attach",
+          ),
+        ),
+      }
+      : undefined,
+    client: selected
+      ? clientsRef.current.get(selected.hostId)
+      : undefined,
+  });
   const aggregateStatus = Object.values(statuses).includes("connected")
     ? ("connected" as const)
     : Object.values(statuses).some((status) =>
@@ -949,6 +966,7 @@ export function useLiveAlphaController(
       ? transcripts[selectedThreadId]
       : undefined,
     workspaceFiles: workspaceFileBrowser.files,
+    terminals: terminalController.model,
     busy: busy || workspaceFileBrowser.busy,
     error: selectedHostReconnecting
       ? undefined
@@ -1055,6 +1073,14 @@ export function useLiveAlphaController(
       activateWorkspaceFile: workspaceFileBrowser.activateFile,
       closeWorkspaceFile: workspaceFileBrowser.closeFile,
       reloadWorkspaceFile: workspaceFileBrowser.reloadFile,
+      showTerminals: terminalController.actions.show,
+      hideTerminals: terminalController.actions.hide,
+      createTerminal: terminalController.actions.create,
+      selectTerminal: terminalController.actions.select,
+      closeTerminal: terminalController.actions.close,
+      retryTerminalControl: terminalController.actions.retryControl,
+      inputTerminal: terminalController.actions.input,
+      resizeTerminal: terminalController.actions.resize,
       sendPrompt: async (text) => {
         const selectedId = selectedThreadIdRef.current;
         const draft = localThreadDraftRef.current;

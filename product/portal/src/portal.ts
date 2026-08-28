@@ -4,6 +4,9 @@ import {
   type PortalRpcMethod,
   type PortalRpcParams,
   type PortalRpcResult,
+  TERMINAL_RPC_METHODS,
+  type TerminalNotification,
+  type TerminalRpcMethod,
   type ThreadSummary,
   WORKSPACE_FILE_RPC_METHODS,
   type WorkspaceFileWatchNotification,
@@ -15,6 +18,8 @@ import type { JsonRpcMessage } from './json-rpc.ts';
 import { RuntimeStateStore } from './runtime-state.ts';
 import { type PortalAction, type PortalPrincipal, PortalSecurity, PortalSecurityError } from './security.ts';
 import { ThreadEventJournal } from './thread-journal.ts';
+import { TmuxTerminalBackend } from './tmux-terminal-backend.ts';
+import { type PortalTerminalSession, type TerminalBackend, TerminalService } from './terminals.ts';
 import { HostedThread, type ThreadAttachment, ThreadPromptActiveError } from './thread-runtime.ts';
 import { type RegisteredWorkspace, WorkspaceCatalog, workspaceSummary } from './workspace-catalog.ts';
 import { WorkspaceFileService, type WorkspaceFileWatchSession } from './workspace-files.ts';
@@ -22,15 +27,18 @@ import { WorkspaceFileService, type WorkspaceFileWatchSession } from './workspac
 export class PortalRpcSession {
   readonly #portal: Portal;
   readonly #watches: WorkspaceFileWatchSession;
+  readonly #terminals?: PortalTerminalSession;
   #closed = false;
 
   constructor(
     portal: Portal,
     watches: WorkspaceFileWatchSession,
+    terminals: PortalTerminalSession | undefined,
     readonly principal: PortalPrincipal,
   ) {
     this.#portal = portal;
     this.#watches = watches;
+    this.#terminals = terminals;
   }
 
   async request<Method extends PortalRpcMethod>(
@@ -60,6 +68,13 @@ export class PortalRpcSession {
         Method
       >;
     }
+    if (TERMINAL_RPC_METHODS.includes(method as TerminalRpcMethod)) {
+      if (!this.#terminals) throw new Error('Portal Terminal service is unavailable.');
+      return await this.#terminals.request(
+        method as TerminalRpcMethod,
+        params as PortalRpcParams<TerminalRpcMethod>,
+      ) as PortalRpcResult<Method>;
+    }
     return await this.#portal.request(this.principal, method, params, true);
   }
 
@@ -67,6 +82,7 @@ export class PortalRpcSession {
     if (this.#closed) return;
     this.#closed = true;
     this.#watches.close();
+    this.#terminals?.close();
   }
 }
 
@@ -94,6 +110,7 @@ export class Portal {
   readonly #journal: ThreadEventJournal;
   readonly #runtimeStates: RuntimeStateStore;
   readonly #workspaceFiles: WorkspaceFileService;
+  readonly #terminals?: TerminalService;
   readonly #workspaceCatalog: WorkspaceCatalog;
   readonly security: PortalSecurity;
   readonly #workspaces: Map<string, RegisteredWorkspace>;
@@ -109,6 +126,7 @@ export class Portal {
     runtimeStates: RuntimeStateStore,
     workspaceCatalog: WorkspaceCatalog,
     workspaceFiles: WorkspaceFileService,
+    terminals: TerminalService | undefined,
     security: PortalSecurity,
   ) {
     this.#catalog = catalog;
@@ -116,6 +134,7 @@ export class Portal {
     this.#runtimeStates = runtimeStates;
     this.#workspaceCatalog = workspaceCatalog;
     this.#workspaceFiles = workspaceFiles;
+    this.#terminals = terminals;
     this.security = security;
     this.#workspaces = new Map(
       workspaceCatalog.list().map((
@@ -127,7 +146,10 @@ export class Portal {
     );
   }
 
-  static async open(config: PortalConfig) {
+  static async open(
+    config: PortalConfig,
+    options: { terminalBackend?: TerminalBackend | false } = {},
+  ) {
     const catalog = new ThreadCatalog(config.stateDirectory);
     const workspaceCatalog = await WorkspaceCatalog.open(
       config.stateDirectory,
@@ -148,6 +170,17 @@ export class Portal {
           workspaces.map(({ workspaceId }) => workspaceId),
         ),
       ]);
+    const terminalBackend = options.terminalBackend === false ? undefined : options.terminalBackend ??
+      (await TmuxTerminalBackend.available()
+        ? new TmuxTerminalBackend({ stateDirectory: config.stateDirectory })
+        : undefined);
+    const terminals = terminalBackend
+      ? new TerminalService({
+        backend: terminalBackend,
+        resolveWorkspace: (workspaceId) =>
+          workspaceCatalog.list().find((workspace) => workspace.workspaceId === workspaceId),
+      })
+      : undefined;
     return new Portal(
       config,
       catalog,
@@ -155,6 +188,7 @@ export class Portal {
       runtimeStates,
       workspaceCatalog,
       workspaceFiles,
+      terminals,
       security,
     );
   }
@@ -190,6 +224,7 @@ export class Portal {
             'credential.rotate',
             'credential.revoke',
             ...WORKSPACE_FILE_RPC_METHODS,
+            ...(this.#terminals ? TERMINAL_RPC_METHODS : []),
             'acp.v1',
           ],
         } as PortalRpcResult<Method>;
@@ -381,6 +416,15 @@ export class Portal {
       case 'workspace.file.watch.update':
       case 'workspace.file.watch.stop':
         throw new Error('Workspace file watches require an RPC session.');
+      case 'terminal.list':
+      case 'terminal.create':
+      case 'terminal.snapshot':
+      case 'terminal.attach':
+      case 'terminal.input':
+      case 'terminal.resize':
+      case 'terminal.detach':
+      case 'terminal.close':
+        throw new Error('Terminal requests require an RPC session.');
       default:
         throw new Error(`Unknown Portal method: ${String(method)}`);
     }
@@ -395,6 +439,8 @@ export class Portal {
       workspaceId?: string;
       agentId?: string;
       threadId?: string;
+      terminalId?: string;
+      mode?: 'observe' | 'control';
     };
     if (method === 'thread.create' || method === 'thread.draft.create') {
       await this.security.authorize(principal, 'thread.create', input);
@@ -422,6 +468,16 @@ export class Portal {
         workspaceId: thread.workspaceId,
         agentId: thread.agentId,
       });
+      return;
+    }
+    if (TERMINAL_RPC_METHODS.includes(method as TerminalRpcMethod)) {
+      const action: PortalAction = method === 'terminal.create' ||
+          method === 'terminal.input' || method === 'terminal.resize' ||
+          method === 'terminal.close' ||
+          (method === 'terminal.attach' && input.mode === 'control')
+        ? 'terminal.control'
+        : 'terminal.observe';
+      await this.security.authorize(principal, action, input);
       return;
     }
     const action: PortalAction = method === 'portal.capabilities'
@@ -452,10 +508,12 @@ export class Portal {
   connectRpc(
     principal: PortalPrincipal,
     send: (notification: WorkspaceFileWatchNotification) => void,
+    sendTerminal?: (notification: TerminalNotification) => unknown,
   ) {
     return new PortalRpcSession(
       this,
       this.#workspaceFiles.openWatchSession(send),
+      this.#terminals?.openSession(crypto.randomUUID(), sendTerminal ?? (() => undefined)),
       principal,
     );
   }
@@ -562,6 +620,7 @@ export class Portal {
       await this.#runtimeStates.delete(threadId).catch(() => undefined);
     }));
     this.#workspaceFiles.close();
+    await this.#terminals?.close();
   }
 
   #thread(threadId: string): ThreadSummary {

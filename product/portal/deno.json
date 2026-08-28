@@ -10,6 +10,7 @@
     "dev": "deno run --allow-env --allow-net --allow-read --allow-run --allow-write src/main.ts serve --config portal.config.json",
     "acceptance": "deno run --allow-env --allow-net scripts/acceptance.ts",
     "acceptance:filesystem": "deno run --allow-env --allow-net scripts/filesystem-acceptance.ts",
+    "acceptance:terminal": "deno run --allow-env --allow-net scripts/terminal-acceptance.ts",
     "build": "deno compile --allow-env --allow-net --allow-read --allow-run --allow-write --output dist/weave-portal src/main.ts",
     "sign:macos": "deno run --allow-env --allow-read --allow-run scripts/sign-macos.ts",
     "build:macos-signed": "deno task build && deno task sign:macos"

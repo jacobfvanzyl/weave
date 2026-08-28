@@ -1,9 +1,14 @@
-import { PORTAL_PAIR_REQUEST_TYPE, WORKSPACE_FILE_WATCH_EVENT_METHOD } from '@weave/product-protocol';
+import {
+  PORTAL_PAIR_REQUEST_TYPE,
+  TERMINAL_EVENT_METHOD,
+  WORKSPACE_FILE_WATCH_EVENT_METHOD,
+} from '@weave/product-protocol';
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.14';
 import { dirname, fromFileUrl, join } from 'jsr:@std/path@1.1.2';
 import type { PortalConfig } from './config.ts';
 import { Portal } from './portal.ts';
-import { startPortalServer } from './server.ts';
+import { sendTerminal, startPortalServer } from './server.ts';
+import { InMemoryTerminalBackend } from './terminals.ts';
 import {
   generatePortalKey,
   type PortalCredentialSigner,
@@ -26,6 +31,173 @@ const pairTestCredential = async (
   });
   return { ...key, credentialId: paired.principal.credentialId };
 };
+
+Deno.test('Portal closes a backpressured Terminal socket with a retryable resync reason', () => {
+  const closes: Array<{ code?: number; reason?: string }> = [];
+  const socket = {
+    readyState: WebSocket.OPEN,
+    bufferedAmount: 256 * 1024,
+    send: () => {
+      throw new Error('backpressured socket must not send');
+    },
+    close: (code?: number, reason?: string) => closes.push({ code, reason }),
+  };
+  assertEquals(sendTerminal(socket, { jsonrpc: '2.0', method: 'terminal.event', params: {} }), false);
+  assertEquals(closes, [{ code: 1013, reason: 'Terminal stream fell behind; reconnect to resync.' }]);
+});
+
+Deno.test('Portal RPC exposes persistent Terminal control and observer attachments', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-product-terminal-rpc-' });
+  const workspacePath = join(root, 'workspace');
+  await Deno.mkdir(workspacePath);
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 },
+    displayName: 'Terminal Portal',
+    allowedOrigins: [],
+    stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{ agentId: 'fake', name: 'Fake', command: 'false', args: [], env: {} }],
+  };
+  const backend = new InMemoryTerminalBackend();
+  const portal = await Portal.open(config, { terminalBackend: backend });
+  const credential = await pairTestCredential(portal);
+  const server = startPortalServer(portal);
+  const address = server.addr as Deno.NetAddr;
+  const url = `ws://127.0.0.1:${address.port}/rpc`;
+  const controller = await RpcSocket.open(url, credential);
+  const observer = await RpcSocket.open(url, credential);
+  try {
+    const capabilities = await controller.request('portal.capabilities') as { capabilities: string[] };
+    assertEquals(capabilities.capabilities.includes('terminal.attach'), true);
+
+    const created = await controller.request('terminal.create', {
+      workspaceId: 'workspace',
+      cols: 90,
+      rows: 28,
+    }) as { terminal: { terminalId: string } };
+    const controlled = await controller.request('terminal.attach', {
+      workspaceId: 'workspace',
+      terminalId: created.terminal.terminalId,
+      mode: 'control',
+    }) as { attachment: { attachmentId: string } };
+
+    let conflict: unknown;
+    try {
+      await observer.request('terminal.attach', {
+        workspaceId: 'workspace',
+        terminalId: created.terminal.terminalId,
+        mode: 'control',
+      });
+    } catch (cause) {
+      conflict = cause;
+    }
+    assertEquals(conflict instanceof RpcResponseError && { code: conflict.code, data: conflict.data }, {
+      code: -32012,
+      data: {
+        domain: 'terminal',
+        code: 'TERMINAL_CONTROLLED',
+        workspaceId: 'workspace',
+        terminalId: created.terminal.terminalId,
+      },
+    });
+
+    const observed = await observer.request('terminal.attach', {
+      workspaceId: 'workspace',
+      terminalId: created.terminal.terminalId,
+      mode: 'observe',
+    }) as { attachment: { attachmentId: string } };
+    await backend.emitOutput(created.terminal.terminalId, 'ready\r\n');
+    await waitFor(() =>
+      [controller, observer].every((socket) =>
+        socket.notifications.some((message) => message.method === TERMINAL_EVENT_METHOD)
+      )
+    );
+
+    await controller.request('terminal.input', {
+      workspaceId: 'workspace',
+      terminalId: created.terminal.terminalId,
+      attachmentId: controlled.attachment.attachmentId,
+      data: 'echo ready\r',
+    });
+    assertEquals(backend.inputs.at(-1)?.data, 'echo ready\r');
+    for (const data of ['\r', ' ', '\t']) {
+      await controller.request('terminal.input', {
+        workspaceId: 'workspace',
+        terminalId: created.terminal.terminalId,
+        attachmentId: controlled.attachment.attachmentId,
+        data,
+      });
+    }
+    assertEquals(backend.inputs.slice(-3).map(({ data }) => data), [
+      '\r',
+      ' ',
+      '\t',
+    ]);
+
+    const restrictedKey = await generatePortalKey();
+    const restrictedGrants = portal.security.defaultGrants();
+    restrictedGrants.workspaceIds = [];
+    const restrictedToken = await portal.security.createPairingToken(
+      60_000,
+      restrictedGrants,
+    );
+    const restrictedPairing = await portal.security.redeemPairing({
+      type: PORTAL_PAIR_REQUEST_TYPE,
+      token: restrictedToken,
+      label: 'Restricted Terminal client',
+      publicKey: restrictedKey.publicKey,
+    });
+    const restricted = await RpcSocket.open(url, {
+      ...restrictedKey,
+      credentialId: restrictedPairing.principal.credentialId,
+    });
+    const unauthorized = await assertRejects(
+      () =>
+        restricted.request('terminal.snapshot', {
+          workspaceId: 'workspace',
+          terminalId: created.terminal.terminalId,
+        }),
+      RpcResponseError,
+      'Resource is unavailable.',
+    );
+    restricted.close();
+    assertEquals({
+      message: unauthorized.message,
+      code: unauthorized.code,
+      resourceCode: (unauthorized.data as { code?: string }).code,
+    }, {
+      message: 'Resource is unavailable.',
+      code: -32003,
+      resourceCode: 'RESOURCE_UNAVAILABLE',
+    });
+
+    controller.close();
+    let replacement: { attachment: { attachmentId: string } } | undefined;
+    for (let attempt = 0; attempt < 100 && !replacement; attempt += 1) {
+      try {
+        replacement = await observer.request('terminal.attach', {
+          workspaceId: 'workspace',
+          terminalId: created.terminal.terminalId,
+          mode: 'control',
+        }) as { attachment: { attachmentId: string } };
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    assertEquals(replacement?.attachment.attachmentId.length ? true : false, true);
+    await observer.request('terminal.detach', {
+      workspaceId: 'workspace',
+      terminalId: created.terminal.terminalId,
+      attachmentId: observed.attachment.attachmentId,
+    });
+  } finally {
+    controller.close();
+    observer.close();
+    await server.shutdown();
+    await portal.close();
+    await Deno.remove(root, { recursive: true });
+  }
+});
 
 Deno.test('Alpha registers a durable project through its chosen Portal', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-product-project-' });

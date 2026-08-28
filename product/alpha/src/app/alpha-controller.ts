@@ -5,6 +5,7 @@ import type {
   WorkspaceFileMetadata,
 } from "@weave/product-protocol";
 import type { AcpTranscript } from "@/chat/acp-transcript";
+import type { AlphaTerminalsModel } from "./use-alpha-terminals";
 
 export type AlphaConnectionStatus =
   | "disconnected"
@@ -104,6 +105,7 @@ export type AlphaViewModel = {
   composerFocusThreadId?: string;
   transcript?: AcpTranscript;
   workspaceFiles?: AlphaWorkspaceFiles;
+  terminals?: AlphaTerminalsModel;
   busy: boolean;
   error?: string;
 };
@@ -136,6 +138,14 @@ export type AlphaActions = {
   activateWorkspaceFile(path: string): void;
   closeWorkspaceFile(path: string): void;
   reloadWorkspaceFile(): Promise<void> | void;
+  showTerminals?(): Promise<void> | void;
+  hideTerminals?(): Promise<void> | void;
+  createTerminal?(): Promise<void> | void;
+  selectTerminal?(terminalId: string): Promise<void> | void;
+  closeTerminal?(terminalId: string): Promise<void> | void;
+  retryTerminalControl?(): Promise<void> | void;
+  inputTerminal?(data: string): Promise<void> | void;
+  resizeTerminal?(cols: number, rows: number): Promise<void> | void;
   sendPrompt(text: string): Promise<void> | void;
   cancelPrompt(): Promise<void> | void;
   respondToPermission(requestId: string, optionId: string): void;

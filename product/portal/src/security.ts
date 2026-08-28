@@ -35,6 +35,7 @@ export type PortalResource = {
   workspaceId?: string;
   agentId?: string;
   threadId?: string;
+  terminalId?: string;
 };
 export type PortalGrants = {
   actions: PortalAction[];
@@ -692,6 +693,7 @@ export class PortalSecurity {
       ...(resource.workspaceId ? { workspaceId: resource.workspaceId } : {}),
       ...(resource.agentId ? { agentId: resource.agentId } : {}),
       ...(resource.threadId ? { threadId: resource.threadId } : {}),
+      ...(resource.terminalId ? { terminalId: resource.terminalId } : {}),
     });
     throw new PortalSecurityError(
       'RESOURCE_UNAVAILABLE',

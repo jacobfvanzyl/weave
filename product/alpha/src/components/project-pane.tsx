@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
   AiFile01Icon,
@@ -130,6 +130,8 @@ export function ProjectPane({
   reconnecting = false,
   capacitorPlatform = false,
   busy,
+  footerActions,
+  forceVisible = false,
   onOpenDirectory,
   onOpenFile,
 }: {
@@ -138,11 +140,13 @@ export function ProjectPane({
   reconnecting?: boolean;
   capacitorPlatform?: boolean;
   busy: boolean;
+  footerActions?: ReactNode;
+  forceVisible?: boolean;
   onOpenDirectory(path: string): Promise<void> | void;
   onOpenFile(path: string): void;
 }) {
   const { isMobile, openMobile, state, toggleSidebar } = useSidebar();
-  const visible = isMobile ? openMobile : state === 'expanded';
+  const visible = forceVisible || (isMobile ? openMobile : state === 'expanded');
   const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(() => new Set());
 
   useEffect(() => setExpandedDirectories(new Set()), [files?.workspaceId]);
@@ -167,7 +171,7 @@ export function ProjectPane({
   return (
     <Sidebar
       side='right'
-      collapsible='offcanvas'
+      collapsible={forceVisible ? 'none' : 'offcanvas'}
       position='inline'
       aria-label={files ? `${files.workspaceName} Project Pane` : 'Project Pane'}
       data-slot='project-pane'
@@ -263,11 +267,13 @@ export function ProjectPane({
 
       <SidebarFooter className='h-[var(--bottom-rail-height)] shrink-0 justify-center gap-0 border-t border-sidebar-border bg-status-bar p-0'>
         <div className='flex justify-end px-1'>
-          <ProjectPaneToggle
-            action='Hide'
-            capacitorInset={capacitorPlatform}
-            onClick={toggleSidebar}
-          />
+          {footerActions ?? (
+            <ProjectPaneToggle
+              action='Hide'
+              capacitorInset={capacitorPlatform}
+              onClick={toggleSidebar}
+            />
+          )}
         </div>
       </SidebarFooter>
     </Sidebar>

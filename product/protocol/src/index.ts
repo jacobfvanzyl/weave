@@ -38,6 +38,31 @@ export type {
   WorkspaceFileWatchEvent,
   WorkspaceFileWatchNotification,
 } from './workspace-files.ts';
+export {
+  parseTerminalErrorData,
+  parseTerminalNotification,
+  parseTerminalRpcParams,
+  parseTerminalRpcResult,
+  TERMINAL_ERROR_CODES,
+  TERMINAL_EVENT_METHOD,
+  TERMINAL_RPC_METHODS,
+} from './terminals.ts';
+export type {
+  TerminalAttachment,
+  TerminalAttachmentMode,
+  TerminalControllerState,
+  TerminalErrorCode,
+  TerminalErrorData,
+  TerminalEvent,
+  TerminalNotification,
+  TerminalRpcContracts,
+  TerminalRpcMethod,
+  TerminalRpcParams,
+  TerminalRpcResult,
+  TerminalSnapshot,
+  TerminalStatus,
+  TerminalSummary,
+} from './terminals.ts';
 import {
   parseWorkspaceFileRpcParams,
   parseWorkspaceFileRpcResult,
@@ -45,6 +70,13 @@ import {
   type WorkspaceFileRpcContracts,
   type WorkspaceFileRpcMethod,
 } from './workspace-files.ts';
+import {
+  parseTerminalRpcParams,
+  parseTerminalRpcResult,
+  TERMINAL_RPC_METHODS,
+  type TerminalRpcContracts,
+  type TerminalRpcMethod,
+} from './terminals.ts';
 
 export type RepositoryIdentity = {
   canonicalKey: string;
@@ -274,7 +306,8 @@ type BasePortalRpcContracts = {
 
 export type PortalRpcContracts =
   & BasePortalRpcContracts
-  & WorkspaceFileRpcContracts;
+  & WorkspaceFileRpcContracts
+  & TerminalRpcContracts;
 
 export type PortalRpcMethod = keyof PortalRpcContracts;
 export const PORTAL_RPC_METHODS = [
@@ -292,6 +325,7 @@ export const PORTAL_RPC_METHODS = [
   'credential.rotate',
   'credential.revoke',
   ...WORKSPACE_FILE_RPC_METHODS,
+  ...TERMINAL_RPC_METHODS,
 ] as const satisfies readonly PortalRpcMethod[];
 export type PortalRpcParams<Method extends PortalRpcMethod> = PortalRpcContracts[Method]['params'];
 export type PortalRpcResult<Method extends PortalRpcMethod> = PortalRpcContracts[Method]['result'];
@@ -303,6 +337,12 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
   if (WORKSPACE_FILE_RPC_METHODS.includes(method as WorkspaceFileRpcMethod)) {
     return parseWorkspaceFileRpcParams(
       method as WorkspaceFileRpcMethod,
+      value,
+    ) as PortalRpcParams<Method>;
+  }
+  if (TERMINAL_RPC_METHODS.includes(method as TerminalRpcMethod)) {
+    return parseTerminalRpcParams(
+      method as TerminalRpcMethod,
       value,
     ) as PortalRpcParams<Method>;
   }
@@ -460,6 +500,12 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
   if (WORKSPACE_FILE_RPC_METHODS.includes(method as WorkspaceFileRpcMethod)) {
     return parseWorkspaceFileRpcResult(
       method as WorkspaceFileRpcMethod,
+      value,
+    ) as PortalRpcResult<Method>;
+  }
+  if (TERMINAL_RPC_METHODS.includes(method as TerminalRpcMethod)) {
+    return parseTerminalRpcResult(
+      method as TerminalRpcMethod,
       value,
     ) as PortalRpcResult<Method>;
   }

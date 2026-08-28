@@ -184,6 +184,22 @@ export function useMockAlphaController(
   const [archivedThreads, setArchivedThreads] = useState<
     AlphaWorkspace["threads"]
   >([]);
+  const [terminalTabs, setTerminalTabs] = useState([
+    {
+      terminalId: "mock-terminal-1",
+      workspaceId: "workspace-weave",
+      title: "zsh",
+      status: "running" as const,
+      cols: 100,
+      rows: 30,
+    },
+  ]);
+  const [activeTerminalId, setActiveTerminalId] = useState(
+    "mock-terminal-1",
+  );
+  const [terminalData, setTerminalData] = useState(
+    "Welcome to Weave\r\n$ ",
+  );
 
   const model = useMemo<AlphaViewModel>(() => ({
     platform: "mock",
@@ -213,6 +229,19 @@ export function useMockAlphaController(
     composerFocusThreadId,
     transcript,
     workspaceFiles,
+    terminals: {
+      hostId: "mock-host",
+      workspaceId: selectedThreadId ? "workspace-weave" : undefined,
+      supported: true,
+      tabs: selectedThreadId ? terminalTabs : [],
+      activeTerminalId: selectedThreadId ? activeTerminalId : undefined,
+      attachmentId: selectedThreadId ? "mock-attachment" : undefined,
+      attachmentMode: selectedThreadId ? "control" : undefined,
+      data: selectedThreadId ? terminalData : "",
+      dataEpoch: 1,
+      dataOffset: 0,
+      loading: false,
+    },
     busy: scenario === "busy" || Boolean(loadingThreadId),
     error: scenario === "error"
       ? "Portal lost the connection to this host."
@@ -232,6 +261,9 @@ export function useMockAlphaController(
     transcript,
     workspaceFiles,
     workspaces,
+    terminalTabs,
+    activeTerminalId,
+    terminalData,
   ]);
 
   return {
@@ -488,6 +520,35 @@ export function useMockAlphaController(
             : current
         );
       },
+      showTerminals: () => undefined,
+      hideTerminals: () => undefined,
+      createTerminal: () => {
+        const terminalId = `mock-terminal-${terminalTabs.length + 1}`;
+        setTerminalTabs((current) => [...current, {
+          terminalId,
+          workspaceId: "workspace-weave",
+          title: "zsh",
+          status: "running",
+          cols: 100,
+          rows: 30,
+        }]);
+        setActiveTerminalId(terminalId);
+        setTerminalData("$ ");
+      },
+      selectTerminal: setActiveTerminalId,
+      closeTerminal: (terminalId) => {
+        setTerminalTabs((current) => {
+          const next = current.filter((terminal) =>
+            terminal.terminalId !== terminalId
+          );
+          setActiveTerminalId(next[0]?.terminalId ?? "");
+          return next;
+        });
+      },
+      retryTerminalControl: () => undefined,
+      inputTerminal: (data) =>
+        setTerminalData((current) => `${current}${data}`),
+      resizeTerminal: () => undefined,
       sendPrompt: (text) => {
         setWorkspaces((current) =>
           current.map((workspace) => ({

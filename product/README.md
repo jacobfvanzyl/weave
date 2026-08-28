@@ -59,7 +59,11 @@ fallback for older Hosts.
 Portal provides Workspace and Agent listing, durable Thread identity, explicit archive and restore, and ACP recovery,
 plus Workspace-scoped filesystem browsing, UTF-8 reads, full content hashes, conditional writes, directory and file
 mutations, bounded search, and connection-scoped change observation. Alpha exposes the filesystem through a read-only
-Workspace browser. Persistent user terminals remain a follow-on slice and will be introduced behind a new product
-interface rather than pulled in as a legacy dependency.
+Workspace browser. Portal also exposes product-owned persistent user terminals behind the `terminal.*` protocol.
+Its private tmux adapter keeps Workspace-scoped shells alive across client disconnects and Portal restarts, while the
+public service enforces one controller, multiple observers, bounded output, typed conflicts, and explicit detach versus
+close. Alpha renders those shells with xterm in independently persisted Bottom and Right docks. Run
+`deno task acceptance:terminal` from `product/portal` with `PORTAL_URL`, `PORTAL_PAIRING_TOKEN`, and
+`PORTAL_WORKSPACE_ID` to exercise the two-client lifecycle against a configured Host.
 
 See `portal/README.md` for local configuration and direct acceptance.

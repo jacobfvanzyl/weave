@@ -1,21 +1,23 @@
 import {
   type AgentSummary,
   parsePortalRpcResult,
+  parseTerminalErrorData,
+  parseTerminalNotification,
   parseWorkspaceFileErrorData,
   parseWorkspaceFileWatchNotification,
   type PortalRpcMethod,
   type PortalRpcParams,
   type PortalRpcResult,
+  TERMINAL_EVENT_METHOD,
+  type TerminalAttachmentMode,
+  type TerminalNotification,
   type ThreadSummary,
   WORKSPACE_FILE_WATCH_EVENT_METHOD,
   type WorkspaceFileErrorData,
   type WorkspaceFileWatchEvent,
   type WorkspaceSummary,
 } from '@weave/product-protocol';
-import type {
-  ContentBlock,
-  CreateElicitationResponse,
-} from '@agentclientprotocol/sdk';
+import type { ContentBlock, CreateElicitationResponse } from '@agentclientprotocol/sdk';
 import { AcpSessionClient } from '@/chat/acp-client';
 import type { AcpTranscriptEvent } from '@/chat/acp-transcript';
 import { portalWebSocketUrl } from '@/portal-address';
@@ -137,9 +139,13 @@ class JsonRpcWebSocket {
       try {
         if (
           (data as { domain?: unknown } | undefined)?.domain ===
-          'workspace-filesystem'
+            'workspace-filesystem'
         ) {
           data = parseWorkspaceFileErrorData(data);
+        } else if (
+          (data as { domain?: unknown } | undefined)?.domain === 'terminal'
+        ) {
+          data = parseTerminalErrorData(data);
         }
       } catch {
         // Preserve malformed remote error data as opaque evidence.
@@ -147,9 +153,7 @@ class JsonRpcWebSocket {
       pending.reject(
         new PortalRpcError(
           typeof error.code === 'number' ? error.code : -32000,
-          typeof error.message === 'string'
-            ? error.message
-            : `${pending.method} failed.`,
+          typeof error.message === 'string' ? error.message : `${pending.method} failed.`,
           data,
         ),
       );
@@ -179,6 +183,19 @@ export class DirectHostClient {
     string,
     (event: WorkspaceFileWatchEvent) => void
   >();
+  private readonly terminalListeners = new Map<
+    string,
+    {
+      generation: string;
+      cursor: number;
+      onEvent: (event: TerminalNotification) => void;
+    }
+  >();
+  private readonly pendingTerminalNotifications = new Map<
+    string,
+    TerminalNotification[]
+  >();
+  private readonly overflowedTerminalAttachments = new Set<string>();
 
   constructor(
     hostUrl: string,
@@ -197,16 +214,13 @@ export class DirectHostClient {
 
   async snapshot(): Promise<HostSnapshot> {
     const capabilities = await this.request('portal.capabilities', {});
-    const supportsThreadLifecycle =
-      capabilities.capabilities.includes('thread.archive') &&
+    const supportsThreadLifecycle = capabilities.capabilities.includes('thread.archive') &&
       capabilities.capabilities.includes('thread.restore');
     const [workspaces, agents, threads, archivedThreads] = await Promise.all([
       this.request('workspace.list', {}),
       this.request('agent.list', {}),
       this.request('thread.list', { status: 'active' }),
-      supportsThreadLifecycle
-        ? this.request('thread.list', { status: 'archived' })
-        : Promise.resolve({ threads: [] }),
+      supportsThreadLifecycle ? this.request('thread.list', { status: 'archived' }) : Promise.resolve({ threads: [] }),
     ]);
     return {
       hostId: capabilities.hostId,
@@ -399,9 +413,132 @@ export class DirectHostClient {
     };
   }
 
+  listTerminals(workspaceId: string) {
+    return this.request('terminal.list', { workspaceId });
+  }
+
+  createTerminal(workspaceId: string, cols?: number, rows?: number) {
+    return this.request('terminal.create', {
+      workspaceId,
+      ...(cols === undefined ? {} : { cols }),
+      ...(rows === undefined ? {} : { rows }),
+    });
+  }
+
+  snapshotTerminal(workspaceId: string, terminalId: string) {
+    return this.request('terminal.snapshot', { workspaceId, terminalId });
+  }
+
+  async attachTerminal(
+    workspaceId: string,
+    terminalId: string,
+    mode: TerminalAttachmentMode,
+    onEvent: (event: TerminalNotification) => void,
+  ) {
+    const result = await this.request('terminal.attach', {
+      workspaceId,
+      terminalId,
+      mode,
+    });
+    let started = false;
+    return {
+      ...result,
+      startEvents: () => {
+        if (started) return;
+        started = true;
+        this.terminalListeners.set(result.attachment.attachmentId, {
+          generation: result.snapshot.generation,
+          cursor: result.snapshot.cursor,
+          onEvent,
+        });
+        if (this.overflowedTerminalAttachments.delete(result.attachment.attachmentId)) {
+          this.pendingTerminalNotifications.delete(result.attachment.attachmentId);
+          onEvent({
+            attachmentId: result.attachment.attachmentId,
+            terminalId: result.snapshot.terminal.terminalId,
+            workspaceId: result.snapshot.terminal.workspaceId,
+            generation: result.snapshot.generation,
+            sequence: result.snapshot.cursor + 1,
+            event: { type: 'resync', retainedFrom: result.snapshot.retainedFrom },
+          });
+          return;
+        }
+        const pending = this.pendingTerminalNotifications.get(
+          result.attachment.attachmentId,
+        ) ?? [];
+        this.pendingTerminalNotifications.delete(result.attachment.attachmentId);
+        for (const notification of pending) {
+          this.dispatchTerminalNotification(notification);
+        }
+      },
+    };
+  }
+
+  inputTerminal(
+    workspaceId: string,
+    terminalId: string,
+    attachmentId: string,
+    data: string,
+  ) {
+    return this.request('terminal.input', {
+      workspaceId,
+      terminalId,
+      attachmentId,
+      data,
+    });
+  }
+
+  resizeTerminal(
+    workspaceId: string,
+    terminalId: string,
+    attachmentId: string,
+    cols: number,
+    rows: number,
+  ) {
+    return this.request('terminal.resize', {
+      workspaceId,
+      terminalId,
+      attachmentId,
+      cols,
+      rows,
+    });
+  }
+
+  async detachTerminal(
+    workspaceId: string,
+    terminalId: string,
+    attachmentId: string,
+  ) {
+    this.terminalListeners.delete(attachmentId);
+    this.pendingTerminalNotifications.delete(attachmentId);
+    this.overflowedTerminalAttachments.delete(attachmentId);
+    return await this.request('terminal.detach', {
+      workspaceId,
+      terminalId,
+      attachmentId,
+    });
+  }
+
+  async closeTerminal(
+    workspaceId: string,
+    terminalId: string,
+    attachmentId: string,
+  ) {
+    const result = await this.request('terminal.close', {
+      workspaceId,
+      terminalId,
+      attachmentId,
+    });
+    this.terminalListeners.delete(attachmentId);
+    this.pendingTerminalNotifications.delete(attachmentId);
+    this.overflowedTerminalAttachments.delete(attachmentId);
+    return result;
+  }
+
   async prompt(content: ContentBlock[]) {
-    if (!this.acp || !this.activeThread)
+    if (!this.acp || !this.activeThread) {
       throw new Error('Attach to a Thread first.');
+    }
     await this.acp.prompt(content);
   }
 
@@ -432,16 +569,59 @@ export class DirectHostClient {
 
   close() {
     this.workspaceFileWatchListeners.clear();
+    this.terminalListeners.clear();
+    this.pendingTerminalNotifications.clear();
+    this.overflowedTerminalAttachments.clear();
+    this.pendingTerminalNotifications.clear();
     this.acp?.close();
     this.rpc.close();
   }
 
   private handleNotification(method: string, params: unknown) {
-    if (method !== WORKSPACE_FILE_WATCH_EVENT_METHOD) return;
-    const notification = parseWorkspaceFileWatchNotification(method, params);
-    this.workspaceFileWatchListeners.get(notification.subscriptionId)?.(
-      notification.event,
-    );
+    if (method === WORKSPACE_FILE_WATCH_EVENT_METHOD) {
+      const notification = parseWorkspaceFileWatchNotification(method, params);
+      this.workspaceFileWatchListeners.get(notification.subscriptionId)?.(
+        notification.event,
+      );
+      return;
+    }
+    if (method === TERMINAL_EVENT_METHOD) {
+      this.dispatchTerminalNotification(
+        parseTerminalNotification(method, params),
+      );
+    }
+  }
+
+  private dispatchTerminalNotification(notification: TerminalNotification) {
+    const listener = this.terminalListeners.get(notification.attachmentId);
+    if (!listener) {
+      if (this.overflowedTerminalAttachments.has(notification.attachmentId)) return;
+      const pending = this.pendingTerminalNotifications.get(
+        notification.attachmentId,
+      ) ?? [];
+      pending.push(notification);
+      if (pending.length > 256) {
+        this.pendingTerminalNotifications.delete(notification.attachmentId);
+        this.overflowedTerminalAttachments.add(notification.attachmentId);
+      } else {
+        this.pendingTerminalNotifications.set(notification.attachmentId, pending);
+      }
+      return;
+    }
+    if (notification.sequence <= listener.cursor) return;
+    if (
+      notification.generation !== listener.generation ||
+      notification.sequence !== listener.cursor + 1
+    ) {
+      this.terminalListeners.delete(notification.attachmentId);
+      listener.onEvent({
+        ...notification,
+        event: { type: 'resync', retainedFrom: notification.sequence },
+      });
+      return;
+    }
+    listener.cursor = notification.sequence;
+    listener.onEvent(notification);
   }
 
   private async request<Method extends PortalRpcMethod>(
