@@ -19,13 +19,14 @@ export const MOCK_SCENARIOS = [
   "connecting",
   "reconnecting",
   "empty",
+  "multi-host",
   "sidebar",
   "chat",
   "busy",
   "error",
 ] as const;
 
-export type MockScenario = typeof MOCK_SCENARIOS[number];
+export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 const WORKSPACES: AlphaWorkspace[] = [
   {
@@ -121,8 +122,10 @@ const scenarioConnection = (scenario: MockScenario): AlphaConnectionStatus => {
 
 const scenarioTranscript = (scenario: MockScenario) => {
   if (
-    scenario !== "sidebar" && scenario !== "chat" &&
-    scenario !== "reconnecting" && scenario !== "busy" &&
+    scenario !== "sidebar" &&
+    scenario !== "chat" &&
+    scenario !== "reconnecting" &&
+    scenario !== "busy" &&
     scenario !== "error"
   ) {
     return undefined;
@@ -150,8 +153,10 @@ export function useMockAlphaController(
   const [archivedThreadsOpen, setArchivedThreadsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState(
-    scenario === "sidebar" || scenario === "chat" ||
-      scenario === "reconnecting" || scenario === "busy" ||
+    scenario === "sidebar" ||
+      scenario === "chat" ||
+      scenario === "reconnecting" ||
+      scenario === "busy" ||
       scenario === "error"
       ? "thread-wve-47"
       : undefined,
@@ -159,27 +164,50 @@ export function useMockAlphaController(
   const [loadingThreadId, setLoadingThreadId] = useState<string>();
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [composerFocusThreadId, setComposerFocusThreadId] = useState<string>();
-  const [transcript, setTranscript] = useState<AcpTranscript | undefined>(
-    () => scenarioTranscript(scenario),
+  const [transcript, setTranscript] = useState<AcpTranscript | undefined>(() =>
+    scenarioTranscript(scenario),
   );
   const [workspaceFiles, setWorkspaceFiles] = useState<
     AlphaWorkspaceFiles | undefined
   >(() =>
     selectedThreadId
       ? {
-        workspaceId: "workspace-weave",
-        workspaceName: "weave",
-        openFiles: [],
-        directories: {
-          "": { entries: MOCK_WORKSPACE_ENTRIES[""], truncated: false },
-        },
-      }
-      : undefined
+          workspaceId: "workspace-weave",
+          workspaceName: "weave",
+          openFiles: [],
+          directories: {
+            "": { entries: MOCK_WORKSPACE_ENTRIES[""], truncated: false },
+          },
+        }
+      : undefined,
   );
   const [workspaces, setWorkspaces] = useState<AlphaWorkspace[]>(
     scenario === "empty"
       ? WORKSPACES.map((workspace) => ({ ...workspace, threads: [] }))
-      : WORKSPACES,
+      : scenario === "multi-host"
+        ? WORKSPACES.map((workspace, index) =>
+            index === 0
+              ? {
+                  ...workspace,
+                  id: "repository:github.com/veezee/weave",
+                  placements: [
+                    {
+                      id: "mock-host:workspace-weave",
+                      workspaceId: "workspace-weave",
+                      hostId: "mock-host",
+                      hostName: "Bazzite",
+                    },
+                    {
+                      id: "mock-macbook:workspace-weave",
+                      workspaceId: "workspace-weave",
+                      hostId: "mock-macbook",
+                      hostName: "Jaco’s MacBook Air",
+                    },
+                  ],
+                }
+              : workspace,
+          )
+        : WORKSPACES,
   );
   const [archivedThreads, setArchivedThreads] = useState<
     AlphaWorkspace["threads"]
@@ -194,77 +222,106 @@ export function useMockAlphaController(
       rows: 30,
     },
   ]);
-  const [activeTerminalId, setActiveTerminalId] = useState(
-    "mock-terminal-1",
+  const [activeTerminalId, setActiveTerminalId] = useState("mock-terminal-1");
+  const [terminalData, setTerminalData] = useState("Welcome to Weave\r\n$ ");
+  const terminalProject = workspaces.find((workspace) =>
+    workspace.threads.some(({ id }) => id === selectedThreadId),
   );
-  const [terminalData, setTerminalData] = useState(
-    "Welcome to Weave\r\n$ ",
+  const terminalThread = terminalProject?.threads.find(
+    ({ id }) => id === selectedThreadId,
   );
 
-  const model = useMemo<AlphaViewModel>(() => ({
-    platform: "mock",
-    connectionsLoaded: true,
-    connectionsOpen,
-    archivedThreadsOpen,
-    connections: [{
-      hostId: "mock-host",
-      displayName: "bazzite",
+  const model = useMemo<AlphaViewModel>(
+    () => ({
+      platform: "mock",
+      connectionsLoaded: true,
+      connectionsOpen,
+      archivedThreadsOpen,
+      connections: [
+        {
+          hostId: "mock-host",
+          displayName: "Bazzite",
+          hostUrl,
+          status: connectionStatus,
+          selected: true,
+          supportsProjectRegistration: true,
+        },
+        ...(scenario === "multi-host"
+          ? [
+              {
+                hostId: "mock-macbook",
+                displayName: "Jaco’s MacBook Air",
+                hostUrl: "macbook",
+                status: "connected" as const,
+                selected: false,
+                supportsProjectRegistration: true,
+              },
+            ]
+          : []),
+      ],
+      connection: {
+        status: connectionStatus,
+        hostUrl,
+        hostName: "bazzite",
+      },
+      searchQuery,
+      workspaces,
+      archivedThreads,
+      showHostIdentity: scenario === "multi-host",
+      selectedThreadId,
+      loadingThreadId,
+      composerFocusRequest,
+      composerFocusThreadId,
+      transcript,
+      workspaceFiles,
+      terminals: {
+        scope:
+          terminalProject && terminalThread
+            ? {
+                hostId: terminalThread.hostId,
+                projectId: terminalThread.projectId ?? terminalProject.id,
+                workspaceId: terminalThread.workspaceId,
+                worktreeId: terminalThread.worktreeId,
+              }
+            : undefined,
+        supported: true,
+        tabs: selectedThreadId ? terminalTabs : [],
+        activeTerminalId: selectedThreadId ? activeTerminalId : undefined,
+        attachmentId: selectedThreadId ? "mock-attachment" : undefined,
+        attachmentMode: selectedThreadId ? "control" : undefined,
+        data: selectedThreadId ? terminalData : "",
+        dataEpoch: 1,
+        dataOffset: 0,
+        loading: false,
+      },
+      busy: scenario === "busy" || Boolean(loadingThreadId),
+      error:
+        scenario === "error"
+          ? "Portal lost the connection to this host."
+          : undefined,
+    }),
+    [
+      connectionStatus,
+      archivedThreads,
+      archivedThreadsOpen,
+      connectionsOpen,
       hostUrl,
-      status: connectionStatus,
-      selected: true,
-      supportsProjectRegistration: true,
-    }],
-    connection: {
-      status: connectionStatus,
-      hostUrl,
-      hostName: "bazzite",
-    },
-    searchQuery,
-    workspaces,
-    archivedThreads,
-    showHostIdentity: false,
-    selectedThreadId,
-    loadingThreadId,
-    composerFocusRequest,
-    composerFocusThreadId,
-    transcript,
-    workspaceFiles,
-    terminals: {
-      hostId: "mock-host",
-      workspaceId: selectedThreadId ? "workspace-weave" : undefined,
-      supported: true,
-      tabs: selectedThreadId ? terminalTabs : [],
-      activeTerminalId: selectedThreadId ? activeTerminalId : undefined,
-      attachmentId: selectedThreadId ? "mock-attachment" : undefined,
-      attachmentMode: selectedThreadId ? "control" : undefined,
-      data: selectedThreadId ? terminalData : "",
-      dataEpoch: 1,
-      dataOffset: 0,
-      loading: false,
-    },
-    busy: scenario === "busy" || Boolean(loadingThreadId),
-    error: scenario === "error"
-      ? "Portal lost the connection to this host."
-      : undefined,
-  }), [
-    connectionStatus,
-    archivedThreads,
-    archivedThreadsOpen,
-    connectionsOpen,
-    hostUrl,
-    scenario,
-    searchQuery,
-    loadingThreadId,
-    composerFocusRequest,
-    composerFocusThreadId,
-    selectedThreadId,
-    transcript,
-    workspaceFiles,
-    workspaces,
-    terminalTabs,
-    activeTerminalId,
-    terminalData,
-  ]);
+      scenario,
+      searchQuery,
+      loadingThreadId,
+      composerFocusRequest,
+      composerFocusThreadId,
+      selectedThreadId,
+      transcript,
+      workspaceFiles,
+      workspaces,
+      terminalTabs,
+      activeTerminalId,
+      terminalData,
+      terminalProject,
+      terminalThread,
+    ],
+  );
 
   return {
     model,
@@ -283,30 +340,67 @@ export function useMockAlphaController(
         if (!path.startsWith("/")) {
           throw new Error("Project path must be absolute.");
         }
-        const workspaceName = name?.trim() ||
-          path.split("/").filter(Boolean).at(-1);
+        const workspaceName =
+          name?.trim() || path.split("/").filter(Boolean).at(-1);
         if (!workspaceName) {
           throw new Error("Project path must name a directory.");
         }
-        const workspaceId = `mock-workspace-${
-          workspaceName.toLocaleLowerCase().replaceAll(/[^a-z0-9]+/g, "-")
-        }`;
+        const workspaceId = `mock-workspace-${workspaceName
+          .toLocaleLowerCase()
+          .replaceAll(/[^a-z0-9]+/g, "-")}`;
         setWorkspaces((current) =>
           current.some((workspace) => workspace.id === workspaceId)
             ? current
-            : [...current, {
-              id: workspaceId,
-              workspaceId,
-              hostId,
-              hostName: "bazzite",
-              name: workspaceName,
-              threads: [],
-            }]
+            : [
+                ...current,
+                {
+                  id: workspaceId,
+                  workspaceId,
+                  hostId,
+                  hostName: "bazzite",
+                  name: workspaceName,
+                  threads: [],
+                },
+              ],
         );
       },
-      createThread: (workspaceId) => {
+      removeProject: (workspaceId, placementId) => {
+        setWorkspaces((current) =>
+          current.flatMap((workspace) => {
+            if (workspace.id !== workspaceId) return [workspace];
+            const placements = workspace.placements ?? [
+              {
+                id: `${workspace.hostId}:${workspace.workspaceId}`,
+                workspaceId: workspace.workspaceId,
+                hostId: workspace.hostId,
+                hostName: workspace.hostName,
+              },
+            ];
+            const removed = placementId
+              ? placements.find(({ id }) => id === placementId)
+              : placements[0];
+            if (!removed) return [workspace];
+            const remaining = placements.filter(({ id }) => id !== removed.id);
+            if (!remaining.length) return [];
+            return [
+              {
+                ...workspace,
+                placements: remaining,
+                threads: workspace.threads.filter(
+                  ({ hostId }) => hostId !== removed.hostId,
+                ),
+              },
+            ];
+          }),
+        );
+      },
+      createThread: (workspaceId, placementId) => {
         const targetId = workspaceId || workspaces[0]?.id;
         if (!targetId) return;
+        const targetWorkspace = workspaces.find(({ id }) => id === targetId);
+        const placement = placementId
+          ? targetWorkspace?.placements?.find(({ id }) => id === placementId)
+          : undefined;
         const existingDraft = workspaces
           .find(({ id }) => id === targetId)
           ?.threads.find(({ draft }) => draft);
@@ -321,33 +415,37 @@ export function useMockAlphaController(
           current.map((workspace) =>
             workspace.id === targetId
               ? {
-                ...workspace,
-                threads: [{
-                  id,
-                  threadId: id,
-                  hostId: "mock-host",
-                  title: "New thread",
-                  agentName: "weave-codex",
-                  hostName: "bazzite",
-                  supportsThreadLifecycle: false,
-                  status: "active",
-                  updatedAt: new Date().toISOString(),
-                  workspaceId: workspace.id,
-                  draft: true,
-                }, ...workspace.threads],
-              }
+                  ...workspace,
+                  threads: [
+                    {
+                      id,
+                      threadId: id,
+                      hostId: placement?.hostId ?? workspace.hostId,
+                      title: "New thread",
+                      agentName: "weave-codex",
+                      hostName: placement?.hostName ?? workspace.hostName,
+                      supportsThreadLifecycle: false,
+                      status: "active",
+                      updatedAt: new Date().toISOString(),
+                      workspaceId:
+                        placement?.workspaceId ?? workspace.workspaceId,
+                      draft: true,
+                    },
+                    ...workspace.threads,
+                  ],
+                }
               : {
-                ...workspace,
-                threads: workspace.threads.filter(({ draft }) => !draft),
-              }
-          )
+                  ...workspace,
+                  threads: workspace.threads.filter(({ draft }) => !draft),
+                },
+          ),
         );
         setSelectedThreadId(id);
         setTranscript(createTranscript(id));
         setComposerFocusThreadId(id);
         setComposerFocusRequest((current) => current + 1);
-        const workspace = workspaces.find((candidate) =>
-          candidate.id === targetId
+        const workspace = workspaces.find(
+          (candidate) => candidate.id === targetId,
         );
         if (workspace) {
           setWorkspaceFiles({
@@ -361,7 +459,8 @@ export function useMockAlphaController(
         }
       },
       selectThread: async (threadId) => {
-        const thread = workspaces.flatMap((workspace) => workspace.threads)
+        const thread = workspaces
+          .flatMap((workspace) => workspace.threads)
           .find((candidate) => candidate.id === threadId);
         if (thread?.draft) {
           setSelectedThreadId(threadId);
@@ -373,10 +472,10 @@ export function useMockAlphaController(
           current.map((workspace) => ({
             ...workspace,
             threads: workspace.threads.filter(({ draft }) => !draft),
-          }))
+          })),
         );
-        const workspace = workspaces.find((candidate) =>
-          candidate.id === thread?.workspaceId
+        const workspace = workspaces.find(
+          (candidate) => candidate.id === thread?.workspaceId,
         );
         setSelectedThreadId(threadId);
         setLoadingThreadId(threadId);
@@ -387,33 +486,37 @@ export function useMockAlphaController(
         setWorkspaceFiles(
           workspace
             ? {
-              workspaceId: workspace.id,
-              workspaceName: workspace.name,
-              openFiles: [],
-              directories: {
-                "": { entries: MOCK_WORKSPACE_ENTRIES[""], truncated: false },
-              },
-            }
+                workspaceId: workspace.id,
+                workspaceName: workspace.name,
+                openFiles: [],
+                directories: {
+                  "": { entries: MOCK_WORKSPACE_ENTRIES[""], truncated: false },
+                },
+              }
             : undefined,
         );
         setLoadingThreadId(undefined);
       },
       archiveThread: (threadId) => {
-        const thread = workspaces.flatMap((workspace) => workspace.threads)
+        const thread = workspaces
+          .flatMap((workspace) => workspace.threads)
           .find((candidate) => candidate.id === threadId);
         if (!thread) return;
-        setArchivedThreads((current) => [{
-          ...thread,
-          status: "archived",
-          archivedAt: new Date().toISOString(),
-        }, ...current]);
+        setArchivedThreads((current) => [
+          {
+            ...thread,
+            status: "archived",
+            archivedAt: new Date().toISOString(),
+          },
+          ...current,
+        ]);
         setWorkspaces((current) =>
           current.map((workspace) => ({
             ...workspace,
-            threads: workspace.threads.filter((candidate) =>
-              candidate.id !== threadId
+            threads: workspace.threads.filter(
+              (candidate) => candidate.id !== threadId,
             ),
-          }))
+          })),
         );
         if (selectedThreadId === threadId) {
           setSelectedThreadId(undefined);
@@ -422,42 +525,47 @@ export function useMockAlphaController(
         }
       },
       restoreThread: (threadId) => {
-        const thread = archivedThreads.find((candidate) =>
-          candidate.id === threadId
+        const thread = archivedThreads.find(
+          (candidate) => candidate.id === threadId,
         );
         if (!thread) return;
         setArchivedThreads((current) =>
-          current.filter((candidate) => candidate.id !== threadId)
+          current.filter((candidate) => candidate.id !== threadId),
         );
         setWorkspaces((current) =>
           current.map((workspace) =>
             workspace.workspaceId === thread.workspaceId
               ? {
-                ...workspace,
-                threads: [{
-                  ...thread,
-                  status: "active",
-                  archivedAt: undefined,
-                }, ...workspace.threads],
-              }
-              : workspace
-          )
+                  ...workspace,
+                  threads: [
+                    {
+                      ...thread,
+                      status: "active",
+                      archivedAt: undefined,
+                    },
+                    ...workspace.threads,
+                  ],
+                }
+              : workspace,
+          ),
         );
       },
       openWorkspaceDirectory: (path) => {
         setWorkspaceFiles((current) =>
           current
             ? {
-              ...current,
-              directories: current.directories[path] ? current.directories : {
-                ...current.directories,
-                [path]: {
-                  entries: MOCK_WORKSPACE_ENTRIES[path] ?? [],
-                  truncated: false,
-                },
-              },
-            }
-            : current
+                ...current,
+                directories: current.directories[path]
+                  ? current.directories
+                  : {
+                      ...current.directories,
+                      [path]: {
+                        entries: MOCK_WORKSPACE_ENTRIES[path] ?? [],
+                        truncated: false,
+                      },
+                    },
+              }
+            : current,
         );
       },
       openWorkspaceFile: (path) => {
@@ -466,43 +574,47 @@ export function useMockAlphaController(
         setWorkspaceFiles((current) =>
           current
             ? {
-              ...current,
-              openFiles: current.openFiles.some((file) => file.path === path)
-                ? current.openFiles
-                : [...current.openFiles, {
-                  kind: "text",
-                  path,
-                  content,
-                  contentHash: "0".repeat(64),
-                  size: new TextEncoder().encode(content).byteLength,
-                  changed: false,
-                }],
-              activeFilePath: path,
-            }
-            : current
+                ...current,
+                openFiles: current.openFiles.some((file) => file.path === path)
+                  ? current.openFiles
+                  : [
+                      ...current.openFiles,
+                      {
+                        kind: "text",
+                        path,
+                        content,
+                        contentHash: "0".repeat(64),
+                        size: new TextEncoder().encode(content).byteLength,
+                        changed: false,
+                      },
+                    ],
+                activeFilePath: path,
+              }
+            : current,
         );
       },
       activateWorkspaceFile: (path) => {
         setWorkspaceFiles((current) =>
           current?.openFiles.some((file) => file.path === path)
             ? { ...current, activeFilePath: path }
-            : current
+            : current,
         );
       },
       closeWorkspaceFile: (path) => {
         setWorkspaceFiles((current) => {
           if (!current) return current;
-          const closingIndex = current.openFiles.findIndex((file) =>
-            file.path === path
+          const closingIndex = current.openFiles.findIndex(
+            (file) => file.path === path,
           );
           if (closingIndex === -1) return current;
           return {
             ...current,
             openFiles: current.openFiles.filter((file) => file.path !== path),
-            activeFilePath: current.activeFilePath === path
-              ? current.openFiles[closingIndex + 1]?.path ??
-                current.openFiles[closingIndex - 1]?.path
-              : current.activeFilePath,
+            activeFilePath:
+              current.activeFilePath === path
+                ? (current.openFiles[closingIndex + 1]?.path ??
+                  current.openFiles[closingIndex - 1]?.path)
+                : current.activeFilePath,
           };
         });
       },
@@ -510,36 +622,39 @@ export function useMockAlphaController(
         setWorkspaceFiles((current) =>
           current
             ? {
-              ...current,
-              openFiles: current.openFiles.map((file) =>
-                file.kind === "text" && file.path === current.activeFilePath
-                  ? { ...file, changed: false }
-                  : file
-              ),
-            }
-            : current
+                ...current,
+                openFiles: current.openFiles.map((file) =>
+                  file.kind === "text" && file.path === current.activeFilePath
+                    ? { ...file, changed: false }
+                    : file,
+                ),
+              }
+            : current,
         );
       },
       showTerminals: () => undefined,
       hideTerminals: () => undefined,
       createTerminal: () => {
         const terminalId = `mock-terminal-${terminalTabs.length + 1}`;
-        setTerminalTabs((current) => [...current, {
-          terminalId,
-          workspaceId: "workspace-weave",
-          title: "zsh",
-          status: "running",
-          cols: 100,
-          rows: 30,
-        }]);
+        setTerminalTabs((current) => [
+          ...current,
+          {
+            terminalId,
+            workspaceId: "workspace-weave",
+            title: "zsh",
+            status: "running",
+            cols: 100,
+            rows: 30,
+          },
+        ]);
         setActiveTerminalId(terminalId);
         setTerminalData("$ ");
       },
       selectTerminal: setActiveTerminalId,
       closeTerminal: (terminalId) => {
         setTerminalTabs((current) => {
-          const next = current.filter((terminal) =>
-            terminal.terminalId !== terminalId
+          const next = current.filter(
+            (terminal) => terminal.terminalId !== terminalId,
           );
           setActiveTerminalId(next[0]?.terminalId ?? "");
           return next;
@@ -556,67 +671,65 @@ export function useMockAlphaController(
             threads: workspace.threads.map((thread) =>
               thread.id === selectedThreadId
                 ? {
-                  ...thread,
-                  draft: undefined,
-                  supportsThreadLifecycle: true,
-                }
-                : thread
+                    ...thread,
+                    draft: undefined,
+                    supportsThreadLifecycle: true,
+                  }
+                : thread,
             ),
-          }))
+          })),
         );
         setTranscript((current) =>
           current
             ? reduceAcpEvent(
-              queueOptimisticPrompt(
-                current,
-                `mock-local-${Date.now()}`,
-                [{ type: "text", text }],
-              ),
-              { type: "turn/started" },
-            )
-            : current
+                queueOptimisticPrompt(current, `mock-local-${Date.now()}`, [
+                  { type: "text", text },
+                ]),
+                { type: "turn/started" },
+              )
+            : current,
         );
       },
       cancelPrompt: () =>
         setTranscript((current) =>
           current
             ? reduceAcpEvent(current, {
-              type: "turn/stopped",
-              stopReason: "cancelled",
-            })
-            : current
+                type: "turn/stopped",
+                stopReason: "cancelled",
+              })
+            : current,
         ),
       respondToPermission: (requestId, optionId) =>
         setTranscript((current) =>
           current
             ? reduceAcpEvent(current, {
-              type: "permission/resolved",
-              requestId,
-              optionId,
-            })
-            : current
+                type: "permission/resolved",
+                requestId,
+                optionId,
+              })
+            : current,
         ),
       respondToElicitation: (requestId, response) =>
         setTranscript((current) =>
           current
             ? reduceAcpEvent(current, {
-              type: "elicitation/resolved",
-              requestId,
-              response,
-            })
-            : current
+                type: "elicitation/resolved",
+                requestId,
+                response,
+              })
+            : current,
         ),
       setMode: (modeId) =>
         setTranscript((current) =>
           current
             ? reduceAcpEvent(current, {
-              type: "session/update",
-              update: {
-                sessionUpdate: "current_mode_update",
-                currentModeId: modeId,
-              },
-            })
-            : current
+                type: "session/update",
+                update: {
+                  sessionUpdate: "current_mode_update",
+                  currentModeId: modeId,
+                },
+              })
+            : current,
         ),
       setConfigOption: (optionId, value) =>
         setTranscript((current) => {
@@ -625,8 +738,8 @@ export function useMockAlphaController(
             ...current,
             configOptions: current.configOptions.map((option) =>
               option.id === optionId
-                ? { ...option, currentValue: value } as typeof option
-                : option
+                ? ({ ...option, currentValue: value } as typeof option)
+                : option,
             ),
           };
         }),

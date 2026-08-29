@@ -3,9 +3,14 @@ import type { GroupImperativeHandle, Layout } from 'react-resizable-panels';
 import { type AlphaController, selectedThread } from '@/app/alpha-controller';
 import { type AlphaDockPanelId, useAlphaDockLayout } from '@/app/alpha-dock-layout';
 import {
+  alphaTerminalScopeKey,
+  selectedTerminalScope,
+} from '@/app/alpha-terminal-scope';
+import {
   type AlphaPaneId,
   alphaPaneIds,
   alphaPaneMinimumWidths,
+  alphaSidebarDefaultWidth,
   layoutChangesOnlyPanePair,
   layoutForPaneSet,
   paneSetKey,
@@ -17,6 +22,7 @@ import { ConnectionsDialog } from './connections-dialog';
 import { ArchivedThreadsDialog } from './archived-threads-dialog';
 import { DockRailActions } from './dock-rail-actions';
 import { EditorPane } from './editor-pane';
+import { GlobalBottomRail } from './global-bottom-rail';
 import { ProjectPane } from './project-pane';
 import { TerminalPane } from './terminal-pane';
 import { ThreadSidebar } from './thread-sidebar';
@@ -28,24 +34,16 @@ import { useIsMobile } from '@/hooks/use-mobile';
 type PaneLayouts = ReturnType<typeof useAlphaPaneLayouts>;
 
 const paneHandleClassName =
-  'bg-transparent before:absolute before:inset-x-0 before:top-0 before:bottom-[var(--bottom-rail-height)] before:bg-border hover:before:bg-ring focus-visible:before:bg-ring';
+  'bg-transparent before:absolute before:inset-x-0 before:inset-y-0 before:bg-border hover:before:bg-ring focus-visible:before:bg-ring';
 
 function PaneRow({
   controller,
-  onToggleThreads,
-  threadSidebarVisible,
-  onThreadSidebarVisibleChange,
   paneLayouts,
   isMobile,
-  footerActions,
 }: {
   controller: AlphaController;
-  onToggleThreads(): void;
-  threadSidebarVisible: boolean;
-  onThreadSidebarVisibleChange(visible: boolean): void;
   paneLayouts: PaneLayouts;
   isMobile: boolean;
-  footerActions?: ReactNode;
 }) {
   const { model, actions } = controller;
   const [showMobileEditor, setShowMobileEditor] = useState(false);
@@ -56,13 +54,6 @@ function PaneRow({
   >(undefined);
   const acceptedRowKeyRef = useRef<string | undefined>(undefined);
   const openFiles = model.workspaceFiles?.openFiles ?? [];
-  const activeThread = selectedThread(model);
-  const reconnecting = Boolean(
-    activeThread &&
-      model.connections.some(
-        ({ hostId, status }) => hostId === activeThread.hostId && status === 'reconnecting',
-      ),
-  );
   const hasActiveThread = Boolean(model.selectedThreadId);
   const editorOpen = hasActiveThread && openFiles.length > 0;
 
@@ -86,9 +77,8 @@ function PaneRow({
         <div className='flex min-h-0 min-w-0 flex-1'>
           <WorkspacePlaceholder
             controller={controller}
-            onToggleThreads={onToggleThreads}
             className={cn(showMobileEditor && editorOpen && 'max-md:hidden')}
-            footerActions={!editorOpen || !showMobileEditor ? footerActions : undefined}
+            showFooter={false}
           />
           {editorOpen && (
             <EditorPane
@@ -100,7 +90,7 @@ function PaneRow({
               onCloseFile={actions.closeWorkspaceFile}
               onReloadFile={() => void actions.reloadWorkspaceFile()}
               onReturnToThread={() => setShowMobileEditor(false)}
-              footerActions={showMobileEditor ? footerActions : undefined}
+              showFooter={false}
             />
           )}
         </div>
@@ -109,7 +99,6 @@ function PaneRow({
   }
 
   const visiblePaneIds: AlphaPaneId[] = [
-    ...(threadSidebarVisible ? [alphaPaneIds.threads] : []),
     alphaPaneIds.thread,
     ...(editorOpen ? [alphaPaneIds.editor] : []),
   ];
@@ -157,43 +146,15 @@ function PaneRow({
   return (
     <ResizablePanelGroup
       key={`${paneLayouts.snapshot.threadId ?? 'none'}:${rowKey}`}
-      id='alpha-pane-row'
+      id='alpha-content-pane-row'
       groupRef={rowRef}
       orientation='horizontal'
       defaultLayout={layoutForPaneSet(paneLayouts.snapshot, visiblePaneIds)}
       onLayoutChange={handleLayoutChange}
       onLayoutChanged={handleLayoutChanged}
       className='min-h-0 min-w-0 flex-1'
-      data-slot='alpha-pane-row'
+      data-slot='alpha-content-pane-row'
     >
-      {threadSidebarVisible && (
-        <>
-          <ResizablePanel
-            id={alphaPaneIds.threads}
-            defaultSize='19rem'
-            minSize={alphaPaneMinimumWidths[alphaPaneIds.threads]}
-            className='flex min-w-0 overflow-hidden'
-          >
-            <SidebarProvider
-              open={threadSidebarVisible}
-              onOpenChange={onThreadSidebarVisibleChange}
-              cookieName={false}
-              keyboardShortcut={false}
-              className='h-full min-h-0 min-w-0 overflow-hidden'
-            >
-              <ThreadSidebar controller={controller} />
-            </SidebarProvider>
-          </ResizablePanel>
-          <ResizableHandle
-            aria-label='Resize Threads and Thread Panes'
-            className={paneHandleClassName}
-            onKeyDownCapture={() => activateResizePair(alphaPaneIds.threads, alphaPaneIds.thread)}
-            onPointerDownCapture={() => activateResizePair(alphaPaneIds.threads, alphaPaneIds.thread)}
-            onDoubleClick={equalizeRow}
-          />
-        </>
-      )}
-
       <ResizablePanel
         id={alphaPaneIds.thread}
         minSize={alphaPaneMinimumWidths[alphaPaneIds.thread]}
@@ -201,8 +162,7 @@ function PaneRow({
       >
         <WorkspacePlaceholder
           controller={controller}
-          onToggleThreads={onToggleThreads}
-          footerActions={!editorOpen ? footerActions : undefined}
+          showFooter={false}
         />
       </ResizablePanel>
 
@@ -228,7 +188,7 @@ function PaneRow({
               onCloseFile={actions.closeWorkspaceFile}
               onReloadFile={() => void actions.reloadWorkspaceFile()}
               onReturnToThread={() => setShowMobileEditor(false)}
-              footerActions={footerActions}
+              showFooter={false}
             />
           </ResizablePanel>
         </>
@@ -239,30 +199,18 @@ function PaneRow({
 
 function WorkspaceFrame({
   controller,
-  onToggleThreads,
-  threadSidebarVisible,
-  onThreadSidebarVisibleChange,
   paneLayouts,
   isMobile,
-  footerActions,
 }: {
   controller: AlphaController;
-  onToggleThreads(): void;
-  threadSidebarVisible: boolean;
-  onThreadSidebarVisibleChange(visible: boolean): void;
   paneLayouts: PaneLayouts;
   isMobile: boolean;
-  footerActions?: ReactNode;
 }) {
   return (
     <PaneRow
       controller={controller}
-      onToggleThreads={onToggleThreads}
-      threadSidebarVisible={threadSidebarVisible}
-      onThreadSidebarVisibleChange={onThreadSidebarVisibleChange}
       paneLayouts={paneLayouts}
       isMobile={isMobile}
-      footerActions={footerActions}
     />
   );
 }
@@ -270,53 +218,172 @@ function WorkspaceFrame({
 function ResponsiveShell({
   controller,
   paneLayouts,
-  footerActions,
+  bottomOpen,
+  bottomSize,
+  bottomPane,
+  maximizedPane,
+  onBottomSizeChange,
 }: {
   controller: AlphaController;
   paneLayouts: PaneLayouts;
-  footerActions?: ReactNode;
+  bottomOpen: boolean;
+  bottomSize: number;
+  bottomPane: ReactNode;
+  maximizedPane?: ReactNode;
+  onBottomSizeChange(size: number): void;
 }) {
   const threadSidebar = useSidebar();
+  const maximizedContent = maximizedPane
+    ? (
+      <div
+        data-slot='alpha-maximized-terminal'
+        className='flex min-h-0 min-w-0 flex-1 overflow-hidden'
+      >
+        {maximizedPane}
+      </div>
+    )
+    : undefined;
 
   if (threadSidebar.isMobile) {
     return (
       <>
-        <ThreadSidebar controller={controller} />
+        <ThreadSidebar controller={controller} showFooter={false} />
         <SidebarInset className='min-h-0 min-w-0 overflow-hidden'>
-          <WorkspaceFrame
-            controller={controller}
-            onToggleThreads={threadSidebar.toggleSidebar}
-            threadSidebarVisible={paneLayouts.snapshot.visible.threads}
-            onThreadSidebarVisibleChange={paneLayouts.setThreadsVisible}
-            paneLayouts={paneLayouts}
-            isMobile
-            footerActions={footerActions}
-          />
+          {maximizedContent ?? (
+            <WorkspaceFrame
+              controller={controller}
+              paneLayouts={paneLayouts}
+              isMobile
+            />
+          )}
         </SidebarInset>
       </>
     );
   }
 
+  const contentColumn = maximizedContent ?? (
+    <ResizablePanelGroup
+      id='alpha-bottom-dock-group'
+      orientation='vertical'
+      defaultLayout={{
+        workspace: 100 - bottomSize,
+        bottom: bottomSize,
+      }}
+      onLayoutChanged={(layout) => {
+        if (bottomOpen && layout.bottom) onBottomSizeChange(layout.bottom);
+      }}
+      className='min-h-0 min-w-0 flex-1'
+      data-slot='alpha-bottom-dock-group'
+    >
+      <ResizablePanel
+        id='workspace'
+        minSize='12rem'
+        className='flex min-h-0 min-w-0'
+      >
+        <WorkspaceFrame
+          controller={controller}
+          paneLayouts={paneLayouts}
+          isMobile={false}
+        />
+      </ResizablePanel>
+      {bottomOpen && (
+        <>
+          <ResizableHandle aria-label='Resize Workspace and Bottom Dock' />
+          <ResizablePanel
+            id='bottom'
+            minSize='8rem'
+            className='flex min-h-0 min-w-0 overflow-hidden'
+          >
+            {bottomPane}
+          </ResizablePanel>
+        </>
+      )}
+    </ResizablePanelGroup>
+  );
+
+  if (threadSidebar.state !== 'expanded') return contentColumn;
+
   return (
-    <WorkspaceFrame
+    <ResizablePanelGroup
+      id='alpha-pane-row'
+      orientation='horizontal'
+      defaultLayout={paneLayouts.sidebarWidth !== undefined
+        ? {
+          threads: paneLayouts.sidebarWidth,
+          workspace: 100 - paneLayouts.sidebarWidth,
+        }
+        : undefined}
+      onLayoutChanged={(layout) => {
+        if (!layout.threads || !layout.workspace) return;
+        paneLayouts.rememberSidebarWidth(layout.threads);
+      }}
+      className='min-h-0 min-w-0 flex-1'
+      data-slot='alpha-pane-row'
+    >
+      <ResizablePanel
+        id={alphaPaneIds.threads}
+        defaultSize={alphaSidebarDefaultWidth}
+        minSize={alphaPaneMinimumWidths[alphaPaneIds.threads]}
+        className='flex min-h-0 min-w-0 overflow-hidden'
+      >
+        <SidebarProvider
+          open
+          onOpenChange={paneLayouts.setThreadsVisible}
+          cookieName={false}
+          keyboardShortcut={false}
+          className='h-full min-h-0 min-w-0 overflow-hidden'
+        >
+          <ThreadSidebar controller={controller} showFooter={false} />
+        </SidebarProvider>
+      </ResizablePanel>
+      <ResizableHandle
+        aria-label='Resize Threads and Workspace Panes'
+        className={paneHandleClassName}
+      />
+      <ResizablePanel
+        id='workspace'
+        minSize='24rem'
+        className='flex min-h-0 min-w-0 overflow-hidden'
+      >
+        {contentColumn}
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  );
+}
+
+function ConnectedBottomRail({
+  controller,
+  dockActions,
+}: {
+  controller: AlphaController;
+  dockActions: ReactNode;
+}) {
+  const threads = useSidebar();
+  return (
+    <GlobalBottomRail
       controller={controller}
-      onToggleThreads={threadSidebar.toggleSidebar}
-      threadSidebarVisible={threadSidebar.state === 'expanded'}
-      onThreadSidebarVisibleChange={paneLayouts.setThreadsVisible}
-      paneLayouts={paneLayouts}
-      isMobile={false}
-      footerActions={footerActions}
+      dockActions={dockActions}
+      threadsVisible={threads.isMobile ? threads.openMobile : threads.state === 'expanded'}
+      threadsToggleDisabled={!controller.model.selectedThreadId}
+      onToggleThreads={threads.toggleSidebar}
     />
   );
 }
 
 function ConnectedShell({ controller }: { controller: AlphaController }) {
   const paneLayouts = useAlphaPaneLayouts(controller.model.selectedThreadId);
-  const dockLayout = useAlphaDockLayout();
+  const terminalScope = selectedTerminalScope(controller.model);
+  const terminalScopeKey = terminalScope
+    ? alphaTerminalScopeKey(terminalScope)
+    : undefined;
+  const dockLayout = useAlphaDockLayout(terminalScopeKey);
   const isMobile = useIsMobile();
   const [mobilePanelId, setMobilePanelId] = useState<AlphaDockPanelId | null>(
     null,
   );
+  const [maximizedTerminalScopeKey, setMaximizedTerminalScopeKey] = useState<
+    string | undefined
+  >(undefined);
   const terminalVisibilityActionsRef = useRef({
     show: controller.actions.showTerminals,
     hide: controller.actions.hideTerminals,
@@ -338,11 +405,28 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
   const bottomOpen = hasActiveThread && dockLayout.snapshot.docks.bottom.open;
   const rightOpen = hasActiveThread && dockLayout.snapshot.docks.right.open;
   const terminalActive = hasActiveThread && dockLayout.isPanelActive('terminal');
+  const terminalIsMaximized = terminalActive &&
+    maximizedTerminalScopeKey === terminalScopeKey;
+  const capacitorPlatform = isCapacitorPlatform(controller.model.platform);
 
   useEffect(() => {
     if (terminalActive) void terminalVisibilityActionsRef.current.show?.();
     else void terminalVisibilityActionsRef.current.hide?.();
   }, [controller.model.selectedThreadId, terminalActive]);
+
+  useEffect(() => {
+    if (
+      !terminalActive &&
+      terminalScopeKey &&
+      maximizedTerminalScopeKey === terminalScopeKey
+    ) {
+      setMaximizedTerminalScopeKey(undefined);
+    }
+  }, [
+    maximizedTerminalScopeKey,
+    terminalActive,
+    terminalScopeKey,
+  ]);
 
   const toggleDockPanel = (panelId: AlphaDockPanelId) => {
     const panelWasActive = dockLayout.isPanelActive(panelId);
@@ -354,7 +438,6 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     <DockRailActions
       snapshot={dockLayout.snapshot}
       disabled={!hasActiveThread}
-      capacitorInset={isCapacitorPlatform(controller.model.platform)}
       onToggle={toggleDockPanel}
       onMoveTerminal={(position) => {
         dockLayout.moveTerminal(position);
@@ -363,21 +446,32 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     />
   );
 
-  const terminalPane = (footerActions?: ReactNode) => (
+  const terminalPane = () => (
     <TerminalPane
       model={terminalModel}
       disabled={controller.model.busy}
-      footerActions={footerActions}
+      showFooter={false}
+      maximized={terminalIsMaximized}
       onCreate={controller.actions.createTerminal}
       onSelect={controller.actions.selectTerminal}
-      onClose={controller.actions.closeTerminal}
+      onClose={async (terminalId) => {
+        const closingLastTab = terminalModel.tabs.length === 1;
+        await controller.actions.closeTerminal?.(terminalId);
+        if (!closingLastTab) return;
+        setMaximizedTerminalScopeKey(undefined);
+        dockLayout.hideTerminalPanel();
+        setMobilePanelId((current) => current === 'terminal' ? null : current);
+      }}
+      onToggleMaximized={() => setMaximizedTerminalScopeKey((current) =>
+        current === terminalScopeKey ? undefined : terminalScopeKey
+      )}
       onRetryControl={controller.actions.retryTerminalControl}
       onInput={controller.actions.inputTerminal}
       onResize={controller.actions.resizeTerminal}
     />
   );
 
-  const projectPane = (footerActions?: ReactNode, forceVisible = false) => (
+  const projectPane = (forceVisible = false) => (
     <SidebarProvider
       open
       onOpenChange={() => undefined}
@@ -400,9 +494,9 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
                 status === 'reconnecting',
             ),
         )}
-        capacitorPlatform={isCapacitorPlatform(controller.model.platform)}
+        capacitorPlatform={capacitorPlatform}
         busy={controller.model.busy}
-        footerActions={footerActions}
+        showFooter={false}
         forceVisible={forceVisible}
         onOpenDirectory={(path) => void controller.actions.openWorkspaceDirectory(path)}
         onOpenFile={(path) => void controller.actions.openWorkspaceFile(path)}
@@ -411,8 +505,8 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
   );
 
   const rightPanel = dockLayout.snapshot.docks.right.activePanelId === 'terminal'
-    ? terminalPane(rail)
-    : projectPane(rail);
+    ? terminalPane()
+    : projectPane();
   const mobileActivePanel = mobilePanelId && dockLayout.isPanelActive(mobilePanelId)
     ? mobilePanelId
     : rightOpen
@@ -428,112 +522,102 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
         if (hasActiveThread) paneLayouts.setThreadsVisible(visible);
       }}
       className={cn(
-        'fixed inset-x-0 top-[var(--alpha-viewport-top,0px)] h-[var(--alpha-viewport-height,100dvh)] min-h-0 overflow-hidden',
+        'fixed inset-x-0 top-[var(--alpha-viewport-top,0px)] h-[var(--alpha-viewport-height,100dvh)] min-h-0 flex-col overflow-hidden',
         controller.model.platform === 'ios' && 'pt-[env(safe-area-inset-top)]',
       )}
       style={{
-        '--sidebar-width': '19rem',
-        '--sidebar-width-mobile': '19rem',
+        '--sidebar-width': alphaSidebarDefaultWidth,
+        '--sidebar-width-mobile': alphaSidebarDefaultWidth,
         '--bottom-rail-height': '2rem',
       } as CSSProperties}
     >
-      {isMobile
-        ? (
-          mobileActivePanel
-            ? (
-              <div
-                data-slot='alpha-mobile-dock-surface'
-                className='flex min-h-0 min-w-0 flex-1 overflow-hidden'
-              >
-                {mobileActivePanel === 'terminal' ? terminalPane(rail) : projectPane(rail, true)}
-              </div>
-            )
-            : (
-              <ResponsiveShell
-                controller={controller}
-                paneLayouts={paneLayouts}
-                footerActions={rail}
-              />
-            )
-        )
-        : (
-          <ResizablePanelGroup
-            id='alpha-right-dock-group'
-            orientation='horizontal'
-            defaultLayout={{
-              workspace: 100 - dockLayout.snapshot.rememberedSize.right,
-              right: dockLayout.snapshot.rememberedSize.right,
-            }}
-            onLayoutChanged={(layout) => {
-              if (rightOpen && layout.right) {
-                dockLayout.rememberSize('right', layout.right);
-              }
-            }}
-            className='min-h-0 min-w-0 flex-1'
-            data-slot='alpha-right-dock-group'
-          >
-            <ResizablePanel
-              id='workspace'
-              minSize='24rem'
-              className='flex min-h-0 min-w-0'
-            >
-              <ResizablePanelGroup
-                id='alpha-bottom-dock-group'
-                orientation='vertical'
-                defaultLayout={{
-                  workspace: 100 - dockLayout.snapshot.rememberedSize.bottom,
-                  bottom: dockLayout.snapshot.rememberedSize.bottom,
-                }}
-                onLayoutChanged={(layout) => {
-                  if (bottomOpen && layout.bottom) {
-                    dockLayout.rememberSize('bottom', layout.bottom);
-                  }
-                }}
-                className='min-h-0 min-w-0 flex-1'
-                data-slot='alpha-bottom-dock-group'
-              >
-                <ResizablePanel
-                  id='workspace'
-                  minSize='12rem'
-                  className='flex min-h-0 min-w-0'
+      <div data-slot='alpha-dock-content' className='flex min-h-0 min-w-0 flex-1 overflow-hidden'>
+        {terminalIsMaximized
+          ? (
+            <ResponsiveShell
+              controller={controller}
+              paneLayouts={paneLayouts}
+              bottomOpen={false}
+              bottomSize={dockLayout.snapshot.rememberedSize.bottom}
+              bottomPane={terminalPane()}
+              maximizedPane={terminalPane()}
+              onBottomSizeChange={(size) => dockLayout.rememberSize('bottom', size)}
+            />
+          )
+          : isMobile
+          ? (
+            mobileActivePanel
+              ? (
+                <div
+                  data-slot='alpha-mobile-dock-surface'
+                  className='flex min-h-0 min-w-0 flex-1 overflow-hidden'
                 >
-                  <ResponsiveShell
-                    controller={controller}
-                    paneLayouts={paneLayouts}
-                    footerActions={!bottomOpen && !rightOpen ? rail : undefined}
-                  />
-                </ResizablePanel>
-                {bottomOpen && (
-                  <>
-                    <ResizableHandle aria-label='Resize Workspace and Bottom Dock' />
-                    <ResizablePanel
-                      id='bottom'
-                      minSize='8rem'
-                      className='flex min-h-0 min-w-0 overflow-hidden'
-                    >
-                      {terminalPane(!rightOpen ? rail : undefined)}
-                    </ResizablePanel>
-                  </>
-                )}
-              </ResizablePanelGroup>
-            </ResizablePanel>
-            {rightOpen && (
-              <>
-                <ResizableHandle
-                  aria-label='Resize Workspace and Right Dock'
-                  className={paneHandleClassName}
+                  {mobileActivePanel === 'terminal' ? terminalPane() : projectPane(true)}
+                </div>
+              )
+              : (
+                <ResponsiveShell
+                  controller={controller}
+                  paneLayouts={paneLayouts}
+                  bottomOpen={false}
+                  bottomSize={dockLayout.snapshot.rememberedSize.bottom}
+                  bottomPane={terminalPane()}
+                  onBottomSizeChange={(size) => dockLayout.rememberSize('bottom', size)}
                 />
-                <ResizablePanel
-                  id='right'
-                  minSize='14rem'
-                  className='flex min-h-0 min-w-0 overflow-hidden'
-                >
-                  {rightPanel}
-                </ResizablePanel>
-              </>
-            )}
-          </ResizablePanelGroup>
-        )}
+              )
+          )
+          : (
+            <ResizablePanelGroup
+              id='alpha-right-dock-group'
+              orientation='horizontal'
+              defaultLayout={{
+                workspace: 100 - dockLayout.snapshot.rememberedSize.right,
+                right: dockLayout.snapshot.rememberedSize.right,
+              }}
+              onLayoutChanged={(layout) => {
+                if (rightOpen && layout.right) {
+                  dockLayout.rememberSize('right', layout.right);
+                }
+              }}
+              className='min-h-0 min-w-0 flex-1'
+              data-slot='alpha-right-dock-group'
+            >
+              <ResizablePanel
+                id='workspace'
+                minSize='24rem'
+                className='flex min-h-0 min-w-0'
+              >
+                <ResponsiveShell
+                  controller={controller}
+                  paneLayouts={paneLayouts}
+                  bottomOpen={bottomOpen}
+                  bottomSize={dockLayout.snapshot.rememberedSize.bottom}
+                  bottomPane={terminalPane()}
+                  onBottomSizeChange={(size) => dockLayout.rememberSize('bottom', size)}
+                />
+              </ResizablePanel>
+              {rightOpen && (
+                <>
+                  <ResizableHandle
+                    aria-label='Resize Workspace and Right Dock'
+                    className={paneHandleClassName}
+                  />
+                  <ResizablePanel
+                    id='right'
+                    minSize='14rem'
+                    className='flex min-h-0 min-w-0 overflow-hidden'
+                  >
+                    {rightPanel}
+                  </ResizablePanel>
+                </>
+              )}
+            </ResizablePanelGroup>
+          )}
+      </div>
+      <ConnectedBottomRail
+        controller={controller}
+        dockActions={rail}
+      />
     </SidebarProvider>
   );
 }

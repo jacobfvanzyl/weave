@@ -28,7 +28,42 @@ Deno.test('Workspace catalog durably registers valid Host-local directories', as
         path: projectPath,
       }],
     );
-    assertEquals((await Deno.stat(`${state}/workspaces.json`)).mode! & 0o777, 0o600);
+    assertEquals(
+      (await Deno.stat(`${state}/workspaces.json`)).mode! & 0o777,
+      0o600,
+    );
+
+    assertEquals(
+      (await reopened.remove(added.workspaceId))?.workspaceId,
+      added.workspaceId,
+    );
+    assertEquals(reopened.list(), []);
+    assertEquals((await WorkspaceCatalog.open(state, [])).list(), []);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test('Workspace catalog durably removes configured projects', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-project-catalog-' });
+  try {
+    const project = `${root}/project`;
+    await Deno.mkdir(project);
+    const catalog = await WorkspaceCatalog.open(`${root}/state`, [{
+      workspaceId: 'configured',
+      name: 'Configured',
+      path: project,
+    }]);
+
+    assertEquals((await catalog.remove('configured'))?.workspaceId, 'configured');
+    assertEquals(catalog.list(), []);
+
+    const reopened = await WorkspaceCatalog.open(`${root}/state`, [{
+      workspaceId: 'configured',
+      name: 'Configured',
+      path: project,
+    }]);
+    assertEquals(reopened.list(), []);
   } finally {
     await Deno.remove(root, { recursive: true });
   }

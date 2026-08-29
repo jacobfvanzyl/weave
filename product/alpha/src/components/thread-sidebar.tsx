@@ -2,16 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
-  Archive02Icon,
   ArrowRight01Icon,
+  Delete02Icon,
+  FileBoxIcon,
   Folder01Icon,
   MoreHorizontalIcon,
   Search01Icon,
+  ServerIcon,
   Settings01Icon,
 } from "@hugeicons/core-free-icons";
 import type { AlphaController, AlphaThread } from "@/app/alpha-controller";
 import { AddProjectDialog } from "@/components/add-project-dialog";
 import { CodexIcon } from "@/components/codex-icon";
+import { CreateThreadDialog } from "@/components/create-thread-dialog";
+import { ProjectHostDialog } from "@/components/project-host-dialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -121,7 +125,7 @@ function ThreadMenuItem({
           <DropdownMenuContent align="end">
             <DropdownMenuGroup>
               <DropdownMenuItem onClick={onArchive}>
-                <HugeiconsIcon icon={Archive02Icon} strokeWidth={2} />
+                <HugeiconsIcon icon={FileBoxIcon} strokeWidth={2} />
                 Archive
               </DropdownMenuItem>
             </DropdownMenuGroup>
@@ -132,7 +136,13 @@ function ThreadMenuItem({
   );
 }
 
-export function ThreadSidebar({ controller }: { controller: AlphaController }) {
+export function ThreadSidebar({
+  controller,
+  showFooter = true,
+}: {
+  controller: AlphaController;
+  showFooter?: boolean;
+}) {
   const { model, actions } = controller;
   const { setOpenMobile } = useSidebar();
   const capacitorPlatform = isCapacitorPlatform(model.platform);
@@ -148,14 +158,16 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
       .map(({ hostId }) => hostId),
   );
   const selectedThreadIsDraft = model.workspaces.some(({ threads }) =>
-    threads.some(
-      ({ draft, id }) => draft && id === model.selectedThreadId,
-    )
+    threads.some(({ draft, id }) => draft && id === model.selectedThreadId),
   );
-  const threadSelectionBusy = model.busy && (
-    !selectedThreadIsDraft || Boolean(model.creatingThreadWorkspaceId)
-  );
+  const threadSelectionBusy =
+    model.busy &&
+    (!selectedThreadIsDraft || Boolean(model.creatingThreadWorkspaceId));
   const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [createThreadWorkspaceId, setCreateThreadWorkspaceId] =
+    useState<string>();
+  const [removeProjectWorkspaceId, setRemoveProjectWorkspaceId] =
+    useState<string>();
   const [searchExpanded, setSearchExpanded] = useState(
     Boolean(model.searchQuery),
   );
@@ -182,6 +194,12 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
         .filter((workspace) => !query || workspace.threads.length > 0),
     [model.workspaces, query],
   );
+  const createThreadWorkspace = model.workspaces.find(
+    ({ id }) => id === createThreadWorkspaceId,
+  );
+  const removeProjectWorkspace = model.workspaces.find(
+    ({ id }) => id === removeProjectWorkspaceId,
+  );
 
   return (
     <Sidebar collapsible="offcanvas" position="inline">
@@ -196,51 +214,48 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
           )}
           data-slot="thread-search"
         >
-          {searchExpanded
-            ? (
-              <>
-                <HugeiconsIcon
-                  icon={Search01Icon}
-                  strokeWidth={2}
-                  className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-icon-muted"
-                />
-                <SidebarInput
-                  ref={searchInputRef}
-                  type="search"
-                  aria-label="Search threads"
-                  placeholder="Search threads…"
-                  value={model.searchQuery}
-                  className="pl-7"
-                  onBlur={() => {
-                    if (!model.searchQuery) setSearchExpanded(false);
-                  }}
-                  onChange={(event) =>
-                    actions.setSearchQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
-                    actions.setSearchQuery("");
-                    setSearchExpanded(false);
-                  }}
-                />
-              </>
-            )
-            : (
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
+          {searchExpanded ? (
+            <>
+              <HugeiconsIcon
+                icon={Search01Icon}
+                strokeWidth={2}
+                className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-icon-muted"
+              />
+              <SidebarInput
+                ref={searchInputRef}
+                type="search"
                 aria-label="Search threads"
-                title="Search threads"
-                className="size-7"
-                onClick={() => setSearchExpanded(true)}
-              >
-                <HugeiconsIcon
-                  data-icon="inline-start"
-                  icon={Search01Icon}
-                  strokeWidth={2}
-                />
-              </Button>
-            )}
+                placeholder="Search threads…"
+                value={model.searchQuery}
+                className="pl-7"
+                onBlur={() => {
+                  if (!model.searchQuery) setSearchExpanded(false);
+                }}
+                onChange={(event) => actions.setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  actions.setSearchQuery("");
+                  setSearchExpanded(false);
+                }}
+              />
+            </>
+          ) : (
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Search threads"
+              title="Search threads"
+              className="size-7"
+              onClick={() => setSearchExpanded(true)}
+            >
+              <HugeiconsIcon
+                data-icon="inline-start"
+                icon={Search01Icon}
+                strokeWidth={2}
+              />
+            </Button>
+          )}
         </div>
         <SidebarGroupAction
           type="button"
@@ -265,56 +280,122 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
             ({ draft, id }) => draft && id === model.selectedThreadId,
           );
           return (
-          <Collapsible
-            key={workspace.id}
-            defaultOpen
-            className="group/workspace"
-          >
-            <SidebarGroup className="py-1">
-              <SidebarGroupLabel
-                render={<CollapsibleTrigger />}
-                className="gap-1.5 pr-7"
-              >
-                <HugeiconsIcon
-                  icon={Folder01Icon}
-                  strokeWidth={2}
-                  className="mr-0.5 shrink-0"
-                />
-                <span className="truncate">{workspace.name}</span>
-                <HugeiconsIcon
-                  icon={ArrowRight01Icon}
-                  strokeWidth={2}
-                  className="shrink-0 transition-transform group-data-open/workspace:rotate-90"
-                />
-              </SidebarGroupLabel>
-              <SidebarGroupAction
-                className="top-3 right-2.5 w-6"
-                title={creatingThread
-                  ? `Creating thread in ${workspace.name}`
-                  : `New thread in ${workspace.name}`}
-                aria-label={creatingThread
-                  ? `Creating thread in ${workspace.name}`
-                  : `New thread in ${workspace.name}`}
-                aria-busy={creatingThread}
-                disabled={
-                  (!selectedDraft && model.busy) ||
-                  Boolean(model.creatingThreadWorkspaceId) ||
-                  !(workspace.placements ?? [workspace]).some(
-                    ({ hostId }) => connectedHostIds.has(hostId),
-                  )
-                }
-                onClick={() => void actions.createThread(workspace.id)}
-              >
-                {creatingThread
-                  ? <Spinner aria-hidden="true" />
-                  : <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />}
-              </SidebarGroupAction>
-              <CollapsibleContent>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {workspace.threads.map((thread) =>
-                      reconnectingHostIds.has(thread.hostId)
-                        ? (
+            <Collapsible
+              key={workspace.id}
+              defaultOpen
+              className="group/workspace"
+            >
+              <SidebarGroup className="py-1">
+                <SidebarGroupLabel
+                  render={<CollapsibleTrigger />}
+                  className="gap-1.5 pr-14"
+                >
+                  <HugeiconsIcon
+                    icon={Folder01Icon}
+                    strokeWidth={2}
+                    className="mr-0.5 shrink-0"
+                  />
+                  <span className="truncate">{workspace.name}</span>
+                  <HugeiconsIcon
+                    icon={ArrowRight01Icon}
+                    strokeWidth={2}
+                    className="shrink-0 transition-transform group-data-open/workspace:rotate-90"
+                  />
+                </SidebarGroupLabel>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <SidebarGroupAction
+                        className="top-2 right-9 w-6"
+                        title={`Project settings for ${workspace.name}`}
+                        aria-label={`Project settings for ${workspace.name}`}
+                        disabled={model.busy || !actions.removeProject}
+                      />
+                    }
+                  >
+                    <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuGroup>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        disabled={
+                          !(workspace.placements ?? [workspace]).some(
+                            ({ hostId }) => connectedHostIds.has(hostId),
+                          )
+                        }
+                        onClick={() => {
+                          const placements = workspace.placements ?? [
+                            {
+                              id: `${workspace.hostId}:${workspace.workspaceId}`,
+                              workspaceId: workspace.workspaceId,
+                              hostId: workspace.hostId,
+                              hostName: workspace.hostName,
+                            },
+                          ];
+                          const hostCount = new Set(
+                            placements.map(({ hostId }) => hostId),
+                          ).size;
+                          if (hostCount > 1) {
+                            setRemoveProjectWorkspaceId(workspace.id);
+                            return;
+                          }
+                          void actions.removeProject?.(
+                            workspace.id,
+                            placements[0]?.id,
+                          );
+                        }}
+                      >
+                        <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+                        Remove Project
+                      </DropdownMenuItem>
+                    </DropdownMenuGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <SidebarGroupAction
+                  className="top-2 right-2.5 w-6"
+                  title={
+                    creatingThread
+                      ? `Creating thread in ${workspace.name}`
+                      : `New thread in ${workspace.name}`
+                  }
+                  aria-label={
+                    creatingThread
+                      ? `Creating thread in ${workspace.name}`
+                      : `New thread in ${workspace.name}`
+                  }
+                  aria-busy={creatingThread}
+                  disabled={
+                    (!selectedDraft && model.busy) ||
+                    Boolean(model.creatingThreadWorkspaceId) ||
+                    !(workspace.placements ?? [workspace]).some(({ hostId }) =>
+                      connectedHostIds.has(hostId),
+                    )
+                  }
+                  onClick={() => {
+                    const hostCount = new Set(
+                      (workspace.placements ?? [workspace]).map(
+                        ({ hostId }) => hostId,
+                      ),
+                    ).size;
+                    if (hostCount > 1) {
+                      setCreateThreadWorkspaceId(workspace.id);
+                      return;
+                    }
+                    void actions.createThread(workspace.id);
+                  }}
+                >
+                  {creatingThread ? (
+                    <Spinner aria-hidden="true" />
+                  ) : (
+                    <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+                  )}
+                </SidebarGroupAction>
+                <CollapsibleContent>
+                  <SidebarGroupContent>
+                    <SidebarMenu>
+                      {workspace.threads.map((thread) =>
+                        reconnectingHostIds.has(thread.hostId) ? (
                           <SidebarMenuItem key={thread.id}>
                             <SidebarMenuSkeleton
                               showIcon
@@ -323,8 +404,7 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
                               data-slot="reconnecting-thread"
                             />
                           </SidebarMenuItem>
-                        )
-                        : (
+                        ) : (
                           <ThreadMenuItem
                             key={thread.id}
                             thread={thread}
@@ -336,27 +416,16 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
                               void actions.selectThread(thread.id);
                             }}
                             onArchive={() =>
-                              void actions.archiveThread(thread.id)}
+                              void actions.archiveThread(thread.id)
+                            }
                           />
-                        )
-                    )}
-                    {!workspace.threads.length && (
-                      <li>
-                        <Empty className="gap-1 p-3">
-                          <EmptyHeader>
-                            <EmptyTitle>No threads yet</EmptyTitle>
-                            <EmptyDescription>
-                              Create the first thread in this workspace.
-                            </EmptyDescription>
-                          </EmptyHeader>
-                        </Empty>
-                      </li>
-                    )}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </CollapsibleContent>
-            </SidebarGroup>
-          </Collapsible>
+                        ),
+                      )}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </CollapsibleContent>
+              </SidebarGroup>
+            </Collapsible>
           );
         })}
         {!workspaces.length && (
@@ -369,43 +438,71 @@ export function ThreadSidebar({ controller }: { controller: AlphaController }) {
         )}
       </SidebarContent>
 
-      <SidebarFooter
-        className={cn(
-          "h-[var(--bottom-rail-height)] shrink-0 justify-start gap-0 border-t border-sidebar-border bg-status-bar py-0 pr-1",
-          capacitorPlatform ? "pl-7" : "pl-1",
-        )}
-      >
-        <SidebarMenu className="flex-row">
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              size="sm"
-              type="button"
-              aria-label="Archived Threads"
-              tooltip="Archived Threads"
-              className="w-fit"
-              onClick={actions.openArchivedThreads}
-            >
-              <HugeiconsIcon icon={Archive02Icon} strokeWidth={2} />
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              size="sm"
-              type="button"
-              aria-label="Settings"
-              tooltip="Settings"
-              className="w-fit"
-              onClick={actions.openConnections}
-            >
-              <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} />
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
+      {showFooter && (
+        <SidebarFooter
+          className={cn(
+            "h-[var(--bottom-rail-height)] shrink-0 justify-start gap-0 border-t border-sidebar-border bg-status-bar py-0 pr-1",
+            capacitorPlatform ? "pl-7" : "pl-1",
+          )}
+        >
+          <SidebarMenu className="flex-row">
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="sm"
+                type="button"
+                aria-label="Archived Threads"
+                tooltip="Archived Threads"
+                className="w-fit"
+                onClick={actions.openArchivedThreads}
+              >
+                <HugeiconsIcon icon={FileBoxIcon} strokeWidth={2} />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="sm"
+                type="button"
+                aria-label="Settings"
+                tooltip="Settings"
+                className="w-fit"
+                onClick={actions.openConnections}
+              >
+                <HugeiconsIcon icon={ServerIcon} strokeWidth={2} />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+      )}
       <AddProjectDialog
         controller={controller}
         open={addProjectOpen}
         onOpenChange={setAddProjectOpen}
+      />
+      <CreateThreadDialog
+        workspace={createThreadWorkspace}
+        connections={model.connections}
+        open={Boolean(createThreadWorkspace)}
+        onOpenChange={(open) => {
+          if (!open) setCreateThreadWorkspaceId(undefined);
+        }}
+        onCreateThread={(workspaceId, placementId) => {
+          void actions.createThread(workspaceId, placementId);
+        }}
+      />
+      <ProjectHostDialog
+        workspace={removeProjectWorkspace}
+        connections={model.connections}
+        open={Boolean(removeProjectWorkspace)}
+        description={
+          <>Remove {removeProjectWorkspace?.name ?? "this project"} from:</>
+        }
+        onOpenChange={(open) => {
+          if (!open) setRemoveProjectWorkspaceId(undefined);
+        }}
+        onSelect={(placement) => {
+          if (!removeProjectWorkspace) return;
+          void actions.removeProject?.(removeProjectWorkspace.id, placement.id);
+        }}
       />
     </Sidebar>
   );

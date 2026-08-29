@@ -1,11 +1,8 @@
 import type { ReactNode } from "react";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { SidebarLeftIcon } from "@hugeicons/core-free-icons";
 import type { AlphaController } from "@/app/alpha-controller";
 import { selectedThread } from "@/app/alpha-controller";
 import { CodexIcon } from "@/components/codex-icon";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import {
   Empty,
   EmptyDescription,
@@ -21,14 +18,14 @@ import { cn } from "@/lib/utils";
 
 export function WorkspacePlaceholder({
   controller,
-  onToggleThreads,
   className,
   footerActions,
+  showFooter = true,
 }: {
   controller: AlphaController;
-  onToggleThreads(): void;
   className?: string;
   footerActions?: ReactNode;
+  showFooter?: boolean;
 }) {
   const { model, actions } = controller;
   const thread = selectedThread(model);
@@ -54,40 +51,25 @@ export function WorkspacePlaceholder({
         data-slot="thread-top-rail"
       >
         {thread && (
-          <>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Toggle threads"
-              onClick={onToggleThreads}
-            >
-              <HugeiconsIcon
-                data-icon="inline-start"
-                icon={SidebarLeftIcon}
-                strokeWidth={2}
-              />
-            </Button>
-            {reconnecting
-              ? (
-                <div className="flex min-w-0 flex-col gap-1" aria-label="Reconnecting Host">
-                  <Skeleton className="h-3 w-28" />
-                  {model.showHostIdentity && <Skeleton className="h-2.5 w-16" />}
-                </div>
-              )
-              : (
-                <div className="min-w-0">
-                  <p className="truncate text-xs font-medium">
-                    {thread.title || "Weave"}
+          reconnecting
+            ? (
+              <div className="flex min-w-0 flex-col gap-1" aria-label="Reconnecting Host">
+                <Skeleton className="h-3 w-28" />
+                {model.showHostIdentity && <Skeleton className="h-2.5 w-16" />}
+              </div>
+            )
+            : (
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium">
+                  {thread.title || "Weave"}
+                </p>
+                {model.showHostIdentity && (
+                  <p className="truncate text-[0.625rem] text-muted-foreground">
+                    {thread.hostName || model.connection.hostName}
                   </p>
-                  {model.showHostIdentity && (
-                    <p className="truncate text-[0.625rem] text-muted-foreground">
-                      {thread.hostName || model.connection.hostName}
-                    </p>
-                  )}
-                </div>
-              )}
-          </>
+                )}
+              </div>
+            )
         )}
       </header>
 
@@ -152,16 +134,18 @@ export function WorkspacePlaceholder({
           )
         : <section className="min-h-0 flex-1" data-slot="thread-content" />}
 
-      <footer
-        className="flex h-[var(--bottom-rail-height)] shrink-0 items-center border-t bg-status-bar px-1"
-        data-slot="main-bottom-rail"
-      >
-        {footerActions && (
-          <div className="ml-auto">
-            {footerActions}
-          </div>
-        )}
-      </footer>
+      {showFooter && (
+        <footer
+          className="flex h-[var(--bottom-rail-height)] shrink-0 items-center border-t bg-status-bar px-1"
+          data-slot="main-bottom-rail"
+        >
+          {footerActions && (
+            <div className="ml-auto">
+              {footerActions}
+            </div>
+          )}
+        </footer>
+      )}
 
       {model.error && (
         <Alert

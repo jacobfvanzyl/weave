@@ -11,8 +11,11 @@ vi.mock('./xterm-terminal-view', () => ({
 }));
 
 const model = (change: Partial<AlphaTerminalsModel> = {}): AlphaTerminalsModel => ({
-  hostId: 'host-1',
-  workspaceId: 'workspace-1',
+  scope: {
+    hostId: 'host-1',
+    projectId: 'project-1',
+    workspaceId: 'workspace-1',
+  },
   supported: true,
   tabs: [{
     terminalId: 'terminal-1',
@@ -57,6 +60,10 @@ describe('TerminalPane', () => {
       'aria-selected',
       'true',
     );
+    expect(screen.getByRole('tab', { name: /jaco — zsh/ }))
+      .not.toHaveClass('border-b');
+    expect(screen.getByRole('tab', { name: /logs/ }))
+      .toHaveClass('border-b', 'border-border');
     await user.click(screen.getByRole('tab', { name: /logs/ }));
     expect(select).toHaveBeenCalledWith('terminal-2');
     expect(screen.getByRole('button', { name: 'Close logs' })).toBeDisabled();
@@ -64,6 +71,51 @@ describe('TerminalPane', () => {
     expect(close).toHaveBeenCalledWith('terminal-1');
     await user.click(screen.getByRole('button', { name: 'New Terminal' }));
     expect(create).toHaveBeenCalledOnce();
+  });
+
+  it('aligns its top rail with the other panes and places maximize after create', async () => {
+    const maximize = vi.fn();
+    const { container, rerender } = render(
+      <TerminalPane
+        model={model()}
+        disabled={false}
+        onToggleMaximized={maximize}
+      />,
+    );
+    const header = container.querySelector('header');
+    const actions = container.querySelector('[data-slot="terminal-actions"]');
+    const create = screen.getByRole('button', { name: 'New Terminal' });
+    const expand = screen.getByRole('button', { name: 'Maximize Terminal' });
+
+    expect(header).toHaveClass('h-11');
+    expect(header).not.toHaveClass('border-b');
+    expect(actions).toHaveClass('border-l', 'border-b', 'border-border');
+    expect(create).toHaveClass('w-11', 'border-0');
+    expect(create).not.toHaveClass('border-l');
+    expect(expand).toHaveClass('border-0');
+    expect(expand).not.toHaveClass('border-l');
+    expect(expand.querySelector('[data-symbol="expand-terminal"]'))
+      .toBeInTheDocument();
+    expect(create.compareDocumentPosition(expand) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+    expect(expand).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(expand);
+    expect(maximize).toHaveBeenCalledOnce();
+
+    rerender(
+      <TerminalPane
+        model={model()}
+        disabled={false}
+        maximized
+        onToggleMaximized={maximize}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Restore Terminal' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: 'Restore Terminal' })
+        .querySelector('[data-symbol="collapse-terminal"]'),
+    ).toBeInTheDocument();
   });
 
   it('renders observer mode read-only and offers to request control', async () => {

@@ -8,7 +8,11 @@ type StoredWorkspace = {
   name: string;
   path: string;
 };
-type WorkspaceCatalogState = { version: 1; workspaces: StoredWorkspace[] };
+type WorkspaceCatalogState = {
+  version: 1;
+  workspaces: StoredWorkspace[];
+  removedConfiguredWorkspaceIds?: string[];
+};
 
 export type RegisteredWorkspace = WorkspaceDefinition & {
   repositoryIdentity?: RepositoryIdentity;
@@ -21,6 +25,13 @@ const parseState = (value: unknown): WorkspaceCatalogState => {
   const state = value as WorkspaceCatalogState;
   if (state.version !== 1 || !Array.isArray(state.workspaces)) {
     throw new Error('Workspace catalog state is unsupported.');
+  }
+  if (
+    state.removedConfiguredWorkspaceIds !== undefined &&
+    (!Array.isArray(state.removedConfiguredWorkspaceIds) ||
+      state.removedConfiguredWorkspaceIds.some((workspaceId) => typeof workspaceId !== 'string'))
+  ) {
+    throw new Error('Workspace catalog removed-project state is invalid.');
   }
   for (const workspace of state.workspaces) {
     if (
@@ -54,12 +65,14 @@ export const workspaceSummary = (
 ): WorkspaceSummary => ({
   workspaceId: workspace.workspaceId,
   name: workspace.name,
+  rootName: basename(workspace.path) || workspace.name,
   ...(workspace.repositoryIdentity ? { repositoryIdentity: workspace.repositoryIdentity } : {}),
 });
 
 export class WorkspaceCatalog {
   readonly #path: string;
   readonly #configuredIds: Set<string>;
+  readonly #removedConfiguredIds: Set<string>;
   readonly #workspaces = new Map<string, RegisteredWorkspace>();
   #state: WorkspaceCatalogState;
   #mutation = Promise.resolve();
@@ -67,10 +80,12 @@ export class WorkspaceCatalog {
   private constructor(
     path: string,
     configuredIds: Set<string>,
+    removedConfiguredIds: Set<string>,
     state: WorkspaceCatalogState,
   ) {
     this.#path = path;
     this.#configuredIds = configuredIds;
+    this.#removedConfiguredIds = removedConfiguredIds;
     this.#state = state;
   }
 
@@ -86,12 +101,17 @@ export class WorkspaceCatalog {
     const catalog = new WorkspaceCatalog(
       path,
       new Set(configured.map(({ workspaceId }) => workspaceId)),
+      new Set(state.removedConfiguredWorkspaceIds ?? []),
       state,
     );
     const seenPaths = new Set<string>();
     for (
       const [index, workspace] of [...configured, ...state.workspaces].entries()
     ) {
+      if (
+        index < configured.length &&
+        catalog.#removedConfiguredIds.has(workspace.workspaceId)
+      ) continue;
       if (catalog.#workspaces.has(workspace.workspaceId)) continue;
       const realPath = await Deno.realPath(workspace.path);
       if (seenPaths.has(realPath)) continue;
@@ -140,6 +160,26 @@ export class WorkspaceCatalog {
       await this.#persist();
     });
     return [...this.#workspaces.values()].find((candidate) => candidate.path === workspace.path) ?? workspace;
+  }
+
+  async remove(workspaceId: string) {
+    let removed: RegisteredWorkspace | undefined;
+    await this.#mutate(async () => {
+      removed = this.#workspaces.get(workspaceId);
+      if (!removed) return;
+      this.#workspaces.delete(workspaceId);
+      if (this.#configuredIds.has(workspaceId)) {
+        this.#removedConfiguredIds.add(workspaceId);
+      }
+      this.#state.removedConfiguredWorkspaceIds = [
+        ...this.#removedConfiguredIds,
+      ];
+      this.#state.workspaces = [...this.#workspaces.values()]
+        .filter(({ workspaceId }) => !this.#configuredIds.has(workspaceId))
+        .map(({ workspaceId, name, path }) => ({ workspaceId, name, path }));
+      await this.#persist();
+    });
+    return removed;
   }
 
   async #mutate(operation: () => Promise<void>) {

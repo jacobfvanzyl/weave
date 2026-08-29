@@ -209,6 +209,10 @@ export class WorkspaceFileService {
     this.#roots.set(root.workspaceId, path);
   }
 
+  removeRoot(workspaceId: string) {
+    this.#roots.delete(workspaceId);
+  }
+
   async list(
     params: PortalRpcParams<'workspace.file.list'>,
   ): Promise<PortalRpcResult<'workspace.file.list'>> {

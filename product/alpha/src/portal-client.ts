@@ -16,13 +16,16 @@ import {
   type WorkspaceFileErrorData,
   type WorkspaceFileWatchEvent,
   type WorkspaceSummary,
-} from '@weave/product-protocol';
-import type { ContentBlock, CreateElicitationResponse } from '@agentclientprotocol/sdk';
-import { AcpSessionClient } from '@/chat/acp-client';
-import type { AcpTranscriptEvent } from '@/chat/acp-transcript';
-import { portalWebSocketUrl } from '@/portal-address';
-import { authenticatedPortalWebSocket } from '@/portal-authenticated-websocket';
-import type { PortalCredentialSigner } from '@/portal-credential';
+} from "@weave/product-protocol";
+import type {
+  ContentBlock,
+  CreateElicitationResponse,
+} from "@agentclientprotocol/sdk";
+import { AcpSessionClient } from "@/chat/acp-client";
+import type { AcpTranscriptEvent } from "@/chat/acp-transcript";
+import { portalWebSocketUrl } from "@/portal-address";
+import { authenticatedPortalWebSocket } from "@/portal-authenticated-websocket";
+import type { PortalCredentialSigner } from "@/portal-credential";
 
 type JsonRpcId = number;
 type PendingRequest = {
@@ -39,7 +42,7 @@ export class PortalRpcError extends Error {
     readonly data?: WorkspaceFileErrorData | unknown,
   ) {
     super(message);
-    this.name = 'PortalRpcError';
+    this.name = "PortalRpcError";
   }
 }
 
@@ -49,7 +52,7 @@ export class PortalTransportError extends Error {
     readonly closeCode?: number,
   ) {
     super(message);
-    this.name = 'PortalTransportError';
+    this.name = "PortalTransportError";
   }
 }
 
@@ -68,9 +71,7 @@ class JsonRpcWebSocket {
       socket.onopen = () => resolve();
       socket.onerror = () =>
         reject(
-          new PortalTransportError(
-            'The Host WebSocket could not be opened.',
-          ),
+          new PortalTransportError("The Host WebSocket could not be opened."),
         );
     });
     socket.onmessage = (event) => this.receive(String(event.data));
@@ -92,7 +93,7 @@ class JsonRpcWebSocket {
       this.pending.set(id, { method, resolve, reject });
       this.socket.send(
         JSON.stringify({
-          jsonrpc: '2.0',
+          jsonrpc: "2.0",
           id,
           method,
           ...(params === undefined ? {} : { params }),
@@ -103,16 +104,16 @@ class JsonRpcWebSocket {
 
   close() {
     this.closedByClient = true;
-    this.socket.close(1000, 'Weave disconnected.');
+    this.socket.close(1000, "Weave disconnected.");
   }
 
   private receive(text: string) {
     const message = JSON.parse(text) as Record<string, unknown>;
-    if (typeof message.method === 'string') {
-      if (typeof message.id === 'number') {
+    if (typeof message.method === "string") {
+      if (typeof message.id === "number") {
         this.socket.send(
           JSON.stringify({
-            jsonrpc: '2.0',
+            jsonrpc: "2.0",
             id: message.id,
             error: {
               code: -32601,
@@ -125,11 +126,11 @@ class JsonRpcWebSocket {
       }
       return;
     }
-    if (typeof message.id !== 'number') return;
+    if (typeof message.id !== "number") return;
     const pending = this.pending.get(message.id);
     if (!pending) return;
     this.pending.delete(message.id);
-    if (message.error && typeof message.error === 'object') {
+    if (message.error && typeof message.error === "object") {
       const error = message.error as {
         code?: unknown;
         message?: unknown;
@@ -139,11 +140,11 @@ class JsonRpcWebSocket {
       try {
         if (
           (data as { domain?: unknown } | undefined)?.domain ===
-            'workspace-filesystem'
+          "workspace-filesystem"
         ) {
           data = parseWorkspaceFileErrorData(data);
         } else if (
-          (data as { domain?: unknown } | undefined)?.domain === 'terminal'
+          (data as { domain?: unknown } | undefined)?.domain === "terminal"
         ) {
           data = parseTerminalErrorData(data);
         }
@@ -152,8 +153,10 @@ class JsonRpcWebSocket {
       }
       pending.reject(
         new PortalRpcError(
-          typeof error.code === 'number' ? error.code : -32000,
-          typeof error.message === 'string' ? error.message : `${pending.method} failed.`,
+          typeof error.code === "number" ? error.code : -32000,
+          typeof error.message === "string"
+            ? error.message
+            : `${pending.method} failed.`,
           data,
         ),
       );
@@ -213,14 +216,17 @@ export class DirectHostClient {
   }
 
   async snapshot(): Promise<HostSnapshot> {
-    const capabilities = await this.request('portal.capabilities', {});
-    const supportsThreadLifecycle = capabilities.capabilities.includes('thread.archive') &&
-      capabilities.capabilities.includes('thread.restore');
+    const capabilities = await this.request("portal.capabilities", {});
+    const supportsThreadLifecycle =
+      capabilities.capabilities.includes("thread.archive") &&
+      capabilities.capabilities.includes("thread.restore");
     const [workspaces, agents, threads, archivedThreads] = await Promise.all([
-      this.request('workspace.list', {}),
-      this.request('agent.list', {}),
-      this.request('thread.list', { status: 'active' }),
-      supportsThreadLifecycle ? this.request('thread.list', { status: 'archived' }) : Promise.resolve({ threads: [] }),
+      this.request("workspace.list", {}),
+      this.request("agent.list", {}),
+      this.request("thread.list", { status: "active" }),
+      supportsThreadLifecycle
+        ? this.request("thread.list", { status: "archived" })
+        : Promise.resolve({ threads: [] }),
     ]);
     return {
       hostId: capabilities.hostId,
@@ -234,16 +240,16 @@ export class DirectHostClient {
   }
 
   async attach(threadId: string) {
-    const prepared = await this.request('thread.attach', { threadId });
+    const prepared = await this.request("thread.attach", { threadId });
     this.acp?.close();
     this.activeThread = prepared.thread;
     this.onAcpEvent({
-      type: 'history/reset',
+      type: "history/reset",
       sessionId: prepared.thread.acpSessionId,
     });
     const url = new URL(this.baseUrl);
     url.pathname = prepared.connection.path;
-    url.searchParams.set('threadId', prepared.connection.threadId);
+    url.searchParams.set("threadId", prepared.connection.threadId);
     this.acp = new AcpSessionClient({
       url: url.toString(),
       WebSocket: this.WebSocket,
@@ -258,7 +264,7 @@ export class DirectHostClient {
 
   async createThread(workspaceId: string, agentId: string, title?: string) {
     return (
-      await this.request('thread.create', {
+      await this.request("thread.create", {
         workspaceId,
         agentId,
         ...(title ? { title } : {}),
@@ -272,7 +278,7 @@ export class DirectHostClient {
     title?: string,
   ) {
     return (
-      await this.request('thread.draft.create', {
+      await this.request("thread.draft.create", {
         workspaceId,
         agentId,
         ...(title ? { title } : {}),
@@ -286,20 +292,24 @@ export class DirectHostClient {
       this.acp = undefined;
       this.activeThread = undefined;
     }
-    await this.request('thread.draft.discard', { threadId });
+    await this.request("thread.draft.discard", { threadId });
   }
 
   async addWorkspace(path: string, name?: string) {
     return (
-      await this.request('workspace.add', {
+      await this.request("workspace.add", {
         path,
         ...(name ? { name } : {}),
       })
     ).workspace;
   }
 
+  async removeWorkspace(workspaceId: string) {
+    await this.request("workspace.remove", { workspaceId });
+  }
+
   async archiveThread(threadId: string) {
-    const archived = (await this.request('thread.archive', { threadId }))
+    const archived = (await this.request("thread.archive", { threadId }))
       .thread;
     if (this.activeThread?.threadId === threadId) {
       this.acp?.close();
@@ -310,19 +320,19 @@ export class DirectHostClient {
   }
 
   async restoreThread(threadId: string) {
-    return (await this.request('thread.restore', { threadId })).thread;
+    return (await this.request("thread.restore", { threadId })).thread;
   }
 
   listWorkspaceFiles(workspaceId: string, path: string) {
-    return this.request('workspace.file.list', { workspaceId, path });
+    return this.request("workspace.file.list", { workspaceId, path });
   }
 
   readWorkspaceFile(workspaceId: string, path: string) {
-    return this.request('workspace.file.read', { workspaceId, path });
+    return this.request("workspace.file.read", { workspaceId, path });
   }
 
   hashWorkspaceFile(workspaceId: string, path: string) {
-    return this.request('workspace.file.hash', { workspaceId, path });
+    return this.request("workspace.file.hash", { workspaceId, path });
   }
 
   writeWorkspaceFile(
@@ -331,7 +341,7 @@ export class DirectHostClient {
     content: string,
     expectedContentHash: string | null,
   ) {
-    return this.request('workspace.file.write', {
+    return this.request("workspace.file.write", {
       workspaceId,
       path,
       content,
@@ -340,7 +350,7 @@ export class DirectHostClient {
   }
 
   createWorkspaceDirectory(workspaceId: string, path: string) {
-    return this.request('workspace.directory.create', { workspaceId, path });
+    return this.request("workspace.directory.create", { workspaceId, path });
   }
 
   moveWorkspaceFile(
@@ -349,7 +359,7 @@ export class DirectHostClient {
     toPath: string,
     overwrite?: boolean,
   ) {
-    return this.request('workspace.file.move', {
+    return this.request("workspace.file.move", {
       workspaceId,
       fromPath,
       toPath,
@@ -358,7 +368,7 @@ export class DirectHostClient {
   }
 
   deleteWorkspaceFile(workspaceId: string, path: string, recursive?: boolean) {
-    return this.request('workspace.file.delete', {
+    return this.request("workspace.file.delete", {
       workspaceId,
       path,
       ...(recursive === undefined ? {} : { recursive }),
@@ -369,10 +379,10 @@ export class DirectHostClient {
     workspaceId: string,
     path: string,
     query: string,
-    scope: 'path' | 'content' | 'both' = 'both',
+    scope: "path" | "content" | "both" = "both",
     limit?: number,
   ) {
-    return this.request('workspace.file.search', {
+    return this.request("workspace.file.search", {
       workspaceId,
       path,
       query,
@@ -386,7 +396,7 @@ export class DirectHostClient {
     paths: string[],
     onEvent: (event: WorkspaceFileWatchEvent) => void,
   ) {
-    const started = await this.request('workspace.file.watch.start', {
+    const started = await this.request("workspace.file.watch.start", {
       workspaceId,
       paths,
     });
@@ -396,7 +406,7 @@ export class DirectHostClient {
       subscriptionId: started.subscriptionId,
       paths: started.paths,
       update: async (nextPaths: string[]) => {
-        const updated = await this.request('workspace.file.watch.update', {
+        const updated = await this.request("workspace.file.watch.update", {
           subscriptionId: started.subscriptionId,
           paths: nextPaths,
         });
@@ -406,7 +416,7 @@ export class DirectHostClient {
         if (closed) return;
         closed = true;
         this.workspaceFileWatchListeners.delete(started.subscriptionId);
-        await this.request('workspace.file.watch.stop', {
+        await this.request("workspace.file.watch.stop", {
           subscriptionId: started.subscriptionId,
         }).catch(() => undefined);
       },
@@ -414,11 +424,11 @@ export class DirectHostClient {
   }
 
   listTerminals(workspaceId: string) {
-    return this.request('terminal.list', { workspaceId });
+    return this.request("terminal.list", { workspaceId });
   }
 
   createTerminal(workspaceId: string, cols?: number, rows?: number) {
-    return this.request('terminal.create', {
+    return this.request("terminal.create", {
       workspaceId,
       ...(cols === undefined ? {} : { cols }),
       ...(rows === undefined ? {} : { rows }),
@@ -426,7 +436,7 @@ export class DirectHostClient {
   }
 
   snapshotTerminal(workspaceId: string, terminalId: string) {
-    return this.request('terminal.snapshot', { workspaceId, terminalId });
+    return this.request("terminal.snapshot", { workspaceId, terminalId });
   }
 
   async attachTerminal(
@@ -435,7 +445,7 @@ export class DirectHostClient {
     mode: TerminalAttachmentMode,
     onEvent: (event: TerminalNotification) => void,
   ) {
-    const result = await this.request('terminal.attach', {
+    const result = await this.request("terminal.attach", {
       workspaceId,
       terminalId,
       mode,
@@ -451,22 +461,34 @@ export class DirectHostClient {
           cursor: result.snapshot.cursor,
           onEvent,
         });
-        if (this.overflowedTerminalAttachments.delete(result.attachment.attachmentId)) {
-          this.pendingTerminalNotifications.delete(result.attachment.attachmentId);
+        if (
+          this.overflowedTerminalAttachments.delete(
+            result.attachment.attachmentId,
+          )
+        ) {
+          this.pendingTerminalNotifications.delete(
+            result.attachment.attachmentId,
+          );
           onEvent({
             attachmentId: result.attachment.attachmentId,
             terminalId: result.snapshot.terminal.terminalId,
             workspaceId: result.snapshot.terminal.workspaceId,
             generation: result.snapshot.generation,
             sequence: result.snapshot.cursor + 1,
-            event: { type: 'resync', retainedFrom: result.snapshot.retainedFrom },
+            event: {
+              type: "resync",
+              retainedFrom: result.snapshot.retainedFrom,
+            },
           });
           return;
         }
-        const pending = this.pendingTerminalNotifications.get(
+        const pending =
+          this.pendingTerminalNotifications.get(
+            result.attachment.attachmentId,
+          ) ?? [];
+        this.pendingTerminalNotifications.delete(
           result.attachment.attachmentId,
-        ) ?? [];
-        this.pendingTerminalNotifications.delete(result.attachment.attachmentId);
+        );
         for (const notification of pending) {
           this.dispatchTerminalNotification(notification);
         }
@@ -480,7 +502,7 @@ export class DirectHostClient {
     attachmentId: string,
     data: string,
   ) {
-    return this.request('terminal.input', {
+    return this.request("terminal.input", {
       workspaceId,
       terminalId,
       attachmentId,
@@ -495,7 +517,7 @@ export class DirectHostClient {
     cols: number,
     rows: number,
   ) {
-    return this.request('terminal.resize', {
+    return this.request("terminal.resize", {
       workspaceId,
       terminalId,
       attachmentId,
@@ -512,7 +534,7 @@ export class DirectHostClient {
     this.terminalListeners.delete(attachmentId);
     this.pendingTerminalNotifications.delete(attachmentId);
     this.overflowedTerminalAttachments.delete(attachmentId);
-    return await this.request('terminal.detach', {
+    return await this.request("terminal.detach", {
       workspaceId,
       terminalId,
       attachmentId,
@@ -524,7 +546,7 @@ export class DirectHostClient {
     terminalId: string,
     attachmentId: string,
   ) {
-    const result = await this.request('terminal.close', {
+    const result = await this.request("terminal.close", {
       workspaceId,
       terminalId,
       attachmentId,
@@ -537,7 +559,7 @@ export class DirectHostClient {
 
   async prompt(content: ContentBlock[]) {
     if (!this.acp || !this.activeThread) {
-      throw new Error('Attach to a Thread first.');
+      throw new Error("Attach to a Thread first.");
     }
     await this.acp.prompt(content);
   }
@@ -549,7 +571,7 @@ export class DirectHostClient {
   respondToPermission(requestId: string, optionId: string) {
     return (
       this.acp?.respondToPermission(requestId, {
-        outcome: 'selected',
+        outcome: "selected",
         optionId,
       }) ?? false
     );
@@ -595,16 +617,19 @@ export class DirectHostClient {
   private dispatchTerminalNotification(notification: TerminalNotification) {
     const listener = this.terminalListeners.get(notification.attachmentId);
     if (!listener) {
-      if (this.overflowedTerminalAttachments.has(notification.attachmentId)) return;
-      const pending = this.pendingTerminalNotifications.get(
-        notification.attachmentId,
-      ) ?? [];
+      if (this.overflowedTerminalAttachments.has(notification.attachmentId))
+        return;
+      const pending =
+        this.pendingTerminalNotifications.get(notification.attachmentId) ?? [];
       pending.push(notification);
       if (pending.length > 256) {
         this.pendingTerminalNotifications.delete(notification.attachmentId);
         this.overflowedTerminalAttachments.add(notification.attachmentId);
       } else {
-        this.pendingTerminalNotifications.set(notification.attachmentId, pending);
+        this.pendingTerminalNotifications.set(
+          notification.attachmentId,
+          pending,
+        );
       }
       return;
     }
@@ -616,7 +641,7 @@ export class DirectHostClient {
       this.terminalListeners.delete(notification.attachmentId);
       listener.onEvent({
         ...notification,
-        event: { type: 'resync', retainedFrom: notification.sequence },
+        event: { type: "resync", retainedFrom: notification.sequence },
       });
       return;
     }

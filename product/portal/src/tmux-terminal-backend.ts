@@ -34,6 +34,7 @@ type ControlClient = {
   close(): void;
 };
 type ControlClientFactory = (input: {
+  executable: string;
   args: string[];
   env: Record<string, string>;
   handlers: ControlHandlers;
@@ -53,6 +54,35 @@ const CONFIG_VERSION = 'weave-product-terminal-v1';
 const TMUX_REQUIRED = 'tmux is required for Weave terminals but was not found on PATH.';
 const MAX_SAFE_UNIX_SOCKET_BYTES = 96;
 
+const executableFile = (path: string) => {
+  try {
+    const stat = Deno.statSync(path);
+    return stat.isFile && (stat.mode === null || (stat.mode & 0o111) !== 0);
+  } catch {
+    return false;
+  }
+};
+
+export const resolveTmuxExecutable = (
+  env: Record<string, string | undefined>,
+  options: {
+    os?: typeof Deno.build.os;
+    isExecutable?: (path: string) => boolean;
+  } = {},
+) => {
+  const configured = env.WEAVE_PORTAL_TMUX_PATH?.trim();
+  if (configured) return configured;
+  const isExecutable = options.isExecutable ?? executableFile;
+  const pathCandidates = (env.PATH ?? '')
+    .split(':')
+    .filter(Boolean)
+    .map((directory) => join(directory, 'tmux'));
+  const platformCandidates = (options.os ?? Deno.build.os) === 'darwin'
+    ? ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux']
+    : ['/usr/local/bin/tmux', '/usr/bin/tmux'];
+  return [...new Set([...pathCandidates, ...platformCandidates])].find(isExecutable) ?? 'tmux';
+};
+
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 const stableSocketPath = (stateDirectory: string) => {
@@ -65,12 +95,15 @@ const stableSocketPath = (stateDirectory: string) => {
   }
   return `/tmp/weave-product-tmux-${hash.toString(16).padStart(16, '0')}.sock`;
 };
-const commandEnvironment = (source: Record<string, string | undefined>) =>
-  Object.fromEntries(
+const commandEnvironment = (source: Record<string, string | undefined>) => {
+  const env = Object.fromEntries(
     Object.entries(source).filter((entry): entry is [string, string] =>
       typeof entry[1] === 'string' && entry[0] !== 'NO_COLOR' && entry[0] !== 'TMUX' && entry[0] !== 'TMUX_PANE'
     ),
   );
+  if (!env.LC_ALL && !env.LC_CTYPE && !env.LANG) env.LANG = 'C.UTF-8';
+  return env;
+};
 
 const validTerminalName = (value: string | undefined) =>
   value && /^[A-Za-z0-9][A-Za-z0-9_.+-]*$/.test(value) ? value : undefined;
@@ -231,13 +264,14 @@ class TmuxControlClient implements ControlClient {
   }
 
   static async open(input: {
+    executable: string;
     args: string[];
     env: Record<string, string>;
     handlers: ControlHandlers;
   }) {
     let process: Deno.ChildProcess;
     try {
-      process = new Deno.Command('tmux', {
+      process = new Deno.Command(input.executable, {
         args: input.args,
         env: input.env,
         clearEnv: true,
@@ -386,6 +420,7 @@ class TmuxControlClient implements ControlClient {
 export class TmuxTerminalBackend implements TerminalBackend {
   readonly #socketPath: string;
   readonly #configPath: string;
+  readonly #executable: string;
   readonly #env: Record<string, string | undefined>;
   readonly #runner?: TmuxRunner;
   readonly #controlFactory: ControlClientFactory;
@@ -404,13 +439,14 @@ export class TmuxTerminalBackend implements TerminalBackend {
     this.#socketPath = stableSocketPath(options.stateDirectory);
     this.#configPath = join(options.stateDirectory, 'terminal', 'tmux.conf');
     this.#env = options.env ?? Deno.env.toObject();
+    this.#executable = resolveTmuxExecutable(this.#env);
     this.#runner = options.runner;
     this.#controlFactory = options.controlClientFactory ?? TmuxControlClient.open;
   }
 
   static async available(env: Record<string, string | undefined> = Deno.env.toObject()) {
     try {
-      return (await new Deno.Command('tmux', {
+      return (await new Deno.Command(resolveTmuxExecutable(env), {
         args: ['-V'],
         env: commandEnvironment(env),
         clearEnv: true,
@@ -510,7 +546,12 @@ export class TmuxTerminalBackend implements TerminalBackend {
       command,
     ], { cwd: input.cwd, env: processEnv });
     const [windowId, paneId] = created.stdout.trim().split('\t');
-    if (!windowId || !paneId) throw new Error('tmux did not return the created Terminal window.');
+    if (!windowId || !paneId) {
+      throw new Error(
+        `tmux did not return the created Terminal window: stdout=${JSON.stringify(created.stdout)} ` +
+          `stderr=${JSON.stringify(created.stderr)} code=${created.code}.`,
+      );
+    }
     for (
       const [name, value] of [
         ['@weave_terminal_id', input.terminalId],
@@ -606,6 +647,7 @@ export class TmuxTerminalBackend implements TerminalBackend {
       await this.#ensureSession(Deno.env.get('HOME') ?? Deno.cwd());
       await this.#records();
       this.#controlClient = await this.#controlFactory({
+        executable: this.#executable,
         args: [...this.#baseArgs(), '-C', 'attach-session', '-f', 'pause-after=1', '-t', SESSION_NAME],
         env: commandEnvironment(this.#env),
         handlers: {
@@ -738,7 +780,7 @@ export class TmuxTerminalBackend implements TerminalBackend {
   }
 
   async #runCommand(args: string[], options: { cwd?: string; env: Record<string, string> }) {
-    const output = await new Deno.Command('tmux', {
+    const output = await new Deno.Command(this.#executable, {
       args: [...this.#baseArgs(), ...args],
       cwd: options.cwd,
       env: options.env,

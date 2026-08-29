@@ -102,6 +102,16 @@ describe('XtermTerminalView', () => {
     await waitFor(() => expect(xterm.dispose).toHaveBeenCalledOnce());
   });
 
+  it('puts viewport padding on xterm so fitting reserves the final input row', () => {
+    const { container } = render(
+      <XtermTerminalView data='' readOnly={false} />,
+    );
+    const host = container.querySelector('[data-slot="xterm-terminal"]');
+
+    expect(host).toHaveClass('[&>.xterm]:p-2');
+    expect(host).not.toHaveClass('p-2');
+  });
+
   it('forwards control input and fitted dimensions but suppresses input while read-only', () => {
     const input = vi.fn();
     const resize = vi.fn();

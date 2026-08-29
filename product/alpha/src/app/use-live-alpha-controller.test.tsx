@@ -51,6 +51,45 @@ afterEach(() => {
 });
 
 describe("useLiveAlphaController", () => {
+  it("removes the selected Host placement and refreshes only that Portal", async () => {
+    const removableSnapshot: HostSnapshot = {
+      ...snapshot,
+      capabilities: ["workspace.add", "workspace.remove"],
+    };
+    const removedSnapshot: HostSnapshot = {
+      ...removableSnapshot,
+      workspaces: [],
+      threads: [],
+    };
+    let currentSnapshot = removableSnapshot;
+    const client = {
+      snapshot: vi.fn(async () => currentSnapshot),
+      removeWorkspace: vi.fn(async () => {
+        currentSnapshot = removedSnapshot;
+      }),
+      close: vi.fn(),
+    } as unknown as DirectHostClient;
+    const { result } = renderHook(() =>
+      useLiveAlphaController(vi.fn(() => client)),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const workspace = result.current.model.workspaces[0]!;
+    const placement = workspace.placements?.[0];
+
+    await act(async () =>
+      result.current.actions.removeProject?.(workspace.id, placement?.id),
+    );
+
+    expect(client.removeWorkspace).toHaveBeenCalledWith("weave");
+    expect(client.snapshot).toHaveBeenCalledTimes(2);
+    expect(result.current.model.workspaces).toEqual([]);
+    expect(result.current.model.error).toBeUndefined();
+  });
+
   it("reflects an Agent title update in the active transcript and sidebar immediately", async () => {
     let onEvent: ConstructorParameters<typeof DirectHostClient>[2] | undefined;
     const client = {
@@ -61,28 +100,29 @@ describe("useLiveAlphaController", () => {
         entries: [],
         truncated: false,
       })),
-      watchWorkspaceFiles: vi.fn(async (
-        _workspaceId: string,
-        paths: string[],
-      ) => ({
-        subscriptionId: "watch-title",
-        paths,
-        update: vi.fn(async (nextPaths: string[]) => nextPaths),
-        close: vi.fn(async () => undefined),
-      })),
+      watchWorkspaceFiles: vi.fn(
+        async (_workspaceId: string, paths: string[]) => ({
+          subscriptionId: "watch-title",
+          paths,
+          update: vi.fn(async (nextPaths: string[]) => nextPaths),
+          close: vi.fn(async () => undefined),
+        }),
+      ),
       close: vi.fn(),
     } as unknown as DirectHostClient;
     const { result } = renderHook(() =>
-      useLiveAlphaController(vi.fn(
-        (
-          _hostUrl: string,
-          _credential: unknown,
-          nextOnEvent: ConstructorParameters<typeof DirectHostClient>[2],
-        ) => {
-          onEvent = nextOnEvent;
-          return client;
-        },
-      ))
+      useLiveAlphaController(
+        vi.fn(
+          (
+            _hostUrl: string,
+            _credential: unknown,
+            nextOnEvent: ConstructorParameters<typeof DirectHostClient>[2],
+          ) => {
+            onEvent = nextOnEvent;
+            return client;
+          },
+        ),
+      ),
     );
 
     await act(async () => {
@@ -90,7 +130,7 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
     });
     await act(async () =>
-      result.current.actions.selectThread("host-1:thread-1")
+      result.current.actions.selectThread("host-1:thread-1"),
     );
     act(() => onEvent?.({ type: "history/reset", sessionId: "session-1" }));
 
@@ -102,12 +142,10 @@ describe("useLiveAlphaController", () => {
           title: "Agent-selected title",
           updatedAt: "2026-08-28T06:00:00.000Z",
         },
-      })
+      }),
     );
 
-    expect(result.current.model.transcript?.title).toBe(
-      "Agent-selected title",
-    );
+    expect(result.current.model.transcript?.title).toBe("Agent-selected title");
     expect(result.current.model.workspaces[0]?.threads[0]).toMatchObject({
       id: "host-1:thread-1",
       title: "Agent-selected title",
@@ -122,7 +160,7 @@ describe("useLiveAlphaController", () => {
           title: null,
           updatedAt: "2026-08-28T06:05:00.000Z",
         },
-      })
+      }),
     );
     expect(result.current.model.transcript?.title).toBeNull();
     expect(result.current.model.workspaces[0]?.threads[0]).toMatchObject({
@@ -153,8 +191,8 @@ describe("useLiveAlphaController", () => {
       snapshot: vi.fn(async () => switchingSnapshot),
       attach: vi.fn(async (threadId: string) => {
         if (threadId === "thread-2") await secondAttach;
-        return switchingSnapshot.threads.find((thread) =>
-          thread.threadId === threadId
+        return switchingSnapshot.threads.find(
+          (thread) => thread.threadId === threadId,
         )!;
       }),
       listWorkspaceFiles: vi.fn(async () => ({
@@ -162,28 +200,29 @@ describe("useLiveAlphaController", () => {
         entries: [],
         truncated: false,
       })),
-      watchWorkspaceFiles: vi.fn(async (
-        _workspaceId: string,
-        paths: string[],
-      ) => ({
-        subscriptionId: "watch-1",
-        paths,
-        update: vi.fn(async (nextPaths: string[]) => nextPaths),
-        close: vi.fn(async () => undefined),
-      })),
+      watchWorkspaceFiles: vi.fn(
+        async (_workspaceId: string, paths: string[]) => ({
+          subscriptionId: "watch-1",
+          paths,
+          update: vi.fn(async (nextPaths: string[]) => nextPaths),
+          close: vi.fn(async () => undefined),
+        }),
+      ),
       close: vi.fn(),
     } as unknown as DirectHostClient;
     const { result } = renderHook(() =>
-      useLiveAlphaController(vi.fn(
-        (
-          _hostUrl: string,
-          _credential: unknown,
-          nextOnEvent: ConstructorParameters<typeof DirectHostClient>[2],
-        ) => {
-          onEvent = nextOnEvent;
-          return client;
-        },
-      ))
+      useLiveAlphaController(
+        vi.fn(
+          (
+            _hostUrl: string,
+            _credential: unknown,
+            nextOnEvent: ConstructorParameters<typeof DirectHostClient>[2],
+          ) => {
+            onEvent = nextOnEvent;
+            return client;
+          },
+        ),
+      ),
     );
 
     await act(async () => {
@@ -191,7 +230,7 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
     });
     await act(async () =>
-      result.current.actions.selectThread("host-1:thread-1")
+      result.current.actions.selectThread("host-1:thread-1"),
     );
     act(() => onEvent?.({ type: "history/reset", sessionId: "session-1" }));
     expect(result.current.model.transcript?.sessionId).toBe("session-1");
@@ -331,9 +370,9 @@ describe("useLiveAlphaController", () => {
     ]);
     expect(result.current.model.workspaces[0].placements).toHaveLength(2);
     expect(
-      result.current.model.workspaces.slice(1).map(({ placements }) =>
-        placements?.length
-      ),
+      result.current.model.workspaces
+        .slice(1)
+        .map(({ placements }) => placements?.length),
     ).toEqual([1, 1]);
     expect(
       result.current.model.workspaces
@@ -343,7 +382,7 @@ describe("useLiveAlphaController", () => {
     ).toEqual(["host-1:thread-1", "host-2:thread-1"]);
 
     await act(async () =>
-      result.current.actions.selectThread("host-2:thread-1")
+      result.current.actions.selectThread("host-2:thread-1"),
     );
     expect(host2.attach).toHaveBeenCalledWith("thread-1");
     expect(host1.attach).not.toHaveBeenCalled();
@@ -373,13 +412,16 @@ describe("useLiveAlphaController", () => {
     ).toBe("connected");
 
     await act(async () =>
-      result.current.actions.createThread("repository:github.com/veezee/weave")
+      result.current.actions.createThread(
+        "repository:github.com/veezee/weave",
+        "host-1:weave",
+      ),
     );
     expect(host2.createThread).not.toHaveBeenCalled();
     expect(host1.createThread).not.toHaveBeenCalled();
     expect(result.current.model.workspaces[0]?.threads[0]).toMatchObject({
       draft: true,
-      hostId: "host-2",
+      hostId: "host-1",
       title: "New thread",
     });
 
@@ -401,7 +443,7 @@ describe("useLiveAlphaController", () => {
       close: vi.fn(),
     } as unknown as DirectHostClient;
     const { result } = renderHook(() =>
-      useLiveAlphaController(vi.fn(() => client))
+      useLiveAlphaController(vi.fn(() => client)),
     );
     await act(async () => {
       await Promise.resolve();
@@ -413,7 +455,7 @@ describe("useLiveAlphaController", () => {
         hostId: "host-1",
         path: "/srv/odin",
         name: "Odin",
-      })
+      }),
     );
 
     expect(client.addWorkspace).toHaveBeenCalledWith("/srv/odin", "Odin");
@@ -448,19 +490,18 @@ describe("useLiveAlphaController", () => {
         entries: [],
         truncated: false,
       })),
-      watchWorkspaceFiles: vi.fn(async (
-        _workspaceId: string,
-        paths: string[],
-      ) => ({
-        subscriptionId: "watch-created",
-        paths,
-        update: vi.fn(async (nextPaths: string[]) => nextPaths),
-        close: vi.fn(async () => undefined),
-      })),
+      watchWorkspaceFiles: vi.fn(
+        async (_workspaceId: string, paths: string[]) => ({
+          subscriptionId: "watch-created",
+          paths,
+          update: vi.fn(async (nextPaths: string[]) => nextPaths),
+          close: vi.fn(async () => undefined),
+        }),
+      ),
       close: vi.fn(),
     } as unknown as DirectHostClient;
     const { result } = renderHook(() =>
-      useLiveAlphaController(vi.fn(() => client))
+      useLiveAlphaController(vi.fn(() => client)),
     );
     await act(async () => {
       await Promise.resolve();
@@ -514,11 +555,10 @@ describe("useLiveAlphaController", () => {
       { type: "text", text: "Start the work" },
     ]);
     expect(result.current.model.creatingThreadWorkspaceId).toBeUndefined();
-    expect(result.current.model.selectedThreadId).toBe(
-      "host-1:thread-created",
-    );
-    expect(result.current.model.workspaces[0]?.threads.some(({ draft }) => draft))
-      .toBe(false);
+    expect(result.current.model.selectedThreadId).toBe("host-1:thread-created");
+    expect(
+      result.current.model.workspaces[0]?.threads.some(({ draft }) => draft),
+    ).toBe(false);
   });
 
   it("preflights supported drafts so config is available before the first prompt", async () => {
@@ -554,19 +594,22 @@ describe("useLiveAlphaController", () => {
               { id: "code", name: "Code" },
             ],
           },
-          configOptions: [{
-            type: "select",
-            id: "model",
-            name: "Model",
-            currentValue: "gpt-5.6-sol",
-            options: [{ value: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
-          }, {
-            type: "select",
-            id: "reasoning_effort",
-            name: "Reasoning effort",
-            currentValue: "high",
-            options: [{ value: "high", name: "High" }],
-          }],
+          configOptions: [
+            {
+              type: "select",
+              id: "model",
+              name: "Model",
+              currentValue: "gpt-5.6-sol",
+              options: [{ value: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+            },
+            {
+              type: "select",
+              id: "reasoning_effort",
+              name: "Reasoning effort",
+              currentValue: "high",
+              options: [{ value: "high", name: "High" }],
+            },
+          ],
         });
         return prepared;
       }),
@@ -583,28 +626,29 @@ describe("useLiveAlphaController", () => {
         entries: [],
         truncated: false,
       })),
-      watchWorkspaceFiles: vi.fn(async (
-        _workspaceId: string,
-        paths: string[],
-      ) => ({
-        subscriptionId: "watch-prepared",
-        paths,
-        update: vi.fn(async (nextPaths: string[]) => nextPaths),
-        close: vi.fn(async () => undefined),
-      })),
+      watchWorkspaceFiles: vi.fn(
+        async (_workspaceId: string, paths: string[]) => ({
+          subscriptionId: "watch-prepared",
+          paths,
+          update: vi.fn(async (nextPaths: string[]) => nextPaths),
+          close: vi.fn(async () => undefined),
+        }),
+      ),
       close: vi.fn(),
     } as unknown as DirectHostClient;
     const { result } = renderHook(() =>
-      useLiveAlphaController(vi.fn(
-        (
-          _hostUrl: string,
-          _credential: unknown,
-          nextOnEvent: ConstructorParameters<typeof DirectHostClient>[2],
-        ) => {
-          onEvent = nextOnEvent;
-          return client;
-        },
-      ))
+      useLiveAlphaController(
+        vi.fn(
+          (
+            _hostUrl: string,
+            _credential: unknown,
+            nextOnEvent: ConstructorParameters<typeof DirectHostClient>[2],
+          ) => {
+            onEvent = nextOnEvent;
+            return client;
+          },
+        ),
+      ),
     );
     await act(async () => {
       await Promise.resolve();
@@ -648,7 +692,9 @@ describe("useLiveAlphaController", () => {
     expect(result.current.model.workspaces[0]?.threads[0]?.id).toBe(
       "host-1:draft-prepared",
     );
-    expect(result.current.model.workspaces[0]?.threads[0]?.draft).toBeUndefined();
+    expect(
+      result.current.model.workspaces[0]?.threads[0]?.draft,
+    ).toBeUndefined();
   });
 
   it("discards an untouched local draft when another Thread is selected", async () => {
@@ -671,19 +717,18 @@ describe("useLiveAlphaController", () => {
         entries: [],
         truncated: false,
       })),
-      watchWorkspaceFiles: vi.fn(async (
-        _workspaceId: string,
-        paths: string[],
-      ) => ({
-        subscriptionId: "watch-draft",
-        paths,
-        update: vi.fn(async (nextPaths: string[]) => nextPaths),
-        close: vi.fn(async () => undefined),
-      })),
+      watchWorkspaceFiles: vi.fn(
+        async (_workspaceId: string, paths: string[]) => ({
+          subscriptionId: "watch-draft",
+          paths,
+          update: vi.fn(async (nextPaths: string[]) => nextPaths),
+          close: vi.fn(async () => undefined),
+        }),
+      ),
       close: vi.fn(),
     } as unknown as DirectHostClient;
     const { result } = renderHook(() =>
-      useLiveAlphaController(vi.fn(() => client))
+      useLiveAlphaController(vi.fn(() => client)),
     );
     await act(async () => {
       await Promise.resolve();
@@ -702,9 +747,7 @@ describe("useLiveAlphaController", () => {
     });
 
     expect(client.createThread).not.toHaveBeenCalled();
-    expect(client.discardThreadDraft).toHaveBeenCalledWith(
-      "draft-discarded",
-    );
+    expect(client.discardThreadDraft).toHaveBeenCalledWith("draft-discarded");
     expect(result.current.model.selectedThreadId).toBe("host-1:thread-1");
     expect(result.current.model.workspaces[0]?.threads).toHaveLength(1);
     expect(result.current.model.workspaces[0]?.threads[0]?.id).toBe(
@@ -757,7 +800,7 @@ describe("useLiveAlphaController", () => {
       close: vi.fn(),
     } as unknown as DirectHostClient;
     const { result } = renderHook(() =>
-      useLiveAlphaController(vi.fn(() => client))
+      useLiveAlphaController(vi.fn(() => client)),
     );
 
     await act(async () => {
@@ -765,12 +808,12 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
     });
     await act(async () =>
-      result.current.actions.selectThread("host-1:thread-1")
+      result.current.actions.selectThread("host-1:thread-1"),
     );
     expect(result.current.model.selectedThreadId).toBe("host-1:thread-1");
 
     await act(async () =>
-      result.current.actions.archiveThread("host-1:thread-1")
+      result.current.actions.archiveThread("host-1:thread-1"),
     );
     expect(result.current.model.selectedThreadId).toBeUndefined();
     expect(result.current.model.workspaces[0].threads).toEqual([]);
@@ -782,7 +825,7 @@ describe("useLiveAlphaController", () => {
     ).toEqual([{ id: "host-1:thread-1", status: "archived" }]);
 
     await act(async () =>
-      result.current.actions.restoreThread("host-1:thread-1")
+      result.current.actions.restoreThread("host-1:thread-1"),
     );
     expect(result.current.model.archivedThreads).toEqual([]);
     expect(result.current.model.workspaces[0].threads[0]).toMatchObject({
@@ -831,7 +874,7 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
     });
     await act(async () =>
-      result.current.actions.selectThread("host-1:thread-1")
+      result.current.actions.selectThread("host-1:thread-1"),
     );
     act(() => onEvent?.({ type: "history/reset", sessionId: "session-1" }));
 
@@ -919,12 +962,14 @@ describe("useLiveAlphaController", () => {
         entries: [],
         truncated: false,
       })),
-      watchWorkspaceFiles: vi.fn(async (_workspaceId: string, paths: string[]) => ({
-        subscriptionId: "watch-1",
-        paths,
-        update: vi.fn(async (nextPaths: string[]) => nextPaths),
-        close: vi.fn(async () => undefined),
-      })),
+      watchWorkspaceFiles: vi.fn(
+        async (_workspaceId: string, paths: string[]) => ({
+          subscriptionId: "watch-1",
+          paths,
+          update: vi.fn(async (nextPaths: string[]) => nextPaths),
+          close: vi.fn(async () => undefined),
+        }),
+      ),
       close: vi.fn(),
     } as unknown as DirectHostClient;
     const reconnectClient = {
@@ -950,7 +995,7 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
     });
     await act(async () =>
-      result.current.actions.selectThread("host-1:thread-1")
+      result.current.actions.selectThread("host-1:thread-1"),
     );
 
     act(() => connectionClosed?.(new Error("Socket closed.")));
@@ -976,10 +1021,10 @@ describe("useLiveAlphaController", () => {
   it("browses and reads Workspace files through the connected Portal", async () => {
     let onWatchEvent:
       | ((event: {
-        kind: "modify";
-        paths: string[];
-        affectedDirectories: string[];
-      }) => void)
+          kind: "modify";
+          paths: string[];
+          affectedDirectories: string[];
+        }) => void)
       | undefined;
     const watch = {
       update: vi.fn(async (paths: string[]) => paths),
@@ -990,16 +1035,17 @@ describe("useLiveAlphaController", () => {
       attach: vi.fn(async () => snapshot.threads[0]),
       listWorkspaceFiles: vi.fn(async (_workspaceId: string, path: string) => ({
         path,
-        entries: path === ""
-          ? [
-            { name: "src", path: "src", type: "directory" as const },
-            {
-              name: "README.md",
-              path: "README.md",
-              type: "file" as const,
-            },
-          ]
-          : [{ name: "main.ts", path: "src/main.ts", type: "file" as const }],
+        entries:
+          path === ""
+            ? [
+                { name: "src", path: "src", type: "directory" as const },
+                {
+                  name: "README.md",
+                  path: "README.md",
+                  type: "file" as const,
+                },
+              ]
+            : [{ name: "main.ts", path: "src/main.ts", type: "file" as const }],
         truncated: false,
       })),
       readWorkspaceFile: vi.fn(async (_workspaceId: string, path: string) => ({
@@ -1028,7 +1074,7 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
     });
     await act(async () =>
-      result.current.actions.selectThread("host-1:thread-1")
+      result.current.actions.selectThread("host-1:thread-1"),
     );
     expect(result.current.model.workspaceFiles).toMatchObject({
       workspaceId: "weave",
@@ -1060,7 +1106,7 @@ describe("useLiveAlphaController", () => {
     await act(async () => result.current.actions.openWorkspaceDirectory("src"));
     expect(client.listWorkspaceFiles).toHaveBeenCalledTimes(2);
     await act(async () =>
-      result.current.actions.openWorkspaceFile("src/main.ts")
+      result.current.actions.openWorkspaceFile("src/main.ts"),
     );
     expect(result.current.model.workspaceFiles?.openFiles[0]).toMatchObject({
       kind: "text",
@@ -1068,7 +1114,7 @@ describe("useLiveAlphaController", () => {
       content: "export {};\n",
     });
     await act(async () =>
-      result.current.actions.openWorkspaceFile("README.md")
+      result.current.actions.openWorkspaceFile("README.md"),
     );
     expect(
       result.current.model.workspaceFiles?.openFiles.map((file) => file.path),
@@ -1081,7 +1127,7 @@ describe("useLiveAlphaController", () => {
       "src/main.ts",
     );
     await act(async () =>
-      result.current.actions.openWorkspaceFile("README.md")
+      result.current.actions.openWorkspaceFile("README.md"),
     );
     expect(client.readWorkspaceFile).toHaveBeenCalledTimes(2);
     act(() => result.current.actions.closeWorkspaceFile("README.md"));
@@ -1143,7 +1189,7 @@ describe("useLiveAlphaController", () => {
       close: vi.fn(),
     } as unknown as DirectHostClient;
     const { result } = renderHook(() =>
-      useLiveAlphaController(vi.fn(() => client))
+      useLiveAlphaController(vi.fn(() => client)),
     );
 
     await act(async () => {
@@ -1151,10 +1197,10 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
     });
     await act(async () =>
-      result.current.actions.selectThread("host-1:thread-1")
+      result.current.actions.selectThread("host-1:thread-1"),
     );
     await act(async () =>
-      result.current.actions.openWorkspaceFile("image.bin")
+      result.current.actions.openWorkspaceFile("image.bin"),
     );
 
     expect(result.current.model.workspaceFiles?.openFiles).toEqual([

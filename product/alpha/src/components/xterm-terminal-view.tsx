@@ -148,7 +148,7 @@ export function XtermTerminalView({
       ref={hostRef}
       data-slot='xterm-terminal'
       className={cn(
-        'min-h-0 min-w-0 flex-1 overflow-hidden bg-[#1e1e2e] p-2',
+        'min-h-0 min-w-0 flex-1 overflow-hidden bg-[#1e1e2e] [&>.xterm]:p-2',
         className,
       )}
       onPointerDown={() => {

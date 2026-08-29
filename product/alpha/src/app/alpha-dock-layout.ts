@@ -4,7 +4,7 @@ export type AlphaDockPosition = 'bottom' | 'right';
 export type AlphaDockPanelId = 'terminal' | 'project';
 
 export type AlphaDockSnapshot = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   panelPosition: {
     terminal: AlphaDockPosition;
     project: 'right';
@@ -19,73 +19,168 @@ export type AlphaDockSnapshot = {
   };
 };
 
-const storageKey = 'weave.alpha.docks.v1';
+type PersistedAlphaDockState = {
+  schemaVersion: 2;
+  panelPosition: AlphaDockSnapshot['panelPosition'];
+  projectOpen: boolean;
+  terminalOpenByScope: Record<string, boolean>;
+  rememberedSize: AlphaDockSnapshot['rememberedSize'];
+};
 
-export const createAlphaDockSnapshot = (): AlphaDockSnapshot => ({
-  schemaVersion: 1,
+type LegacyAlphaDockSnapshot = Omit<AlphaDockSnapshot, 'schemaVersion'> & {
+  schemaVersion: 1;
+};
+
+const storageKey = 'weave.alpha.docks.v2';
+const legacyStorageKey = 'weave.alpha.docks.v1';
+
+const createPersistedState = (): PersistedAlphaDockState => ({
+  schemaVersion: 2,
   panelPosition: { terminal: 'bottom', project: 'right' },
-  docks: {
-    bottom: { open: false, activePanelId: null },
-    right: { open: false, activePanelId: null },
-  },
+  projectOpen: false,
+  terminalOpenByScope: {},
   rememberedSize: { bottom: 32, right: 24 },
 });
 
-const panelPosition = (
-  snapshot: AlphaDockSnapshot,
-  panelId: AlphaDockPanelId,
-) => snapshot.panelPosition[panelId];
+const terminalOpen = (
+  state: PersistedAlphaDockState,
+  terminalScopeKey: string | undefined,
+) => Boolean(terminalScopeKey && state.terminalOpenByScope[terminalScopeKey]);
 
-const parseSnapshot = (value: unknown): AlphaDockSnapshot | undefined => {
+const snapshotFromState = (
+  state: PersistedAlphaDockState,
+  terminalScopeKey?: string,
+): AlphaDockSnapshot => {
+  const terminalIsOpen = terminalOpen(state, terminalScopeKey);
+  const terminalAtBottom = state.panelPosition.terminal === 'bottom';
+  const rightPanelId = !terminalAtBottom && terminalIsOpen
+    ? 'terminal'
+    : state.projectOpen
+    ? 'project'
+    : null;
+  return {
+    schemaVersion: 2,
+    panelPosition: state.panelPosition,
+    docks: {
+      bottom: {
+        open: terminalAtBottom && terminalIsOpen,
+        activePanelId: terminalAtBottom && terminalIsOpen ? 'terminal' : null,
+      },
+      right: {
+        open: rightPanelId !== null,
+        activePanelId: rightPanelId,
+      },
+    },
+    rememberedSize: state.rememberedSize,
+  };
+};
+
+export const createAlphaDockSnapshot = (): AlphaDockSnapshot =>
+  snapshotFromState(createPersistedState());
+
+const validPosition = (value: unknown): value is AlphaDockPosition =>
+  value === 'bottom' || value === 'right';
+
+const finiteSize = (value: unknown, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 && parsed < 100
+    ? parsed
+    : fallback;
+};
+
+const parseState = (value: unknown): PersistedAlphaDockState | undefined => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
-  const input = value as Partial<AlphaDockSnapshot>;
+  const input = value as Partial<PersistedAlphaDockState>;
   if (
-    input.schemaVersion !== 1 ||
-    (input.panelPosition?.terminal !== 'bottom' &&
-      input.panelPosition?.terminal !== 'right') ||
+    input.schemaVersion !== 2 ||
+    !validPosition(input.panelPosition?.terminal) ||
     input.panelPosition?.project !== 'right'
   ) return;
-  const defaults = createAlphaDockSnapshot();
-  const bottomSize = Number(input.rememberedSize?.bottom);
-  const rightSize = Number(input.rememberedSize?.right);
-  const dock = (position: AlphaDockPosition) => {
-    const candidate = input.docks?.[position];
-    const activePanelId = candidate?.activePanelId;
-    const validActive = activePanelId === 'terminal' ||
-      activePanelId === 'project'
-      ? activePanelId
-      : null;
-    return {
-      open: candidate?.open === true && validActive !== null,
-      activePanelId: validActive,
-    };
-  };
+  const defaults = createPersistedState();
+  const terminalOpenByScope = input.terminalOpenByScope &&
+      typeof input.terminalOpenByScope === 'object' &&
+      !Array.isArray(input.terminalOpenByScope)
+    ? Object.fromEntries(
+      Object.entries(input.terminalOpenByScope).filter(
+        ([key, open]) => key.length > 0 && typeof open === 'boolean',
+      ),
+    )
+    : {};
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     panelPosition: input.panelPosition as AlphaDockSnapshot['panelPosition'],
-    docks: { bottom: dock('bottom'), right: dock('right') },
+    projectOpen: input.projectOpen === true,
+    terminalOpenByScope,
     rememberedSize: {
-      bottom: Number.isFinite(bottomSize) ? bottomSize : defaults.rememberedSize.bottom,
-      right: Number.isFinite(rightSize) ? rightSize : defaults.rememberedSize.right,
+      bottom: finiteSize(
+        input.rememberedSize?.bottom,
+        defaults.rememberedSize.bottom,
+      ),
+      right: finiteSize(
+        input.rememberedSize?.right,
+        defaults.rememberedSize.right,
+      ),
     },
   };
 };
 
-const loadSnapshot = () => {
+const migrateLegacyState = (
+  value: unknown,
+  terminalScopeKey: string | undefined,
+): PersistedAlphaDockState | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const input = value as Partial<LegacyAlphaDockSnapshot>;
+  if (
+    input.schemaVersion !== 1 ||
+    !validPosition(input.panelPosition?.terminal) ||
+    input.panelPosition?.project !== 'right'
+  ) return;
+  const defaults = createPersistedState();
+  const terminalPosition = input.panelPosition.terminal;
+  const terminalWasOpen = input.docks?.[terminalPosition]?.open === true &&
+    input.docks?.[terminalPosition]?.activePanelId === 'terminal';
+  return {
+    schemaVersion: 2,
+    panelPosition: input.panelPosition as AlphaDockSnapshot['panelPosition'],
+    projectOpen: input.docks?.right?.open === true &&
+      input.docks.right.activePanelId === 'project',
+    terminalOpenByScope: terminalWasOpen && terminalScopeKey
+      ? { [terminalScopeKey]: true }
+      : {},
+    rememberedSize: {
+      bottom: finiteSize(
+        input.rememberedSize?.bottom,
+        defaults.rememberedSize.bottom,
+      ),
+      right: finiteSize(
+        input.rememberedSize?.right,
+        defaults.rememberedSize.right,
+      ),
+    },
+  };
+};
+
+const loadState = (terminalScopeKey: string | undefined) => {
   if (typeof window === 'undefined' || !window.localStorage) {
-    return createAlphaDockSnapshot();
+    return createPersistedState();
   }
   try {
-    return parseSnapshot(JSON.parse(window.localStorage.getItem(storageKey) ?? 'null')) ??
-      createAlphaDockSnapshot();
+    const current = parseState(
+      JSON.parse(window.localStorage.getItem(storageKey) ?? 'null'),
+    );
+    if (current) return current;
+    return migrateLegacyState(
+      JSON.parse(window.localStorage.getItem(legacyStorageKey) ?? 'null'),
+      terminalScopeKey,
+    ) ?? createPersistedState();
   } catch {
-    return createAlphaDockSnapshot();
+    return createPersistedState();
   }
 };
 
-const saveSnapshot = (snapshot: AlphaDockSnapshot) => {
+const saveState = (state: PersistedAlphaDockState) => {
   if (typeof window === 'undefined' || !window.localStorage) return;
-  window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+  window.localStorage.setItem(storageKey, JSON.stringify(state));
 };
 
 export const alphaDockButtons = (snapshot: AlphaDockSnapshot) => {
@@ -100,79 +195,92 @@ export const alphaDockButtons = (snapshot: AlphaDockSnapshot) => {
   return { bottom, right, showDivider: bottom.length > 0 && right.length > 0 };
 };
 
-export function useAlphaDockLayout() {
-  const [snapshot, setSnapshotState] = useState(loadSnapshot);
+export function useAlphaDockLayout(terminalScopeKey?: string) {
+  const [state, setState] = useState(() => loadState(terminalScopeKey));
+  const snapshot = snapshotFromState(state, terminalScopeKey);
   const update = useCallback(
-    (change: (current: AlphaDockSnapshot) => AlphaDockSnapshot) => {
-      setSnapshotState((current) => {
+    (change: (current: PersistedAlphaDockState) => PersistedAlphaDockState) => {
+      setState((current) => {
         const next = change(current);
-        saveSnapshot(next);
+        saveState(next);
         return next;
       });
     },
     [],
   );
 
+  const setTerminalOpen = useCallback((
+    current: PersistedAlphaDockState,
+    open: boolean,
+  ) => {
+    if (!terminalScopeKey) return current;
+    return {
+      ...current,
+      terminalOpenByScope: {
+        ...current.terminalOpenByScope,
+        [terminalScopeKey]: open,
+      },
+    };
+  }, [terminalScopeKey]);
+
   const togglePanel = useCallback((panelId: AlphaDockPanelId) => {
     update((current) => {
-      const position = panelPosition(current, panelId);
-      const dock = current.docks[position];
-      const active = dock.open && dock.activePanelId === panelId;
-      return {
-        ...current,
-        docks: {
-          ...current.docks,
-          [position]: active
-            ? { open: false, activePanelId: dock.activePanelId }
-            : { open: true, activePanelId: panelId },
-        },
-      };
+      const currentSnapshot = snapshotFromState(current, terminalScopeKey);
+      const position = currentSnapshot.panelPosition[panelId];
+      const active = currentSnapshot.docks[position].open &&
+        currentSnapshot.docks[position].activePanelId === panelId;
+      if (panelId === 'terminal') return setTerminalOpen(current, !active);
+      const withProject = { ...current, projectOpen: !active };
+      return !active && current.panelPosition.terminal === 'right'
+        ? setTerminalOpen(withProject, false)
+        : withProject;
     });
-  }, [update]);
+  }, [setTerminalOpen, terminalScopeKey, update]);
 
   const setDockOpen = useCallback((position: AlphaDockPosition, open: boolean) => {
     update((current) => {
-      const dock = current.docks[position];
-      const fallbackPanel = position === 'bottom'
-        ? current.panelPosition.terminal === 'bottom' ? 'terminal' : null
-        : dock.activePanelId ?? 'project';
-      return {
-        ...current,
-        docks: {
-          ...current.docks,
-          [position]: {
-            open: open && fallbackPanel !== null,
-            activePanelId: dock.activePanelId ?? fallbackPanel,
-          },
-        },
-      };
+      const currentSnapshot = snapshotFromState(current, terminalScopeKey);
+      const activePanelId = currentSnapshot.docks[position].activePanelId;
+      if (!open) {
+        return activePanelId === 'terminal'
+          ? setTerminalOpen(current, false)
+          : activePanelId === 'project'
+          ? { ...current, projectOpen: false }
+          : current;
+      }
+      if (position === 'bottom') {
+        return current.panelPosition.terminal === 'bottom'
+          ? setTerminalOpen(current, true)
+          : current;
+      }
+      return current.panelPosition.terminal === 'right' && terminalScopeKey
+        ? setTerminalOpen(current, true)
+        : { ...current, projectOpen: true };
     });
-  }, [update]);
+  }, [setTerminalOpen, terminalScopeKey, update]);
+
+  const hideTerminalPanel = useCallback(() => {
+    update((current) => {
+      const next = setTerminalOpen(current, false);
+      return current.panelPosition.terminal === 'right' &&
+          terminalOpen(current, terminalScopeKey)
+        ? { ...next, projectOpen: true }
+        : next;
+    });
+  }, [setTerminalOpen, terminalScopeKey, update]);
 
   const moveTerminal = useCallback((target: AlphaDockPosition) => {
-    update((current) => {
-      const source = current.panelPosition.terminal;
-      if (source === target) return current;
-      const sourceDock = current.docks[source];
-      const terminalVisible = sourceDock.open && sourceDock.activePanelId === 'terminal';
-      const nextSource = sourceDock.activePanelId === 'terminal'
-        ? source === 'right'
-          ? { open: true, activePanelId: 'project' as const }
-          : { open: false, activePanelId: null }
-        : sourceDock;
-      return {
+    update((current) => current.panelPosition.terminal === target
+      ? current
+      : {
         ...current,
         panelPosition: { ...current.panelPosition, terminal: target },
-        docks: {
-          ...current.docks,
-          [source]: nextSource,
-          [target]: terminalVisible
-            ? { open: true, activePanelId: 'terminal' }
-            : current.docks[target],
-        },
-      };
-    });
-  }, [update]);
+        projectOpen: current.panelPosition.terminal === 'right' &&
+            terminalOpen(current, terminalScopeKey)
+          ? true
+          : current.projectOpen,
+      });
+  }, [terminalScopeKey, update]);
 
   const rememberSize = useCallback((position: AlphaDockPosition, size: number) => {
     if (!Number.isFinite(size) || size <= 0 || size >= 100) return;
@@ -183,7 +291,7 @@ export function useAlphaDockLayout() {
   }, [update]);
 
   const isPanelActive = useCallback((panelId: AlphaDockPanelId) => {
-    const position = panelPosition(snapshot, panelId);
+    const position = snapshot.panelPosition[panelId];
     const dock = snapshot.docks[position];
     return dock.open && dock.activePanelId === panelId;
   }, [snapshot]);
@@ -193,6 +301,7 @@ export function useAlphaDockLayout() {
     buttons: alphaDockButtons(snapshot),
     togglePanel,
     setDockOpen,
+    hideTerminalPanel,
     moveTerminal,
     rememberSize,
     isPanelActive,

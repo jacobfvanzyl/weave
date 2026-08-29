@@ -172,20 +172,70 @@ describe("AlphaShell", () => {
     const showProjectPane = screen.getByRole("button", {
       name: "Show Project Pane",
     });
+    const toggleThreads = screen.getByRole("button", {
+      name: "Toggle threads",
+    });
+    const archivedThreads = screen.getByRole("button", {
+      name: "Archived Threads",
+    });
+    const sidebarRailDivider = container.querySelector(
+      '[data-slot="sidebar-rail-divider"]',
+    );
+    const threadTopRail = container.querySelector(
+      '[data-slot="thread-top-rail"]',
+    );
+    const globalBottomRail = container.querySelector(
+      '[data-slot="global-bottom-rail"]',
+    );
 
     expect(showProjectPane.closest("footer")).toHaveAttribute(
       "data-slot",
-      "editor-bottom-rail",
+      "global-bottom-rail",
     );
-    expect(showProjectPane).toHaveClass("mr-6");
+    expect(globalBottomRail).toContainElement(toggleThreads);
+    expect(toggleThreads.parentElement?.firstElementChild).toBe(toggleThreads);
+    expect(toggleThreads.nextElementSibling).toBe(sidebarRailDivider);
+    expect(sidebarRailDivider?.nextElementSibling).toBe(archivedThreads);
+    expect(sidebarRailDivider).toHaveClass(
+      "mx-1",
+      "my-1",
+      "w-px",
+      "self-stretch",
+      "shrink-0",
+      "bg-border",
+    );
+    expect(toggleThreads).toHaveAttribute("aria-pressed", "true");
+    expect(toggleThreads).toHaveClass("text-primary");
+    expect(threadTopRail).not.toContainElement(toggleThreads);
+
+    await userEvent.click(toggleThreads);
+    expect(
+      container.querySelector('[data-slot="alpha-pane-row"]'),
+    ).not.toBeInTheDocument();
+    expect(toggleThreads).toHaveAttribute("aria-pressed", "false");
+    expect(toggleThreads).not.toHaveClass("text-primary");
+
+    await userEvent.click(toggleThreads);
+    expect(
+      container.querySelector('[data-slot="alpha-pane-row"]'),
+    ).toBeInTheDocument();
+    expect(toggleThreads).toHaveAttribute("aria-pressed", "true");
+    expect(toggleThreads).toHaveClass("text-primary");
+    expect(showProjectPane).not.toHaveClass("mr-6");
     expect(
       container.querySelector('[data-slot="main-bottom-rail"]'),
-    ).not.toContainElement(showProjectPane);
+    ).not.toBeInTheDocument();
+    expect(
+      container.querySelector('[data-slot="global-bottom-rail"]'),
+    ).toContainElement(showProjectPane);
     await userEvent.click(showProjectPane);
     const threadPane = container.querySelector('[data-slot="thread-pane"]');
     const editorPane = container.querySelector('[data-slot="editor-pane"]');
     const projectPane = container.querySelector('[data-slot="project-pane"]');
     const paneRow = container.querySelector('[data-slot="alpha-pane-row"]');
+    const contentPaneRow = container.querySelector(
+      '[data-slot="alpha-content-pane-row"]',
+    );
 
     expect(paneRow).toBeInTheDocument();
     expect(
@@ -193,7 +243,14 @@ describe("AlphaShell", () => {
         paneRow?.querySelectorAll(':scope > [data-slot="resizable-panel"]') ??
           [],
       ).map((panel) => panel.id),
-    ).toEqual(["threads", "thread", "editor"]);
+    ).toEqual(["threads", "workspace"]);
+    expect(
+      Array.from(
+        contentPaneRow?.querySelectorAll(
+          ':scope > [data-slot="resizable-panel"]',
+        ) ?? [],
+      ).map((panel) => panel.id),
+    ).toEqual(["thread", "editor"]);
     expect(
       threadPane?.closest('[data-slot="resizable-panel"]'),
     ).toHaveAttribute("id", "thread");
@@ -203,26 +260,30 @@ describe("AlphaShell", () => {
     expect(
       projectPane?.closest('[data-slot="resizable-panel"]'),
     ).toHaveAttribute("id", "right");
-    expect(paneRow?.querySelectorAll('[role="separator"]')).toHaveLength(2);
+    expect(contentPaneRow?.querySelectorAll('[role="separator"]')).toHaveLength(1);
     expect(projectPane).toBeInTheDocument();
     expect(editorPane).toHaveTextContent("# Weave");
     expect(projectPane).not.toHaveTextContent("# Weave");
     expect(
       projectPane?.querySelector('[data-slot="sidebar-footer"]'),
-    ).toContainElement(
-      screen.getByRole("button", { name: "Hide Project Pane" }),
-    );
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Hide Project Pane" }),
-    ).toHaveClass("mr-6", "text-primary");
+    ).toHaveClass("text-primary");
     expect(
-      container.querySelector('[data-slot="editor-bottom-rail"]'),
+      container.querySelector('[data-slot="global-bottom-rail"]'),
+    ).toHaveClass("px-4");
+    expect(
+      container.querySelector('[data-slot="global-bottom-rail"]'),
     ).toHaveClass("h-[var(--bottom-rail-height)]");
+    expect(
+      container.querySelectorAll('[data-slot$="bottom-rail"]'),
+    ).toHaveLength(1);
     expect(
       screen.getByRole("separator", {
         name: "Resize Workspace and Right Dock",
       }),
-    ).toHaveClass("before:bottom-[var(--bottom-rail-height)]");
+    ).toHaveClass("before:inset-y-0");
     expect(
       screen.getByRole("separator", {
         name: "Resize Thread and Editor Panes",
@@ -256,8 +317,11 @@ describe("AlphaShell", () => {
       },
     ];
     value.model.terminals = {
-      hostId: "host-1",
-      workspaceId: "weave",
+      scope: {
+        hostId: "host-1",
+        projectId: "weave",
+        workspaceId: "weave",
+      },
       supported: true,
       tabs: [
         {
@@ -279,6 +343,7 @@ describe("AlphaShell", () => {
     };
     value.actions.showTerminals = vi.fn();
     value.actions.hideTerminals = vi.fn();
+    value.actions.closeTerminal = vi.fn();
     const user = userEvent.setup();
     const { container } = render(<AlphaShell controller={value} />);
 
@@ -293,6 +358,45 @@ describe("AlphaShell", () => {
       screen.getByRole("button", { name: "Show Terminal Pane" }),
     );
     expect(value.actions.showTerminals).toHaveBeenCalledOnce();
+    expect(
+      container
+        .querySelector('[data-slot="terminal-pane"]')
+        ?.closest('[data-slot="resizable-panel"]'),
+    ).toHaveAttribute("id", "bottom");
+    const primaryRow = container.querySelector('[data-slot="alpha-pane-row"]');
+    const sidebarPanel = primaryRow?.querySelector<HTMLElement>(
+      ':scope > [data-slot="resizable-panel"]#threads',
+    );
+    const workspacePanel = primaryRow?.querySelector<HTMLElement>(
+      ':scope > [data-slot="resizable-panel"]#workspace',
+    );
+    const bottomPanel = container.querySelector<HTMLElement>(
+      '[data-slot="resizable-panel"]#bottom',
+    );
+    expect(sidebarPanel).not.toContainElement(bottomPanel);
+    expect(workspacePanel).toContainElement(bottomPanel);
+    expect(
+      container.querySelectorAll('[data-slot$="bottom-rail"]'),
+    ).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Maximize Terminal" }));
+    const maximizedFromBottom = container.querySelector(
+      '[data-slot="alpha-maximized-terminal"]',
+    );
+    expect(maximizedFromBottom).toContainElement(
+      container.querySelector('[data-slot="terminal-pane"]'),
+    );
+    expect(
+      container.querySelector('[data-slot="resizable-panel"]#bottom'),
+    ).not.toBeInTheDocument();
+    expect(
+      container.querySelector('[data-slot="alpha-right-dock-group"]'),
+    ).not.toBeInTheDocument();
+    expect(
+      container.querySelector('[data-slot="alpha-pane-row"] #threads'),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Restore Terminal" }));
     expect(
       container
         .querySelector('[data-slot="terminal-pane"]')
@@ -330,6 +434,33 @@ describe("AlphaShell", () => {
       container.querySelector('[data-slot="project-pane"]'),
     ).not.toBeInTheDocument();
     expect(value.actions.hideTerminals).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Maximize Terminal" }));
+    const maximizedFromRight = container.querySelector(
+      '[data-slot="alpha-maximized-terminal"]',
+    );
+    expect(maximizedFromRight).toContainElement(
+      container.querySelector('[data-slot="terminal-pane"]'),
+    );
+    expect(
+      container.querySelector('[data-slot="alpha-right-dock-group"]'),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Restore Terminal" }));
+    expect(
+      container
+        .querySelector('[data-slot="terminal-pane"]')
+        ?.closest('[data-slot="resizable-panel"]'),
+    ).toHaveAttribute("id", "right");
+
+    await user.click(screen.getByRole("button", { name: "Close jaco — zsh" }));
+    expect(value.actions.closeTerminal).toHaveBeenCalledWith("terminal-1");
+    expect(
+      container.querySelector('[data-slot="terminal-pane"]'),
+    ).not.toBeInTheDocument();
+    expect(
+      container.querySelector('[data-slot="project-pane"]'),
+    ).toBeInTheDocument();
   });
 
   it("reattaches Terminal when an open dock is restored for a selected Thread", async () => {
@@ -408,8 +539,11 @@ describe("AlphaShell", () => {
       },
     ];
     value.model.terminals = {
-      hostId: "host-1",
-      workspaceId: "weave",
+      scope: {
+        hostId: "host-1",
+        projectId: "weave",
+        workspaceId: "weave",
+      },
       supported: true,
       tabs: [],
       data: "",
@@ -442,6 +576,171 @@ describe("AlphaShell", () => {
     ).toBeInTheDocument();
   });
 
+  it("switches Terminal pane state by Host and Project scope and restores it on return", async () => {
+    window.localStorage.setItem(
+      "weave.alpha.docks.v1",
+      JSON.stringify({
+        schemaVersion: 1,
+        panelPosition: { terminal: "bottom", project: "right" },
+        docks: {
+          bottom: { open: true, activePanelId: "terminal" },
+          right: { open: false, activePanelId: null },
+        },
+        rememberedSize: { bottom: 32, right: 24 },
+      }),
+    );
+    const value = controller();
+    value.model.selectedThreadId = "thread-1";
+    value.model.workspaces = [
+      {
+        id: "weave",
+        workspaceId: "weave",
+        hostId: "host-1",
+        hostName: "Bazzite",
+        name: "Weave",
+        threads: [
+          {
+            id: "thread-1",
+            threadId: "thread-1",
+            hostId: "host-1",
+            title: "Existing thread",
+            agentName: "Codex",
+            hostName: "Bazzite",
+            status: "active",
+            updatedAt: "2026-08-28T00:00:00.000Z",
+            workspaceId: "weave",
+          },
+        ],
+      },
+    ];
+    value.model.terminals = {
+      scope: {
+        hostId: "host-1",
+        projectId: "weave",
+        workspaceId: "weave",
+      },
+      supported: true,
+      tabs: [],
+      data: "",
+      dataEpoch: 0,
+      dataOffset: 0,
+      loading: false,
+    };
+    value.actions.showTerminals = vi.fn();
+    value.actions.hideTerminals = vi.fn();
+    const { container, rerender } = render(<AlphaShell controller={value} />);
+
+    expect(container.querySelector('[data-slot="terminal-pane"]'))
+      .toBeInTheDocument();
+    expect(value.actions.showTerminals).toHaveBeenCalledOnce();
+
+    value.model.selectedThreadId = "draft-same-scope";
+    value.model.workspaces[0].threads = [{
+      id: "draft-same-scope",
+      threadId: "draft-same-scope",
+      hostId: "host-1",
+      title: "New thread",
+      agentName: "Codex",
+      hostName: "Bazzite",
+      status: "active",
+      updatedAt: "2026-08-28T00:00:30.000Z",
+      workspaceId: "weave",
+      draft: true,
+    }];
+    rerender(<AlphaShell controller={value} />);
+
+    expect(container.querySelector('[data-slot="terminal-pane"]'))
+      .toBeInTheDocument();
+    expect(value.actions.showTerminals).toHaveBeenCalledTimes(2);
+
+    value.model.connections.push({
+      hostId: "host-2",
+      displayName: "MacBook",
+      hostUrl: "ws://macbook:4122",
+      status: "connected",
+      selected: false,
+    });
+    value.model.selectedThreadId = "draft-2";
+    value.model.workspaces = [{
+      id: "weave",
+      workspaceId: "weave",
+      hostId: "host-1",
+      hostName: "Bazzite",
+      name: "Weave",
+      threads: [{
+        id: "draft-2",
+        threadId: "draft-2",
+        hostId: "host-2",
+        title: "New thread",
+        agentName: "Codex",
+        hostName: "MacBook",
+        status: "active",
+        updatedAt: "2026-08-28T00:01:00.000Z",
+        workspaceId: "weave",
+        draft: true,
+      }],
+    }];
+    value.model.terminals = {
+      scope: {
+        hostId: "host-2",
+        projectId: "weave",
+        workspaceId: "weave",
+      },
+      supported: true,
+      tabs: [],
+      data: "",
+      dataEpoch: 0,
+      dataOffset: 0,
+      loading: false,
+    };
+    rerender(<AlphaShell controller={value} />);
+
+    expect(container.querySelector('[data-slot="terminal-pane"]'))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show Terminal Pane" }))
+      .toBeInTheDocument();
+    expect(value.actions.showTerminals).toHaveBeenCalledTimes(2);
+    expect(value.actions.hideTerminals).toHaveBeenCalled();
+
+    value.model.selectedThreadId = "thread-1";
+    value.model.workspaces = [{
+      id: "weave",
+      workspaceId: "weave",
+      hostId: "host-1",
+      hostName: "Bazzite",
+      name: "Weave",
+      threads: [{
+        id: "thread-1",
+        threadId: "thread-1",
+        hostId: "host-1",
+        title: "Existing thread",
+        agentName: "Codex",
+        hostName: "Bazzite",
+        status: "active",
+        updatedAt: "2026-08-28T00:00:00.000Z",
+        workspaceId: "weave",
+      }],
+    }];
+    value.model.terminals = {
+      scope: {
+        hostId: "host-1",
+        projectId: "weave",
+        workspaceId: "weave",
+      },
+      supported: true,
+      tabs: [],
+      data: "",
+      dataEpoch: 0,
+      dataOffset: 0,
+      loading: false,
+    };
+    rerender(<AlphaShell controller={value} />);
+
+    expect(container.querySelector('[data-slot="terminal-pane"]'))
+      .toBeInTheDocument();
+    expect(value.actions.showTerminals).toHaveBeenCalledTimes(3);
+  });
+
   it("shows only the sidebar and a blank Thread Pane when no Thread is selected", () => {
     const value = controller();
     value.model.workspaceFiles = {
@@ -469,7 +768,14 @@ describe("AlphaShell", () => {
         paneRow?.querySelectorAll(':scope > [data-slot="resizable-panel"]') ??
           [],
       ).map((panel) => panel.id),
-    ).toEqual(["threads", "thread"]);
+    ).toEqual(["threads", "workspace"]);
+    expect(
+      Array.from(
+        container
+          .querySelector('[data-slot="alpha-content-pane-row"]')
+          ?.querySelectorAll(':scope > [data-slot="resizable-panel"]') ?? [],
+      ).map((panel) => panel.id),
+    ).toEqual(["thread"]);
     expect(
       container.querySelector('[data-slot="editor-pane"]'),
     ).not.toBeInTheDocument();
@@ -522,8 +828,8 @@ describe("AlphaShell", () => {
 
     await user.click(screen.getByRole("button", { name: "Show Project Pane" }));
     await user.click(screen.getByRole("button", { name: "Hide Project Pane" }));
-    expect(window.localStorage.getItem("weave.alpha.docks.v1")).toContain(
-      '"right":{"open":false',
+    expect(window.localStorage.getItem("weave.alpha.docks.v2")).toContain(
+      '"projectOpen":false',
     );
     initial.unmount();
 
@@ -603,7 +909,7 @@ describe("AlphaShell", () => {
       container.querySelector('[data-slot="project-pane"][data-side="right"]'),
     ).toBeInTheDocument();
     expect(
-      container.querySelector('[data-slot="main-bottom-rail"]'),
+      container.querySelector('[data-slot="global-bottom-rail"]'),
     ).toHaveClass("h-[var(--bottom-rail-height)]");
 
     const projectSidebar = container.querySelector(

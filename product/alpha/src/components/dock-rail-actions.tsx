@@ -12,6 +12,7 @@ import {
 } from '@/app/alpha-dock-layout';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { RailDivider } from './rail-divider';
 
 const label = (panelId: AlphaDockPanelId) =>
   panelId === 'terminal' ? 'Terminal' : 'Project';
@@ -19,13 +20,11 @@ const label = (panelId: AlphaDockPanelId) =>
 export function DockRailActions({
   snapshot,
   disabled,
-  capacitorInset = false,
   onToggle,
   onMoveTerminal,
 }: {
   snapshot: AlphaDockSnapshot;
   disabled: boolean;
-  capacitorInset?: boolean;
   onToggle(panelId: AlphaDockPanelId): void;
   onMoveTerminal(position: AlphaDockPosition): void;
 }) {
@@ -87,7 +86,7 @@ export function DockRailActions({
     return dock.open && dock.activePanelId === panelId;
   };
 
-  const button = (panelId: AlphaDockPanelId, last: boolean) => {
+  const button = (panelId: AlphaDockPanelId) => {
     const active = isActive(panelId);
     const name = label(panelId);
     return (
@@ -102,7 +101,6 @@ export function DockRailActions({
         aria-haspopup={panelId === 'terminal' ? 'menu' : undefined}
         className={cn(
           active && 'text-primary',
-          last && capacitorInset && 'mr-6',
         )}
         disabled={disabled}
         onClick={() => {
@@ -149,21 +147,16 @@ export function DockRailActions({
     );
   };
 
-  const ordered = [...groups.bottom, ...groups.right];
   return (
-    <div ref={rootRef} className='relative ml-auto flex items-center px-1' data-slot='dock-rail-actions'>
+    <div ref={rootRef} className='relative ml-auto flex items-center' data-slot='dock-rail-actions'>
       {groups.bottom.map(({ panelId }) =>
-        button(panelId, ordered.at(-1)?.panelId === panelId)
+        button(panelId)
       )}
       {groups.showDivider && (
-        <span
-          data-slot='dock-group-divider'
-          aria-hidden='true'
-          className='mx-1 my-1 w-px self-stretch shrink-0 bg-border'
-        />
+        <RailDivider slot='dock-group-divider' />
       )}
       {groups.right.map(({ panelId }) =>
-        button(panelId, ordered.at(-1)?.panelId === panelId)
+        button(panelId)
       )}
       {terminalMenuOpen && (
         <div

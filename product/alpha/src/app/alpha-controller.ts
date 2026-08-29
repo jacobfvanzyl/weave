@@ -8,10 +8,7 @@ import type { AcpTranscript } from "@/chat/acp-transcript";
 import type { AlphaTerminalsModel } from "./use-alpha-terminals";
 
 export type AlphaConnectionStatus =
-  | "disconnected"
-  | "connecting"
-  | "reconnecting"
-  | "connected";
+  "disconnected" | "connecting" | "reconnecting" | "connected";
 
 export type AlphaThread = {
   id: string;
@@ -26,6 +23,7 @@ export type AlphaThread = {
   archivedAt?: string;
   workspaceId: string;
   projectId?: string;
+  worktreeId?: string;
   draft?: boolean;
 };
 
@@ -59,19 +57,20 @@ export type AlphaHostConnection = {
 
 export type AlphaWorkspaceFileTab =
   | (WorkspaceFileMetadata & {
-    kind: "text";
-    content: string;
-    changed: boolean;
-  })
+      kind: "text";
+      content: string;
+      changed: boolean;
+    })
   | {
-    kind: "unavailable";
-    path: string;
-    reason: "unsupported" | "too-large";
-  };
+      kind: "unavailable";
+      path: string;
+      reason: "unsupported" | "too-large";
+    };
 
 export type AlphaWorkspaceFiles = {
   workspaceId: string;
   workspaceName: string;
+  workspaceRootName?: string;
   directories: Record<
     string,
     {
@@ -129,7 +128,14 @@ export type AlphaActions = {
     path: string;
     name?: string;
   }): Promise<void> | void;
-  createThread(workspaceId?: string): Promise<void> | void;
+  removeProject?(
+    workspaceId: string,
+    placementId?: string,
+  ): Promise<void> | void;
+  createThread(
+    workspaceId?: string,
+    placementId?: string,
+  ): Promise<void> | void;
   selectThread(threadId: string): Promise<void> | void;
   archiveThread(threadId: string): Promise<void> | void;
   restoreThread(threadId: string): Promise<void> | void;

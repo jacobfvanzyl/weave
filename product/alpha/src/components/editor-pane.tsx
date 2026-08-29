@@ -77,6 +77,7 @@ export function EditorPane({
   onReloadFile,
   onReturnToThread,
   footerActions,
+  showFooter = true,
 }: {
   files: AlphaWorkspaceFileTab[];
   activeFilePath?: string;
@@ -87,6 +88,7 @@ export function EditorPane({
   onReloadFile(): void;
   onReturnToThread(): void;
   footerActions?: ReactNode;
+  showFooter?: boolean;
 }) {
   const activeFile = files.find((file) => file.path === activeFilePath) ??
     files[0];
@@ -202,12 +204,14 @@ export function EditorPane({
           : <UnavailableContent file={activeFile} />}
       </TabsContent>
 
-      <footer
-        className="flex h-[var(--bottom-rail-height)] shrink-0 items-center border-t bg-status-bar px-1"
-        data-slot="editor-bottom-rail"
-      >
-        {footerActions && <div className="ml-auto">{footerActions}</div>}
-      </footer>
+      {showFooter && (
+        <footer
+          className="flex h-[var(--bottom-rail-height)] shrink-0 items-center border-t bg-status-bar px-1"
+          data-slot="editor-bottom-rail"
+        >
+          {footerActions && <div className="ml-auto">{footerActions}</div>}
+        </footer>
+      )}
     </Tabs>
   );
 }

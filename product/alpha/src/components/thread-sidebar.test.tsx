@@ -68,6 +68,7 @@ const controller = (platform = "ios"): AlphaController => ({
     reconnectHost: vi.fn(),
     refresh: vi.fn(),
     addProject: vi.fn(async () => undefined),
+    removeProject: vi.fn(async () => undefined),
     createThread: vi.fn(),
     selectThread: vi.fn(),
     archiveThread: vi.fn(),
@@ -98,6 +99,25 @@ function MobileSidebarState() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ThreadSidebar", () => {
+  it("leaves an empty workspace section blank beneath its header", () => {
+    const value = controller();
+    value.model.workspaces[0].threads = [];
+    render(
+      <SidebarProvider>
+        <ThreadSidebar controller={value} />
+      </SidebarProvider>,
+    );
+
+    expect(screen.getByText("weave")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "New thread in weave" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No threads yet")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Create the first thread in this workspace."),
+    ).not.toBeInTheDocument();
+  });
+
   it("replaces the active new-thread action with a disabled spinner", () => {
     const value = controller();
     value.model.creatingThreadWorkspaceId = "weave";
@@ -112,9 +132,189 @@ describe("ThreadSidebar", () => {
     });
     expect(creating).toBeDisabled();
     expect(creating).toHaveAttribute("aria-busy", "true");
-    expect(within(creating).getByRole("status", { hidden: true }))
-      .toHaveAttribute("data-slot", "spinner");
+    expect(
+      within(creating).getByRole("status", { hidden: true }),
+    ).toHaveAttribute("data-slot", "spinner");
     expect(container.querySelectorAll('[data-slot="spinner"]')).toHaveLength(1);
+  });
+
+  it("creates directly when a project has only one Host", async () => {
+    const value = controller();
+    render(
+      <SidebarProvider>
+        <ThreadSidebar controller={value} />
+      </SidebarProvider>,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "New thread in weave" }),
+    );
+
+    expect(value.actions.createThread).toHaveBeenCalledWith("weave");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("asks which connected Host should create a thread for a merged project", async () => {
+    const value = controller();
+    value.model.workspaces[0].placements = [
+      {
+        id: "host-1:weave",
+        workspaceId: "weave",
+        hostId: "host-1",
+        hostName: "Bazzite",
+      },
+      {
+        id: "host-2:weave",
+        workspaceId: "weave",
+        hostId: "host-2",
+        hostName: "Jaco’s MacBook Air",
+      },
+    ];
+    value.model.connections.push({
+      hostId: "host-2",
+      displayName: "Jaco’s MacBook Air",
+      hostUrl: "macbook",
+      status: "connected",
+      selected: false,
+    });
+    const user = userEvent.setup();
+    render(
+      <SidebarProvider>
+        <ThreadSidebar controller={value} />
+      </SidebarProvider>,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "New thread in weave" }),
+    );
+
+    expect(value.actions.createThread).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toHaveTextContent("Choose a Host");
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "Create a new thread for weave on:",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Jaco’s MacBook Air" }),
+    );
+
+    expect(value.actions.createThread).toHaveBeenCalledWith(
+      "weave",
+      "host-2:weave",
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows unavailable project Hosts in the picker without allowing selection", async () => {
+    const value = controller();
+    value.model.workspaces[0].placements = [
+      {
+        id: "host-1:weave",
+        workspaceId: "weave",
+        hostId: "host-1",
+        hostName: "Bazzite",
+      },
+      {
+        id: "host-2:weave",
+        workspaceId: "weave",
+        hostId: "host-2",
+        hostName: "Jaco’s MacBook Air",
+      },
+    ];
+    value.model.connections.push({
+      hostId: "host-2",
+      displayName: "Jaco’s MacBook Air",
+      hostUrl: "macbook",
+      status: "disconnected",
+      selected: false,
+    });
+    const user = userEvent.setup();
+    render(
+      <SidebarProvider>
+        <ThreadSidebar controller={value} />
+      </SidebarProvider>,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "New thread in weave" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Jaco’s MacBook Air disconnected/ }),
+    ).toBeDisabled();
+  });
+
+  it("offers only project removal and removes a single-Host placement directly", async () => {
+    const value = controller();
+    const user = userEvent.setup();
+    render(
+      <SidebarProvider>
+        <ThreadSidebar controller={value} />
+      </SidebarProvider>,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Project settings for weave" }),
+    );
+    const remove = await screen.findByRole("menuitem", {
+      name: "Remove Project",
+    });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+    await user.click(remove);
+
+    expect(value.actions.removeProject).toHaveBeenCalledWith(
+      "weave",
+      "host-1:weave",
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("asks which Host placement to remove for a merged project", async () => {
+    const value = controller();
+    value.model.workspaces[0].placements = [
+      {
+        id: "placement-1",
+        workspaceId: "weave",
+        hostId: "host-1",
+        hostName: "Bazzite",
+      },
+      {
+        id: "placement-2",
+        workspaceId: "weave",
+        hostId: "host-2",
+        hostName: "Jaco’s MacBook Air",
+      },
+    ];
+    value.model.connections.push({
+      hostId: "host-2",
+      displayName: "Jaco’s MacBook Air",
+      hostUrl: "macbook",
+      status: "connected",
+      selected: false,
+    });
+    const user = userEvent.setup();
+    render(
+      <SidebarProvider>
+        <ThreadSidebar controller={value} />
+      </SidebarProvider>,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Project settings for weave" }),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Remove Project" }),
+    );
+
+    expect(screen.getByRole("dialog")).toHaveTextContent("Choose a Host");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Remove weave from:");
+    await user.click(
+      screen.getByRole("button", { name: "Jaco’s MacBook Air" }),
+    );
+
+    expect(value.actions.removeProject).toHaveBeenCalledWith(
+      "weave",
+      "placement-2",
+    );
   });
 
   it("replaces only reconnecting Host threads with non-interactive skeletons", () => {
@@ -129,11 +329,13 @@ describe("ThreadSidebar", () => {
     expect(
       screen.getByLabelText("Reconnecting bazzite thread"),
     ).toHaveAttribute("data-slot", "reconnecting-thread");
-    expect(container.querySelector('[data-slot="skeleton"]'))
-      .toBeInTheDocument();
+    expect(
+      container.querySelector('[data-slot="skeleton"]'),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Acceptance")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New thread in weave" }))
-      .toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "New thread in weave" }),
+    ).toBeDisabled();
   });
 
   it("keeps search compact until activated and places Add Project in the top rail", async () => {
@@ -207,7 +409,7 @@ describe("ThreadSidebar", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Mobile sidebar state")).toHaveTextContent(
         "false",
-      )
+      ),
     );
     await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
     expect(screen.getByLabelText("Mobile sidebar state")).toHaveTextContent(
@@ -383,7 +585,10 @@ describe("ThreadSidebar", () => {
 
     expect(
       screen.getByRole("button", { name: "New thread in weave" }),
-    ).toHaveClass("w-6");
+    ).toHaveClass("top-2", "w-6");
+    expect(
+      screen.getByRole("button", { name: "Project settings for weave" }),
+    ).toHaveClass("top-2", "w-6");
   });
 
   it("does not expose Workspace files as a dedicated Thread-sidebar artifact", () => {

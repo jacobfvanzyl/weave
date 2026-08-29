@@ -7,6 +7,10 @@ import {
 } from './alpha-dock-layout';
 
 describe('useAlphaDockLayout', () => {
+  const scopeA = '["host-1","project-1",null]';
+  const scopeB = '["host-2","project-1",null]';
+  const scopeC = '["host-1","project-2",null]';
+
   beforeEach(() => {
     const values = new Map<string, string>();
     Object.defineProperty(window, 'localStorage', {
@@ -25,7 +29,7 @@ describe('useAlphaDockLayout', () => {
   });
 
   it('opens Terminal in Bottom by default and keeps Bottom and Right independent', () => {
-    const { result } = renderHook(() => useAlphaDockLayout());
+    const { result } = renderHook(() => useAlphaDockLayout(scopeA));
 
     act(() => result.current.togglePanel('terminal'));
     expect(result.current.snapshot.docks.bottom).toEqual({
@@ -42,7 +46,7 @@ describe('useAlphaDockLayout', () => {
   });
 
   it('moves visible and hidden Terminal panels without conflating lifecycle state', () => {
-    const { result } = renderHook(() => useAlphaDockLayout());
+    const { result } = renderHook(() => useAlphaDockLayout(scopeA));
 
     act(() => result.current.togglePanel('terminal'));
     act(() => result.current.moveTerminal('right'));
@@ -64,7 +68,7 @@ describe('useAlphaDockLayout', () => {
   });
 
   it('reveals Project when a visible Right Terminal moves back to Bottom', () => {
-    const { result } = renderHook(() => useAlphaDockLayout());
+    const { result } = renderHook(() => useAlphaDockLayout(scopeA));
 
     act(() => result.current.togglePanel('terminal'));
     act(() => result.current.moveTerminal('right'));
@@ -74,6 +78,25 @@ describe('useAlphaDockLayout', () => {
       open: true,
       activePanelId: 'terminal',
     });
+    expect(result.current.snapshot.docks.right).toEqual({
+      open: true,
+      activePanelId: 'project',
+    });
+  });
+
+  it('hides a final Bottom Terminal panel and reveals Project when Terminal is in Right', () => {
+    const { result } = renderHook(() => useAlphaDockLayout(scopeA));
+
+    act(() => result.current.togglePanel('terminal'));
+    act(() => result.current.hideTerminalPanel());
+    expect(result.current.snapshot.docks.bottom).toEqual({
+      open: false,
+      activePanelId: null,
+    });
+
+    act(() => result.current.togglePanel('terminal'));
+    act(() => result.current.moveTerminal('right'));
+    act(() => result.current.hideTerminalPanel());
     expect(result.current.snapshot.docks.right).toEqual({
       open: true,
       activePanelId: 'project',
@@ -99,7 +122,7 @@ describe('useAlphaDockLayout', () => {
   });
 
   it('persists Terminal placement and independent dock sizes', () => {
-    const initial = renderHook(() => useAlphaDockLayout());
+    const initial = renderHook(() => useAlphaDockLayout(scopeA));
     act(() => {
       initial.result.current.moveTerminal('right');
       initial.result.current.rememberSize('bottom', 31);
@@ -107,7 +130,7 @@ describe('useAlphaDockLayout', () => {
     });
     initial.unmount();
 
-    const restored = renderHook(() => useAlphaDockLayout());
+    const restored = renderHook(() => useAlphaDockLayout(scopeA));
     expect(restored.result.current.snapshot.panelPosition.terminal).toBe(
       'right',
     );
@@ -115,5 +138,30 @@ describe('useAlphaDockLayout', () => {
       bottom: 31,
       right: 24,
     });
+  });
+
+  it('restores Terminal openness independently for each Host and Project scope', () => {
+    const { result, rerender } = renderHook(
+      ({ scope }) => useAlphaDockLayout(scope),
+      { initialProps: { scope: scopeA } },
+    );
+
+    act(() => result.current.togglePanel('terminal'));
+    expect(result.current.isPanelActive('terminal')).toBe(true);
+
+    rerender({ scope: scopeB });
+    expect(result.current.isPanelActive('terminal')).toBe(false);
+
+    act(() => result.current.togglePanel('terminal'));
+    expect(result.current.isPanelActive('terminal')).toBe(true);
+
+    rerender({ scope: scopeC });
+    expect(result.current.isPanelActive('terminal')).toBe(false);
+
+    rerender({ scope: scopeA });
+    expect(result.current.isPanelActive('terminal')).toBe(true);
+
+    rerender({ scope: scopeB });
+    expect(result.current.isPanelActive('terminal')).toBe(true);
   });
 });

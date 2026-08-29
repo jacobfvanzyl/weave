@@ -91,8 +91,11 @@ const client = (
 };
 
 const target = {
-  hostId: 'host-1',
-  workspaceId: 'workspace-1',
+  scope: {
+    hostId: 'host-1',
+    projectId: 'project-1',
+    workspaceId: 'workspace-1',
+  },
   supported: true,
 };
 
@@ -134,6 +137,50 @@ describe('useAlphaTerminals', () => {
     expect(host.attachTerminal).toHaveBeenCalledOnce();
     expect(result.current.model.attachmentId).toBe('attachment-control');
     expect(host.closeTerminal).not.toHaveBeenCalled();
+  });
+
+  it('keeps attachment demand scoped while changing projects and Hosts', async () => {
+    const first = client();
+    const second = client();
+    const { result, rerender } = renderHook(
+      ({ nextTarget, host }) =>
+        useAlphaTerminals({ target: nextTarget, client: host }),
+      { initialProps: { nextTarget: target, host: first } },
+    );
+
+    await act(() => result.current.actions.show());
+    rerender({
+      nextTarget: {
+        scope: {
+          hostId: 'host-2',
+          projectId: 'project-2',
+          workspaceId: 'workspace-2',
+        },
+        supported: true,
+      },
+      host: second,
+    });
+    await act(async () => await Promise.resolve());
+
+    expect(first.detachTerminal).toHaveBeenCalledWith(
+      'workspace-1',
+      'terminal-1',
+      'attachment-control',
+    );
+    expect(second.listTerminals).not.toHaveBeenCalled();
+    expect(second.createTerminal).not.toHaveBeenCalled();
+
+    await act(() => result.current.actions.show());
+    expect(second.listTerminals).toHaveBeenCalledWith('workspace-2');
+    await act(() => result.current.actions.hide());
+
+    rerender({ nextTarget: target, host: first });
+    await waitFor(() => expect(first.listTerminals).toHaveBeenCalledTimes(2));
+    expect(second.detachTerminal).toHaveBeenCalledWith(
+      'workspace-2',
+      'terminal-1',
+      'attachment-control',
+    );
   });
 
   it('falls back to an explicit read-only observer when control is held elsewhere', async () => {

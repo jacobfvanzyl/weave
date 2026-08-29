@@ -69,7 +69,9 @@ export class PortalRpcSession {
       >;
     }
     if (TERMINAL_RPC_METHODS.includes(method as TerminalRpcMethod)) {
-      if (!this.#terminals) throw new Error('Portal Terminal service is unavailable.');
+      if (!this.#terminals) {
+        throw new Error('Portal Terminal service is unavailable.');
+      }
       return await this.#terminals.request(
         method as TerminalRpcMethod,
         params as PortalRpcParams<TerminalRpcMethod>,
@@ -214,6 +216,7 @@ export class Portal {
           capabilities: [
             'workspace.list',
             'workspace.add',
+            'workspace.remove',
             'agent.list',
             'thread.list',
             'thread.create',
@@ -249,6 +252,25 @@ export class Portal {
         return { workspace: workspaceSummary(workspace) } as PortalRpcResult<
           Method
         >;
+      }
+      case 'workspace.remove': {
+        const input = params as PortalRpcParams<'workspace.remove'>;
+        const workspace = await this.#workspaceCatalog.remove(
+          input.workspaceId,
+        );
+        if (!workspace) {
+          throw new PortalSecurityError(
+            'RESOURCE_UNAVAILABLE',
+            'Resource is unavailable.',
+          );
+        }
+        this.#workspaceFiles.removeRoot(workspace.workspaceId);
+        this.#workspaces.delete(workspace.workspaceId);
+        await this.security.unregisterWorkspace(
+          principal,
+          workspace.workspaceId,
+        );
+        return { removed: true } as PortalRpcResult<Method>;
       }
       case 'agent.list':
         return {
@@ -484,7 +506,7 @@ export class Portal {
       ? 'portal.inspect'
       : method === 'workspace.list'
       ? 'workspace.inspect'
-      : method === 'workspace.add'
+      : method === 'workspace.add' || method === 'workspace.remove'
       ? 'workspace.manage'
       : method === 'agent.list'
       ? 'agent.use'
@@ -513,7 +535,10 @@ export class Portal {
     return new PortalRpcSession(
       this,
       this.#workspaceFiles.openWatchSession(send),
-      this.#terminals?.openSession(crypto.randomUUID(), sendTerminal ?? (() => undefined)),
+      this.#terminals?.openSession(
+        crypto.randomUUID(),
+        sendTerminal ?? (() => undefined),
+      ),
       principal,
     );
   }
@@ -685,7 +710,11 @@ export class Portal {
     return runtime.thread;
   }
 
-  async #createDraftThread(workspaceId: string, agentId: string, title?: string) {
+  async #createDraftThread(
+    workspaceId: string,
+    agentId: string,
+    title?: string,
+  ) {
     const workspace = this.#workspace(workspaceId);
     const agent = this.#agent(agentId);
     const runtime = await HostedThread.create(

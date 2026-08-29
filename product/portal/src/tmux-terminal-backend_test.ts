@@ -1,5 +1,5 @@
 import { assertEquals, assertExists } from 'jsr:@std/assert@1.0.19';
-import { TmuxTerminalBackend } from './tmux-terminal-backend.ts';
+import { resolveTmuxExecutable, TmuxTerminalBackend } from './tmux-terminal-backend.ts';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -24,6 +24,36 @@ const tmuxAvailable = async () => {
   }
 };
 
+const sparseServiceEnvironment = () => ({
+  HOME: Deno.env.get('HOME'),
+  PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+  SHELL: '/bin/sh',
+});
+
+Deno.test('TmuxTerminalBackend resolves Homebrew tmux outside a launchd PATH', () => {
+  const executable = resolveTmuxExecutable(
+    { PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+    {
+      os: 'darwin',
+      isExecutable: (path) => path === '/opt/homebrew/bin/tmux',
+    },
+  );
+
+  assertEquals(executable, '/opt/homebrew/bin/tmux');
+});
+
+Deno.test('TmuxTerminalBackend honors an explicit tmux executable override', () => {
+  const executable = resolveTmuxExecutable(
+    {
+      PATH: '/usr/bin:/bin',
+      WEAVE_PORTAL_TMUX_PATH: '/custom/tools/tmux',
+    },
+    { isExecutable: () => false },
+  );
+
+  assertEquals(executable, '/custom/tools/tmux');
+});
+
 Deno.test({
   name: 'TmuxTerminalBackend persists a shell across adapter restarts and supports I/O, capture, resize, and close',
   ignore: Deno.build.os === 'windows',
@@ -36,7 +66,7 @@ Deno.test({
     const output: string[] = [];
     const first = new TmuxTerminalBackend({
       stateDirectory,
-      env: { ...Deno.env.toObject(), SHELL: '/bin/sh' },
+      env: sparseServiceEnvironment(),
     });
     const unsubscribe = first.subscribe((event) => {
       if (event.type === 'output') output.push(event.data);
@@ -89,7 +119,7 @@ Deno.test({
 
       const reopened = new TmuxTerminalBackend({
         stateDirectory,
-        env: { ...Deno.env.toObject(), SHELL: '/bin/sh' },
+        env: sparseServiceEnvironment(),
       });
       try {
         const restored = (await reopened.list()).find((terminal) => terminal.terminalId === terminalId);

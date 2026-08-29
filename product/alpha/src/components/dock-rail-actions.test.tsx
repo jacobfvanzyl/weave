@@ -14,7 +14,6 @@ describe('DockRailActions', () => {
       <DockRailActions
         snapshot={snapshot}
         disabled={false}
-        capacitorInset
         onToggle={vi.fn()}
         onMoveTerminal={vi.fn()}
       />,
@@ -26,7 +25,8 @@ describe('DockRailActions', () => {
       'Hide Project Pane',
     ]);
     expect(buttons[0]).toHaveClass('text-primary');
-    expect(buttons[1]).toHaveClass('text-primary', 'mr-6');
+    expect(buttons[1]).toHaveClass('text-primary');
+    expect(buttons[1]).not.toHaveClass('mr-6');
     expect(container.querySelectorAll('[data-slot="dock-group-divider"]'))
       .toHaveLength(1);
     expect(container.querySelector('[data-slot="dock-group-divider"]'))

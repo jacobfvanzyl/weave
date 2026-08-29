@@ -88,7 +88,7 @@ describe("WorkspacePlaceholder", () => {
 
     render(
       <SidebarProvider>
-        <WorkspacePlaceholder controller={value} onToggleThreads={vi.fn()} />
+        <WorkspacePlaceholder controller={value} />
       </SidebarProvider>,
     );
 
@@ -105,7 +105,7 @@ describe("WorkspacePlaceholder", () => {
 
     render(
       <SidebarProvider>
-        <WorkspacePlaceholder controller={value} onToggleThreads={vi.fn()} />
+        <WorkspacePlaceholder controller={value} />
       </SidebarProvider>,
     );
 
@@ -119,7 +119,7 @@ describe("WorkspacePlaceholder", () => {
     value.model.error = undefined;
     const { container } = render(
       <SidebarProvider>
-        <WorkspacePlaceholder controller={value} onToggleThreads={vi.fn()} />
+        <WorkspacePlaceholder controller={value} />
       </SidebarProvider>,
     );
 
@@ -140,7 +140,6 @@ describe("WorkspacePlaceholder", () => {
       <SidebarProvider>
         <WorkspacePlaceholder
           controller={value}
-          onToggleThreads={vi.fn()}
         />
       </SidebarProvider>,
     );
@@ -162,7 +161,6 @@ describe("WorkspacePlaceholder", () => {
       <SidebarProvider>
         <WorkspacePlaceholder
           controller={controller()}
-          onToggleThreads={vi.fn()}
         />
       </SidebarProvider>,
     );
@@ -190,7 +188,6 @@ describe("WorkspacePlaceholder", () => {
       <SidebarProvider>
         <WorkspacePlaceholder
           controller={value}
-          onToggleThreads={vi.fn()}
           footerActions={
             <ProjectPaneToggle
               action="Show"
@@ -224,7 +221,6 @@ describe("WorkspacePlaceholder", () => {
       <SidebarProvider defaultOpen={false}>
         <WorkspacePlaceholder
           controller={controller()}
-          onToggleThreads={vi.fn()}
           footerActions={
             <ProjectPaneToggle
               action="Show"

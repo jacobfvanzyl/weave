@@ -17,6 +17,46 @@ export const alphaPaneMinimumWidths = {
   [alphaPaneIds.project]: '12rem',
 } as const satisfies Record<AlphaPaneId, number | string>;
 
+export const alphaSidebarDefaultWidth = '20rem';
+export const alphaSidebarWidthStorageKey = 'weave.alpha.sidebar-width.v1';
+
+type PersistedAlphaSidebarWidth = {
+  schemaVersion: 1;
+  size: number;
+};
+
+const parseSidebarWidth = (value: unknown) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const input = value as Partial<PersistedAlphaSidebarWidth>;
+  if (
+    input.schemaVersion !== 1 ||
+    typeof input.size !== 'number' ||
+    !Number.isFinite(input.size) ||
+    input.size <= 0 ||
+    input.size >= 100
+  ) return;
+  return input.size;
+};
+
+const loadSidebarWidth = () => {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    return parseSidebarWidth(
+      JSON.parse(window.localStorage.getItem(alphaSidebarWidthStorageKey) ?? 'null'),
+    );
+  } catch {
+    return undefined;
+  }
+};
+
+const saveSidebarWidth = (size: number) => {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  window.localStorage.setItem(
+    alphaSidebarWidthStorageKey,
+    JSON.stringify({ schemaVersion: 1, size } satisfies PersistedAlphaSidebarWidth),
+  );
+};
+
 const layoutChangeTolerance = 0.001;
 
 export const layoutChangesOnlyPanePair = (
@@ -93,6 +133,7 @@ export function useAlphaPaneLayouts(activeThreadId: string | undefined) {
   const [snapshots, setSnapshots] = useState<
     Record<string, AlphaThreadPaneLayout>
   >({});
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const snapshot = useMemo(
     () =>
       snapshots[activeKey] ??
@@ -151,10 +192,19 @@ export function useAlphaPaneLayouts(activeThreadId: string | undefined) {
     [updateSnapshot],
   );
 
+  const rememberSidebarWidth = useCallback((size: number) => {
+    const parsed = parseSidebarWidth({ schemaVersion: 1, size });
+    if (parsed === undefined) return;
+    setSidebarWidth(parsed);
+    saveSidebarWidth(parsed);
+  }, []);
+
   return {
     snapshot,
+    sidebarWidth,
     setThreadsVisible,
     setProjectVisible,
     rememberRowLayout,
+    rememberSidebarWidth,
   };
 }

@@ -104,7 +104,12 @@ export function useWorkspaceFileBrowser() {
     }
   };
 
-  const open = async (client: DirectHostClient, workspaceId: string, workspaceName: string) => {
+  const open = async (
+    client: DirectHostClient,
+    workspaceId: string,
+    workspaceName: string,
+    workspaceRootName?: string,
+  ) => {
     disposeWatch();
     const generation = watchGeneration.current;
     clientRef.current = client;
@@ -115,6 +120,7 @@ export function useWorkspaceFileBrowser() {
       replaceFiles({
         workspaceId,
         workspaceName,
+        ...(workspaceRootName ? { workspaceRootName } : {}),
         openFiles: [],
         directories: {
           '': { entries: listed.entries, truncated: listed.truncated },

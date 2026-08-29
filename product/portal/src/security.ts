@@ -661,6 +661,29 @@ export class PortalSecurity {
     await this.assertActive(principal);
   }
 
+  async unregisterWorkspace(principal: PortalPrincipal, workspaceId: string) {
+    this.#workspaceIds.delete(workspaceId);
+    await this.#mutate(async (state) => {
+      for (const credential of state.credentials) {
+        credential.grants.workspaceIds = credential.grants.workspaceIds.filter(
+          (candidate) => candidate !== workspaceId,
+        );
+      }
+      for (const offer of state.pairingOffers) {
+        offer.grants.workspaceIds = offer.grants.workspaceIds.filter(
+          (candidate) => candidate !== workspaceId,
+        );
+      }
+      await this.#audit('workspace.unregistered', {
+        auditId: crypto.randomUUID(),
+        principalId: principal.principalId,
+        credentialId: principal.credentialId,
+        workspaceId,
+      });
+    });
+    await this.assertActive(principal);
+  }
+
   allows(
     principal: PortalPrincipal,
     action: PortalAction,

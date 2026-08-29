@@ -91,6 +91,7 @@ export type RepositoryIdentity = {
 export type WorkspaceSummary = {
   workspaceId: string;
   name: string;
+  rootName?: string;
   repositoryIdentity?: RepositoryIdentity;
 };
 export type AgentSummary = { agentId: string; name: string };
@@ -255,6 +256,10 @@ type BasePortalRpcContracts = {
     params: { path: string; name?: string };
     result: { workspace: WorkspaceSummary };
   };
+  'workspace.remove': {
+    params: { workspaceId: string };
+    result: { removed: true };
+  };
   'agent.list': {
     params: Record<string, never>;
     result: { agents: AgentSummary[] };
@@ -314,6 +319,7 @@ export const PORTAL_RPC_METHODS = [
   'portal.capabilities',
   'workspace.list',
   'workspace.add',
+  'workspace.remove',
   'agent.list',
   'thread.list',
   'thread.create',
@@ -356,6 +362,10 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
       return {
         path: string(params.path, 'path'),
         ...(params.name === undefined ? {} : { name: string(params.name, 'name') }),
+      } as PortalRpcParams<Method>;
+    case 'workspace.remove':
+      return {
+        workspaceId: string(params.workspaceId, 'workspaceId'),
       } as PortalRpcParams<Method>;
     case 'thread.list': {
       const status = params.status;
@@ -419,6 +429,7 @@ const workspace = (value: unknown): WorkspaceSummary => {
   return {
     workspaceId: string(record.workspaceId, 'workspace.workspaceId'),
     name: string(record.name, 'workspace.name'),
+    ...(record.rootName === undefined ? {} : { rootName: string(record.rootName, 'workspace.rootName') }),
     ...(record.repositoryIdentity === undefined
       ? {}
       : { repositoryIdentity: repositoryIdentity(record.repositoryIdentity) }),
@@ -533,6 +544,11 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
       return { workspace: workspace(result.workspace) } as PortalRpcResult<
         Method
       >;
+    case 'workspace.remove':
+      if (result.removed !== true) {
+        throw new Error('workspace.remove result is invalid.');
+      }
+      return { removed: true } as PortalRpcResult<Method>;
     case 'agent.list':
       if (!Array.isArray(result.agents)) {
         throw new Error('agents must be an array.');

@@ -1,5 +1,11 @@
 import type { KeyboardEvent, ReactNode } from 'react';
-import { Add01Icon, Cancel01Icon, TerminalIcon } from '@hugeicons/core-free-icons';
+import {
+  Add01Icon,
+  ArrowExpand01Icon,
+  ArrowShrink01Icon,
+  Cancel01Icon,
+  TerminalIcon,
+} from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import type { AlphaTerminalsModel } from '@/app/use-alpha-terminals';
 import { Button } from '@/components/ui/button';
@@ -12,9 +18,12 @@ export function TerminalPane({
   disabled,
   className,
   footerActions,
+  showFooter = true,
+  maximized = false,
   onCreate,
   onSelect,
   onClose,
+  onToggleMaximized,
   onRetryControl,
   onInput,
   onResize,
@@ -23,9 +32,12 @@ export function TerminalPane({
   disabled: boolean;
   className?: string;
   footerActions?: ReactNode;
+  showFooter?: boolean;
+  maximized?: boolean;
   onCreate?(): Promise<void> | void;
   onSelect?(terminalId: string): Promise<void> | void;
   onClose?(terminalId: string): Promise<void> | void;
+  onToggleMaximized?(): void;
   onRetryControl?(): Promise<void> | void;
   onInput?(data: string): Promise<void> | void;
   onResize?(cols: number, rows: number): Promise<void> | void;
@@ -46,55 +58,94 @@ export function TerminalPane({
       data-slot='terminal-pane'
       className={cn('flex min-h-0 min-w-0 flex-1 flex-col bg-[#1e1e2e]', className)}
     >
-      <header className='flex h-9 shrink-0 items-stretch border-b border-border bg-title-bar'>
-        <div role='tablist' aria-label='Terminals' className='flex min-w-0 flex-1 overflow-x-auto'>
-          {model.tabs.map((terminal) => {
-            const active = terminal.terminalId === model.activeTerminalId;
-            return (
-              <div
-                key={terminal.terminalId}
-                role='tab'
-                tabIndex={active ? 0 : -1}
-                aria-selected={active}
-                aria-label={terminal.title}
-                className={cn(
-                  'group flex min-w-32 max-w-56 cursor-default items-center gap-2 border-r border-border px-2 text-xs text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring',
-                  active && 'bg-[#1e1e2e] text-foreground',
-                )}
-                onClick={() => void onSelect?.(terminal.terminalId)}
-                onKeyDown={(event) => activateOnKeyboard(event, terminal.terminalId)}
-              >
-                <HugeiconsIcon icon={TerminalIcon} strokeWidth={1.75} className='size-3.5 shrink-0' />
-                <span className='min-w-0 flex-1 truncate'>{terminal.title}</span>
-                <Button
-                  type='button'
-                  size='icon-xs'
-                  variant='ghost'
-                  aria-label={`Close ${terminal.title}`}
-                  className='size-5 shrink-0 opacity-60 hover:opacity-100'
-                  disabled={disabled || !active || model.attachmentMode !== 'control'}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void onClose?.(terminal.terminalId);
-                  }}
+      <header
+        data-slot='terminal-top-rail'
+        className='flex h-11 shrink-0 items-stretch bg-title-bar'
+      >
+        <div className='scrollbar-none min-w-0 flex-1 overflow-x-auto overflow-y-hidden'>
+          <div
+            role='tablist'
+            aria-label='Terminals'
+            className='flex h-full w-max min-w-full items-stretch'
+          >
+            {model.tabs.map((terminal) => {
+              const active = terminal.terminalId === model.activeTerminalId;
+              return (
+                <div
+                  key={terminal.terminalId}
+                  role='tab'
+                  tabIndex={active ? 0 : -1}
+                  aria-selected={active}
+                  aria-label={terminal.title}
+                  data-slot='terminal-tab'
+                  data-active={active ? '' : undefined}
+                  className={cn(
+                    'group flex min-w-32 max-w-56 cursor-default items-center gap-2 border-r border-border px-2 text-xs text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring',
+                    active
+                      ? 'bg-[#1e1e2e] text-foreground'
+                      : 'border-b border-border',
+                  )}
+                  onClick={() => void onSelect?.(terminal.terminalId)}
+                  onKeyDown={(event) => activateOnKeyboard(event, terminal.terminalId)}
                 >
-                  <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-                </Button>
-              </div>
-            );
-          })}
+                  <HugeiconsIcon icon={TerminalIcon} strokeWidth={1.75} className='size-3.5 shrink-0' />
+                  <span className='min-w-0 flex-1 truncate'>{terminal.title}</span>
+                  <Button
+                    type='button'
+                    size='icon-xs'
+                    variant='ghost'
+                    aria-label={`Close ${terminal.title}`}
+                    className='size-5 shrink-0 opacity-60 hover:opacity-100'
+                    disabled={disabled || !active || model.attachmentMode !== 'control'}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onClose?.(terminal.terminalId);
+                    }}
+                  >
+                    <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+                  </Button>
+                </div>
+              );
+            })}
+            <span
+              data-slot='terminal-tab-rail-fill'
+              aria-hidden='true'
+              className='h-full min-w-0 flex-1 border-b border-border'
+            />
+          </div>
         </div>
-        <Button
-          type='button'
-          size='icon'
-          variant='ghost'
-          aria-label='New Terminal'
-          className='h-full w-9 shrink-0 rounded-none border-l border-border'
-          disabled={disabled || !model.supported}
-          onClick={() => void onCreate?.()}
+        <div
+          data-slot='terminal-actions'
+          className='flex h-full shrink-0 border-b border-l border-border'
         >
-          <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-        </Button>
+          <Button
+            type='button'
+            size='icon'
+            variant='ghost'
+            aria-label='New Terminal'
+            className='h-full w-11 shrink-0 rounded-none border-0'
+            disabled={disabled || !model.supported}
+            onClick={() => void onCreate?.()}
+          >
+            <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+          </Button>
+          <Button
+            type='button'
+            size='icon'
+            variant='ghost'
+            aria-label={maximized ? 'Restore Terminal' : 'Maximize Terminal'}
+            aria-pressed={maximized}
+            title={maximized ? 'Restore Terminal' : 'Maximize Terminal'}
+            className='h-full w-11 shrink-0 rounded-none border-0'
+            onClick={onToggleMaximized}
+          >
+            <HugeiconsIcon
+              data-symbol={maximized ? 'collapse-terminal' : 'expand-terminal'}
+              icon={maximized ? ArrowShrink01Icon : ArrowExpand01Icon}
+              strokeWidth={2}
+            />
+          </Button>
+        </div>
       </header>
 
       <div className='relative flex min-h-0 flex-1 flex-col'>
@@ -122,6 +173,11 @@ export function TerminalPane({
             </Button>
           </div>
         )}
+        {!showFooter && model.error && model.attachmentId && (
+          <div role='alert' className='shrink-0 border-b border-border px-3 py-1 text-xs text-destructive'>
+            {model.error}
+          </div>
+        )}
         {model.error && !model.attachmentId
           ? (
             <div
@@ -143,17 +199,19 @@ export function TerminalPane({
           )}
       </div>
 
-      <footer
-        data-slot='terminal-bottom-rail'
-        className='flex h-[var(--bottom-rail-height)] shrink-0 items-center border-t border-border bg-status-bar'
-      >
-        {model.error && model.attachmentId && (
-          <span role='alert' className='min-w-0 flex-1 truncate px-2 text-xs text-destructive'>
-            {model.error}
-          </span>
-        )}
-        {footerActions && <div className='ml-auto'>{footerActions}</div>}
-      </footer>
+      {showFooter && (
+        <footer
+          data-slot='terminal-bottom-rail'
+          className='flex h-[var(--bottom-rail-height)] shrink-0 items-center border-t border-border bg-status-bar'
+        >
+          {model.error && model.attachmentId && (
+            <span role='alert' className='min-w-0 flex-1 truncate px-2 text-xs text-destructive'>
+              {model.error}
+            </span>
+          )}
+          {footerActions && <div className='ml-auto'>{footerActions}</div>}
+        </footer>
+      )}
     </section>
   );
 }

@@ -64,7 +64,7 @@ const hostFailureMessage = (cause: unknown) =>
     ? "This Portal Host changed identity. Pair it again to reconnect safely."
     : "Couldn’t reconnect to this Portal Host. Check that Portal is running and try again.";
 
-const withTimeout = async <Value,>(
+const withTimeout = async <Value>(
   promise: Promise<Value>,
   timeoutMs: number,
 ): Promise<Value> => {
@@ -151,7 +151,7 @@ const mapHostWorkspaces = (
             agents,
             supportsThreadLifecycle,
             projectId,
-          )
+          ),
         )
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
       repositoryIdentity: workspace.repositoryIdentity,
@@ -172,11 +172,12 @@ const groupHostWorkspaces = (workspaces: AlphaWorkspace[]) => {
     const repositoryIdentity = members.find(
       ({ repositoryIdentity }) => repositoryIdentity,
     )?.repositoryIdentity;
-    const name = names.length === 1
-      ? names[0]!
-      : repositoryIdentity?.displayName ||
-        repositoryIdentity?.name ||
-        representative.name;
+    const name =
+      names.length === 1
+        ? names[0]!
+        : repositoryIdentity?.displayName ||
+          repositoryIdentity?.name ||
+          representative.name;
     return {
       ...representative,
       id,
@@ -210,7 +211,7 @@ const mapHostArchivedThreads = (
       connection,
       agents,
       true,
-    )
+    ),
   );
 };
 
@@ -227,11 +228,11 @@ const sessionInfoUpdatedAt = (
   titleChanged: boolean,
 ) =>
   typeof update.updatedAt === "string" &&
-      Number.isFinite(Date.parse(update.updatedAt))
+  Number.isFinite(Date.parse(update.updatedAt))
     ? update.updatedAt
     : titleChanged
-    ? new Date().toISOString()
-    : undefined;
+      ? new Date().toISOString()
+      : undefined;
 
 const applySessionInfoToThread = (
   thread: HostSnapshot["threads"][number],
@@ -270,9 +271,8 @@ export function useLiveAlphaController(
   const [hostErrors, setHostErrors] = useState<HostErrors>({});
   const [selectedThreadId, setSelectedThreadId] = useState<string>();
   const [loadingThreadId, setLoadingThreadId] = useState<string>();
-  const [creatingThreadWorkspaceId, setCreatingThreadWorkspaceId] = useState<
-    string
-  >();
+  const [creatingThreadWorkspaceId, setCreatingThreadWorkspaceId] =
+    useState<string>();
   const [localThreadDraft, setLocalThreadDraft] = useState<LocalThreadDraft>();
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [composerFocusThreadId, setComposerFocusThreadId] = useState<string>();
@@ -341,7 +341,7 @@ export function useLiveAlphaController(
           ?.discardThreadDraft(draft.thread.threadId);
       } catch (cause) {
         if (!(cause instanceof PortalTransportError)) {
-          console.warn('Unable to discard the provisional Thread.', cause);
+          console.warn("Unable to discard the provisional Thread.", cause);
         }
       }
     }
@@ -351,14 +351,13 @@ export function useLiveAlphaController(
     connection: PersistedPortalConnection,
     attempt: ConnectionAttempt = "connect",
   ): Promise<boolean> => {
-    const generation = (connectionAttemptRef.current.get(connection.hostId) ??
-      0) + 1;
+    const generation =
+      (connectionAttemptRef.current.get(connection.hostId) ?? 0) + 1;
     connectionAttemptRef.current.set(connection.hostId, generation);
     setStatuses((current) => ({
       ...current,
-      [connection.hostId]: attempt === "reconnect"
-        ? "reconnecting"
-        : "connecting",
+      [connection.hostId]:
+        attempt === "reconnect" ? "reconnecting" : "connecting",
     }));
     setHostErrors((current) => ({
       ...current,
@@ -395,13 +394,13 @@ export function useLiveAlphaController(
               const archivedThreads = snapshot.archivedThreads.map(apply);
               return changed
                 ? {
-                  ...current,
-                  [connection.hostId]: {
-                    ...snapshot,
-                    threads,
-                    archivedThreads,
-                  },
-                }
+                    ...current,
+                    [connection.hostId]: {
+                      ...snapshot,
+                      threads,
+                      archivedThreads,
+                    },
+                  }
                 : current;
             });
             const draft = localThreadDraftRef.current;
@@ -409,13 +408,19 @@ export function useLiveAlphaController(
               draft?.placement.hostId === connection.hostId &&
               draft.thread.id === id
             ) {
-              const titleChanged = update.title !== undefined &&
+              const titleChanged =
+                update.title !== undefined &&
                 draft.thread.title !== update.title;
               const updatedAt = sessionInfoUpdatedAt(update, titleChanged);
               const nextDraft: LocalThreadDraft = {
                 ...draft,
                 ...(draft.prepared
-                  ? { prepared: applySessionInfoToThread(draft.prepared, update) }
+                  ? {
+                      prepared: applySessionInfoToThread(
+                        draft.prepared,
+                        update,
+                      ),
+                    }
                   : {}),
                 thread: {
                   ...draft.thread,
@@ -434,8 +439,8 @@ export function useLiveAlphaController(
             const next = transcript
               ? reduceAcpEvent(transcript, event)
               : event.type === "history/reset"
-              ? createTranscript(event.sessionId ?? "unattached")
-              : transcript;
+                ? createTranscript(event.sessionId ?? "unattached")
+                : transcript;
             return next === transcript ? current : { ...current, [id]: next };
           });
         },
@@ -462,23 +467,28 @@ export function useLiveAlphaController(
       }
       const activeThreadId = activeThreadIdsRef.current.get(connection.hostId);
       if (
-        attempt === "reconnect" && activeThreadId &&
+        attempt === "reconnect" &&
+        activeThreadId &&
         activeThreadId === selectedThreadIdRef.current
       ) {
         const draft = localThreadDraftRef.current;
-        const preparedDraft = draft?.prepared &&
-            draft.placement.hostId === connection.hostId &&
-            draft.thread.id === activeThreadId
-          ? draft
-          : undefined;
-        const thread = preparedDraft?.thread ?? snapshot.threads.find(
-          (candidate) =>
-            resourceId(connection.hostId, candidate.threadId) ===
+        const preparedDraft =
+          draft?.prepared &&
+          draft.placement.hostId === connection.hostId &&
+          draft.thread.id === activeThreadId
+            ? draft
+            : undefined;
+        const thread =
+          preparedDraft?.thread ??
+          snapshot.threads.find(
+            (candidate) =>
+              resourceId(connection.hostId, candidate.threadId) ===
               activeThreadId,
-        );
-        const workspace = snapshot.workspaces.find((candidate) =>
-          candidate.workspaceId ===
-            (preparedDraft?.placement.workspaceId ?? thread?.workspaceId)
+          );
+        const workspace = snapshot.workspaces.find(
+          (candidate) =>
+            candidate.workspaceId ===
+            (preparedDraft?.placement.workspaceId ?? thread?.workspaceId),
         );
         if (!thread || !workspace) {
           throw new Error("The active Thread is no longer available.");
@@ -490,6 +500,7 @@ export function useLiveAlphaController(
               nextClient,
               workspace.workspaceId,
               workspace.name,
+              workspace.rootName,
             );
             if (opened !== true) {
               throw new Error("The active Project could not be loaded.");
@@ -509,7 +520,7 @@ export function useLiveAlphaController(
           const updated = current.map((candidate) =>
             candidate.hostId === connection.hostId
               ? { ...candidate, displayName: snapshot.displayName }
-              : candidate
+              : candidate,
           );
           void persist(updated);
           return updated;
@@ -522,7 +533,10 @@ export function useLiveAlphaController(
         clientsRef.current.delete(connection.hostId);
       }
       if (connectionAttemptRef.current.get(connection.hostId) === generation) {
-        console.warn(`Unable to connect Portal Host ${connection.hostId}.`, cause);
+        console.warn(
+          `Unable to connect Portal Host ${connection.hostId}.`,
+          cause,
+        );
         setStatuses((current) => ({
           ...current,
           [connection.hostId]: "disconnected",
@@ -531,7 +545,9 @@ export function useLiveAlphaController(
           ...current,
           [connection.hostId]: hostFailureMessage(cause),
         }));
-        const activeThreadId = activeThreadIdsRef.current.get(connection.hostId);
+        const activeThreadId = activeThreadIdsRef.current.get(
+          connection.hostId,
+        );
         const draft = localThreadDraftRef.current;
         if (draft?.placement.hostId === connection.hostId) {
           void discardLocalThreadDraft();
@@ -638,12 +654,12 @@ export function useLiveAlphaController(
       groupHostWorkspaces(
         connections.flatMap((connection) =>
           statuses[connection.hostId] === "connected" ||
-              statuses[connection.hostId] === "reconnecting"
+          statuses[connection.hostId] === "reconnecting"
             ? mapHostWorkspaces(snapshots[connection.hostId], connection)
-            : []
+            : [],
         ),
       ).sort((left, right) =>
-        workspaceRecency(right).localeCompare(workspaceRecency(left))
+        workspaceRecency(right).localeCompare(workspaceRecency(left)),
       ),
     [connections, snapshots, statuses],
   );
@@ -653,15 +669,15 @@ export function useLiveAlphaController(
       persistedWorkspaces.map((workspace) =>
         localThreadDraft?.projectId === workspace.id
           ? {
-            ...workspace,
-            threads: [
-              localThreadDraft.thread,
-              ...workspace.threads.filter(
-                ({ id }) => id !== localThreadDraft.thread.id,
-              ),
-            ],
-          }
-          : workspace
+              ...workspace,
+              threads: [
+                localThreadDraft.thread,
+                ...workspace.threads.filter(
+                  ({ id }) => id !== localThreadDraft.thread.id,
+                ),
+              ],
+            }
+          : workspace,
       ),
     [localThreadDraft, persistedWorkspaces],
   );
@@ -671,9 +687,9 @@ export function useLiveAlphaController(
       connections
         .flatMap((connection) =>
           statuses[connection.hostId] === "connected" ||
-              statuses[connection.hostId] === "reconnecting"
+          statuses[connection.hostId] === "reconnecting"
             ? mapHostArchivedThreads(snapshots[connection.hostId], connection)
-            : []
+            : [],
         )
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     [connections, snapshots, statuses],
@@ -681,6 +697,11 @@ export function useLiveAlphaController(
 
   const allThreads = modelWorkspaces.flatMap((workspace) => workspace.threads);
   const selected = allThreads.find((thread) => thread.id === selectedThreadId);
+  const selectedProject = selected
+    ? modelWorkspaces.find((workspace) =>
+        workspace.threads.some(({ id }) => id === selected.id),
+      )
+    : undefined;
   const selectedConnection = connections.find(
     (connection) => connection.hostId === selected?.hostId,
   );
@@ -688,28 +709,31 @@ export function useLiveAlphaController(
     ? statuses[selected.hostId] === "reconnecting"
     : false;
   const terminalController = useAlphaTerminals({
-    target: selected
-      ? {
-        hostId: selected.hostId,
-        workspaceId: selected.workspaceId,
-        supported: Boolean(
-          snapshots[selected.hostId]?.capabilities.includes(
-            "terminal.attach",
-          ),
-        ),
-      }
-      : undefined,
-    client: selected
-      ? clientsRef.current.get(selected.hostId)
-      : undefined,
+    target:
+      selected && selectedProject
+        ? {
+            scope: {
+              hostId: selected.hostId,
+              projectId: selected.projectId ?? selectedProject.id,
+              workspaceId: selected.workspaceId,
+              worktreeId: selected.worktreeId,
+            },
+            supported: Boolean(
+              snapshots[selected.hostId]?.capabilities.includes(
+                "terminal.attach",
+              ),
+            ),
+          }
+        : undefined,
+    client: selected ? clientsRef.current.get(selected.hostId) : undefined,
   });
   const aggregateStatus = Object.values(statuses).includes("connected")
     ? ("connected" as const)
-    : Object.values(statuses).some((status) =>
-        status === "connecting" || status === "reconnecting"
-      )
-    ? ("connecting" as const)
-    : ("disconnected" as const);
+    : Object.values(statuses).some(
+          (status) => status === "connecting" || status === "reconnecting",
+        )
+      ? ("connecting" as const)
+      : ("disconnected" as const);
 
   const performAcpAction = async (
     action: () => Promise<void>,
@@ -740,12 +764,12 @@ export function useLiveAlphaController(
       (candidate) => candidate.workspaceId === thread?.workspaceId,
     );
     if (!thread || !client) return;
-    const previousSelectedThreadId = selectedThreadId === draft?.thread.id
-      ? undefined
-      : selectedThreadId;
-    const previousActiveThreadId = selectedThreadId === draft?.thread.id
-      ? undefined
-      : activeThreadIdsRef.current.get(thread.hostId);
+    const previousSelectedThreadId =
+      selectedThreadId === draft?.thread.id ? undefined : selectedThreadId;
+    const previousActiveThreadId =
+      selectedThreadId === draft?.thread.id
+        ? undefined
+        : activeThreadIdsRef.current.get(thread.hostId);
     setBusy(true);
     setError(undefined);
     selectedThreadIdRef.current = id;
@@ -761,6 +785,7 @@ export function useLiveAlphaController(
           client,
           workspace.workspaceId,
           workspace.name,
+          workspace.rootName,
         );
       } else workspaceFileBrowser.close();
     } catch (cause) {
@@ -771,12 +796,12 @@ export function useLiveAlphaController(
       } else activeThreadIdsRef.current.delete(thread.hostId);
       reportActionError(cause);
     } finally {
-      setLoadingThreadId((current) => current === id ? undefined : current);
+      setLoadingThreadId((current) => (current === id ? undefined : current));
       setBusy(false);
     }
   };
 
-  const createThread = async (workspaceId?: string) => {
+  const createThread = async (workspaceId?: string, placementId?: string) => {
     const workspaceModel =
       persistedWorkspaces.find((candidate) => candidate.id === workspaceId) ||
       persistedWorkspaces[0];
@@ -797,12 +822,18 @@ export function useLiveAlphaController(
         workspaceId: workspaceModel.workspaceId,
       },
     ];
-    const placement = placements.find(
-      ({ hostId, workspaceId }) =>
-        selected?.projectId === workspaceModel.id &&
-        selected.hostId === hostId &&
-        selected.workspaceId === workspaceId,
-    ) ??
+    const requestedPlacement = placementId
+      ? placements.find(({ id }) => id === placementId)
+      : undefined;
+    if (placementId && !requestedPlacement) return;
+    const placement =
+      requestedPlacement ??
+      placements.find(
+        ({ hostId, workspaceId }) =>
+          selected?.projectId === workspaceModel.id &&
+          selected.hostId === hostId &&
+          selected.workspaceId === workspaceId,
+      ) ??
       placements.find(({ hostId }) => statuses[hostId] === "connected") ??
       placements[0];
     if (!placement) return;
@@ -825,10 +856,7 @@ export function useLiveAlphaController(
     try {
       await discardLocalThreadDraft();
       const prepared = supportsDrafts
-        ? await client.createThreadDraft(
-          placement.workspaceId,
-          agent.agentId,
-        )
+        ? await client.createThreadDraft(placement.workspaceId, agent.agentId)
         : undefined;
       const id = prepared
         ? resourceId(placement.hostId, prepared.threadId)
@@ -870,6 +898,7 @@ export function useLiveAlphaController(
         client,
         workspace.workspaceId,
         workspace.name,
+        workspace.rootName,
       );
       focusComposer(id);
     } catch (cause) {
@@ -962,15 +991,16 @@ export function useLiveAlphaController(
     creatingThreadWorkspaceId,
     composerFocusRequest,
     composerFocusThreadId,
-    transcript: selectedThreadId && loadingThreadId !== selectedThreadId
-      ? transcripts[selectedThreadId]
-      : undefined,
+    transcript:
+      selectedThreadId && loadingThreadId !== selectedThreadId
+        ? transcripts[selectedThreadId]
+        : undefined,
     workspaceFiles: workspaceFileBrowser.files,
     terminals: terminalController.model,
     busy: busy || workspaceFileBrowser.busy,
     error: selectedHostReconnecting
       ? undefined
-      : workspaceFileBrowser.error ?? error,
+      : (workspaceFileBrowser.error ?? error),
   };
 
   return {
@@ -1064,6 +1094,61 @@ export function useLiveAlphaController(
           setBusy(false);
         }
       },
+      removeProject: async (workspaceId, placementId) => {
+        const workspace = persistedWorkspaces.find(
+          ({ id }) => id === workspaceId,
+        );
+        if (!workspace) return;
+        const placements = workspace.placements ?? [
+          {
+            id: `${workspace.hostId}:${workspace.workspaceId}`,
+            workspaceId: workspace.workspaceId,
+            hostId: workspace.hostId,
+            hostName: workspace.hostName,
+          },
+        ];
+        const placement = placementId
+          ? placements.find(({ id }) => id === placementId)
+          : placements[0];
+        if (!placement) return;
+        const client = clientsRef.current.get(placement.hostId);
+        if (!client) throw new Error("The selected Portal is not connected.");
+        if (
+          !snapshots[placement.hostId]?.capabilities.includes(
+            "workspace.remove",
+          )
+        ) {
+          throw new Error(
+            "The selected Portal must be updated before it can remove projects.",
+          );
+        }
+        setBusy(true);
+        setError(undefined);
+        try {
+          const draft = localThreadDraftRef.current;
+          if (
+            draft?.placement.hostId === placement.hostId &&
+            draft.placement.workspaceId === placement.workspaceId
+          ) {
+            await discardLocalThreadDraft();
+          }
+          await client.removeWorkspace(placement.workspaceId);
+          if (
+            selected?.hostId === placement.hostId &&
+            selected.workspaceId === placement.workspaceId
+          ) {
+            selectedThreadIdRef.current = undefined;
+            setSelectedThreadId(undefined);
+            setLoadingThreadId(undefined);
+            workspaceFileBrowser.close();
+          }
+          updateSnapshot(placement.hostId, await client.snapshot());
+        } catch (cause) {
+          reportActionError(cause);
+        } finally {
+          setBusy(false);
+        }
+      },
       createThread,
       selectThread,
       archiveThread,
@@ -1100,11 +1185,7 @@ export function useLiveAlphaController(
               return {
                 ...current,
                 [draft.thread.id]: transcript
-                  ? queueOptimisticPrompt(
-                    transcript,
-                    localPromptId,
-                    content,
-                  )
+                  ? queueOptimisticPrompt(transcript, localPromptId, content)
                   : transcript,
               };
             });
@@ -1127,11 +1208,10 @@ export function useLiveAlphaController(
                 ...current,
                 [draft.thread.id]: current[draft.thread.id]
                   ? reduceAcpEvent(current[draft.thread.id]!, {
-                    type: "turn/failed",
-                    error: cause instanceof Error
-                      ? cause.message
-                      : String(cause),
-                  })
+                      type: "turn/failed",
+                      error:
+                        cause instanceof Error ? cause.message : String(cause),
+                    })
                   : current[draft.thread.id],
               }));
               reportActionError(cause);
@@ -1181,8 +1261,8 @@ export function useLiveAlphaController(
             setSelectedThreadId(remoteId);
             setTranscripts((current) => {
               const next = { ...current };
-              const draftTranscript = next[draft.thread.id] ??
-                createTranscript(created.acpSessionId);
+              const draftTranscript =
+                next[draft.thread.id] ?? createTranscript(created.acpSessionId);
               delete next[draft.thread.id];
               next[remoteId!] = {
                 ...draftTranscript,
@@ -1192,18 +1272,18 @@ export function useLiveAlphaController(
             });
             await client.attach(created.threadId);
             setTranscripts((current) => {
-              const transcript = current[remoteId!] ??
-                createTranscript(created.acpSessionId);
+              const transcript =
+                current[remoteId!] ?? createTranscript(created.acpSessionId);
               return transcript.entries.some(({ id }) => id === localPromptId)
                 ? current
                 : {
-                  ...current,
-                  [remoteId!]: queueOptimisticPrompt(
-                    transcript,
-                    localPromptId,
-                    content,
-                  ),
-                };
+                    ...current,
+                    [remoteId!]: queueOptimisticPrompt(
+                      transcript,
+                      localPromptId,
+                      content,
+                    ),
+                  };
             });
             void refreshHost(draft.placement.hostId);
           } catch (cause) {
@@ -1223,11 +1303,10 @@ export function useLiveAlphaController(
                 ...current,
                 [remoteId!]: current[remoteId!]
                   ? reduceAcpEvent(current[remoteId!]!, {
-                    type: "turn/failed",
-                    error: cause instanceof Error
-                      ? cause.message
-                      : String(cause),
-                  })
+                      type: "turn/failed",
+                      error:
+                        cause instanceof Error ? cause.message : String(cause),
+                    })
                   : current[remoteId!],
               }));
             }
@@ -1245,9 +1324,10 @@ export function useLiveAlphaController(
               ...current,
               [remoteId!]: current[remoteId!]
                 ? reduceAcpEvent(current[remoteId!]!, {
-                  type: "turn/failed",
-                  error: cause instanceof Error ? cause.message : String(cause),
-                })
+                    type: "turn/failed",
+                    error:
+                      cause instanceof Error ? cause.message : String(cause),
+                  })
                 : current[remoteId!],
             }));
             reportActionError(cause);
@@ -1262,10 +1342,10 @@ export function useLiveAlphaController(
           ...current,
           [selectedId]: current[selectedId]
             ? queueOptimisticPrompt(
-              current[selectedId],
-              `local-${crypto.randomUUID()}`,
-              content,
-            )
+                current[selectedId],
+                `local-${crypto.randomUUID()}`,
+                content,
+              )
             : current[selectedId],
         }));
         await performAcpAction(async () => await client.prompt(content), true);
@@ -1279,14 +1359,14 @@ export function useLiveAlphaController(
       respondToPermission: (requestId, optionId) =>
         selected
           ? clientsRef.current
-            .get(selected.hostId)
-            ?.respondToPermission(requestId, optionId)
+              .get(selected.hostId)
+              ?.respondToPermission(requestId, optionId)
           : undefined,
       respondToElicitation: (requestId, response) =>
         selected
           ? clientsRef.current
-            .get(selected.hostId)
-            ?.respondToElicitation(requestId, response)
+              .get(selected.hostId)
+              ?.respondToElicitation(requestId, response)
           : undefined,
       setMode: (modeId) =>
         performAcpAction(async () => {

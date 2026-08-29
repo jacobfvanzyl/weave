@@ -131,6 +131,7 @@ export function ProjectPane({
   capacitorPlatform = false,
   busy,
   footerActions,
+  showFooter = true,
   forceVisible = false,
   onOpenDirectory,
   onOpenFile,
@@ -141,12 +142,15 @@ export function ProjectPane({
   capacitorPlatform?: boolean;
   busy: boolean;
   footerActions?: ReactNode;
+  showFooter?: boolean;
   forceVisible?: boolean;
   onOpenDirectory(path: string): Promise<void> | void;
   onOpenFile(path: string): void;
 }) {
   const { isMobile, openMobile, state, toggleSidebar } = useSidebar();
   const visible = forceVisible || (isMobile ? openMobile : state === 'expanded');
+  const projectRootName = files?.workspaceRootName || files?.workspaceName;
+  const loading = reconnecting || (hasActiveThread && busy && !files);
   const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(() => new Set());
 
   useEffect(() => setExpandedDirectories(new Set()), [files?.workspaceId]);
@@ -173,33 +177,30 @@ export function ProjectPane({
       side='right'
       collapsible={forceVisible ? 'none' : 'offcanvas'}
       position='inline'
-      aria-label={files ? `${files.workspaceName} Project Pane` : 'Project Pane'}
+      aria-label={files ? `${projectRootName} Project Pane` : 'Project Pane'}
       data-slot='project-pane'
       className='border-l-0'
-      aria-busy={reconnecting}
+      aria-busy={loading}
     >
-      <SidebarHeader className='h-11 shrink-0 justify-center gap-0 border-b border-l border-sidebar-border bg-title-bar px-2 py-0'>
-        <div className='flex min-w-0 items-center gap-1'>
-          <HugeiconsIcon
-            data-symbol='project-pane'
-            icon={FolderTreeIcon}
-            strokeWidth={1.75}
-            className='shrink-0 text-icon-muted'
-          />
-          {reconnecting
+      <SidebarHeader
+        data-slot='project-top-rail'
+        className='h-11 shrink-0 justify-center gap-0 border-b border-l border-sidebar-border bg-title-bar px-2 py-0'
+      >
+        <div className='flex min-w-0 items-center'>
+          {loading
             ? <SidebarMenuSkeleton className='h-6 flex-1 px-1' />
             : (
               <span className='min-w-0 flex-1 truncate text-xs font-medium'>
-                {files?.workspaceName || 'Project'}
+                {projectRootName || 'Project'}
               </span>
             )}
         </div>
       </SidebarHeader>
 
       <SidebarContent className='border-l border-sidebar-border'>
-        {reconnecting
+        {loading
           ? (
-            <SidebarGroup data-slot='reconnecting-project-pane' aria-label='Reconnecting project'>
+            <SidebarGroup data-slot='loading-project-pane' aria-label='Loading project'>
               <SidebarGroupContent className='space-y-1'>
                 <SidebarMenuSkeleton showIcon />
                 <SidebarMenuSkeleton showIcon />
@@ -265,17 +266,19 @@ export function ProjectPane({
           )}
       </SidebarContent>
 
-      <SidebarFooter className='h-[var(--bottom-rail-height)] shrink-0 justify-center gap-0 border-t border-sidebar-border bg-status-bar p-0'>
-        <div className='flex justify-end px-1'>
-          {footerActions ?? (
-            <ProjectPaneToggle
-              action='Hide'
-              capacitorInset={capacitorPlatform}
-              onClick={toggleSidebar}
-            />
-          )}
-        </div>
-      </SidebarFooter>
+      {showFooter && (
+        <SidebarFooter className='h-[var(--bottom-rail-height)] shrink-0 justify-center gap-0 border-t border-sidebar-border bg-status-bar p-0'>
+          <div className='flex justify-end px-1'>
+            {footerActions ?? (
+              <ProjectPaneToggle
+                action='Hide'
+                capacitorInset={capacitorPlatform}
+                onClick={toggleSidebar}
+              />
+            )}
+          </div>
+        </SidebarFooter>
+      )}
     </Sidebar>
   );
 }

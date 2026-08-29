@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { TerminalAttachmentMode, TerminalNotification, TerminalSummary } from '@weave/product-protocol';
 import { type DirectHostClient, PortalRpcError } from '@/portal-client';
+import {
+  type AlphaTerminalScope,
+  alphaTerminalScopeKey,
+} from './alpha-terminal-scope';
 
 export type AlphaTerminalClient = Pick<
   DirectHostClient,
@@ -14,14 +18,12 @@ export type AlphaTerminalClient = Pick<
 >;
 
 export type AlphaTerminalTarget = {
-  hostId: string;
-  workspaceId: string;
+  scope: AlphaTerminalScope;
   supported: boolean;
 };
 
 export type AlphaTerminalsModel = {
-  hostId?: string;
-  workspaceId?: string;
+  scope?: AlphaTerminalScope;
   supported: boolean;
   tabs: TerminalSummary[];
   activeTerminalId?: string;
@@ -36,18 +38,18 @@ export type AlphaTerminalsModel = {
 };
 
 type ActiveAttachment = {
-  hostId: string;
+  scopeKey: string;
   workspaceId: string;
   terminalId: string;
   attachmentId: string;
   mode: TerminalAttachmentMode;
+  client: AlphaTerminalClient;
 };
 
 const emptyModel = (
   target: AlphaTerminalTarget | undefined,
 ): AlphaTerminalsModel => ({
-  hostId: target?.hostId,
-  workspaceId: target?.workspaceId,
+  scope: target?.scope,
   supported: target?.supported ?? false,
   tabs: [],
   data: '',
@@ -72,14 +74,16 @@ export function useAlphaTerminals({
   client?: AlphaTerminalClient;
 }) {
   const [model, setModel] = useState<AlphaTerminalsModel>(() => emptyModel(target));
-  const requestedRef = useRef(false);
+  const requestedScopeKeysRef = useRef(new Set<string>());
+  const preferredTerminalIdsRef = useRef(new Map<string, string>());
   const attachmentRef = useRef<ActiveAttachment | undefined>(undefined);
   const closingRef = useRef(new Set<string>());
   const reconcileExitedRef = useRef<(preferredTerminalId?: string) => void>(() => undefined);
   const operationRef = useRef(Promise.resolve());
-  const activeTerminalIdRef = useRef(model.activeTerminalId);
-  activeTerminalIdRef.current = model.activeTerminalId;
-  const targetKey = target ? `${target.hostId}:${target.workspaceId}:${target.supported}` : '';
+  const scopeKey = target ? alphaTerminalScopeKey(target.scope) : '';
+  const targetKey = target
+    ? JSON.stringify([scopeKey, target.scope.workspaceId, target.supported])
+    : '';
 
   const serialized = <Result>(operation: () => Promise<Result>) => {
     const result = operationRef.current.then(operation, operation);
@@ -93,8 +97,8 @@ export function useAlphaTerminals({
   const detachCurrent = async () => {
     const attachment = attachmentRef.current;
     attachmentRef.current = undefined;
-    if (!attachment || !client) return;
-    await client
+    if (!attachment) return;
+    await attachment.client
       .detachTerminal(
         attachment.workspaceId,
         attachment.terminalId,
@@ -180,7 +184,7 @@ export function useAlphaTerminals({
     let readOnlyReason: string | undefined;
     try {
       attached = await client.attachTerminal(
-        target.workspaceId,
+        target.scope.workspaceId,
         terminal.terminalId,
         preferredMode,
         receive,
@@ -190,7 +194,7 @@ export function useAlphaTerminals({
         throw cause;
       }
       attached = await client.attachTerminal(
-        target.workspaceId,
+        target.scope.workspaceId,
         terminal.terminalId,
         'observe',
         receive,
@@ -198,16 +202,20 @@ export function useAlphaTerminals({
       readOnlyReason = 'This Terminal is controlled from another attachment.';
     }
     attachmentRef.current = {
-      hostId: target.hostId,
-      workspaceId: target.workspaceId,
+      scopeKey,
+      workspaceId: target.scope.workspaceId,
       terminalId: terminal.terminalId,
       attachmentId: attached.attachment.attachmentId,
       mode: attached.attachment.mode,
+      client,
     };
+    preferredTerminalIdsRef.current.set(
+      scopeKey,
+      attached.snapshot.terminal.terminalId,
+    );
     setModel((current) => ({
       ...current,
-      hostId: target.hostId,
-      workspaceId: target.workspaceId,
+      scope: target.scope,
       supported: true,
       tabs: current.tabs.some(
           ({ terminalId }) => terminalId === attached.snapshot.terminal.terminalId,
@@ -243,24 +251,23 @@ export function useAlphaTerminals({
     }
     const currentAttachment = attachmentRef.current;
     if (
-      currentAttachment?.hostId === target.hostId &&
-      currentAttachment.workspaceId === target.workspaceId &&
+      currentAttachment?.scopeKey === scopeKey &&
+      currentAttachment.workspaceId === target.scope.workspaceId &&
       (!preferredTerminalId || currentAttachment.terminalId === preferredTerminalId)
     ) {
       return;
     }
     setModel((current) => ({
       ...current,
-      hostId: target.hostId,
-      workspaceId: target.workspaceId,
+      scope: target.scope,
       supported: true,
       loading: true,
       error: undefined,
     }));
-    const listed = await client.listTerminals(target.workspaceId);
+    const listed = await client.listTerminals(target.scope.workspaceId);
     let tabs = listed.terminals;
     if (!tabs.length) {
-      tabs = [(await client.createTerminal(target.workspaceId)).terminal];
+      tabs = [(await client.createTerminal(target.scope.workspaceId)).terminal];
     }
     const terminal = tabs.find(({ terminalId }) => terminalId === preferredTerminalId) ??
       tabs[0];
@@ -269,7 +276,7 @@ export function useAlphaTerminals({
   };
 
   reconcileExitedRef.current = (preferredTerminalId) => {
-    if (!requestedRef.current) return;
+    if (!requestedScopeKeysRef.current.has(scopeKey)) return;
     void serialized(async () => {
       await detachCurrent();
       await ensureAttached(preferredTerminalId);
@@ -284,12 +291,14 @@ export function useAlphaTerminals({
 
   useEffect(() => {
     let disposed = false;
-    const preferredTerminalId = activeTerminalIdRef.current;
+    const preferredTerminalId = preferredTerminalIdsRef.current.get(scopeKey);
     void serialized(async () => {
       await detachCurrent();
       if (disposed) return;
       setModel(emptyModel(target));
-      if (requestedRef.current) await ensureAttached(preferredTerminalId);
+      if (requestedScopeKeysRef.current.has(scopeKey)) {
+        await ensureAttached(preferredTerminalId);
+      }
     }).catch((cause) => {
       if (!disposed) {
         setModel((current) => ({
@@ -308,7 +317,7 @@ export function useAlphaTerminals({
 
   useEffect(
     () => () => {
-      requestedRef.current = false;
+      requestedScopeKeysRef.current.clear();
       void detachCurrent();
     },
     [],
@@ -317,17 +326,22 @@ export function useAlphaTerminals({
   const actions = {
     show: () =>
       serialized(async () => {
-        requestedRef.current = true;
-        await ensureAttached(model.activeTerminalId);
+        if (!scopeKey) return;
+        requestedScopeKeysRef.current.add(scopeKey);
+        await ensureAttached(
+          model.activeTerminalId ?? preferredTerminalIdsRef.current.get(scopeKey),
+        );
       }),
-    // Dock visibility is view-only. Keep the attachment (and controller
-    // authority) alive until the target changes, the Terminal closes, the
-    // transport requests a resync, or this controller is torn down.
-    hide: () => Promise.resolve(),
+    // Hiding the current scope is view-only, so its live attachment remains.
+    // Clearing demand prevents it from being reattached after a scope change.
+    hide: () => {
+      if (scopeKey) requestedScopeKeysRef.current.delete(scopeKey);
+      return Promise.resolve();
+    },
     create: () =>
       serialized(async () => {
         if (!target || !client || !target.supported) return;
-        const created = await client.createTerminal(target.workspaceId);
+        const created = await client.createTerminal(target.scope.workspaceId);
         setModel((current) => ({
           ...current,
           tabs: [...current.tabs, created.terminal],
@@ -386,7 +400,7 @@ export function useAlphaTerminals({
         closingRef.current.add(terminalId);
         try {
           await client.closeTerminal(
-            target.workspaceId,
+            target.scope.workspaceId,
             terminalId,
             attachment.attachmentId,
           );
@@ -394,6 +408,9 @@ export function useAlphaTerminals({
           closingRef.current.delete(terminalId);
         }
         attachmentRef.current = undefined;
+        if (preferredTerminalIdsRef.current.get(scopeKey) === terminalId) {
+          preferredTerminalIdsRef.current.delete(scopeKey);
+        }
         const tabs = model.tabs.filter((tab) => tab.terminalId !== terminalId);
         setModel((current) => ({
           ...current,
@@ -405,7 +422,9 @@ export function useAlphaTerminals({
           dataEpoch: current.dataEpoch + 1,
           dataOffset: 0,
         }));
-        if (tabs[0] && requestedRef.current) await attach(tabs[0]);
+        if (tabs[0] && requestedScopeKeysRef.current.has(scopeKey)) {
+          await attach(tabs[0]);
+        }
       }),
   };
 

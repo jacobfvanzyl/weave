@@ -8,6 +8,7 @@ import { ProjectPane } from './project-pane';
 const files: AlphaWorkspaceFiles = {
   workspaceId: 'weave',
   workspaceName: 'Weave',
+  workspaceRootName: 'weave',
   activeFilePath: 'src/main.ts',
   openFiles: [{
     kind: 'text',
@@ -49,12 +50,34 @@ describe('ProjectPane', () => {
       </SidebarProvider>,
     );
 
-    expect(screen.getByLabelText('Reconnecting project')).toBeInTheDocument();
+    expect(screen.getByLabelText('Loading project')).toBeInTheDocument();
     expect(container.querySelector('[data-slot="project-pane"]'))
       .toHaveAttribute('aria-busy', 'true');
     expect(container.querySelectorAll('[data-slot="sidebar-menu-skeleton"]'))
       .toHaveLength(6);
     expect(screen.queryByText('README.md')).not.toBeInTheDocument();
+  });
+
+  it('uses the same prose-free skeleton while the initial directory loads', () => {
+    const { container } = render(
+      <SidebarProvider>
+        <ProjectPane
+          busy
+          onOpenDirectory={vi.fn()}
+          onOpenFile={vi.fn()}
+        />
+      </SidebarProvider>,
+    );
+
+    expect(screen.getByLabelText('Loading project')).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="project-pane"]'))
+      .toHaveAttribute('aria-busy', 'true');
+    expect(container.querySelectorAll('[data-slot="sidebar-menu-skeleton"]'))
+      .toHaveLength(6);
+    expect(screen.queryByText('Loading directory')).not.toBeInTheDocument();
+    expect(screen.queryByText(
+      'The active Thread directory will appear here when the Host makes it available.',
+    )).not.toBeInTheDocument();
   });
 
   it('expands directories in place with nesting guides without presenting file content', async () => {
@@ -87,7 +110,10 @@ describe('ProjectPane', () => {
     expect(toggle).toBeInTheDocument();
     expect(toggle).toHaveTextContent('');
     expect(toggle).toHaveClass('size-7', 'items-center', 'justify-center');
-    expect(container.querySelectorAll('[data-symbol="project-pane"]')).toHaveLength(2);
+    expect(container.querySelector(
+      '[data-slot="project-top-rail"] [data-symbol="project-pane"]',
+    )).not.toBeInTheDocument();
+    expect(container.querySelectorAll('[data-symbol="project-pane"]')).toHaveLength(1);
     expect(screen.queryByText('11 B')).not.toBeInTheDocument();
     expect(screen.queryByText('export {};')).not.toBeInTheDocument();
     expect(screen.queryByText('Read only')).not.toBeInTheDocument();
@@ -95,7 +121,7 @@ describe('ProjectPane', () => {
     await user.click(screen.getByRole('button', { name: 'Expand directory src' }));
     expect(screen.getByText('main.ts')).toBeInTheDocument();
     expect(container.querySelector('[data-indent-indicator="true"]')).toHaveClass('border-l');
-    expect(screen.getByText('Weave')).toBeInTheDocument();
+    expect(screen.getByText('weave')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Go to parent directory' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Expand directory nested' }));
     expect(openDirectory).toHaveBeenCalledWith('src/nested');
@@ -118,10 +144,11 @@ describe('ProjectPane', () => {
       </SidebarProvider>,
     );
 
-    expect(screen.getAllByText('Weave')).toHaveLength(1);
+    expect(screen.getAllByText('weave')).toHaveLength(1);
+    expect(screen.queryByText('Weave')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Hide Project Pane' }));
     expect(container.querySelector('[data-slot="project-pane"]')).not.toBeInTheDocument();
-    expect(screen.queryByText('Weave')).not.toBeInTheDocument();
+    expect(screen.queryByText('weave')).not.toBeInTheDocument();
   });
 
 });

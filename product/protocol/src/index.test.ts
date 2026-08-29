@@ -114,6 +114,16 @@ describe('Portal protocol', () => {
     })).toEqual({ discarded: true });
   });
 
+  test('parses host-local project removal requests and results', () => {
+    expect(parsePortalRpcParams('workspace.remove', {
+      workspaceId: 'workspace-1',
+    })).toEqual({ workspaceId: 'workspace-1' });
+    expect(parsePortalRpcResult('workspace.remove', { removed: true }))
+      .toEqual({ removed: true });
+    expect(() => parsePortalRpcResult('workspace.remove', { removed: false }))
+      .toThrow('workspace.remove');
+  });
+
   test('binds capabilities to a stable Host and authenticated principal', () => {
     expect(parsePortalRpcResult('portal.capabilities', {
       protocolVersion: 2,
@@ -148,6 +158,7 @@ describe('Portal protocol', () => {
         workspace: {
           workspaceId: 'workspace-1',
           name: 'Weave',
+          rootName: 'weave',
           repositoryIdentity: {
             canonicalKey: 'github.com/veezee/weave',
             locator: {
@@ -159,10 +170,11 @@ describe('Portal protocol', () => {
             name: 'weave',
           },
         },
-      }).workspace.repositoryIdentity?.canonicalKey,
-    ).toBe(
-      'github.com/veezee/weave',
-    );
+      }).workspace,
+    ).toMatchObject({
+      rootName: 'weave',
+      repositoryIdentity: { canonicalKey: 'github.com/veezee/weave' },
+    });
     expect(() => parsePortalRpcParams('workspace.add', { path: '' })).toThrow(
       'path',
     );
@@ -242,24 +254,28 @@ describe('Portal protocol', () => {
     expect(parsePortalRpcParams('terminal.list', {
       workspaceId: 'workspace-1',
     })).toEqual({ workspaceId: 'workspace-1' });
-    expect(parsePortalRpcResult('terminal.create', {
-      terminal: {
+    expect(
+      parsePortalRpcResult('terminal.create', {
+        terminal: {
+          terminalId: 'terminal-1',
+          workspaceId: 'workspace-1',
+          title: 'zsh',
+          status: 'running',
+          cols: 80,
+          rows: 24,
+        },
+      }).terminal.terminalId,
+    ).toBe('terminal-1');
+    expect(
+      parseTerminalNotification(TERMINAL_EVENT_METHOD, {
+        attachmentId: 'attachment-1',
         terminalId: 'terminal-1',
         workspaceId: 'workspace-1',
-        title: 'zsh',
-        status: 'running',
-        cols: 80,
-        rows: 24,
-      },
-    }).terminal.terminalId).toBe('terminal-1');
-    expect(parseTerminalNotification(TERMINAL_EVENT_METHOD, {
-      attachmentId: 'attachment-1',
-      terminalId: 'terminal-1',
-      workspaceId: 'workspace-1',
-      generation: 'generation-1',
-      sequence: 1,
-      event: { type: 'output', data: 'ready' },
-    }).event).toEqual({ type: 'output', data: 'ready' });
+        generation: 'generation-1',
+        sequence: 1,
+        event: { type: 'output', data: 'ready' },
+      }).event,
+    ).toEqual({ type: 'output', data: 'ready' });
   });
 
   test('requires conditional writes and validates watch notifications and typed errors', () => {
