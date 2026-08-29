@@ -137,7 +137,9 @@ const scenarioTranscript = (scenario: MockScenario) => {
 };
 
 export const mockScenarioFromLocation = (): MockScenario | undefined => {
-  if (!import.meta.env.DEV) return undefined;
+  if (!import.meta.env.DEV && import.meta.env.VITE_ALPHA_ACCEPTANCE !== "1") {
+    return undefined;
+  }
   const requested = new URLSearchParams(window.location.search).get("mock");
   return MOCK_SCENARIOS.find((scenario) => scenario === requested);
 };

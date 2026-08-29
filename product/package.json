@@ -14,6 +14,11 @@
     "build:alpha": "cd alpha && bun run build",
     "build:alpha:macos": "cd alpha && bun run build:macos",
     "run:alpha:macos": "cd alpha && bun run run:macos",
+    "acceptance:browser:fixture": "cd alpha && bun run acceptance:browser:fixture",
+    "acceptance:browser:fixture:test": "cd alpha && bun run acceptance:browser:fixture:test",
+    "acceptance:browser:macos": "cd alpha && bun run acceptance:browser:macos",
+    "acceptance:browser:macos:test": "cd alpha && bun run acceptance:browser:macos:test",
+    "acceptance:browser:ipad": "cd alpha && bun run acceptance:browser:ipad",
     "check:portal": "cd portal && deno task lint && deno task check",
     "test:portal": "cd portal && deno task test",
     "check": "bun run check:boundary && bun run test:boundary && bun run test:protocol && bun run test:alpha && bun run build:alpha && bun run check:portal && bun run test:portal"

@@ -116,9 +116,7 @@ final class AlphaBrowserHost: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             browser?.stopLoading()
             emitBrowserState()
         case "reset":
-            installFreshBrowser(loadDefault: true)
-            layoutBrowser()
-            browser?.isHidden = false
+            resetBrowser()
         default:
             break
         }
@@ -167,6 +165,20 @@ final class AlphaBrowserHost: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         browserError = nil
         browserNotice = nil
         if loadDefault { navigate(to: alphaBrowserDefaultURL) }
+    }
+
+    private func resetBrowser() {
+        let dataStore = browser?.configuration.websiteDataStore
+        dataStore?.removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+            modifiedSince: .distantPast
+        ) { [weak self] in
+            DispatchQueue.main.async {
+                self?.installFreshBrowser(loadDefault: true)
+                self?.layoutBrowser()
+                self?.browser?.isHidden = false
+            }
+        }
     }
 
     private func navigate(to rawValue: String) {
@@ -363,3 +375,192 @@ final class AlphaBrowserHost: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         decisionHandler(.deny)
     }
 }
+
+#if DEBUG
+extension AlphaBrowserHost {
+    @MainActor
+    func runAcceptance(baseURL: URL, stage: String) async -> [String: Any] {
+        for _ in 0..<100 {
+            let alphaLoaded = (try? await shell?.evaluateJavaScript(
+                "Boolean(document.querySelector('[aria-label=\"Show Browser Pane\"]'))"
+            )) as? Bool ?? false
+            if alphaLoaded { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        _ = try? await shell?.evaluateJavaScript("""
+            (() => {
+              const key = 'weave.alpha.docks.v3';
+              const state = JSON.parse(localStorage.getItem(key) || '{}');
+              state.schemaVersion = 3;
+              state.panelPosition = { terminal: 'bottom', browser: 'right', project: 'right' };
+              state.projectOpen = false;
+              state.browserOpen = true;
+              state.terminalOpenByScope ||= {};
+              state.activePanelByDock = { bottom: null, right: 'browser' };
+              state.rememberedSize ||= { bottom: 32, right: 24 };
+              localStorage.setItem(key, JSON.stringify(state));
+              location.reload();
+              return true;
+            })()
+            """)
+        var requestedOpen = false
+        var requestedThread = false
+        for _ in 0..<100 {
+            let surfaceMounted = (try? await shell?.evaluateJavaScript(
+                "Boolean(document.querySelector('[data-slot=\"browser-surface-slot\"]'))"
+            )) as? Bool ?? false
+            if surfaceMounted { break }
+            if !requestedOpen {
+                let showControlEnabled = (try? await shell?.evaluateJavaScript(
+                    "document.querySelector('[aria-label=\"Show Browser Pane\"]')?.disabled === false"
+                )) as? Bool ?? false
+                if showControlEnabled {
+                    _ = try? await shell?.evaluateJavaScript(
+                        "document.querySelector('[aria-label=\"Show Browser Pane\"]')?.click(); true"
+                    )
+                    requestedOpen = true
+                } else if !requestedThread {
+                    let selectedThread = (try? await shell?.evaluateJavaScript("""
+                        (() => {
+                          const thread = document.querySelector(
+                            '[data-sidebar="content"] [data-sidebar="menu-button"]:not([aria-label])'
+                          );
+                          thread?.click();
+                          return Boolean(thread);
+                        })()
+                        """)) as? Bool ?? false
+                    requestedThread = selectedThread
+                }
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        for _ in 0..<100 {
+            if browser?.isHidden == false && (browser?.frame.width ?? 0) > 100 { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let surfaceWidth = (try? await shell?.evaluateJavaScript(
+            "document.querySelector('[data-slot=\"browser-surface-slot\"]')?.getBoundingClientRect().width || 0"
+        )) as? Double ?? 0
+        let surfaceHeight = (try? await shell?.evaluateJavaScript(
+            "document.querySelector('[data-slot=\"browser-surface-slot\"]')?.getBoundingClientRect().height || 0"
+        )) as? Double ?? 0
+        let slotPresented = browser?.isHidden == false
+            && (browser?.frame.width ?? 0) > 100
+            && (browser?.frame.height ?? 0) > 100
+        if stage == "seed" || stage == "verify" {
+            let path = stage == "seed" ? "/cookie/set" : "/cookie/read"
+            let url = URL(string: path, relativeTo: baseURL)!.absoluteURL
+            navigate(to: url.absoluteString)
+            await waitForAcceptanceLoad()
+            return [
+                "browserDataStoreIsNonPersistent": browser?.configuration.websiteDataStore
+                    !== WKWebsiteDataStore.default(),
+                "cookieAbsent": await evaluateAcceptanceBool(
+                    "JSON.parse(document.body.textContent).present === false"
+                ),
+                "cookiePresent": await evaluateAcceptanceBool(
+                    "JSON.parse(document.body.textContent).present === true"
+                ),
+                "stage": stage,
+            ]
+        }
+        navigate(to: baseURL.absoluteString)
+        await waitForAcceptanceLoad()
+        let fixtureLoaded = await evaluateAcceptanceBool(
+            "document.body.dataset.fixture === 'alpha-browser-acceptance'"
+        )
+        let controlSnapshotCaptured = await evaluateAcceptanceBool("""
+            ['control-input', 'control-apply', 'control-result', 'control-bottom']
+              .every((id) => Boolean(document.getElementById(id)))
+            """)
+        let controlTypeSucceeded = await evaluateAcceptanceBool("""
+            (() => {
+              const input = document.querySelector('#control-input');
+              input.focus();
+              input.value = 'native-probe';
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              return input.value === 'native-probe' && document.activeElement === input;
+            })()
+            """)
+        let controlKeySucceeded = await evaluateAcceptanceBool("""
+            (() => {
+              const input = document.querySelector('#control-input');
+              input.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter', bubbles: true, cancelable: true
+              }));
+              return input.dataset.lastKey === 'Enter';
+            })()
+            """)
+        _ = await evaluateAcceptanceBool(
+            "document.querySelector('#control-apply')?.click(); true"
+        )
+        var controlClickAndWaitSucceeded = false
+        for _ in 0..<100 {
+            controlClickAndWaitSucceeded = await evaluateAcceptanceBool(
+                "document.querySelector('#control-result')?.textContent === 'control:applied:native-probe:key:Enter'"
+            )
+            if controlClickAndWaitSucceeded { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let controlScrollSucceeded = await evaluateAcceptanceBool("""
+            (() => {
+              document.querySelector('#control-bottom')?.scrollIntoView();
+              return window.scrollY > 0;
+            })()
+            """)
+        let cookieSetURL = URL(string: "/cookie/set", relativeTo: baseURL)!.absoluteURL
+        navigate(to: cookieSetURL.absoluteString)
+        await waitForAcceptanceLoad()
+        let cookieAvailableBeforeReset = await evaluateAcceptanceBool(
+            "JSON.parse(document.body.textContent).present === true"
+        )
+        let browserBeforeReset = browser
+        _ = try? await shell?.evaluateJavaScript(
+            "document.querySelector('[aria-label=\"Reset Browser Session\"]')?.click(); true"
+        )
+        for _ in 0..<100 {
+            if browser !== browserBeforeReset { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let cookieReadURL = URL(string: "/cookie/read", relativeTo: baseURL)!.absoluteURL
+        navigate(to: cookieReadURL.absoluteString)
+        await waitForAcceptanceLoad()
+        let cookieClearedByReset = await evaluateAcceptanceBool(
+            "JSON.parse(document.body.textContent).present === false"
+        )
+        navigate(to: baseURL.absoluteString)
+        await waitForAcceptanceLoad()
+        return [
+            "browserDataStoreIsNonPersistent": browser?.configuration.websiteDataStore
+                !== WKWebsiteDataStore.default(),
+            "cookieAvailableBeforeReset": cookieAvailableBeforeReset,
+            "cookieClearedByReset": cookieClearedByReset,
+            "fixtureLoaded": fixtureLoaded,
+            "nativeControlProbeSucceeded": controlSnapshotCaptured
+                && controlTypeSucceeded
+                && controlKeySucceeded
+                && controlClickAndWaitSucceeded
+                && controlScrollSucceeded,
+            "slotPresented": slotPresented,
+            "nativeFrameHeight": browser?.frame.height ?? 0,
+            "nativeFrameWidth": browser?.frame.width ?? 0,
+            "surfaceHeight": surfaceHeight,
+            "surfaceWidth": surfaceWidth,
+        ]
+    }
+
+    @MainActor
+    private func waitForAcceptanceLoad() async {
+        for _ in 0..<100 {
+            if browser?.isLoading != true { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    @MainActor
+    private func evaluateAcceptanceBool(_ script: String) async -> Bool {
+        guard let browser else { return false }
+        return (try? await browser.evaluateJavaScript(script)) as? Bool ?? false
+    }
+}
+#endif

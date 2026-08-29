@@ -10,6 +10,7 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
+    exclude: ['acceptance/**', 'dist/**', 'node_modules/**'],
     setupFiles: ['./src/test/setup.ts'],
   },
 });
