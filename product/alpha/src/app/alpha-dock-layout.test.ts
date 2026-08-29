@@ -28,7 +28,7 @@ describe('useAlphaDockLayout', () => {
     });
   });
 
-  it('opens Terminal in Bottom by default and keeps Bottom and Right independent', () => {
+  it('opens Terminal in Bottom and Browser in Right independently', () => {
     const { result } = renderHook(() => useAlphaDockLayout(scopeA));
 
     act(() => result.current.togglePanel('terminal'));
@@ -36,20 +36,20 @@ describe('useAlphaDockLayout', () => {
       open: true,
       activePanelId: 'terminal',
     });
-    act(() => result.current.togglePanel('project'));
+    act(() => result.current.togglePanel('browser'));
     expect(result.current.snapshot.docks.right).toEqual({
       open: true,
-      activePanelId: 'project',
+      activePanelId: 'browser',
     });
     expect(result.current.isPanelActive('terminal')).toBe(true);
-    expect(result.current.isPanelActive('project')).toBe(true);
+    expect(result.current.isPanelActive('browser')).toBe(true);
   });
 
   it('moves visible and hidden Terminal panels without conflating lifecycle state', () => {
     const { result } = renderHook(() => useAlphaDockLayout(scopeA));
 
     act(() => result.current.togglePanel('terminal'));
-    act(() => result.current.moveTerminal('right'));
+    act(() => result.current.movePanel('terminal', 'right'));
     expect(result.current.snapshot.panelPosition.terminal).toBe('right');
     expect(result.current.snapshot.docks.bottom.open).toBe(false);
     expect(result.current.snapshot.docks.right).toEqual({
@@ -59,7 +59,7 @@ describe('useAlphaDockLayout', () => {
 
     act(() => result.current.togglePanel('terminal'));
     act(() => result.current.togglePanel('project'));
-    act(() => result.current.moveTerminal('bottom'));
+    act(() => result.current.movePanel('terminal', 'bottom'));
     expect(result.current.snapshot.docks.right).toEqual({
       open: true,
       activePanelId: 'project',
@@ -71,8 +71,8 @@ describe('useAlphaDockLayout', () => {
     const { result } = renderHook(() => useAlphaDockLayout(scopeA));
 
     act(() => result.current.togglePanel('terminal'));
-    act(() => result.current.moveTerminal('right'));
-    act(() => result.current.moveTerminal('bottom'));
+    act(() => result.current.movePanel('terminal', 'right'));
+    act(() => result.current.movePanel('terminal', 'bottom'));
 
     expect(result.current.snapshot.docks.bottom).toEqual({
       open: true,
@@ -95,7 +95,7 @@ describe('useAlphaDockLayout', () => {
     });
 
     act(() => result.current.togglePanel('terminal'));
-    act(() => result.current.moveTerminal('right'));
+    act(() => result.current.movePanel('terminal', 'right'));
     act(() => result.current.hideTerminalPanel());
     expect(result.current.snapshot.docks.right).toEqual({
       open: true,
@@ -103,19 +103,23 @@ describe('useAlphaDockLayout', () => {
     });
   });
 
-  it('orders Terminal immediately before Project and separates populated dock groups once', () => {
+  it('orders Terminal, Browser, and Project and separates populated dock groups once', () => {
     const split = alphaDockButtons(createAlphaDockSnapshot());
     expect(split.bottom.map(({ panelId }) => panelId)).toEqual(['terminal']);
-    expect(split.right.map(({ panelId }) => panelId)).toEqual(['project']);
+    expect(split.right.map(({ panelId }) => panelId)).toEqual([
+      'browser',
+      'project',
+    ]);
     expect(split.showDivider).toBe(true);
 
     const together = alphaDockButtons({
       ...createAlphaDockSnapshot(),
-      panelPosition: { terminal: 'right', project: 'right' },
+      panelPosition: { terminal: 'right', browser: 'right', project: 'right' },
     });
     expect(together.bottom).toEqual([]);
     expect(together.right.map(({ panelId }) => panelId)).toEqual([
       'terminal',
+      'browser',
       'project',
     ]);
     expect(together.showDivider).toBe(false);
@@ -124,7 +128,9 @@ describe('useAlphaDockLayout', () => {
   it('persists Terminal placement and independent dock sizes', () => {
     const initial = renderHook(() => useAlphaDockLayout(scopeA));
     act(() => {
-      initial.result.current.moveTerminal('right');
+      initial.result.current.movePanel('terminal', 'right');
+      initial.result.current.movePanel('browser', 'bottom');
+      initial.result.current.togglePanel('browser');
       initial.result.current.rememberSize('bottom', 31);
       initial.result.current.rememberSize('right', 24);
     });
@@ -134,9 +140,48 @@ describe('useAlphaDockLayout', () => {
     expect(restored.result.current.snapshot.panelPosition.terminal).toBe(
       'right',
     );
+    expect(restored.result.current.snapshot.panelPosition.browser).toBe(
+      'bottom',
+    );
+    expect(restored.result.current.isPanelActive('browser')).toBe(true);
     expect(restored.result.current.snapshot.rememberedSize).toEqual({
       bottom: 31,
       right: 24,
+    });
+  });
+
+  it('migrates the v2 Terminal and Project state while adding Browser closed on Right', () => {
+    window.localStorage.setItem('weave.alpha.docks.v2', JSON.stringify({
+      schemaVersion: 2,
+      panelPosition: { terminal: 'bottom', project: 'right' },
+      projectOpen: true,
+      terminalOpenByScope: { [scopeA]: true },
+      rememberedSize: { bottom: 30, right: 25 },
+    }));
+
+    const { result } = renderHook(() => useAlphaDockLayout(scopeA));
+    expect(result.current.snapshot.schemaVersion).toBe(3);
+    expect(result.current.snapshot.panelPosition.browser).toBe('right');
+    expect(result.current.snapshot.docks.bottom.activePanelId).toBe('terminal');
+    expect(result.current.snapshot.docks.right.activePanelId).toBe('project');
+    expect(result.current.isPanelActive('browser')).toBe(false);
+  });
+
+  it('moves Browser between docks and restores the panel underneath it', () => {
+    const { result } = renderHook(() => useAlphaDockLayout(scopeA));
+
+    act(() => result.current.togglePanel('project'));
+    act(() => result.current.togglePanel('browser'));
+    expect(result.current.snapshot.docks.right.activePanelId).toBe('browser');
+
+    act(() => result.current.movePanel('browser', 'bottom'));
+    expect(result.current.snapshot.docks.bottom.activePanelId).toBe('browser');
+    expect(result.current.snapshot.docks.right.activePanelId).toBe('project');
+
+    act(() => result.current.hideBrowserPanel());
+    expect(result.current.snapshot.docks.bottom).toEqual({
+      open: false,
+      activePanelId: null,
     });
   });
 

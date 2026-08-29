@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  BrowserIcon,
   FolderTreeIcon,
   TerminalIcon,
 } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
   alphaDockButtons,
+  type AlphaMovableDockPanelId,
   type AlphaDockPanelId,
   type AlphaDockPosition,
   type AlphaDockSnapshot,
@@ -15,41 +17,46 @@ import { cn } from '@/lib/utils';
 import { RailDivider } from './rail-divider';
 
 const label = (panelId: AlphaDockPanelId) =>
-  panelId === 'terminal' ? 'Terminal' : 'Project';
+  panelId === 'terminal' ? 'Terminal' : panelId === 'browser' ? 'Browser' : 'Project';
+
+const movable = (
+  panelId: AlphaDockPanelId,
+): panelId is AlphaMovableDockPanelId => panelId !== 'project';
 
 export function DockRailActions({
   snapshot,
   disabled,
   onToggle,
-  onMoveTerminal,
+  onMovePanel,
 }: {
   snapshot: AlphaDockSnapshot;
   disabled: boolean;
   onToggle(panelId: AlphaDockPanelId): void;
-  onMoveTerminal(position: AlphaDockPosition): void;
+  onMovePanel(panelId: AlphaMovableDockPanelId, position: AlphaDockPosition): void;
 }) {
   const groups = alphaDockButtons(snapshot);
-  const [terminalMenuOpen, setTerminalMenuOpen] = useState(false);
+  const [moveMenuPanel, setMoveMenuPanel] = useState<AlphaMovableDockPanelId | undefined>(undefined);
   const rootRef = useRef<HTMLDivElement>(null);
-  const terminalButtonRef = useRef<HTMLButtonElement>(null);
+  const movableButtonRefs = useRef<Partial<Record<AlphaMovableDockPanelId, HTMLButtonElement>>>({});
   const firstMenuItemRef = useRef<HTMLButtonElement>(null);
   const longPressRef = useRef<number | undefined>(undefined);
-  const suppressTerminalClickRef = useRef(false);
+  const suppressClickRef = useRef<AlphaMovableDockPanelId | undefined>(undefined);
 
-  const closeTerminalMenu = (restoreFocus = false) => {
-    setTerminalMenuOpen(false);
+  const closeMoveMenu = (restoreFocus = false) => {
+    const panelId = moveMenuPanel;
+    setMoveMenuPanel(undefined);
     if (restoreFocus) {
-      window.requestAnimationFrame(() => terminalButtonRef.current?.focus());
+      window.requestAnimationFrame(() => panelId && movableButtonRefs.current[panelId]?.focus());
     }
   };
 
   useEffect(() => {
-    if (!terminalMenuOpen) return;
+    if (!moveMenuPanel) return;
     firstMenuItemRef.current?.focus();
-  }, [terminalMenuOpen]);
+  }, [moveMenuPanel]);
 
   useEffect(() => {
-    if (!terminalMenuOpen) return;
+    if (!moveMenuPanel) return;
     const close = (event: Event) => {
       if (
         event instanceof KeyboardEvent && event.key !== 'Escape'
@@ -58,7 +65,7 @@ export function DockRailActions({
         event instanceof PointerEvent &&
         rootRef.current?.contains(event.target as Node)
       ) return;
-      closeTerminalMenu(event instanceof KeyboardEvent);
+      closeMoveMenu(event instanceof KeyboardEvent);
     };
     window.addEventListener('pointerdown', close);
     window.addEventListener('keydown', close);
@@ -66,7 +73,7 @@ export function DockRailActions({
       window.removeEventListener('pointerdown', close);
       window.removeEventListener('keydown', close);
     };
-  }, [terminalMenuOpen]);
+  }, [moveMenuPanel]);
 
   useEffect(() => () => {
     if (longPressRef.current !== undefined) {
@@ -92,45 +99,49 @@ export function DockRailActions({
     return (
       <Button
         key={panelId}
-        ref={panelId === 'terminal' ? terminalButtonRef : undefined}
+        ref={movable(panelId)
+          ? (element) => {
+            movableButtonRefs.current[panelId] = element ?? undefined;
+          }
+          : undefined}
         type='button'
         size='icon'
         variant='ghost'
         aria-label={`${active ? 'Hide' : 'Show'} ${name} Pane`}
         aria-pressed={active}
-        aria-haspopup={panelId === 'terminal' ? 'menu' : undefined}
+        aria-haspopup={movable(panelId) ? 'menu' : undefined}
         className={cn(
           active && 'text-primary',
         )}
         disabled={disabled}
         onClick={() => {
-          if (panelId === 'terminal' && suppressTerminalClickRef.current) {
-            suppressTerminalClickRef.current = false;
+          if (movable(panelId) && suppressClickRef.current === panelId) {
+            suppressClickRef.current = undefined;
             return;
           }
           onToggle(panelId);
         }}
-        onContextMenu={panelId === 'terminal'
+        onContextMenu={movable(panelId)
           ? (event) => {
             event.preventDefault();
-            setTerminalMenuOpen(true);
+            setMoveMenuPanel(panelId);
           }
           : undefined}
-        onKeyDown={panelId === 'terminal'
+        onKeyDown={movable(panelId)
           ? (event) => {
             if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
               event.preventDefault();
-              setTerminalMenuOpen(true);
+              setMoveMenuPanel(panelId);
             }
           }
           : undefined}
-        onPointerDown={panelId === 'terminal'
+        onPointerDown={movable(panelId)
           ? (event) => {
             if (event.pointerType !== 'touch') return;
             clearLongPress();
             longPressRef.current = window.setTimeout(() => {
-              suppressTerminalClickRef.current = true;
-              setTerminalMenuOpen(true);
+              suppressClickRef.current = panelId;
+              setMoveMenuPanel(panelId);
               longPressRef.current = undefined;
             }, 500);
           }
@@ -140,7 +151,11 @@ export function DockRailActions({
       >
         <HugeiconsIcon
           data-symbol={`${panelId}-pane`}
-          icon={panelId === 'terminal' ? TerminalIcon : FolderTreeIcon}
+          icon={panelId === 'terminal'
+            ? TerminalIcon
+            : panelId === 'browser'
+            ? BrowserIcon
+            : FolderTreeIcon}
           strokeWidth={2}
         />
       </Button>
@@ -158,10 +173,10 @@ export function DockRailActions({
       {groups.right.map(({ panelId }) =>
         button(panelId)
       )}
-      {terminalMenuOpen && (
+      {moveMenuPanel && (
         <div
           role='menu'
-          aria-label='Terminal dock position'
+          aria-label={`${label(moveMenuPanel)} dock position`}
           className='absolute right-1 bottom-[calc(100%+0.25rem)] z-50 min-w-36 rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10'
         >
           {(['bottom', 'right'] as const).map((position) => (
@@ -170,11 +185,11 @@ export function DockRailActions({
               ref={position === 'bottom' ? firstMenuItemRef : undefined}
               type='button'
               role='menuitemradio'
-              aria-checked={snapshot.panelPosition.terminal === position}
+              aria-checked={snapshot.panelPosition[moveMenuPanel] === position}
               className='flex min-h-7 w-full items-center rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-accent focus:bg-accent focus:text-accent-foreground'
               onClick={() => {
-                onMoveTerminal(position);
-                closeTerminalMenu(true);
+                onMovePanel(moveMenuPanel, position);
+                closeMoveMenu(true);
               }}
               onKeyDown={(event) => {
                 if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -190,7 +205,7 @@ export function DockRailActions({
               }}
             >
               <span aria-hidden='true' className='mr-2 w-3 text-primary'>
-                {snapshot.panelPosition.terminal === position ? '✓' : ''}
+                {snapshot.panelPosition[moveMenuPanel] === position ? '✓' : ''}
               </span>
               Dock {position === 'bottom' ? 'Bottom' : 'Right'}
             </button>

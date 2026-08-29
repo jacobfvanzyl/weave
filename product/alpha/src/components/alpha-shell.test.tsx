@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AlphaController } from "@/app/alpha-controller";
 import { AlphaShell } from "./alpha-shell";
 
@@ -71,6 +71,11 @@ const controller = (): AlphaController => ({
 });
 
 describe("AlphaShell", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(window, "webkit");
+  });
+
   beforeEach(() => {
     mobileViewport.value = false;
     document.cookie = "project_pane_state=; path=/; max-age=0";
@@ -352,7 +357,7 @@ describe("AlphaShell", () => {
       .filter((button) => button.getAttribute("aria-label")?.endsWith("Pane"));
     expect(
       initialRail.map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["Show Terminal Pane", "Show Project Pane"]);
+    ).toEqual(["Show Terminal Pane", "Show Browser Pane", "Show Project Pane"]);
 
     await user.click(
       screen.getByRole("button", { name: "Show Terminal Pane" }),
@@ -381,7 +386,7 @@ describe("AlphaShell", () => {
 
     await user.click(screen.getByRole("button", { name: "Maximize Terminal" }));
     const maximizedFromBottom = container.querySelector(
-      '[data-slot="alpha-maximized-terminal"]',
+      '[data-slot="alpha-maximized-dock-pane"]',
     );
     expect(maximizedFromBottom).toContainElement(
       container.querySelector('[data-slot="terminal-pane"]'),
@@ -437,7 +442,7 @@ describe("AlphaShell", () => {
 
     await user.click(screen.getByRole("button", { name: "Maximize Terminal" }));
     const maximizedFromRight = container.querySelector(
-      '[data-slot="alpha-maximized-terminal"]',
+      '[data-slot="alpha-maximized-dock-pane"]',
     );
     expect(maximizedFromRight).toContainElement(
       container.querySelector('[data-slot="terminal-pane"]'),
@@ -510,6 +515,70 @@ describe("AlphaShell", () => {
     ).toBeInTheDocument();
     expect(value.actions.showTerminals).toHaveBeenCalledOnce();
     expect(value.actions.hideTerminals).not.toHaveBeenCalled();
+  });
+
+  it("docks Browser Right or Bottom and maximizes with the Terminal semantics", async () => {
+    class TestResizeObserver {
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    Object.defineProperty(window, "webkit", {
+      configurable: true,
+      value: {
+        messageHandlers: {
+          alphaBrowser: { postMessage: vi.fn() },
+        },
+      },
+    });
+    const value = controller();
+    value.model.selectedThreadId = "thread-1";
+    value.model.workspaces = [{
+      id: "weave",
+      workspaceId: "weave",
+      hostId: "host-1",
+      hostName: "bazzite",
+      name: "Weave",
+      threads: [{
+        id: "thread-1",
+        threadId: "thread-1",
+        hostId: "host-1",
+        title: "Selected Thread",
+        agentName: "Codex",
+        hostName: "bazzite",
+        status: "active",
+        updatedAt: "2026-08-29T00:00:00.000Z",
+        workspaceId: "weave",
+      }],
+    }];
+    const user = userEvent.setup();
+    const { container } = render(<AlphaShell controller={value} />);
+
+    await user.click(screen.getByRole("button", { name: "Show Browser Pane" }));
+    expect(
+      container
+        .querySelector('[data-slot="browser-pane"]')
+        ?.closest('[data-slot="resizable-panel"]'),
+    ).toHaveAttribute("id", "right");
+
+    await user.click(screen.getByRole("button", { name: "Maximize Browser" }));
+    expect(container.querySelector('[data-slot="alpha-maximized-dock-pane"]'))
+      .toContainElement(container.querySelector('[data-slot="browser-pane"]'));
+    expect(screen.getByRole("button", { name: "Restore Browser" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Restore Browser" }));
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Hide Browser Pane" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Dock Bottom" }));
+    expect(
+      container
+        .querySelector('[data-slot="browser-pane"]')
+        ?.closest('[data-slot="resizable-panel"]'),
+    ).toHaveAttribute("id", "bottom");
+
+    await user.click(screen.getByRole("button", { name: "Close Browser" }));
+    expect(container.querySelector('[data-slot="browser-pane"]'))
+      .not.toBeInTheDocument();
   });
 
   it("presents an open dock as a replacement surface on narrow screens", async () => {
@@ -828,7 +897,7 @@ describe("AlphaShell", () => {
 
     await user.click(screen.getByRole("button", { name: "Show Project Pane" }));
     await user.click(screen.getByRole("button", { name: "Hide Project Pane" }));
-    expect(window.localStorage.getItem("weave.alpha.docks.v2")).toContain(
+    expect(window.localStorage.getItem("weave.alpha.docks.v3")).toContain(
       '"projectOpen":false',
     );
     initial.unmount();

@@ -6,7 +6,7 @@ import { DockRailActions } from './dock-rail-actions';
 
 describe('DockRailActions', () => {
   afterEach(() => vi.useRealTimers());
-  it('orders Terminal before Project, marks active panels mauve, and separates dock groups once', () => {
+  it('orders Terminal before Browser and Project and separates dock groups once', () => {
     const snapshot = createAlphaDockSnapshot();
     snapshot.docks.bottom = { open: true, activePanelId: 'terminal' };
     snapshot.docks.right = { open: true, activePanelId: 'project' };
@@ -15,18 +15,20 @@ describe('DockRailActions', () => {
         snapshot={snapshot}
         disabled={false}
         onToggle={vi.fn()}
-        onMoveTerminal={vi.fn()}
+        onMovePanel={vi.fn()}
       />,
     );
 
     const buttons = screen.getAllByRole('button');
     expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
       'Hide Terminal Pane',
+      'Show Browser Pane',
       'Hide Project Pane',
     ]);
     expect(buttons[0]).toHaveClass('text-primary');
-    expect(buttons[1]).toHaveClass('text-primary');
-    expect(buttons[1]).not.toHaveClass('mr-6');
+    expect(buttons[1]).not.toHaveClass('text-primary');
+    expect(buttons[2]).toHaveClass('text-primary');
+    expect(buttons[2]).not.toHaveClass('mr-6');
     expect(container.querySelectorAll('[data-slot="dock-group-divider"]'))
       .toHaveLength(1);
     expect(container.querySelector('[data-slot="dock-group-divider"]'))
@@ -41,7 +43,7 @@ describe('DockRailActions', () => {
         snapshot={createAlphaDockSnapshot()}
         disabled={false}
         onToggle={vi.fn()}
-        onMoveTerminal={move}
+        onMovePanel={move}
       />,
     );
     const terminal = screen.getByRole('button', {
@@ -57,7 +59,7 @@ describe('DockRailActions', () => {
     fireEvent.keyDown(dockBottom, { key: 'ArrowDown' });
     expect(screen.getByRole('menuitemradio', { name: 'Dock Right' })).toHaveFocus();
     await user.click(screen.getByRole('menuitemradio', { name: 'Dock Right' }));
-    expect(move).toHaveBeenCalledWith('right');
+    expect(move).toHaveBeenCalledWith('terminal', 'right');
     await new Promise((resolve) => requestAnimationFrame(resolve));
     expect(terminal).toHaveFocus();
 
@@ -79,7 +81,7 @@ describe('DockRailActions', () => {
         snapshot={createAlphaDockSnapshot()}
         disabled={false}
         onToggle={toggle}
-        onMoveTerminal={vi.fn()}
+        onMovePanel={vi.fn()}
       />,
     );
     const terminal = screen.getByRole('button', { name: 'Show Terminal Pane' });
@@ -94,5 +96,26 @@ describe('DockRailActions', () => {
     expect(screen.getByRole('menu', { name: 'Terminal dock position' }))
       .toBeInTheDocument();
     expect(toggle).not.toHaveBeenCalled();
+  });
+
+  it('gives Browser the same bottom/right placement menu as Terminal', async () => {
+    const user = userEvent.setup();
+    const move = vi.fn();
+    render(
+      <DockRailActions
+        snapshot={createAlphaDockSnapshot()}
+        disabled={false}
+        onToggle={vi.fn()}
+        onMovePanel={move}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Show Browser Pane' }));
+    expect(screen.getByRole('menu', { name: 'Browser dock position' }))
+      .toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: 'Dock Right' }))
+      .toHaveAttribute('aria-checked', 'true');
+    await user.click(screen.getByRole('menuitemradio', { name: 'Dock Bottom' }));
+    expect(move).toHaveBeenCalledWith('browser', 'bottom');
   });
 });

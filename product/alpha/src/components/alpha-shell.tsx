@@ -1,7 +1,11 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react';
 import type { GroupImperativeHandle, Layout } from 'react-resizable-panels';
 import { type AlphaController, selectedThread } from '@/app/alpha-controller';
-import { type AlphaDockPanelId, useAlphaDockLayout } from '@/app/alpha-dock-layout';
+import {
+  type AlphaDockPanelId,
+  type AlphaMovableDockPanelId,
+  useAlphaDockLayout,
+} from '@/app/alpha-dock-layout';
 import {
   alphaTerminalScopeKey,
   selectedTerminalScope,
@@ -20,6 +24,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { SidebarInset, SidebarProvider, useSidebar } from '@/components/ui/sidebar';
 import { ConnectionsDialog } from './connections-dialog';
 import { ArchivedThreadsDialog } from './archived-threads-dialog';
+import { BrowserPane } from './browser-pane';
 import { DockRailActions } from './dock-rail-actions';
 import { EditorPane } from './editor-pane';
 import { GlobalBottomRail } from './global-bottom-rail';
@@ -236,7 +241,7 @@ function ResponsiveShell({
   const maximizedContent = maximizedPane
     ? (
       <div
-        data-slot='alpha-maximized-terminal'
+        data-slot='alpha-maximized-dock-pane'
         className='flex min-h-0 min-w-0 flex-1 overflow-hidden'
       >
         {maximizedPane}
@@ -381,9 +386,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
   const [mobilePanelId, setMobilePanelId] = useState<AlphaDockPanelId | null>(
     null,
   );
-  const [maximizedTerminalScopeKey, setMaximizedTerminalScopeKey] = useState<
-    string | undefined
-  >(undefined);
+  const [maximizedPanelKey, setMaximizedPanelKey] = useState<string>();
   const terminalVisibilityActionsRef = useRef({
     show: controller.actions.showTerminals,
     hide: controller.actions.hideTerminals,
@@ -405,8 +408,15 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
   const bottomOpen = hasActiveThread && dockLayout.snapshot.docks.bottom.open;
   const rightOpen = hasActiveThread && dockLayout.snapshot.docks.right.open;
   const terminalActive = hasActiveThread && dockLayout.isPanelActive('terminal');
+  const browserActive = hasActiveThread && dockLayout.isPanelActive('browser');
   const terminalIsMaximized = terminalActive &&
-    maximizedTerminalScopeKey === terminalScopeKey;
+    maximizedPanelKey === `terminal:${terminalScopeKey}`;
+  const browserIsMaximized = browserActive && maximizedPanelKey === 'browser';
+  const maximizedPanelId: AlphaMovableDockPanelId | undefined = terminalIsMaximized
+    ? 'terminal'
+    : browserIsMaximized
+    ? 'browser'
+    : undefined;
   const capacitorPlatform = isCapacitorPlatform(controller.model.platform);
 
   useEffect(() => {
@@ -418,15 +428,21 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     if (
       !terminalActive &&
       terminalScopeKey &&
-      maximizedTerminalScopeKey === terminalScopeKey
+      maximizedPanelKey === `terminal:${terminalScopeKey}`
     ) {
-      setMaximizedTerminalScopeKey(undefined);
+      setMaximizedPanelKey(undefined);
     }
   }, [
-    maximizedTerminalScopeKey,
+    maximizedPanelKey,
     terminalActive,
     terminalScopeKey,
   ]);
+
+  useEffect(() => {
+    if (!browserActive && maximizedPanelKey === 'browser') {
+      setMaximizedPanelKey(undefined);
+    }
+  }, [browserActive, maximizedPanelKey]);
 
   const toggleDockPanel = (panelId: AlphaDockPanelId) => {
     const panelWasActive = dockLayout.isPanelActive(panelId);
@@ -439,9 +455,9 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
       snapshot={dockLayout.snapshot}
       disabled={!hasActiveThread}
       onToggle={toggleDockPanel}
-      onMoveTerminal={(position) => {
-        dockLayout.moveTerminal(position);
-        if (dockLayout.isPanelActive('terminal')) setMobilePanelId('terminal');
+      onMovePanel={(panelId, position) => {
+        dockLayout.movePanel(panelId, position);
+        if (dockLayout.isPanelActive(panelId)) setMobilePanelId(panelId);
       }}
     />
   );
@@ -458,16 +474,32 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
         const closingLastTab = terminalModel.tabs.length === 1;
         await controller.actions.closeTerminal?.(terminalId);
         if (!closingLastTab) return;
-        setMaximizedTerminalScopeKey(undefined);
+        setMaximizedPanelKey(undefined);
         dockLayout.hideTerminalPanel();
         setMobilePanelId((current) => current === 'terminal' ? null : current);
       }}
-      onToggleMaximized={() => setMaximizedTerminalScopeKey((current) =>
-        current === terminalScopeKey ? undefined : terminalScopeKey
+      onToggleMaximized={() => setMaximizedPanelKey((current) =>
+        current === `terminal:${terminalScopeKey}`
+          ? undefined
+          : `terminal:${terminalScopeKey}`
       )}
       onRetryControl={controller.actions.retryTerminalControl}
       onInput={controller.actions.inputTerminal}
       onResize={controller.actions.resizeTerminal}
+    />
+  );
+
+  const browserPane = () => (
+    <BrowserPane
+      maximized={browserIsMaximized}
+      onClose={() => {
+        setMaximizedPanelKey(undefined);
+        dockLayout.hideBrowserPanel();
+        setMobilePanelId((current) => current === 'browser' ? null : current);
+      }}
+      onToggleMaximized={() => setMaximizedPanelKey((current) =>
+        current === 'browser' ? undefined : 'browser'
+      )}
     />
   );
 
@@ -504,9 +536,14 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     </SidebarProvider>
   );
 
-  const rightPanel = dockLayout.snapshot.docks.right.activePanelId === 'terminal'
-    ? terminalPane()
-    : projectPane();
+  const dockPane = (panelId: AlphaDockPanelId | null, forceProject = false) =>
+    panelId === 'terminal'
+      ? terminalPane()
+      : panelId === 'browser'
+      ? browserPane()
+      : projectPane(forceProject);
+  const bottomPanel = dockPane(dockLayout.snapshot.docks.bottom.activePanelId);
+  const rightPanel = dockPane(dockLayout.snapshot.docks.right.activePanelId);
   const mobileActivePanel = mobilePanelId && dockLayout.isPanelActive(mobilePanelId)
     ? mobilePanelId
     : rightOpen
@@ -532,15 +569,15 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
       } as CSSProperties}
     >
       <div data-slot='alpha-dock-content' className='flex min-h-0 min-w-0 flex-1 overflow-hidden'>
-        {terminalIsMaximized
+        {maximizedPanelId
           ? (
             <ResponsiveShell
               controller={controller}
               paneLayouts={paneLayouts}
               bottomOpen={false}
               bottomSize={dockLayout.snapshot.rememberedSize.bottom}
-              bottomPane={terminalPane()}
-              maximizedPane={terminalPane()}
+              bottomPane={bottomPanel}
+              maximizedPane={maximizedPanelId === 'terminal' ? terminalPane() : browserPane()}
               onBottomSizeChange={(size) => dockLayout.rememberSize('bottom', size)}
             />
           )
@@ -552,7 +589,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
                   data-slot='alpha-mobile-dock-surface'
                   className='flex min-h-0 min-w-0 flex-1 overflow-hidden'
                 >
-                  {mobileActivePanel === 'terminal' ? terminalPane() : projectPane(true)}
+                  {dockPane(mobileActivePanel, true)}
                 </div>
               )
               : (
@@ -561,7 +598,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
                   paneLayouts={paneLayouts}
                   bottomOpen={false}
                   bottomSize={dockLayout.snapshot.rememberedSize.bottom}
-                  bottomPane={terminalPane()}
+                  bottomPane={bottomPanel}
                   onBottomSizeChange={(size) => dockLayout.rememberSize('bottom', size)}
                 />
               )
@@ -592,7 +629,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
                   paneLayouts={paneLayouts}
                   bottomOpen={bottomOpen}
                   bottomSize={dockLayout.snapshot.rememberedSize.bottom}
-                  bottomPane={terminalPane()}
+                  bottomPane={bottomPanel}
                   onBottomSizeChange={(size) => dockLayout.rememberSize('bottom', size)}
                 />
               </ResizablePanel>
