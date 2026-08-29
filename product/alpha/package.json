@@ -7,6 +7,8 @@
     "dev": "vite --host 0.0.0.0 --port 5174",
     "test": "vitest run",
     "build": "tsc -b && vite build",
+    "build:macos": "bun scripts/build-macos.ts",
+    "run:macos": "open 'dist/Weave Alpha.app'",
     "preview": "vite preview --host 0.0.0.0 --port 4174",
     "cap:sync": "bun run build && cap sync",
     "ios:add": "cap add ios",

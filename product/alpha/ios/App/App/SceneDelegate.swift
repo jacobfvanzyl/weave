@@ -173,8 +173,18 @@ private extension Data {
 }
 
 final class WeaveBridgeViewController: CAPBridgeViewController {
+    private var alphaBrowserHost: AlphaBrowserHost?
+
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(PortalCredentialPlugin())
+        if let webView {
+            alphaBrowserHost = AlphaBrowserHost(shell: webView)
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        alphaBrowserHost?.layoutBrowser()
     }
 }
 

@@ -36,6 +36,38 @@ Mock mode is disabled in production builds. Actions such as search, Thread
 selection, Thread creation, archiving, restoration, connection, and disconnection
 remain interactive in the mocked shell.
 
+### Apple native Alpha hosts
+
+Alpha's embedded Browser is Apple-only. React owns the Browser toolbar and measured dock slot; a
+native sibling `WKWebView` owns page rendering behind the bounded `alphaBrowser` message contract.
+Both hosts use a non-persistent website data store. Hiding and reopening the pane retains that
+in-memory session, while Reset and a full app restart create a fresh session.
+
+Build the production macOS AppKit application from `product/`:
+
+```bash
+bun run build:alpha:macos
+bun run run:alpha:macos
+```
+
+The build embeds the production Alpha assets in `alpha/dist/Weave Alpha.app` and signs the bundle.
+It uses ad-hoc signing by default for a local build; set `WEAVE_ALPHA_CODESIGN_IDENTITY` to a
+codesigning identity for a named development signature. The AppKit shell is the supported
+macOS host; Alpha does not enable Mac Catalyst and does not embed Electron or Chromium.
+
+For iPadOS, synchronize the same production assets into the Capacitor project before building from
+`alpha/ios/App/App.xcodeproj`:
+
+```bash
+cd alpha
+bun run cap:sync
+```
+
+The UIKit host is compiled into the existing Capacitor view controller. Both Apple hosts keep
+popups in the visible session, use the platform picker for uploads, block downloads and non-HTTP(S)
+top-level navigation, deny camera and microphone capture, and leave other WebKit permissions at
+their explicit defaults.
+
 ## Module seams
 
 - Alpha depends on `@weave/product-protocol` and browser or Capacitor primitives only.
