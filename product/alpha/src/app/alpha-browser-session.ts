@@ -1,3 +1,21 @@
+import {
+  BROWSER_CONTROL_ERROR_CODES,
+  type BrowserControlErrorCode,
+  type BrowserControlInvokeParams,
+  parseBrowserControlInvokeResult,
+  type BrowserControlInvokeResult,
+} from '@weave/product-protocol';
+
+export class AlphaBrowserControlError extends Error {
+  constructor(
+    readonly code: BrowserControlErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AlphaBrowserControlError';
+  }
+}
+
 export type AlphaBrowserPolicy = {
   popups: 'same-session';
   uploads: 'system-picker';
@@ -16,6 +34,11 @@ export type AlphaBrowserState = {
   notice?: string;
   policy?: AlphaBrowserPolicy;
   error?: string;
+  tabId?: string;
+  generation?: number;
+  controlRevision?: number;
+  agentControlEnabled: boolean;
+  visible: boolean;
 };
 
 export type AlphaBrowserFrame = {
@@ -34,12 +57,17 @@ export type AlphaBrowserCommand =
   | { type: 'forward' }
   | { type: 'reload' }
   | { type: 'stop' }
-  | { type: 'reset' };
+  | { type: 'reset' }
+  | { type: 'control'; request: BrowserControlInvokeParams }
+  | { type: 'control.cancel'; requestId: string };
 
 export type AlphaBrowserSession = {
   getSnapshot(): AlphaBrowserState;
   subscribe(listener: () => void): () => void;
   send(command: AlphaBrowserCommand): boolean;
+  execute(request: BrowserControlInvokeParams, signal?: AbortSignal): Promise<BrowserControlInvokeResult>;
+  setVisible(visible: boolean): void;
+  setAgentControlEnabled(enabled: boolean): void;
 };
 
 type AlphaBrowserMessageHandler = {
@@ -57,6 +85,7 @@ declare global {
 }
 
 const browserStateEvent = 'weave:alpha-browser-state';
+const browserControlResultEvent = 'weave:alpha-browser-control-result';
 const defaultBrowserUrl = 'https://example.com';
 
 const initialState = (target: Window): AlphaBrowserState => ({
@@ -65,6 +94,8 @@ const initialState = (target: Window): AlphaBrowserState => ({
   loading: false,
   canGoBack: false,
   canGoForward: false,
+  agentControlEnabled: false,
+  visible: false,
 });
 
 const browserPolicy = (value: unknown): AlphaBrowserPolicy | undefined => {
@@ -106,27 +137,74 @@ const browserState = (value: unknown): AlphaBrowserState | undefined => {
     notice: typeof input.notice === 'string' ? input.notice : undefined,
     policy: browserPolicy(input.policy),
     error: typeof input.error === 'string' ? input.error : undefined,
+    tabId: typeof input.tabId === 'string' ? input.tabId : undefined,
+    generation: Number.isSafeInteger(input.generation) ? Number(input.generation) : undefined,
+    controlRevision: Number.isSafeInteger(input.controlRevision) ? Number(input.controlRevision) : undefined,
+    agentControlEnabled: false,
+    visible: false,
   };
 };
 
 export function createAlphaBrowserSession(
   target: Window = window,
+  onUnused?: () => void,
 ): AlphaBrowserSession {
   let snapshot = initialState(target);
   let listening = false;
+  let enabledAtRevision = 0;
   const listeners = new Set<() => void>();
+  const pending = new Map<string, {
+    resolve(value: BrowserControlInvokeResult): void;
+    reject(cause: Error): void;
+  }>();
 
   const receive = (event: Event) => {
     const next = browserState((event as CustomEvent).detail);
     if (!next) return;
-    snapshot = next;
+    const controlRevision = next.controlRevision ?? snapshot.controlRevision ?? 0;
+    const interrupted = snapshot.agentControlEnabled && controlRevision > enabledAtRevision;
+    snapshot = {
+      ...next,
+      agentControlEnabled: interrupted ? false : snapshot.agentControlEnabled,
+      visible: snapshot.visible,
+    };
     listeners.forEach((listener) => listener());
+  };
+
+  const receiveControlResult = (event: Event) => {
+    const detail = (event as CustomEvent).detail as Record<string, unknown> | undefined;
+    const requestId = typeof detail?.requestId === 'string' ? detail.requestId : undefined;
+    if (!requestId) return;
+    const request = pending.get(requestId);
+    if (!request) return;
+    pending.delete(requestId);
+    try {
+      if (detail?.error && typeof detail.error === 'object') {
+        const error = detail.error as { code?: unknown; message?: unknown };
+        const code = BROWSER_CONTROL_ERROR_CODES.includes(error.code as BrowserControlErrorCode)
+          ? error.code as BrowserControlErrorCode
+          : 'CONTROL_INTERRUPTED';
+        request.reject(new AlphaBrowserControlError(
+          code,
+          typeof error.message === 'string' ? error.message : 'Browser control failed.',
+        ));
+      } else request.resolve(parseBrowserControlInvokeResult(detail?.result));
+    } catch (cause) {
+      request.reject(cause instanceof Error ? cause : new Error(String(cause)));
+    }
   };
 
   const send = (command: AlphaBrowserCommand) => {
     const handler = target.webkit?.messageHandlers?.alphaBrowser;
     if (!handler) return false;
     handler.postMessage(command);
+    if (
+      command.type !== 'status' && command.type !== 'present' && command.type !== 'hide' &&
+      command.type !== 'control' && command.type !== 'control.cancel' && snapshot.agentControlEnabled
+    ) {
+      snapshot = { ...snapshot, agentControlEnabled: false };
+      listeners.forEach((listener) => listener());
+    }
     return true;
   };
 
@@ -136,6 +214,7 @@ export function createAlphaBrowserSession(
     const supported = Boolean(target.webkit?.messageHandlers?.alphaBrowser);
     if (snapshot.supported !== supported) snapshot = { ...snapshot, supported };
     target.addEventListener(browserStateEvent, receive);
+    target.addEventListener(browserControlResultEvent, receiveControlResult);
     send({ type: 'status' });
   };
 
@@ -143,6 +222,8 @@ export function createAlphaBrowserSession(
     if (!listening || listeners.size > 0) return;
     listening = false;
     target.removeEventListener(browserStateEvent, receive);
+    target.removeEventListener(browserControlResultEvent, receiveControlResult);
+    onUnused?.();
   };
 
   return {
@@ -156,5 +237,47 @@ export function createAlphaBrowserSession(
       };
     },
     send,
+    execute: (request, signal) => {
+      if (!snapshot.agentControlEnabled || !snapshot.visible) {
+        return Promise.reject(new Error('Browser agent control is not enabled for the visible pane.'));
+      }
+      if (signal?.aborted) return Promise.reject(signal.reason);
+      return new Promise((resolve, reject) => {
+        const cancel = () => {
+          pending.delete(request.requestId);
+          send({ type: 'control.cancel', requestId: request.requestId });
+          reject(signal?.reason instanceof Error ? signal.reason : new Error('Browser control was cancelled.'));
+        };
+        signal?.addEventListener('abort', cancel, { once: true });
+        pending.set(request.requestId, {
+          resolve: (value) => {
+            signal?.removeEventListener('abort', cancel);
+            resolve(value);
+          },
+          reject: (cause) => {
+            signal?.removeEventListener('abort', cancel);
+            reject(cause);
+          },
+        });
+        if (!send({ type: 'control', request })) cancel();
+      });
+    },
+    setVisible: (visible) => {
+      if (snapshot.visible === visible) return;
+      snapshot = { ...snapshot, visible };
+      if (!visible) snapshot.agentControlEnabled = false;
+      listeners.forEach((listener) => listener());
+    },
+    setAgentControlEnabled: (enabled) => {
+      const next = enabled && snapshot.supported && snapshot.visible;
+      if (snapshot.agentControlEnabled === next) return;
+      enabledAtRevision = snapshot.controlRevision ?? 0;
+      snapshot = { ...snapshot, agentControlEnabled: next };
+      listeners.forEach((listener) => listener());
+    },
   };
 }
+
+let sharedSession: AlphaBrowserSession | undefined;
+export const alphaBrowserSession = () =>
+  sharedSession ??= createAlphaBrowserSession(window, () => sharedSession = undefined);

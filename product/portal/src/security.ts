@@ -26,6 +26,8 @@ export const PORTAL_ACTIONS = [
   'agent.use',
   'terminal.observe',
   'terminal.control',
+  'browser.observe',
+  'browser.control',
   'credential.rotate',
   'credential.revoke',
 ] as const;
@@ -816,13 +818,14 @@ export class PortalSecurity {
   }
 
   async #upgradeAdministrativeGrants() {
-    const legacyActions = PORTAL_ACTIONS.filter((action) => action !== 'workspace.manage');
+    const newlyAddedActions: PortalAction[] = ['workspace.manage', 'browser.observe', 'browser.control'];
+    const legacyActions = PORTAL_ACTIONS.filter((action) => !newlyAddedActions.includes(action));
     const configuredAgentIds = this.config.agents.map(({ agentId }) => agentId);
     const upgrade = (grants: PortalGrants) => {
       const wasAdministrative = legacyActions.every((action) => grants.actions.includes(action)) &&
         configuredAgentIds.every((agentId) => grants.agentIds.includes(agentId));
       if (!wasAdministrative) return false;
-      const actions = unique([...grants.actions, 'workspace.manage' as const]);
+      const actions = unique([...grants.actions, ...newlyAddedActions]);
       const workspaceIds = unique([
         ...grants.workspaceIds,
         ...this.#workspaceIds,

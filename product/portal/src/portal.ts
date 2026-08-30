@@ -23,22 +23,27 @@ import { type PortalTerminalSession, type TerminalBackend, TerminalService } fro
 import { HostedThread, type ThreadAttachment, ThreadPromptActiveError } from './thread-runtime.ts';
 import { type RegisteredWorkspace, WorkspaceCatalog, workspaceSummary } from './workspace-catalog.ts';
 import { WorkspaceFileService, type WorkspaceFileWatchSession } from './workspace-files.ts';
+import { BrowserControlBroker, type BrowserHostConnection } from './browser-control.ts';
+import { BrowserMcpBridge } from './browser-mcp.ts';
 
 export class PortalRpcSession {
   readonly #portal: Portal;
   readonly #watches: WorkspaceFileWatchSession;
   readonly #terminals?: PortalTerminalSession;
+  readonly #browserHost?: BrowserHostConnection;
   #closed = false;
 
   constructor(
     portal: Portal,
     watches: WorkspaceFileWatchSession,
     terminals: PortalTerminalSession | undefined,
+    browserHost: BrowserHostConnection | undefined,
     readonly principal: PortalPrincipal,
   ) {
     this.#portal = portal;
     this.#watches = watches;
     this.#terminals = terminals;
+    this.#browserHost = browserHost;
   }
 
   async request<Method extends PortalRpcMethod>(
@@ -47,6 +52,25 @@ export class PortalRpcSession {
   ): Promise<PortalRpcResult<Method>> {
     if (this.#closed) throw new Error('Portal RPC session is closed.');
     await this.#portal.authorizeRequest(this.principal, method, params);
+    if (method === 'browser.provider.attach') {
+      if (!this.#browserHost) throw new Error('Browser provider transport is unavailable.');
+      const input = params as PortalRpcParams<'browser.provider.attach'>;
+      return this.#portal.browserControl.attach(
+        this.principal.principalId,
+        input.threadId,
+        input.offer,
+        this.#browserHost,
+      ) as PortalRpcResult<Method>;
+    }
+    if (method === 'browser.provider.detach') {
+      const input = params as PortalRpcParams<'browser.provider.detach'>;
+      const lease = this.#portal.browserControl.statusForLease(input.leaseId);
+      if (lease && lease.principalId !== this.principal.principalId) {
+        throw new PortalSecurityError('ACCESS_DENIED', 'Browser control lease is unavailable.');
+      }
+      this.#portal.browserControl.detach(input.leaseId);
+      return { detached: true } as PortalRpcResult<Method>;
+    }
     if (method === 'workspace.file.watch.start') {
       return await this.#watches.start(
         params as PortalRpcParams<'workspace.file.watch.start'>,
@@ -85,6 +109,7 @@ export class PortalRpcSession {
     this.#closed = true;
     this.#watches.close();
     this.#terminals?.close();
+    if (this.#browserHost) this.#portal.browserControl.detachConnection(this.#browserHost.connectionId);
   }
 }
 
@@ -115,6 +140,8 @@ export class Portal {
   readonly #terminals?: TerminalService;
   readonly #workspaceCatalog: WorkspaceCatalog;
   readonly security: PortalSecurity;
+  readonly browserControl: BrowserControlBroker;
+  readonly browserMcp: BrowserMcpBridge;
   readonly #workspaces: Map<string, RegisteredWorkspace>;
   readonly #agents: Map<string, AgentDefinition>;
   readonly #runtimes = new Map<string, Promise<HostedThread>>();
@@ -138,6 +165,8 @@ export class Portal {
     this.#workspaceFiles = workspaceFiles;
     this.#terminals = terminals;
     this.security = security;
+    this.browserControl = new BrowserControlBroker(security.hostId);
+    this.browserMcp = new BrowserMcpBridge(config.stateDirectory, this.browserControl);
     this.#workspaces = new Map(
       workspaceCatalog.list().map((
         workspace,
@@ -224,6 +253,8 @@ export class Portal {
             'thread.attach',
             'thread.archive',
             'thread.restore',
+            'browser.provider.attach',
+            'browser.provider.detach',
             'credential.rotate',
             'credential.revoke',
             ...WORKSPACE_FILE_RPC_METHODS,
@@ -464,6 +495,20 @@ export class Portal {
       terminalId?: string;
       mode?: 'observe' | 'control';
     };
+    if (method === 'browser.provider.attach') {
+      const thread = this.#thread(input.threadId ?? '');
+      await this.security.authorize(principal, 'thread.attach', {
+        threadId: thread.threadId,
+        workspaceId: thread.workspaceId,
+        agentId: thread.agentId,
+      });
+      await this.security.authorize(principal, 'browser.control', { threadId: thread.threadId });
+      return;
+    }
+    if (method === 'browser.provider.detach') {
+      await this.security.authorize(principal, 'browser.control', input);
+      return;
+    }
     if (method === 'thread.create' || method === 'thread.draft.create') {
       await this.security.authorize(principal, 'thread.create', input);
       await this.security.authorize(principal, 'agent.use', input);
@@ -531,6 +576,7 @@ export class Portal {
     principal: PortalPrincipal,
     send: (notification: WorkspaceFileWatchNotification) => void,
     sendTerminal?: (notification: TerminalNotification) => unknown,
+    browserHost?: BrowserHostConnection,
   ) {
     return new PortalRpcSession(
       this,
@@ -539,6 +585,7 @@ export class Portal {
         crypto.randomUUID(),
         sendTerminal ?? (() => undefined),
       ),
+      browserHost,
       principal,
     );
   }
@@ -704,6 +751,7 @@ export class Portal {
       (thread) => this.#catalog.put(thread),
       this.#journal,
       this.#runtimeStates,
+      (threadId) => this.browserMcp.servers(threadId),
     );
     this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
     await this.#catalog.put(runtime.thread);
@@ -726,6 +774,7 @@ export class Portal {
       },
       this.#journal,
       this.#runtimeStates,
+      (threadId) => this.browserMcp.servers(threadId),
       (thread) => this.#promoteDraftThread(thread),
     );
     this.#drafts.set(runtime.thread.threadId, runtime.thread);
@@ -768,6 +817,7 @@ export class Portal {
         (changed) => this.#catalog.put(changed),
         this.#journal,
         this.#runtimeStates,
+        (restoredThreadId) => this.browserMcp.servers(restoredThreadId),
       );
       this.#runtimes.set(threadId, runtime);
       runtime.catch(() => this.#runtimes.delete(threadId));

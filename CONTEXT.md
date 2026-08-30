@@ -113,3 +113,8 @@ _Avoid_: Open files, recent files, preview tabs
 **Thread Pane**:
 An open Pane that presents a Thread within its owning Workspace's main work area. A Thread has at most one open Thread Pane across that Workspace's Tabs.
 _Avoid_: Agent pane, chat window
+
+**Browser Session**:
+The single ephemeral web-browsing context presented by a Browser Pane and optionally attached to one Thread for visible, revocable agent control.
+Resetting or replacing its native WebView ends the Browser Session.
+_Avoid_: Preview, browser tab, hidden browser, agent browser

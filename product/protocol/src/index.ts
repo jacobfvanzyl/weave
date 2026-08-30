@@ -18,6 +18,8 @@ export const WEAVE_ACP_THREAD_EVENTS_ACK_METHOD = '_weave.dev/thread_events/ack'
 export const WEAVE_ACP_THREAD_EVENTS_SYNC_METHOD = '_weave.dev/thread_events/sync' as const;
 export const WEAVE_ACP_RUNTIME_STATE_METHOD = '_weave.dev/runtime/state' as const;
 
+export * from './browser-control.ts';
+
 export {
   parseWorkspaceFileErrorData,
   parseWorkspaceFileRpcParams,
@@ -77,6 +79,14 @@ import {
   type TerminalRpcContracts,
   type TerminalRpcMethod,
 } from './terminals.ts';
+import {
+  parseBrowserProviderAttachParams,
+  parseBrowserProviderDetachParams,
+  parseBrowserProviderLease,
+  type BrowserProviderAttachParams,
+  type BrowserProviderDetachParams,
+  type BrowserProviderLease,
+} from './browser-control.ts';
 
 export type RepositoryIdentity = {
   canonicalKey: string;
@@ -299,6 +309,14 @@ type BasePortalRpcContracts = {
     params: { threadId: string };
     result: { thread: ThreadSummary };
   };
+  'browser.provider.attach': {
+    params: BrowserProviderAttachParams;
+    result: BrowserProviderLease;
+  };
+  'browser.provider.detach': {
+    params: BrowserProviderDetachParams;
+    result: { detached: true };
+  };
   'credential.rotate': {
     params: { publicKey: string; label?: string };
     result: { credentialId: string };
@@ -328,6 +346,8 @@ export const PORTAL_RPC_METHODS = [
   'thread.attach',
   'thread.archive',
   'thread.restore',
+  'browser.provider.attach',
+  'browser.provider.detach',
   'credential.rotate',
   'credential.revoke',
   ...WORKSPACE_FILE_RPC_METHODS,
@@ -393,6 +413,10 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
       return {
         threadId: string(params.threadId, 'threadId'),
       } as PortalRpcParams<Method>;
+    case 'browser.provider.attach':
+      return parseBrowserProviderAttachParams(params) as PortalRpcParams<Method>;
+    case 'browser.provider.detach':
+      return parseBrowserProviderDetachParams(params) as PortalRpcParams<Method>;
     case 'credential.rotate':
       return {
         publicKey: string(params.publicKey, 'publicKey'),
@@ -584,6 +608,13 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
     case 'thread.archive':
     case 'thread.restore':
       return { thread: thread(result.thread) } as PortalRpcResult<Method>;
+    case 'browser.provider.attach':
+      return parseBrowserProviderLease(result) as PortalRpcResult<Method>;
+    case 'browser.provider.detach':
+      if (result.detached !== true) {
+        throw new Error('browser.provider.detach result is invalid.');
+      }
+      return { detached: true } as PortalRpcResult<Method>;
     case 'credential.rotate':
       return {
         credentialId: string(result.credentialId, 'credentialId'),

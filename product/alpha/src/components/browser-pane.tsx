@@ -102,6 +102,21 @@ export function BrowserPane({
         <div className='flex h-full shrink-0 items-stretch border-l border-border'>
           <Button
             type='button'
+            size='sm'
+            variant={browser.state.agentControlEnabled ? 'default' : 'ghost'}
+            aria-label={browser.state.agentControlEnabled ? 'Take Over Browser' : 'Enable Agent Browser Control'}
+            aria-pressed={browser.state.agentControlEnabled}
+            title={browser.state.agentControlEnabled
+              ? 'Take over and revoke agent control'
+              : 'Allow the active Thread to control this visible Browser'}
+            className='h-full rounded-none px-2 text-[11px]'
+            disabled={!browser.state.supported}
+            onClick={() => browser.setAgentControlEnabled(!browser.state.agentControlEnabled)}
+          >
+            {browser.state.agentControlEnabled ? 'Take over' : 'Agent'}
+          </Button>
+          <Button
+            type='button'
             size='icon'
             variant='ghost'
             aria-label='Reset Browser Session'

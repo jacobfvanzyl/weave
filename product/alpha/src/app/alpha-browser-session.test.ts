@@ -18,6 +18,8 @@ describe('createAlphaBrowserSession', () => {
       loading: false,
       canGoBack: false,
       canGoForward: false,
+      agentControlEnabled: false,
+      visible: false,
     });
     expect(session.send({ type: 'reload' })).toBe(false);
   });
@@ -73,6 +75,11 @@ describe('createAlphaBrowserSession', () => {
       canGoForward: false,
       notice: 'Popup stayed in this session.',
       error: 'Recoverable fixture error.',
+      tabId: undefined,
+      generation: undefined,
+      controlRevision: undefined,
+      agentControlEnabled: false,
+      visible: false,
       policy: {
         popups: 'same-session',
         uploads: 'system-picker',
@@ -99,5 +106,73 @@ describe('createAlphaBrowserSession', () => {
       },
     }));
     expect(session.getSnapshot().url).toBe('https://example.org/');
+  });
+
+  it('requires visible opt-in, resolves native control, and revokes on trusted human input', async () => {
+    const commands: AlphaBrowserCommand[] = [];
+    Object.defineProperty(window, 'webkit', {
+      configurable: true,
+      value: { messageHandlers: { alphaBrowser: { postMessage: (command: AlphaBrowserCommand) => commands.push(command) } } },
+    });
+    const session = createAlphaBrowserSession();
+    const unsubscribe = session.subscribe(() => undefined);
+    window.dispatchEvent(new CustomEvent('weave:alpha-browser-state', { detail: {
+      supported: true,
+      url: 'https://fixture.test/',
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      tabId: 'tab-1',
+      generation: 1,
+      controlRevision: 0,
+    } }));
+    session.setVisible(true);
+    session.setAgentControlEnabled(true);
+    const request = {
+      requestId: 'request-1',
+      leaseId: 'lease-1',
+      address: { hostId: 'host-1', threadId: 'thread-1', clientId: 'client-1', tabId: 'tab-1' },
+      generation: 1,
+      expectedControlRevision: 0,
+      deadlineAt: '2026-08-29T21:00:00.000Z',
+      command: { kind: 'see' as const },
+    };
+    const controlled = session.execute(request);
+    expect(commands.at(-1)).toEqual({ type: 'control', request });
+    window.dispatchEvent(new CustomEvent('weave:alpha-browser-control-result', { detail: {
+      requestId: 'request-1',
+      result: {
+        requestId: 'request-1',
+        leaseId: 'lease-1',
+        address: request.address,
+        view: {
+          id: 'view-1', tabId: 'tab-1', generation: 1, controlRevision: 0,
+          url: 'https://fixture.test/', loading: false,
+          viewport: { width: 800, height: 600 }, text: 'Ready', elements: [], warnings: [],
+        },
+      },
+    } }));
+    await expect(controlled).resolves.toMatchObject({ view: { id: 'view-1' } });
+
+    const failed = session.execute({ ...request, requestId: 'request-error' });
+    window.dispatchEvent(new CustomEvent('weave:alpha-browser-control-result', { detail: {
+      requestId: 'request-error',
+      error: { code: 'STALE_VIEW', message: 'The browser view is stale.' },
+    } }));
+    await expect(failed).rejects.toMatchObject({ code: 'STALE_VIEW' });
+
+    window.dispatchEvent(new CustomEvent('weave:alpha-browser-state', { detail: {
+      supported: true,
+      url: 'https://fixture.test/',
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      tabId: 'tab-1',
+      generation: 1,
+      controlRevision: 1,
+    } }));
+    expect(session.getSnapshot().agentControlEnabled).toBe(false);
+    await expect(session.execute({ ...request, requestId: 'request-2' })).rejects.toThrow('not enabled');
+    unsubscribe();
   });
 });

@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  parseBrowserControlCommand,
+  parseBrowserProviderAttachParams,
   parsePortalAuthChallenge,
   parsePortalAuthenticated,
   parsePortalPairRequest,
@@ -15,6 +17,44 @@ import {
 } from './index';
 
 describe('Portal protocol', () => {
+  test('parses the bounded visible Browser capability and ergonomic commands', () => {
+    expect(parseBrowserProviderAttachParams({
+      threadId: 'thread-1',
+      offer: {
+        version: 1,
+        clientId: 'alpha-ipad',
+        tabId: 'visible-tab',
+        generation: 2,
+        controlRevision: 4,
+        platform: 'iPadOS',
+        operations: ['see', 'act'],
+        limits: {
+          maxResultBytes: 65536,
+          maxScreenshotBytes: 1500000,
+          maxElements: 200,
+          maxDurationMs: 30000,
+        },
+      },
+    }).offer.tabId).toBe('visible-tab');
+    expect(parseBrowserControlCommand({
+      kind: 'act',
+      viewId: 'view-1',
+      action: { kind: 'fill', target: 'view-1:0', text: 'WVE-57' },
+      expect: { kind: 'text', text: 'submitted' },
+      screenshot: true,
+    })).toEqual({
+      kind: 'act',
+      viewId: 'view-1',
+      action: { kind: 'fill', target: 'view-1:0', text: 'WVE-57' },
+      expect: { kind: 'text', text: 'submitted' },
+      screenshot: true,
+    });
+    expect(() => parseBrowserControlCommand({
+      kind: 'act',
+      viewId: 'view-1',
+      action: { kind: 'evaluate', script: 'document.cookie' },
+    })).toThrow('action.kind is invalid');
+  });
   test('parses the key-authentication and pairing envelopes', () => {
     expect(parsePortalAuthChallenge({
       type: 'weave.portal.auth.challenge',

@@ -52,6 +52,7 @@ type ClientPending = {
 type AgentPending = { attachmentId: string; providerId: JsonRpcId };
 type ThreadChanged = (thread: ThreadSummary) => Promise<void>;
 type ThreadPromoted = (thread: ThreadSummary) => Promise<void>;
+export type McpServersForThread = (threadId: string) => unknown[];
 
 const promptContentFrom = (params: unknown): unknown[] => {
   if (!params || typeof params !== 'object' || Array.isArray(params)) return [];
@@ -89,6 +90,7 @@ export class HostedThread {
   readonly #attachments = new Map<string, Attachment>();
   readonly #journal: ThreadEventJournal;
   readonly #runtimeStates: RuntimeStateStore;
+  readonly #mcpServers: unknown[];
   readonly #clientPending = new Map<string, ClientPending>();
   readonly #agentPending = new Map<string, AgentPending>();
   readonly #onThreadChanged: ThreadChanged;
@@ -116,6 +118,7 @@ export class HostedThread {
     onThreadChanged: ThreadChanged,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
+    mcpServers: unknown[],
     onFirstPrompt?: ThreadPromoted,
   ) {
     this.#workspace = workspace;
@@ -127,6 +130,7 @@ export class HostedThread {
     this.#onThreadChanged = onThreadChanged;
     this.#journal = journal;
     this.#runtimeStates = runtimeStates;
+    this.#mcpServers = mcpServers;
     this.#onFirstPrompt = onFirstPrompt;
   }
 
@@ -137,9 +141,11 @@ export class HostedThread {
     onThreadChanged: ThreadChanged,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
+    mcpServersForThread: McpServersForThread,
     onFirstPrompt?: ThreadPromoted,
   ) {
     const threadId = crypto.randomUUID();
+    const mcpServers = mcpServersForThread(threadId);
     const runtimeState = await runtimeStates.start(threadId, 'idle');
     const buffered: JsonRpcMessage[] = [];
     const holder: { hosted?: HostedThread } = {};
@@ -153,7 +159,7 @@ export class HostedThread {
       },
     );
     const initializeResult = await process.request('initialize', ACP_INITIALIZE_PARAMS);
-    const sessionResult = await process.request('session/new', { cwd: workspace.path, mcpServers: [] });
+    const sessionResult = await process.request('session/new', { cwd: workspace.path, mcpServers });
     const now = new Date().toISOString();
     const hosted = new HostedThread(
       {
@@ -175,6 +181,7 @@ export class HostedThread {
       onThreadChanged,
       journal,
       runtimeStates,
+      mcpServers,
       onFirstPrompt,
     );
     holder.hosted = hosted;
@@ -189,7 +196,9 @@ export class HostedThread {
     onThreadChanged: ThreadChanged,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
+    mcpServersForThread: McpServersForThread,
   ) {
+    const mcpServers = mcpServersForThread(thread.threadId);
     const runtimeState = await runtimeStates.start(thread.threadId, 'restoring');
     const buffered: JsonRpcMessage[] = [];
     const holder: { hosted?: HostedThread } = {};
@@ -213,7 +222,7 @@ export class HostedThread {
         sessionLoadResult = await restoreProviderSession(process, initializeResult, {
           sessionId: thread.acpSessionId,
           cwd: workspace.path,
-          mcpServers: [],
+          mcpServers,
         });
       } catch (restoreCause) {
         await process.close().catch(() => undefined);
@@ -222,7 +231,7 @@ export class HostedThread {
         buffered.length = 0;
         process = spawn();
         initializeResult = await process.request('initialize', ACP_INITIALIZE_PARAMS);
-        sessionLoadResult = await process.request('session/new', { cwd: workspace.path, mcpServers: [] });
+        sessionLoadResult = await process.request('session/new', { cwd: workspace.path, mcpServers });
         restoredThread = {
           ...thread,
           acpSessionId: sessionIdFrom(sessionLoadResult),
@@ -244,6 +253,7 @@ export class HostedThread {
         onThreadChanged,
         journal,
         runtimeStates,
+        mcpServers,
       );
       holder.hosted = hosted;
       for (const message of buffered) {
@@ -560,7 +570,7 @@ export class HostedThread {
       const sessionLoadResult = await restoreProviderSession(process, initializeResult, {
         sessionId: this.thread.acpSessionId,
         cwd: this.#workspace.path,
-        mcpServers: [],
+        mcpServers: this.#mcpServers,
       });
       this.#initializeResult = initializeResult;
       this.#sessionLoadResult = {
@@ -600,7 +610,7 @@ export class HostedThread {
         const loaded = await this.#process.request('session/load', {
           sessionId: this.thread.acpSessionId,
           cwd: this.#workspace.path,
-          mcpServers: [],
+          mcpServers: this.#mcpServers,
         });
         return { messages, state: sessionLoadStateFrom(loaded) };
       } finally {

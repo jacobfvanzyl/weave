@@ -1,8 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
-import { createAlphaBrowserSession } from './alpha-browser-session';
+import { alphaBrowserSession } from './alpha-browser-session';
 
 export function useAlphaBrowserSession() {
-  const session = useMemo(() => createAlphaBrowserSession(), []);
+  const session = useMemo(() => alphaBrowserSession(), []);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const state = useSyncExternalStore(
     session.subscribe,
@@ -13,6 +13,7 @@ export function useAlphaBrowserSession() {
   useLayoutEffect(() => {
     const surface = surfaceRef.current;
     if (!surface) return;
+    session.setVisible(true);
     let frameRequest: number | undefined;
     const present = () => {
       if (frameRequest !== undefined) return;
@@ -33,6 +34,7 @@ export function useAlphaBrowserSession() {
       window.removeEventListener('scroll', present, true);
       if (frameRequest !== undefined) window.cancelAnimationFrame(frameRequest);
       session.send({ type: 'hide' });
+      session.setVisible(false);
     };
   }, [session]);
 
@@ -40,5 +42,6 @@ export function useAlphaBrowserSession() {
     state,
     surfaceRef,
     send: session.send,
+    setAgentControlEnabled: session.setAgentControlEnabled,
   };
 }

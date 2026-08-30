@@ -1,5 +1,9 @@
 import {
   type AgentSummary,
+  type BrowserControlErrorCode,
+  type BrowserControlInvokeParams,
+  parseBrowserControlInvokeParams,
+  type BrowserProviderLease,
   parsePortalRpcResult,
   parseTerminalErrorData,
   parseTerminalNotification,
@@ -26,6 +30,11 @@ import type { AcpTranscriptEvent } from "@/chat/acp-transcript";
 import { portalWebSocketUrl } from "@/portal-address";
 import { authenticatedPortalWebSocket } from "@/portal-authenticated-websocket";
 import type { PortalCredentialSigner } from "@/portal-credential";
+import {
+  alphaBrowserSession,
+  AlphaBrowserControlError,
+  type AlphaBrowserSession,
+} from "@/app/alpha-browser-session";
 
 type JsonRpcId = number;
 type PendingRequest = {
@@ -34,6 +43,7 @@ type PendingRequest = {
   reject(error: Error): void;
 };
 type NotificationHandler = (method: string, params: unknown) => void;
+type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
 export class PortalRpcError extends Error {
   constructor(
@@ -56,6 +66,23 @@ export class PortalTransportError extends Error {
   }
 }
 
+const browserClientIdentity = () => {
+  const key = "weave.alpha.browser-client-id";
+  const stored = globalThis.localStorage?.getItem(key);
+  if (stored) return stored;
+  const created = crypto.randomUUID();
+  globalThis.localStorage?.setItem(key, created);
+  return created;
+};
+
+const browserPlatform = (): "macOS" | "iPadOS" =>
+  /iPad/i.test(globalThis.navigator?.userAgent ?? "") ? "iPadOS" : "macOS";
+
+const browserControlFailure = (code: BrowserControlErrorCode, message: string) =>
+  Object.assign(new Error(message), {
+    data: { domain: "browser-control", code, retryable: code === "CANCELLED" },
+  });
+
 class JsonRpcWebSocket {
   private nextId = 0;
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
@@ -66,6 +93,7 @@ class JsonRpcWebSocket {
     private readonly socket: WebSocket,
     private readonly onNotification?: NotificationHandler,
     private readonly onUnexpectedClose?: (error: Error) => void,
+    private readonly onRequest?: RequestHandler,
   ) {
     this.opened = new Promise<void>((resolve, reject) => {
       socket.onopen = () => resolve();
@@ -74,7 +102,7 @@ class JsonRpcWebSocket {
           new PortalTransportError("The Host WebSocket could not be opened."),
         );
     });
-    socket.onmessage = (event) => this.receive(String(event.data));
+    socket.onmessage = (event) => void this.receive(String(event.data));
     socket.onclose = (event) => {
       const error = new PortalTransportError(
         event.reason || `The Host WebSocket closed (${event.code}).`,
@@ -107,20 +135,26 @@ class JsonRpcWebSocket {
     this.socket.close(1000, "Weave disconnected.");
   }
 
-  private receive(text: string) {
+  private async receive(text: string) {
     const message = JSON.parse(text) as Record<string, unknown>;
     if (typeof message.method === "string") {
-      if (typeof message.id === "number") {
-        this.socket.send(
-          JSON.stringify({
+      if (typeof message.id === "number" || typeof message.id === "string") {
+        try {
+          if (!this.onRequest) throw new Error(`Method not supported by Weave: ${message.method}`);
+          const value = await this.onRequest(message.method, message.params);
+          this.socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: value }));
+        } catch (cause) {
+          const typed = cause as Error & { data?: unknown };
+          this.socket.send(JSON.stringify({
             jsonrpc: "2.0",
             id: message.id,
             error: {
-              code: -32601,
-              message: `Method not supported by Weave: ${message.method}`,
+              code: -32013,
+              message: typed instanceof Error ? typed.message : String(cause),
+              ...(typed?.data === undefined ? {} : { data: typed.data }),
             },
-          }),
-        );
+          }));
+        }
       } else {
         this.onNotification?.(message.method, message.params);
       }
@@ -182,6 +216,12 @@ export class DirectHostClient {
   private rpc: JsonRpcWebSocket;
   private acp?: AcpSessionClient;
   private activeThread?: ThreadSummary;
+  private readonly browserSession: AlphaBrowserSession;
+  private readonly browserClientId: string;
+  private browserLease?: BrowserProviderLease;
+  private browserSync = Promise.resolve();
+  private readonly browserRequests = new Map<string, AbortController>();
+  private readonly stopBrowserSubscription: () => void;
   private readonly workspaceFileWatchListeners = new Map<
     string,
     (event: WorkspaceFileWatchEvent) => void
@@ -205,14 +245,19 @@ export class DirectHostClient {
     credential: PortalCredentialSigner,
     private readonly onAcpEvent: (event: AcpTranscriptEvent) => void,
     onUnexpectedClose?: (error: Error) => void,
+    browserSession: AlphaBrowserSession = alphaBrowserSession(),
   ) {
     this.baseUrl = portalWebSocketUrl(hostUrl);
     this.WebSocket = authenticatedPortalWebSocket(credential);
+    this.browserSession = browserSession;
+    this.browserClientId = browserClientIdentity();
     this.rpc = new JsonRpcWebSocket(
       new this.WebSocket(this.baseUrl.toString()) as unknown as WebSocket,
       (method, params) => this.handleNotification(method, params),
       onUnexpectedClose,
+      (method, params) => this.handleBrowserRequest(method, params),
     );
+    this.stopBrowserSubscription = this.browserSession.subscribe(() => this.queueBrowserSync());
   }
 
   async snapshot(): Promise<HostSnapshot> {
@@ -243,6 +288,7 @@ export class DirectHostClient {
     const prepared = await this.request("thread.attach", { threadId });
     this.acp?.close();
     this.activeThread = prepared.thread;
+    await this.syncBrowserProvider();
     this.onAcpEvent({
       type: "history/reset",
       sessionId: prepared.thread.acpSessionId,
@@ -291,6 +337,7 @@ export class DirectHostClient {
       this.acp?.close();
       this.acp = undefined;
       this.activeThread = undefined;
+      this.queueBrowserSync();
     }
     await this.request("thread.draft.discard", { threadId });
   }
@@ -315,6 +362,7 @@ export class DirectHostClient {
       this.acp?.close();
       this.acp = undefined;
       this.activeThread = undefined;
+      this.queueBrowserSync();
     }
     return archived;
   }
@@ -590,6 +638,9 @@ export class DirectHostClient {
   }
 
   close() {
+    this.stopBrowserSubscription();
+    for (const request of this.browserRequests.values()) request.abort();
+    this.browserRequests.clear();
     this.workspaceFileWatchListeners.clear();
     this.terminalListeners.clear();
     this.pendingTerminalNotifications.clear();
@@ -599,7 +650,93 @@ export class DirectHostClient {
     this.rpc.close();
   }
 
+  private queueBrowserSync() {
+    this.browserSync = this.browserSync.then(() => this.syncBrowserProvider()).catch(() => undefined);
+  }
+
+  private async syncBrowserProvider() {
+    const state = this.browserSession.getSnapshot();
+    const thread = this.activeThread;
+    const attachable = Boolean(
+      thread && state.supported && state.visible && state.agentControlEnabled &&
+        state.tabId && state.generation && state.controlRevision !== undefined,
+    );
+    if (
+      this.browserLease &&
+      (!attachable || this.browserLease.address.threadId !== thread?.threadId ||
+        this.browserLease.address.tabId !== state.tabId ||
+        this.browserLease.generation !== state.generation)
+    ) {
+      const leaseId = this.browserLease.leaseId;
+      this.browserLease = undefined;
+      await this.request("browser.provider.detach", { leaseId }).catch(() => undefined);
+    }
+    if (!attachable || this.browserLease || !thread) return;
+    this.browserLease = await this.request("browser.provider.attach", {
+      threadId: thread.threadId,
+      offer: {
+        version: 1,
+        clientId: this.browserClientId,
+        tabId: state.tabId!,
+        generation: state.generation!,
+        controlRevision: state.controlRevision!,
+        platform: browserPlatform(),
+        operations: ["see", "act"],
+        limits: {
+          maxResultBytes: 2 * 1024 * 1024,
+          maxScreenshotBytes: 1_500_000,
+          maxElements: 200,
+          maxDurationMs: 30_000,
+        },
+      },
+    });
+  }
+
+  private async handleBrowserRequest(method: string, value: unknown) {
+    if (method !== "browser.control.execute") {
+      throw new Error(`Method not supported by Weave: ${method}`);
+    }
+    const request = parseBrowserControlInvokeParams(value);
+    const lease = this.browserLease;
+    const state = this.browserSession.getSnapshot();
+    if (
+      !lease || request.leaseId !== lease.leaseId ||
+      request.address.hostId !== lease.address.hostId ||
+      request.address.threadId !== lease.address.threadId ||
+      request.address.clientId !== lease.address.clientId ||
+      request.address.tabId !== lease.address.tabId ||
+      request.generation !== lease.generation || !state.agentControlEnabled ||
+      !state.visible
+    ) {
+      throw browserControlFailure(
+        "LEASE_REVOKED",
+        "Browser control is not attached to this visible session.",
+      );
+    }
+    const controller = new AbortController();
+    this.browserRequests.set(request.requestId, controller);
+    try {
+      return await this.browserSession.execute(request, controller.signal);
+    } catch (cause) {
+      throw browserControlFailure(
+        controller.signal.aborted
+          ? "CANCELLED"
+          : cause instanceof AlphaBrowserControlError
+          ? cause.code
+          : "CONTROL_INTERRUPTED",
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    } finally {
+      this.browserRequests.delete(request.requestId);
+    }
+  }
+
   private handleNotification(method: string, params: unknown) {
+    if (method === "browser.control.cancel") {
+      const requestId = (params as { requestId?: unknown } | undefined)?.requestId;
+      if (typeof requestId === "string") this.browserRequests.get(requestId)?.abort();
+      return;
+    }
     if (method === WORKSPACE_FILE_WATCH_EVENT_METHOD) {
       const notification = parseWorkspaceFileWatchNotification(method, params);
       this.workspaceFileWatchListeners.get(notification.subscriptionId)?.(
