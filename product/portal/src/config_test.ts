@@ -46,3 +46,14 @@ Deno.test('Portal accepts TLS files and an explicit browser-origin policy', () =
   });
   assertEquals(config.allowedOrigins, ['capacitor://localhost']);
 });
+
+Deno.test('Portal example permits every shipped Alpha host', async () => {
+  const example = JSON.parse(
+    await Deno.readTextFile(new URL('../portal.config.example.json', import.meta.url)),
+  ) as { allowedOrigins?: unknown };
+  assertEquals(example.allowedOrigins, [
+    'http://localhost:5174',
+    'capacitor://localhost',
+    'weave://app',
+  ]);
+});

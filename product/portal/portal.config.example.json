@@ -5,7 +5,7 @@
     "certificateFile": "/absolute/path/to/my-mac.example.ts.net.crt",
     "privateKeyFile": "/absolute/path/to/my-mac.example.ts.net.key"
   },
-  "allowedOrigins": ["http://localhost:5174", "capacitor://localhost"],
+  "allowedOrigins": ["http://localhost:5174", "capacitor://localhost", "weave://app"],
   "stateDirectory": "/absolute/path/to/portal-state",
   "threadEventRetentionLimit": 10000,
   "workspaces": [

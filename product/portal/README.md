@@ -10,6 +10,8 @@ It has no source or package dependency on the earlier Weave server or Portal imp
 Copy `portal.config.example.json` to the ignored `portal.config.json` and set absolute state, certificate, key, and
 Workspace paths. Agent commands are explicit so installation and version policy stay outside the runtime. A listener
 that is not loopback-only must use TLS and an explicit browser-origin allowlist.
+The example allowlist covers the Vite development client, the Capacitor iPad host, and the packaged macOS
+`weave://app` host.
 
 Configured Workspaces seed the Portal project catalog, but the list may be empty. A paired administrative Alpha can
 choose this Portal and add an existing Host-local directory from the Projects sidebar. Portal validates and
