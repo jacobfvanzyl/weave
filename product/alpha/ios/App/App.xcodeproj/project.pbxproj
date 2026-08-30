@@ -17,6 +17,7 @@
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		A13FC1412F00000100A00001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A13FC1402F00000100A00001 /* PrivacyInfo.xcprivacy */; };
 		B53A00012F00000100A00001 /* AlphaBrowserHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53A00002F00000100A00001 /* AlphaBrowserHost.swift */; };
+		B53A00032F00000100A00001 /* AlphaBrowserControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53A00022F00000100A00001 /* AlphaBrowserControl.swift */; };
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 /* End PBXBuildFile section */
 
@@ -32,6 +33,7 @@
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		A13FC1402F00000100A00001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B53A00002F00000100A00001 /* AlphaBrowserHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlphaBrowserHost.swift; sourceTree = "<group>"; };
+		B53A00022F00000100A00001 /* AlphaBrowserControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlphaBrowserControl.swift; sourceTree = "<group>"; };
 		9582B6822FE993A50072D4E8 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
@@ -68,6 +70,7 @@
 		504EC3061FED79650016851F /* App */ = {
 			isa = PBXGroup;
 			children = (
+				B53A00022F00000100A00001 /* AlphaBrowserControl.swift */,
 				B53A00002F00000100A00001 /* AlphaBrowserHost.swift */,
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
@@ -166,6 +169,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				B53A00032F00000100A00001 /* AlphaBrowserControl.swift in Sources */,
 				B53A00012F00000100A00001 /* AlphaBrowserHost.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 			);

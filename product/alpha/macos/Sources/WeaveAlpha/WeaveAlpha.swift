@@ -1,108 +1,6 @@
 import AppKit
 import WebKit
 
-private let defaultBrowserURL = "https://example.com"
-private let mediaPolicySource = """
-(() => {
-  const deny = () => Promise.reject(
-    new DOMException('Blocked by Alpha Browser policy.', 'NotAllowedError')
-  );
-  if (globalThis.MediaDevices?.prototype) {
-    try {
-      Object.defineProperty(globalThis.MediaDevices.prototype, 'getUserMedia', {
-        configurable: false,
-        writable: false,
-        value: deny
-      });
-      return;
-    } catch {}
-  }
-  const media = navigator.mediaDevices;
-  if (media) {
-    try {
-      Object.defineProperty(media, 'getUserMedia', {
-        configurable: false,
-        writable: false,
-        value: deny
-      });
-      return;
-    } catch {}
-  }
-  try {
-    Object.defineProperty(navigator, 'mediaDevices', {
-      configurable: false,
-      value: { getUserMedia: deny }
-    });
-  } catch {}
-})();
-"""
-private let humanInputSource = """
-(() => {
-  const notify = event => {
-    if (event.isTrusted) webkit.messageHandlers.alphaBrowserHumanInput.postMessage({});
-  };
-  addEventListener('pointerdown', notify, true);
-  addEventListener('keydown', notify, true);
-})();
-"""
-private let browserControlSource = """
-const command = request.command;
-const visible = element => {
-  const rect = element.getBoundingClientRect(); const style = getComputedStyle(element);
-  return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-};
-const describe = (element, ref) => {
-  const role = element.getAttribute('role') || ({A:'link',BUTTON:'button',INPUT:'textbox',TEXTAREA:'textbox',SELECT:'combobox'}[element.tagName] || 'control');
-  const name = element.getAttribute('aria-label') || element.getAttribute('title') || element.innerText || element.placeholder || '';
-  return { ref, role, name: String(name).trim().slice(0, 300), disabled: Boolean(element.disabled), ...('checked' in element ? {checked:Boolean(element.checked)} : {}) };
-};
-const candidateElements = () => [...document.querySelectorAll('a,button,input,textarea,select,[role],[tabindex]')]
-  .filter(visible).slice(0, 200);
-const waitFor = async condition => {
-  if (!condition) return;
-  const deadline = Date.parse(request.deadlineAt);
-  while (Date.now() < deadline) {
-    if (condition.kind === 'text' && document.body?.innerText.includes(condition.text)) return;
-    if (condition.kind === 'url' && location.href.includes(condition.includes)) return;
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  throw new Error('WAIT_TIMEOUT');
-};
-if (command.kind === 'act') {
-  if (command.viewId !== previousViewId) throw new Error('STALE_VIEW');
-  const action = command.action;
-  if (action.kind === 'click' || action.kind === 'fill') {
-    const prefix = `${command.viewId}:`;
-    const index = action.target.startsWith(prefix) ? Number(action.target.slice(prefix.length)) : -1;
-    const target = Number.isSafeInteger(index) && index >= 0 ? candidateElements()[index] : undefined;
-    const actual = target ? describe(target, action.target) : undefined;
-    const matchesExpected = actual && expectedTarget &&
-      actual.ref === expectedTarget.ref && actual.role === expectedTarget.role &&
-      actual.name === expectedTarget.name && Boolean(actual.disabled) === Boolean(expectedTarget.disabled) &&
-      (actual.checked ?? null) === (expectedTarget.checked ?? null);
-    if (!target || !target.isConnected || !visible(target) || !matchesExpected) throw new Error('INVALID_TARGET');
-    if (action.kind === 'click') target.click();
-    else {
-      if (!('value' in target) || target.type === 'password' || target.type === 'file') throw new Error('INVALID_TARGET');
-      target.focus(); target.value = action.text;
-      target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: action.text }));
-      target.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  } else if (action.kind === 'key') {
-    const target = document.activeElement || document.body;
-    target.dispatchEvent(new KeyboardEvent('keydown', { key: action.key, bubbles: true }));
-    target.dispatchEvent(new KeyboardEvent('keyup', { key: action.key, bubbles: true }));
-  } else if (action.kind === 'scroll') {
-    const distance = action.amount === 'small' ? 160 : innerHeight * 0.8;
-    scrollBy({ top: action.direction === 'up' ? -distance : distance, behavior: 'instant' });
-  }
-  await waitFor(command.expect);
-} else await waitFor(command.wait);
-const viewId = crypto.randomUUID();
-const elements = candidateElements().map((element, index) => describe(element, `${viewId}:${index}`));
-return { id: viewId, text: String(document.body?.innerText || '').slice(0, 65536), elements, warnings: [] };
-"""
-
 private final class AlphaAppSchemeHandler: NSObject, WKURLSchemeHandler {
     private let resourceRoot: URL?
 
@@ -160,7 +58,6 @@ private final class AlphaAppSchemeHandler: NSObject, WKURLSchemeHandler {
         ["html", "css", "js", "json", "svg"].contains(pathExtension.lowercased())
     }
 }
-
 private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     weak var delegate: WKScriptMessageHandler?
 
@@ -184,9 +81,7 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     private var browserNotice: String?
     private var browserTabId = UUID().uuidString
     private var browserGeneration = 0
-    private var controlRevision = 0
-    private var browserControlViewId: String?
-    private var browserControlElements: [String: [String: Any]] = [:]
+    private let browserControl = AlphaBrowserControlEngine()
 
     override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
         let configuration = WKWebViewConfiguration()
@@ -245,9 +140,7 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "alphaBrowserHumanInput" {
-            controlRevision += 1
-            browserControlViewId = nil
-            browserControlElements.removeAll()
+            browserControl.interrupt()
             emitBrowserState()
             return
         }
@@ -293,7 +186,7 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
         case "control":
             if let request = command["request"] as? [String: Any] { executeBrowserControl(request) }
         case "control.cancel":
-            break
+            if let requestId = command["requestId"] as? String { browserControl.cancel(requestId: requestId) }
         default:
             break
         }
@@ -333,13 +226,13 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.addUserScript(WKUserScript(
-            source: mediaPolicySource,
+            source: alphaBrowserMediaPolicySource,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: false,
             in: .page
         ))
         configuration.userContentController.addUserScript(WKUserScript(
-            source: humanInputSource,
+            source: alphaBrowserHumanInputSource,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: false,
             in: .page
@@ -355,13 +248,11 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
         browser = replacement
         browserTabId = UUID().uuidString
         browserGeneration += 1
-        controlRevision = 0
-        browserControlViewId = nil
-        browserControlElements.removeAll()
+        browserControl.reset()
         root.addSubview(replacement, positioned: .above, relativeTo: shell)
         browserError = nil
         browserNotice = nil
-        if loadDefault { navigate(to: defaultBrowserURL) }
+        if loadDefault { navigate(to: alphaBrowserDefaultURL) }
     }
 
     private func resetBrowser() {
@@ -407,14 +298,14 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     private func dispatchBrowserState() {
         var state: [String: Any] = [
             "supported": true,
-            "url": browser?.url?.absoluteString ?? defaultBrowserURL,
+            "url": browser?.url?.absoluteString ?? alphaBrowserDefaultURL,
             "title": browser?.title ?? "",
             "loading": browser?.isLoading ?? false,
             "canGoBack": browser?.canGoBack ?? false,
             "canGoForward": browser?.canGoForward ?? false,
             "tabId": browserTabId,
             "generation": browserGeneration,
-            "controlRevision": controlRevision,
+            "controlRevision": browserControl.controlRevision,
             "policy": [
                 "popups": "same-session",
                 "uploads": "system-picker",
@@ -435,109 +326,28 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     }
 
     private func executeBrowserControl(_ request: [String: Any]) {
-        let requestId = request["requestId"] as? String ?? "unknown"
-        guard let browser, let address = request["address"] as? [String: Any] else {
-            dispatchControlFailure(requestId: requestId, code: "CONTROL_INTERRUPTED", message: "Browser control is unavailable.")
+        guard let browser else {
+            let requestId = request["requestId"] as? String ?? "unknown"
+            dispatchControlEvent([
+                "requestId": requestId,
+                "error": ["code": "CONTROL_INTERRUPTED", "message": "Browser control is unavailable."],
+            ])
             return
         }
-        guard address["tabId"] as? String == browserTabId,
-              (request["generation"] as? NSNumber)?.intValue == browserGeneration else {
-            dispatchControlFailure(requestId: requestId, code: "STALE_TAB", message: "The controlled browser tab changed.")
-            return
-        }
-        guard (request["expectedControlRevision"] as? NSNumber)?.intValue == controlRevision else {
-            dispatchControlFailure(requestId: requestId, code: "CONTROL_INTERRUPTED", message: "A person took over the browser.")
-            return
-        }
-        let command = request["command"] as? [String: Any]
-        var expectedTarget: Any = NSNull()
-        if command?["kind"] as? String == "act" {
-            guard command?["viewId"] as? String == browserControlViewId else {
-                dispatchControlFailure(requestId: requestId, code: "STALE_VIEW", message: "The browser view is stale.")
-                return
-            }
-            if let action = command?["action"] as? [String: Any],
-               let target = action["target"] as? String {
-                guard let descriptor = browserControlElements[target] else {
-                    dispatchControlFailure(requestId: requestId, code: "INVALID_TARGET", message: "The browser target is no longer available.")
-                    return
-                }
-                expectedTarget = descriptor
-            }
-        }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if let command = request["command"] as? [String: Any], command["kind"] as? String == "see",
-               let url = command["url"] as? String {
-                self.navigate(to: url)
-                while browser.isLoading && Date() < (ISO8601DateFormatter().date(from: request["deadlineAt"] as? String ?? "") ?? Date()) {
-                    try? await Task.sleep(nanoseconds: 50_000_000)
-                }
-            }
-            do {
-                let projection = try await browser.callAsyncJavaScript(
-                    browserControlSource,
-                    arguments: [
-                        "request": request,
-                        "previousViewId": self.browserControlViewId ?? NSNull(),
-                        "expectedTarget": expectedTarget,
-                    ],
-                    in: nil,
-                    contentWorld: .world(name: "weave.browser.control")
-                )
-                guard var view = projection as? [String: Any] else { throw NSError(domain: "BrowserControl", code: 1) }
-                guard let viewId = view["id"] as? String,
-                      let elements = view["elements"] as? [[String: Any]] else {
-                    throw NSError(domain: "BrowserControl", code: 2)
-                }
-                self.browserControlViewId = viewId
-                self.browserControlElements = Dictionary(uniqueKeysWithValues: elements.compactMap { element in
-                    (element["ref"] as? String).map { ($0, element) }
-                })
-                view["tabId"] = self.browserTabId
-                view["generation"] = self.browserGeneration
-                view["controlRevision"] = self.controlRevision
-                view["url"] = browser.url?.absoluteString ?? defaultBrowserURL
-                view["title"] = browser.title ?? ""
-                view["loading"] = browser.isLoading
-                view["viewport"] = ["width": Int(browser.bounds.width), "height": Int(browser.bounds.height)]
-                if let command = request["command"] as? [String: Any], command["screenshot"] as? Bool == true {
-                    let image = try await browser.takeSnapshot(configuration: nil)
-                    if let tiff = image.tiffRepresentation,
-                       let representation = NSBitmapImageRep(data: tiff),
-                       let data = representation.representation(using: .png, properties: [:]) {
-                        view["screenshot"] = ["mimeType": "image/png", "data": data.base64EncodedString()]
-                    }
-                }
-                let result: [String: Any] = [
-                    "requestId": requestId,
-                    "leaseId": request["leaseId"] as? String ?? "",
-                    "address": address,
-                    "view": view,
-                ]
-                self.dispatchControlResult(requestId: requestId, result: result)
-            } catch {
-                let failure = self.browserControlFailure(error)
-                self.dispatchControlFailure(requestId: requestId, code: failure.code, message: failure.message)
-            }
-        }
-    }
-
-    private func dispatchControlResult(requestId: String, result: [String: Any]) {
-        dispatchControlEvent(["requestId": requestId, "result": result])
-    }
-
-    private func browserControlFailure(_ error: Error) -> (code: String, message: String) {
-        let nativeError = error as NSError
-        let message = nativeError.userInfo["WKJavaScriptExceptionMessage"] as? String ?? nativeError.localizedDescription
-        if message.contains("STALE_VIEW") { return ("STALE_VIEW", "The browser view is stale.") }
-        if message.contains("INVALID_TARGET") { return ("INVALID_TARGET", "The browser target is no longer available.") }
-        if message.contains("WAIT_TIMEOUT") { return ("TIMEOUT", "The browser condition timed out.") }
-        return ("CONTROL_INTERRUPTED", message)
-    }
-
-    private func dispatchControlFailure(requestId: String, code: String, message: String) {
-        dispatchControlEvent(["requestId": requestId, "error": ["code": code, "message": message]])
+        browserControl.start(
+            request: request,
+            browser: browser,
+            tabId: browserTabId,
+            generation: browserGeneration,
+            navigate: { [weak self] url in self?.navigate(to: url) },
+            screenshot: { webView in
+                let image = try await webView.takeSnapshot(configuration: nil)
+                guard let tiff = image.tiffRepresentation,
+                      let representation = NSBitmapImageRep(data: tiff) else { return nil }
+                return representation.representation(using: .png, properties: [:])
+            },
+            completion: { [weak self] detail in self?.dispatchControlEvent(detail) }
+        )
     }
 
     private func dispatchControlEvent(_ detail: [String: Any]) {
@@ -548,8 +358,7 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if webView === browser {
-            browserControlViewId = nil
-            browserControlElements.removeAll()
+            browserControl.invalidate()
             emitBrowserState()
         }
     }
