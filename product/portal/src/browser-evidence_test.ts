@@ -30,3 +30,21 @@ Deno.test('Browser control evidence is private, bounded, and redacted', async ()
     await Deno.remove(root, { recursive: true });
   }
 });
+
+Deno.test('Browser control evidence rotates audits and deletes expired artifacts', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-browser-retention-' });
+  try {
+    const store = new BrowserControlEvidenceStore(root, () => new Date(), 1, 1);
+    const event = { event: 'browser.control.detached' as const, timestamp: new Date().toISOString() };
+    store.audit(event);
+    store.audit(event);
+    assertEquals((await Deno.stat(join(root, 'browser-control-audit.jsonl.1'))).mode! & 0o777, 0o600);
+    await store.storeScreenshot(new Uint8Array([1, 2, 3]), 'request');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const artifacts: string[] = [];
+    for await (const entry of Deno.readDir(join(root, 'browser-artifacts'))) artifacts.push(entry.name);
+    assertEquals(artifacts, []);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});

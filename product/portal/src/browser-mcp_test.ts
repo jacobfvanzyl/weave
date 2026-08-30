@@ -160,3 +160,66 @@ Deno.test('Thread-scoped MCP preserves typed broker failures as tool evidence', 
   await gateway.close();
   await Deno.remove(root, { recursive: true });
 });
+
+Deno.test('Thread-scoped MCP interrupts an in-flight lease and requires a fresh provider after reconnect', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-browser-mcp-reconnect-' });
+  const broker = new BrowserControlBroker('host-1');
+  let invocationStarted!: () => void;
+  const started = new Promise<void>((resolve) => invocationStarted = resolve);
+  const attach = (tabId: string, invoke: (params: BrowserControlInvokeParams, signal: AbortSignal) => Promise<unknown>) =>
+    broker.attach('principal-1', 'thread-1', {
+      version: 1,
+      clientId: 'alpha-1',
+      tabId,
+      generation: 1,
+      controlRevision: 0,
+      platform: 'iPadOS',
+      operations: ['see', 'act'],
+      authorization: { observe: true, control: true },
+      limits: { maxResultBytes: 64_000, maxScreenshotBytes: 32_000, maxElements: 20, maxDurationMs: 1_000 },
+    }, { connectionId: `connection-${tabId}`, invoke });
+  const firstLease = attach('tab-old', (_params, signal) => new Promise((_resolve, reject) => {
+    invocationStarted();
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }));
+  const bridge = new BrowserMcpBridge(root, broker);
+  const descriptor = bridge.servers('thread-1')[0]!;
+  const env = Object.fromEntries(descriptor.env.map(({ name, value }) => [name, value]));
+  const gateway = await bridge.serve();
+  const input = new TransformStream<Uint8Array>();
+  const output = new TransformStream<Uint8Array>();
+  const received = collect(output.readable);
+  const task = runBrowserMcp({
+    path: env.WEAVE_BROWSER_MCP_SOCKET!,
+    threadId: env.WEAVE_BROWSER_MCP_THREAD!,
+    token: env.WEAVE_BROWSER_MCP_TOKEN!,
+    stdin: input.readable,
+    stdout: output.writable,
+  });
+  const writer = input.writable.getWriter();
+  const send = (id: number) => writer.write(new TextEncoder().encode(`${JSON.stringify({
+    jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'browser_see', arguments: {} },
+  })}\n`));
+  await send(1);
+  await started;
+  broker.detach(firstLease.leaseId);
+  attach('tab-new', (params) => Promise.resolve({
+    requestId: params.requestId,
+    leaseId: params.leaseId,
+    address: params.address,
+    view: {
+      id: 'fresh-view', tabId: 'tab-new', generation: 1, controlRevision: 0,
+      url: 'https://fixture.test/', loading: false,
+      viewport: { width: 800, height: 600 }, text: 'reconnected', elements: [], warnings: [],
+    },
+  }));
+  await send(2);
+  await writer.close();
+  await task;
+  const messages = (await received).trim().split('\n').map((line) => JSON.parse(line));
+  assertEquals(messages[0].result.structuredContent.error.code, 'LEASE_REVOKED');
+  assertEquals(messages[1].result.structuredContent.tabId, 'tab-new');
+  assertEquals(messages[1].result.structuredContent.text, 'reconnected');
+  await gateway.close();
+  await Deno.remove(root, { recursive: true });
+});

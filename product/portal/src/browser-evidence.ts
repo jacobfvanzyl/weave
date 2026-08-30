@@ -12,9 +12,13 @@ export class BrowserControlEvidenceStore {
     readonly stateDirectory: string,
     readonly now: () => Date = () => new Date(),
     readonly artifactLifetimeMs = 5 * 60_000,
+    readonly maximumAuditBytes = 1024 * 1024,
   ) {
     this.#auditPath = join(stateDirectory, 'browser-control-audit.jsonl');
     this.#artifactDirectory = join(stateDirectory, 'browser-artifacts');
+    void Deno.mkdir(this.#artifactDirectory, { recursive: true, mode: 0o700 })
+      .then(() => this.#removeExpiredArtifacts())
+      .catch(() => undefined);
   }
 
   brokerOptions(): BrowserControlBrokerOptions {
@@ -26,6 +30,20 @@ export class BrowserControlEvidenceStore {
 
   audit(event: BrowserControlAuditEvent) {
     Deno.mkdirSync(dirname(this.#auditPath), { recursive: true, mode: 0o700 });
+    try {
+      if (Deno.statSync(this.#auditPath).size >= this.maximumAuditBytes) {
+        const rotated = `${this.#auditPath}.1`;
+        try {
+          Deno.removeSync(rotated);
+        } catch (cause) {
+          if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+        }
+        Deno.renameSync(this.#auditPath, rotated);
+        Deno.chmodSync(rotated, 0o600);
+      }
+    } catch (cause) {
+      if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+    }
     Deno.writeTextFileSync(this.#auditPath, `${JSON.stringify(event)}\n`, {
       append: true,
       create: true,
@@ -41,6 +59,7 @@ export class BrowserControlEvidenceStore {
     const path = join(this.#artifactDirectory, `${artifactId}.png`);
     await Deno.writeFile(path, data, { createNew: true, mode: 0o600 });
     await Deno.chmod(path, 0o600);
+    setTimeout(() => void Deno.remove(path).catch(() => undefined), this.artifactLifetimeMs);
     return {
       uri: `${artifactScheme}${artifactId}`,
       sizeBytes: data.byteLength,

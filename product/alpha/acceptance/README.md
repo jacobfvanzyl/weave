@@ -51,6 +51,31 @@ Record these beside the automated evidence for a release candidate:
    shows the content-process error and Reload recovers. Otherwise record it explicitly as not
    deterministically exercised; the delegate and recovery path remain covered by code review.
 
+## Portal-proxied Browser control evidence
+
+Run the deterministic control task through the visible `weave-visible-browser` MCP tools, then
+convert the durable Portal journal into a redacted evidence record:
+
+```bash
+bun run acceptance:browser:control:evidence -- \
+  --journal "$HOME/Library/Application Support/Weave/product-portal/thread-events.json" \
+  --thread <thread-id> \
+  --platform macOS \
+  --expected-text control:applied:WVE-60:key:K \
+  --output /absolute/evidence/browser-control-macos.json
+```
+
+Use `--start-sequence` and `--end-sequence` to isolate a device run. HTTPS is mandatory; the
+explicit `--allow-loopback-http` exception exists only for local packaged-macOS diagnosis. The
+collector requires navigate, fill, key, click, scroll, a fresh view chain, the expected visible
+state, and screenshot evidence. A timed-out navigation counts only when a later successful
+observation proves that the exact requested URL loaded; the evidence records that outcome and keeps
+the `TIMEOUT` failure. It records typed interruption failures and observed tab identities without
+copying page text, form values, or the screenshot itself.
+
+The security decision and remaining rollout gates live in
+[`docs/research/wve-60-browser-control-security-review.md`](../../../docs/research/wve-60-browser-control-security-review.md).
+
 ## Release gate
 
 Phase 1 is releasable only when the deterministic fixture tests and macOS host suite pass, a current
