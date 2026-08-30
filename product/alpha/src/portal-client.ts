@@ -254,7 +254,10 @@ export class DirectHostClient {
     this.rpc = new JsonRpcWebSocket(
       new this.WebSocket(this.baseUrl.toString()) as unknown as WebSocket,
       (method, params) => this.handleNotification(method, params),
-      onUnexpectedClose,
+      (error) => {
+        this.browserSession.setAgentAccess('off');
+        onUnexpectedClose?.(error);
+      },
       (method, params) => this.handleBrowserRequest(method, params),
     );
     this.stopBrowserSubscription = this.browserSession.subscribe(() => this.queueBrowserSync());
@@ -638,6 +641,7 @@ export class DirectHostClient {
   }
 
   close() {
+    this.browserSession.setAgentAccess('off');
     this.stopBrowserSubscription();
     for (const request of this.browserRequests.values()) request.abort();
     this.browserRequests.clear();
@@ -658,7 +662,7 @@ export class DirectHostClient {
     const state = this.browserSession.getSnapshot();
     const thread = this.activeThread;
     const attachable = Boolean(
-      thread && state.supported && state.visible && state.agentControlEnabled &&
+      thread && state.supported && state.visible && state.agentAccess !== 'off' &&
         state.tabId && state.generation && state.controlRevision !== undefined,
     );
     if (
@@ -682,6 +686,10 @@ export class DirectHostClient {
         controlRevision: state.controlRevision!,
         platform: browserPlatform(),
         operations: ["see", "act"],
+        authorization: {
+          observe: true,
+          control: state.agentAccess === 'control',
+        },
         limits: {
           maxResultBytes: 2 * 1024 * 1024,
           maxScreenshotBytes: 1_500_000,

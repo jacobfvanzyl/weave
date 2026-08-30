@@ -1,7 +1,9 @@
 import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { alphaBrowserSession } from './alpha-browser-session';
 
-export function useAlphaBrowserSession() {
+export function useAlphaBrowserSession(
+  controlTarget?: { threadId: string; title: string; controller: string },
+) {
   const session = useMemo(() => alphaBrowserSession(), []);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const state = useSyncExternalStore(
@@ -9,6 +11,10 @@ export function useAlphaBrowserSession() {
     session.getSnapshot,
     session.getSnapshot,
   );
+
+  useLayoutEffect(() => {
+    session.setControlTarget(controlTarget);
+  }, [controlTarget?.controller, controlTarget?.threadId, controlTarget?.title, session]);
 
   useLayoutEffect(() => {
     const surface = surfaceRef.current;
@@ -28,10 +34,21 @@ export function useAlphaBrowserSession() {
     window.addEventListener('resize', present);
     window.addEventListener('scroll', present, true);
     present();
+    const visibilityChanged = () => {
+      if (document.hidden) {
+        session.send({ type: 'hide' });
+        session.setVisible(false);
+      } else {
+        session.setVisible(true);
+        present();
+      }
+    };
+    document.addEventListener('visibilitychange', visibilityChanged);
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', present);
       window.removeEventListener('scroll', present, true);
+      document.removeEventListener('visibilitychange', visibilityChanged);
       if (frameRequest !== undefined) window.cancelAnimationFrame(frameRequest);
       session.send({ type: 'hide' });
       session.setVisible(false);
@@ -43,5 +60,6 @@ export function useAlphaBrowserSession() {
     surfaceRef,
     send: session.send,
     setAgentControlEnabled: session.setAgentControlEnabled,
+    setAgentAccess: session.setAgentAccess,
   };
 }

@@ -38,6 +38,8 @@ export type AlphaBrowserState = {
   generation?: number;
   controlRevision?: number;
   agentControlEnabled: boolean;
+  agentAccess: 'off' | 'observe' | 'control';
+  controlTarget?: { threadId: string; title: string; controller: string };
   visible: boolean;
 };
 
@@ -68,6 +70,8 @@ export type AlphaBrowserSession = {
   execute(request: BrowserControlInvokeParams, signal?: AbortSignal): Promise<BrowserControlInvokeResult>;
   setVisible(visible: boolean): void;
   setAgentControlEnabled(enabled: boolean): void;
+  setAgentAccess(access: 'off' | 'observe' | 'control'): void;
+  setControlTarget(target?: { threadId: string; title: string; controller: string }): void;
 };
 
 type AlphaBrowserMessageHandler = {
@@ -95,6 +99,7 @@ const initialState = (target: Window): AlphaBrowserState => ({
   canGoBack: false,
   canGoForward: false,
   agentControlEnabled: false,
+  agentAccess: 'off',
   visible: false,
 });
 
@@ -141,6 +146,7 @@ const browserState = (value: unknown): AlphaBrowserState | undefined => {
     generation: Number.isSafeInteger(input.generation) ? Number(input.generation) : undefined,
     controlRevision: Number.isSafeInteger(input.controlRevision) ? Number(input.controlRevision) : undefined,
     agentControlEnabled: false,
+    agentAccess: 'off',
     visible: false,
   };
 };
@@ -163,9 +169,15 @@ export function createAlphaBrowserSession(
     if (!next) return;
     const controlRevision = next.controlRevision ?? snapshot.controlRevision ?? 0;
     const interrupted = snapshot.agentControlEnabled && controlRevision > enabledAtRevision;
+    const replacedTab = snapshot.agentControlEnabled && Boolean(
+      snapshot.tabId && next.tabId &&
+        (snapshot.tabId !== next.tabId || snapshot.generation !== next.generation),
+    );
     snapshot = {
       ...next,
-      agentControlEnabled: interrupted ? false : snapshot.agentControlEnabled,
+      agentControlEnabled: interrupted || replacedTab ? false : snapshot.agentControlEnabled,
+      agentAccess: interrupted || replacedTab ? 'off' : snapshot.agentAccess,
+      controlTarget: snapshot.controlTarget,
       visible: snapshot.visible,
     };
     listeners.forEach((listener) => listener());
@@ -203,6 +215,7 @@ export function createAlphaBrowserSession(
       command.type !== 'control' && command.type !== 'control.cancel' && snapshot.agentControlEnabled
     ) {
       snapshot = { ...snapshot, agentControlEnabled: false };
+      snapshot.agentAccess = 'off';
       listeners.forEach((listener) => listener());
     }
     return true;
@@ -238,7 +251,11 @@ export function createAlphaBrowserSession(
     },
     send,
     execute: (request, signal) => {
-      if (!snapshot.agentControlEnabled || !snapshot.visible) {
+      const needsControl = request.command.kind === 'act' || Boolean(request.command.url);
+      if (
+        !snapshot.agentControlEnabled || !snapshot.visible || snapshot.agentAccess === 'off' ||
+        (needsControl && snapshot.agentAccess !== 'control')
+      ) {
         return Promise.reject(new Error('Browser agent control is not enabled for the visible pane.'));
       }
       if (signal?.aborted) return Promise.reject(signal.reason);
@@ -265,14 +282,38 @@ export function createAlphaBrowserSession(
     setVisible: (visible) => {
       if (snapshot.visible === visible) return;
       snapshot = { ...snapshot, visible };
-      if (!visible) snapshot.agentControlEnabled = false;
+      if (!visible) {
+        snapshot.agentControlEnabled = false;
+        snapshot.agentAccess = 'off';
+      }
       listeners.forEach((listener) => listener());
     },
     setAgentControlEnabled: (enabled) => {
       const next = enabled && snapshot.supported && snapshot.visible;
       if (snapshot.agentControlEnabled === next) return;
       enabledAtRevision = snapshot.controlRevision ?? 0;
-      snapshot = { ...snapshot, agentControlEnabled: next };
+      snapshot = { ...snapshot, agentControlEnabled: next, agentAccess: next ? 'control' : 'off' };
+      listeners.forEach((listener) => listener());
+    },
+    setAgentAccess: (access) => {
+      const next = snapshot.supported && snapshot.visible && snapshot.controlTarget ? access : 'off';
+      if (snapshot.agentAccess === next) return;
+      enabledAtRevision = snapshot.controlRevision ?? 0;
+      snapshot = { ...snapshot, agentControlEnabled: next !== 'off', agentAccess: next };
+      listeners.forEach((listener) => listener());
+    },
+    setControlTarget: (target) => {
+      if (
+        snapshot.controlTarget?.threadId === target?.threadId &&
+        snapshot.controlTarget?.controller === target?.controller &&
+        snapshot.controlTarget?.title === target?.title
+      ) return;
+      const changedThread = snapshot.controlTarget?.threadId !== target?.threadId;
+      snapshot = {
+        ...snapshot,
+        controlTarget: target,
+        ...(changedThread ? { agentControlEnabled: false, agentAccess: 'off' as const } : {}),
+      };
       listeners.forEach((listener) => listener());
     },
   };

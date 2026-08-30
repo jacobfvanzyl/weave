@@ -19,6 +19,7 @@ describe('createAlphaBrowserSession', () => {
       canGoBack: false,
       canGoForward: false,
       agentControlEnabled: false,
+      agentAccess: 'off',
       visible: false,
     });
     expect(session.send({ type: 'reload' })).toBe(false);
@@ -79,6 +80,8 @@ describe('createAlphaBrowserSession', () => {
       generation: undefined,
       controlRevision: undefined,
       agentControlEnabled: false,
+      agentAccess: 'off',
+      controlTarget: undefined,
       visible: false,
       policy: {
         popups: 'same-session',
@@ -106,6 +109,76 @@ describe('createAlphaBrowserSession', () => {
       },
     }));
     expect(session.getSnapshot().url).toBe('https://example.org/');
+  });
+
+  it('separates observe from control and revokes access when the target Thread changes', async () => {
+    const commands: AlphaBrowserCommand[] = [];
+    Object.defineProperty(window, 'webkit', {
+      configurable: true,
+      value: { messageHandlers: { alphaBrowser: { postMessage: (command: AlphaBrowserCommand) => commands.push(command) } } },
+    });
+    const session = createAlphaBrowserSession();
+    const unsubscribe = session.subscribe(() => undefined);
+    window.dispatchEvent(new CustomEvent('weave:alpha-browser-state', { detail: {
+      supported: true,
+      url: 'https://fixture.test/',
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      tabId: 'tab-1',
+      generation: 1,
+      controlRevision: 0,
+    } }));
+    session.setVisible(true);
+    session.setControlTarget({ threadId: 'thread-1', title: 'Acceptance', controller: 'Codex' });
+    session.setAgentAccess('observe');
+    const request = {
+      requestId: 'observe-1',
+      leaseId: 'lease-1',
+      address: { hostId: 'host-1', threadId: 'thread-1', clientId: 'client-1', tabId: 'tab-1' },
+      generation: 1,
+      expectedControlRevision: 0,
+      deadlineAt: '2026-08-30T21:00:00.000Z',
+      command: { kind: 'see' as const },
+    };
+    const observed = session.execute(request);
+    expect(commands.at(-1)).toEqual({ type: 'control', request });
+    window.dispatchEvent(new CustomEvent('weave:alpha-browser-control-result', { detail: {
+      requestId: request.requestId,
+      result: {
+        requestId: request.requestId,
+        leaseId: request.leaseId,
+        address: request.address,
+        view: {
+          id: 'view-1', tabId: 'tab-1', generation: 1, controlRevision: 0,
+          url: 'https://fixture.test/', loading: false,
+          viewport: { width: 800, height: 600 }, text: 'Ready', elements: [], warnings: [],
+        },
+      },
+    } }));
+    await expect(observed).resolves.toMatchObject({ view: { id: 'view-1' } });
+    await expect(session.execute({
+      ...request,
+      requestId: 'act-1',
+      command: { kind: 'act', viewId: 'view-1', action: { kind: 'key', key: 'K' } },
+    })).rejects.toThrow('not enabled');
+
+    session.setControlTarget({ threadId: 'thread-2', title: 'Other', controller: 'Codex' });
+    expect(session.getSnapshot()).toMatchObject({ agentAccess: 'off', agentControlEnabled: false });
+
+    session.setAgentAccess('control');
+    window.dispatchEvent(new CustomEvent('weave:alpha-browser-state', { detail: {
+      supported: true,
+      url: 'https://fixture.test/',
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      tabId: 'tab-2',
+      generation: 2,
+      controlRevision: 0,
+    } }));
+    expect(session.getSnapshot()).toMatchObject({ agentAccess: 'off', agentControlEnabled: false });
+    unsubscribe();
   });
 
   it('requires visible opt-in, resolves native control, and revokes on trusted human input', async () => {

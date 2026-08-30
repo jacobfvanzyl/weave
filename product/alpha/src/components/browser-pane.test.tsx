@@ -37,7 +37,11 @@ describe('BrowserPane', () => {
     const maximize = vi.fn();
     const close = vi.fn();
     const { unmount } = render(
-      <BrowserPane onClose={close} onToggleMaximized={maximize} />,
+      <BrowserPane
+        controlTarget={{ threadId: 'thread-1', title: 'Acceptance', controller: 'Codex' }}
+        onClose={close}
+        onToggleMaximized={maximize}
+      />,
     );
 
     expect(commands[0]).toEqual({ type: 'status' });
@@ -71,6 +75,10 @@ describe('BrowserPane', () => {
     expect(screen.getByText(
       'Popup: here · Upload: system picker · Download: off · Camera/mic: off · Other permissions: WebKit',
     )).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Enable Agent Browser Observe' }));
+    expect(screen.getByText('Agent observe · Codex · Acceptance (thread-1)')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Take Over Browser' }));
+    expect(screen.queryByText('Agent observe · Codex · Acceptance (thread-1)')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Back' }));
     expect(commands).toContainEqual({ type: 'back' });
 

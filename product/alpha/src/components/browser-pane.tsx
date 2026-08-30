@@ -19,13 +19,15 @@ export function BrowserPane({
   maximized = false,
   onClose,
   onToggleMaximized,
+  controlTarget,
 }: {
   className?: string;
   maximized?: boolean;
   onClose?(): void;
   onToggleMaximized?(): void;
+  controlTarget?: { threadId: string; title: string; controller: string };
 }) {
-  const browser = useAlphaBrowserSession();
+  const browser = useAlphaBrowserSession(controlTarget);
   const [location, setLocation] = useState(browser.state.url);
 
   useEffect(() => {
@@ -100,21 +102,49 @@ export function BrowserPane({
           />
         </form>
         <div className='flex h-full shrink-0 items-stretch border-l border-border'>
-          <Button
-            type='button'
-            size='sm'
-            variant={browser.state.agentControlEnabled ? 'default' : 'ghost'}
-            aria-label={browser.state.agentControlEnabled ? 'Take Over Browser' : 'Enable Agent Browser Control'}
-            aria-pressed={browser.state.agentControlEnabled}
-            title={browser.state.agentControlEnabled
-              ? 'Take over and revoke agent control'
-              : 'Allow the active Thread to control this visible Browser'}
-            className='h-full rounded-none px-2 text-[11px]'
-            disabled={!browser.state.supported}
-            onClick={() => browser.setAgentControlEnabled(!browser.state.agentControlEnabled)}
-          >
-            {browser.state.agentControlEnabled ? 'Take over' : 'Agent'}
-          </Button>
+          {browser.state.agentAccess === 'off'
+            ? (
+              <>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='ghost'
+                  aria-label='Enable Agent Browser Observe'
+                  title='Allow the active Thread to inspect this visible Browser without navigating or acting'
+                  className='h-full rounded-none px-2 text-[11px]'
+                  disabled={!browser.state.supported || !controlTarget}
+                  onClick={() => browser.setAgentAccess('observe')}
+                >
+                  Observe
+                </Button>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='ghost'
+                  aria-label='Enable Agent Browser Control'
+                  title='Allow the active Thread to control this visible Browser'
+                  className='h-full rounded-none px-2 text-[11px]'
+                  disabled={!browser.state.supported || !controlTarget}
+                  onClick={() => browser.setAgentAccess('control')}
+                >
+                  Control
+                </Button>
+              </>
+            )
+            : (
+              <Button
+                type='button'
+                size='sm'
+                variant='default'
+                aria-label='Take Over Browser'
+                aria-pressed='true'
+                title='Take over and immediately revoke agent access'
+                className='h-full rounded-none px-2 text-[11px]'
+                onClick={() => browser.setAgentAccess('off')}
+              >
+                Take over
+              </Button>
+            )}
           <Button
             type='button'
             size='icon'
@@ -155,6 +185,17 @@ export function BrowserPane({
           </Button>
         </div>
       </header>
+
+      {browser.state.agentAccess !== 'off' && browser.state.controlTarget && (
+        <div
+          role='status'
+          data-slot='browser-agent-access'
+          className='shrink-0 border-b border-border bg-primary/10 px-3 py-1 text-xs text-foreground'
+        >
+          Agent {browser.state.agentAccess} · {browser.state.controlTarget.controller} ·{' '}
+          {browser.state.controlTarget.title} ({browser.state.controlTarget.threadId})
+        </div>
+      )}
 
       {browser.state.error && (
         <div role='alert' className='shrink-0 border-b border-border px-3 py-1 text-xs text-destructive'>

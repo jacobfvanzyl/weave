@@ -491,6 +491,13 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
 
   const browserPane = () => (
     <BrowserPane
+      controlTarget={selectedThread(controller.model)
+        ? {
+          threadId: selectedThread(controller.model)!.threadId,
+          title: selectedThread(controller.model)!.title,
+          controller: selectedThread(controller.model)!.agentName,
+        }
+        : undefined}
       maximized={browserIsMaximized}
       onClose={() => {
         setMaximizedPanelKey(undefined);
