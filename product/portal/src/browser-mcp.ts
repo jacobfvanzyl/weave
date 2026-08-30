@@ -50,16 +50,18 @@ const executable = (socketPath: string) => {
 };
 
 export class BrowserMcpBridge {
-  readonly #tokens = new Map<string, string>();
+  readonly #tokens = new Map<string, { value: string; expiresAt: number }>();
 
   constructor(
     readonly stateDirectory: string,
     readonly broker: BrowserControlBroker,
+    readonly now: () => Date = () => new Date(),
+    readonly tokenLifetimeMs = 15 * 60_000,
   ) {}
 
   servers(threadId: string) {
     const token = crypto.randomUUID();
-    this.#tokens.set(threadId, token);
+    this.#tokens.set(threadId, { value: token, expiresAt: this.now().getTime() + this.tokenLifetimeMs });
     const socketPath = browserMcpSocketPath(this.stateDirectory);
     const process = executable(socketPath);
     return [{
@@ -95,7 +97,11 @@ export class BrowserMcpBridge {
         const handshake = object(JSON.parse(checkedLine(first.value)));
         const threadId = typeof handshake.threadId === 'string' ? handshake.threadId : '';
         const token = typeof handshake.token === 'string' ? handshake.token : '';
-        if (handshake.protocol !== protocol || !threadId || this.#tokens.get(threadId) !== token) {
+        const credential = this.#tokens.get(threadId);
+        if (
+          handshake.protocol !== protocol || !threadId || !credential || credential.value !== token ||
+          credential.expiresAt <= this.now().getTime()
+        ) {
           throw new Error('Browser MCP bridge authentication failed.');
         }
         await writeLine(writer, { ok: true, protocol });
@@ -240,12 +246,23 @@ const tools = [
 
 const toolResult = (view: Record<string, unknown>) => {
   const screenshot = object(view.screenshot);
+  const artifact = object(screenshot.artifact);
   const visible = { ...view };
   delete visible.screenshot;
   return {
     content: [
       { type: 'text', text: JSON.stringify(visible) },
       ...(screenshot.data ? [{ type: 'image', mimeType: 'image/png', data: screenshot.data }] : []),
+      ...(artifact.uri
+        ? [{
+          type: 'resource_link',
+          uri: artifact.uri,
+          name: 'browser-screenshot.png',
+          mimeType: 'image/png',
+          size: artifact.sizeBytes,
+          description: `Bounded Browser screenshot artifact; expires ${artifact.expiresAt}.`,
+        }]
+        : []),
     ],
     structuredContent: visible,
     isError: false,

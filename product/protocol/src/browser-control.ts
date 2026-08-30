@@ -17,6 +17,11 @@ export type BrowserControlLimits = {
   maxDurationMs: number;
 };
 
+export type BrowserControlAuthorization = {
+  observe: boolean;
+  control: boolean;
+};
+
 export type BrowserProviderOffer = {
   version: typeof BROWSER_CONTROL_VERSION;
   clientId: string;
@@ -25,6 +30,7 @@ export type BrowserProviderOffer = {
   controlRevision: number;
   platform: 'macOS' | 'iPadOS';
   operations: BrowserControlOperation[];
+  authorization: BrowserControlAuthorization;
   limits: BrowserControlLimits;
 };
 
@@ -51,6 +57,16 @@ export type BrowserElement = {
   checked?: boolean;
 };
 
+export type BrowserScreenshotArtifact = {
+  uri: string;
+  sizeBytes: number;
+  expiresAt: string;
+};
+
+export type BrowserScreenshot =
+  | { mimeType: 'image/png'; data: string; artifact?: never }
+  | { mimeType: 'image/png'; artifact: BrowserScreenshotArtifact; data?: never };
+
 export type BrowserView = {
   id: string;
   tabId: string;
@@ -62,7 +78,7 @@ export type BrowserView = {
   viewport: { width: number; height: number };
   text: string;
   elements: BrowserElement[];
-  screenshot?: { mimeType: 'image/png'; data: string };
+  screenshot?: BrowserScreenshot;
   warnings: string[];
 };
 
@@ -121,6 +137,7 @@ export const BROWSER_CONTROL_ERROR_CODES = [
   'RESULT_TOO_LARGE',
   'NAVIGATION_FAILED',
   'HOST_DISCONNECTED',
+  'BUSY',
 ] as const;
 
 export type BrowserControlErrorCode = typeof BROWSER_CONTROL_ERROR_CODES[number];
@@ -218,6 +235,7 @@ export const parseBrowserProviderOffer = (value: unknown): BrowserProviderOffer 
     return item as BrowserControlOperation;
   });
   const limits = record(input.limits, 'browser provider limits');
+  const authorization = record(input.authorization, 'browser provider authorization');
   return {
     version: BROWSER_CONTROL_VERSION,
     clientId: text(input.clientId, 'clientId'),
@@ -226,6 +244,10 @@ export const parseBrowserProviderOffer = (value: unknown): BrowserProviderOffer 
     controlRevision: integer(input.controlRevision, 'controlRevision'),
     platform: input.platform,
     operations: [...new Set(operations)],
+    authorization: {
+      observe: boolean(authorization.observe, 'authorization.observe'),
+      control: boolean(authorization.control, 'authorization.control'),
+    },
     limits: {
       maxResultBytes: integer(limits.maxResultBytes, 'limits.maxResultBytes', 1),
       maxScreenshotBytes: integer(limits.maxScreenshotBytes, 'limits.maxScreenshotBytes', 1),
@@ -291,6 +313,12 @@ const browserView = (value: unknown): BrowserView => {
   }
   const screenshot = input.screenshot === undefined ? undefined : record(input.screenshot, 'browser screenshot');
   if (screenshot && screenshot.mimeType !== 'image/png') throw new Error('browser screenshot type is invalid.');
+  const screenshotArtifact = screenshot?.artifact === undefined
+    ? undefined
+    : record(screenshot.artifact, 'browser screenshot artifact');
+  if (screenshot && (typeof screenshot.data === 'string') === Boolean(screenshotArtifact)) {
+    throw new Error('browser screenshot must contain exactly one data or artifact payload.');
+  }
   return {
     id: text(input.id, 'view.id'),
     tabId: text(input.tabId, 'view.tabId'),
@@ -315,7 +343,24 @@ const browserView = (value: unknown): BrowserView => {
       };
     }),
     ...(screenshot
-      ? { screenshot: { mimeType: 'image/png' as const, data: text(screenshot.data, 'screenshot.data') } }
+      ? {
+        screenshot: screenshotArtifact
+          ? {
+            mimeType: 'image/png' as const,
+            artifact: {
+              uri: text(screenshotArtifact.uri, 'screenshot.artifact.uri'),
+              sizeBytes: integer(screenshotArtifact.sizeBytes, 'screenshot.artifact.sizeBytes', 1),
+              expiresAt: (() => {
+                const expiresAt = text(screenshotArtifact.expiresAt, 'screenshot.artifact.expiresAt');
+                if (!Number.isFinite(Date.parse(expiresAt))) {
+                  throw new Error('screenshot.artifact.expiresAt is invalid.');
+                }
+                return expiresAt;
+              })(),
+            },
+          }
+          : { mimeType: 'image/png' as const, data: text(screenshot.data, 'screenshot.data') },
+      }
       : {}),
     warnings: input.warnings.map((warning, index) => text(warning, `view.warnings[${index}]`)),
   };

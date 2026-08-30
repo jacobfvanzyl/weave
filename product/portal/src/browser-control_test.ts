@@ -10,8 +10,83 @@ const offer = (overrides: Partial<BrowserProviderOffer> = {}): BrowserProviderOf
   controlRevision: 0,
   platform: 'iPadOS',
   operations: ['see', 'act'],
+  authorization: { observe: true, control: true },
   limits: { maxResultBytes: 64_000, maxScreenshotBytes: 32_000, maxElements: 20, maxDurationMs: 500 },
   ...overrides,
+});
+
+Deno.test('BrowserControlBroker keeps observe and control grants separate', async () => {
+  const broker = new BrowserControlBroker('host-1');
+  broker.attach('principal-1', 'thread-1', offer({
+    authorization: { observe: true, control: false },
+  }), {
+    connectionId: 'connection-1',
+    invoke: (params) => Promise.resolve(resultFor(params)),
+  });
+
+  await broker.invoke('thread-1', { kind: 'see' });
+  await assertRejects(
+    () => broker.invoke('thread-1', {
+      kind: 'act',
+      viewId: 'view-1',
+      action: { kind: 'key', key: 'K' },
+    }),
+    BrowserControlError,
+    'control permission',
+  );
+});
+
+Deno.test('BrowserControlBroker bounds queued work and writes redacted audit events', async () => {
+  const events: Array<Record<string, unknown>> = [];
+  let releaseFirst!: () => void;
+  const broker = new BrowserControlBroker('host-1', () => new Date('2026-08-30T00:00:00.000Z'), 60_000, {
+    maxPendingPerProvider: 1,
+    audit: (event) => events.push(event),
+  });
+  broker.attach('principal-1', 'thread-1', offer(), {
+    connectionId: 'connection-1',
+    invoke: (params) => new Promise((resolve) => {
+      releaseFirst = () => resolve(resultFor(params));
+    }),
+  });
+
+  const first = broker.invoke('thread-1', { kind: 'see' });
+  await Promise.resolve();
+  const queued = broker.invoke('thread-1', { kind: 'see' });
+  await assertRejects(() => queued, BrowserControlError, 'busy');
+  releaseFirst();
+  await first;
+
+  assertEquals(events.some((event) => event.event === 'browser.control.completed'), true);
+  assertEquals(JSON.stringify(events).includes('Ready'), false);
+  assertEquals(JSON.stringify(events).includes('Message'), false);
+});
+
+Deno.test('BrowserControlBroker externalizes large screenshots before returning them', async () => {
+  const broker = new BrowserControlBroker('host-1', undefined, undefined, {
+    screenshotInlineBytes: 8,
+    externalizeScreenshot: (_data, metadata) => Promise.resolve({
+      uri: `weave-browser-artifact://${metadata.requestId}`,
+      sizeBytes: metadata.sizeBytes,
+      expiresAt: '2026-08-30T00:05:00.000Z',
+    }),
+  });
+  broker.attach('principal-1', 'thread-1', offer(), {
+    connectionId: 'connection-1',
+    invoke: (params) => Promise.resolve(resultFor(params, {
+      screenshot: { mimeType: 'image/png', data: btoa('large screenshot') },
+    })),
+  });
+
+  const result = await broker.invoke('thread-1', { kind: 'see', screenshot: true });
+  assertEquals(result.view.screenshot, {
+    mimeType: 'image/png',
+    artifact: {
+      uri: `weave-browser-artifact://${result.requestId}`,
+      sizeBytes: 16,
+      expiresAt: '2026-08-30T00:05:00.000Z',
+    },
+  });
 });
 
 const resultFor = (params: BrowserControlInvokeParams, overrides: Record<string, unknown> = {}) => ({

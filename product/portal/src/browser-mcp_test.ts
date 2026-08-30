@@ -14,6 +14,40 @@ const collect = async (stream: ReadableStream<Uint8Array>) => {
   }
 };
 
+const browserToken = (descriptor: ReturnType<BrowserMcpBridge['servers']>[number]) =>
+  Object.fromEntries(descriptor.env.map(({ name, value }) => [name, value])).WEAVE_BROWSER_MCP_TOKEN!;
+
+const handshake = async (path: string, threadId: string, token: string) => {
+  const connection = await Deno.connect({ transport: 'unix', path });
+  await connection.write(new TextEncoder().encode(`${JSON.stringify({
+    protocol: 'weave-browser-mcp/1',
+    threadId,
+    token,
+  })}\n`));
+  const buffer = new Uint8Array(4096);
+  const count = await connection.read(buffer);
+  connection.close();
+  return JSON.parse(new TextDecoder().decode(buffer.subarray(0, count ?? 0)).trim());
+};
+
+Deno.test('Thread-scoped MCP rotates and expires bearer tokens', async () => {
+  const root = await Deno.makeTempDir({ prefix: 'weave-browser-mcp-token-' });
+  let now = new Date('2026-08-30T00:00:00.000Z');
+  const bridge = new BrowserMcpBridge(root, new BrowserControlBroker('host-1'), () => now, 1_000);
+  const first = bridge.servers('thread-1')[0]!;
+  const firstToken = browserToken(first);
+  const secondToken = browserToken(bridge.servers('thread-1')[0]!);
+  const gateway = await bridge.serve();
+
+  assertEquals((await handshake(gateway.path, 'thread-1', firstToken)).ok, false);
+  assertEquals((await handshake(gateway.path, 'thread-1', secondToken)).ok, true);
+  now = new Date('2026-08-30T00:00:02.000Z');
+  assertEquals((await handshake(gateway.path, 'thread-1', secondToken)).ok, false);
+
+  await gateway.close();
+  await Deno.remove(root, { recursive: true });
+});
+
 Deno.test('Thread-scoped MCP exposes only see and act and reaches the pinned broker', async () => {
   const root = await Deno.makeTempDir({ prefix: 'weave-browser-mcp-' });
   const broker = new BrowserControlBroker('host-1');
@@ -26,6 +60,7 @@ Deno.test('Thread-scoped MCP exposes only see and act and reaches the pinned bro
     controlRevision: 0,
     platform: 'macOS',
     operations: ['see', 'act'],
+    authorization: { observe: true, control: true },
     limits: { maxResultBytes: 64_000, maxScreenshotBytes: 32_000, maxElements: 20, maxDurationMs: 1_000 },
   }, {
     connectionId: 'connection-1',

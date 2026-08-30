@@ -92,6 +92,7 @@ An Alpha offer advertises a version plus operations, limits, and platform, for e
 {
   "version": 1,
   "operations": ["see", "act"],
+  "authorization": { "observe": true, "control": true },
   "limits": { "maxResultBytes": 2097152, "maxScreenshotBytes": 1500000, "maxElements": 200, "maxDurationMs": 30000 },
   "platform": "iPadOS"
 }
@@ -104,11 +105,11 @@ Snapshots are a capped projection, not a DOM dump:
 - URL, title, loading state, viewport, at most 64 KiB of normalized visible text, and at most 200 visible interactive elements.
 - Each element returns role, accessible name, bounds, state, and an opaque locator ID scoped to `{tabId, documentRevision, snapshotId}`. Do not return page selectors or HTML.
 - Redact password values, file paths, authorization-like fields, hidden elements, cookies, storage, headers, and request bodies. Text input values are omitted by default.
-- Screenshot is opt-in, viewport-only, re-encoded with a 1.5 MiB result cap. MCP can return it as an image content item; the MCP result model supports structured content plus image content ([MCP tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)).
+- Screenshot is opt-in, viewport-only, re-encoded with a 1.5 MiB result cap. Small results may be returned as image content; results above 256 KiB are moved to a private five-minute Portal artifact and returned as an MCP resource link. The original tool response therefore never carries unbounded base64.
 - No console or network capture in the vertical slice. Public `WKWebView` provides navigation delegates, script evaluation, and snapshots, not a supported CDP-equivalent network-inspection interface. Later console support would be an explicitly bounded injected adapter; full request/response interception remains out of scope.
 - Upload controls may be reported as requiring human action. The agent cannot set a path or drive the system picker.
 
-Typed failures include `NOT_ATTACHED`, `LEASE_REVOKED`, `CONTROL_INTERRUPTED`, `STALE_TAB`, `STALE_VIEW`, `UNSUPPORTED`, `INVALID_TARGET`, `TIMEOUT`, `CANCELLED`, `RESULT_TOO_LARGE`, `NAVIGATION_FAILED`, and `HOST_DISCONNECTED`. Error text is bounded and must not echo page secrets. The MCP adapter preserves the code, message, and retryability as tool-error evidence.
+Typed failures include `NOT_ATTACHED`, `LEASE_REVOKED`, `CONTROL_INTERRUPTED`, `STALE_TAB`, `STALE_VIEW`, `UNSUPPORTED`, `INVALID_TARGET`, `TIMEOUT`, `CANCELLED`, `RESULT_TOO_LARGE`, `NAVIGATION_FAILED`, `HOST_DISCONNECTED`, and `BUSY`. Error text is bounded and must not echo page secrets. The MCP adapter preserves the code, message, and retryability as tool-error evidence.
 
 ## Threat model
 

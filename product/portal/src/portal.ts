@@ -24,6 +24,7 @@ import { HostedThread, type ThreadAttachment, ThreadPromptActiveError } from './
 import { type RegisteredWorkspace, WorkspaceCatalog, workspaceSummary } from './workspace-catalog.ts';
 import { WorkspaceFileService, type WorkspaceFileWatchSession } from './workspace-files.ts';
 import { BrowserControlBroker, type BrowserHostConnection } from './browser-control.ts';
+import { BrowserControlEvidenceStore } from './browser-evidence.ts';
 import { BrowserMcpBridge } from './browser-mcp.ts';
 
 export class PortalRpcSession {
@@ -165,7 +166,13 @@ export class Portal {
     this.#workspaceFiles = workspaceFiles;
     this.#terminals = terminals;
     this.security = security;
-    this.browserControl = new BrowserControlBroker(security.hostId);
+    const browserEvidence = new BrowserControlEvidenceStore(config.stateDirectory);
+    this.browserControl = new BrowserControlBroker(
+      security.hostId,
+      undefined,
+      undefined,
+      browserEvidence.brokerOptions(),
+    );
     this.browserMcp = new BrowserMcpBridge(config.stateDirectory, this.browserControl);
     this.#workspaces = new Map(
       workspaceCatalog.list().map((

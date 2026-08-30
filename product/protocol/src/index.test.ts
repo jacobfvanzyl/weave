@@ -28,6 +28,7 @@ describe('Portal protocol', () => {
         controlRevision: 4,
         platform: 'iPadOS',
         operations: ['see', 'act'],
+        authorization: { observe: true, control: true },
         limits: {
           maxResultBytes: 65536,
           maxScreenshotBytes: 1500000,
