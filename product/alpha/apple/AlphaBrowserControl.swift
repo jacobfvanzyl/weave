@@ -151,6 +151,16 @@ final class AlphaBrowserControlEngine {
         tasks[requestId]?.cancel()
     }
 
+    private func deadline(from value: Any?) -> Date {
+        guard let raw = value as? String else { return Date() }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = fractional.date(from: raw) { return parsed }
+        let wholeSeconds = ISO8601DateFormatter()
+        wholeSeconds.formatOptions = [.withInternetDateTime]
+        return wholeSeconds.date(from: raw) ?? Date()
+    }
+
     func start(
         request: [String: Any],
         browser: WKWebView,
@@ -196,7 +206,7 @@ final class AlphaBrowserControlEngine {
             do {
                 if command?["kind"] as? String == "see", let url = command?["url"] as? String {
                     navigate(url)
-                    let deadline = ISO8601DateFormatter().date(from: request["deadlineAt"] as? String ?? "") ?? Date()
+                    let deadline = deadline(from: request["deadlineAt"])
                     while browser.isLoading && Date() < deadline {
                         try await Task.sleep(nanoseconds: 50_000_000)
                     }

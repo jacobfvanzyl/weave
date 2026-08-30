@@ -27,4 +27,11 @@ describe('shared Apple visible-browser control host', () => {
     expect(source).not.toContain('document.cookie');
     expect(source).not.toContain('localStorage');
   });
+
+  it('parses the fractional-second RFC 3339 deadlines emitted by Portal', () => {
+    const source = readFileSync(shared, 'utf8');
+    expect(source).toContain('func deadline(from value: Any?)');
+    expect(source).toContain('.withFractionalSeconds');
+    expect(source).toContain('deadline(from: request["deadlineAt"])');
+  });
 });
