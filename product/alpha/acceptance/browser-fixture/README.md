@@ -18,4 +18,4 @@ allows that fixture without adding a test-only App Transport Security exception.
 
 The fixture exposes navigation/history, redirect, slow and failing responses, popup and frame
 policy, upload and attachment responses, permission controls, ephemeral cookies, and stable targets
-for the bounded native snapshot/type/key/click/wait/scroll feasibility probe.
+for the separate Phase 2 native snapshot/type/key/click/wait/scroll feasibility probe.

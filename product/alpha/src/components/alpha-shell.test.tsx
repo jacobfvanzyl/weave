@@ -125,6 +125,48 @@ describe("AlphaShell", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps the human Browser available without a selected Thread or Portal", async () => {
+    const user = userEvent.setup();
+    const value = controller();
+    value.model.connection.status = "disconnected";
+    value.model.connections[0].status = "disconnected";
+    const { container } = render(<AlphaShell controller={value} />);
+
+    expect(screen.getByRole("button", { name: "Show Browser Pane" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Show Terminal Pane" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Show Project Pane" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Show Browser Pane" }));
+    expect(container.querySelector('[data-slot="browser-pane"]')).toBeInTheDocument();
+  });
+
+  it("restores a bottom-docked Browser on mobile without substituting Terminal", () => {
+    class TestResizeObserver {
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    mobileViewport.value = true;
+    window.localStorage.setItem(
+      "weave.alpha.docks.v3",
+      JSON.stringify({
+        schemaVersion: 3,
+        panelPosition: { terminal: "bottom", browser: "bottom", project: "right" },
+        projectOpen: false,
+        browserOpen: true,
+        terminalOpenByScope: {},
+        activePanelByDock: { bottom: "browser", right: null },
+        rememberedSize: { bottom: 32, right: 24 },
+      }),
+    );
+
+    const { container } = render(<AlphaShell controller={controller()} />);
+
+    expect(container.querySelector('[data-slot="alpha-mobile-dock-surface"]'))
+      .toContainElement(container.querySelector('[data-slot="browser-pane"]'));
+    expect(container.querySelector('[data-slot="terminal-pane"]')).not.toBeInTheDocument();
+  });
+
   it("places Project in a separate full-height Right Dock after the Editor Pane", async () => {
     const value = controller();
     value.model.platform = "ios";

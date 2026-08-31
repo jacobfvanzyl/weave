@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  isBenignDevicectlLaunchFailure,
   selectPhysicalIPad,
   validateIPadBrowserAcceptanceReport,
   validateIPadBrowserRestartReport,
@@ -46,8 +47,10 @@ describe('Weave Alpha physical-iPad acceptance', () => {
   test('rejects stale or incomplete app-written evidence', () => {
     expect(() => validateIPadBrowserAcceptanceReport({
       fixtureLoaded: true,
+      multiTabLifecycleSucceeded: true,
       runId: 'old-run',
       screenshotWritten: true,
+      slotMatchesSurface: true,
       slotPresented: true,
     }, 'current-run')).toThrow('current-run');
   });
@@ -60,5 +63,27 @@ describe('Weave Alpha physical-iPad acceptance', () => {
       runId: 'verify-run',
       stage: 'verify',
     }, 'verify-run', 'verify')).toMatchObject({ cookieAbsent: true });
+  });
+
+  test('requires the native Browser frame to match the React surface', () => {
+    expect(() => validateIPadBrowserAcceptanceReport({
+      browserDataStoreIsNonPersistent: true,
+      cookieAvailableBeforeReset: true,
+      cookieClearedByReset: true,
+      fixtureLoaded: true,
+      multiTabLifecycleSucceeded: true,
+      runId: 'geometry-run',
+      screenshotWritten: true,
+      slotMatchesSurface: false,
+      slotPresented: true,
+    }, 'geometry-run')).toThrow('geometry-run');
+  });
+
+  test('only tolerates devicectl losing the PID of an app that exited successfully', () => {
+    expect(isBenignDevicectlLaunchFailure(
+      'The process was launched, but the process identifier could not be determined because it exited.',
+    )).toBe(true);
+    expect(isBenignDevicectlLaunchFailure('Device is disconnected.')).toBe(false);
+    expect(isBenignDevicectlLaunchFailure('Application com.veezee.alpha is not installed.')).toBe(false);
   });
 });

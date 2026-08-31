@@ -17,15 +17,30 @@ export class AlphaBrowserControlError extends Error {
 }
 
 export type AlphaBrowserPolicy = {
-  popups: 'same-session';
+  popups: 'new-tab' | 'same-session';
   uploads: 'system-picker';
   downloads: 'unavailable';
   mediaPermissions: 'denied';
   otherPermissions: 'webkit-default';
 };
 
+export type AlphaBrowserTabState = {
+  id: string;
+  url: string;
+  title?: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  notice?: string;
+  error?: string;
+  generation?: number;
+  controlRevision?: number;
+};
+
 export type AlphaBrowserState = {
   supported: boolean;
+  tabs: AlphaBrowserTabState[];
+  selectedTabId?: string;
   url: string;
   title?: string;
   loading: boolean;
@@ -54,11 +69,15 @@ export type AlphaBrowserCommand =
   | { type: 'status' }
   | { type: 'present'; frame: AlphaBrowserFrame }
   | { type: 'hide' }
-  | { type: 'navigate'; url: string }
-  | { type: 'back' }
-  | { type: 'forward' }
-  | { type: 'reload' }
-  | { type: 'stop' }
+  | { type: 'tab.new' }
+  | { type: 'tab.select'; tabId: string }
+  | { type: 'tab.close'; tabId: string }
+  | { type: 'navigate'; tabId?: string; url: string }
+  | { type: 'back'; tabId?: string }
+  | { type: 'forward'; tabId?: string }
+  | { type: 'reload'; tabId?: string }
+  | { type: 'stop'; tabId?: string }
+  | { type: 'open.external'; url: string }
   | { type: 'reset' }
   | { type: 'control'; request: BrowserControlInvokeParams }
   | { type: 'control.cancel'; requestId: string };
@@ -90,11 +109,11 @@ declare global {
 
 const browserStateEvent = 'weave:alpha-browser-state';
 const browserControlResultEvent = 'weave:alpha-browser-control-result';
-const defaultBrowserUrl = 'https://example.com';
-
 const initialState = (target: Window): AlphaBrowserState => ({
   supported: Boolean(target.webkit?.messageHandlers?.alphaBrowser),
-  url: defaultBrowserUrl,
+  tabs: [],
+  selectedTabId: undefined,
+  url: '',
   loading: false,
   canGoBack: false,
   canGoForward: false,
@@ -107,7 +126,7 @@ const browserPolicy = (value: unknown): AlphaBrowserPolicy | undefined => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const input = value as Partial<AlphaBrowserPolicy>;
   if (
-    input.popups !== 'same-session' ||
+    input.popups !== 'same-session' && input.popups !== 'new-tab' ||
     input.uploads !== 'system-picker' ||
     input.downloads !== 'unavailable' ||
     input.mediaPermissions !== 'denied' ||
@@ -122,18 +141,90 @@ const browserPolicy = (value: unknown): AlphaBrowserPolicy | undefined => {
   };
 };
 
-const browserState = (value: unknown): AlphaBrowserState | undefined => {
+const browserTabState = (value: unknown): AlphaBrowserTabState | undefined => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
-  const input = value as Partial<AlphaBrowserState>;
+  const input = value as Partial<AlphaBrowserTabState>;
   if (
-    typeof input.supported !== 'boolean' ||
+    typeof input.id !== 'string' || !input.id ||
     typeof input.url !== 'string' ||
     typeof input.loading !== 'boolean' ||
     typeof input.canGoBack !== 'boolean' ||
     typeof input.canGoForward !== 'boolean'
   ) return;
   return {
+    id: input.id,
+    url: input.url,
+    title: typeof input.title === 'string' ? input.title : undefined,
+    loading: input.loading,
+    canGoBack: input.canGoBack,
+    canGoForward: input.canGoForward,
+    notice: typeof input.notice === 'string' ? input.notice : undefined,
+    error: typeof input.error === 'string' ? input.error : undefined,
+    generation: Number.isSafeInteger(input.generation) ? Number(input.generation) : undefined,
+    controlRevision: Number.isSafeInteger(input.controlRevision)
+      ? Number(input.controlRevision)
+      : undefined,
+  };
+};
+
+const browserState = (value: unknown): AlphaBrowserState | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const input = value as Partial<AlphaBrowserState>;
+  if (typeof input.supported !== 'boolean') return;
+  if (Array.isArray(input.tabs)) {
+    const tabs = input.tabs.map(browserTabState);
+    if (tabs.some((tab) => !tab)) return;
+    const boundedTabs = tabs as AlphaBrowserTabState[];
+    const selectedTabId = typeof input.selectedTabId === 'string' &&
+        boundedTabs.some(({ id }) => id === input.selectedTabId)
+      ? input.selectedTabId
+      : boundedTabs[0]?.id;
+    const selected = boundedTabs.find(({ id }) => id === selectedTabId);
+    return {
+      supported: input.supported,
+      tabs: boundedTabs,
+      selectedTabId,
+      url: selected?.url ?? '',
+      title: selected?.title,
+      loading: selected?.loading ?? false,
+      canGoBack: selected?.canGoBack ?? false,
+      canGoForward: selected?.canGoForward ?? false,
+      notice: selected?.notice,
+      policy: browserPolicy(input.policy),
+      error: selected?.error,
+      tabId: selected?.id,
+      generation: selected?.generation,
+      controlRevision: selected?.controlRevision,
+      agentControlEnabled: false,
+      agentAccess: 'off',
+      visible: false,
+    };
+  }
+  if (
+    typeof input.url !== 'string' ||
+    typeof input.loading !== 'boolean' ||
+    typeof input.canGoBack !== 'boolean' ||
+    typeof input.canGoForward !== 'boolean'
+  ) return;
+  const legacyTabId = typeof input.tabId === 'string' ? input.tabId : 'legacy-tab';
+  const legacyTab: AlphaBrowserTabState = {
+    id: legacyTabId,
+    url: input.url,
+    title: typeof input.title === 'string' ? input.title : undefined,
+    loading: input.loading,
+    canGoBack: input.canGoBack,
+    canGoForward: input.canGoForward,
+    notice: typeof input.notice === 'string' ? input.notice : undefined,
+    error: typeof input.error === 'string' ? input.error : undefined,
+    generation: Number.isSafeInteger(input.generation) ? Number(input.generation) : undefined,
+    controlRevision: Number.isSafeInteger(input.controlRevision)
+      ? Number(input.controlRevision)
+      : undefined,
+  };
+  return {
     supported: input.supported,
+    tabs: [legacyTab],
+    selectedTabId: legacyTabId,
     url: input.url,
     title: typeof input.title === 'string' ? input.title : undefined,
     loading: input.loading,

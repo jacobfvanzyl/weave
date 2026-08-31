@@ -115,6 +115,10 @@ An open Pane that presents a Thread within its owning Workspace's main work area
 _Avoid_: Agent pane, chat window
 
 **Browser Session**:
-The single ephemeral web-browsing context presented by a Browser Pane and optionally attached to one Thread for visible, revocable agent control.
-Resetting or replacing its native WebView ends the Browser Session.
-_Avoid_: Preview, browser tab, hidden browser, agent browser
+The single ephemeral web-browsing context presented by a Browser Pane. Its ordered Browser Tabs share cookies and site data until the user resets it or quits Alpha.
+Human operation is the Phase 1 product contract; agent observation and control belong to a separately scoped Phase 2.
+_Avoid_: Preview, hidden browser, agent browser
+
+**Browser Tab**:
+A human-visible page and navigation history within one Browser Session. Closing the last Browser Tab immediately creates a fresh blank Browser Tab.
+_Avoid_: Workspace Tab, Pane, hidden browser

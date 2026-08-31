@@ -405,10 +405,14 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     loading: false,
     error: 'Select a Thread to open its Workspace Terminals.',
   };
-  const bottomOpen = hasActiveThread && dockLayout.snapshot.docks.bottom.open;
-  const rightOpen = hasActiveThread && dockLayout.snapshot.docks.right.open;
+  const panelAvailable = (panelId: AlphaDockPanelId | null) =>
+    panelId === 'browser' || hasActiveThread;
+  const bottomOpen = dockLayout.snapshot.docks.bottom.open &&
+    panelAvailable(dockLayout.snapshot.docks.bottom.activePanelId);
+  const rightOpen = dockLayout.snapshot.docks.right.open &&
+    panelAvailable(dockLayout.snapshot.docks.right.activePanelId);
   const terminalActive = hasActiveThread && dockLayout.isPanelActive('terminal');
-  const browserActive = hasActiveThread && dockLayout.isPanelActive('browser');
+  const browserActive = dockLayout.isPanelActive('browser');
   const terminalIsMaximized = terminalActive &&
     maximizedPanelKey === `terminal:${terminalScopeKey}`;
   const browserIsMaximized = browserActive && maximizedPanelKey === 'browser';
@@ -453,7 +457,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
   const rail = (
     <DockRailActions
       snapshot={dockLayout.snapshot}
-      disabled={!hasActiveThread}
+      disabled={(panelId) => panelId !== 'browser' && !hasActiveThread}
       onToggle={toggleDockPanel}
       onMovePanel={(panelId, position) => {
         dockLayout.movePanel(panelId, position);
@@ -491,13 +495,6 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
 
   const browserPane = () => (
     <BrowserPane
-      controlTarget={selectedThread(controller.model)
-        ? {
-          threadId: selectedThread(controller.model)!.threadId,
-          title: selectedThread(controller.model)!.title,
-          controller: selectedThread(controller.model)!.agentName,
-        }
-        : undefined}
       maximized={browserIsMaximized}
       onClose={() => {
         setMaximizedPanelKey(undefined);
@@ -556,7 +553,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     : rightOpen
     ? dockLayout.snapshot.docks.right.activePanelId
     : bottomOpen
-    ? 'terminal'
+    ? dockLayout.snapshot.docks.bottom.activePanelId
     : null;
 
   return (

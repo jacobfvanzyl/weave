@@ -7,11 +7,6 @@ export type MacosBrowserAcceptanceReport = {
   alphaLoaded: boolean;
   browserDataStoreIsNonPersistent: boolean;
   browserPaneMounted: boolean;
-  controlClickAndWaitSucceeded: boolean;
-  controlKeySucceeded: boolean;
-  controlScrollSucceeded: boolean;
-  controlSnapshotCaptured: boolean;
-  controlTypeSucceeded: boolean;
   cookieAvailableBeforeReset: boolean;
   cookieClearedByReset: boolean;
   downloadNoticeReportedToShell: boolean;
@@ -23,6 +18,7 @@ export type MacosBrowserAcceptanceReport = {
   navigatedToPage2: boolean;
   mediaCaptureWasDenied: boolean;
   mediaPolicyReportedToShell: boolean;
+  multiTabLifecycleSucceeded: boolean;
   popupNoticeReportedToShell: boolean;
   popupStayedInVisibleSession: boolean;
   reloadRecoveredSessionState: boolean;
@@ -39,8 +35,12 @@ export type MacosBrowserAcceptanceReport = {
   slotPresented: boolean;
   slotOrientation: 'bottom' | 'right';
   slotWidth: number;
+  slotX: number;
+  slotY: number;
   surfaceHeight: number;
   surfaceWidth: number;
+  surfaceX: number;
+  surfaceY: number;
   webViewsAreDistinct: boolean;
 };
 

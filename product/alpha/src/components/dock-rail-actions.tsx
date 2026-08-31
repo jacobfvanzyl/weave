@@ -30,7 +30,7 @@ export function DockRailActions({
   onMovePanel,
 }: {
   snapshot: AlphaDockSnapshot;
-  disabled: boolean;
+  disabled: boolean | ((panelId: AlphaDockPanelId) => boolean);
   onToggle(panelId: AlphaDockPanelId): void;
   onMovePanel(panelId: AlphaMovableDockPanelId, position: AlphaDockPosition): void;
 }) {
@@ -113,7 +113,7 @@ export function DockRailActions({
         className={cn(
           active && 'text-primary',
         )}
-        disabled={disabled}
+        disabled={typeof disabled === 'function' ? disabled(panelId) : disabled}
         onClick={() => {
           if (movable(panelId) && suppressClickRef.current === panelId) {
             suppressClickRef.current = undefined;

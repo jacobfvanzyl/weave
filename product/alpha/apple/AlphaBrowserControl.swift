@@ -48,7 +48,26 @@ let alphaBrowserMediaPolicySource = """
 let alphaBrowserHumanInputSource = """
 (() => {
   const notify = event => {
-    if (event.isTrusted) webkit.messageHandlers.alphaBrowserHumanInput.postMessage({});
+    if (!event.isTrusted) return;
+    if (event.type !== 'keydown') {
+      webkit.messageHandlers.alphaBrowserHumanInput.postMessage({ kind: 'input' });
+      return;
+    }
+    const command = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
+    const shortcut = key === 'escape' || (command && (
+      ['t', 'w', 'l', 'r', '[', ']', '.', 'tab'].includes(key) ||
+      /^[1-9]$/.test(key) || (event.shiftKey && key === 'o')
+    ));
+    webkit.messageHandlers.alphaBrowserHumanInput.postMessage({
+      kind: shortcut ? 'shortcut' : 'input',
+      key: event.key,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey
+    });
+    if (shortcut && command) event.preventDefault();
   };
   addEventListener('pointerdown', notify, true);
   addEventListener('keydown', notify, true);

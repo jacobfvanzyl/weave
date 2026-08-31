@@ -45,6 +45,16 @@ describe('DirectHostClient', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     let snapshot: AlphaBrowserState = {
       supported: true,
+      tabs: [{
+        id: 'tab-1',
+        url: 'https://example.com',
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        generation: 1,
+        controlRevision: 0,
+      }],
+      selectedTabId: 'tab-1',
       url: 'https://example.com',
       loading: false,
       canGoBack: false,

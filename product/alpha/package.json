@@ -12,6 +12,7 @@
     "acceptance:browser:fixture": "bun acceptance/browser-fixture/server.ts",
     "acceptance:browser:fixture:test": "bun test acceptance/browser-fixture/server.test.ts",
     "acceptance:browser:apple-control:test": "bun test acceptance/apple-browser-control-source.test.ts",
+    "acceptance:browser:apple-human:test": "bun test acceptance/apple-browser-tabs-source.test.ts",
     "acceptance:browser:control:evidence:test": "bun test acceptance/browser-control/journal-evidence.test.ts",
     "acceptance:browser:control:evidence": "bun acceptance/browser-control/journal-evidence.ts",
     "acceptance:browser:macos": "bun acceptance/macos-host/run-macos-cli.ts",

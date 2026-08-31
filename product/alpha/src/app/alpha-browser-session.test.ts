@@ -14,7 +14,9 @@ describe('createAlphaBrowserSession', () => {
 
     expect(session.getSnapshot()).toEqual({
       supported: false,
-      url: 'https://example.com',
+      tabs: [],
+      selectedTabId: undefined,
+      url: '',
       loading: false,
       canGoBack: false,
       canGoForward: false,
@@ -23,6 +25,69 @@ describe('createAlphaBrowserSession', () => {
       visible: false,
     });
     expect(session.send({ type: 'reload' })).toBe(false);
+  });
+
+  it('exposes ordered native tabs and sends explicit tab lifecycle commands', () => {
+    const commands: AlphaBrowserCommand[] = [];
+    Object.defineProperty(window, 'webkit', {
+      configurable: true,
+      value: {
+        messageHandlers: {
+          alphaBrowser: {
+            postMessage: (command: AlphaBrowserCommand) => commands.push(command),
+          },
+        },
+      },
+    });
+    const session = createAlphaBrowserSession();
+    const unsubscribe = session.subscribe(() => undefined);
+
+    window.dispatchEvent(new CustomEvent('weave:alpha-browser-state', {
+      detail: {
+        supported: true,
+        selectedTabId: 'tab-2',
+        tabs: [
+          {
+            id: 'tab-1',
+            url: 'https://example.org/',
+            title: 'Example',
+            loading: false,
+            canGoBack: true,
+            canGoForward: false,
+            generation: 1,
+          },
+          {
+            id: 'tab-2',
+            url: '',
+            title: '',
+            loading: false,
+            canGoBack: false,
+            canGoForward: false,
+            generation: 2,
+          },
+        ],
+      },
+    }));
+
+    expect(session.getSnapshot()).toMatchObject({
+      selectedTabId: 'tab-2',
+      tabId: 'tab-2',
+      url: '',
+      tabs: [
+        { id: 'tab-1', title: 'Example', url: 'https://example.org/' },
+        { id: 'tab-2', title: '', url: '' },
+      ],
+    });
+
+    session.send({ type: 'tab.new' });
+    session.send({ type: 'tab.select', tabId: 'tab-1' });
+    session.send({ type: 'tab.close', tabId: 'tab-2' });
+    expect(commands.slice(-3)).toEqual([
+      { type: 'tab.new' },
+      { type: 'tab.select', tabId: 'tab-1' },
+      { type: 'tab.close', tabId: 'tab-2' },
+    ]);
+    unsubscribe();
   });
 
   it('drives the native handler and accepts only bounded host state', () => {
@@ -69,6 +134,19 @@ describe('createAlphaBrowserSession', () => {
     expect(changed).toHaveBeenCalledOnce();
     expect(session.getSnapshot()).toEqual({
       supported: true,
+      tabs: [{
+        id: 'legacy-tab',
+        url: 'https://example.org/',
+        title: 'Example',
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        notice: 'Popup stayed in this session.',
+        error: 'Recoverable fixture error.',
+        generation: undefined,
+        controlRevision: undefined,
+      }],
+      selectedTabId: 'legacy-tab',
       url: 'https://example.org/',
       title: 'Example',
       loading: false,

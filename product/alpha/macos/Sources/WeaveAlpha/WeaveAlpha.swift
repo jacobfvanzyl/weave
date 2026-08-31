@@ -70,18 +70,50 @@ private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
+private final class AlphaBrowserTab {
+    let id: String
+    let generation: Int
+    let webView: WKWebView
+    var error: String?
+    var notice: String?
+    var stateObservations: [NSKeyValueObservation] = []
+
+    init(id: String = UUID().uuidString, generation: Int, webView: WKWebView) {
+        self.id = id
+        self.generation = generation
+        self.webView = webView
+    }
+}
+
 @MainActor
 private final class BrowserHostController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     private let root = NSView()
     private let appSchemeHandler: AlphaAppSchemeHandler
     private let shell: WKWebView
-    private var browser: WKWebView?
+    private let browserDataStore = WKWebsiteDataStore.nonPersistent()
+    private var browserTabs: [AlphaBrowserTab] = []
+    private var selectedBrowserTabId: String?
+    private var recentBrowserTabIds: [String] = []
     private var lastBrowserFrame = NSRect.zero
-    private var browserError: String?
-    private var browserNotice: String?
-    private var browserTabId = UUID().uuidString
-    private var browserGeneration = 0
+    private var browserPresentationRequested = false
+    private var browserResetInProgress = false
+    private var nextBrowserGeneration = 0
     private let browserControl = AlphaBrowserControlEngine()
+
+    private var selectedBrowserTab: AlphaBrowserTab? {
+        browserTabs.first { $0.id == selectedBrowserTabId }
+    }
+    private var browser: WKWebView? { selectedBrowserTab?.webView }
+    private var browserError: String? {
+        get { selectedBrowserTab?.error }
+        set { selectedBrowserTab?.error = newValue }
+    }
+    private var browserNotice: String? {
+        get { selectedBrowserTab?.notice }
+        set { selectedBrowserTab?.notice = newValue }
+    }
+    private var browserTabId: String { selectedBrowserTab?.id ?? "" }
+    private var browserGeneration: Int { selectedBrowserTab?.generation ?? nextBrowserGeneration }
 
     override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
         let configuration = WKWebViewConfiguration()
@@ -141,6 +173,9 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "alphaBrowserHumanInput" {
             browserControl.interrupt()
+            if let input = message.body as? [String: Any], input["kind"] as? String == "shortcut" {
+                dispatchHumanShortcut(input)
+            }
             emitBrowserState()
             return
         }
@@ -149,6 +184,12 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
             let command = message.body as? [String: Any],
             let type = command["type"] as? String
         else { return }
+
+        if browserResetInProgress,
+           !["status", "present", "hide", "open.external", "control.cancel"].contains(type) {
+            emitBrowserState()
+            return
+        }
 
         switch type {
         case "status":
@@ -169,18 +210,35 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
             else { return }
             presentBrowser(cssFrame: NSRect(x: x, y: y, width: width, height: height))
         case "hide":
-            browser?.isHidden = true
-        case "navigate":
-            if let value = command["url"] as? String { navigate(to: value) }
-        case "back":
-            if browser?.canGoBack == true { browser?.goBack() }
-        case "forward":
-            if browser?.canGoForward == true { browser?.goForward() }
-        case "reload":
-            browser?.reload()
-        case "stop":
-            browser?.stopLoading()
+            browserPresentationRequested = false
+            browserTabs.forEach { $0.webView.isHidden = true }
+        case "tab.new":
+            _ = createBrowserTab(after: selectedBrowserTabId, select: true)
+            showSelectedBrowser()
             emitBrowserState()
+        case "tab.select":
+            if let tabId = command["tabId"] as? String { selectBrowserTab(tabId) }
+        case "tab.close":
+            if let tabId = command["tabId"] as? String { closeBrowserTab(tabId) }
+        case "navigate":
+            if let value = command["url"] as? String {
+                navigate(to: value, tabId: command["tabId"] as? String)
+            }
+        case "back":
+            let target = browser(for: command["tabId"] as? String)
+            if target?.canGoBack == true { target?.goBack() }
+        case "forward":
+            let target = browser(for: command["tabId"] as? String)
+            if target?.canGoForward == true { target?.goForward() }
+        case "reload":
+            browser(for: command["tabId"] as? String)?.reload()
+        case "stop":
+            browser(for: command["tabId"] as? String)?.stopLoading()
+            emitBrowserState()
+        case "open.external":
+            if let value = command["url"] as? String, let url = URL(string: value) {
+                NSWorkspace.shared.open(url)
+            }
         case "reset":
             resetBrowser()
         case "control":
@@ -197,80 +255,169 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     }
 
     private func presentBrowser(cssFrame: NSRect) {
-        if browser == nil { installFreshBrowser(loadDefault: true) }
+        browserPresentationRequested = true
+        if browser == nil && !browserResetInProgress { _ = createBrowserTab(select: true) }
         lastBrowserFrame = cssFrame
         applyLastBrowserFrame()
-        browser?.isHidden = false
-        if browser?.superview == nil, let browser {
-            root.addSubview(browser, positioned: .above, relativeTo: shell)
-        }
+        showSelectedBrowser()
         emitBrowserState()
     }
 
     private func applyLastBrowserFrame() {
-        guard let browser else { return }
-        browser.frame = NSRect(
+        let frame = NSRect(
             x: lastBrowserFrame.minX,
             y: root.bounds.height - lastBrowserFrame.minY - lastBrowserFrame.height,
             width: max(0, lastBrowserFrame.width),
             height: max(0, lastBrowserFrame.height)
         ).intersection(root.bounds)
+        browserTabs.forEach { $0.webView.frame = frame }
     }
 
-    private func installFreshBrowser(loadDefault: Bool) {
-        browser?.stopLoading()
-        browser?.navigationDelegate = nil
-        browser?.uiDelegate = nil
-        browser?.removeFromSuperview()
-
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.userContentController.addUserScript(WKUserScript(
-            source: alphaBrowserMediaPolicySource,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: false,
-            in: .page
-        ))
-        configuration.userContentController.addUserScript(WKUserScript(
-            source: alphaBrowserHumanInputSource,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: false,
-            in: .page
-        ))
-        configuration.userContentController.add(
-            WeakMessageHandler(delegate: self),
-            name: "alphaBrowserHumanInput"
-        )
+    @discardableResult
+    private func createBrowserTab(
+        after tabId: String? = nil,
+        configuration suppliedConfiguration: WKWebViewConfiguration? = nil,
+        select: Bool
+    ) -> AlphaBrowserTab {
+        let configuration = suppliedConfiguration ?? WKWebViewConfiguration()
+        configuration.websiteDataStore = browserDataStore
+        if suppliedConfiguration == nil {
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: alphaBrowserMediaPolicySource,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false,
+                in: .page
+            ))
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: alphaBrowserHumanInputSource,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false,
+                in: .page
+            ))
+            configuration.userContentController.add(
+                WeakMessageHandler(delegate: self),
+                name: "alphaBrowserHumanInput"
+            )
+        }
         let replacement = WKWebView(frame: .zero, configuration: configuration)
         replacement.navigationDelegate = self
         replacement.uiDelegate = self
         replacement.isHidden = true
-        browser = replacement
-        browserTabId = UUID().uuidString
-        browserGeneration += 1
-        browserControl.reset()
+        nextBrowserGeneration += 1
+        let tab = AlphaBrowserTab(generation: nextBrowserGeneration, webView: replacement)
+        let insertion = tabId.flatMap { id in browserTabs.firstIndex { $0.id == id } }.map { $0 + 1 }
+            ?? browserTabs.endIndex
+        browserTabs.insert(tab, at: insertion)
+        observeBrowserState(of: tab)
         root.addSubview(replacement, positioned: .above, relativeTo: shell)
-        browserError = nil
-        browserNotice = nil
-        if loadDefault { navigate(to: alphaBrowserDefaultURL) }
+        if select {
+            selectedBrowserTabId = tab.id
+            recordRecentTab(tab.id)
+            browserControl.reset()
+        }
+        applyLastBrowserFrame()
+        return tab
+    }
+
+    private func observeBrowserState(of tab: AlphaBrowserTab) {
+        let stateChanged: @Sendable () -> Void = { [weak self] in
+            Task { @MainActor [weak self] in self?.emitBrowserState() }
+        }
+        tab.stateObservations = [
+            tab.webView.observe(\.title, options: [.new]) { _, _ in stateChanged() },
+            tab.webView.observe(\.url, options: [.new]) { _, _ in stateChanged() },
+            tab.webView.observe(\.canGoBack, options: [.new]) { _, _ in stateChanged() },
+            tab.webView.observe(\.canGoForward, options: [.new]) { _, _ in stateChanged() },
+            tab.webView.observe(\.isLoading, options: [.new]) { _, _ in stateChanged() },
+        ]
+    }
+
+    private func browser(for tabId: String?) -> WKWebView? {
+        guard let tabId else { return browser }
+        return browserTabs.first { $0.id == tabId }?.webView
+    }
+
+    private func tab(for webView: WKWebView) -> AlphaBrowserTab? {
+        browserTabs.first { $0.webView === webView }
+    }
+
+    private func recordRecentTab(_ tabId: String) {
+        recentBrowserTabIds.removeAll { $0 == tabId }
+        recentBrowserTabIds.append(tabId)
+    }
+
+    private func showSelectedBrowser() {
+        for tab in browserTabs {
+            tab.webView.isHidden = !browserPresentationRequested ||
+                tab.id != selectedBrowserTabId || tab.webView.url == nil
+        }
+    }
+
+    private func selectBrowserTab(_ tabId: String) {
+        guard browserTabs.contains(where: { $0.id == tabId }) else { return }
+        selectedBrowserTabId = tabId
+        recordRecentTab(tabId)
+        browserControl.reset()
+        showSelectedBrowser()
+        emitBrowserState()
+    }
+
+    private func closeBrowserTab(_ tabId: String) {
+        guard let index = browserTabs.firstIndex(where: { $0.id == tabId }) else { return }
+        let wasSelected = selectedBrowserTabId == tabId
+        let removed = browserTabs.remove(at: index)
+        removed.webView.stopLoading()
+        removed.webView.navigationDelegate = nil
+        removed.webView.uiDelegate = nil
+        removed.webView.removeFromSuperview()
+        recentBrowserTabIds.removeAll { $0 == tabId }
+        if browserTabs.isEmpty {
+            selectedBrowserTabId = nil
+            _ = createBrowserTab(select: true)
+        } else if wasSelected {
+            selectedBrowserTabId = recentBrowserTabIds.last(where: { recent in
+                browserTabs.contains { $0.id == recent }
+            }) ?? browserTabs[min(index, browserTabs.count - 1)].id
+            if let selectedBrowserTabId { recordRecentTab(selectedBrowserTabId) }
+        }
+        browserControl.reset()
+        showSelectedBrowser()
+        emitBrowserState()
     }
 
     private func resetBrowser() {
-        let dataStore = browser?.configuration.websiteDataStore
-        dataStore?.removeData(
+        guard !browserResetInProgress else { return }
+        browserResetInProgress = true
+        browserTabs.forEach { tab in
+            tab.webView.stopLoading()
+            tab.webView.navigationDelegate = nil
+            tab.webView.uiDelegate = nil
+            tab.webView.removeFromSuperview()
+        }
+        browserTabs.removeAll()
+        selectedBrowserTabId = nil
+        recentBrowserTabIds.removeAll()
+        browserControl.reset()
+        emitBrowserState()
+        browserDataStore.removeData(
             ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
             modifiedSince: .distantPast
         ) { [weak self] in
             DispatchQueue.main.async {
-                self?.installFreshBrowser(loadDefault: true)
+                self?.browserResetInProgress = false
+                _ = self?.createBrowserTab(select: true)
                 self?.applyLastBrowserFrame()
-                self?.browser?.isHidden = false
+                self?.showSelectedBrowser()
+                self?.emitBrowserState()
             }
         }
     }
 
-    private func navigate(to rawValue: String) {
-        if browser == nil { installFreshBrowser(loadDefault: false) }
+    private func navigate(to rawValue: String, tabId: String? = nil) {
+        if browserTabs.isEmpty { _ = createBrowserTab(select: true) }
+        guard let targetTab = tabId.flatMap({ id in browserTabs.first { $0.id == id } }) ?? selectedBrowserTab else {
+            return
+        }
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let candidate = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
         guard
@@ -278,14 +425,15 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
             let scheme = url.scheme?.lowercased(),
             scheme == "http" || scheme == "https"
         else {
-            browserError = "Invalid web URL: \(rawValue)"
-            browserNotice = nil
+            targetTab.error = "Invalid web URL: \(rawValue)"
+            targetTab.notice = nil
             emitBrowserState()
             return
         }
-        browserError = nil
-        browserNotice = nil
-        browser?.load(URLRequest(url: url))
+        targetTab.error = nil
+        targetTab.notice = nil
+        targetTab.webView.isHidden = !browserPresentationRequested || targetTab.id != selectedBrowserTabId
+        targetTab.webView.load(URLRequest(url: url))
         emitBrowserState()
     }
 
@@ -296,26 +444,33 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     }
 
     private func dispatchBrowserState() {
-        var state: [String: Any] = [
+        let tabs = browserTabs.map { tab -> [String: Any] in
+            var state: [String: Any] = [
+                "id": tab.id,
+                "url": tab.webView.url?.absoluteString ?? "",
+                "title": tab.webView.title ?? "",
+                "loading": tab.webView.isLoading,
+                "canGoBack": tab.webView.canGoBack,
+                "canGoForward": tab.webView.canGoForward,
+                "generation": tab.generation,
+                "controlRevision": browserControl.controlRevision,
+            ]
+            if let notice = tab.notice { state["notice"] = notice }
+            if let error = tab.error { state["error"] = error }
+            return state
+        }
+        let state: [String: Any] = [
             "supported": true,
-            "url": browser?.url?.absoluteString ?? alphaBrowserDefaultURL,
-            "title": browser?.title ?? "",
-            "loading": browser?.isLoading ?? false,
-            "canGoBack": browser?.canGoBack ?? false,
-            "canGoForward": browser?.canGoForward ?? false,
-            "tabId": browserTabId,
-            "generation": browserGeneration,
-            "controlRevision": browserControl.controlRevision,
+            "tabs": tabs,
+            "selectedTabId": selectedBrowserTabId ?? "",
             "policy": [
-                "popups": "same-session",
+                "popups": "new-tab",
                 "uploads": "system-picker",
                 "downloads": "unavailable",
                 "mediaPermissions": "denied",
                 "otherPermissions": "webkit-default",
             ],
         ]
-        if let browserNotice { state["notice"] = browserNotice }
-        if let browserError { state["error"] = browserError }
         guard
             let data = try? JSONSerialization.data(withJSONObject: state),
             let json = String(data: data, encoding: .utf8)
@@ -357,8 +512,10 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        if webView === browser {
-            browserControl.invalidate()
+        if webView === browser { browserControl.invalidate() }
+        if let tab = tab(for: webView) {
+            tab.notice = nil
+            showSelectedBrowser()
             emitBrowserState()
         }
     }
@@ -368,19 +525,18 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
-        guard webView === browser else {
+        guard let tab = tab(for: webView) else {
             decisionHandler(.allow)
             return
         }
         if navigationAction.shouldPerformDownload {
-            reportUnsupportedDownload()
+            reportUnsupportedDownload(in: tab)
             decisionHandler(.cancel)
             return
         }
-        if let url = navigationAction.request.url, !isAllowedWebURL(url) {
-            browserError = "Unsupported URL scheme: \(url.scheme ?? "unknown")"
-            browserNotice = nil
-            emitBrowserState()
+        let isTopLevel = navigationAction.targetFrame?.isMainFrame ?? true
+        if isTopLevel, let url = navigationAction.request.url, !isAllowedWebURL(url) {
+            dispatchExternalRequest(url)
             decisionHandler(.cancel)
             return
         }
@@ -392,7 +548,7 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
     ) {
-        guard webView === browser else {
+        guard let tab = tab(for: webView) else {
             decisionHandler(.allow)
             return
         }
@@ -400,7 +556,7 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
             .value(forHTTPHeaderField: "Content-Disposition")?
             .lowercased()
         if disposition?.contains("attachment") == true {
-            reportUnsupportedDownload()
+            reportUnsupportedDownload(in: tab)
             decisionHandler(.cancel)
             return
         }
@@ -408,18 +564,18 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if webView === browser {
-            browserError = nil
+        if let tab = tab(for: webView) {
+            tab.error = nil
             emitBrowserState()
         }
     }
 
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
-        if webView === browser { emitBrowserState() }
+        if tab(for: webView) != nil { emitBrowserState() }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        if webView === browser { emitBrowserState() }
+        if tab(for: webView) != nil { emitBrowserState() }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -431,8 +587,8 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        if webView === browser {
-            browserError = "The browser content process stopped. Reload to continue."
+        if let tab = tab(for: webView) {
+            tab.error = "The browser content process stopped. Reload to continue."
             emitBrowserState()
         }
     }
@@ -440,8 +596,8 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
     private func navigationFailed(in webView: WKWebView, error: Error) {
         let failure = error as NSError
         if failure.code == NSURLErrorCancelled { return }
-        if webView === browser {
-            browserError = error.localizedDescription
+        if let tab = tab(for: webView) {
+            tab.error = error.localizedDescription
             print("Alpha Browser navigation error: \(failure.domain) \(failure.code) \(error.localizedDescription)")
             emitBrowserState()
         } else {
@@ -454,10 +610,29 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
         return scheme == "http" || scheme == "https"
     }
 
-    private func reportUnsupportedDownload() {
-        browserError = nil
-        browserNotice = "Downloads are unavailable in Alpha Browser."
+    private func reportUnsupportedDownload(in tab: AlphaBrowserTab) {
+        tab.error = nil
+        tab.notice = "Downloads are unavailable in Alpha Browser."
         emitBrowserState()
+    }
+
+    private func dispatchExternalRequest(_ url: URL) {
+        guard let data = try? JSONSerialization.data(withJSONObject: url.absoluteString),
+              let json = String(data: data, encoding: .utf8) else { return }
+        shell.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('weave:alpha-browser-open-external',{detail:\(json)}))"
+        )
+    }
+
+    private func dispatchHumanShortcut(_ shortcut: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: shortcut),
+              let json = String(data: data, encoding: .utf8) else { return }
+        shell.evaluateJavaScript("""
+            (() => {
+              const value = \(json);
+              window.dispatchEvent(new KeyboardEvent('keydown', value));
+            })()
+            """)
     }
 
     func webView(
@@ -466,19 +641,23 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
         for navigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        if webView === browser,
+        if let sourceTab = tab(for: webView),
            navigationAction.targetFrame == nil,
            let requestURL = navigationAction.request.url {
             guard isAllowedWebURL(requestURL) else {
-                browserError = "Unsupported URL scheme: \(requestURL.scheme ?? "unknown")"
-                browserNotice = nil
-                emitBrowserState()
+                dispatchExternalRequest(requestURL)
                 return nil
             }
-            browserError = nil
-            browserNotice = "Opened popup in the current Browser session."
-            webView.load(URLRequest(url: requestURL))
+            sourceTab.error = nil
+            sourceTab.notice = nil
+            let popup = createBrowserTab(
+                after: sourceTab.id,
+                configuration: configuration,
+                select: true
+            )
+            showSelectedBrowser()
             emitBrowserState()
+            return popup.webView
         }
         return nil
     }
@@ -489,12 +668,12 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void
     ) {
-        guard webView === browser else {
+        guard let tab = tab(for: webView) else {
             completionHandler(nil)
             return
         }
-        browserError = nil
-        browserNotice = "Choose files with the macOS system picker."
+        tab.error = nil
+        tab.notice = "Choose files with the macOS system picker."
         emitBrowserState()
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
@@ -512,9 +691,9 @@ private final class BrowserHostController: NSViewController, WKNavigationDelegat
         type: WKMediaCaptureType,
         decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
     ) {
-        if webView === browser {
-            browserError = nil
-            browserNotice = "Camera and microphone access is denied in Alpha Browser."
+        if let tab = tab(for: webView) {
+            tab.error = nil
+            tab.notice = "Camera and microphone access is denied in Alpha Browser."
             emitBrowserState()
         }
         decisionHandler(.deny)
@@ -567,11 +746,6 @@ private struct BrowserAcceptanceReport: Encodable {
     let alphaLoaded: Bool
     let browserDataStoreIsNonPersistent: Bool
     let browserPaneMounted: Bool
-    let controlClickAndWaitSucceeded: Bool
-    let controlKeySucceeded: Bool
-    let controlScrollSucceeded: Bool
-    let controlSnapshotCaptured: Bool
-    let controlTypeSucceeded: Bool
     let cookieAvailableBeforeReset: Bool
     let cookieClearedByReset: Bool
     let downloadNoticeReportedToShell: Bool
@@ -583,6 +757,7 @@ private struct BrowserAcceptanceReport: Encodable {
     let navigatedToPage2: Bool
     let mediaCaptureWasDenied: Bool
     let mediaPolicyReportedToShell: Bool
+    let multiTabLifecycleSucceeded: Bool
     let popupNoticeReportedToShell: Bool
     let popupStayedInVisibleSession: Bool
     let reloadRecoveredSessionState: Bool
@@ -599,8 +774,12 @@ private struct BrowserAcceptanceReport: Encodable {
     let slotPresented: Bool
     let slotOrientation: String
     let slotWidth: Double
+    let slotX: Double
+    let slotY: Double
     let surfaceHeight: Double
     let surfaceWidth: Double
+    let surfaceX: Double
+    let surfaceY: Double
     let webViewsAreDistinct: Bool
 }
 
@@ -727,7 +906,7 @@ private extension BrowserHostController {
             )
         }
         for _ in 0..<100 {
-            if browser?.isHidden == false && (browser?.frame.width ?? 0) > 100 { break }
+            if browser != nil && (browser?.frame.width ?? 0) > 100 { break }
             try? await Task.sleep(for: .milliseconds(100))
         }
         if let restartStage = options.restartStage {
@@ -746,10 +925,19 @@ private extension BrowserHostController {
         let surfaceHeight = await evaluateShellNumber(
             "document.querySelector('[data-slot=\"browser-surface-slot\"]')?.getBoundingClientRect().height || 0"
         )
+        let surfaceX = await evaluateShellNumber(
+            "document.querySelector('[data-slot=\"browser-surface-slot\"]')?.getBoundingClientRect().x || 0"
+        )
+        let surfaceY = await evaluateShellNumber(
+            "document.querySelector('[data-slot=\"browser-surface-slot\"]')?.getBoundingClientRect().y || 0"
+        )
         let slotPresented = browser?.isHidden == false && frame.width > 100 && frame.height > 100
+        let expectedNativeY = root.bounds.height - surfaceY - surfaceHeight
         let slotMatchesSurface = browserPaneMounted
             && abs(frame.width - surfaceWidth) < 1
             && abs(frame.height - surfaceHeight) < 1
+            && abs(frame.minX - surfaceX) < 1
+            && abs(frame.minY - expectedNativeY) < 1
         let fixtureLoaded = await evaluateBrowserBool(
             "document.body.dataset.fixture === 'alpha-browser-acceptance'"
         )
@@ -818,15 +1006,28 @@ private extension BrowserHostController {
             "document.body.dataset.fixture === 'alpha-browser-acceptance'"
         )
         let unreachableRecoverySucceeded = browserError == nil && fixtureLoadedAfterFailure
+        let popupSourceTabId = selectedBrowserTabId
+        let popupTabCount = browserTabs.count
         _ = await evaluateBrowserBool(
             "document.querySelector('a[target=\"_blank\"]')?.click(); true"
         )
         let popupStayedInVisibleSession = await waitForBrowserPath("/popup")
+            && browserTabs.count == popupTabCount + 1
+            && selectedBrowserTabId != popupSourceTabId
+            && browserTabs.first(where: { $0.id == popupSourceTabId })?.webView.url?.path == "/"
         let popupNoticeReportedToShell = await waitForShellBool(
-            "document.querySelector('[role=\"status\"]')?.textContent.includes('current Browser session') === true"
+            "document.querySelectorAll('[role=\"tab\"]').length >= 2"
         )
-        navigate(to: options.fixtureURL.absoluteString)
-        _ = await waitForBrowserPath("/")
+        let popupTabId = selectedBrowserTabId
+        let tabsShareProfile = browserTabs.allSatisfy {
+            $0.webView.configuration.websiteDataStore === browserDataStore
+        }
+        if let popupSourceTabId { selectBrowserTab(popupSourceTabId) }
+        if let popupTabId { selectBrowserTab(popupTabId); closeBrowserTab(popupTabId) }
+        let multiTabLifecycleSucceeded = popupStayedInVisibleSession
+            && tabsShareProfile
+            && selectedBrowserTabId == popupSourceTabId
+            && browserTabs.count == popupTabCount
         _ = await evaluateBrowserBool(
             "document.querySelector('a[download]')?.click(); true"
         )
@@ -834,8 +1035,17 @@ private extension BrowserHostController {
             "document.querySelector('[role=\"status\"]')?.textContent.includes('Downloads are unavailable') === true"
         )
         let downloadWasBlocked = browser?.url?.path == "/"
-        let uploadPolicyReportedToShell = await evaluateShellBool(
-            "document.querySelector('[data-slot=\"browser-policy\"]')?.textContent.includes('Upload: system picker') === true"
+        _ = await evaluateShellBool(
+            "document.querySelector('[aria-label=\"Browser Options\"]')?.click(); true"
+        )
+        let uploadPolicyReportedToShell = await waitForShellBool(
+            "document.body.textContent.includes('Uploads use the system picker') === true"
+        )
+        let mediaPolicyReportedToShell = await waitForShellBool(
+            "document.body.textContent.includes('Downloads and camera/microphone are unavailable') === true"
+        )
+        _ = await evaluateShellBool(
+            "document.querySelector('[aria-label=\"Browser Options\"]')?.click(); true"
         )
         _ = await evaluateBrowserBool(
             "document.querySelector('#request-camera')?.click(); true"
@@ -843,47 +1053,10 @@ private extension BrowserHostController {
         let mediaCaptureWasDenied = await waitForBrowserBool(
             "document.querySelector('#fixture-state')?.textContent.startsWith('permission:camera:denied:') === true"
         )
-        let mediaPolicyReportedToShell = await evaluateShellBool(
-            "document.querySelector('[data-slot=\"browser-policy\"]')?.textContent.includes('Camera/mic: off') === true"
-        )
         try? await Task.sleep(for: .milliseconds(500))
         let frameEmbeddingWasDenied = await evaluateBrowserBool(
             "document.body.dataset.deniedFrameRendered !== 'true'"
         )
-        let controlSnapshotCaptured = await evaluateBrowserBool("""
-            ['control-input', 'control-apply', 'control-result', 'control-bottom']
-              .every((id) => Boolean(document.getElementById(id)))
-            """)
-        let controlTypeSucceeded = await evaluateBrowserBool("""
-            (() => {
-              const input = document.querySelector('#control-input');
-              input.focus();
-              input.value = 'native-probe';
-              input.dispatchEvent(new Event('input', { bubbles: true }));
-              return input.value === 'native-probe' && document.activeElement === input;
-            })()
-            """)
-        let controlKeySucceeded = await evaluateBrowserBool("""
-            (() => {
-              const input = document.querySelector('#control-input');
-              input.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'Enter', bubbles: true, cancelable: true
-              }));
-              return input.dataset.lastKey === 'Enter';
-            })()
-            """)
-        _ = await evaluateBrowserBool(
-            "document.querySelector('#control-apply')?.click(); true"
-        )
-        let controlClickAndWaitSucceeded = await waitForBrowserBool(
-            "document.querySelector('#control-result')?.textContent === 'control:applied:native-probe:key:Enter'"
-        )
-        let controlScrollSucceeded = await evaluateBrowserBool("""
-            (() => {
-              document.querySelector('#control-bottom')?.scrollIntoView();
-              return window.scrollY > 0;
-            })()
-            """)
         let cookieSetURL = URL(string: "/cookie/set", relativeTo: options.fixtureURL)!
             .absoluteURL.absoluteString
         navigate(to: cookieSetURL)
@@ -891,11 +1064,10 @@ private extension BrowserHostController {
         let cookieAvailableBeforeReset = await evaluateBrowserBool(
             "JSON.parse(document.body.textContent).present === true"
         )
-        _ = await evaluateShellBool(
-            "document.querySelector('[aria-label=\"Reset Browser Session\"]')?.click(); true"
-        )
+        let browserBeforeReset = browser
+        resetBrowser()
         for _ in 0..<100 {
-            if browser?.url?.host == "example.com" { break }
+            if let browser, browser !== browserBeforeReset { break }
             try? await Task.sleep(for: .milliseconds(100))
         }
         let resetClearedHistory = browser?.canGoBack == false && browser?.canGoForward == false
@@ -914,11 +1086,6 @@ private extension BrowserHostController {
             browserDataStoreIsNonPersistent: browser?.configuration.websiteDataStore
                 !== WKWebsiteDataStore.default(),
             browserPaneMounted: browserPaneMounted,
-            controlClickAndWaitSucceeded: controlClickAndWaitSucceeded,
-            controlKeySucceeded: controlKeySucceeded,
-            controlScrollSucceeded: controlScrollSucceeded,
-            controlSnapshotCaptured: controlSnapshotCaptured,
-            controlTypeSucceeded: controlTypeSucceeded,
             cookieAvailableBeforeReset: cookieAvailableBeforeReset,
             cookieClearedByReset: cookieClearedByReset,
             downloadNoticeReportedToShell: downloadNoticeReportedToShell,
@@ -930,6 +1097,7 @@ private extension BrowserHostController {
             navigatedToPage2: navigatedToPage2,
             mediaCaptureWasDenied: mediaCaptureWasDenied,
             mediaPolicyReportedToShell: mediaPolicyReportedToShell,
+            multiTabLifecycleSucceeded: multiTabLifecycleSucceeded,
             popupNoticeReportedToShell: popupNoticeReportedToShell,
             popupStayedInVisibleSession: popupStayedInVisibleSession,
             reloadRecoveredSessionState: reloadRecoveredSessionState,
@@ -946,8 +1114,12 @@ private extension BrowserHostController {
             slotPresented: slotPresented,
             slotOrientation: frame.width > frame.height * 1.5 ? "bottom" : "right",
             slotWidth: frame.width,
+            slotX: frame.minX,
+            slotY: frame.minY,
             surfaceHeight: surfaceHeight,
             surfaceWidth: surfaceWidth,
+            surfaceX: surfaceX,
+            surfaceY: surfaceY,
             webViewsAreDistinct: browser.map { $0 !== shell } ?? false
         )
         if let data = try? JSONEncoder().encode(report) {

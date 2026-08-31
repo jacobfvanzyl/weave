@@ -29,10 +29,27 @@ export type IPadBrowserAcceptanceReport = {
   cookieAvailableBeforeReset: boolean;
   cookieClearedByReset: boolean;
   fixtureLoaded: boolean;
-  nativeControlProbeSucceeded: boolean;
+  inactiveTabHidden: boolean;
+  multiTabLifecycleSucceeded: boolean;
+  nativeFrameHeight: number;
+  nativeFrameWidth: number;
+  nativeFrameX: number;
+  nativeFrameY: number;
+  popupCloseRestoredSource: boolean;
+  popupLoaded: boolean;
+  popupSourcePreserved: boolean;
+  popupTabAdjacent: boolean;
+  popupTabCreated: boolean;
+  popupTabSelected: boolean;
   runId: string;
   screenshotWritten: boolean;
+  slotMatchesSurface: boolean;
   slotPresented: boolean;
+  surfaceHeight: number;
+  surfaceWidth: number;
+  surfaceX: number;
+  surfaceY: number;
+  tabsShareProfile: boolean;
 };
 
 export type IPadBrowserRestartReport = {
@@ -86,8 +103,9 @@ export function validateIPadBrowserAcceptanceReport(
     'cookieAvailableBeforeReset',
     'cookieClearedByReset',
     'fixtureLoaded',
-    'nativeControlProbeSucceeded',
+    'multiTabLifecycleSucceeded',
     'screenshotWritten',
+    'slotMatchesSurface',
     'slotPresented',
   ];
   if (report.runId !== runId || required.some((key) => report[key] !== true)) {
@@ -117,6 +135,10 @@ export function validateIPadBrowserRestartReport(
     throw new Error(`Physical-iPad restart report for ${runId} is stale or incomplete.`);
   }
   return report as IPadBrowserRestartReport;
+}
+
+export function isBenignDevicectlLaunchFailure(stderr: string): boolean {
+  return stderr.includes('process identifier could not be determined');
 }
 
 const alphaRoot = resolve(import.meta.dir, '../..');
@@ -247,7 +269,7 @@ export async function runPhysicalIPadAcceptance({
     const runRestartStage = async (stage: 'seed' | 'verify') => {
       const stageRunId = randomUUID();
       const stageReportPath = join(evidenceDirectory, `restart-${stage}.json`);
-      run('xcrun', [
+      const launch = run('xcrun', [
         'devicectl', 'device', 'process', 'launch',
         '--device', device.identifier,
         '--terminate-existing',
@@ -255,7 +277,13 @@ export async function runPhysicalIPadAcceptance({
         '--browser-acceptance-run-id', stageRunId,
         '--browser-acceptance-fixture-url', `http://${fixtureHost}:${fixture.port}/`,
         '--browser-acceptance-stage', stage,
-      ]);
+      ], true);
+      if (launch.exitCode !== 0) {
+        const stderr = launch.stderr.toString().trim();
+        if (!isBenignDevicectlLaunchFailure(stderr)) {
+          throw new Error(stderr || `xcrun exited with status ${launch.exitCode}.`);
+        }
+      }
       for (let attempt = 0; attempt < 120; attempt += 1) {
         if (copyFromApp({
           destination: stageReportPath,

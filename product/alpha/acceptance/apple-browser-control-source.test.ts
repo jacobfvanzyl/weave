@@ -34,4 +34,12 @@ describe('shared Apple visible-browser control host', () => {
     expect(source).toContain('.withFractionalSeconds');
     expect(source).toContain('deadline(from: request["deadlineAt"])');
   });
+
+  it('forwards trusted hardware-keyboard Browser shortcuts out of native page content', () => {
+    const source = readFileSync(shared, 'utf8');
+    expect(source).toContain('let alphaBrowserHumanInputSource');
+    expect(source).toContain("kind: shortcut ? 'shortcut' : 'input'");
+    expect(source).toContain('metaKey: event.metaKey');
+    expect(source).toContain('if (shortcut && command) event.preventDefault()');
+  });
 });

@@ -16,7 +16,7 @@ bun run acceptance:browser:macos -- --output /absolute/evidence/directory
 
 The test covers Right and Bottom dock geometry, navigation/history, reload/stop,
 errors/recovery, popup policy, upload/download policy, camera/microphone denial, frame restrictions,
-Reset, separate-process storage, and the bounded snapshot/type/key/click/wait/scroll probe. The
+Reset, multi-tab lifecycle, and separate-process storage. The
 evidence command retains JSON reports and AppKit screenshots at the requested path.
 
 ## Physical-iPad evidence
@@ -34,8 +34,8 @@ bun run acceptance:browser:ipad -- \
 The runner's steps are deliberately distinct and machine-readable: select a physical iPad, sync
 the acceptance-only client bundle, make a signed DEBUG build, install it, launch it, then copy the
 app-written JSON and PNG from its data container. A successful install or launch is not browser
-acceptance. The JSON must independently pass fixture, native slot, ephemeral store, Reset, bounded
-control, screenshot, restart-seed, and restart-verify assertions.
+acceptance. The JSON must independently pass fixture, native slot, ephemeral store, Reset, multi-tab,
+screenshot, restart-seed, and restart-verify assertions.
 
 The runner uses public `xcodebuild` and `devicectl` commands only. It does not expose a listener,
 debugging protocol, production browser-control API, or private WebKit API. Build intermediates live
@@ -51,7 +51,10 @@ Record these beside the automated evidence for a release candidate:
    shows the content-process error and Reload recovers. Otherwise record it explicitly as not
    deterministically exercised; the delegate and recovery path remain covered by code review.
 
-## Portal-proxied Browser control evidence
+## Phase 2 Portal-proxied Browser control evidence
+
+Agentic Browser control is explicitly outside the Phase 1 release boundary. Retain this separate
+workflow for Phase 2 security and capability work; do not use it to pass or fail human Browser basics.
 
 Run the deterministic control task through the visible `weave-visible-browser` MCP tools, then
 convert the durable Portal journal into a redacted evidence record:
