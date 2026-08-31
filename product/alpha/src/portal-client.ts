@@ -655,7 +655,9 @@ export class DirectHostClient {
   }
 
   private queueBrowserSync() {
-    this.browserSync = this.browserSync.then(() => this.syncBrowserProvider()).catch(() => undefined);
+    this.browserSync = this.browserSync
+      .then(() => this.syncBrowserProvider())
+      .catch(() => this.browserSession.setAgentAccess('off'));
   }
 
   private async syncBrowserProvider() {

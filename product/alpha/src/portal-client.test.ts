@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AlphaBrowserSession, AlphaBrowserState } from './app/alpha-browser-session';
 import { DirectHostClient, PortalTransportError } from './portal-client';
 
 const credential = {
@@ -40,6 +41,63 @@ class FakeWebSocket {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('DirectHostClient', () => {
+  it('revokes visible browser consent when provider attachment fails', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    let snapshot: AlphaBrowserState = {
+      supported: true,
+      url: 'https://example.com',
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      tabId: 'tab-1',
+      generation: 1,
+      controlRevision: 0,
+      agentControlEnabled: true,
+      agentAccess: 'control',
+      controlTarget: { threadId: 'thread-1', title: 'Acceptance', controller: 'Codex' },
+      visible: true,
+    };
+    const setAgentAccess = vi.fn((access: AlphaBrowserState['agentAccess']) => {
+      snapshot = {
+        ...snapshot,
+        agentControlEnabled: access !== 'off',
+        agentAccess: access,
+      };
+    });
+    const browserSession: AlphaBrowserSession = {
+      getSnapshot: () => snapshot,
+      subscribe: () => () => undefined,
+      send: () => true,
+      execute: vi.fn(),
+      setVisible: vi.fn(),
+      setAgentControlEnabled: vi.fn(),
+      setAgentAccess,
+      setControlTarget: vi.fn(),
+    };
+    const client = new DirectHostClient(
+      '127.0.0.1',
+      credential,
+      vi.fn(),
+      undefined,
+      browserSession,
+    );
+    const internal = client as unknown as {
+      activeThread: { threadId: string };
+      request: () => Promise<never>;
+      queueBrowserSync(): void;
+      browserSync: Promise<void>;
+    };
+    internal.activeThread = { threadId: 'thread-1' };
+    internal.request = vi.fn().mockRejectedValue(new Error('Provider unavailable'));
+
+    internal.queueBrowserSync();
+    await internal.browserSync;
+
+    expect(setAgentAccess).toHaveBeenCalledWith('off');
+    expect(snapshot).toMatchObject({ agentControlEnabled: false, agentAccess: 'off' });
+    client.close();
+  });
+
   it('does not reinterpret active Threads from a pre-lifecycle Portal as archived', async () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
