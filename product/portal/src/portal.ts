@@ -1,3 +1,4 @@
+import { realpath } from './host-files.ts';
 import {
   PORTAL_ACP_PATH,
   PORTAL_PROTOCOL_VERSION,
@@ -11,7 +12,7 @@ import {
   WORKSPACE_FILE_RPC_METHODS,
   type WorkspaceFileWatchNotification,
 } from '@weave/product-protocol';
-import { isAbsolute, relative } from 'jsr:@std/path@1.1.2';
+import { isAbsolute, relative } from 'node:path';
 import { ThreadCatalog } from './catalog.ts';
 import type { AgentDefinition, PortalConfig, WorkspaceDefinition } from './config.ts';
 import type { JsonRpcMessage } from './json-rpc.ts';
@@ -569,11 +570,11 @@ export class Portal {
     if (input.workspaceId) {
       workspace = this.#workspace(input.workspaceId);
     } else if (input.workspacePath) {
-      const path = await Deno.realPath(input.workspacePath);
+      const path = await realpath(input.workspacePath);
       const candidates = await Promise.all(
         [...this.#workspaces.values()].map(async (candidate) => ({
           definition: candidate,
-          path: await Deno.realPath(candidate.path),
+          path: await realpath(candidate.path),
         })),
       );
       workspace = candidates

@@ -3,7 +3,7 @@ import { pairPortalCredential, required, RpcResponseError, RpcSocket } from './r
 
 const baseUrl = required('PORTAL_URL').replace(/\/$/, '');
 const workspaceId = required('PORTAL_WORKSPACE_ID');
-const marker = Deno.env.get('PORTAL_TERMINAL_ACCEPTANCE_MARKER')?.trim() || `WVE43_${crypto.randomUUID()}`;
+const marker = process.env['PORTAL_TERMINAL_ACCEPTANCE_MARKER']?.trim() || `WVE43_${crypto.randomUUID()}`;
 const credential = await pairPortalCredential(
   baseUrl,
   required('PORTAL_PAIRING_TOKEN'),

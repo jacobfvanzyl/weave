@@ -1,4 +1,6 @@
-import { dirname, join } from 'jsr:@std/path@1.1.2';
+import { chmod, mkdir, readText, removePath, rename, writeText } from './host-files.ts';
+import { isFsError } from './host-files.ts';
+import { dirname, join } from 'node:path';
 
 export type RuntimeStatus = 'idle' | 'exited' | 'restoring' | 'uncertain' | 'unavailable';
 
@@ -78,7 +80,7 @@ export class RuntimeStateStore {
   static async open(stateDirectory: string) {
     const path = join(stateDirectory, 'runtime-states.json');
     try {
-      const value = JSON.parse(await Deno.readTextFile(path)) as unknown;
+      const value = JSON.parse(await readText(path)) as unknown;
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new Error('Runtime state store must be an object.');
       }
@@ -90,10 +92,10 @@ export class RuntimeStateStore {
       if (new Set(records.map((record) => record.threadId)).size !== records.length) {
         throw new Error('Runtime state store contains duplicate Thread IDs.');
       }
-      await Deno.chmod(path, 0o600).catch(() => undefined);
+      await chmod(path, 0o600).catch(() => undefined);
       return new RuntimeStateStore(stateDirectory, records);
     } catch (cause) {
-      if (cause instanceof Deno.errors.NotFound) return new RuntimeStateStore(stateDirectory, []);
+      if (isFsError(cause, 'ENOENT')) return new RuntimeStateStore(stateDirectory, []);
       throw new Error(`Runtime state store is invalid: ${path}`, { cause });
     }
   }
@@ -143,20 +145,20 @@ export class RuntimeStateStore {
   }
 
   async #write(records: Map<string, RuntimeStateRecord>) {
-    await Deno.mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
+    await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
     const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`;
     try {
-      await Deno.writeTextFile(
+      await writeText(
         temporary,
         `${JSON.stringify({ version: 1, runtimes: [...records.values()] } satisfies StoredRuntimeStates, null, 2)}\n`,
         { mode: 0o600 },
       );
-      await Deno.rename(temporary, this.#path);
-      await Deno.chmod(this.#path, 0o600);
+      await rename(temporary, this.#path);
+      await chmod(this.#path, 0o600);
       this.#records = records;
     } finally {
-      await Deno.remove(temporary).catch((cause) => {
-        if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+      await removePath(temporary).catch((cause) => {
+        if (!(isFsError(cause, 'ENOENT'))) throw cause;
       });
     }
   }

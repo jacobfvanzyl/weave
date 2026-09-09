@@ -1,4 +1,7 @@
-import { assertEquals, assertExists } from 'jsr:@std/assert@1.0.19';
+import { test } from './test-support.ts';
+import { removePath, temporaryDirectory } from './host-files.ts';
+import { runProcess } from './host-process.ts';
+import { assertEquals, assertExists } from './test-support.ts';
 import { resolveTmuxExecutable, TmuxTerminalBackend } from './tmux-terminal-backend.ts';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -14,23 +17,23 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 5_000) => {
 
 const tmuxAvailable = async () => {
   try {
-    return (await new Deno.Command('tmux', {
+    return (await runProcess('tmux', {
       args: ['-V'],
-      stdout: 'null',
-      stderr: 'null',
-    }).output()).success;
+      stdout: 'ignore',
+      stderr: 'ignore',
+    })).success;
   } catch {
     return false;
   }
 };
 
 const sparseServiceEnvironment = () => ({
-  HOME: Deno.env.get('HOME'),
+  HOME: process.env['HOME'],
   PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
   SHELL: '/bin/sh',
 });
 
-Deno.test('TmuxTerminalBackend resolves Homebrew tmux outside a launchd PATH', () => {
+test('TmuxTerminalBackend resolves Homebrew tmux outside a launchd PATH', () => {
   const executable = resolveTmuxExecutable(
     { PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
     {
@@ -42,7 +45,7 @@ Deno.test('TmuxTerminalBackend resolves Homebrew tmux outside a launchd PATH', (
   assertEquals(executable, '/opt/homebrew/bin/tmux');
 });
 
-Deno.test('TmuxTerminalBackend honors an explicit tmux executable override', () => {
+test('TmuxTerminalBackend honors an explicit tmux executable override', () => {
   const executable = resolveTmuxExecutable(
     {
       PATH: '/usr/bin:/bin',
@@ -54,13 +57,13 @@ Deno.test('TmuxTerminalBackend honors an explicit tmux executable override', () 
   assertEquals(executable, '/custom/tools/tmux');
 });
 
-Deno.test({
+test({
   name: 'TmuxTerminalBackend persists a shell across adapter restarts and supports I/O, capture, resize, and close',
-  ignore: Deno.build.os === 'windows',
+  ignore: process.platform === 'win32',
   fn: async () => {
     if (!await tmuxAvailable()) return;
-    const stateDirectory = await Deno.makeTempDir({ dir: '/tmp', prefix: 'weave-product-terminal-state-' });
-    const cwd = await Deno.makeTempDir({ dir: '/tmp', prefix: 'weave-product-terminal-cwd-' });
+    const stateDirectory = await temporaryDirectory({ dir: '/tmp', prefix: 'weave-product-terminal-state-' });
+    const cwd = await temporaryDirectory({ dir: '/tmp', prefix: 'weave-product-terminal-cwd-' });
     const terminalId = crypto.randomUUID();
     const marker = `__WEAVE_PRODUCT_TERMINAL_${crypto.randomUUID()}__`;
     const output: string[] = [];
@@ -100,7 +103,7 @@ Deno.test({
       assertEquals(captured.data.includes(marker), true);
       assertEquals(captured.data.startsWith('\x1b[2J\x1b[H'), true);
       const cursor = new TextDecoder().decode(
-        (await new Deno.Command('tmux', {
+        (await runProcess('tmux', {
           args: [
             '-S',
             `${stateDirectory}/terminal/tmux.sock`,
@@ -110,7 +113,7 @@ Deno.test({
             created.paneId!,
             '#{cursor_x}\t#{cursor_y}',
           ],
-        }).output()).stdout,
+        })).stdout,
       ).trim().split('\t').map(Number);
       assertEquals(captured.data.endsWith(`\x1b[${cursor[1] + 1};${cursor[0] + 1}H`), true);
 
@@ -135,8 +138,8 @@ Deno.test({
       unsubscribe();
       await first.close(terminalId).catch(() => undefined);
       await first.dispose();
-      await Deno.remove(stateDirectory, { recursive: true }).catch(() => undefined);
-      await Deno.remove(cwd, { recursive: true }).catch(() => undefined);
+      await removePath(stateDirectory, { recursive: true }).catch(() => undefined);
+      await removePath(cwd, { recursive: true }).catch(() => undefined);
     }
   },
 });

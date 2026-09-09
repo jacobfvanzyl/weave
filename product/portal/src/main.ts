@@ -1,4 +1,4 @@
-import { resolve } from 'jsr:@std/path@1.1.2';
+import { resolve } from 'node:path';
 import { loadPortalConfig } from './config.ts';
 import { localAcpSocketPath, runStdioAcpConnector, serveLocalAcpGateway } from './local-acp.ts';
 import { Portal } from './portal.ts';
@@ -26,7 +26,7 @@ const configFrom = async (args: string[]) => {
 };
 
 if (import.meta.main) {
-  const [command, subcommand, ...args] = Deno.args;
+  const [command, subcommand, ...args] = process.argv.slice(2);
   if (command === 'serve') {
     const serveArgs = [subcommand, ...args].filter((value): value is string => value !== undefined);
     const portal = await Portal.open(await configFrom(serveArgs));
@@ -47,15 +47,15 @@ if (import.meta.main) {
       return shutdownTask;
     };
     const onSignal = () => void shutdown();
-    Deno.addSignalListener('SIGINT', onSignal);
-    Deno.addSignalListener('SIGTERM', onSignal);
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
     try {
       gateway = await serveLocalAcpGateway(portal);
       console.log(`Weave Portal ACP: ${gateway.path}`);
       await Promise.race([server.finished, gateway.finished]);
     } finally {
-      Deno.removeSignalListener('SIGINT', onSignal);
-      Deno.removeSignalListener('SIGTERM', onSignal);
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
       await shutdown();
     }
   } else if (command === 'acp' && subcommand === 'connect') {
@@ -66,7 +66,7 @@ if (import.meta.main) {
     await runStdioAcpConnector({
       path: await localAcpSocketPath(config),
       agentId,
-      ...(workspaceId ? { workspaceId } : { workspacePath: Deno.cwd() }),
+      ...(workspaceId ? { workspaceId } : { workspacePath: process.cwd() }),
     });
   } else if (command === 'pairing' && subcommand === 'create') {
     const config = await configFrom(args);

@@ -1,4 +1,8 @@
-import { dirname, join } from 'jsr:@std/path@1.1.2';
+import { createServer } from 'node:net';
+import { localStream, connectLocal, stdinStream, stdoutStream, type LocalStream } from './local-stream.ts';
+import { chmod, mkdir, removePath } from './host-files.ts';
+import { isFsError } from './host-files.ts';
+import { dirname, join } from 'node:path';
 import type { PortalConfig } from './config.ts';
 import { error, type JsonRpcMessage, parseJsonRpcMessage, result } from './json-rpc.ts';
 import { readLines } from './line-stream.ts';
@@ -282,13 +286,11 @@ export const localAcpSocketPath = async (config: Pick<PortalConfig, 'stateDirect
 
 export const serveLocalAcpGateway = async (portal: Portal): Promise<LocalAcpGateway> => {
   const path = await localAcpSocketPath(portal.config);
-  await Deno.mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const listener = Deno.listen({ transport: 'unix', path });
-  await Deno.chmod(path, 0o600);
-  const connections = new Set<Deno.Conn>();
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const connections = new Set<LocalStream>();
   let closing = false;
 
-  const handle = async (connection: Deno.Conn) => {
+  const handle = async (connection: LocalStream) => {
     connections.add(connection);
     const writer = connection.writable.getWriter();
     let outputQueue = Promise.resolve();
@@ -330,13 +332,19 @@ export const serveLocalAcpGateway = async (portal: Portal): Promise<LocalAcpGate
     }
   };
 
-  const finished = (async () => {
+  const listener = createServer((socket) => { void handle(localStream(socket)); });
+  await new Promise<void>((resolve, reject) => {
+    listener.once('error', reject);
+    const previousMask = process.umask(0o077);
     try {
-      for await (const connection of listener) void handle(connection);
-    } catch (cause) {
-      if (!closing) throw cause;
-    }
-  })();
+      listener.listen(path, () => { listener.off('error', reject); resolve(); });
+    } finally { process.umask(previousMask); }
+  });
+  await chmod(path, 0o600);
+  const finished = new Promise<void>((resolve, reject) => {
+    listener.once('close', resolve);
+    listener.once('error', reject);
+  });
 
   return {
     path,
@@ -353,8 +361,8 @@ export const serveLocalAcpGateway = async (portal: Portal): Promise<LocalAcpGate
         }
       }
       await finished.catch(() => undefined);
-      await Deno.remove(path).catch((cause) => {
-        if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+      await removePath(path).catch((cause) => {
+        if (!(isFsError(cause, 'ENOENT'))) throw cause;
       });
     },
   };
@@ -368,9 +376,9 @@ export const runStdioAcpConnector = async (input: {
   stdin?: ReadableStream<Uint8Array>;
   stdout?: WritableStream<Uint8Array>;
 }) => {
-  const connection = await Deno.connect({ transport: 'unix', path: input.path });
+  const connection = await connectLocal(input.path);
   const writer = connection.writable.getWriter();
-  const stdout = (input.stdout ?? Deno.stdout.writable).getWriter();
+  const stdout = (input.stdout ?? stdoutStream()).getWriter();
   const inputAbort = new AbortController();
   const pending = new Set<string>();
   let inputEnded = false;
@@ -416,7 +424,7 @@ export const runStdioAcpConnector = async (input: {
 
     const outbound = (async () => {
       try {
-        for await (const line of readLines(input.stdin ?? Deno.stdin.readable, inputAbort.signal)) {
+        for await (const line of readLines(input.stdin ?? stdinStream(), inputAbort.signal)) {
           const checked = checkedLine(line, 'ACP client');
           const message = parseJsonRpcMessage(checked);
           if (message.method && message.id !== undefined) pending.add(`${typeof message.id}:${String(message.id)}`);
@@ -435,7 +443,7 @@ export const runStdioAcpConnector = async (input: {
     })();
 
     await Promise.all([inbound, outbound]).catch((cause) => {
-      if (!(cause instanceof Deno.errors.Interrupted) && !(cause instanceof Deno.errors.BadResource)) throw cause;
+      if (!(isFsError(cause, 'EINTR')) && !(isFsError(cause, 'EBADF'))) throw cause;
     });
   } finally {
     inputAbort.abort();

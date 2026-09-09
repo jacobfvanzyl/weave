@@ -1,12 +1,15 @@
-import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.14';
+import { test } from './test-support.ts';
+import { mkdir, readText, realpath, removePath, stat, symlink, temporaryDirectory, writeBytes, writeText } from './host-files.ts';
+import type { FileChange } from './host-files.ts';
+import { assertEquals, assertRejects } from './test-support.ts';
 import { WorkspaceFileError, WorkspaceFileService, type WorkspaceFileSystemWatcher } from './workspace-files.ts';
 
 class FakeWatcher implements WorkspaceFileSystemWatcher {
   closed = false;
-  readonly #events: Deno.FsEvent[] = [];
-  readonly #waiting: Array<(value: IteratorResult<Deno.FsEvent>) => void> = [];
+  readonly #events: FileChange[] = [];
+  readonly #waiting: Array<(value: IteratorResult<FileChange>) => void> = [];
 
-  emit(event: Deno.FsEvent) {
+  emit(event: FileChange) {
     const waiting = this.#waiting.shift();
     if (waiting) waiting({ value: event, done: false });
     else this.#events.push(event);
@@ -21,7 +24,7 @@ class FakeWatcher implements WorkspaceFileSystemWatcher {
     return this;
   }
 
-  next(): Promise<IteratorResult<Deno.FsEvent>> {
+  next(): Promise<IteratorResult<FileChange>> {
     const event = this.#events.shift();
     if (event) return Promise.resolve({ value: event, done: false });
     if (this.closed) return Promise.resolve({ value: undefined, done: true });
@@ -32,8 +35,8 @@ class FakeWatcher implements WorkspaceFileSystemWatcher {
 const withWorkspace = async (
   callback: (context: { root: string; outside: string; service: WorkspaceFileService }) => Promise<void>,
 ) => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-product-workspace-' });
-  const outside = await Deno.makeTempDir({ prefix: 'weave-product-outside-' });
+  const root = await temporaryDirectory({ prefix: 'weave-product-workspace-' });
+  const outside = await temporaryDirectory({ prefix: 'weave-product-outside-' });
   const service = await WorkspaceFileService.open([{ workspaceId: 'workspace', path: root }], {
     maxReadBytes: 1_024,
     maxWriteBytes: 1_024,
@@ -45,18 +48,18 @@ const withWorkspace = async (
     watchDebounceMs: 0,
   });
   try {
-    await callback({ root: await Deno.realPath(root), outside: await Deno.realPath(outside), service });
+    await callback({ root: await realpath(root), outside: await realpath(outside), service });
   } finally {
     service.close();
-    await Deno.remove(root, { recursive: true }).catch(() => undefined);
-    await Deno.remove(outside, { recursive: true }).catch(() => undefined);
+    await removePath(root, { recursive: true }).catch(() => undefined);
+    await removePath(outside, { recursive: true }).catch(() => undefined);
   }
 };
 
-Deno.test('Workspace files list directories and read and hash UTF-8 files', async () =>
+test('Workspace files list directories and read and hash UTF-8 files', async () =>
   await withWorkspace(async ({ root, service }) => {
-    await Deno.mkdir(`${root}/src`);
-    await Deno.writeTextFile(`${root}/README.md`, '# hello\n');
+    await mkdir(`${root}/src`);
+    await writeText(`${root}/README.md`, '# hello\n');
 
     const listed = await service.list({ workspaceId: 'workspace', path: '' });
     assertEquals(listed.path, '');
@@ -71,23 +74,23 @@ Deno.test('Workspace files list directories and read and hash UTF-8 files', asyn
       content: '# hello\n',
       contentHash: '9e8b62f81ea5c66fa06ee53da032751386b37702153070c0e14dd1d316282fa7',
       size: 8,
-      mtimeMs: (await Deno.stat(`${root}/README.md`)).mtime?.getTime(),
+      mtimeMs: (await stat(`${root}/README.md`)).mtime?.getTime(),
     });
 
     assertEquals(await service.hash({ workspaceId: 'workspace', path: 'README.md' }), {
       path: 'README.md',
       contentHash: '9e8b62f81ea5c66fa06ee53da032751386b37702153070c0e14dd1d316282fa7',
       size: 8,
-      mtimeMs: (await Deno.stat(`${root}/README.md`)).mtime?.getTime(),
+      mtimeMs: (await stat(`${root}/README.md`)).mtime?.getTime(),
       lineCount: 1,
     });
   }));
 
-Deno.test('Workspace file listings and limited searches are deterministic and bounded', async () =>
+test('Workspace file listings and limited searches are deterministic and bounded', async () =>
   await withWorkspace(async ({ root, service }) => {
-    await Deno.writeTextFile(`${root}/z-last.txt`, 'marker');
-    await Deno.writeTextFile(`${root}/a-first.txt`, 'marker');
-    await Deno.writeTextFile(`${root}/m-middle.txt`, 'marker');
+    await writeText(`${root}/z-last.txt`, 'marker');
+    await writeText(`${root}/a-first.txt`, 'marker');
+    await writeText(`${root}/m-middle.txt`, 'marker');
 
     const listed = await service.list({ workspaceId: 'workspace', path: '' });
     assertEquals(listed.entries.map((entry) => entry.name), ['a-first.txt', 'm-middle.txt']);
@@ -103,7 +106,7 @@ Deno.test('Workspace file listings and limited searches are deterministic and bo
     );
   }));
 
-Deno.test('Workspace files require create-only or hash-conditional writes', async () =>
+test('Workspace files require create-only or hash-conditional writes', async () =>
   await withWorkspace(async ({ root, service }) => {
     const created = await service.write({
       workspaceId: 'workspace',
@@ -126,9 +129,9 @@ Deno.test('Workspace files require create-only or hash-conditional writes', asyn
       content: 'second',
       expectedContentHash: created.contentHash,
     });
-    assertEquals(await Deno.readTextFile(`${root}/notes.txt`), 'second');
+    assertEquals(await readText(`${root}/notes.txt`), 'second');
 
-    await Deno.writeTextFile(`${root}/notes.txt`, 'external');
+    await writeText(`${root}/notes.txt`, 'external');
     await assertRejects(
       () =>
         service.write({
@@ -140,10 +143,10 @@ Deno.test('Workspace files require create-only or hash-conditional writes', asyn
       WorkspaceFileError,
       'Reload before saving',
     );
-    assertEquals(await Deno.readTextFile(`${root}/notes.txt`), 'external');
+    assertEquals(await readText(`${root}/notes.txt`), 'external');
   }));
 
-Deno.test('Workspace files serialize competing conditional writes', async () =>
+test('Workspace files serialize competing conditional writes', async () =>
   await withWorkspace(async ({ service }) => {
     const created = await service.write({
       workspaceId: 'workspace',
@@ -168,10 +171,10 @@ Deno.test('Workspace files serialize competing conditional writes', async () =>
     assertEquals(writes.map((result) => result.status).sort(), ['fulfilled', 'rejected']);
   }));
 
-Deno.test('Workspace files create, move, delete, and search within bounded roots', async () =>
+test('Workspace files create, move, delete, and search within bounded roots', async () =>
   await withWorkspace(async ({ root, service }) => {
-    await Deno.mkdir(`${root}/.git`);
-    await Deno.mkdir(`${root}/node_modules`);
+    await mkdir(`${root}/.git`);
+    await mkdir(`${root}/node_modules`);
     assertEquals(await service.createDirectory({ workspaceId: 'workspace', path: 'src/nested' }), {
       ok: true,
       path: 'src/nested',
@@ -190,7 +193,7 @@ Deno.test('Workspace files create, move, delete, and search within bounded roots
       }),
       { ok: true, path: 'src/main.ts' },
     );
-    assertEquals(await Deno.readTextFile(`${root}/src/main.ts`), 'export const marker = "WVE42";\n');
+    assertEquals(await readText(`${root}/src/main.ts`), 'export const marker = "WVE42";\n');
 
     assertEquals(
       await service.search({ workspaceId: 'workspace', path: '', query: 'WVE42', scope: 'both', limit: 5 }),
@@ -216,14 +219,14 @@ Deno.test('Workspace files create, move, delete, and search within bounded roots
       ok: true,
       path: 'src',
     });
-    await assertRejects(() => Deno.stat(`${root}/src`), Deno.errors.NotFound);
+    await assertRejects(() => stat(`${root}/src`), { code: 'ENOENT' });
   }));
 
-Deno.test('Workspace files reject traversal, symlinks, binary content, and oversized payloads', async () =>
+test('Workspace files reject traversal, symlinks, binary content, and oversized payloads', async () =>
   await withWorkspace(async ({ root, outside, service }) => {
-    await Deno.writeTextFile(`${outside}/secret.txt`, 'secret');
-    await Deno.symlink(`${outside}/secret.txt`, `${root}/escape`);
-    await Deno.writeFile(`${root}/binary.dat`, new Uint8Array([0x66, 0, 0x6f]));
+    await writeText(`${outside}/secret.txt`, 'secret');
+    await symlink(`${outside}/secret.txt`, `${root}/escape`);
+    await writeBytes(`${root}/binary.dat`, new Uint8Array([0x66, 0, 0x6f]));
 
     for (const path of ['../secret.txt', '/tmp/secret.txt', 'src//main.ts', 'src/./main.ts', 'src\\main.ts']) {
       await assertRejects(
@@ -265,8 +268,8 @@ Deno.test('Workspace files reject traversal, symlinks, binary content, and overs
     );
   }));
 
-Deno.test('Workspace file watches normalize changes and belong to one client session', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-product-watch-' });
+test('Workspace file watches normalize changes and belong to one client session', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-product-watch-' });
   const watchers: FakeWatcher[] = [];
   const service = await WorkspaceFileService.open(
     [{ workspaceId: 'workspace', path: root }],
@@ -283,8 +286,8 @@ Deno.test('Workspace file watches normalize changes and belong to one client ses
   const notifications: unknown[] = [];
   const session = service.openWatchSession((notification) => notifications.push(notification));
   try {
-    await Deno.mkdir(`${root}/src`);
-    const realRoot = await Deno.realPath(root);
+    await mkdir(`${root}/src`);
+    const realRoot = await realpath(root);
     assertEquals(await session.start({ workspaceId: 'workspace', paths: ['', 'src'] }), {
       subscriptionId: 'watch-1',
       paths: ['', 'src'],
@@ -322,6 +325,6 @@ Deno.test('Workspace file watches normalize changes and belong to one client ses
     );
   } finally {
     service.close();
-    await Deno.remove(root, { recursive: true }).catch(() => undefined);
+    await removePath(root, { recursive: true }).catch(() => undefined);
   }
 });

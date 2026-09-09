@@ -27,8 +27,8 @@ Workspaces remain Host-scoped.
 Start Portal, then create a short-lived, one-time Pairing Token for the device:
 
 ```bash
-deno task dev
-deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json
+bun run dev
+bun src/main.ts pairing create --config portal.config.json
 ```
 
 Paste the compact JWT output into Alpha's Connections dialog and enter the Portal Host URL separately. The URL is
@@ -40,8 +40,8 @@ It never rotates a device credential automatically.
 List or revoke paired credentials from the Host:
 
 ```bash
-deno run --allow-read --allow-write src/main.ts credential list --config portal.config.json
-deno run --allow-read --allow-write src/main.ts credential revoke --config portal.config.json <credential-id>
+bun src/main.ts credential list --config portal.config.json
+bun src/main.ts credential revoke --config portal.config.json <credential-id>
 ```
 
 See [Portal security](./SECURITY.md) for the trust model, rollover behavior, and TLS requirements.
@@ -86,9 +86,9 @@ Workspace has a valid path in that Zed context can be imported. Use `dev: open a
 ## Verify
 
 ```bash
-deno task check
-deno task test
-deno task build
+bun run check
+bun run test
+bun run build
 ```
 
 On macOS, create a build whose privacy grants survive compatible Portal upgrades by signing it with a stable Apple
@@ -96,7 +96,7 @@ code-signing identity and identifier:
 
 ```bash
 WEAVE_PORTAL_CODESIGN_IDENTITY="Apple Development: developer@example.com (TEAMID)" \
-  deno task build:macos-signed
+  bun run build:macos-signed
 ```
 
 The signed task uses `xyz.veezee.weave.portal` by default. Override it only when packaging under another permanent
@@ -125,11 +125,11 @@ For a real Agent acceptance against an already running Portal:
 
 ```bash
 PORTAL_URL=ws://127.0.0.1:4122 \
-PORTAL_PAIRING_TOKEN="$(deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json)" \
+PORTAL_PAIRING_TOKEN="$(bun src/main.ts pairing create --config portal.config.json)" \
 PORTAL_WORKSPACE_ID=workspace \
 PORTAL_AGENT_ID=codex \
 PORTAL_ACCEPTANCE_MARKER=PORTAL_ACCEPTANCE_OK \
-deno task acceptance
+bun run acceptance
 ```
 
 The filesystem acceptance is Agent-independent and creates and removes only a uniquely named directory below
@@ -137,9 +137,9 @@ The filesystem acceptance is Agent-independent and creates and removes only a un
 
 ```bash
 PORTAL_URL=ws://127.0.0.1:4122 \
-PORTAL_PAIRING_TOKEN="$(deno run --allow-read --allow-write src/main.ts pairing create --config portal.config.json)" \
+PORTAL_PAIRING_TOKEN="$(bun src/main.ts pairing create --config portal.config.json)" \
 PORTAL_WORKSPACE_ID=workspace \
-deno task acceptance:filesystem
+bun run acceptance:filesystem
 ```
 
 The same command can target a Portal running on Bazzite by changing `PORTAL_URL`; packaging and service installation
@@ -166,3 +166,32 @@ while a prompt is active, disconnects idle attachments when archiving, and refus
 Restoring preserves the same Thread and provider session identities so the normal recovery path can resume its history.
 Archive and restore use the existing Thread attachment grant and write audit records containing stable identifiers,
 never prompt or transcript content.
+
+## Bun runtime and distributable acceptance
+
+Use Bun **1.3.14** from the repository root. `bun run build:host` produces
+`product/portal/dist/weave-portal`; `bun run --cwd product/portal build:linux`
+produces `weave-portal-linux-x64`. These executables include Bun and need no
+source checkout or installed JavaScript runtime. The Host still requires tmux,
+a POSIX shell, terminfo, and the configured external ACP providers. Neovim is
+optional software inside a terminal, not an Alpha surface.
+
+The configured state directory, Host identity, credential grants, Thread IDs,
+provider journals and tmux socket remain compatible with the preceding Host.
+Keep that directory and the same operating-system account across upgrades.
+Terminal sessions survive Host restarts through tmux; this does not promise
+survival across machine reboots.
+
+`bun scripts/packaged-acceptance.ts <host-binary> <compiled-fixture-agent>`
+starts an isolated loopback Host, pairs, exercises ACP recovery and the local
+connector, and restarts the executable while preserving credentials, Thread
+history and a real tmux terminal. Compile the harness and
+`src/test-fixtures/fake-agent.ts` with `bun build --compile --target=bun-linux-x64`
+to run the same checks on Linux without installing Bun. This fixture validates
+runtime/protocol behavior; real provider and client acceptance is recorded separately.
+
+Bun 1.3.14 has an upstream [WebSocket shutdown accounting bug](https://github.com/oven-sh/bun/issues/36223).
+The Host stops admission and drains its own tracked connections instead of
+awaiting the affected `server.stop()` promise. Tests verify actual client closure,
+socket cleanup, port reuse and process exit. Re-evaluate this workaround when
+upgrading the pinned Bun version.

@@ -1,4 +1,6 @@
-import { assertEquals, assertThrows } from 'jsr:@std/assert@1.0.14';
+import { test } from './test-support.ts';
+import { readText } from './host-files.ts';
+import { assertEquals, assertThrows } from './test-support.ts';
 import { parsePortalConfig } from './config.ts';
 
 const base = {
@@ -9,17 +11,17 @@ const base = {
   agents: [{ agentId: 'agent', name: 'Agent', command: 'false' }],
 };
 
-Deno.test('Portal permits a loopback-only development listener without TLS', () => {
+test('Portal permits a loopback-only development listener without TLS', () => {
   const config = parsePortalConfig(base);
   assertEquals(config.listen, { hostname: '127.0.0.1', port: 4122 });
   assertEquals(config.allowedOrigins, []);
 });
 
-Deno.test('Portal can start without preconfigured projects', () => {
+test('Portal can start without preconfigured projects', () => {
   assertEquals(parsePortalConfig({ ...base, workspaces: [] }).workspaces, []);
 });
 
-Deno.test('Portal requires TLS and an explicit origin policy for non-loopback listeners', () => {
+test('Portal requires TLS and an explicit origin policy for non-loopback listeners', () => {
   assertThrows(
     () => parsePortalConfig({ ...base, listen: { hostname: '0.0.0.0', port: 4122 } }),
     Error,
@@ -37,7 +39,7 @@ Deno.test('Portal requires TLS and an explicit origin policy for non-loopback li
   );
 });
 
-Deno.test('Portal accepts TLS files and an explicit browser-origin policy', () => {
+test('Portal accepts TLS files and an explicit browser-origin policy', () => {
   const config = parsePortalConfig({
     ...base,
     listen: { hostname: '0.0.0.0', port: 4122 },
@@ -47,9 +49,9 @@ Deno.test('Portal accepts TLS files and an explicit browser-origin policy', () =
   assertEquals(config.allowedOrigins, ['capacitor://localhost']);
 });
 
-Deno.test('Portal example permits every shipped Alpha host', async () => {
+test('Portal example permits every shipped Alpha host', async () => {
   const example = JSON.parse(
-    await Deno.readTextFile(new URL('../portal.config.example.json', import.meta.url)),
+    await readText(new URL('../portal.config.example.json', import.meta.url)),
   ) as { allowedOrigins?: unknown };
   assertEquals(example.allowedOrigins, [
     'http://localhost:5174',

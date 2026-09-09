@@ -1,14 +1,15 @@
-import { resolve } from 'jsr:@std/path@1.1.2';
+import { stat } from '../src/host-files.ts';
+import { runProcess } from '../src/host-process.ts';
+import { resolve } from 'node:path';
 
 const DEFAULT_IDENTIFIER = 'xyz.veezee.weave.portal';
 
 const run = async (args: string[]) => {
-  const command = new Deno.Command('/usr/bin/codesign', {
+  const output = await runProcess('/usr/bin/codesign', {
     args,
-    stdout: 'piped',
-    stderr: 'piped',
+    stdout: 'pipe',
+    stderr: 'pipe',
   });
-  const output = await command.output();
   if (!output.success) {
     throw new Error(
       new TextDecoder().decode(output.stderr).trim() ||
@@ -21,25 +22,25 @@ const run = async (args: string[]) => {
   };
 };
 
-if (Deno.build.os !== 'darwin') {
+if (process.platform !== 'darwin') {
   throw new Error('Portal macOS signing can only run on macOS.');
 }
 
-const identity = Deno.env.get('WEAVE_PORTAL_CODESIGN_IDENTITY')?.trim();
+const identity = process.env['WEAVE_PORTAL_CODESIGN_IDENTITY']?.trim();
 if (!identity) {
   throw new Error(
     'WEAVE_PORTAL_CODESIGN_IDENTITY is required. Use `security find-identity -v -p codesigning` to list identities.',
   );
 }
 
-const identifier = Deno.env.get('WEAVE_PORTAL_CODESIGN_IDENTIFIER')?.trim() || DEFAULT_IDENTIFIER;
+const identifier = process.env['WEAVE_PORTAL_CODESIGN_IDENTIFIER']?.trim() || DEFAULT_IDENTIFIER;
 if (!/^[A-Za-z0-9.-]+$/.test(identifier)) {
   throw new Error('WEAVE_PORTAL_CODESIGN_IDENTIFIER is invalid.');
 }
 
-const target = resolve(Deno.args[0] || 'dist/weave-portal');
-const stat = await Deno.stat(target);
-if (!stat.isFile) throw new Error(`Portal signing target is not a file: ${target}`);
+const target = resolve(process.argv.slice(2)[0] || 'dist/weave-portal');
+const details = await stat(target);
+if (!details.isFile()) throw new Error(`Portal signing target is not a file: ${target}`);
 
 await run([
   '--force',

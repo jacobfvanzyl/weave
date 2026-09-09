@@ -1,5 +1,7 @@
+import { chmod, mkdir, readText, rename, writeText } from './host-files.ts';
+import { isFsError } from './host-files.ts';
 import type { ThreadSummary } from '@weave/product-protocol';
-import { dirname, join } from 'jsr:@std/path@1.1.2';
+import { dirname, join } from 'node:path';
 
 type StoredCatalog = { version: 1; threads: ThreadSummary[] };
 
@@ -14,13 +16,13 @@ export class ThreadCatalog {
 
   async load() {
     try {
-      const value = JSON.parse(await Deno.readTextFile(this.#path)) as StoredCatalog;
+      const value = JSON.parse(await readText(this.#path)) as StoredCatalog;
       if (value.version !== 1 || !Array.isArray(value.threads)) {
         throw new Error('Thread catalog version is unsupported.');
       }
       for (const thread of value.threads) this.#threads.set(thread.threadId, thread);
     } catch (cause) {
-      if (cause instanceof Deno.errors.NotFound) return;
+      if (isFsError(cause, 'ENOENT')) return;
       throw cause;
     }
   }
@@ -71,12 +73,12 @@ export class ThreadCatalog {
   }
 
   async #persist() {
-    await Deno.mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
+    await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
     const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`;
-    await Deno.writeTextFile(temporary, `${JSON.stringify({ version: 1, threads: this.list() }, null, 2)}\n`, {
+    await writeText(temporary, `${JSON.stringify({ version: 1, threads: this.list() }, null, 2)}\n`, {
       mode: 0o600,
     });
-    await Deno.rename(temporary, this.#path);
-    await Deno.chmod(this.#path, 0o600);
+    await rename(temporary, this.#path);
+    await chmod(this.#path, 0o600);
   }
 }

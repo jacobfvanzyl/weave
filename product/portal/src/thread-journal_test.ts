@@ -1,8 +1,10 @@
-import { assertEquals } from 'jsr:@std/assert@1.0.14';
+import { test } from './test-support.ts';
+import { removePath, temporaryDirectory } from './host-files.ts';
+import { assertEquals } from './test-support.ts';
 import { ThreadEventJournal } from './thread-journal.ts';
 
-Deno.test('Thread journal clears only non-conversational state for provider replacement', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-product-portal-journal-replacement-' });
+test('Thread journal clears only non-conversational state for provider replacement', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-product-portal-journal-replacement-' });
   try {
     const journal = await ThreadEventJournal.open(root);
     await journal.append('empty-thread', {
@@ -30,6 +32,6 @@ Deno.test('Thread journal clears only non-conversational state for provider repl
     assertEquals(await journal.clearIfNoConversation('used-thread'), false);
     assertEquals((await journal.read('used-thread')).events.length, 1);
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await removePath(root, { recursive: true });
   }
 });

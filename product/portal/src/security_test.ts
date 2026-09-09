@@ -1,3 +1,5 @@
+import { test } from './test-support.ts';
+import { readText, removePath, stat, temporaryDirectory } from './host-files.ts';
 import {
   PORTAL_PAIR_REQUEST_TYPE,
   PORTAL_PAIRING_TOKEN_ALGORITHM,
@@ -6,8 +8,8 @@ import {
   PORTAL_RPC_PATH,
   portalAuthChallengePayload,
 } from '@weave/product-protocol';
-import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.14';
-import { join } from 'jsr:@std/path@1.1.2';
+import { assertEquals, assertRejects } from './test-support.ts';
+import { join } from 'node:path';
 import { generatePortalKey, type PortalCredentialSigner } from '../scripts/rpc-client.ts';
 import type { PortalConfig } from './config.ts';
 import { PORTAL_ACTIONS, type PortalGrants, PortalSecurity, PortalSecurityError } from './security.ts';
@@ -92,8 +94,8 @@ const authenticate = async (
   });
 };
 
-Deno.test('Portal Pairing Tokens are one-time and Host identity survives restart', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-portal-security-' });
+test('Portal Pairing Tokens are one-time and Host identity survives restart', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-portal-security-' });
   try {
     const security = await PortalSecurity.open(config(root));
     const hostId = security.hostId;
@@ -125,13 +127,13 @@ Deno.test('Portal Pairing Tokens are one-time and Host identity survives restart
       'invalid or expired',
     );
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await removePath(root, { recursive: true });
   }
 });
 
-Deno.test('Portal Pairing Tokens use a strict minimal signed JWT profile', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-portal-pairing-token-' });
-  const otherRoot = await Deno.makeTempDir({ prefix: 'weave-portal-pairing-token-other-' });
+test('Portal Pairing Tokens use a strict minimal signed JWT profile', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-portal-pairing-token-' });
+  const otherRoot = await temporaryDirectory({ prefix: 'weave-portal-pairing-token-other-' });
   try {
     const security = await PortalSecurity.open(config(root));
     const token = await security.createPairingToken(60_000, {
@@ -151,8 +153,8 @@ Deno.test('Portal Pairing Tokens use a strict minimal signed JWT profile', async
     assertEquals(claims.aud, PORTAL_PAIRING_TOKEN_AUDIENCE);
 
     const keyPath = join(root, 'state', 'pairing-token.key');
-    assertEquals((await Deno.stat(keyPath)).mode! & 0o777, 0o600);
-    const keyBytes = decodeBase64Url((await Deno.readTextFile(keyPath)).trim());
+    assertEquals((await stat(keyPath)).mode! & 0o777, 0o600);
+    const keyBytes = decodeBase64Url((await readText(keyPath)).trim());
     const validHeader = {
       alg: PORTAL_PAIRING_TOKEN_ALGORITHM,
       typ: PORTAL_PAIRING_TOKEN_TYPE,
@@ -182,7 +184,7 @@ Deno.test('Portal Pairing Tokens use a strict minimal signed JWT profile', async
 
     const otherSecurity = await PortalSecurity.open(config(otherRoot));
     const otherKeyBytes = decodeBase64Url(
-      (await Deno.readTextFile(join(otherRoot, 'state', 'pairing-token.key'))).trim(),
+      (await readText(join(otherRoot, 'state', 'pairing-token.key'))).trim(),
     );
     await denied(await signJwt(otherKeyBytes, validHeader, claims));
     assertEquals(typeof otherSecurity.hostId, 'string');
@@ -195,13 +197,13 @@ Deno.test('Portal Pairing Tokens use a strict minimal signed JWT profile', async
       'invalid or expired',
     );
   } finally {
-    await Deno.remove(root, { recursive: true });
-    await Deno.remove(otherRoot, { recursive: true });
+    await removePath(root, { recursive: true });
+    await removePath(otherRoot, { recursive: true });
   }
 });
 
-Deno.test('Portal credential rotation is explicit and interruption-safe', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-portal-rotation-' });
+test('Portal credential rotation is explicit and interruption-safe', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-portal-rotation-' });
   try {
     const security = await PortalSecurity.open(config(root));
     const original = await pair(security);
@@ -238,12 +240,12 @@ Deno.test('Portal credential rotation is explicit and interruption-safe', async 
       ],
     );
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await removePath(root, { recursive: true });
   }
 });
 
-Deno.test('Portal authorization applies resource grants without revealing denied resources', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-portal-grants-' });
+test('Portal authorization applies resource grants without revealing denied resources', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-portal-grants-' });
   try {
     const security = await PortalSecurity.open(config(root));
     const credential = await pair(security, {
@@ -272,12 +274,12 @@ Deno.test('Portal authorization applies resource grants without revealing denied
       'Resource is unavailable.',
     );
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await removePath(root, { recursive: true });
   }
 });
 
-Deno.test('Portal upgrades existing administrative pairings for project registration', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-portal-grants-' });
+test('Portal upgrades existing administrative pairings for project registration', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-portal-grants-' });
   try {
     const initial = await PortalSecurity.open(config(root));
     const credential = await pair(initial, {
@@ -296,6 +298,6 @@ Deno.test('Portal upgrades existing administrative pairings for project registra
       workspaceId: 'registered-later',
     });
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await removePath(root, { recursive: true });
   }
 });

@@ -1,4 +1,6 @@
-import { dirname, join } from 'jsr:@std/path@1.1.2';
+import { chmod, mkdir, readText, removePath, rename, writeText } from './host-files.ts';
+import { isFsError } from './host-files.ts';
+import { dirname, join } from 'node:path';
 import { type JsonRpcMessage, parseJsonRpcMessage } from './json-rpc.ts';
 
 export type ThreadEventRecord = {
@@ -130,11 +132,11 @@ export class ThreadEventJournal {
     }
     const path = join(stateDirectory, 'thread-events.json');
     try {
-      const journal = journalFrom(JSON.parse(await Deno.readTextFile(path)));
-      await Deno.chmod(path, 0o600).catch(() => undefined);
+      const journal = journalFrom(JSON.parse(await readText(path)));
+      await chmod(path, 0o600).catch(() => undefined);
       return new ThreadEventJournal(stateDirectory, retentionLimit, journal.events, journal.compactedThrough);
     } catch (cause) {
-      if (cause instanceof Deno.errors.NotFound) {
+      if (isFsError(cause, 'ENOENT')) {
         return new ThreadEventJournal(stateDirectory, retentionLimit, [], new Map());
       }
       throw new Error(`Thread event journal is invalid: ${path}`, { cause });
@@ -214,10 +216,10 @@ export class ThreadEventJournal {
   }
 
   async #persist(events: ThreadEventRecord[], compactedThrough: Map<string, number>) {
-    await Deno.mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
+    await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
     const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`;
     try {
-      await Deno.writeTextFile(
+      await writeText(
         temporary,
         `${
           JSON.stringify(
@@ -232,11 +234,11 @@ export class ThreadEventJournal {
         }\n`,
         { mode: 0o600 },
       );
-      await Deno.rename(temporary, this.#path);
-      await Deno.chmod(this.#path, 0o600);
+      await rename(temporary, this.#path);
+      await chmod(this.#path, 0o600);
     } finally {
-      await Deno.remove(temporary).catch((cause) => {
-        if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+      await removePath(temporary).catch((cause) => {
+        if (!(isFsError(cause, 'ENOENT'))) throw cause;
       });
     }
   }

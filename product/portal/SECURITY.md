@@ -92,8 +92,8 @@ of the Portal state directory. Never put Pairing Tokens or the signing key in lo
 ## macOS code identity and privacy grants
 
 Release and installed development builds on macOS must use a stable Apple code-signing identity and the permanent
-identifier `xyz.veezee.weave.portal`. An ad-hoc Deno compile identifies itself by its exact code hash, so macOS cannot
-carry Files & Folders decisions across rebuilds and may ask for Documents access again. `deno task
+identifier `xyz.veezee.weave.portal`. An ad-hoc Bun compile identifies itself by its exact code hash, so macOS cannot
+carry Files & Folders decisions across rebuilds and may ask for Documents access again. `bun run
 build:macos-signed` signs and verifies the compiled binary when `WEAVE_PORTAL_CODESIGN_IDENTITY` names an available
 Keychain identity. The ordinary `build` task remains unsigned and must not replace an installed signed Portal.
 

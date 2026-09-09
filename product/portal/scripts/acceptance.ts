@@ -18,9 +18,9 @@ const credential = await pairPortalCredential(baseUrl, required('PORTAL_PAIRING_
 const workspaceId = required('PORTAL_WORKSPACE_ID');
 const agentId = required('PORTAL_AGENT_ID');
 const marker = required('PORTAL_ACCEPTANCE_MARKER');
-const recovery = Deno.env.get('PORTAL_ACCEPTANCE_RECOVERY') === 'true';
-const existingThreadId = Deno.env.get('PORTAL_ACCEPTANCE_THREAD_ID')?.trim();
-const expectedGeneration = Deno.env.get('PORTAL_ACCEPTANCE_EXPECTED_GENERATION')?.trim();
+const recovery = process.env['PORTAL_ACCEPTANCE_RECOVERY'] === 'true';
+const existingThreadId = process.env['PORTAL_ACCEPTANCE_THREAD_ID']?.trim();
+const expectedGeneration = process.env['PORTAL_ACCEPTANCE_EXPECTED_GENERATION']?.trim();
 const rpc = await RpcSocket.open(`${baseUrl}/rpc`, credential);
 try {
   const thread = existingThreadId

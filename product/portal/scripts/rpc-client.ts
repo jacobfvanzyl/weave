@@ -12,7 +12,7 @@ import {
 import { idKey, type JsonRpcMessage, parseJsonRpcMessage } from '../src/json-rpc.ts';
 
 export const required = (name: string) => {
-  const value = Deno.env.get(name)?.trim();
+  const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
 };
@@ -215,9 +215,9 @@ export class RpcSocket {
   }
 }
 
-export const waitFor = async (predicate: () => boolean, timeoutMs = 5_000) => {
+export const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000) => {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
+  while (!await predicate()) {
     if (Date.now() > deadline) {
       throw new Error('Timed out waiting for the acceptance condition.');
     }

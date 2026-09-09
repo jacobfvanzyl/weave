@@ -1,5 +1,8 @@
-import { assert, assertEquals, assertNotEquals, assertStringIncludes } from 'jsr:@std/assert@1.0.14';
-import { dirname, fromFileUrl, join } from 'jsr:@std/path@1.1.2';
+import { fileURLToPath } from 'node:url';
+import { test } from './test-support.ts';
+import { mkdir, removePath, temporaryDirectory } from './host-files.ts';
+import { assert, assertEquals, assertNotEquals, assertStringIncludes } from './test-support.ts';
+import { dirname, join } from 'node:path';
 import type { PortalConfig } from './config.ts';
 import { localAcpInternals, runStdioAcpConnector, serveLocalAcpGateway } from './local-acp.ts';
 import { type JsonRpcMessage, request } from './json-rpc.ts';
@@ -47,11 +50,11 @@ const exchange = async (
   return (await collected).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as JsonRpcMessage);
 };
 
-Deno.test('Zed-facing local ACP lists, reloads, resumes, and continues a Portal-owned Thread', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-product-zed-import-' });
+test('Zed-facing local ACP lists, reloads, resumes, and continues a Portal-owned Thread', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-product-zed-import-' });
   const workspacePath = join(root, 'workspace');
-  await Deno.mkdir(workspacePath);
-  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  await mkdir(workspacePath);
+  const fakeAgent = join(dirname(fileURLToPath(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
     displayName: 'Zed Import Portal',
@@ -61,8 +64,8 @@ Deno.test('Zed-facing local ACP lists, reloads, resumes, and continues a Portal-
     agents: [{
       agentId: 'fake',
       name: 'Fake',
-      command: Deno.execPath(),
-      args: ['run', '--quiet', '--allow-read', fakeAgent],
+      command: process.execPath,
+      args: [fakeAgent],
       env: {},
     }],
   };
@@ -159,11 +162,11 @@ Deno.test('Zed-facing local ACP lists, reloads, resumes, and continues a Portal-
   } finally {
     await gateway.close();
     await portal.close();
-    await Deno.remove(root, { recursive: true });
+    await removePath(root, { recursive: true });
   }
 });
 
-Deno.test('Zed-facing session identity scopes the same raw Thread ID by Portal Host', () => {
+test('Zed-facing session identity scopes the same raw Thread ID by Portal Host', () => {
   const first = localAcpInternals.externalSessionId('host-a', 'same-thread');
   const second = localAcpInternals.externalSessionId('host-b', 'same-thread');
   assertNotEquals(first, second);
@@ -171,11 +174,11 @@ Deno.test('Zed-facing session identity scopes the same raw Thread ID by Portal H
   assertStringIncludes(first, 'weave-v1:');
 });
 
-Deno.test('Agent title updates persist in Portal and appear in Zed session listing after restart', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-product-agent-title-' });
+test('Agent title updates persist in Portal and appear in Zed session listing after restart', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-product-agent-title-' });
   const workspacePath = join(root, 'workspace');
-  await Deno.mkdir(workspacePath);
-  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  await mkdir(workspacePath);
+  const fakeAgent = join(dirname(fileURLToPath(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
     displayName: 'Agent Title Portal',
@@ -185,8 +188,8 @@ Deno.test('Agent title updates persist in Portal and appear in Zed session listi
     agents: [{
       agentId: 'fake',
       name: 'Fake',
-      command: Deno.execPath(),
-      args: ['run', '--quiet', '--allow-read', fakeAgent],
+      command: process.execPath,
+      args: [fakeAgent],
       env: {},
     }],
   };
@@ -270,15 +273,15 @@ Deno.test('Agent title updates persist in Portal and appear in Zed session listi
   } finally {
     await gateway.close();
     await portal.close();
-    await Deno.remove(root, { recursive: true });
+    await removePath(root, { recursive: true });
   }
 });
 
-Deno.test('Zed-facing load follows a provider session replaced during empty Thread recovery', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-product-zed-replacement-' });
+test('Zed-facing load follows a provider session replaced during empty Thread recovery', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-product-zed-replacement-' });
   const workspacePath = join(root, 'workspace');
-  await Deno.mkdir(workspacePath);
-  const fakeAgent = join(dirname(fromFileUrl(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
+  await mkdir(workspacePath);
+  const fakeAgent = join(dirname(fileURLToPath(import.meta.url)), 'test-fixtures', 'fake-agent.ts');
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
     displayName: 'Zed Replacement Portal',
@@ -288,8 +291,8 @@ Deno.test('Zed-facing load follows a provider session replaced during empty Thre
     agents: [{
       agentId: 'fake',
       name: 'Fake',
-      command: Deno.execPath(),
-      args: ['run', '--quiet', '--allow-read', fakeAgent],
+      command: process.execPath,
+      args: [fakeAgent],
       env: {},
     }],
   };
@@ -326,14 +329,14 @@ Deno.test('Zed-facing load follows a provider session replaced during empty Thre
   } finally {
     await gateway.close();
     await portal.close();
-    await Deno.remove(root, { recursive: true });
+    await removePath(root, { recursive: true });
   }
 });
 
-Deno.test('stdio ACP connector exits when the Portal gateway closes', async () => {
-  const root = await Deno.makeTempDir({ prefix: 'weave-product-zed-disconnect-' });
+test('stdio ACP connector exits when the Portal gateway closes', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-product-zed-disconnect-' });
   const workspacePath = join(root, 'workspace');
-  await Deno.mkdir(workspacePath);
+  await mkdir(workspacePath);
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
     displayName: 'Zed Disconnect Portal',
@@ -343,7 +346,7 @@ Deno.test('stdio ACP connector exits when the Portal gateway closes', async () =
     agents: [{
       agentId: 'fake',
       name: 'Fake',
-      command: Deno.execPath(),
+      command: process.execPath,
       args: ['eval', ''],
       env: {},
     }],
@@ -378,6 +381,6 @@ Deno.test('stdio ACP connector exits when the Portal gateway closes', async () =
     outputReader.releaseLock();
     await gateway.close();
     await portal.close();
-    await Deno.remove(root, { recursive: true });
+    await removePath(root, { recursive: true });
   }
 });

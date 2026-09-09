@@ -1,4 +1,8 @@
-import { dirname, join } from 'jsr:@std/path@1.1.2';
+import { chmod, mkdir, statSync, writeText } from './host-files.ts';
+import { isFsError } from './host-files.ts';
+import { spawnProcess, runProcess } from './host-process.ts';
+import type { HostProcess } from './host-process.ts';
+import { dirname, join } from 'node:path';
 import type { TerminalBackend, TerminalBackendEvent, TerminalBackendRecord } from './terminals.ts';
 
 type CommandResult = { code: number; stdout: string; stderr: string };
@@ -56,8 +60,8 @@ const MAX_SAFE_UNIX_SOCKET_BYTES = 96;
 
 const executableFile = (path: string) => {
   try {
-    const stat = Deno.statSync(path);
-    return stat.isFile && (stat.mode === null || (stat.mode & 0o111) !== 0);
+    const stat = statSync(path);
+    return stat.isFile() && (stat.mode === null || (stat.mode & 0o111) !== 0);
   } catch {
     return false;
   }
@@ -66,7 +70,7 @@ const executableFile = (path: string) => {
 export const resolveTmuxExecutable = (
   env: Record<string, string | undefined>,
   options: {
-    os?: typeof Deno.build.os;
+    os?: NodeJS.Platform;
     isExecutable?: (path: string) => boolean;
   } = {},
 ) => {
@@ -77,7 +81,7 @@ export const resolveTmuxExecutable = (
     .split(':')
     .filter(Boolean)
     .map((directory) => join(directory, 'tmux'));
-  const platformCandidates = (options.os ?? Deno.build.os) === 'darwin'
+  const platformCandidates = (options.os ?? process.platform) === 'darwin'
     ? ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux']
     : ['/usr/local/bin/tmux', '/usr/bin/tmux'];
   return [...new Set([...pathCandidates, ...platformCandidates])].find(isExecutable) ?? 'tmux';
@@ -110,13 +114,12 @@ const validTerminalName = (value: string | undefined) =>
 
 const terminalAvailable = async (name: string, env: Record<string, string>) => {
   try {
-    const result = await new Deno.Command('infocmp', {
+    const result = await runProcess('infocmp', {
       args: [name],
       env,
-      clearEnv: true,
-      stdout: 'null',
-      stderr: 'null',
-    }).output();
+      stdout: 'ignore',
+      stderr: 'ignore',
+    });
     return result.success;
   } catch {
     return false;
@@ -237,7 +240,7 @@ class OutputDecoder {
 }
 
 class TmuxControlClient implements ControlClient {
-  readonly #process: Deno.ChildProcess;
+  readonly #process: HostProcess;
   readonly #writer: WritableStreamDefaultWriter<Uint8Array>;
   readonly #ready: Promise<void>;
   readonly #pending: Array<{
@@ -255,7 +258,7 @@ class TmuxControlClient implements ControlClient {
   #isReady = false;
   #closed = false;
 
-  private constructor(process: Deno.ChildProcess, private readonly handlers: ControlHandlers) {
+  private constructor(process: HostProcess, private readonly handlers: ControlHandlers) {
     this.#process = process;
     this.#writer = process.stdin.getWriter();
     this.#ready = new Promise((resolve) => {
@@ -269,18 +272,17 @@ class TmuxControlClient implements ControlClient {
     env: Record<string, string>;
     handlers: ControlHandlers;
   }) {
-    let process: Deno.ChildProcess;
+    let process: HostProcess;
     try {
-      process = new Deno.Command(input.executable, {
+      process = spawnProcess(input.executable, {
         args: input.args,
         env: input.env,
-        clearEnv: true,
-        stdin: 'piped',
-        stdout: 'piped',
-        stderr: 'piped',
-      }).spawn();
+          stdin: 'pipe',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
     } catch (cause) {
-      if (cause instanceof Deno.errors.NotFound) throw new Error(TMUX_REQUIRED);
+      if (isFsError(cause, 'ENOENT')) throw new Error(TMUX_REQUIRED);
       throw cause;
     }
     const client = new TmuxControlClient(process, input.handlers);
@@ -438,28 +440,27 @@ export class TmuxTerminalBackend implements TerminalBackend {
   constructor(options: TmuxTerminalBackendOptions) {
     this.#socketPath = stableSocketPath(options.stateDirectory);
     this.#configPath = join(options.stateDirectory, 'terminal', 'tmux.conf');
-    this.#env = options.env ?? Deno.env.toObject();
+    this.#env = options.env ?? { ...process.env };
     this.#executable = resolveTmuxExecutable(this.#env);
     this.#runner = options.runner;
     this.#controlFactory = options.controlClientFactory ?? TmuxControlClient.open;
   }
 
-  static async available(env: Record<string, string | undefined> = Deno.env.toObject()) {
+  static async available(env: Record<string, string | undefined> = { ...process.env }) {
     try {
-      return (await new Deno.Command(resolveTmuxExecutable(env), {
+      return (await runProcess(resolveTmuxExecutable(env), {
         args: ['-V'],
         env: commandEnvironment(env),
-        clearEnv: true,
-        stdout: 'null',
-        stderr: 'null',
-      }).output()).success;
+          stdout: 'ignore',
+        stderr: 'ignore',
+      })).success;
     } catch {
       return false;
     }
   }
 
   async list() {
-    await this.#ensureSession(Deno.env.get('HOME') ?? Deno.cwd());
+    await this.#ensureSession(process.env['HOME'] ?? process.cwd());
     const result = await this.#run(
       [
         'list-windows',
@@ -644,7 +645,7 @@ export class TmuxTerminalBackend implements TerminalBackend {
     if (this.#disposed || this.#controlClient) return;
     if (this.#controlOpening) return await this.#controlOpening;
     this.#controlOpening = (async () => {
-      await this.#ensureSession(Deno.env.get('HOME') ?? Deno.cwd());
+      await this.#ensureSession(process.env['HOME'] ?? process.cwd());
       await this.#records();
       this.#controlClient = await this.#controlFactory({
         executable: this.#executable,
@@ -745,10 +746,10 @@ export class TmuxTerminalBackend implements TerminalBackend {
 
   async #ensureConfig() {
     this.#configReady ??= (async () => {
-      await Deno.mkdir(dirname(this.#configPath), { recursive: true, mode: 0o700 });
+      await mkdir(dirname(this.#configPath), { recursive: true, mode: 0o700 });
       const defaultTerminal = await resolveDefaultTerminal(this.#env);
-      await Deno.writeTextFile(this.#configPath, buildConfig(defaultTerminal), { mode: 0o600 });
-      await Deno.chmod(this.#configPath, 0o600).catch(() => undefined);
+      await writeText(this.#configPath, buildConfig(defaultTerminal), { mode: 0o600 });
+      await chmod(this.#configPath, 0o600).catch(() => undefined);
     })();
     await this.#configReady;
   }
@@ -770,7 +771,7 @@ export class TmuxTerminalBackend implements TerminalBackend {
         ? await this.#runner([...this.#baseArgs(), ...args], { ...options, env })
         : await this.#runCommand(args, { ...options, env });
     } catch (cause) {
-      if (cause instanceof Deno.errors.NotFound) throw new Error(TMUX_REQUIRED);
+      if (isFsError(cause, 'ENOENT')) throw new Error(TMUX_REQUIRED);
       throw cause;
     }
     if (!acceptedCodes.includes(result.code)) {
@@ -780,14 +781,13 @@ export class TmuxTerminalBackend implements TerminalBackend {
   }
 
   async #runCommand(args: string[], options: { cwd?: string; env: Record<string, string> }) {
-    const output = await new Deno.Command(this.#executable, {
+    const output = await runProcess(this.#executable, {
       args: [...this.#baseArgs(), ...args],
       cwd: options.cwd,
       env: options.env,
-      clearEnv: true,
-      stdout: 'piped',
-      stderr: 'piped',
-    }).output();
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
     return {
       code: output.code,
       stdout: decoder.decode(output.stdout),

@@ -1,7 +1,8 @@
-import { assertEquals } from 'jsr:@std/assert@1.0.14';
+import { test } from './test-support.ts';
+import { assertEquals } from './test-support.ts';
 import { normalizeGitRemoteUrl, resolveRepositoryIdentity } from './repository-identity.ts';
 
-Deno.test('Git remote normalization matches cross-Host SSH and HTTPS repositories', () => {
+test('Git remote normalization matches cross-Host SSH and HTTPS repositories', () => {
   assertEquals(
     normalizeGitRemoteUrl('git@GitHub.com:VeeZee/Weave.git'),
     'github.com/veezee/weave',
@@ -12,7 +13,7 @@ Deno.test('Git remote normalization matches cross-Host SSH and HTTPS repositorie
   );
 });
 
-Deno.test('repository identity prefers upstream, then origin, then alphabetic fetch remotes', async () => {
+test('repository identity prefers upstream, then origin, then alphabetic fetch remotes', async () => {
   const commands: string[][] = [];
   const identity = await resolveRepositoryIdentity('/checkout', (_cwd, args) => {
     commands.push(args);

@@ -1,4 +1,5 @@
-import { isAbsolute, resolve } from 'jsr:@std/path@1.1.2';
+import { readText } from './host-files.ts';
+import { isAbsolute, resolve } from 'node:path';
 
 export type WorkspaceDefinition = {
   workspaceId: string;
@@ -149,4 +150,4 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
   };
 };
 
-export const loadPortalConfig = async (path: string) => parsePortalConfig(JSON.parse(await Deno.readTextFile(path)));
+export const loadPortalConfig = async (path: string) => parsePortalConfig(JSON.parse(await readText(path)));

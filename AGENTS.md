@@ -10,7 +10,7 @@ The supported application is the newer Alpha, Host Daemon, and shared product pr
 | `product/deferred/` | Inactive filetree, Editor, and Browser reference snapshots; never a build input |
 | `.agents/tools/linear/` | Deliberately isolated, pinned tracker CLI |
 
-Run `bun install --frozen-lockfile`, `bun run dev:alpha`, and `bun run check` at the root. Focused checks/builds are root scripts or package-local Bun scripts. The Host still uses Deno until WVE-70 completes its runtime port; desktop switches from transitional AppKit to Electron in WVE-71. Capacitor is for iPad. All libghostty work belongs to WVE-65.
+Run `bun install --frozen-lockfile`, `bun run dev:alpha`, and `bun run check` at the root. Focused checks/builds are root scripts or package-local Bun scripts. The Host uses Bun; desktop switches from transitional AppKit to Electron in WVE-71. Capacitor is for iPad. All libghostty work belongs to WVE-65.
 
 Preserve credentials, Host state, unrelated dirty work, and remote deployments. Do not commit secrets or edit installed dependencies directly. Repository cleanup is not remote deployment teardown. Before Docker work, check memory and verify the preferred explicit context; do not assume local Docker.
 

@@ -1,26 +1,35 @@
+import { writeText } from '../host-files.ts';
+import { stdinStream, stdoutStream } from '../local-stream.ts';
 import { type JsonRpcMessage, parseJsonRpcMessage, result } from '../json-rpc.ts';
 import { readLines } from '../line-stream.ts';
 
 const encoder = new TextEncoder();
-const writer = Deno.stdout.writable.getWriter();
+const writer = stdoutStream().getWriter();
 const send = async (message: JsonRpcMessage) => await writer.write(encoder.encode(`${JSON.stringify(message)}\n`));
-const recoveryMode = Deno.args.find((value) => value.startsWith('--recovery='))?.slice('--recovery='.length) ?? 'load';
-const replaysTranscript = Deno.args.includes('--replay-transcript');
-const processLog = Deno.args.find((value) => value.startsWith('--process-log='))?.slice('--process-log='.length);
+const staleSession = process.argv.find((value) => value.startsWith('--emit-stale='))?.slice('--emit-stale='.length);
+if (staleSession) {
+  await Bun.sleep(75);
+  await send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: staleSession,
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'OBSOLETE_PROVIDER_EVENT' } } } });
+  process.exit(0);
+}
+const recoveryMode = process.argv.slice(2).find((value) => value.startsWith('--recovery='))?.slice('--recovery='.length) ?? 'load';
+const replaysTranscript = process.argv.slice(2).includes('--replay-transcript');
+const processLog = process.argv.slice(2).find((value) => value.startsWith('--process-log='))?.slice('--process-log='.length);
 const transcript: JsonRpcMessage[] = [];
 let resumeAttempted = false;
 let restoredWith = '';
 let activeSessionId = 'fake-session';
 
 if (processLog) {
-  await Deno.writeTextFile(processLog, `start ${Deno.pid}\n`, { append: true, create: true });
-  Deno.addSignalListener('SIGTERM', async () => {
-    await Deno.writeTextFile(processLog, `stop ${Deno.pid}\n`, { append: true, create: true });
-    Deno.exit();
+  await writeText(processLog, `start ${process.pid}\n`, { append: true, create: true });
+  process.on('SIGTERM', async () => {
+    await writeText(processLog, `stop ${process.pid}\n`, { append: true, create: true });
+    process.exit();
   });
 }
 
-for await (const line of readLines(Deno.stdin.readable)) {
+for await (const line of readLines(stdinStream())) {
   if (!line.trim()) continue;
   const message = parseJsonRpcMessage(line);
   if (message.id === undefined || !message.method) continue;
@@ -150,18 +159,12 @@ for await (const line of readLines(Deno.stdin.readable)) {
       });
     }
     if (prompt.includes('CRASH_WITH_STALE')) {
-      new Deno.Command(Deno.execPath(), {
-        args: [
-          'eval',
-          `await new Promise((resolve) => setTimeout(resolve, 75)); console.log(JSON.stringify({jsonrpc:'2.0',method:'session/update',params:{sessionId:'${activeSessionId}',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'OBSOLETE_PROVIDER_EVENT'}}}}));`,
-        ],
-        stdin: 'null',
-        stdout: 'inherit',
-        stderr: 'null',
-      }).spawn();
-      Deno.exit(17);
+      Bun.spawn([process.execPath, ...(import.meta.path.startsWith('/$bunfs/') ? [] : [import.meta.path]),
+        `--emit-stale=${activeSessionId}`,
+      ], { stdin: 'ignore', stdout: 'inherit', stderr: 'ignore' });
+      process.exit(17);
     }
-    if (prompt.includes('CRASH_AFTER')) Deno.exit(17);
+    if (prompt.includes('CRASH_AFTER')) process.exit(17);
     if (prompt.includes('SLOW')) await new Promise((resolve) => setTimeout(resolve, 100));
     const userUpdate: JsonRpcMessage = {
       jsonrpc: '2.0',
@@ -198,5 +201,5 @@ for await (const line of readLines(Deno.stdin.readable)) {
 }
 
 if (processLog) {
-  await Deno.writeTextFile(processLog, `stop ${Deno.pid}\n`, { append: true, create: true });
+  await writeText(processLog, `stop ${process.pid}\n`, { append: true, create: true });
 }

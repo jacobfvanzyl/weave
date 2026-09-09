@@ -1,5 +1,7 @@
+import { chmod, mkdir, readText, realpath, rename, stat, writeText } from './host-files.ts';
+import { isFsError } from './host-files.ts';
 import type { RepositoryIdentity, WorkspaceSummary } from '@weave/product-protocol';
-import { basename, isAbsolute, join } from 'jsr:@std/path@1.1.2';
+import { basename, isAbsolute, join } from 'node:path';
 import type { WorkspaceDefinition } from './config.ts';
 import { resolveRepositoryIdentity } from './repository-identity.ts';
 
@@ -48,8 +50,8 @@ const resolveWorkspace = async (
   workspace: WorkspaceDefinition,
   canonicalizePath = false,
 ): Promise<RegisteredWorkspace> => {
-  const realPath = (await Deno.realPath(workspace.path)).replace(/\/$/, '');
-  if (!(await Deno.stat(realPath)).isDirectory) {
+  const realPath = (await realpath(workspace.path)).replace(/\/$/, '');
+  if (!(await stat(realPath)).isDirectory()) {
     throw new Error('Project path must be a directory.');
   }
   const repositoryIdentity = await resolveRepositoryIdentity(realPath);
@@ -90,13 +92,13 @@ export class WorkspaceCatalog {
   }
 
   static async open(stateDirectory: string, configured: WorkspaceDefinition[]) {
-    await Deno.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+    await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
     const path = join(stateDirectory, 'workspaces.json');
     let state: WorkspaceCatalogState = { version: 1, workspaces: [] };
     try {
-      state = parseState(JSON.parse(await Deno.readTextFile(path)));
+      state = parseState(JSON.parse(await readText(path)));
     } catch (cause) {
-      if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+      if (!(isFsError(cause, 'ENOENT'))) throw cause;
     }
     const catalog = new WorkspaceCatalog(
       path,
@@ -113,7 +115,7 @@ export class WorkspaceCatalog {
         catalog.#removedConfiguredIds.has(workspace.workspaceId)
       ) continue;
       if (catalog.#workspaces.has(workspace.workspaceId)) continue;
-      const realPath = await Deno.realPath(workspace.path);
+      const realPath = await realpath(workspace.path);
       if (seenPaths.has(realPath)) continue;
       const resolved = await resolveWorkspace(
         workspace,
@@ -133,11 +135,11 @@ export class WorkspaceCatalog {
     if (!isAbsolute(input.path)) {
       throw new Error('Project path must be absolute.');
     }
-    const path = (await Deno.realPath(input.path)).replace(/\/$/, '');
+    const path = (await realpath(input.path)).replace(/\/$/, '');
     const existing = await Promise.all(
       [...this.#workspaces.values()].map(async (workspace) => ({
         workspace,
-        path: await Deno.realPath(workspace.path),
+        path: await realpath(workspace.path),
       })),
     ).then((workspaces) => workspaces.find((workspace) => workspace.path === path)?.workspace);
     if (existing) return existing;
@@ -190,10 +192,10 @@ export class WorkspaceCatalog {
 
   async #persist() {
     const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`;
-    await Deno.writeTextFile(temporary, JSON.stringify(this.#state, null, 2), {
+    await writeText(temporary, JSON.stringify(this.#state, null, 2), {
       mode: 0o600,
     });
-    await Deno.rename(temporary, this.#path);
-    await Deno.chmod(this.#path, 0o600).catch(() => undefined);
+    await rename(temporary, this.#path);
+    await chmod(this.#path, 0o600).catch(() => undefined);
   }
 }

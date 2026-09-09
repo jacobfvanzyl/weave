@@ -17,7 +17,7 @@ bun install --frozen-lockfile
 bun run check
 ```
 
-Portal remains a Deno executable and is checked from its own directory. Alpha and the protocol share the root Bun workspace.
+The Host runs on Bun. Alpha, Host and protocol share the root Bun workspace.
 
 ### Alpha UI mocks
 
@@ -65,7 +65,7 @@ bun run cap:sync
 ## Module seams
 
 - Alpha depends on `@weave/product-protocol` and browser or Capacitor primitives only.
-- Portal depends on `@weave/product-protocol` and Deno primitives only.
+- Portal depends on `@weave/product-protocol`, Bun and standard Node-compatible APIs.
 - The protocol contains wire types, constants, and response validation. It contains no Portal or Alpha behavior.
 - `scripts/check-boundary.ts` rejects imports that escape this directory and dependencies on the earlier Weave packages.
 
@@ -88,7 +88,7 @@ mutations, bounded search, and connection-scoped change observation. Alpha no lo
 Its private tmux adapter keeps Workspace-scoped shells alive across client disconnects and Portal restarts, while the
 public service enforces one controller, multiple observers, bounded output, typed conflicts, and explicit detach versus
 close. Alpha renders those shells with xterm in independently persisted Bottom and Right docks. Run
-`deno task acceptance:terminal` from `product/portal` with `PORTAL_URL`, `PORTAL_PAIRING_TOKEN`, and
+`bun run acceptance:terminal` from `product/portal` with `PORTAL_URL`, `PORTAL_PAIRING_TOKEN`, and
 `PORTAL_WORKSPACE_ID` to exercise the two-client lifecycle against a configured Host.
 
 See `portal/README.md` for local configuration and direct acceptance.

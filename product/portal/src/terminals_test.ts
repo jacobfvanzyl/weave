@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from 'jsr:@std/assert@1.0.19';
+import { test } from './test-support.ts';
+import { assertEquals, assertRejects } from './test-support.ts';
 import type { TerminalNotification } from '@weave/product-protocol';
 import { InMemoryTerminalBackend, PortalTerminalError, TerminalService } from './terminals.ts';
 
@@ -46,7 +47,7 @@ const createFixture = (options: { retentionLimitBytes?: number; attachmentQueueL
   return { backend, service };
 };
 
-Deno.test('TerminalService creates, lists, snapshots, and reconnects persistent terminals', async () => {
+test('TerminalService creates, lists, snapshots, and reconnects persistent terminals', async () => {
   const { backend, service } = createFixture();
   const connection = service.openSession('connection-1', () => undefined);
   try {
@@ -92,7 +93,7 @@ Deno.test('TerminalService creates, lists, snapshots, and reconnects persistent 
   }
 });
 
-Deno.test('TerminalService allows one controller and many observers', async () => {
+test('TerminalService allows one controller and many observers', async () => {
   const { backend, service } = createFixture();
   const controlNotifications: TerminalNotification[] = [];
   const observerNotifications: TerminalNotification[] = [];
@@ -176,7 +177,7 @@ Deno.test('TerminalService allows one controller and many observers', async () =
   }
 });
 
-Deno.test('TerminalService absorbs output captured during attach instead of replaying it twice', async () => {
+test('TerminalService absorbs output captured during attach instead of replaying it twice', async () => {
   const backend = new CaptureAfterReleaseBackend();
   const service = new TerminalService({
     backend,
@@ -210,7 +211,7 @@ Deno.test('TerminalService absorbs output captured during attach instead of repl
   }
 });
 
-Deno.test('TerminalService still delivers captured attach output to existing attachments', async () => {
+test('TerminalService still delivers captured attach output to existing attachments', async () => {
   const backend = new CaptureAfterReleaseBackend();
   const service = new TerminalService({
     backend,
@@ -261,7 +262,7 @@ Deno.test('TerminalService still delivers captured attach output to existing att
   }
 });
 
-Deno.test('TerminalService snapshots metadata changed during attach capture', async () => {
+test('TerminalService snapshots metadata changed during attach capture', async () => {
   const backend = new CaptureAfterReleaseBackend();
   const service = new TerminalService({
     backend,
@@ -295,7 +296,7 @@ Deno.test('TerminalService snapshots metadata changed during attach capture', as
   }
 });
 
-Deno.test('TerminalService rejects an attach when the Terminal exits during capture', async () => {
+test('TerminalService rejects an attach when the Terminal exits during capture', async () => {
   const backend = new CaptureAfterReleaseBackend();
   const service = new TerminalService({
     backend,
@@ -322,7 +323,7 @@ Deno.test('TerminalService rejects an attach when the Terminal exits during capt
   }
 });
 
-Deno.test('TerminalService preserves output emitted after the backend snapshot boundary', async () => {
+test('TerminalService preserves output emitted after the backend snapshot boundary', async () => {
   const backend = new FrozenCaptureBackend();
   const service = new TerminalService({
     backend,
@@ -356,7 +357,7 @@ Deno.test('TerminalService preserves output emitted after the backend snapshot b
   }
 });
 
-Deno.test('TerminalService detaches views without closing and requires the controller to close', async () => {
+test('TerminalService detaches views without closing and requires the controller to close', async () => {
   const { backend, service } = createFixture();
   const controllerNotifications: TerminalNotification[] = [];
   const observerNotifications: TerminalNotification[] = [];
@@ -421,7 +422,7 @@ Deno.test('TerminalService detaches views without closing and requires the contr
   }
 });
 
-Deno.test('TerminalService reports a replay gap rather than returning partial retained output', async () => {
+test('TerminalService reports a replay gap rather than returning partial retained output', async () => {
   const { backend, service } = createFixture({ retentionLimitBytes: 8 });
   const connection = service.openSession('connection-1', () => undefined);
   try {
@@ -454,7 +455,7 @@ Deno.test('TerminalService reports a replay gap rather than returning partial re
   }
 });
 
-Deno.test('TerminalService releases control when the transport rejects its backlog', async () => {
+test('TerminalService releases control when the transport rejects its backlog', async () => {
   const { service } = createFixture();
   const stalled = service.openSession('stalled', () => false);
   const replacement = service.openSession('replacement', () => undefined);
@@ -482,7 +483,7 @@ Deno.test('TerminalService releases control when the transport rejects its backl
   }
 });
 
-Deno.test('TerminalService delivers exit to healthy attachments when another sender throws', async () => {
+test('TerminalService delivers exit to healthy attachments when another sender throws', async () => {
   const { backend, service } = createFixture();
   const broken = service.openSession('broken', () => {
     throw new Error('transport failed');

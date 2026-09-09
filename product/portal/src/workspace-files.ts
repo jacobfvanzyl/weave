@@ -1,3 +1,8 @@
+import { link, lstat, mkdir, readBytes, readDirectory, realpath, removePath, rename, stat, watchPaths, writeBytes } from './host-files.ts';
+import type { Stats } from './host-files.ts';
+import type { Dirent } from './host-files.ts';
+import type { FileChange } from './host-files.ts';
+import { isFsError } from './host-files.ts';
 import type {
   PortalRpcParams,
   PortalRpcResult,
@@ -22,7 +27,7 @@ export type WorkspaceFileLimits = {
   watchDebounceMs: number;
 };
 
-export type WorkspaceFileSystemWatcher = AsyncIterable<Deno.FsEvent> & {
+export type WorkspaceFileSystemWatcher = AsyncIterable<FileChange> & {
   close(): void;
 };
 export type WorkspaceFileDependencies = {
@@ -115,7 +120,7 @@ const compareEntries = (
     left.name.localeCompare(right.name);
 };
 
-const compareDirectoryEntries = (left: Deno.DirEntry, right: Deno.DirEntry) =>
+const compareDirectoryEntries = (left: Dirent, right: Dirent) =>
   left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) ||
   left.name.localeCompare(right.name);
 
@@ -137,7 +142,7 @@ const metadata = async (
   absolutePath: string,
   bytes: Uint8Array,
 ): Promise<WorkspaceFileMetadata> => {
-  const details = await Deno.stat(absolutePath);
+  const details = await stat(absolutePath);
   return {
     path,
     contentHash: await sha256(bytes),
@@ -180,8 +185,8 @@ export class WorkspaceFileService {
     const resolved = new Map<string, string>();
     for (const root of roots) {
       try {
-        const path = await Deno.realPath(root.path);
-        if (!(await Deno.stat(path)).isDirectory) {
+        const path = await realpath(root.path);
+        if (!(await stat(path)).isDirectory()) {
           return fail('WORKSPACE_UNAVAILABLE');
         }
         resolved.set(root.workspaceId, path.replace(/\/$/, ''));
@@ -195,15 +200,15 @@ export class WorkspaceFileService {
       { ...DEFAULT_WORKSPACE_FILE_LIMITS, ...limits },
       {
         watchFs: dependencies.watchFs ??
-          ((paths, options) => Deno.watchFs(paths, options)),
+          ((paths, options) => watchPaths(paths, options)),
         createId: dependencies.createId ?? (() => crypto.randomUUID()),
       },
     );
   }
 
   async addRoot(root: WorkspaceRoot) {
-    const path = (await Deno.realPath(root.path)).replace(/\/$/, '');
-    if (!(await Deno.stat(path)).isDirectory) {
+    const path = (await realpath(root.path)).replace(/\/$/, '');
+    if (!(await stat(path)).isDirectory()) {
       return fail('WORKSPACE_UNAVAILABLE');
     }
     this.#roots.set(root.workspaceId, path);
@@ -218,21 +223,21 @@ export class WorkspaceFileService {
   ): Promise<PortalRpcResult<'workspace.file.list'>> {
     const path = canonicalPath(params.path, true);
     const absolutePath = await this.#existingPath(params.workspaceId, path);
-    if (!(await Deno.stat(absolutePath)).isDirectory) {
+    if (!(await stat(absolutePath)).isDirectory()) {
       return fail('NOT_DIRECTORY', { path });
     }
 
     const entries: WorkspaceFileEntry[] = [];
     let truncated = false;
-    for await (const entry of Deno.readDir(absolutePath)) {
+    for await (const entry of readDirectory(absolutePath)) {
       const entryPath = path ? `${path}/${entry.name}` : entry.name;
-      const details = await Deno.lstat(`${absolutePath}/${entry.name}`).catch(
+      const details = await lstat(`${absolutePath}/${entry.name}`).catch(
         () => undefined,
       );
       entries.push({
         name: entry.name,
         path: entryPath,
-        type: entry.isDirectory ? 'directory' : entry.isFile ? 'file' : 'other',
+        type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other',
         hidden: entry.name.startsWith('.'),
         ...(details ? { size: details.size } : {}),
         ...(details?.mtime ? { mtimeMs: details.mtime.getTime() } : {}),
@@ -309,8 +314,8 @@ export class WorkspaceFileService {
       path,
     );
     const current = await this.#statMaybe(absolutePath);
-    if (current?.isSymlink) return fail('SYMLINK_NOT_ALLOWED', { path });
-    if (current && !current.isFile) return fail('NOT_FILE', { path });
+    if (current?.isSymbolicLink()) return fail('SYMLINK_NOT_ALLOWED', { path });
+    if (current && !current.isFile()) return fail('NOT_FILE', { path });
     if (params.expectedContentHash === null && current) {
       return fail('ALREADY_EXISTS', { path });
     }
@@ -337,22 +342,22 @@ export class WorkspaceFileService {
 
     const temporaryPath = `${parent}/.${basename(path)}.weave-${crypto.randomUUID()}.tmp`;
     try {
-      await Deno.writeFile(temporaryPath, bytes, {
+      await writeBytes(temporaryPath, bytes, {
         createNew: true,
         ...(current?.mode ? { mode: current.mode } : {}),
       });
       if (params.expectedContentHash === null) {
         try {
-          await Deno.link(temporaryPath, absolutePath);
+          await link(temporaryPath, absolutePath);
         } catch (cause) {
-          if (cause instanceof Deno.errors.AlreadyExists) {
+          if (isFsError(cause, 'EEXIST')) {
             return fail('ALREADY_EXISTS', { path });
           }
           throw cause;
         }
       } else {
         const latest = await this.#statMaybe(absolutePath);
-        if (!latest?.isFile || latest.isSymlink) {
+        if (!latest?.isFile() || latest.isSymbolicLink()) {
           return fail('STALE_CONTENT', {
             path,
             expectedContentHash: params.expectedContentHash,
@@ -372,11 +377,11 @@ export class WorkspaceFileService {
             actualContentHash: latestHash,
           });
         }
-        await Deno.rename(temporaryPath, absolutePath);
+        await rename(temporaryPath, absolutePath);
       }
     } finally {
-      await Deno.remove(temporaryPath).catch((cause) => {
-        if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+      await removePath(temporaryPath).catch((cause) => {
+        if (!(isFsError(cause, 'ENOENT'))) throw cause;
       });
     }
     return await metadata(path, absolutePath, bytes);
@@ -400,11 +405,11 @@ export class WorkspaceFileService {
     for (const segment of path.split('/')) {
       current = `${current}/${segment}`;
       const details = await this.#statMaybe(current);
-      if (details?.isSymlink) return fail('SYMLINK_NOT_ALLOWED', { path });
-      if (details && !details.isDirectory) {
+      if (details?.isSymbolicLink()) return fail('SYMLINK_NOT_ALLOWED', { path });
+      if (details && !details.isDirectory()) {
         return fail('NOT_DIRECTORY', { path });
       }
-      if (!details) await Deno.mkdir(current);
+      if (!details) await mkdir(current);
     }
     return { ok: true, path };
   }
@@ -430,14 +435,14 @@ export class WorkspaceFileService {
       toPath,
     );
     const existingTarget = await this.#statMaybe(target);
-    if (existingTarget?.isSymlink) {
+    if (existingTarget?.isSymbolicLink()) {
       return fail('SYMLINK_NOT_ALLOWED', { path: toPath });
     }
     if (existingTarget && !params.overwrite) {
       return fail('ALREADY_EXISTS', { path: toPath });
     }
-    if (existingTarget) await Deno.remove(target, { recursive: true });
-    await Deno.rename(source, target);
+    if (existingTarget) await removePath(target, { recursive: true });
+    await rename(source, target);
     return { ok: true, path: toPath };
   }
 
@@ -455,10 +460,10 @@ export class WorkspaceFileService {
   ): Promise<PortalRpcResult<'workspace.file.delete'>> {
     const path = canonicalPath(params.path);
     const absolutePath = await this.#existingPath(params.workspaceId, path);
-    const details = await Deno.lstat(absolutePath);
-    if (details.isDirectory && !params.recursive) {
+    const details = await lstat(absolutePath);
+    if (details.isDirectory() && !params.recursive) {
       try {
-        await Deno.remove(absolutePath);
+        await removePath(absolutePath);
       } catch (cause) {
         if ((cause as { code?: unknown }).code === 'ENOTEMPTY') {
           return fail('DIRECTORY_NOT_EMPTY', { path });
@@ -466,7 +471,7 @@ export class WorkspaceFileService {
         throw cause;
       }
     } else {
-      await Deno.remove(absolutePath, { recursive: params.recursive === true });
+      await removePath(absolutePath, { recursive: params.recursive === true });
     }
     return { ok: true, path };
   }
@@ -476,7 +481,7 @@ export class WorkspaceFileService {
   ): Promise<PortalRpcResult<'workspace.file.search'>> {
     const path = canonicalPath(params.path, true);
     const directory = await this.#existingPath(params.workspaceId, path);
-    if (!(await Deno.stat(directory)).isDirectory) {
+    if (!(await stat(directory)).isDirectory()) {
       return fail('NOT_DIRECTORY', { path });
     }
     const query = params.query.toLocaleLowerCase();
@@ -503,9 +508,9 @@ export class WorkspaceFileService {
       absoluteDirectory: string,
       relativeDirectory: string,
     ): Promise<void> => {
-      const directoryEntries: Deno.DirEntry[] = [];
+      const directoryEntries: Dirent[] = [];
       let directoryWasTruncated = false;
-      for await (const entry of Deno.readDir(absoluteDirectory)) {
+      for await (const entry of readDirectory(absoluteDirectory)) {
         if (entry.name === '.git' || entry.name === 'node_modules') continue;
         directoryEntries.push(entry);
         directoryEntries.sort(compareDirectoryEntries);
@@ -518,19 +523,19 @@ export class WorkspaceFileService {
         if (truncated) return;
         const entryPath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
         const absolutePath = `${absoluteDirectory}/${entry.name}`;
-        const details = await Deno.lstat(absolutePath).catch(() => undefined);
-        if (!details || details.isSymlink) continue;
+        const details = await lstat(absolutePath).catch(() => undefined);
+        if (!details || details.isSymbolicLink()) continue;
         if (
           (params.scope === 'path' || params.scope === 'both') &&
           entryPath.toLocaleLowerCase().includes(query)
         ) {
           if (!add({ path: entryPath, kind: 'path' })) return;
         }
-        if (details.isDirectory) {
+        if (details.isDirectory()) {
           await walk(absolutePath, entryPath);
           continue;
         }
-        if (!details.isFile) continue;
+        if (!details.isFile()) continue;
         visitedFiles += 1;
         if (visitedFiles > this.#limits.maxSearchFiles) {
           truncated = true;
@@ -609,19 +614,19 @@ export class WorkspaceFileService {
     let current = root;
     for (const segment of path.split('/').filter(Boolean)) {
       current = `${current}/${segment}`;
-      let details: Deno.FileInfo;
+      let details: Stats;
       try {
-        details = await Deno.lstat(current);
+        details = await lstat(current);
       } catch (cause) {
-        if (cause instanceof Deno.errors.NotFound) {
+        if (isFsError(cause, 'ENOENT')) {
           return fail('NOT_FOUND', { path });
         }
         throw cause;
       }
-      if (details.isSymlink) return fail('SYMLINK_NOT_ALLOWED', { path });
+      if (details.isSymbolicLink()) return fail('SYMLINK_NOT_ALLOWED', { path });
     }
-    const resolved = await Deno.realPath(current).catch((cause) => {
-      if (cause instanceof Deno.errors.NotFound) {
+    const resolved = await realpath(current).catch((cause) => {
+      if (isFsError(cause, 'ENOENT')) {
         return fail('NOT_FOUND', { path });
       }
       throw cause;
@@ -634,7 +639,7 @@ export class WorkspaceFileService {
 
   async #regularFile(workspaceId: string, path: string) {
     const absolutePath = await this.#existingPath(workspaceId, path);
-    if (!(await Deno.stat(absolutePath)).isFile) {
+    if (!(await stat(absolutePath)).isFile()) {
       return fail('NOT_FILE', { path });
     }
     return absolutePath;
@@ -642,7 +647,7 @@ export class WorkspaceFileService {
 
   async #writablePath(workspaceId: string, path: string) {
     const parent = await this.#existingPath(workspaceId, parentPath(path));
-    if (!(await Deno.stat(parent)).isDirectory) {
+    if (!(await stat(parent)).isDirectory()) {
       return fail('NOT_DIRECTORY', { path });
     }
     return { absolutePath: `${parent}/${basename(path)}`, parent };
@@ -650,17 +655,17 @@ export class WorkspaceFileService {
 
   async #statMaybe(path: string) {
     try {
-      return await Deno.lstat(path);
+      return await lstat(path);
     } catch (cause) {
-      if (cause instanceof Deno.errors.NotFound) return undefined;
+      if (isFsError(cause, 'ENOENT')) return undefined;
       throw cause;
     }
   }
 
   async #readBounded(absolutePath: string, path: string, limit: number) {
-    const details = await Deno.stat(absolutePath);
+    const details = await stat(absolutePath);
     if (details.size > limit) return fail('PAYLOAD_TOO_LARGE', { path });
-    const bytes = await Deno.readFile(absolutePath);
+    const bytes = await readBytes(absolutePath);
     if (bytes.byteLength > limit) return fail('PAYLOAD_TOO_LARGE', { path });
     return bytes;
   }
@@ -799,7 +804,7 @@ class WorkspaceFileWatchSubscription {
     }
   }
 
-  #queue(event: Deno.FsEvent) {
+  #queue(event: FileChange) {
     const paths = event.paths
       .map((path) => relativeToRoot(this.#resolved.root, path.replace(/\/$/, '')))
       .filter((path): path is string => path !== undefined);

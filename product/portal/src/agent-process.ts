@@ -1,3 +1,6 @@
+import { isFsError } from './host-files.ts';
+import { spawnProcess } from './host-process.ts';
+import type { HostProcess } from './host-process.ts';
 import type { AgentDefinition } from './config.ts';
 import { idKey, type JsonRpcMessage, parseJsonRpcMessage, request } from './json-rpc.ts';
 import { readLines } from './line-stream.ts';
@@ -30,13 +33,13 @@ const inheritedEnvironment = () => {
     'CODEX_HOME',
   ];
   return Object.fromEntries(names.flatMap((name) => {
-    const value = Deno.env.get(name);
+    const value = process.env[name];
     return value === undefined ? [] : [[name, value]];
   }));
 };
 
 export class AgentProcess {
-  readonly #child: Deno.ChildProcess;
+  readonly #child: HostProcess;
   readonly #writer: WritableStreamDefaultWriter<Uint8Array>;
   readonly #pending = new Map<string, Pending>();
   readonly #encoder = new TextEncoder();
@@ -55,15 +58,14 @@ export class AgentProcess {
   ) {
     this.#onMessage = onMessage;
     this.#onExit = onExit;
-    this.#child = new Deno.Command(agent.command, {
+    this.#child = spawnProcess(agent.command, {
       args: agent.args,
       cwd,
       env: { ...inheritedEnvironment(), ...agent.env },
-      clearEnv: true,
-      stdin: 'piped',
-      stdout: 'piped',
-      stderr: 'piped',
-    }).spawn();
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
     this.#writer = this.#child.stdin.getWriter();
     void this.#readMessages();
     void this.#readStderr();
@@ -93,7 +95,7 @@ export class AgentProcess {
     try {
       this.#child.kill('SIGTERM');
     } catch (cause) {
-      if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+      if (!(isFsError(cause, 'ENOENT'))) throw cause;
     }
     await this.#writer.close().catch(() => undefined);
     await this.#child.status.catch(() => undefined);

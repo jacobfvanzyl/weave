@@ -1,3 +1,5 @@
+import { chmod, mkdir, readText, removePath, rename, writeText } from './host-files.ts';
+import { isFsError } from './host-files.ts';
 import {
   PORTAL_AUTH_CHALLENGE_TYPE,
   PORTAL_PAIR_RESULT_TYPE,
@@ -11,7 +13,7 @@ import {
   type PortalPairResult,
   type PortalPrincipalSummary,
 } from '@weave/product-protocol';
-import { dirname, join } from 'jsr:@std/path@1.1.2';
+import { dirname, join } from 'node:path';
 import type { PortalConfig } from './config.ts';
 
 export const PORTAL_ACTIONS = [
@@ -159,29 +161,29 @@ const importPairingTokenKey = async (bytes: Uint8Array) => {
 const loadPairingTokenKey = async (stateDirectory: string) => {
   const keyPath = join(stateDirectory, 'pairing-token.key');
   try {
-    const bytes = decodeBase64Url((await Deno.readTextFile(keyPath)).trim());
-    await Deno.chmod(keyPath, 0o600).catch(() => undefined);
+    const bytes = decodeBase64Url((await readText(keyPath)).trim());
+    await chmod(keyPath, 0o600).catch(() => undefined);
     return await importPairingTokenKey(bytes);
   } catch (cause) {
-    if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+    if (!(isFsError(cause, 'ENOENT'))) throw cause;
   }
 
-  await Deno.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+  await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   try {
-    await Deno.writeTextFile(keyPath, `${encodeBase64Url(bytes)}\n`, {
+    await writeText(keyPath, `${encodeBase64Url(bytes)}\n`, {
       createNew: true,
       mode: 0o600,
     });
-    await Deno.chmod(keyPath, 0o600);
+    await chmod(keyPath, 0o600);
     return await importPairingTokenKey(bytes);
   } catch (cause) {
-    if (!(cause instanceof Deno.errors.AlreadyExists)) throw cause;
+    if (!(isFsError(cause, 'EEXIST'))) throw cause;
     const persisted = decodeBase64Url(
-      (await Deno.readTextFile(keyPath)).trim(),
+      (await readText(keyPath)).trim(),
     );
-    await Deno.chmod(keyPath, 0o600).catch(() => undefined);
+    await chmod(keyPath, 0o600).catch(() => undefined);
     return await importPairingTokenKey(persisted);
   }
 };
@@ -275,8 +277,8 @@ export class PortalSecurity {
     const pairingTokenKey = await loadPairingTokenKey(config.stateDirectory);
     const statePath = join(config.stateDirectory, 'security.json');
     try {
-      const state = parseState(JSON.parse(await Deno.readTextFile(statePath)));
-      await Deno.chmod(statePath, 0o600).catch(() => undefined);
+      const state = parseState(JSON.parse(await readText(statePath)));
+      await chmod(statePath, 0o600).catch(() => undefined);
       const security = new PortalSecurity(
         config,
         state,
@@ -286,7 +288,7 @@ export class PortalSecurity {
       await security.#upgradeAdministrativeGrants();
       return security;
     } catch (cause) {
-      if (!(cause instanceof Deno.errors.NotFound)) {
+      if (!(isFsError(cause, 'ENOENT'))) {
         throw new Error('Portal security state is invalid.', { cause });
       }
       const security = new PortalSecurity(
@@ -811,7 +813,7 @@ export class PortalSecurity {
 
   async #reload() {
     this.#state = parseState(
-      JSON.parse(await Deno.readTextFile(this.#statePath)),
+      JSON.parse(await readText(this.#statePath)),
     );
   }
 
@@ -855,32 +857,32 @@ export class PortalSecurity {
   }
 
   async #persist() {
-    await Deno.mkdir(dirname(this.#statePath), {
+    await mkdir(dirname(this.#statePath), {
       recursive: true,
       mode: 0o700,
     });
     const temporary = `${this.#statePath}.${crypto.randomUUID()}.tmp`;
     try {
-      await Deno.writeTextFile(
+      await writeText(
         temporary,
         `${JSON.stringify(this.#state, null, 2)}\n`,
         { mode: 0o600 },
       );
-      await Deno.rename(temporary, this.#statePath);
-      await Deno.chmod(this.#statePath, 0o600);
+      await rename(temporary, this.#statePath);
+      await chmod(this.#statePath, 0o600);
     } finally {
-      await Deno.remove(temporary).catch((cause) => {
-        if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+      await removePath(temporary).catch((cause) => {
+        if (!(isFsError(cause, 'ENOENT'))) throw cause;
       });
     }
   }
 
   async #audit(event: string, fields: Record<string, unknown>) {
-    await Deno.mkdir(dirname(this.#auditPath), {
+    await mkdir(dirname(this.#auditPath), {
       recursive: true,
       mode: 0o700,
     });
-    await Deno.writeTextFile(
+    await writeText(
       this.#auditPath,
       `${
         JSON.stringify({
@@ -892,6 +894,6 @@ export class PortalSecurity {
       }\n`,
       { append: true, create: true, mode: 0o600 },
     );
-    await Deno.chmod(this.#auditPath, 0o600);
+    await chmod(this.#auditPath, 0o600);
   }
 }

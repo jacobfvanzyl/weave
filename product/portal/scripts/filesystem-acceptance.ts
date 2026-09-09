@@ -4,7 +4,7 @@ import { pairPortalCredential, required, RpcResponseError, RpcSocket, waitFor } 
 const baseUrl = required('PORTAL_URL').replace(/\/$/, '');
 const credential = await pairPortalCredential(baseUrl, required('PORTAL_PAIRING_TOKEN'), 'Filesystem acceptance');
 const workspaceId = required('PORTAL_WORKSPACE_ID');
-const marker = Deno.env.get('PORTAL_FILESYSTEM_ACCEPTANCE_MARKER')?.trim() || `WVE42_${crypto.randomUUID()}`;
+const marker = process.env['PORTAL_FILESYSTEM_ACCEPTANCE_MARKER']?.trim() || `WVE42_${crypto.randomUUID()}`;
 const fixture = `.weave-acceptance/wve-42-${crypto.randomUUID()}`;
 const originalPath = `${fixture}/original.txt`;
 const movedPath = `${fixture}/moved.txt`;

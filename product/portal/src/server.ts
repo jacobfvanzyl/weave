@@ -1,3 +1,5 @@
+import { HostWebSocket, type HostUpgrade } from './host-websocket.ts';
+import { readTextSync } from './host-files.ts';
 import {
   parsePortalAuthResponse,
   parsePortalPairRequest,
@@ -26,13 +28,13 @@ const protocols = (request: Request) =>
     .map((value) => value.trim())
     .filter(Boolean);
 
-const sendJson = (socket: WebSocket, message: unknown) => {
+const sendJson = (socket: HostWebSocket, message: unknown) => {
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(message));
   }
 };
 
-const send = (socket: WebSocket, message: JsonRpcMessage) => sendJson(socket, message);
+const send = (socket: HostWebSocket, message: JsonRpcMessage) => sendJson(socket, message);
 
 const TERMINAL_SOCKET_BACKLOG_LIMIT = 256 * 1024;
 export const sendTerminal = (
@@ -75,9 +77,9 @@ const validateUpgrade = (request: Request, portal: Portal) => {
   }
 };
 
-const upgrade = (request: Request) => Deno.upgradeWebSocket(request, { protocol: PORTAL_WEBSOCKET_PROTOCOL });
 
-const closeAuthenticationFailure = (socket: WebSocket, cause: unknown) => {
+
+const closeAuthenticationFailure = (socket: HostWebSocket, cause: unknown) => {
   const securityError = cause instanceof PortalSecurityError ? cause : undefined;
   socket.close(
     1008,
@@ -87,7 +89,7 @@ const closeAuthenticationFailure = (socket: WebSocket, cause: unknown) => {
 
 const activeCredentialMonitor = (
   portal: Portal,
-  socket: WebSocket,
+  socket: HostWebSocket,
   principal: PortalPrincipal,
 ) => {
   const timer = setInterval(() => {
@@ -98,7 +100,7 @@ const activeCredentialMonitor = (
   return () => clearInterval(timer);
 };
 
-const pairingWebSocket = (request: Request, portal: Portal) => {
+const pairingWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) => {
   const denied = validateUpgrade(request, portal);
   if (denied) return denied;
   const upgraded = upgrade(request);
@@ -124,7 +126,7 @@ const pairingWebSocket = (request: Request, portal: Portal) => {
   return upgraded.response;
 };
 
-const rpcWebSocket = (request: Request, portal: Portal) => {
+const rpcWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) => {
   const denied = validateUpgrade(request, portal);
   if (denied) return denied;
   const origin = request.headers.get('origin') ?? undefined;
@@ -238,7 +240,7 @@ const rpcWebSocket = (request: Request, portal: Portal) => {
   return upgraded.response;
 };
 
-const acpWebSocket = (request: Request, portal: Portal) => {
+const acpWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) => {
   const denied = validateUpgrade(request, portal);
   if (denied) return denied;
   const url = new URL(request.url);
@@ -309,32 +311,71 @@ const acpWebSocket = (request: Request, portal: Portal) => {
 
 export const startPortalServer = (
   portal: Portal,
-  onListen?: (address: Deno.NetAddr) => void,
+  onListen?: (address: { hostname: string; port: number }) => void,
 ) => {
   const tls = portal.config.tls
     ? {
-      cert: Deno.readTextFileSync(portal.config.tls.certificateFile),
-      key: Deno.readTextFileSync(portal.config.tls.privateKeyFile),
+      cert: readTextSync(portal.config.tls.certificateFile),
+      key: readTextSync(portal.config.tls.privateKeyFile),
     }
-    : {};
-  return Deno.serve({
+    : undefined;
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => { finish = resolve; });
+  const sockets = new Set<HostWebSocket>();
+  const server = Bun.serve<HostWebSocket>({
     hostname: portal.config.listen.hostname,
     port: portal.config.listen.port,
-    onListen,
-    ...tls,
-  }, (request) => {
-    const path = new URL(request.url).pathname;
-    if (path === '/health') {
-      return Response.json({
-        status: 'ok',
-        product: 'weave-portal',
-        hostId: portal.security.hostId,
-        displayName: portal.config.displayName,
-      });
-    }
-    if (path === PORTAL_PAIR_PATH) return pairingWebSocket(request, portal);
-    if (path === PORTAL_RPC_PATH) return rpcWebSocket(request, portal);
-    if (path === PORTAL_ACP_PATH) return acpWebSocket(request, portal);
-    return new Response('Not found.', { status: 404 });
+    tls,
+    websocket: {
+      idleTimeout: 0,
+      maxPayloadLength: 16 * 1024 * 1024,
+      open(socket) { sockets.add(socket.data); socket.data.open(socket); },
+      message(socket, data) { socket.data.receive(data); },
+      close(socket) { sockets.delete(socket.data); socket.data.closed(); },
+    },
+    fetch(request, server) {
+      let socket: HostWebSocket | undefined;
+      const upgrade: HostUpgrade = () => {
+        socket = new HostWebSocket();
+        return { socket, response: undefined };
+      };
+      const path = new URL(request.url).pathname;
+      if (path === '/health') {
+        return Response.json({
+          status: 'ok',
+          product: 'weave-portal',
+          hostId: portal.security.hostId,
+          displayName: portal.config.displayName,
+        });
+      }
+      const response = path === PORTAL_PAIR_PATH ? pairingWebSocket(request, portal, upgrade)
+        : path === PORTAL_RPC_PATH ? rpcWebSocket(request, portal, upgrade)
+        : path === PORTAL_ACP_PATH ? acpWebSocket(request, portal, upgrade)
+        : new Response('Not found.', { status: 404 });
+      // Bun can call websocket.open synchronously inside upgrade. Install the
+      // authentication/session handlers first so the initial challenge is never lost.
+      if (socket && !server.upgrade(request, { data: socket, headers: { 'Sec-WebSocket-Protocol': PORTAL_WEBSOCKET_PROTOCOL } })) {
+        return new Response('WebSocket upgrade failed.', { status: 400 });
+      }
+      return response;
+
+    },
   });
+  const addr = { hostname: server.hostname ?? portal.config.listen.hostname, port: server.port! };
+  onListen?.(addr);
+  return {
+    addr, finished,
+    async shutdown() {
+      // Bun 1.3.14 leaks its pending-WebSocket count after a server-side close
+      // (oven-sh/bun#36223). stop() closes the listener synchronously, but its
+      // promise can never settle. Track our actual connections for draining.
+      for (const socket of sockets) socket.close(1001, 'Host is shutting down.');
+      void server.stop(true);
+      const deadline = Date.now() + 250;
+      while (sockets.size && Date.now() < deadline) await Bun.sleep(10);
+      for (const socket of sockets) socket.terminate();
+      server.unref();
+      finish();
+    },
+  };
 };

@@ -152,7 +152,7 @@ export class TerminalService {
     this.#resolveWorkspace = options.resolveWorkspace;
     this.#retentionLimitBytes = options.retentionLimitBytes ?? DEFAULT_RETENTION_LIMIT_BYTES;
     this.#attachmentQueueLimitBytes = options.attachmentQueueLimitBytes ?? DEFAULT_ATTACHMENT_QUEUE_LIMIT_BYTES;
-    this.#env = options.env ?? Deno.env.toObject();
+    this.#env = options.env ?? { ...process.env };
     this.#unsubscribe = this.#backend.subscribe((event) => this.#acceptBackendEvent(event));
   }
 

@@ -1,14 +1,15 @@
+import { runProcess } from './host-process.ts';
 import type { RepositoryIdentity } from '@weave/product-protocol';
 
 type GitResult = { code: number; stdout: string };
 type GitRunner = (cwd: string, args: string[]) => Promise<GitResult>;
 
 const runGit: GitRunner = async (cwd, args) => {
-  const result = await new Deno.Command('git', {
+  const result = await runProcess('git', {
     args: ['-C', cwd, ...args],
-    stdout: 'piped',
-    stderr: 'null',
-  }).output();
+    stdout: 'pipe',
+    stderr: 'ignore',
+  });
   return {
     code: result.code,
     stdout: new TextDecoder().decode(result.stdout),
