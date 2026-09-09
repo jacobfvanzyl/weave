@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "target": "ES2023", "lib": ["ES2023", "DOM"], "module": "Preserve",
+    "moduleResolution": "Bundler", "types": ["bun", "node"], "strict": true,
+    "noEmit": true, "skipLibCheck": true, "allowImportingTsExtensions": true
+  },
+  "include": ["scripts/*.ts"]
+}

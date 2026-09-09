@@ -933,7 +933,7 @@ export function useLiveAlphaController(
   };
 
   const model: AlphaViewModel = {
-    platform: Capacitor.getPlatform(),
+    platform: window.weaveDesktop?.platform ?? Capacitor.getPlatform(),
     connectionsLoaded,
     connectionsOpen,
     archivedThreadsOpen,

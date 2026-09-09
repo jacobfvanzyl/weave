@@ -175,18 +175,56 @@ private extension Data {
 final class WeaveBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(PortalCredentialPlugin())
+        guard let webView else { return }
+        let container = UIView(frame: webView.frame)
+        container.backgroundColor = UIColor(red: 30 / 255, green: 30 / 255, blue: 46 / 255, alpha: 1)
+        view = container
+        container.addSubview(webView)
+        // One native owner for keyboard and rotation geometry. Alpha follows
+        // the resulting viewport; Capacitor's notification resize is disabled.
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
+        ])
     }
 #if DEBUG
     private var acceptanceStarted = false
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        guard !acceptanceStarted, ProcessInfo.processInfo.arguments.contains("--shell-acceptance") else { return }
+        let live = ProcessInfo.processInfo.arguments.contains("--host-acceptance")
+        guard !acceptanceStarted, live || ProcessInfo.processInfo.arguments.contains("--shell-acceptance") else { return }
         acceptanceStarted = true
         Task { @MainActor in
             guard let webView else { return }
-            webView.load(URLRequest(url: URL(string: "capacitor://localhost/?mock=chat&acceptance=1")!))
-            for _ in 0..<150 {
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let status = UILabel(frame: CGRect(x: 16, y: 28, width: 280, height: 20))
+            status.accessibilityIdentifier = "AcceptanceStage"
+            status.font = .systemFont(ofSize: 10)
+            status.textColor = .white
+            if live { view.addSubview(status) }
+            let url = live ? "capacitor://localhost/?acceptance=live" : "capacitor://localhost/?mock=chat&acceptance=1"
+            webView.load(URLRequest(url: URL(string: url)!))
+            var configured = false
+            for _ in 0..<900 {
                 try? await Task.sleep(nanoseconds: 200_000_000)
+                if live {
+                    if !configured, let data = try? Data(contentsOf: documents.appendingPathComponent("host-acceptance-input.json")),
+                       let input = String(data: data, encoding: .utf8), !webView.isLoading {
+                        do {
+                            _ = try await webView.evaluateJavaScript("window.alphaAcceptanceInput = " + input)
+                            configured = true
+                        } catch {}
+                    }
+                    if let stage = try? await webView.evaluateJavaScript("window.alphaAcceptanceStage || window.alphaAcceptanceDetail || 'starting'"), let stage = stage as? String {
+                        status.text = stage
+                        if stage == "native-finish" {
+                            _ = try? await webView.evaluateJavaScript("window.alphaAcceptanceStage = 'native-finished'")
+                        }
+                    }
+                }
                 if let result = try? await webView.evaluateJavaScript("JSON.stringify(window.alphaAcceptance || null)"),
                    let json = result as? String, json != "null" {
                     let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -194,6 +232,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
                     let renderer = UIGraphicsImageRenderer(bounds: view.bounds)
                     let image = renderer.image { _ in view.drawHierarchy(in: view.bounds, afterScreenUpdates: true) }
                     try? image.pngData()?.write(to: documents.appendingPathComponent("shell-acceptance.png"), options: .atomic)
+                    status.text = json.contains("\"passed\":true") ? "passed" : "failed"
                     print("ALPHA_ACCEPTANCE " + json)
                     return
                 }

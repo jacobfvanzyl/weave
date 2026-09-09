@@ -44,6 +44,7 @@ export function XtermTerminalView({
       allowProposedApi: false,
       convertEol: false,
       cursorBlink: true,
+      macOptionClickForcesSelection: true,
       disableStdin: readOnlyRef.current,
       fontFamily: "ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace",
       fontSize: 13,
@@ -74,6 +75,7 @@ export function XtermTerminalView({
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(host);
+    terminal.textarea?.setAttribute('aria-label', 'Terminal input');
     terminalRef.current = terminal;
     fitRef.current = fitAddon;
     const dataDisposable = terminal.onData((value) => {
@@ -117,7 +119,13 @@ export function XtermTerminalView({
     const terminal = terminalRef.current;
     if (!terminal) return;
     terminal.options.disableStdin = readOnly;
-  }, [readOnly]);
+    // The initial fit can precede the Host attachment. Publish the current
+    // dimensions when control arrives, even if the pane has not changed size.
+    if (!readOnly) {
+      fitRef.current?.fit();
+      resizeRef.current?.(terminal.cols, terminal.rows);
+    }
+  }, [readOnly, dataEpoch]);
 
   useEffect(() => {
     const terminal = terminalRef.current;

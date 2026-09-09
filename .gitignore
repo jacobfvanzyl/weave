@@ -18,3 +18,7 @@ target/
 
 # Bun executable compilation intermediates
 *.bun-build
+
+# Electron staging and packaged desktop output
+product/alpha/.electron/
+product/alpha/release/

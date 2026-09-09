@@ -1,2 +1,4 @@
 export const isCapacitorPlatform = (platform: string) =>
-  platform === "ios" || platform === "android";
+  platform === "ios";
+
+export const isElectronDesktop = () => window.weaveDesktop?.runtime === "electron";

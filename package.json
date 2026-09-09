@@ -17,13 +17,20 @@
     "test:alpha": "cd product/alpha && bun run test",
     "dev:alpha": "cd product/alpha && bun run dev",
     "build:alpha": "cd product/alpha && bun run build",
-    "build:alpha:macos": "cd product/alpha && bun run build:macos",
-    "run:alpha:macos": "cd product/alpha && bun run run:macos",
     "check:portal": "bun run --cwd product/portal check",
     "test:portal": "bun run --cwd product/portal test",
-    "check": "bun run check:boundary && bun run test:boundary && bun run test:protocol && bun run test:alpha && bun run build:alpha && bun run check:portal && bun run test:portal",
+    "check": "bun run check:boundary && bun run test:boundary && bun run test:protocol && bun run test:alpha && bun run build:alpha && bun run check:portal && bun run test:portal && bun run check:desktop",
     "dev:host": "bun run --cwd product/portal dev",
-    "build:host": "bun run --cwd product/portal build"
+    "build:host": "bun run --cwd product/portal build",
+    "dev:desktop": "bun run --cwd product/alpha dev:desktop",
+    "build:desktop": "bun run --cwd product/alpha build:desktop",
+    "run:desktop": "bun run --cwd product/alpha run:desktop",
+    "check:desktop": "bun run --cwd product/alpha check:desktop",
+    "test:desktop": "bun product/alpha/scripts/desktop-acceptance.ts",
+    "test:ipad": "bun product/alpha/scripts/test-ipad.ts"
   },
-  "description": "Weave Alpha and Host Daemon"
+  "description": "Weave Alpha and Host Daemon",
+  "trustedDependencies": [
+    "electron"
+  ]
 }

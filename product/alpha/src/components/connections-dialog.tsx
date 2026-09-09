@@ -68,6 +68,14 @@ export function ConnectionsDialog({ controller }: { controller: AlphaController 
           </DialogDescription>
         </DialogHeader>
 
+        {!hasConnections && window.weaveDesktop && (
+          <p className='text-sm text-muted-foreground'>
+            Moving from the earlier Mac app? Pair each Host again here. Your projects,
+            threads and terminals stay on their Hosts. After checking this connection,
+            you can revoke the old Mac credential from the Host.
+          </p>
+        )}
+
         {hasConnections && (
           <div className='grid gap-2' aria-label='Configured Hosts'>
             {model.connections.map((connection) => (

@@ -12,7 +12,7 @@ bun run dev:alpha
 bun run check
 ```
 
-See [product notes](product/README.md), [Host configuration](product/portal/README.md), and the [domain glossary](CONTEXT.md). The Host uses Bun; Electron desktop and iPad platform cleanup are WVE-71. Housekeeping retains xterm.js; libghostty starts in WVE-65.
+See [product notes](product/README.md), [Host configuration](product/portal/README.md), and the [domain glossary](CONTEXT.md). The Host uses Bun; Electron is the macOS runtime and Capacitor targets iPad only. Housekeeping retains xterm.js; libghostty starts in WVE-65.
 
 The repository-pinned Linear CLI is intentionally a separate tooling install: `bun install --cwd .agents/tools/linear --frozen-lockfile`. Its credential isolation and usage are documented in [the tracker guide](docs/agents/issue-tracker.md).
 

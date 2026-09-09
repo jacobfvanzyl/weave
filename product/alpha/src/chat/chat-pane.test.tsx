@@ -392,7 +392,7 @@ describe('ChatPane', () => {
       .not.toHaveClass('absolute', 'right-14', 'sm:right-3', 'top-0');
   });
 
-  it('releases the iPhone composer after sending so the transcript can return to the viewport origin', async () => {
+  it('releases the compact iPad composer after sending so the transcript can return to the viewport origin', async () => {
     const user = userEvent.setup();
     const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue({
       matches: true,

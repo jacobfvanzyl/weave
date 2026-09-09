@@ -38,29 +38,40 @@ Mock mode is disabled in production builds. Actions such as search, Thread
 selection, Thread creation, archiving, restoration, connection, and disconnection
 remain interactive in the mocked shell.
 
-### Apple native Alpha hosts
+### Desktop and iPad Alpha
 
-Alpha currently exposes ACP conversations and xterm.js terminals. Filetree, Editor, and embedded Browser are deferred; their reference snapshots live in `deferred/` outside active builds.
+Alpha exposes ACP conversations and xterm.js terminals. Filetree, Editor and
+embedded Browser remain in `deferred/`, outside active builds.
 
-Build the production macOS AppKit application from the repository root:
-
-```bash
-bun run build:alpha:macos
-bun run run:alpha:macos
-```
-
-The build embeds the production Alpha assets in `alpha/dist/Weave Alpha.app` and signs the bundle.
-It uses ad-hoc signing by default for a local build; set `WEAVE_ALPHA_CODESIGN_IDENTITY` to a
-codesigning identity for a named development signature. The AppKit shell is the supported
-macOS host; Alpha does not enable Mac Catalyst and does not embed Electron or Chromium.
-
-For iPadOS, synchronize the same production assets into the Capacitor project before building from
-`alpha/ios/App/App.xcodeproj`:
+From the repository root:
 
 ```bash
-cd product/alpha
-bun run cap:sync
+bun run dev:desktop
+bun run build:desktop
+bun run run:desktop
 ```
+
+Electron packages the renderer under `alpha/release/Weave Alpha-darwin-<arch>/`.
+Its sandboxed renderer uses the secure `weave://app` origin and has no Node or
+general-purpose IPC access. The small preload identifies the desktop platform.
+Native menus provide standard editing, zoom, window and application commands.
+Set `WEAVE_ALPHA_CODESIGN_IDENTITY` for a named local development signature.
+Distribution signing/notarization requires the appropriate Apple credentials.
+
+Capacitor targets iPad only. Run `bun run --cwd product/alpha cap:sync` before
+building `alpha/ios/App/App.xcodeproj`. Native credential signing, safe-area,
+keyboard and app-lifecycle integration remain in this shell. AppKit desktop,
+iPhone and Mac Catalyst targets are retired.
+
+The old WebKit private keys cannot be exported into Electron. The first-run
+Connections dialog explains re-pairing. Keep the same Host config/state, create
+a fresh Pairing Token, pair the desktop, verify existing projects/Threads and
+terminals, then revoke the old desktop credential if it is no longer used.
+Electron stores non-exportable keys and connection metadata in its own stable
+`~/Library/Application Support/Weave Alpha` profile. Reinstalling/upgrading the
+app preserves that profile. Neither first launch nor re-pairing deletes Host
+state or the prior WebKit data. Add `weave://app` to each Host's exact allowed
+origins, retaining `capacitor://localhost` for iPad.
 
 ## Module seams
 

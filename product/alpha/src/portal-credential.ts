@@ -54,7 +54,7 @@ const webKey = async (keyId: string) => {
     request.onsuccess = () => resolve(request.result as CryptoKey | undefined);
     request.onerror = () => reject(request.error);
   }).finally(() => database.close());
-  if (!key) throw new Error('This browser no longer has the Host credential. Pair the Host again.');
+  if (!key) throw new Error('This installation no longer has the Host credential. Pair the Host again.');
   webKeys.set(keyId, key);
   return key;
 };

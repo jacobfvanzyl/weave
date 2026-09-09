@@ -18,6 +18,7 @@ const replaysTranscript = process.argv.slice(2).includes('--replay-transcript');
 const processLog = process.argv.slice(2).find((value) => value.startsWith('--process-log='))?.slice('--process-log='.length);
 const transcript: JsonRpcMessage[] = [];
 let resumeAttempted = false;
+let permissionPromptId: string | number | null | undefined;
 let restoredWith = '';
 let activeSessionId = 'fake-session';
 
@@ -32,6 +33,13 @@ if (processLog) {
 for await (const line of readLines(stdinStream())) {
   if (!line.trim()) continue;
   const message = parseJsonRpcMessage(line);
+  if (message.id === 'ui-permission' && permissionPromptId !== undefined) {
+    const accepted = (message.result as { outcome?: { optionId?: string } })?.outcome?.optionId === 'allow-once';
+    await send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: activeSessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: accepted ? 'PERMISSION_ACCEPTED' : 'PERMISSION_DENIED' } } } });
+    await send(result(permissionPromptId, { stopReason: 'end_turn' }));
+    permissionPromptId = undefined;
+    continue;
+  }
   if (message.id === undefined || !message.method) continue;
   if (message.method === 'initialize') {
     await send(result(message.id, {
@@ -134,6 +142,14 @@ for await (const line of readLines(stdinStream())) {
     const prompt = (message.params as { prompt?: Array<{ text?: unknown }> } | undefined)?.prompt
       ?.map((content) => typeof content.text === 'string' ? content.text : '')
       .join('') ?? '';
+    if (prompt === 'UI_PERMISSION') {
+      permissionPromptId = message.id;
+      await send({ jsonrpc: '2.0', id: 'ui-permission', method: 'session/request_permission', params: {
+        sessionId: activeSessionId, toolCall: { toolCallId: 'acceptance-permission', title: 'Acceptance permission', kind: 'read', status: 'pending' },
+        options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }, { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' }],
+      } });
+      continue;
+    }
     const renamedTitle = prompt.startsWith('RENAME_TO:') ? prompt.slice('RENAME_TO:'.length) : undefined;
     const titleUpdate = renamedTitle !== undefined
       ? { sessionId: activeSessionId, title: renamedTitle }

@@ -141,6 +141,17 @@ describe('XtermTerminalView', () => {
     expect(input).not.toHaveBeenCalledWith('blocked');
   });
 
+  it('publishes fitted dimensions when a late Host attachment grants control', () => {
+    const resize = vi.fn();
+    const { rerender } = render(<XtermTerminalView data='' readOnly onResize={resize} />);
+    resize.mockClear(); // The first measurement had no controlling attachment.
+    rerender(<XtermTerminalView data='' readOnly={false} onResize={resize} />);
+    expect(resize).toHaveBeenCalledWith(100, 30);
+    resize.mockClear();
+    rerender(<XtermTerminalView data='' dataEpoch={1} readOnly={false} onResize={resize} />);
+    expect(resize).toHaveBeenCalledWith(100, 30);
+  });
+
   it('appends across a retained-data truncation without resetting xterm', () => {
     const { rerender } = render(
       <XtermTerminalView data='abcd' dataEpoch={7} dataOffset={0} readOnly={false} />,
