@@ -1,10 +1,11 @@
 import { fileURLToPath } from 'node:url';
 import { test } from './test-support.ts';
-import { mkdir, readText, readTextSync, removePath, temporaryDirectory, writeText } from './host-files.ts';
+import { mkdir, readText, readTextSync, realpath, removePath, symlink, temporaryDirectory, writeText } from './host-files.ts';
 import {
   PORTAL_PAIR_REQUEST_TYPE,
   TERMINAL_EVENT_METHOD,
   WORKSPACE_FILE_WATCH_EVENT_METHOD,
+  WORKSPACE_CONTEXT_CAPABILITY,
 } from '@weave/product-protocol';
 import { assertEquals, assertRejects } from './test-support.ts';
 import { dirname, join } from 'node:path';
@@ -295,6 +296,7 @@ test('Alpha registers and removes a durable project through its chosen Portal', 
         workspaceId: added.workspace.workspaceId,
         name: 'Project',
         rootName: 'project',
+        canonicalPath: await realpath(projectPath),
       }],
     );
 
@@ -2128,6 +2130,56 @@ test('Alpha-facing Portal exposes typed Workspace file operations and connection
     );
   } finally {
     rpc.close();
+    await server.shutdown();
+    await portal.close();
+    await removePath(root, { recursive: true });
+  }
+});
+
+test('Authenticated context summaries preserve Host identity and filter canonical paths by grants', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-context-rpc-' });
+  await mkdir(join(root, 'allowed'));
+  await mkdir(join(root, 'private'));
+  await symlink(join(root, 'allowed'), join(root, 'alias'));
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Context Host',
+    allowedOrigins: [], stateDirectory: join(root, 'state'),
+    workspaces: [
+      { workspaceId: 'allowed-id', name: 'Checkout', path: join(root, 'alias') },
+      { workspaceId: 'private-id', name: 'Checkout', path: join(root, 'private') },
+    ],
+    agents: [],
+  };
+  let portal = await Portal.open(config, { terminalBackend: false });
+  const key = await generatePortalKey();
+  const grants = portal.security.defaultGrants();
+  grants.workspaceIds = ['allowed-id'];
+  grants.actions = ['portal.inspect', 'workspace.inspect', 'workspace.file.read'];
+  const token = await portal.security.createPairingToken(60_000, grants);
+  const paired = await portal.security.redeemPairing({ type: PORTAL_PAIR_REQUEST_TYPE, token, label: 'Context reader', publicKey: key.publicKey });
+  const credential = { ...key, credentialId: paired.principal.credentialId };
+  const hostId = portal.security.hostId;
+  let server = startPortalServer(portal);
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const rpc = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, credential);
+      try {
+        const capabilities = await rpc.request('portal.capabilities') as { hostId: string; capabilities: string[] };
+        assertEquals(capabilities.hostId, hostId);
+        assertEquals(capabilities.capabilities.includes(WORKSPACE_CONTEXT_CAPABILITY), true);
+        assertEquals(await rpc.request('workspace.list'), {
+          workspaces: [{ workspaceId: 'allowed-id', name: 'Checkout', rootName: 'allowed', canonicalPath: await realpath(join(root, 'allowed')) }],
+        });
+        await assertRejects(() => rpc.request('workspace.file.list', { workspaceId: 'private-id', path: '' }));
+      } finally { rpc.close(); }
+      if (attempt === 0) {
+        await server.shutdown();
+        await portal.close();
+        portal = await Portal.open(config, { terminalBackend: false });
+        server = startPortalServer(portal);
+      }
+    }
+  } finally {
     await server.shutdown();
     await portal.close();
     await removePath(root, { recursive: true });

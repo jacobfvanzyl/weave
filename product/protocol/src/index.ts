@@ -102,8 +102,11 @@ export type WorkspaceSummary = {
   workspaceId: string;
   name: string;
   rootName?: string;
+  /** Exact directory resolved by the owning Host; absent on older Hosts. */
+  canonicalPath?: string;
   repositoryIdentity?: RepositoryIdentity;
 };
+export const WORKSPACE_CONTEXT_CAPABILITY = 'workspace.context.v1';
 export type AgentSummary = { agentId: string; name: string };
 export type PortalPrincipalSummary = {
   principalId: string;
@@ -454,10 +457,21 @@ const workspace = (value: unknown): WorkspaceSummary => {
     workspaceId: string(record.workspaceId, 'workspace.workspaceId'),
     name: string(record.name, 'workspace.name'),
     ...(record.rootName === undefined ? {} : { rootName: string(record.rootName, 'workspace.rootName') }),
+    ...(record.canonicalPath === undefined ? {} : { canonicalPath: canonicalWorkspacePath(record.canonicalPath) }),
     ...(record.repositoryIdentity === undefined
       ? {}
       : { repositoryIdentity: repositoryIdentity(record.repositoryIdentity) }),
   };
+};
+
+const canonicalWorkspacePath = (value: unknown) => {
+  const path = string(value, 'workspace.canonicalPath');
+  // Supported Hosts use POSIX paths. Preserve case and the filesystem root.
+  if (!path.startsWith('/') || path.includes('\0') ||
+      (path !== '/' && path.split('/').slice(1).some((part) => !part || part === '.' || part === '..'))) {
+    throw new Error('workspace.canonicalPath must be a canonical absolute Host path.');
+  }
+  return path;
 };
 
 const repositoryIdentity = (value: unknown): RepositoryIdentity => {

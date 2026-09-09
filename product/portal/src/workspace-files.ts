@@ -3,6 +3,7 @@ import type { Stats } from './host-files.ts';
 import type { Dirent } from './host-files.ts';
 import type { FileChange } from './host-files.ts';
 import { isFsError } from './host-files.ts';
+import { isAbsolute, relative } from 'node:path';
 import type {
   PortalRpcParams,
   PortalRpcResult,
@@ -108,7 +109,10 @@ const relativeToRoot = (root: string, path: string) => {
   return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : undefined;
 };
 
-const isWithinRoot = (root: string, path: string) => path === root || path.startsWith(`${root}/`);
+const isWithinRoot = (root: string, path: string) => {
+  const child = relative(root, path);
+  return child !== '..' && !child.startsWith('../') && !isAbsolute(child);
+};
 
 const compareEntries = (
   left: WorkspaceFileEntry,
@@ -189,7 +193,7 @@ export class WorkspaceFileService {
         if (!(await stat(path)).isDirectory()) {
           return fail('WORKSPACE_UNAVAILABLE');
         }
-        resolved.set(root.workspaceId, path.replace(/\/$/, ''));
+        resolved.set(root.workspaceId, path);
       } catch (cause) {
         if (cause instanceof WorkspaceFileError) throw cause;
         return fail('WORKSPACE_UNAVAILABLE');
@@ -207,7 +211,7 @@ export class WorkspaceFileService {
   }
 
   async addRoot(root: WorkspaceRoot) {
-    const path = (await realpath(root.path)).replace(/\/$/, '');
+    const path = await realpath(root.path);
     if (!(await stat(path)).isDirectory()) {
       return fail('WORKSPACE_UNAVAILABLE');
     }

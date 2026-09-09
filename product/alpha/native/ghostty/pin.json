@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/ghostty-org/ghostty.git",
+  "revision": "4a70ee4718ba0967bcfd72f43adb715bf65a860d",
+  "zig": "0.16.0",
+  "library": "libghostty-vt",
+  "status": "integration-candidate"
+}

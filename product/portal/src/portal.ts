@@ -10,6 +10,7 @@ import {
   type TerminalRpcMethod,
   type ThreadSummary,
   WORKSPACE_FILE_RPC_METHODS,
+  WORKSPACE_CONTEXT_CAPABILITY,
   type WorkspaceFileWatchNotification,
 } from '@weave/product-protocol';
 import { isAbsolute, relative } from 'node:path';
@@ -216,6 +217,7 @@ export class Portal {
           },
           capabilities: [
             'workspace.list',
+            WORKSPACE_CONTEXT_CAPABILITY,
             'workspace.add',
             'workspace.remove',
             'agent.list',

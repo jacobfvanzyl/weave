@@ -48,16 +48,15 @@ const parseState = (value: unknown): WorkspaceCatalogState => {
 
 const resolveWorkspace = async (
   workspace: WorkspaceDefinition,
-  canonicalizePath = false,
 ): Promise<RegisteredWorkspace> => {
-  const realPath = (await realpath(workspace.path)).replace(/\/$/, '');
+  const realPath = await realpath(workspace.path);
   if (!(await stat(realPath)).isDirectory()) {
     throw new Error('Project path must be a directory.');
   }
   const repositoryIdentity = await resolveRepositoryIdentity(realPath);
   return {
     ...workspace,
-    path: canonicalizePath ? realPath : workspace.path.replace(/\/$/, ''),
+    path: realPath,
     ...(repositoryIdentity ? { repositoryIdentity } : {}),
   };
 };
@@ -68,6 +67,7 @@ export const workspaceSummary = (
   workspaceId: workspace.workspaceId,
   name: workspace.name,
   rootName: basename(workspace.path) || workspace.name,
+  canonicalPath: workspace.path,
   ...(workspace.repositoryIdentity ? { repositoryIdentity: workspace.repositoryIdentity } : {}),
 });
 
@@ -106,7 +106,6 @@ export class WorkspaceCatalog {
       new Set(state.removedConfiguredWorkspaceIds ?? []),
       state,
     );
-    const seenPaths = new Set<string>();
     for (
       const [index, workspace] of [...configured, ...state.workspaces].entries()
     ) {
@@ -115,13 +114,9 @@ export class WorkspaceCatalog {
         catalog.#removedConfiguredIds.has(workspace.workspaceId)
       ) continue;
       if (catalog.#workspaces.has(workspace.workspaceId)) continue;
-      const realPath = await realpath(workspace.path);
-      if (seenPaths.has(realPath)) continue;
-      const resolved = await resolveWorkspace(
-        workspace,
-        index >= configured.length,
-      );
-      seenPaths.add(realPath);
+      // Existing IDs may already own Threads, grants or terminals. Aliases can
+      // share a context without silently deleting one of those identities.
+      const resolved = await resolveWorkspace(workspace);
       catalog.#workspaces.set(resolved.workspaceId, resolved);
     }
     return catalog;
@@ -135,13 +130,8 @@ export class WorkspaceCatalog {
     if (!isAbsolute(input.path)) {
       throw new Error('Project path must be absolute.');
     }
-    const path = (await realpath(input.path)).replace(/\/$/, '');
-    const existing = await Promise.all(
-      [...this.#workspaces.values()].map(async (workspace) => ({
-        workspace,
-        path: await realpath(workspace.path),
-      })),
-    ).then((workspaces) => workspaces.find((workspace) => workspace.path === path)?.workspace);
+    const path = await realpath(input.path);
+    const existing = [...this.#workspaces.values()].find((workspace) => workspace.path === path);
     if (existing) return existing;
     const name = input.name?.trim() || basename(path) || 'Project';
     const workspace = await resolveWorkspace(
@@ -150,7 +140,6 @@ export class WorkspaceCatalog {
         name,
         path,
       },
-      true,
     );
     await this.#mutate(async () => {
       const duplicate = [...this.#workspaces.values()].find((candidate) => candidate.path === workspace.path);

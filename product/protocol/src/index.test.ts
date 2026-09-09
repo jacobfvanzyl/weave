@@ -17,6 +17,21 @@ import {
 } from './index';
 
 describe('Portal protocol', () => {
+  test('preserves exact Host context paths and accepts legacy summaries without guessing', () => {
+    const summary = { workspaceId: 'workspace-1', name: 'Checkout' };
+    for (const canonicalPath of ['/', '/Users/Jaco/Code', '/home/jaco/worktree']) {
+      expect(parsePortalRpcResult('workspace.list', {
+        workspaces: [{ ...summary, canonicalPath }],
+      }).workspaces[0]).toEqual({ ...summary, canonicalPath });
+    }
+    expect(parsePortalRpcResult('workspace.list', { workspaces: [summary] }).workspaces[0])
+      .toEqual(summary);
+    for (const canonicalPath of ['', 'relative', '/work/../other', '/work/./tree', '/work//tree', '/work/', '/work\0hidden']) {
+      expect(() => parsePortalRpcResult('workspace.add', {
+        workspace: { ...summary, canonicalPath },
+      })).toThrow('workspace.canonicalPath');
+    }
+  });
   test('parses the bounded visible Browser capability and ergonomic commands', () => {
     expect(parseBrowserProviderAttachParams({
       threadId: 'thread-1',

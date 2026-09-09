@@ -4,6 +4,20 @@ import type { FileChange } from './host-files.ts';
 import { assertEquals, assertRejects } from './test-support.ts';
 import { WorkspaceFileError, WorkspaceFileService, type WorkspaceFileSystemWatcher } from './workspace-files.ts';
 
+test('Workspace files retain a filesystem-root context without treating it as unavailable', async () => {
+  const directory = await temporaryDirectory({ prefix: 'weave-root-context-' });
+  const files = await WorkspaceFileService.open([{ workspaceId: 'root', path: '/' }]);
+  try {
+    await writeText(`${directory}/owned.txt`, 'root context');
+    const path = (await realpath(`${directory}/owned.txt`)).slice(1);
+    const result = await files.read({ workspaceId: 'root', path });
+    assertEquals(result.content, 'root context');
+  } finally {
+    files.close();
+    await removePath(directory, { recursive: true });
+  }
+});
+
 class FakeWatcher implements WorkspaceFileSystemWatcher {
   closed = false;
   readonly #events: FileChange[] = [];

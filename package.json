@@ -28,6 +28,7 @@
     "check:desktop": "bun run --cwd product/alpha check:desktop",
     "test:desktop": "bun product/alpha/scripts/desktop-acceptance.ts",
     "test:ipad": "bun product/alpha/scripts/test-ipad.ts",
+    "probe:ghostty": "bun product/alpha/scripts/probe-ghostty.ts",
     "build": "bun run build:alpha && bun run build:host",
     "build:host:linux": "bun run --cwd product/portal build:linux",
     "dev:ipad": "bun run --cwd product/alpha cap:sync && bun run --cwd product/alpha ios:open",

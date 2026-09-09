@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { test } from './test-support.ts';
-import { mkdir, removePath, temporaryDirectory } from './host-files.ts';
+import { mkdir, realpath, removePath, temporaryDirectory } from './host-files.ts';
 import { assert, assertEquals, assertNotEquals, assertStringIncludes } from './test-support.ts';
 import { dirname, join } from 'node:path';
 import type { PortalConfig } from './config.ts';
@@ -110,7 +110,7 @@ test('Zed-facing local ACP lists, reloads, resumes, and continues a Portal-owned
       sessions: Array<{ sessionId: string; cwd: string; title: string }>;
     };
     assertEquals(listed.sessions.length, 1);
-    assertEquals(listed.sessions[0].cwd, workspacePath);
+    assertEquals(listed.sessions[0].cwd, await realpath(workspacePath));
     assertEquals(listed.sessions[0].title, 'Alpha-created acceptance');
     assertNotEquals(listed.sessions[0].sessionId, thread.acpSessionId);
     const zedSessionId = listed.sessions[0].sessionId;

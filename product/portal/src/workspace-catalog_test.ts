@@ -1,7 +1,52 @@
 import { test } from './test-support.ts';
-import { mkdir, readText, realpath, removePath, stat, temporaryDirectory } from './host-files.ts';
+import { mkdir, readText, realpath, removePath, stat, symlink, temporaryDirectory, writeText } from './host-files.ts';
 import { assertEquals, assertRejects } from './test-support.ts';
-import { WorkspaceCatalog } from './workspace-catalog.ts';
+import { WorkspaceCatalog, workspaceSummary } from './workspace-catalog.ts';
+
+test('Workspace contexts canonicalize aliases while preserving existing IDs', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-context-' });
+  try {
+    await mkdir(`${root}/checkout`);
+    await mkdir(`${root}/other-worktree`);
+    await mkdir(`${root}/state`);
+    await symlink(`${root}/checkout`, `${root}/alias`);
+    await writeText(`${root}/state/workspaces.json`, JSON.stringify({
+      version: 1,
+      workspaces: [{ workspaceId: 'existing', name: 'Existing', path: `${root}/checkout` }],
+    }));
+    const catalog = await WorkspaceCatalog.open(`${root}/state`, [
+      { workspaceId: 'configured', name: 'Alias', path: `${root}/alias/` },
+      { workspaceId: 'worktree', name: 'Same repository', path: `${root}/other-worktree` },
+    ]);
+    const summaries = catalog.list().map(workspaceSummary);
+    assertEquals(summaries.map(({ workspaceId }) => workspaceId), ['configured', 'worktree', 'existing']);
+    const canonicalPath = await realpath(`${root}/checkout`);
+    assertEquals(summaries[0].canonicalPath, canonicalPath);
+    assertEquals(summaries[2].canonicalPath, canonicalPath);
+    assertEquals(summaries[1].canonicalPath, await realpath(`${root}/other-worktree`));
+    assertEquals((await catalog.add({ path: `${root}/alias/.` })).workspaceId, 'configured');
+    assertEquals(catalog.list().length, 3);
+  } finally { await removePath(root, { recursive: true }); }
+});
+
+test('Workspace contexts preserve the filesystem root and deduplicate concurrent aliases', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-context-' });
+  try {
+    const catalog = await WorkspaceCatalog.open(`${root}/state`, []);
+    const filesystem = await catalog.add({ path: '/', name: 'Filesystem' });
+    assertEquals(filesystem.path, '/');
+    assertEquals(workspaceSummary(filesystem).canonicalPath, '/');
+    await mkdir(`${root}/checkout`);
+    await symlink(`${root}/checkout`, `${root}/alias`);
+    const [first, second] = await Promise.all([
+      catalog.add({ path: `${root}/checkout` }),
+      catalog.add({ path: `${root}/alias` }),
+    ]);
+    assertEquals(first.workspaceId, second.workspaceId);
+    const reopened = await WorkspaceCatalog.open(`${root}/state`, []);
+    assertEquals(reopened.list().map(({ workspaceId }) => workspaceId), [filesystem.workspaceId, first.workspaceId]);
+  } finally { await removePath(root, { recursive: true }); }
+});
 
 test('Workspace catalog durably registers valid Host-local directories', async () => {
   const root = await temporaryDirectory({ prefix: 'weave-project-catalog-' });
