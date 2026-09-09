@@ -1,4 +1,4 @@
-import type { ThreadSummary } from '@weave/product-protocol';
+import type { ThreadSummary, ThreadAttention } from '@weave/product-protocol';
 import {
   messageForThreadEvent,
   RESUME_GAP_ERROR,
@@ -39,6 +39,7 @@ type Attachment = {
   attachmentId: string;
   acknowledgedSequence: number;
   threadEventsEnabled: boolean;
+  loaded: boolean;
   send(message: JsonRpcMessage): void;
   disconnect(reason: string): void;
 };
@@ -49,7 +50,8 @@ type ClientPending = {
   isPrompt: boolean;
   requestedModeId?: string;
 };
-type AgentPending = { attachmentId: string; providerId: JsonRpcId };
+type AgentPending = { attachmentId?: string; providerId: JsonRpcId; message: JsonRpcMessage };
+const HUMAN_AGENT_REQUESTS = new Set(["session/request_permission", "elicitation/create"]);
 type ThreadChanged = (thread: ThreadSummary) => Promise<void>;
 type ThreadPromoted = (thread: ThreadSummary) => Promise<void>;
 export type McpServersForThread = (threadId: string) => unknown[];
@@ -96,6 +98,7 @@ export class HostedThread {
   readonly #onThreadChanged: ThreadChanged;
   #onFirstPrompt?: ThreadPromoted;
   #activePromptAttachmentId?: string;
+  #lastPromptOutcome: 'idle' | 'completed' | 'uncertain' = 'idle';
   #submittedPromptEchoes: string[] = [];
   #nextForwardedId = 0;
   #agentMessageQueue = Promise.resolve();
@@ -278,6 +281,7 @@ export class HostedThread {
       attachmentId: crypto.randomUUID(),
       acknowledgedSequence: 0,
       threadEventsEnabled: false,
+      loaded: false,
       send,
       disconnect,
     };
@@ -286,8 +290,29 @@ export class HostedThread {
       receive: async (message) => await this.#receiveClient(attachment, message),
       close: () => {
         this.#attachments.delete(attachment.attachmentId);
+        const successor = [...this.#attachments.values()].find((candidate) => candidate.loaded);
+        if (successor) this.#deliverOrphanedRequests(successor);
       },
     };
+  }
+
+  attention(): ThreadAttention {
+    const state: ThreadAttention['state'] = this.#closing || this.#recoveryState === 'unavailable' ? 'unavailable'
+      : this.#lastPromptOutcome === 'uncertain' && !this.#activePromptAttachmentId ? 'uncertain'
+      : this.#recoveryState !== 'ready' ? 'unavailable'
+      : [...this.#agentPending.values()].some((pending) => HUMAN_AGENT_REQUESTS.has(pending.message.method ?? '')) ? 'waiting'
+      : this.#activePromptAttachmentId ? 'working' : this.#lastPromptOutcome;
+    return { state, observedAt: new Date().toISOString(), generation: this.#generation };
+  }
+
+  #deliverOrphanedRequests(attachment: Attachment) {
+    for (const pending of this.#agentPending.values()) {
+      if (pending.attachmentId && this.#attachments.has(pending.attachmentId)) continue;
+      if (!HUMAN_AGENT_REQUESTS.has(pending.message.method ?? '')) continue;
+      pending.attachmentId = attachment.attachmentId;
+      // Keep the request identity while changing only its authorized live recipient.
+      attachment.send(pending.message);
+    }
   }
 
   async archive() {
@@ -424,6 +449,8 @@ export class HostedThread {
         });
       }
       attachment.send(result(message.id, this.#sessionLoadResult));
+      attachment.loaded = true;
+      this.#deliverOrphanedRequests(attachment);
       return;
     }
     if (message.method === 'session/resume') {
@@ -435,6 +462,8 @@ export class HostedThread {
       attachment.threadEventsEnabled = false;
       attachment.acknowledgedSequence = 0;
       attachment.send(result(message.id, this.#sessionLoadResult));
+      attachment.loaded = true;
+      this.#deliverOrphanedRequests(attachment);
       return;
     }
     if (this.#recoveryState !== 'ready') {
@@ -455,6 +484,7 @@ export class HostedThread {
         this.#onFirstPrompt = undefined;
       }
       this.#activePromptAttachmentId = attachment.attachmentId;
+      this.#lastPromptOutcome = 'idle';
       try {
         await this.#fanOutSubmittedPrompt(attachment, message.params);
         const providerId = `client:${++this.#nextForwardedId}`;
@@ -516,6 +546,7 @@ export class HostedThread {
     }
 
     const interruptedPrompt = [...this.#clientPending.values()].some((pending) => pending.isPrompt);
+    if (interruptedPrompt) this.#lastPromptOutcome = 'uncertain';
     const state = interruptedPrompt ? 'uncertain' : 'exited';
     await this.#runtimeStates.transition(this.thread.threadId, generation, state, exit).catch(() => undefined);
     this.#emitRuntimeState(
@@ -628,16 +659,15 @@ export class HostedThread {
 
   async #handleAgentMessage(message: JsonRpcMessage) {
     if (message.method && message.id !== undefined) {
-      const controller = this.#activePromptAttachmentId
-        ? this.#attachments.get(this.#activePromptAttachmentId)
-        : this.#attachments.values().next().value as Attachment | undefined;
-      if (!controller) {
+      const controller = (this.#activePromptAttachmentId ? this.#attachments.get(this.#activePromptAttachmentId) : undefined)
+        ?? [...this.#attachments.values()].find((attachment) => attachment.loaded);
+      if (!controller && !HUMAN_AGENT_REQUESTS.has(message.method)) {
         void this.#process.send(error(message.id, -32001, 'No client is available for the Agent request.'));
         return;
       }
       const clientId = `agent:${++this.#nextForwardedId}`;
-      this.#agentPending.set(idKey(clientId), { attachmentId: controller.attachmentId, providerId: message.id });
-      controller.send({ ...message, id: clientId });
+      this.#agentPending.set(idKey(clientId), { attachmentId: controller?.attachmentId, providerId: message.id, message: { ...message, id: clientId } });
+      controller?.send({ ...message, id: clientId });
       return;
     }
     if (message.id !== undefined && message.method === undefined) {
@@ -647,6 +677,8 @@ export class HostedThread {
       if (pending.isPrompt && this.#activePromptAttachmentId === pending.attachment.attachmentId) {
         this.#activePromptAttachmentId = undefined;
         this.#submittedPromptEchoes = [];
+        const stopReason = (message.result as { stopReason?: string } | undefined)?.stopReason;
+        this.#lastPromptOutcome = message.error ? 'uncertain' : stopReason === 'cancelled' ? 'idle' : ['end_turn', 'max_tokens', 'max_turn_requests', 'refusal'].includes(stopReason ?? '') ? 'completed' : 'uncertain';
       }
       if (pending.method === 'session/set_config_option') {
         this.#sessionLoadResult = {

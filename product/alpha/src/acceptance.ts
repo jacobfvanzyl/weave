@@ -98,6 +98,16 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     if (input.permission) {
       stage = 'ACP permission';
       await wait(() => button('Allow once'));
+      const pendingThread = document.querySelector('[data-thread-id]:has([aria-pressed="true"])')?.getAttribute('data-thread-id');
+      if (!pendingThread) throw new Error('No selected pending Thread');
+      button('New agent thread')!.click();
+      await wait(() => button(`New thread in ${input.workspaceName}`));
+      button(`New thread in ${input.workspaceName}`)!.click();
+      await wait(() => document.body.textContent?.includes('Start a conversation with the agent.') && !button('Allow once'));
+      const previousThread = document.querySelector<HTMLButtonElement>(`[data-thread-id="${CSS.escape(pendingThread)}"] button[aria-pressed]`);
+      if (!previousThread) throw new Error('The pending Thread disappeared while inspecting another conversation');
+      previousThread.click();
+      await wait(() => button('Allow once'));
       button('Allow once')!.click();
       await wait(() => document.body.textContent?.includes('PERMISSION_ACCEPTED'));
     } else {
@@ -132,6 +142,6 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     state.alphaAcceptanceStage = 'native-finish';
     await wait(() => state.alphaAcceptanceStage === 'native-finished');
     if (document.querySelector('[data-slot="browser-pane"], [data-slot="editor-pane"], [data-symbol="project-pane"]')) throw new Error('Deferred surface mounted');
-    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
+    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), permissionSurvivesConversationSwitch: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
   } catch (error) { return { passed: false, stage, error: String(error) }; }
 }

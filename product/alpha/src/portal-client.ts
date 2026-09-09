@@ -212,7 +212,7 @@ export class DirectHostClient {
   constructor(
     hostUrl: string,
     credential: PortalCredentialSigner,
-    private readonly onAcpEvent: (event: AcpTranscriptEvent) => void,
+    private readonly onAcpEvent: (event: AcpTranscriptEvent, threadId?: string) => void,
     onUnexpectedClose?: (error: Error) => void,
   ) {
     this.baseUrl = portalWebSocketUrl(hostUrl);
@@ -257,14 +257,14 @@ export class DirectHostClient {
     this.onAcpEvent({
       type: "history/reset",
       sessionId: prepared.thread.acpSessionId,
-    });
+    }, threadId);
     const url = new URL(this.baseUrl);
     url.pathname = prepared.connection.path;
     url.searchParams.set("threadId", prepared.connection.threadId);
     this.acp = new AcpSessionClient({
       url: url.toString(),
       WebSocket: this.WebSocket,
-      onEvent: this.onAcpEvent,
+      onEvent: (event) => this.onAcpEvent(event, threadId),
     });
     await this.acp.initializeAndLoad({
       sessionId: prepared.thread.acpSessionId,

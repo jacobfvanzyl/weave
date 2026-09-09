@@ -101,6 +101,7 @@ const mapThread = (
   hostName: connection.displayName,
   supportsThreadLifecycle,
   status: thread.status,
+  attention: thread.attention,
   updatedAt: thread.updatedAt,
   ...(thread.archivedAt ? { archivedAt: thread.archivedAt } : {}),
   workspaceId: thread.workspaceId,
@@ -286,6 +287,7 @@ export function useLiveAlphaController(
   const localThreadDraftRef = useRef<LocalThreadDraft | undefined>(undefined);
   const connectionAttemptRef = useRef(new Map<string, number>());
   const creatingThreadRef = useRef(false);
+  const promotingThreadIdRef = useRef<string | undefined>(undefined);
   const autoConnectRef = useRef(new Set<string>());
   const refreshingRef = useRef(new Set<string>());
   const reportActionError = (cause: unknown) => {
@@ -306,7 +308,17 @@ export function useLiveAlphaController(
     }
   };
 
-  const updateSnapshot = (hostId: string, snapshot: HostSnapshot) => {
+  const acknowledgePromotion = (id: string) => {
+    if (promotingThreadIdRef.current !== id) return;
+    promotingThreadIdRef.current = undefined;
+    creatingThreadRef.current = false;
+    setBusy(false);
+  };
+  const updateSnapshot = (hostId: string, snapshot: HostSnapshot, authoritative = true) => {
+    if (authoritative) {
+      const promoted = snapshot.threads.find((thread) => resourceId(hostId, thread.threadId) === promotingThreadIdRef.current);
+      if (promoted) acknowledgePromotion(resourceId(hostId, promoted.threadId));
+    }
     setSnapshots((current) => ({ ...current, [hostId]: snapshot }));
     setStatuses((current) => ({ ...current, [hostId]: "connected" }));
     setHostErrors((current) => ({ ...current, [hostId]: undefined }));
@@ -368,9 +380,11 @@ export function useLiveAlphaController(
       nextClient = clientFactory(
         connection.hostUrl,
         portalCredentialSigner(connection),
-        (event) => {
-          const id = activeThreadIdsRef.current.get(connection.hostId);
+        (event, sourceThreadId) => {
+          const id = sourceThreadId ? resourceId(connection.hostId, sourceThreadId) : activeThreadIdsRef.current.get(connection.hostId);
           if (!id) return;
+          if (event.type === "permission/requested" || event.type === "elicitation/requested" ||
+              event.type === "session/update" && ["user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "tool_call"].includes(event.update.sessionUpdate)) acknowledgePromotion(id);
           if (
             event.type === "session/update" &&
             event.update.sessionUpdate === "session_info_update"
@@ -685,7 +699,7 @@ export function useLiveAlphaController(
     available: statuses[connection.hostId] === "connected",
     supported: Boolean(snapshots[connection.hostId]?.capabilities.includes("workspace.composition.get") && snapshots[connection.hostId]?.capabilities.includes("workspace.composition.replace")),
     client: clientsRef.current.get(connection.hostId),
-  })));
+  })), connectionsLoaded);
   // Terminal attachments are owned by individual composition panes. No Thread selection retargets them.
   const terminalController = useAlphaTerminals({});
   const aggregateStatus = Object.values(statuses).includes("connected")
@@ -700,11 +714,12 @@ export function useLiveAlphaController(
     action: () => Promise<void>,
     rethrow = false,
   ) => {
+    const actionThreadId = selectedThreadIdRef.current;
     setError(undefined);
     try {
       await action();
     } catch (cause) {
-      reportActionError(cause);
+      if (selectedThreadIdRef.current === actionThreadId) reportActionError(cause);
       if (rethrow) throw cause;
     }
   };
@@ -909,6 +924,10 @@ export function useLiveAlphaController(
   useSavedThreadSelection(selectedThreadId, Boolean(selected && !selected.draft),
     allThreads.filter((thread) => !thread.draft && statuses[thread.hostId] === "connected").map((thread) => thread.id), selectThread);
 
+  const selectedTranscript = selectedThreadId && loadingThreadId !== selectedThreadId ? transcripts[selectedThreadId] : undefined;
+  const observedRunning = selected?.attention && Date.now() - Date.parse(selected.attention.observedAt) < 15_000 &&
+    (selected.attention.state === "working" || selected.attention.state === "waiting");
+
   const model: AlphaViewModel = {
     platform: window.weaveDesktop?.platform ?? Capacitor.getPlatform(),
     connectionsLoaded,
@@ -939,10 +958,9 @@ export function useLiveAlphaController(
     creatingThreadWorkspaceId,
     composerFocusRequest,
     composerFocusThreadId,
-    transcript:
-      selectedThreadId && loadingThreadId !== selectedThreadId
-        ? transcripts[selectedThreadId]
-        : undefined,
+    transcript: selectedTranscript && observedRunning && selectedTranscript.turn.status === "idle"
+      ? { ...selectedTranscript, turn: { status: "running" } }
+      : selectedTranscript,
     terminals: terminalController.model,
     workspaceCompositions: workspaceController.model,
     busy,
@@ -1121,6 +1139,7 @@ export function useLiveAlphaController(
           const localPromptId = `local-${crypto.randomUUID()}`;
           if (draft.prepared) {
             creatingThreadRef.current = true;
+            promotingThreadIdRef.current = draft.thread.id;
             setBusy(true);
             setError(undefined);
             setTranscripts((current) => {
@@ -1140,13 +1159,14 @@ export function useLiveAlphaController(
                   ({ threadId }) => threadId !== draft.prepared?.threadId,
                 ),
               ],
-            });
+            }, false);
             localThreadDraftRef.current = undefined;
             setLocalThreadDraft(undefined);
             try {
               await client.prompt(content);
               void refreshHost(draft.placement.hostId);
             } catch (cause) {
+              if (selectedThreadIdRef.current !== draft.thread.id) return;
               setTranscripts((current) => ({
                 ...current,
                 [draft.thread.id]: current[draft.thread.id]
@@ -1160,8 +1180,11 @@ export function useLiveAlphaController(
               reportActionError(cause);
               throw cause;
             } finally {
-              creatingThreadRef.current = false;
-              setBusy(false);
+              if (promotingThreadIdRef.current === draft.thread.id) {
+                promotingThreadIdRef.current = undefined;
+                creatingThreadRef.current = false;
+                setBusy(false);
+              }
             }
             return;
           }

@@ -23,7 +23,7 @@ export function WorkspaceSidebar({ controller }: { controller: AlphaController }
         <CodexIcon />
         <span className='flex min-w-0 flex-1 flex-col gap-1'>
           <span className='truncate'>{thread.title}</span>
-          <span className='truncate text-xs text-muted-foreground'>{thread.hostName} · {workspace.canonicalPath ?? workspace.name}{!available ? ' · unavailable' : ''}</span>
+          <span className='truncate text-xs text-muted-foreground'>{thread.hostName} · {workspace.canonicalPath ?? workspace.name}{!available ? ' · unavailable' : thread.attention ? ` · ${Date.now() - Date.parse(thread.attention.observedAt) > 15000 ? 'stale' : thread.attention.state}` : ' · activity unavailable'}</span>
         </span>
       </SidebarMenuButton>
       <DropdownMenu>

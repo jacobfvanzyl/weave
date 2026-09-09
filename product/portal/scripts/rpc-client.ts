@@ -210,6 +210,10 @@ export class RpcSocket {
     return response;
   }
 
+  respond(id: string | number, result: unknown) {
+    this.#socket.send(JSON.stringify({ jsonrpc: "2.0", id, result }));
+  }
+
   close() {
     this.#socket.close();
   }

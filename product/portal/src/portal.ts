@@ -9,6 +9,7 @@ import {
   type TerminalNotification,
   type TerminalRpcMethod,
   type ThreadSummary,
+  THREAD_ATTENTION_CAPABILITY,
   WORKSPACE_FILE_RPC_METHODS,
   WORKSPACE_CONTEXT_CAPABILITY,
   COMPOSITION_RPC_METHODS,
@@ -124,6 +125,7 @@ export class Portal {
   readonly #workspaces: Map<string, RegisteredWorkspace>;
   readonly #agents: Map<string, AgentDefinition>;
   readonly #runtimes = new Map<string, Promise<HostedThread>>();
+  readonly #liveRuntimes = new Map<string, HostedThread>();
   readonly #drafts = new Map<string, ThreadSummary>();
   #lifecycleQueue = Promise.resolve();
 
@@ -228,6 +230,7 @@ export class Portal {
             'workspace.remove',
             'agent.list',
             'thread.list',
+            THREAD_ATTENTION_CAPABILITY,
             'thread.create',
             'thread.draft',
             'thread.attach',
@@ -318,7 +321,7 @@ export class Portal {
               workspaceId: thread.workspaceId,
               agentId: thread.agentId,
             })
-          ),
+          ).map((thread) => ({ ...thread, attention: this.#liveRuntimes.get(thread.threadId)?.attention() ?? { state: 'uncertain', observedAt: new Date().toISOString() } })),
         } as PortalRpcResult<Method>;
       case 'thread.create': {
         const input = params as PortalRpcParams<'thread.create'>;
@@ -374,6 +377,7 @@ export class Portal {
                 throw cause;
               }
               this.#runtimes.delete(input.threadId);
+              this.#liveRuntimes.delete(input.threadId);
             }
           }
           const thread = changed ? await this.#catalog.setArchived(input.threadId, true) : current;
@@ -667,6 +671,7 @@ export class Portal {
       runtimes.flatMap((result) => result.status === 'fulfilled' ? [result.value.close()] : []),
     );
     this.#runtimes.clear();
+    this.#liveRuntimes.clear();
     const draftIds = [...this.#drafts.keys()];
     this.#drafts.clear();
     await Promise.all(draftIds.map(async (threadId) => {
@@ -736,6 +741,7 @@ export class Portal {
       () => [],
     );
     this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
+    this.#liveRuntimes.set(runtime.thread.threadId, runtime);
     await this.#catalog.put(runtime.thread);
     return runtime.thread;
   }
@@ -761,6 +767,7 @@ export class Portal {
     );
     this.#drafts.set(runtime.thread.threadId, runtime.thread);
     this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
+    this.#liveRuntimes.set(runtime.thread.threadId, runtime);
     return runtime.thread;
   }
 
@@ -780,6 +787,7 @@ export class Portal {
       const runtime = this.#runtimes.get(threadId);
       if (runtime) await (await runtime).close('Thread draft was discarded.');
       this.#runtimes.delete(threadId);
+      this.#liveRuntimes.delete(threadId);
       this.#drafts.delete(threadId);
       if (!await this.#journal.clearIfNoConversation(threadId)) {
         throw new Error(`Thread draft contains conversation data: ${threadId}`);
@@ -802,7 +810,10 @@ export class Portal {
         () => [],
       );
       this.#runtimes.set(threadId, runtime);
-      runtime.catch(() => this.#runtimes.delete(threadId));
+      const restoring = runtime;
+      void runtime.then((hosted) => {
+        if (this.#runtimes.get(threadId) === restoring) this.#liveRuntimes.set(threadId, hosted);
+      }, () => { this.#runtimes.delete(threadId); this.#liveRuntimes.delete(threadId); });
     }
     return runtime;
   }

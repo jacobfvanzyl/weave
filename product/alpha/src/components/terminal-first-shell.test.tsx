@@ -27,7 +27,7 @@ it('renders independent terminal and agent selection, compact groups, and non-de
       hostId, displayName: hostId, capabilities: ['workspace.composition.get', 'workspace.composition.replace', 'terminal.attach'],
       workspaces: [{ workspaceId: 'workspace', name: `Checkout ${hostId}`, canonicalPath: '/code/weave' }],
       agents: [{ agentId: 'agent', name: 'Agent' }], archivedThreads: [],
-      threads: [{ threadId: 'thread', workspaceId: 'workspace', agentId: 'agent', title: `Agent on ${hostId}`, status: 'active', acpSessionId: 'session', createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' }],
+      threads: [{ attention: { state: hostId === 'one' ? 'working' : 'waiting', observedAt: new Date().toISOString(), generation: 1 }, threadId: 'thread', workspaceId: 'workspace', agentId: 'agent', title: `Agent on ${hostId}`, status: 'active', acpSessionId: 'session', createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' }],
     };
     let terminal: { terminalId: string; workspaceId: string; title: string; cols: number; rows: number; status: string } | undefined;
     return {
@@ -51,6 +51,10 @@ it('renders independent terminal and agent selection, compact groups, and non-de
   const rendered = render(<App />);
   await waitFor(() => expect(screen.getAllByRole('button', { name: /^Agent Agent on/ })).toHaveLength(2));
   expect(rendered.container.querySelectorAll('[data-context-id]')).toHaveLength(0);
+  expect(one.attach).not.toHaveBeenCalled();
+  expect(two.attach).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Agent Agent on one' })).toHaveTextContent('working');
+  expect(screen.getByRole('button', { name: 'Agent Agent on two' })).toHaveTextContent('waiting');
   await user.click(screen.getByRole('button', { name: 'Agent Agent on two' }));
   await waitFor(() => expect(controller.model.selectedThreadId).toBe('two:thread'));
   await user.click(screen.getByRole('button', { name: 'Open…' }));

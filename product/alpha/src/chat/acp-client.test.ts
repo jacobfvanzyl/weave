@@ -250,3 +250,20 @@ describe('AcpSessionClient', () => {
     channel.close();
   });
 });
+
+it('detaches a pending permission without sending a decision or cancelling its transcript entry', async () => {
+  const events: unknown[] = [];
+  const channel = new AcpSessionClient({ url: 'ws://host/acp', WebSocket: FakeWebSocket as unknown as WebSocketConstructor, onEvent: (event) => events.push(event) });
+  const socket = FakeWebSocket.latest!;
+  socket.open();
+  socket.receive({ jsonrpc: '2.0', id: 'pending-permission', method: 'session/request_permission', params: {
+    sessionId: 'session', toolCall: { toolCallId: 'tool', title: 'Read', kind: 'read', status: 'pending' },
+    options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+  } });
+  for (let i = 0; i < 20 && events.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(events).toContainEqual(expect.objectContaining({ type: 'permission/requested' }));
+  channel.close();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(socket.sent.some((message) => message.id === 'pending-permission')).toBe(false);
+  expect(events).not.toContainEqual(expect.objectContaining({ type: 'permission/cancelled' }));
+});

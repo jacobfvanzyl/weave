@@ -1,6 +1,7 @@
 import type { CreateElicitationResponse } from "@agentclientprotocol/sdk";
 import type {
   RepositoryIdentity,
+  ThreadAttention,
   WorkspaceFileEntry,
   WorkspaceFileMetadata,
 } from "@weave/product-protocol";
@@ -27,6 +28,7 @@ export type AlphaThread = {
   projectId?: string;
   worktreeId?: string;
   draft?: boolean;
+  attention?: ThreadAttention;
 };
 
 export type AlphaWorkspacePlacement = {

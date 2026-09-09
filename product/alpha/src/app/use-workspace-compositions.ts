@@ -34,7 +34,7 @@ const emptyPane = (): TerminalLayoutNode => ({ kind: 'terminal', nodeId: crypto.
 const mapLayout = (node: TerminalLayoutNode, transform: (node: TerminalLayoutNode) => TerminalLayoutNode): TerminalLayoutNode =>
   transform(node.kind === 'split' ? { ...node, children: [mapLayout(node.children[0], transform), mapLayout(node.children[1], transform)] } : node);
 
-export function useWorkspaceCompositions(workspaces: AlphaWorkspace[], connections: CompositionConnection[]) {
+export function useWorkspaceCompositions(workspaces: AlphaWorkspace[], connections: CompositionConnection[], connectionsLoaded = true) {
   const [presentation, setPresentation] = useState(emptyWorkspacePresentation);
   const [compositions, setCompositions] = useState<Record<string, WorkspaceComposition>>({});
   const [loading, setLoading] = useState(true);
@@ -61,6 +61,14 @@ export function useWorkspaceCompositions(workspaces: AlphaWorkspace[], connectio
     saving.current = saving.current.catch(() => undefined).then(() => saveWorkspacePresentation(next))
       .catch(() => { if (mounted.current) setError('Could not save workspace focus on this device.'); });
   };
+  const knownHostsKey = JSON.stringify(connections.map((connection) => connection.hostId).sort());
+  useEffect(() => {
+    if (loading || !connectionsLoaded) return;
+    const known = new Set(state.current.connections.map((connection) => connection.hostId));
+    const forgotten = state.current.presentation.openTabs.filter((tab) => !known.has(tab.hostId));
+    if (forgotten.length) updatePresentation((current) => forgotten.reduce((next, tab) => closeWorkspaceTab(next, tabReferenceKey(tab)), current));
+  }, [loading, connectionsLoaded, knownHostsKey]);
+
   const remember = (hostId: string, composition: WorkspaceComposition) => {
     const key = workspaceReferenceKey(hostId, composition.workspaceId);
     if ((state.current.compositions[key]?.revision ?? -1) > composition.revision) return;

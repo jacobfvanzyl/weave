@@ -2254,3 +2254,81 @@ test('Authenticated compositions enforce ownership and revisions, survive restar
     await removePath(root, { recursive: true });
   }
 });
+
+test('Global attention and pending permissions survive conversation detachment without hidden ACP attachments', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-global-agents-' });
+  const workspacePath = join(root, 'workspace');
+  await mkdir(workspacePath);
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Global agents', allowedOrigins: [], stateDirectory: join(root, 'state'),
+    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    agents: [{ agentId: 'fake', name: 'Fake', command: process.execPath, args: [join(dirname(fileURLToPath(import.meta.url)), 'test-fixtures/fake-agent.ts')], env: {} }],
+  };
+  let portal = await Portal.open(config, { terminalBackend: false });
+  const credential = await pairTestCredential(portal);
+  let server = startPortalServer(portal);
+  const sockets: RpcSocket[] = [];
+  const connect = async (path = '/rpc') => {
+    const socket = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}${path}`, credential);
+    sockets.push(socket); return socket;
+  };
+  try {
+    let rpc = await connect();
+    const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as { thread: { threadId: string; acpSessionId: string } };
+    const attention = async () => {
+      const { threads } = await rpc.request('thread.list') as { threads: Array<{ threadId: string; attention: { state: string; observedAt: string } }> };
+      return threads.find((thread) => thread.threadId === created.thread.threadId)!.attention;
+    };
+    assertEquals((await attention()).state, 'idle');
+    const path = `/acp?threadId=${created.thread.threadId}`;
+    const first = await connect(path);
+    const load = async (socket: RpcSocket) => {
+      await socket.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+      await socket.request('session/load', { sessionId: created.thread.acpSessionId, cwd: workspacePath, mcpServers: [] });
+    };
+    await load(first);
+    const prompting = first.request('session/prompt', { sessionId: created.thread.acpSessionId, prompt: [{ type: 'text', text: 'UI_PERMISSION' }] }).catch(() => undefined);
+    await waitFor(() => first.notifications.some((message) => message.method === 'session/request_permission'));
+    const request = first.notifications.find((message) => message.method === 'session/request_permission')!;
+    assertEquals((await attention()).state, 'waiting');
+    first.close();
+    await prompting;
+    // Only the metadata RPC connection remains. Polling must not start another provider or reject the request.
+    assertEquals((await attention()).state, 'waiting');
+    const next = await connect(path);
+    await load(next);
+    await waitFor(() => next.notifications.some((message) => message.method === 'session/request_permission'));
+    const resumed = next.notifications.find((message) => message.method === 'session/request_permission')!;
+    assertEquals(resumed, request);
+    const observer = await connect(path);
+    await load(observer);
+    assertEquals(observer.notifications.some((message) => message.method === 'session/request_permission'), false);
+    // Another observer cannot answer a request owned by the returned conversation.
+    observer.respond(resumed.id!, { outcome: { outcome: 'selected', optionId: 'allow-once' } });
+    await observer.request('session/set_mode', { sessionId: created.thread.acpSessionId, modeId: 'code' });
+    assertEquals((await attention()).state, 'waiting');
+    next.respond(resumed.id!, { outcome: { outcome: 'selected', optionId: 'allow-once' } });
+    await waitFor(async () => (await attention()).state === 'completed');
+    await waitFor(() => next.notifications.some((message) => JSON.stringify(message).includes('PERMISSION_ACCEPTED')));
+    assertEquals(Number.isFinite(Date.parse((await attention()).observedAt)), true);
+    observer.close();
+    const latePrompt = next.request('session/prompt', { sessionId: created.thread.acpSessionId, prompt: [{ type: 'text', text: 'UI_PERMISSION_AFTER_DETACH' }] }).catch(() => undefined);
+    await waitFor(async () => (await attention()).state === 'working');
+    next.close(); await latePrompt;
+    await waitFor(async () => (await attention()).state === 'waiting');
+    const returned = await connect(path);
+    await load(returned);
+    await waitFor(() => returned.notifications.some((message) => message.method === 'session/request_permission'));
+    returned.respond(returned.notifications.find((message) => message.method === 'session/request_permission')!.id!, { outcome: { outcome: 'selected', optionId: 'allow-once' } });
+    await waitFor(async () => (await attention()).state === 'completed');
+    for (const socket of sockets.splice(0)) socket.close();
+    await server.shutdown(); await portal.close();
+    portal = await Portal.open(config, { terminalBackend: false }); server = startPortalServer(portal);
+    rpc = await connect();
+    // After restart the Host does not claim current provider state from an old completion or launch ACP just for the sidebar.
+    assertEquals((await attention()).state, 'uncertain');
+  } finally {
+    for (const socket of sockets) socket.close();
+    await server.shutdown(); await portal.close(); await removePath(root, { recursive: true });
+  }
+});

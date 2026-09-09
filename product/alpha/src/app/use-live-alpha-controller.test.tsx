@@ -8,6 +8,8 @@ import {
 import { loadPortalConnections } from "./portal-connection-storage";
 import { useLiveAlphaController } from "./use-live-alpha-controller";
 
+vi.mock("@capacitor/preferences", () => ({ Preferences: { get: vi.fn(async () => ({ value: null })), set: vi.fn(async () => undefined) } }));
+
 vi.mock("./portal-connection-storage", () => ({
   loadPortalConnections: vi.fn(async () => ({
     connections: [
@@ -256,6 +258,10 @@ describe("useLiveAlphaController", () => {
 
     expect(result.current.model.loadingThreadId).toBeUndefined();
     expect(result.current.model.transcript?.sessionId).toBe("session-2");
+    act(() => onEvent?.({ type: "turn/failed", error: "Late failure from first Thread" }, "thread-1"));
+    expect(result.current.model.transcript?.turn.status).toBe("idle");
+    await act(async () => result.current.actions.selectThread("host-1:thread-1"));
+    expect(result.current.model.transcript?.turn).toEqual({ status: "failed", error: "Late failure from first Thread" });
     expect(result.current.model.workspaceFiles).toBeUndefined();
     expect(client.listWorkspaceFiles).not.toHaveBeenCalled();
     expect(client.watchWorkspaceFiles).not.toHaveBeenCalled();
@@ -955,7 +961,7 @@ describe("useLiveAlphaController", () => {
     expect(result.current.model.connection.status).toBe("connected");
   });
 
-  it("keeps cached Host threads during reconnect and hides them after the timeout", async () => {
+  it("retains cached Host threads and selected conversation after a reconnect timeout", async () => {
     vi.useFakeTimers();
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -1024,4 +1030,37 @@ describe("useLiveAlphaController", () => {
     expect(result.current.model.error).toBeUndefined();
   });
 
+});
+
+it('releases navigation after the first prompt is accepted, while retaining its owning Thread', async () => {
+  let onEvent: ConstructorParameters<typeof DirectHostClient>[2] | undefined;
+  let count = 0;
+  let rejectPrompt!: (cause: Error) => void;
+  const prompt = new Promise<void>((_resolve, reject) => { rejectPrompt = reject; });
+  const client = {
+    snapshot: vi.fn(async () => ({ ...snapshot, capabilities: ['thread.draft'] })),
+    createThreadDraft: vi.fn(async () => ({ ...snapshot.threads[0], threadId: `draft-${++count}`, acpSessionId: `session-${count}` })),
+    attach: vi.fn(async (threadId: string) => {
+      onEvent?.({ type: 'history/reset', sessionId: threadId }, threadId);
+      return { ...snapshot.threads[0], threadId };
+    }),
+    prompt: vi.fn(() => prompt), close: vi.fn(), discardThreadDraft: vi.fn(),
+  } as unknown as DirectHostClient;
+  const { result } = renderHook(() => useLiveAlphaController((_url, _credential, events) => { onEvent = events; return client; }));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const context = result.current.model.workspaces[0]!.id;
+  await act(async () => result.current.actions.createThread(context));
+  let sending: Promise<void> | void;
+  act(() => { sending = result.current.actions.sendPrompt('Inspect this'); });
+  expect(result.current.model.busy).toBe(true);
+  act(() => onEvent?.({ type: 'permission/requested', requestId: 'approval', request: {
+    sessionId: 'session-1', toolCall: { toolCallId: 'tool', title: 'Read', status: 'pending' }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+  } }, 'draft-1'));
+  expect(result.current.model.busy).toBe(false);
+  await act(async () => result.current.actions.createThread(context));
+  expect(result.current.model.selectedThreadId).toBe('host-1:draft-2');
+  await act(async () => { rejectPrompt(new Error('Old conversation transport detached')); await sending; });
+  expect(result.current.model.selectedThreadId).toBe('host-1:draft-2');
+  expect(result.current.model.error).toBeUndefined();
+  expect(result.current.model.transcript?.turn.status).toBe('idle');
 });

@@ -239,6 +239,8 @@ export const parsePortalPairResult = (value: unknown): PortalPairResult => {
     principal: principal(record.principal),
   };
 };
+export const THREAD_ATTENTION_CAPABILITY = 'thread.attention.v1';
+export type ThreadAttention = { state: 'working' | 'waiting' | 'completed' | 'idle' | 'unavailable' | 'uncertain'; observedAt: string; generation?: number };
 export type ThreadStatus = 'active' | 'archived' | 'closed';
 export type ThreadSummary = {
   threadId: string;
@@ -250,6 +252,7 @@ export type ThreadSummary = {
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
+  attention?: ThreadAttention;
 };
 
 type BasePortalRpcContracts = {
@@ -526,6 +529,15 @@ const agent = (value: unknown): AgentSummary => {
   };
 };
 
+const threadAttention = (value: unknown): ThreadAttention => {
+  const input = object(value, 'thread.attention');
+  const state = string(input.state, 'thread.attention.state');
+  if (!['working', 'waiting', 'completed', 'idle', 'unavailable', 'uncertain'].includes(state)) throw new Error('thread.attention.state is invalid.');
+  const observedAt = string(input.observedAt, 'thread.attention.observedAt');
+  if (!Number.isFinite(Date.parse(observedAt))) throw new Error('thread.attention.observedAt is invalid.');
+  if (input.generation !== undefined && (!Number.isSafeInteger(input.generation) || Number(input.generation) < 1)) throw new Error('thread.attention.generation is invalid.');
+  return { state: state as ThreadAttention['state'], observedAt, ...(input.generation === undefined ? {} : { generation: Number(input.generation) }) };
+};
 const thread = (value: unknown): ThreadSummary => {
   const record = object(value, 'thread');
   const status = string(record.status, 'thread.status');
@@ -546,6 +558,7 @@ const thread = (value: unknown): ThreadSummary => {
     createdAt: string(record.createdAt, 'thread.createdAt'),
     updatedAt: string(record.updatedAt, 'thread.updatedAt'),
     ...(archivedAt === undefined ? {} : { archivedAt }),
+    ...(record.attention === undefined ? {} : { attention: threadAttention(record.attention) }),
   };
 };
 

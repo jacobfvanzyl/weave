@@ -142,7 +142,8 @@ for await (const line of readLines(stdinStream())) {
     const prompt = (message.params as { prompt?: Array<{ text?: unknown }> } | undefined)?.prompt
       ?.map((content) => typeof content.text === 'string' ? content.text : '')
       .join('') ?? '';
-    if (prompt === 'UI_PERMISSION') {
+    if (prompt === 'UI_PERMISSION' || prompt === 'UI_PERMISSION_AFTER_DETACH') {
+      if (prompt === 'UI_PERMISSION_AFTER_DETACH') await new Promise((resolve) => setTimeout(resolve, 200));
       permissionPromptId = message.id;
       await send({ jsonrpc: '2.0', id: 'ui-permission', method: 'session/request_permission', params: {
         sessionId: activeSessionId, toolCall: { toolCallId: 'acceptance-permission', title: 'Acceptance permission', kind: 'read', status: 'pending' },

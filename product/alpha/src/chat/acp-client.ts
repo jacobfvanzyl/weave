@@ -119,6 +119,7 @@ export class AcpSessionClient {
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private readonly pendingElicitations = new Map<string, PendingElicitation>();
   private sessionId?: string;
+  private detached = false;
 
   constructor(options: AcpSessionClientOptions) {
     this.onEvent = options.onEvent;
@@ -139,7 +140,7 @@ export class AcpSessionClient {
         this.onEvent({ type: 'permission/requested', requestId: id, request: params });
         signal.addEventListener('abort', () => {
           if (!this.pendingPermissions.delete(id)) return;
-          this.onEvent({ type: 'permission/cancelled', requestId: id });
+          if (!this.detached) this.onEvent({ type: 'permission/cancelled', requestId: id });
           resolve({ outcome: 'cancelled' });
         }, { once: true });
       }).then((outcome) => ({ outcome })))
@@ -154,7 +155,7 @@ export class AcpSessionClient {
         signal.addEventListener('abort', () => {
           if (!this.pendingElicitations.delete(id)) return;
           const response = { action: 'cancel' } as const;
-          this.onEvent({ type: 'elicitation/resolved', requestId: id, response });
+          if (!this.detached) this.onEvent({ type: 'elicitation/resolved', requestId: id, response });
           resolve(response);
         }, { once: true });
       }))
@@ -207,7 +208,7 @@ export class AcpSessionClient {
       return response;
     } catch (cause) {
       const error = cause instanceof Error ? cause.message : String(cause);
-      this.onEvent({ type: 'turn/failed', error });
+      if (!this.detached) this.onEvent({ type: 'turn/failed', error });
       throw cause;
     }
   }
@@ -283,12 +284,13 @@ export class AcpSessionClient {
   }
 
   close() {
-    for (const [requestId] of this.pendingPermissions) {
-      this.respondToPermission(requestId, { outcome: 'cancelled' });
-    }
-    for (const [requestId] of this.pendingElicitations) {
-      this.respondToElicitation(requestId, { action: 'cancel' });
-    }
+    this.detached = true;
+    // Close the transport before settling local handlers. Detachment must not
+    // send an approval/cancellation decision to the provider.
     this.connection.close();
+    for (const resolve of this.pendingPermissions.values()) resolve({ outcome: 'cancelled' });
+    for (const resolve of this.pendingElicitations.values()) resolve({ action: 'cancel' });
+    this.pendingPermissions.clear();
+    this.pendingElicitations.clear();
   }
 }

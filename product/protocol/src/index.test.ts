@@ -378,3 +378,14 @@ describe('Portal protocol', () => {
     });
   });
 });
+
+test('Thread attention carries freshness separately from archive lifecycle and accepts older Hosts', () => {
+  const thread = { threadId: 'thread', workspaceId: 'workspace', agentId: 'agent', acpSessionId: 'session', status: 'active', createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' };
+  const result = (attention?: unknown) => parsePortalRpcResult('thread.list', { threads: [{ ...thread, ...(attention === undefined ? {} : { attention }) }] }).threads[0];
+  expect(result()).toEqual(thread);
+  for (const state of ['working', 'waiting', 'completed', 'idle', 'unavailable', 'uncertain']) {
+    const attention = { state, observedAt: '2026-09-09T10:00:00Z', generation: 1 };
+    expect(result(attention)).toEqual({ ...thread, attention });
+  }
+  for (const attention of [{ state: 'archived', observedAt: thread.createdAt }, { state: 'idle', observedAt: 'invalid' }, { state: 'idle', observedAt: thread.createdAt, generation: -1 }]) expect(() => result(attention)).toThrow('thread.attention');
+});
