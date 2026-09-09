@@ -25,6 +25,10 @@ _Avoid_: Central server, Portal, agent server
 A Host-managed execution of an ACP Agent, including its process, ACP connection, and provider-owned session state.
 _Avoid_: Thread, Agent Session, run
 
+**Agent Turn**:
+A bounded unit of Agent work initiated within a Thread and ending in an explicit completed, failed, cancelled, or uncertain outcome.
+_Avoid_: Prompt, Agent Runtime
+
 **Workspace Tab**:
 A Workspace-local view that owns one independently arranged set of Panes. Its mutable name describes the view but does not identify it.
 _Avoid_: Project tab, global tab, layout preset
