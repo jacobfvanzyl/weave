@@ -88,6 +88,7 @@ export class HostedThread {
   #initializeResult: unknown;
   #sessionLoadResult: Record<string, unknown>;
   readonly #workspace: WorkspaceDefinition;
+  readonly #assertWorkspaceAvailable?: () => Promise<unknown>;
   readonly #agent: AgentDefinition;
   readonly #attachments = new Map<string, Attachment>();
   readonly #journal: ThreadEventJournal;
@@ -123,8 +124,10 @@ export class HostedThread {
     runtimeStates: RuntimeStateStore,
     mcpServers: unknown[],
     onFirstPrompt?: ThreadPromoted,
+    assertWorkspaceAvailable?: () => Promise<unknown>,
   ) {
     this.#workspace = workspace;
+    this.#assertWorkspaceAvailable = assertWorkspaceAvailable;
     this.#agent = agent;
     this.#process = process;
     this.#generation = generation;
@@ -146,7 +149,9 @@ export class HostedThread {
     runtimeStates: RuntimeStateStore,
     mcpServersForThread: McpServersForThread,
     onFirstPrompt?: ThreadPromoted,
+    assertWorkspaceAvailable?: () => Promise<unknown>,
   ) {
+    await assertWorkspaceAvailable?.();
     const threadId = crypto.randomUUID();
     const mcpServers = mcpServersForThread(threadId);
     const runtimeState = await runtimeStates.start(threadId, 'idle');
@@ -186,6 +191,7 @@ export class HostedThread {
       runtimeStates,
       mcpServers,
       onFirstPrompt,
+      assertWorkspaceAvailable,
     );
     holder.hosted = hosted;
     for (const message of buffered) hosted.#receiveAgent(runtimeState.generation, message);
@@ -200,7 +206,9 @@ export class HostedThread {
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
     mcpServersForThread: McpServersForThread,
+    assertWorkspaceAvailable?: () => Promise<unknown>,
   ) {
+    await assertWorkspaceAvailable?.();
     const mcpServers = mcpServersForThread(thread.threadId);
     const runtimeState = await runtimeStates.start(thread.threadId, 'restoring');
     const buffered: JsonRpcMessage[] = [];
@@ -232,6 +240,7 @@ export class HostedThread {
         if (!await journal.clearIfNoConversation(thread.threadId)) throw restoreCause;
 
         buffered.length = 0;
+        await assertWorkspaceAvailable?.();
         process = spawn();
         initializeResult = await process.request('initialize', ACP_INITIALIZE_PARAMS);
         sessionLoadResult = await process.request('session/new', { cwd: workspace.path, mcpServers });
@@ -257,6 +266,8 @@ export class HostedThread {
         journal,
         runtimeStates,
         mcpServers,
+        undefined,
+        assertWorkspaceAvailable,
       );
       holder.hosted = hosted;
       for (const message of buffered) {
@@ -583,6 +594,7 @@ export class HostedThread {
     let generation = this.#generation;
     let replacement: AgentProcess | undefined;
     try {
+      await this.#assertWorkspaceAvailable?.();
       const state = await this.#runtimeStates.start(this.thread.threadId, 'restoring');
       generation = state.generation;
       this.#generation = generation;
@@ -638,6 +650,7 @@ export class HostedThread {
       const messages: JsonRpcMessage[] = [];
       this.#providerReplayCapture = messages;
       try {
+        await this.#assertWorkspaceAvailable?.();
         const loaded = await this.#process.request('session/load', {
           sessionId: this.thread.acpSessionId,
           cwd: this.#workspace.path,

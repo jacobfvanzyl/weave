@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { test } from './test-support.ts';
-import { mkdir, readText, readTextSync, realpath, removePath, symlink, temporaryDirectory, writeText } from './host-files.ts';
+import { mkdir, readText, readTextSync, realpath, removePath, rename, symlink, temporaryDirectory, writeText } from './host-files.ts';
 import {
   PORTAL_PAIR_REQUEST_TYPE,
   TERMINAL_EVENT_METHOD,
@@ -296,6 +296,7 @@ test('Alpha registers and removes a durable project through its chosen Portal', 
         workspaceId: added.workspace.workspaceId,
         name: 'Project',
         rootName: 'project',
+        availability: 'available',
         canonicalPath: await realpath(projectPath),
       }],
     );
@@ -477,6 +478,11 @@ test('Alpha-facing Portal creates and prompts an ACP Thread over the product pro
     const prompting = acp.request('session/prompt', {
       sessionId: 'fake-session',
       prompt: [{ type: 'text', text: 'SLOW' }],
+    });
+    // Different sockets have no send-order guarantee. Observe acceptance before racing a second prompt.
+    await waitFor(async () => {
+      const summary = await rpc.request('thread.list') as { threads: Array<{ attention?: { state: string } }> };
+      return summary.threads.some((thread) => thread.attention?.state === 'working');
     });
     await assertRejects(
       () =>
@@ -2168,7 +2174,7 @@ test('Authenticated context summaries preserve Host identity and filter canonica
         assertEquals(capabilities.hostId, hostId);
         assertEquals(capabilities.capabilities.includes(WORKSPACE_CONTEXT_CAPABILITY), true);
         assertEquals(await rpc.request('workspace.list'), {
-          workspaces: [{ workspaceId: 'allowed-id', name: 'Checkout', rootName: 'allowed', canonicalPath: await realpath(join(root, 'allowed')) }],
+          workspaces: [{ workspaceId: 'allowed-id', name: 'Checkout', rootName: 'allowed', availability: 'available', canonicalPath: await realpath(join(root, 'allowed')) }],
         });
         await assertRejects(() => rpc.request('workspace.file.list', { workspaceId: 'private-id', path: '' }));
       } finally { rpc.close(); }
@@ -2330,5 +2336,70 @@ test('Global attention and pending permissions survive conversation detachment w
   } finally {
     for (const socket of sockets) socket.close();
     await server.shutdown(); await portal.close(); await removePath(root, { recursive: true });
+  }
+});
+
+
+test('Unavailable registered directories preserve authenticated layouts and terminals without rebinding execution', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-context-recovery-rpc-' });
+  const directory = join(root, 'checkout');
+  await mkdir(directory);
+  const canonicalPath = await realpath(directory);
+  await writeText(join(directory, 'original.txt'), 'original');
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Recovery Host', allowedOrigins: [],
+    stateDirectory: join(root, 'state'), workspaces: [{ workspaceId: 'stable', name: 'Checkout', path: directory }],
+    agents: [{ agentId: 'fake', name: 'Fake', command: process.execPath, args: [fileURLToPath(new URL('./test-fixtures/fake-agent.ts', import.meta.url))], env: {} }],
+  };
+  const backend = new InMemoryTerminalBackend();
+  let portal = await Portal.open(config, { terminalBackend: backend });
+  let server = startPortalServer(portal);
+  const credential = await pairTestCredential(portal);
+  let rpc = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, credential);
+  try {
+    const { thread } = await rpc.request('thread.create', { workspaceId: 'stable', agentId: 'fake' }) as { thread: { threadId: string } };
+    const { terminal } = await rpc.request('terminal.create', { workspaceId: 'stable' }) as { terminal: { terminalId: string } };
+    const saved = await rpc.request('workspace.composition.replace', { workspaceId: 'stable', expectedRevision: 0, tabs: [{ tabId: 'tab', name: 'Existing work', layout: { kind: 'terminal', nodeId: 'node', paneId: 'pane', terminalId: terminal.terminalId } }] });
+    const acp = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/acp?threadId=${thread.threadId}`, credential);
+    try {
+      await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+      await acp.request('session/load', { sessionId: 'fake-session', cwd: directory, mcpServers: [], _meta: { 'weave.dev/threadEvents': { afterSequence: 0 } } });
+      await rename(directory, join(root, 'original'));
+      await assertRejects(() => acp.request('session/prompt', { sessionId: 'fake-session', prompt: [{ type: 'text', text: 'CRASH_AFTER_DIRECTORY_REMOVAL' }] }));
+      await waitFor(() => acp.notifications.some((message) => JSON.stringify(message).includes('RECOVERY_FAILED')));
+      const attention = await rpc.request('thread.list') as { threads: Array<{ attention: { state: string } }> };
+      assertEquals(attention.threads[0]!.attention.state, 'unavailable');
+    } finally { acp.close(); }
+    const summary = async () => (await rpc.request('workspace.list') as { workspaces: Array<{ workspaceId: string; canonicalPath: string; availability: string }> }).workspaces[0]!;
+    assertEquals((await summary()).availability, 'unavailable');
+    rpc.close(); await server.shutdown(); await portal.close();
+    // Startup and credential reuse work even though the directory is absent.
+    portal = await Portal.open(config, { terminalBackend: backend });
+    server = startPortalServer(portal);
+    rpc = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, credential);
+    assertEquals((await summary()).canonicalPath, canonicalPath);
+    assertEquals(await rpc.request('workspace.composition.get', { workspaceId: 'stable' }), saved);
+    const threads = await rpc.request('thread.list') as { threads: Array<{ threadId: string }> };
+    assertEquals(threads.threads[0]!.threadId, thread.threadId);
+    // A replacement at the same spelling cannot take over the existing identity.
+    await mkdir(directory);
+    await writeText(join(directory, 'replacement.txt'), 'replacement');
+    assertEquals((await summary()).availability, 'path-changed');
+    await assertRejects(() => rpc.request('terminal.create', { workspaceId: 'stable' }));
+    await assertRejects(() => rpc.request('thread.create', { workspaceId: 'stable', agentId: 'fake' }));
+    await assertRejects(() => rpc.request('thread.attach', { threadId: thread.threadId }));
+    const fileError = await assertRejects(() => rpc.request('workspace.file.read', { workspaceId: 'stable', path: 'replacement.txt' }));
+    assertEquals(fileError instanceof RpcResponseError && fileError.data, { domain: 'workspace-filesystem', code: 'WORKSPACE_UNAVAILABLE' });
+    const attached = await rpc.request('terminal.attach', { workspaceId: 'stable', terminalId: terminal.terminalId, mode: 'control' }) as { attachment: { attachmentId: string } };
+    await rpc.request('terminal.input', { workspaceId: 'stable', terminalId: terminal.terminalId, attachmentId: attached.attachment.attachmentId, data: 'still here' });
+    assertEquals(backend.inputs.at(-1)?.data, 'still here');
+    await removePath(directory, { recursive: true });
+    await rename(join(root, 'original'), directory);
+    assertEquals((await summary()).availability, 'available');
+    const file = await rpc.request('workspace.file.read', { workspaceId: 'stable', path: 'original.txt' }) as { content: string };
+    assertEquals(file.content, 'original');
+    assertEquals(await rpc.request('workspace.composition.get', { workspaceId: 'stable' }), saved);
+  } finally {
+    rpc.close(); await server.shutdown(); await portal.close(); await removePath(root, { recursive: true });
   }
 });

@@ -37,6 +37,8 @@ export type WorkspaceFileDependencies = {
     options: { recursive: boolean },
   ): WorkspaceFileSystemWatcher;
   createId(): string;
+  /** Catalog-owned roots stay pinned even while unavailable. Checked before file access. */
+  resolveWorkspaceRoot?(workspaceId: string): Promise<{ path: string }>;
 };
 
 export const DEFAULT_WORKSPACE_FILE_LIMITS: WorkspaceFileLimits = {
@@ -188,6 +190,10 @@ export class WorkspaceFileService {
   ) {
     const resolved = new Map<string, string>();
     for (const root of roots) {
+      if (dependencies.resolveWorkspaceRoot) {
+        resolved.set(root.workspaceId, root.path);
+        continue;
+      }
       try {
         const path = await realpath(root.path);
         if (!(await stat(path)).isDirectory()) {
@@ -205,6 +211,7 @@ export class WorkspaceFileService {
       {
         watchFs: dependencies.watchFs ??
           ((paths, options) => watchPaths(paths, options)),
+        resolveWorkspaceRoot: dependencies.resolveWorkspaceRoot,
         createId: dependencies.createId ?? (() => crypto.randomUUID()),
       },
     );
@@ -614,6 +621,11 @@ export class WorkspaceFileService {
   }
 
   async #existingPath(workspaceId: string, path: string) {
+    try {
+      const workspace = await this.#dependencies.resolveWorkspaceRoot?.(workspaceId);
+      if (workspace) this.#roots.set(workspaceId, workspace.path);
+    }
+    catch { return fail('WORKSPACE_UNAVAILABLE'); }
     const root = this.#root(workspaceId);
     let current = root;
     for (const segment of path.split('/').filter(Boolean)) {

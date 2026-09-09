@@ -136,6 +136,7 @@ const mapHostWorkspaces = (
       hostName: connection.displayName,
       name: workspace.name,
       canonicalPath: workspace.canonicalPath,
+      availability: workspace.availability,
       placements: [
         {
           id: resourceId(connection.hostId, workspace.workspaceId),

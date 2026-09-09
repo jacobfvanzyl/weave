@@ -106,6 +106,8 @@ export type WorkspaceSummary = {
   rootName?: string;
   /** Exact directory resolved by the owning Host; absent on older Hosts. */
   canonicalPath?: string;
+  /** Directory availability is separate from Host connectivity. */
+  availability?: 'available' | 'unavailable' | 'path-changed';
   repositoryIdentity?: RepositoryIdentity;
 };
 export const WORKSPACE_CONTEXT_CAPABILITY = 'workspace.context.v1';
@@ -468,10 +470,16 @@ const workspace = (value: unknown): WorkspaceSummary => {
     name: string(record.name, 'workspace.name'),
     ...(record.rootName === undefined ? {} : { rootName: string(record.rootName, 'workspace.rootName') }),
     ...(record.canonicalPath === undefined ? {} : { canonicalPath: canonicalWorkspacePath(record.canonicalPath) }),
+    ...(record.availability === undefined ? {} : { availability: workspaceAvailability(record.availability) }),
     ...(record.repositoryIdentity === undefined
       ? {}
       : { repositoryIdentity: repositoryIdentity(record.repositoryIdentity) }),
   };
+};
+
+const workspaceAvailability = (value: unknown): NonNullable<WorkspaceSummary['availability']> => {
+  if (value !== 'available' && value !== 'unavailable' && value !== 'path-changed') throw new Error('workspace.availability is invalid.');
+  return value;
 };
 
 const canonicalWorkspacePath = (value: unknown) => {

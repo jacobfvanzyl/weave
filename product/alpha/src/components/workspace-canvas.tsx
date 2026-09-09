@@ -19,6 +19,8 @@ function TerminalSurface({ controller, reference, node }: { controller: AlphaCon
     try { setError(undefined); await action(); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
   const available = controller.model.connections.some((connection) => connection.hostId === reference.hostId && connection.status === 'connected');
+  const context = controller.model.workspaces.find((workspace) => (workspace.placements ?? [workspace]).some((placement) => placement.hostId === reference.hostId && placement.workspaceId === reference.workspaceId));
+  const directoryAvailable = context?.availability === undefined || context.availability === 'available';
   const pending = controller.model.workspaceCompositions?.pending;
   const connecting = model.loading || Boolean(node.terminalId && !model.attachmentId && !model.error && available);
   return <section className='flex min-h-0 min-w-0 flex-1 flex-col' aria-label={`Terminal pane ${node.paneId}`} onFocusCapture={() => controller.workspaceActions?.focus(reference, node.paneId)}>
@@ -30,10 +32,11 @@ function TerminalSurface({ controller, reference, node }: { controller: AlphaCon
       {model.attachmentId && <Button size='xs' variant='ghost' disabled={model.attachmentMode !== 'control'} onClick={() => void perform(() => actions.close(node.terminalId!))}>Terminate</Button>}
     </header>
     {(error || model.error || !available) && <Alert variant='destructive'><AlertDescription>{error ?? (!available ? 'Host unavailable. This pane will reconnect when the Host returns.' : model.error)}</AlertDescription></Alert>}
+    {!directoryAvailable && <Alert><AlertDescription>{context?.availability === 'path-changed' ? 'The registered directory has changed. Its saved identity is retained; new shells are disabled.' : 'The workspace directory is unavailable. Existing terminal processes can still be attached.'}</AlertDescription></Alert>}
     {model.attachmentMode === 'observe' && <div className='flex items-center gap-2 p-2 text-xs'><span>{model.readOnlyReason}</span><Button size='xs' variant='outline' onClick={() => void perform(actions.retryControl)}>Request control</Button></div>}
     {model.attachmentId ? <XtermTerminalView data={model.data} dataEpoch={model.dataEpoch} dataOffset={model.dataOffset} readOnly={model.attachmentMode !== 'control' || !available} onInput={(data) => void perform(() => actions.input(data))} onResize={(cols, rows) => void perform(() => actions.resize(cols, rows))} /> : <Empty>
       <EmptyHeader><EmptyTitle>{connecting ? 'Connecting terminal…' : node.terminalId ? 'Terminal unavailable' : 'Empty terminal pane'}</EmptyTitle><EmptyDescription>{node.terminalId ? 'The saved terminal reference stays here until you explicitly replace it.' : 'Start a shell in this workspace directory.'}</EmptyDescription></EmptyHeader>
-      <Button disabled={!available || pending || connecting} onClick={() => void controller.workspaceActions?.startTerminal(reference, node.paneId)}>{node.terminalId ? 'Start replacement terminal' : 'Start terminal'}</Button>
+      <Button disabled={!available || !directoryAvailable || pending || connecting} onClick={() => void controller.workspaceActions?.startTerminal(reference, node.paneId)}>{node.terminalId ? 'Start replacement terminal' : 'Start terminal'}</Button>
     </Empty>}
   </section>;
 }

@@ -45,6 +45,7 @@ export type AlphaWorkspace = {
   hostName: string;
   name: string;
   canonicalPath?: string;
+  availability?: 'available' | 'unavailable' | 'path-changed';
   repositoryIdentity?: RepositoryIdentity;
   placements?: AlphaWorkspacePlacement[];
   threads: AlphaThread[];

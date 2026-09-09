@@ -22,6 +22,7 @@ beforeEach(() => storage.clear());
 it('renders independent terminal and agent selection, compact groups, and non-destructive view closure', async () => {
   const user = userEvent.setup();
   const arrangements = new Map<string, WorkspaceComposition>();
+  const snapshots = new Map<string, HostSnapshot>();
   const makeClient = (hostId: string) => {
     const snapshot: HostSnapshot = {
       hostId, displayName: hostId, capabilities: ['workspace.composition.get', 'workspace.composition.replace', 'terminal.attach'],
@@ -29,6 +30,7 @@ it('renders independent terminal and agent selection, compact groups, and non-de
       agents: [{ agentId: 'agent', name: 'Agent' }], archivedThreads: [],
       threads: [{ attention: { state: hostId === 'one' ? 'working' : 'waiting', observedAt: new Date().toISOString(), generation: 1 }, threadId: 'thread', workspaceId: 'workspace', agentId: 'agent', title: `Agent on ${hostId}`, status: 'active', acpSessionId: 'session', createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' }],
     };
+    snapshots.set(hostId, snapshot);
     let terminal: { terminalId: string; workspaceId: string; title: string; cols: number; rows: number; status: string } | undefined;
     return {
       snapshot: vi.fn(async () => snapshot), close: vi.fn(), attach: vi.fn(async () => snapshot.threads[0]),
@@ -101,4 +103,16 @@ it('renders independent terminal and agent selection, compact groups, and non-de
   await waitFor(() => expect(screen.getByRole('textbox', { name: 'Terminal input' })).toHaveValue('ready'));
   expect(one.createTerminal).toHaveBeenCalledTimes(1);
   expect(controller!.model.selectedThreadId).toBe('two:thread');
+  snapshots.get('one')!.workspaces[0]!.availability = 'path-changed';
+  await act(async () => { await controller!.actions.refresh(); });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Workspace one /code/weave' })).toHaveTextContent('directory changed'));
+  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toHaveValue('ready');
+  await user.click(screen.getByRole('button', { name: 'New agent thread' }));
+  expect(screen.getByRole('menuitem', { name: 'New thread in Checkout one' })).toHaveAttribute('aria-disabled', 'true');
+  await user.keyboard('{Escape}');
+  await user.click(screen.getByRole('button', { name: 'Workspace actions for Checkout one' }));
+  await user.click(screen.getByRole('menuitem', { name: 'New terminal workspace' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Start terminal' })).toBeDisabled());
+  expect(controller!.model.selectedThreadId).toBe('two:thread');
+
 });

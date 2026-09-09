@@ -50,7 +50,7 @@ export function WorkspaceSidebar({ controller }: { controller: AlphaController }
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button size='sm' variant='ghost' aria-label='New agent thread' />}>Agent…</DropdownMenuTrigger>
             <DropdownMenuContent><DropdownMenuGroup>
-              {model.workspaces.map((workspace) => <DropdownMenuItem key={workspace.id} aria-label={`New thread in ${workspace.name}`} disabled={model.busy || !model.connections.some((connection) => connection.hostId === workspace.hostId && connection.status === 'connected')} onClick={() => void actions.createThread(workspace.id)}>{workspace.hostName} · {workspace.canonicalPath ?? workspace.name}</DropdownMenuItem>)}
+              {model.workspaces.map((workspace) => <DropdownMenuItem key={workspace.id} aria-label={`New thread in ${workspace.name}`} disabled={model.busy || (workspace.availability !== undefined && workspace.availability !== 'available') || !model.connections.some((connection) => connection.hostId === workspace.hostId && connection.status === 'connected')} onClick={() => void actions.createThread(workspace.id)}>{workspace.hostName} · {workspace.canonicalPath ?? workspace.name}</DropdownMenuItem>)}
             </DropdownMenuGroup></DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -65,12 +65,12 @@ export function WorkspaceSidebar({ controller }: { controller: AlphaController }
               <div className='flex items-center gap-1'>
                 <Button variant='ghost' size='icon-sm' aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${workspace.name}`} aria-expanded={!collapsed} onClick={() => workspaceActions?.collapse(workspace.id)}>{collapsed ? '›' : '⌄'}</Button>
                 <SidebarMenuButton size='lg' isActive={active} aria-pressed={active} aria-label={`Workspace ${workspace.hostName} ${workspace.canonicalPath ?? workspace.name}`} onClick={() => void workspaceActions?.open(workspace.id)}>
-                  <span className='flex min-w-0 flex-col gap-1'><span className='truncate'>{workspace.name}</span><span className='truncate text-xs text-muted-foreground'>{workspace.hostName} · {workspace.canonicalPath ?? 'Path unavailable'}</span></span>
+                  <span className='flex min-w-0 flex-col gap-1'><span className='truncate'>{workspace.name}</span><span className='truncate text-xs text-muted-foreground'>{workspace.hostName} · {workspace.canonicalPath ?? 'Path unavailable'}{workspace.availability === 'path-changed' ? ' · directory changed' : workspace.availability === 'unavailable' ? ' · directory unavailable' : ''}</span></span>
                 </SidebarMenuButton>
                 <DropdownMenu><DropdownMenuTrigger render={<Button size='icon-sm' variant='ghost' aria-label={`Workspace actions for ${workspace.name}`} />}>⋯</DropdownMenuTrigger>
                   <DropdownMenuContent><DropdownMenuGroup>
                     <DropdownMenuItem onClick={() => void workspaceActions?.open(workspace.id, true)}>New terminal workspace</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void actions.createThread(workspace.id)}>New agent thread</DropdownMenuItem>
+                    <DropdownMenuItem disabled={workspace.availability !== undefined && workspace.availability !== 'available'} onClick={() => void actions.createThread(workspace.id)}>New agent thread</DropdownMenuItem>
                     {tabs.length === 1 && <DropdownMenuItem onClick={() => workspaceActions?.close(tabs[0]!)}>Close workspace view</DropdownMenuItem>}
                   </DropdownMenuGroup></DropdownMenuContent>
                 </DropdownMenu>

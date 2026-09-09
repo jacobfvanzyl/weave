@@ -14,7 +14,7 @@ All Workspaces follow the same domain rules; there is no special personal or roo
 _Avoid_: Project, repository, worktree
 
 **Execution Context**:
-A stable Host identity together with an exact working directory canonicalized by that Host. A Workspace represents the authorized context; a shell's later directory change does not move it.
+A stable Host identity together with an exact working directory canonicalized by that Host. A Workspace represents the authorized context; a shell's later directory change does not move it. A missing or replaced directory retains its last resolved identity and becomes unavailable for new execution until that directory is restored or the registration is explicitly replaced.
 _Avoid_: Repository identity, basename, active selection
 
 **Host**:

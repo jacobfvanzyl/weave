@@ -389,3 +389,12 @@ test('Thread attention carries freshness separately from archive lifecycle and a
   }
   for (const attention of [{ state: 'archived', observedAt: thread.createdAt }, { state: 'idle', observedAt: 'invalid' }, { state: 'idle', observedAt: thread.createdAt, generation: -1 }]) expect(() => result(attention)).toThrow('thread.attention');
 });
+
+
+test('Workspace directory availability preserves canonical identity and rejects unknown states', () => {
+  const workspace = { workspaceId: 'old-id', name: 'Checkout', canonicalPath: '/code/checkout' };
+  for (const availability of ['available', 'unavailable', 'path-changed']) {
+    expect(parsePortalRpcResult('workspace.list', { workspaces: [{ ...workspace, availability }] }).workspaces[0]).toEqual({ ...workspace, availability });
+  }
+  expect(() => parsePortalRpcResult('workspace.list', { workspaces: [{ ...workspace, availability: 'connected' }] })).toThrow('workspace.availability');
+});

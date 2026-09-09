@@ -1,5 +1,5 @@
 import { test } from './test-support.ts';
-import { mkdir, readText, realpath, removePath, stat, symlink, temporaryDirectory, writeText } from './host-files.ts';
+import { mkdir, readText, realpath, removePath, rename, stat, symlink, temporaryDirectory, writeText } from './host-files.ts';
 import { assertEquals, assertRejects } from './test-support.ts';
 import { WorkspaceCatalog, workspaceSummary } from './workspace-catalog.ts';
 
@@ -134,4 +134,58 @@ test('Workspace catalog rejects an unavailable path without persisting it', asyn
   } finally {
     await removePath(root, { recursive: true });
   }
+});
+
+
+test('Pinned contexts survive missing directories and reject symlink and inode replacements', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-context-lifetime-' });
+  try {
+    await mkdir(`${root}/checkout`);
+    await mkdir(`${root}/other`);
+    await symlink(`${root}/checkout`, `${root}/alias`);
+    const configured = [{ workspaceId: 'stable-id', name: 'Checkout', path: `${root}/alias` }];
+    let catalog = await WorkspaceCatalog.open(`${root}/state`, configured);
+    const canonical = workspaceSummary(catalog.list()[0]!).canonicalPath;
+    await removePath(`${root}/alias`);
+    catalog = await WorkspaceCatalog.open(`${root}/state`, configured);
+    assertEquals(workspaceSummary(catalog.list()[0]!).canonicalPath, canonical);
+    assertEquals(catalog.list()[0]!.availability, 'unavailable');
+    await assertRejects(() => catalog.requireAvailable('stable-id'));
+    await symlink(`${root}/other`, `${root}/alias`);
+    await catalog.refresh();
+    assertEquals(catalog.list()[0]!.availability, 'path-changed');
+    assertEquals(catalog.list()[0]!.path, canonical);
+    await removePath(`${root}/alias`);
+    await symlink(`${root}/checkout`, `${root}/alias`);
+    assertEquals((await catalog.requireAvailable('stable-id')).availability, 'available');
+    await rename(`${root}/checkout`, `${root}/original`);
+    await mkdir(`${root}/checkout`);
+    catalog = await WorkspaceCatalog.open(`${root}/state`, configured);
+    assertEquals(catalog.list()[0]!.availability, 'path-changed');
+    await assertRejects(() => catalog.add({ path: `${root}/checkout` }), Error, 'identity has changed');
+    await removePath(`${root}/checkout`, { recursive: true });
+    await rename(`${root}/original`, `${root}/checkout`);
+    assertEquals((await catalog.requireAvailable('stable-id')).workspaceId, 'stable-id');
+    // Editing configuration does not grant an existing opaque ID a different root.
+    catalog = await WorkspaceCatalog.open(`${root}/state`, [{ ...configured[0]!, path: `${root}/other` }]);
+    assertEquals(catalog.list()[0]!.availability, 'path-changed');
+    assertEquals(catalog.list()[0]!.canonicalPath, canonical);
+  } finally { await removePath(root, { recursive: true }); }
+});
+
+test('Legacy unavailable registrations remain inspectable without inventing a canonical identity', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-context-legacy-' });
+  try {
+    await mkdir(`${root}/state`);
+    await writeText(`${root}/state/workspaces.json`, JSON.stringify({ version: 1, workspaces: [{ workspaceId: 'old-id', name: 'Old', path: `${root}/missing` }] }));
+    const catalog = await WorkspaceCatalog.open(`${root}/state`, []);
+    assertEquals(catalog.list()[0]!.workspaceId, 'old-id');
+    assertEquals(workspaceSummary(catalog.list()[0]!).canonicalPath, undefined);
+    assertEquals(catalog.list()[0]!.availability, 'unavailable');
+    await mkdir(`${root}/missing`);
+    assertEquals((await catalog.requireAvailable('old-id')).canonicalPath, await realpath(`${root}/missing`));
+    const reopened = await WorkspaceCatalog.open(`${root}/state`, []);
+    assertEquals(reopened.list()[0]!.workspaceId, 'old-id');
+    assertEquals(reopened.list()[0]!.availability, 'available');
+  } finally { await removePath(root, { recursive: true }); }
 });

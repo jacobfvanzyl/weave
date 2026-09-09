@@ -95,6 +95,7 @@ type AttachmentState = TerminalAttachment & {
 type TerminalServiceOptions = {
   backend: TerminalBackend;
   resolveWorkspace: (workspaceId: string) => TerminalWorkspace | undefined;
+  assertWorkspaceAvailable?: (workspaceId: string) => Promise<unknown>;
   retentionLimitBytes?: number;
   attachmentQueueLimitBytes?: number;
   env?: Record<string, string | undefined>;
@@ -137,6 +138,7 @@ const publicRecord = (record: TerminalBackendRecord): TerminalSummary => ({
 export class TerminalService {
   readonly #backend: TerminalBackend;
   readonly #resolveWorkspace: TerminalServiceOptions['resolveWorkspace'];
+  readonly #assertWorkspaceAvailable: TerminalServiceOptions['assertWorkspaceAvailable'];
   readonly #retentionLimitBytes: number;
   readonly #attachmentQueueLimitBytes: number;
   readonly #env: Record<string, string | undefined>;
@@ -150,6 +152,7 @@ export class TerminalService {
   constructor(options: TerminalServiceOptions) {
     this.#backend = options.backend;
     this.#resolveWorkspace = options.resolveWorkspace;
+    this.#assertWorkspaceAvailable = options.assertWorkspaceAvailable;
     this.#retentionLimitBytes = options.retentionLimitBytes ?? DEFAULT_RETENTION_LIMIT_BYTES;
     this.#attachmentQueueLimitBytes = options.attachmentQueueLimitBytes ?? DEFAULT_ATTACHMENT_QUEUE_LIMIT_BYTES;
     this.#env = options.env ?? { ...process.env };
@@ -193,6 +196,7 @@ export class TerminalService {
             .map(publicRecord),
         } as TerminalRpcResult<Method>;
       case 'terminal.create': {
+        await this.#assertWorkspaceAvailable?.(workspace.workspaceId);
         const input = params as TerminalRpcParams<'terminal.create'>;
         const terminalId = crypto.randomUUID();
         const record = await this.#backend.create({

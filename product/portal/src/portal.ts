@@ -175,7 +175,7 @@ export class Portal {
           config.threadEventRetentionLimit,
         ),
         RuntimeStateStore.open(config.stateDirectory),
-        WorkspaceFileService.open(workspaces),
+        WorkspaceFileService.open(workspaces, {}, { resolveWorkspaceRoot: (id) => workspaceCatalog.requireAvailable(id) }),
         PortalSecurity.open(
           config,
           workspaces.map(({ workspaceId }) => workspaceId),
@@ -188,6 +188,7 @@ export class Portal {
     const terminals = terminalBackend
       ? new TerminalService({
         backend: terminalBackend,
+        assertWorkspaceAvailable: (id) => workspaceCatalog.requireAvailable(id),
         resolveWorkspace: (workspaceId) =>
           workspaceCatalog.list().find((workspace) => workspace.workspaceId === workspaceId),
       })
@@ -244,6 +245,7 @@ export class Portal {
           ],
         } as PortalRpcResult<Method>;
       case 'workspace.list':
+        await this.#workspaceCatalog.refresh();
         return {
           workspaces: [...this.#workspaces.values()]
             .filter(({ workspaceId }) =>
@@ -599,15 +601,13 @@ export class Portal {
     const agent = this.#agent(input.agentId);
     let workspace: WorkspaceDefinition | undefined;
     if (input.workspaceId) {
-      workspace = this.#workspace(input.workspaceId);
+      workspace = await this.#workspaceCatalog.requireAvailable(input.workspaceId);
     } else if (input.workspacePath) {
       const path = await realpath(input.workspacePath);
-      const candidates = await Promise.all(
-        [...this.#workspaces.values()].map(async (candidate) => ({
-          definition: candidate,
-          path: await realpath(candidate.path),
-        })),
-      );
+      await this.#workspaceCatalog.refresh();
+      const candidates = this.#workspaceCatalog.list()
+        .filter((candidate) => candidate.availability === 'available')
+        .map((definition) => ({ definition, path: definition.path }));
       workspace = candidates
         .filter((candidate) => {
           const fromRoot = relative(candidate.path, path);
@@ -729,7 +729,7 @@ export class Portal {
   }
 
   async #createThread(workspaceId: string, agentId: string, title?: string) {
-    const workspace = this.#workspace(workspaceId);
+    const workspace = await this.#workspaceCatalog.requireAvailable(workspaceId);
     const agent = this.#agent(agentId);
     const runtime = await HostedThread.create(
       workspace,
@@ -739,6 +739,8 @@ export class Portal {
       this.#journal,
       this.#runtimeStates,
       () => [],
+      undefined,
+      () => this.#workspaceCatalog.requireAvailable(workspaceId),
     );
     this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
     this.#liveRuntimes.set(runtime.thread.threadId, runtime);
@@ -751,7 +753,7 @@ export class Portal {
     agentId: string,
     title?: string,
   ) {
-    const workspace = this.#workspace(workspaceId);
+    const workspace = await this.#workspaceCatalog.requireAvailable(workspaceId);
     const agent = this.#agent(agentId);
     const runtime = await HostedThread.create(
       workspace,
@@ -764,6 +766,7 @@ export class Portal {
       this.#runtimeStates,
       () => [],
       (thread) => this.#promoteDraftThread(thread),
+      () => this.#workspaceCatalog.requireAvailable(workspaceId),
     );
     this.#drafts.set(runtime.thread.threadId, runtime.thread);
     this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
@@ -800,15 +803,16 @@ export class Portal {
     let runtime = this.#runtimes.get(threadId);
     if (!runtime) {
       const thread = this.#thread(threadId);
-      runtime = HostedThread.restore(
+      runtime = this.#workspaceCatalog.requireAvailable(thread.workspaceId).then((workspace) => HostedThread.restore(
         thread,
-        this.#workspace(thread.workspaceId),
+        workspace,
         this.#agent(thread.agentId),
         (changed) => this.#catalog.put(changed),
         this.#journal,
         this.#runtimeStates,
         () => [],
-      );
+        () => this.#workspaceCatalog.requireAvailable(thread.workspaceId),
+      ));
       this.#runtimes.set(threadId, runtime);
       const restoring = runtime;
       void runtime.then((hosted) => {
