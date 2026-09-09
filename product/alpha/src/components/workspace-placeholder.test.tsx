@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { AlphaController } from "@/app/alpha-controller";
 import { createTranscript } from "@/chat/acp-transcript";
-import { ProjectPaneToggle } from "@/components/project-pane-toggle";
+import { Button } from "@/components/ui/button";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { WorkspacePlaceholder } from "./workspace-placeholder";
 
@@ -189,11 +189,7 @@ describe("WorkspacePlaceholder", () => {
         <WorkspacePlaceholder
           controller={value}
           footerActions={
-            <ProjectPaneToggle
-              action="Show"
-              disabled
-              onClick={vi.fn()}
-            />
+            <Button aria-label="Test control" disabled />
           }
         />
       </SidebarProvider>,
@@ -210,7 +206,7 @@ describe("WorkspacePlaceholder", () => {
       .toBeEmptyDOMElement();
     expect(container.querySelector('[data-slot="thread-content"]'))
       .toBeEmptyDOMElement();
-    expect(screen.getByRole("button", { name: "Show Project Pane" }))
+    expect(screen.getByRole("button", { name: "Test control" }))
       .toBeDisabled();
   });
 
@@ -222,20 +218,15 @@ describe("WorkspacePlaceholder", () => {
         <WorkspacePlaceholder
           controller={controller()}
           footerActions={
-            <ProjectPaneToggle
-              action="Show"
-              onClick={showProjectPane}
-            />
+            <Button aria-label="Test control" size="icon" onClick={showProjectPane} />
           }
         />
       </SidebarProvider>,
     );
 
-    const toggle = screen.getByRole("button", { name: "Show Project Pane" });
+    const toggle = screen.getByRole("button", { name: "Test control" });
     expect(toggle).toHaveTextContent("");
     expect(toggle).toHaveClass("size-7", "items-center", "justify-center");
-    expect(toggle.querySelector('[data-symbol="project-pane"]'))
-      .toBeInTheDocument();
     await user.click(toggle);
     expect(showProjectPane).toHaveBeenCalledOnce();
     expect(container.querySelector('[data-slot="main-bottom-rail"]'))

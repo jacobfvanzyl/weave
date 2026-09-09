@@ -28,7 +28,6 @@ import {
   type PersistedPortalConnection,
   savePortalConnections,
 } from "./portal-connection-storage";
-import { useWorkspaceFileBrowser } from "./use-workspace-file-browser";
 import { useAppResume } from "./use-app-resume";
 import { useAlphaTerminals } from "./use-alpha-terminals";
 
@@ -289,7 +288,6 @@ export function useLiveAlphaController(
   const creatingThreadRef = useRef(false);
   const autoConnectRef = useRef(new Set<string>());
   const refreshingRef = useRef(new Set<string>());
-  const workspaceFileBrowser = useWorkspaceFileBrowser();
   const reportActionError = (cause: unknown) => {
     if (cause instanceof PortalTransportError) return;
     setError(cause instanceof Error ? cause.message : String(cause));
@@ -496,15 +494,6 @@ export function useLiveAlphaController(
         await withTimeout(
           (async () => {
             await nextClient.attach(thread.threadId);
-            const opened = await workspaceFileBrowser.open(
-              nextClient,
-              workspace.workspaceId,
-              workspace.name,
-              workspace.rootName,
-            );
-            if (opened !== true) {
-              throw new Error("The active Project could not be loaded.");
-            }
           })(),
           HOST_RECONNECT_TIMEOUT_MS,
         );
@@ -556,7 +545,6 @@ export function useLiveAlphaController(
             selectedThreadIdRef.current = undefined;
             setSelectedThreadId(undefined);
             setLoadingThreadId(undefined);
-            workspaceFileBrowser.close();
           }
         }
         if (
@@ -568,7 +556,6 @@ export function useLiveAlphaController(
           selectedThreadIdRef.current = undefined;
           setSelectedThreadId(undefined);
           setLoadingThreadId(undefined);
-          workspaceFileBrowser.close();
         }
       }
       return false;
@@ -775,19 +762,10 @@ export function useLiveAlphaController(
     selectedThreadIdRef.current = id;
     setSelectedThreadId(id);
     setLoadingThreadId(id);
-    workspaceFileBrowser.close();
     activeThreadIdsRef.current.set(thread.hostId, id);
     try {
       if (draft) await discardLocalThreadDraft();
       await client.attach(thread.threadId);
-      if (workspace) {
-        await workspaceFileBrowser.open(
-          client,
-          workspace.workspaceId,
-          workspace.name,
-          workspace.rootName,
-        );
-      } else workspaceFileBrowser.close();
     } catch (cause) {
       selectedThreadIdRef.current = previousSelectedThreadId;
       setSelectedThreadId(previousSelectedThreadId);
@@ -894,12 +872,6 @@ export function useLiveAlphaController(
         activeThreadIdsRef.current.set(placement.hostId, id);
         await client.attach(prepared.threadId);
       }
-      await workspaceFileBrowser.open(
-        client,
-        workspace.workspaceId,
-        workspace.name,
-        workspace.rootName,
-      );
       focusComposer(id);
     } catch (cause) {
       await discardLocalThreadDraft();
@@ -932,7 +904,6 @@ export function useLiveAlphaController(
       if (selectedThreadId === id) {
         selectedThreadIdRef.current = undefined;
         setSelectedThreadId(undefined);
-        workspaceFileBrowser.close();
       }
     } catch (cause) {
       reportActionError(cause);
@@ -995,12 +966,11 @@ export function useLiveAlphaController(
       selectedThreadId && loadingThreadId !== selectedThreadId
         ? transcripts[selectedThreadId]
         : undefined,
-    workspaceFiles: workspaceFileBrowser.files,
     terminals: terminalController.model,
-    busy: busy || workspaceFileBrowser.busy,
+    busy,
     error: selectedHostReconnecting
       ? undefined
-      : (workspaceFileBrowser.error ?? error),
+      : error,
   };
 
   return {
@@ -1051,7 +1021,6 @@ export function useLiveAlphaController(
           selectedThreadIdRef.current = undefined;
           setSelectedThreadId(undefined);
           setLoadingThreadId(undefined);
-          workspaceFileBrowser.close();
         }
         setSnapshots((current) => ({ ...current, [hostId]: undefined }));
         setStatuses((current) => ({ ...current, [hostId]: "disconnected" }));
@@ -1140,7 +1109,6 @@ export function useLiveAlphaController(
             selectedThreadIdRef.current = undefined;
             setSelectedThreadId(undefined);
             setLoadingThreadId(undefined);
-            workspaceFileBrowser.close();
           }
           updateSnapshot(placement.hostId, await client.snapshot());
         } catch (cause) {
@@ -1153,11 +1121,6 @@ export function useLiveAlphaController(
       selectThread,
       archiveThread,
       restoreThread,
-      openWorkspaceDirectory: workspaceFileBrowser.openDirectory,
-      openWorkspaceFile: workspaceFileBrowser.openFile,
-      activateWorkspaceFile: workspaceFileBrowser.activateFile,
-      closeWorkspaceFile: workspaceFileBrowser.closeFile,
-      reloadWorkspaceFile: workspaceFileBrowser.reloadFile,
       showTerminals: terminalController.actions.show,
       hideTerminals: terminalController.actions.hide,
       createTerminal: terminalController.actions.create,

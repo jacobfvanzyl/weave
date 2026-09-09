@@ -5,13 +5,11 @@ import { Portal } from './portal.ts';
 import { PortalSecurity } from './security.ts';
 import { startPortalServer } from './server.ts';
 import { WorkspaceCatalog } from './workspace-catalog.ts';
-import { runBrowserMcp } from './browser-mcp.ts';
 
 const usage = () =>
   `Usage:
   weave-portal serve --config <path>
   weave-portal acp connect --config <path> --agent <agent-id> [--workspace <workspace-id>]
-  weave-portal browser mcp
   weave-portal pairing create --config <path> [--ttl-minutes <1-60>]
   weave-portal credential list --config <path>
   weave-portal credential revoke --config <path> <credential-id>`;
@@ -39,12 +37,10 @@ if (import.meta.main) {
       );
     });
     let gateway: Awaited<ReturnType<typeof serveLocalAcpGateway>> | undefined;
-    let browserGateway: Awaited<ReturnType<Portal['browserMcp']['serve']>> | undefined;
     let shutdownTask: Promise<void> | undefined;
     const shutdown = () => {
       shutdownTask ??= (async () => {
         await gateway?.close();
-        await browserGateway?.close();
         await server.shutdown();
         await portal.close();
       })();
@@ -55,10 +51,8 @@ if (import.meta.main) {
     Deno.addSignalListener('SIGTERM', onSignal);
     try {
       gateway = await serveLocalAcpGateway(portal);
-      browserGateway = await portal.browserMcp.serve();
       console.log(`Weave Portal ACP: ${gateway.path}`);
-      console.log(`Weave Portal Browser MCP: ${browserGateway.path}`);
-      await Promise.race([server.finished, gateway.finished, browserGateway.finished]);
+      await Promise.race([server.finished, gateway.finished]);
     } finally {
       Deno.removeSignalListener('SIGINT', onSignal);
       Deno.removeSignalListener('SIGTERM', onSignal);
@@ -74,12 +68,6 @@ if (import.meta.main) {
       agentId,
       ...(workspaceId ? { workspaceId } : { workspacePath: Deno.cwd() }),
     });
-  } else if (command === 'browser' && subcommand === 'mcp') {
-    const path = Deno.env.get('WEAVE_BROWSER_MCP_SOCKET');
-    const threadId = Deno.env.get('WEAVE_BROWSER_MCP_THREAD');
-    const token = Deno.env.get('WEAVE_BROWSER_MCP_TOKEN');
-    if (!path || !threadId || !token) throw new Error('Browser MCP environment is incomplete.');
-    await runBrowserMcp({ path, threadId, token });
   } else if (command === 'pairing' && subcommand === 'create') {
     const config = await configFrom(args);
     const ttlMinutes = Number(option(args, '--ttl-minutes') ?? '5');

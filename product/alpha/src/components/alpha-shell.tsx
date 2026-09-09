@@ -1,9 +1,7 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react';
-import type { GroupImperativeHandle, Layout } from 'react-resizable-panels';
-import { type AlphaController, selectedThread } from '@/app/alpha-controller';
+import { type AlphaController } from '@/app/alpha-controller';
 import {
   type AlphaDockPanelId,
-  type AlphaMovableDockPanelId,
   useAlphaDockLayout,
 } from '@/app/alpha-dock-layout';
 import {
@@ -11,29 +9,21 @@ import {
   selectedTerminalScope,
 } from '@/app/alpha-terminal-scope';
 import {
-  type AlphaPaneId,
   alphaPaneIds,
   alphaPaneMinimumWidths,
   alphaSidebarDefaultWidth,
-  layoutChangesOnlyPanePair,
-  layoutForPaneSet,
-  paneSetKey,
   useAlphaPaneLayouts,
 } from '@/app/alpha-pane-layout';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { SidebarInset, SidebarProvider, useSidebar } from '@/components/ui/sidebar';
 import { ConnectionsDialog } from './connections-dialog';
 import { ArchivedThreadsDialog } from './archived-threads-dialog';
-import { BrowserPane } from './browser-pane';
 import { DockRailActions } from './dock-rail-actions';
-import { EditorPane } from './editor-pane';
 import { GlobalBottomRail } from './global-bottom-rail';
-import { ProjectPane } from './project-pane';
 import { TerminalPane } from './terminal-pane';
 import { ThreadSidebar } from './thread-sidebar';
 import { WorkspacePlaceholder } from './workspace-placeholder';
 import { cn } from '@/lib/utils';
-import { isCapacitorPlatform } from '@/lib/platform';
 import { useIsMobile } from '@/hooks/use-mobile';
 
 type PaneLayouts = ReturnType<typeof useAlphaPaneLayouts>;
@@ -41,165 +31,8 @@ type PaneLayouts = ReturnType<typeof useAlphaPaneLayouts>;
 const paneHandleClassName =
   'bg-transparent before:absolute before:inset-x-0 before:inset-y-0 before:bg-border hover:before:bg-ring focus-visible:before:bg-ring';
 
-function PaneRow({
-  controller,
-  paneLayouts,
-  isMobile,
-}: {
-  controller: AlphaController;
-  paneLayouts: PaneLayouts;
-  isMobile: boolean;
-}) {
-  const { model, actions } = controller;
-  const [showMobileEditor, setShowMobileEditor] = useState(false);
-  const rowRef = useRef<GroupImperativeHandle>(null);
-  const acceptedLayoutRef = useRef<Layout | undefined>(undefined);
-  const activeResizePairRef = useRef<
-    readonly [AlphaPaneId, AlphaPaneId] | undefined
-  >(undefined);
-  const acceptedRowKeyRef = useRef<string | undefined>(undefined);
-  const openFiles = model.workspaceFiles?.openFiles ?? [];
-  const hasActiveThread = Boolean(model.selectedThreadId);
-  const editorOpen = hasActiveThread && openFiles.length > 0;
-
-  useEffect(() => {
-    const clearActiveResizePair = () => {
-      activeResizePairRef.current = undefined;
-    };
-    window.addEventListener('pointerup', clearActiveResizePair);
-    window.addEventListener('pointercancel', clearActiveResizePair);
-    window.addEventListener('keyup', clearActiveResizePair);
-    return () => {
-      window.removeEventListener('pointerup', clearActiveResizePair);
-      window.removeEventListener('pointercancel', clearActiveResizePair);
-      window.removeEventListener('keyup', clearActiveResizePair);
-    };
-  }, []);
-
-  if (isMobile) {
-    return (
-      <>
-        <div className='flex min-h-0 min-w-0 flex-1'>
-          <WorkspacePlaceholder
-            controller={controller}
-            className={cn(showMobileEditor && editorOpen && 'max-md:hidden')}
-            showFooter={false}
-          />
-          {editorOpen && (
-            <EditorPane
-              files={openFiles}
-              activeFilePath={model.workspaceFiles?.activeFilePath}
-              busy={model.busy}
-              className={cn(!showMobileEditor && 'max-md:hidden')}
-              onActivateFile={actions.activateWorkspaceFile}
-              onCloseFile={actions.closeWorkspaceFile}
-              onReloadFile={() => void actions.reloadWorkspaceFile()}
-              onReturnToThread={() => setShowMobileEditor(false)}
-              showFooter={false}
-            />
-          )}
-        </div>
-      </>
-    );
-  }
-
-  const visiblePaneIds: AlphaPaneId[] = [
-    alphaPaneIds.thread,
-    ...(editorOpen ? [alphaPaneIds.editor] : []),
-  ];
-  const rowKey = paneSetKey(visiblePaneIds);
-  if (acceptedRowKeyRef.current !== rowKey) {
-    acceptedRowKeyRef.current = rowKey;
-    acceptedLayoutRef.current = undefined;
-    activeResizePairRef.current = undefined;
-  }
-  const equalizeRow = () => {
-    activeResizePairRef.current = undefined;
-    const ratio = 100 / visiblePaneIds.length;
-    const layout: Layout = Object.fromEntries(
-      visiblePaneIds.map((paneId) => [paneId, ratio]),
-    );
-    rowRef.current?.setLayout(layout);
-    paneLayouts.rememberRowLayout(visiblePaneIds, layout);
-  };
-  const activateResizePair = (before: AlphaPaneId, after: AlphaPaneId) => {
-    activeResizePairRef.current = [before, after];
-  };
-  const restoreIfResizePropagated = (layout: Layout) => {
-    const previous = acceptedLayoutRef.current;
-    const activePair = activeResizePairRef.current;
-    if (
-      previous &&
-      activePair &&
-      !layoutChangesOnlyPanePair(previous, layout, activePair)
-    ) {
-      rowRef.current?.setLayout(previous);
-      return true;
-    }
-    return false;
-  };
-  const handleLayoutChange = (layout: Layout) => {
-    if (restoreIfResizePropagated(layout)) return;
-    acceptedLayoutRef.current = layout;
-  };
-  const handleLayoutChanged = (layout: Layout) => {
-    if (restoreIfResizePropagated(layout)) return;
-    acceptedLayoutRef.current = layout;
-    paneLayouts.rememberRowLayout(visiblePaneIds, layout);
-  };
-
-  return (
-    <ResizablePanelGroup
-      key={`${paneLayouts.snapshot.threadId ?? 'none'}:${rowKey}`}
-      id='alpha-content-pane-row'
-      groupRef={rowRef}
-      orientation='horizontal'
-      defaultLayout={layoutForPaneSet(paneLayouts.snapshot, visiblePaneIds)}
-      onLayoutChange={handleLayoutChange}
-      onLayoutChanged={handleLayoutChanged}
-      className='min-h-0 min-w-0 flex-1'
-      data-slot='alpha-content-pane-row'
-    >
-      <ResizablePanel
-        id={alphaPaneIds.thread}
-        minSize={alphaPaneMinimumWidths[alphaPaneIds.thread]}
-        className='flex min-w-0 overflow-hidden'
-      >
-        <WorkspacePlaceholder
-          controller={controller}
-          showFooter={false}
-        />
-      </ResizablePanel>
-
-      {editorOpen && (
-        <>
-          <ResizableHandle
-            aria-label='Resize Thread and Editor Panes'
-            className={paneHandleClassName}
-            onKeyDownCapture={() => activateResizePair(alphaPaneIds.thread, alphaPaneIds.editor)}
-            onPointerDownCapture={() => activateResizePair(alphaPaneIds.thread, alphaPaneIds.editor)}
-            onDoubleClick={equalizeRow}
-          />
-          <ResizablePanel
-            id={alphaPaneIds.editor}
-            minSize={alphaPaneMinimumWidths[alphaPaneIds.editor]}
-            className='flex min-w-0 overflow-hidden'
-          >
-            <EditorPane
-              files={openFiles}
-              activeFilePath={model.workspaceFiles?.activeFilePath}
-              busy={model.busy}
-              onActivateFile={actions.activateWorkspaceFile}
-              onCloseFile={actions.closeWorkspaceFile}
-              onReloadFile={() => void actions.reloadWorkspaceFile()}
-              onReturnToThread={() => setShowMobileEditor(false)}
-              showFooter={false}
-            />
-          </ResizablePanel>
-        </>
-      )}
-    </ResizablePanelGroup>
-  );
+function PaneRow({ controller }: { controller: AlphaController; paneLayouts: PaneLayouts; isMobile: boolean }) {
+  return <WorkspacePlaceholder controller={controller} showFooter={false} />;
 }
 
 function WorkspaceFrame({
@@ -406,22 +239,15 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     error: 'Select a Thread to open its Workspace Terminals.',
   };
   const panelAvailable = (panelId: AlphaDockPanelId | null) =>
-    panelId === 'browser' || hasActiveThread;
+    panelId === 'terminal' && hasActiveThread;
   const bottomOpen = dockLayout.snapshot.docks.bottom.open &&
     panelAvailable(dockLayout.snapshot.docks.bottom.activePanelId);
   const rightOpen = dockLayout.snapshot.docks.right.open &&
     panelAvailable(dockLayout.snapshot.docks.right.activePanelId);
   const terminalActive = hasActiveThread && dockLayout.isPanelActive('terminal');
-  const browserActive = dockLayout.isPanelActive('browser');
   const terminalIsMaximized = terminalActive &&
     maximizedPanelKey === `terminal:${terminalScopeKey}`;
-  const browserIsMaximized = browserActive && maximizedPanelKey === 'browser';
-  const maximizedPanelId: AlphaMovableDockPanelId | undefined = terminalIsMaximized
-    ? 'terminal'
-    : browserIsMaximized
-    ? 'browser'
-    : undefined;
-  const capacitorPlatform = isCapacitorPlatform(controller.model.platform);
+  const maximizedPanelId = terminalIsMaximized ? 'terminal' : undefined;
 
   useEffect(() => {
     if (terminalActive) void terminalVisibilityActionsRef.current.show?.();
@@ -442,12 +268,6 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     terminalScopeKey,
   ]);
 
-  useEffect(() => {
-    if (!browserActive && maximizedPanelKey === 'browser') {
-      setMaximizedPanelKey(undefined);
-    }
-  }, [browserActive, maximizedPanelKey]);
-
   const toggleDockPanel = (panelId: AlphaDockPanelId) => {
     const panelWasActive = dockLayout.isPanelActive(panelId);
     dockLayout.togglePanel(panelId);
@@ -457,7 +277,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
   const rail = (
     <DockRailActions
       snapshot={dockLayout.snapshot}
-      disabled={(panelId) => panelId !== 'browser' && !hasActiveThread}
+      disabled={!hasActiveThread}
       onToggle={toggleDockPanel}
       onMovePanel={(panelId, position) => {
         dockLayout.movePanel(panelId, position);
@@ -493,59 +313,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     />
   );
 
-  const browserPane = () => (
-    <BrowserPane
-      maximized={browserIsMaximized}
-      onClose={() => {
-        setMaximizedPanelKey(undefined);
-        dockLayout.hideBrowserPanel();
-        setMobilePanelId((current) => current === 'browser' ? null : current);
-      }}
-      onToggleMaximized={() => setMaximizedPanelKey((current) =>
-        current === 'browser' ? undefined : 'browser'
-      )}
-    />
-  );
-
-  const projectPane = (forceVisible = false) => (
-    <SidebarProvider
-      open
-      onOpenChange={() => undefined}
-      cookieName={false}
-      keyboardShortcut={false}
-      className='h-full min-h-0 min-w-0 overflow-hidden'
-      style={{
-        '--sidebar-width': '100%',
-        '--sidebar-width-icon': '2rem',
-      } as CSSProperties}
-    >
-      <ProjectPane
-        files={controller.model.workspaceFiles}
-        hasActiveThread={hasActiveThread}
-        reconnecting={Boolean(
-          selectedThread(controller.model) &&
-            controller.model.connections.some(
-              ({ hostId, status }) =>
-                hostId === selectedThread(controller.model)?.hostId &&
-                status === 'reconnecting',
-            ),
-        )}
-        capacitorPlatform={capacitorPlatform}
-        busy={controller.model.busy}
-        showFooter={false}
-        forceVisible={forceVisible}
-        onOpenDirectory={(path) => void controller.actions.openWorkspaceDirectory(path)}
-        onOpenFile={(path) => void controller.actions.openWorkspaceFile(path)}
-      />
-    </SidebarProvider>
-  );
-
-  const dockPane = (panelId: AlphaDockPanelId | null, forceProject = false) =>
-    panelId === 'terminal'
-      ? terminalPane()
-      : panelId === 'browser'
-      ? browserPane()
-      : projectPane(forceProject);
+  const dockPane = (panelId: AlphaDockPanelId | null, _forceProject = false) => panelId === 'terminal' ? terminalPane() : null;
   const bottomPanel = dockPane(dockLayout.snapshot.docks.bottom.activePanelId);
   const rightPanel = dockPane(dockLayout.snapshot.docks.right.activePanelId);
   const mobileActivePanel = mobilePanelId && dockLayout.isPanelActive(mobilePanelId)
@@ -581,7 +349,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
               bottomOpen={false}
               bottomSize={dockLayout.snapshot.rememberedSize.bottom}
               bottomPane={bottomPanel}
-              maximizedPane={maximizedPanelId === 'terminal' ? terminalPane() : browserPane()}
+              maximizedPane={terminalPane()}
               onBottomSizeChange={(size) => dockLayout.rememberSize('bottom', size)}
             />
           )

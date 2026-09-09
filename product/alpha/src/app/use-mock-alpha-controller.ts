@@ -11,7 +11,6 @@ import type {
   AlphaController,
   AlphaViewModel,
   AlphaWorkspace,
-  AlphaWorkspaceFiles,
 } from "./alpha-controller";
 
 export const MOCK_SCENARIOS = [
@@ -97,22 +96,6 @@ const WORKSPACES: AlphaWorkspace[] = [
   },
 ];
 
-const MOCK_WORKSPACE_ENTRIES: Record<
-  string,
-  AlphaWorkspaceFiles["directories"][string]["entries"]
-> = {
-  "": [
-    { name: "src", path: "src", type: "directory" },
-    { name: "README.md", path: "README.md", type: "file", size: 36 },
-  ],
-  src: [{ name: "main.ts", path: "src/main.ts", type: "file", size: 44 }],
-};
-
-const MOCK_FILE_CONTENT: Record<string, string> = {
-  "README.md": "# Mock Workspace\n\nBrowse files locally.\n",
-  "src/main.ts": "export const marker = 'WVE42_MOCK_WORKSPACE';\n",
-};
-
 const scenarioConnection = (scenario: MockScenario): AlphaConnectionStatus => {
   if (scenario === "disconnected") return "disconnected";
   if (scenario === "connecting") return "connecting";
@@ -168,20 +151,6 @@ export function useMockAlphaController(
   const [composerFocusThreadId, setComposerFocusThreadId] = useState<string>();
   const [transcript, setTranscript] = useState<AcpTranscript | undefined>(() =>
     scenarioTranscript(scenario),
-  );
-  const [workspaceFiles, setWorkspaceFiles] = useState<
-    AlphaWorkspaceFiles | undefined
-  >(() =>
-    selectedThreadId
-      ? {
-          workspaceId: "workspace-weave",
-          workspaceName: "weave",
-          openFiles: [],
-          directories: {
-            "": { entries: MOCK_WORKSPACE_ENTRIES[""], truncated: false },
-          },
-        }
-      : undefined,
   );
   const [workspaces, setWorkspaces] = useState<AlphaWorkspace[]>(
     scenario === "empty"
@@ -275,7 +244,6 @@ export function useMockAlphaController(
       composerFocusRequest,
       composerFocusThreadId,
       transcript,
-      workspaceFiles,
       terminals: {
         scope:
           terminalProject && terminalThread
@@ -315,7 +283,6 @@ export function useMockAlphaController(
       composerFocusThreadId,
       selectedThreadId,
       transcript,
-      workspaceFiles,
       workspaces,
       terminalTabs,
       activeTerminalId,
@@ -450,14 +417,6 @@ export function useMockAlphaController(
           (candidate) => candidate.id === targetId,
         );
         if (workspace) {
-          setWorkspaceFiles({
-            workspaceId: workspace.id,
-            workspaceName: workspace.name,
-            openFiles: [],
-            directories: {
-              "": { entries: MOCK_WORKSPACE_ENTRIES[""], truncated: false },
-            },
-          });
         }
       },
       selectThread: async (threadId) => {
@@ -482,21 +441,8 @@ export function useMockAlphaController(
         setSelectedThreadId(threadId);
         setLoadingThreadId(threadId);
         setTranscript(undefined);
-        setWorkspaceFiles(undefined);
         await new Promise((resolve) => setTimeout(resolve, 600));
         setTranscript(createAcpShowcaseTranscript());
-        setWorkspaceFiles(
-          workspace
-            ? {
-                workspaceId: workspace.id,
-                workspaceName: workspace.name,
-                openFiles: [],
-                directories: {
-                  "": { entries: MOCK_WORKSPACE_ENTRIES[""], truncated: false },
-                },
-              }
-            : undefined,
-        );
         setLoadingThreadId(undefined);
       },
       archiveThread: (threadId) => {
@@ -523,7 +469,6 @@ export function useMockAlphaController(
         if (selectedThreadId === threadId) {
           setSelectedThreadId(undefined);
           setTranscript(undefined);
-          setWorkspaceFiles(undefined);
         }
       },
       restoreThread: (threadId) => {
@@ -550,88 +495,6 @@ export function useMockAlphaController(
                 }
               : workspace,
           ),
-        );
-      },
-      openWorkspaceDirectory: (path) => {
-        setWorkspaceFiles((current) =>
-          current
-            ? {
-                ...current,
-                directories: current.directories[path]
-                  ? current.directories
-                  : {
-                      ...current.directories,
-                      [path]: {
-                        entries: MOCK_WORKSPACE_ENTRIES[path] ?? [],
-                        truncated: false,
-                      },
-                    },
-              }
-            : current,
-        );
-      },
-      openWorkspaceFile: (path) => {
-        const content = MOCK_FILE_CONTENT[path];
-        if (content === undefined) return;
-        setWorkspaceFiles((current) =>
-          current
-            ? {
-                ...current,
-                openFiles: current.openFiles.some((file) => file.path === path)
-                  ? current.openFiles
-                  : [
-                      ...current.openFiles,
-                      {
-                        kind: "text",
-                        path,
-                        content,
-                        contentHash: "0".repeat(64),
-                        size: new TextEncoder().encode(content).byteLength,
-                        changed: false,
-                      },
-                    ],
-                activeFilePath: path,
-              }
-            : current,
-        );
-      },
-      activateWorkspaceFile: (path) => {
-        setWorkspaceFiles((current) =>
-          current?.openFiles.some((file) => file.path === path)
-            ? { ...current, activeFilePath: path }
-            : current,
-        );
-      },
-      closeWorkspaceFile: (path) => {
-        setWorkspaceFiles((current) => {
-          if (!current) return current;
-          const closingIndex = current.openFiles.findIndex(
-            (file) => file.path === path,
-          );
-          if (closingIndex === -1) return current;
-          return {
-            ...current,
-            openFiles: current.openFiles.filter((file) => file.path !== path),
-            activeFilePath:
-              current.activeFilePath === path
-                ? (current.openFiles[closingIndex + 1]?.path ??
-                  current.openFiles[closingIndex - 1]?.path)
-                : current.activeFilePath,
-          };
-        });
-      },
-      reloadWorkspaceFile: () => {
-        setWorkspaceFiles((current) =>
-          current
-            ? {
-                ...current,
-                openFiles: current.openFiles.map((file) =>
-                  file.kind === "text" && file.path === current.activeFilePath
-                    ? { ...file, changed: false }
-                    : file,
-                ),
-              }
-            : current,
         );
       },
       showTerminals: () => undefined,

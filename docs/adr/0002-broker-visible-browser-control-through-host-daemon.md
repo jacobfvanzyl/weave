@@ -1,11 +1,11 @@
 ---
-status: accepted
+status: deprecated
 date: 2026-08-29
 ---
 
 # Broker visible Browser control through the Host Daemon
 
-This ADR is retained as Phase 2 design evidence. WVE-63 Phase 1 ships a human-operated Browser that neither exposes nor depends on agent control, a selected Thread, Portal, MCP, or the broker described below.
+This ADR is retained as historical design evidence. WVE-68 disconnects all embedded Browser functionality, and WVE-63 is deferred. The following architecture is not an active requirement; Browser returns only through separately scoped work after WVE-65.
 
 Alpha owns the one Browser Session that the human sees, and the Host Daemon brokers explicit, revocable control of that session to the active Agent Runtime. The product protocol is a capability-negotiated bidirectional RPC over Alpha's existing authenticated connection; a Thread-scoped stdio MCP adapter exposes only `browser_see` and `browser_act` to the agent. This layered design was chosen over MCP inside Alpha, an ACP extension, provider-native tools, a WebKit debugging listener, or a generic operation tool because it preserves Host authority and interoperability without exposing transport details, raw JavaScript, browser credentials, or a second hidden browser.
 

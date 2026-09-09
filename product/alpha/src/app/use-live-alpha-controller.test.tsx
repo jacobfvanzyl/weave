@@ -170,7 +170,7 @@ describe("useLiveAlphaController", () => {
     expect(client.snapshot).toHaveBeenCalledOnce();
   });
 
-  it("optimistically selects and clears a switching Thread until attach and files finish loading", async () => {
+  it("optimistically selects and clears a switching Thread until attachment finishes without subscribing to files", async () => {
     const secondThread = {
       ...snapshot.threads[0],
       threadId: "thread-2",
@@ -234,7 +234,9 @@ describe("useLiveAlphaController", () => {
     );
     act(() => onEvent?.({ type: "history/reset", sessionId: "session-1" }));
     expect(result.current.model.transcript?.sessionId).toBe("session-1");
-    expect(result.current.model.workspaceFiles).toBeDefined();
+    expect(result.current.model.workspaceFiles).toBeUndefined();
+    expect(client.listWorkspaceFiles).not.toHaveBeenCalled();
+    expect(client.watchWorkspaceFiles).not.toHaveBeenCalled();
 
     let switchPromise: Promise<void> | void;
     act(() => {
@@ -254,7 +256,9 @@ describe("useLiveAlphaController", () => {
 
     expect(result.current.model.loadingThreadId).toBeUndefined();
     expect(result.current.model.transcript?.sessionId).toBe("session-2");
-    expect(result.current.model.workspaceFiles).toBeDefined();
+    expect(result.current.model.workspaceFiles).toBeUndefined();
+    expect(client.listWorkspaceFiles).not.toHaveBeenCalled();
+    expect(client.watchWorkspaceFiles).not.toHaveBeenCalled();
   });
 
   it("aggregates concurrent Hosts with collision-safe routing and preserves unrelated state on failure", async () => {
@@ -1018,201 +1022,4 @@ describe("useLiveAlphaController", () => {
     expect(result.current.model.error).toBeUndefined();
   });
 
-  it("browses and reads Workspace files through the connected Portal", async () => {
-    let onWatchEvent:
-      | ((event: {
-          kind: "modify";
-          paths: string[];
-          affectedDirectories: string[];
-        }) => void)
-      | undefined;
-    const watch = {
-      update: vi.fn(async (paths: string[]) => paths),
-      close: vi.fn(async () => undefined),
-    };
-    const client = {
-      snapshot: vi.fn(async () => snapshot),
-      attach: vi.fn(async () => snapshot.threads[0]),
-      listWorkspaceFiles: vi.fn(async (_workspaceId: string, path: string) => ({
-        path,
-        entries:
-          path === ""
-            ? [
-                { name: "src", path: "src", type: "directory" as const },
-                {
-                  name: "README.md",
-                  path: "README.md",
-                  type: "file" as const,
-                },
-              ]
-            : [{ name: "main.ts", path: "src/main.ts", type: "file" as const }],
-        truncated: false,
-      })),
-      readWorkspaceFile: vi.fn(async (_workspaceId: string, path: string) => ({
-        path,
-        content: path === "src/main.ts" ? "export {};\n" : "# Weave\n",
-        contentHash: "0".repeat(64),
-        size: 11,
-      })),
-      watchWorkspaceFiles: vi.fn(
-        async (
-          _workspaceId: string,
-          paths: string[],
-          listener: typeof onWatchEvent,
-        ) => {
-          onWatchEvent = listener;
-          return { subscriptionId: "watch-1", paths, ...watch };
-        },
-      ),
-      close: vi.fn(),
-    } as unknown as DirectHostClient;
-    const createClient = vi.fn(() => client);
-    const { result } = renderHook(() => useLiveAlphaController(createClient));
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await act(async () =>
-      result.current.actions.selectThread("host-1:thread-1"),
-    );
-    expect(result.current.model.workspaceFiles).toMatchObject({
-      workspaceId: "weave",
-      workspaceName: "Weave",
-      directories: {
-        "": { entries: [{ path: "src" }, { path: "README.md" }] },
-      },
-    });
-    expect(client.watchWorkspaceFiles).toHaveBeenCalledWith(
-      "weave",
-      [""],
-      expect.any(Function),
-    );
-
-    await act(async () => result.current.actions.openWorkspaceDirectory("src"));
-    expect(
-      result.current.model.workspaceFiles?.directories.src?.entries,
-    ).toEqual([
-      {
-        name: "main.ts",
-        path: "src/main.ts",
-        type: "file",
-      },
-    ]);
-    expect(
-      result.current.model.workspaceFiles?.directories[""]?.entries,
-    ).toHaveLength(2);
-    expect(watch.update).not.toHaveBeenCalled();
-    await act(async () => result.current.actions.openWorkspaceDirectory("src"));
-    expect(client.listWorkspaceFiles).toHaveBeenCalledTimes(2);
-    await act(async () =>
-      result.current.actions.openWorkspaceFile("src/main.ts"),
-    );
-    expect(result.current.model.workspaceFiles?.openFiles[0]).toMatchObject({
-      kind: "text",
-      path: "src/main.ts",
-      content: "export {};\n",
-    });
-    await act(async () =>
-      result.current.actions.openWorkspaceFile("README.md"),
-    );
-    expect(
-      result.current.model.workspaceFiles?.openFiles.map((file) => file.path),
-    ).toEqual(["src/main.ts", "README.md"]);
-    expect(result.current.model.workspaceFiles?.activeFilePath).toBe(
-      "README.md",
-    );
-    act(() => result.current.actions.activateWorkspaceFile("src/main.ts"));
-    expect(result.current.model.workspaceFiles?.activeFilePath).toBe(
-      "src/main.ts",
-    );
-    await act(async () =>
-      result.current.actions.openWorkspaceFile("README.md"),
-    );
-    expect(client.readWorkspaceFile).toHaveBeenCalledTimes(2);
-    act(() => result.current.actions.closeWorkspaceFile("README.md"));
-    expect(result.current.model.workspaceFiles?.activeFilePath).toBe(
-      "src/main.ts",
-    );
-
-    await act(async () => {
-      onWatchEvent?.({
-        kind: "modify",
-        paths: ["src/main.ts"],
-        affectedDirectories: ["src"],
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(result.current.model.workspaceFiles?.openFiles[0]).toMatchObject({
-      kind: "text",
-      path: "src/main.ts",
-      content: "export {};\n",
-      changed: true,
-    });
-
-    await act(async () => result.current.actions.reloadWorkspaceFile());
-    expect(result.current.model.workspaceFiles?.openFiles[0]).toMatchObject({
-      changed: false,
-    });
-    expect(result.current.model.selectedThreadId).toBe("host-1:thread-1");
-  });
-
-  it("turns binary and oversized read errors into preview-unavailable state", async () => {
-    const client = {
-      snapshot: vi.fn(async () => snapshot),
-      attach: vi.fn(async () => snapshot.threads[0]),
-      listWorkspaceFiles: vi.fn(async () => ({
-        path: "",
-        entries: [],
-        truncated: false,
-      })),
-      readWorkspaceFile: vi.fn(async () => {
-        throw new PortalRpcError(
-          -32010,
-          "Only UTF-8 text files are supported.",
-          {
-            domain: "workspace-filesystem",
-            code: "UNSUPPORTED_CONTENT",
-            path: "image.bin",
-          },
-        );
-      }),
-      watchWorkspaceFiles: vi.fn(
-        async (_workspaceId: string, paths: string[]) => ({
-          subscriptionId: "watch-1",
-          paths,
-          update: vi.fn(async (nextPaths: string[]) => nextPaths),
-          close: vi.fn(async () => undefined),
-        }),
-      ),
-      close: vi.fn(),
-    } as unknown as DirectHostClient;
-    const { result } = renderHook(() =>
-      useLiveAlphaController(vi.fn(() => client)),
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await act(async () =>
-      result.current.actions.selectThread("host-1:thread-1"),
-    );
-    await act(async () =>
-      result.current.actions.openWorkspaceFile("image.bin"),
-    );
-
-    expect(result.current.model.workspaceFiles?.openFiles).toEqual([
-      {
-        kind: "unavailable",
-        path: "image.bin",
-        reason: "unsupported",
-      },
-    ]);
-    expect(result.current.model.workspaceFiles?.activeFilePath).toBe(
-      "image.bin",
-    );
-    expect(result.current.model.error).toBeUndefined();
-  });
 });

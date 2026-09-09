@@ -38,10 +38,7 @@ remain interactive in the mocked shell.
 
 ### Apple native Alpha hosts
 
-Alpha's embedded Browser is Apple-only. React owns the Browser toolbar and measured dock slot; a
-native sibling `WKWebView` owns page rendering behind the bounded `alphaBrowser` message contract.
-Both hosts use a non-persistent website data store. Hiding and reopening the pane retains that
-in-memory session, while Reset and a full app restart create a fresh session.
+Alpha currently exposes ACP conversations and xterm.js terminals. Filetree, Editor, and embedded Browser are deferred; their reference snapshots live in `deferred/` outside active builds.
 
 Build the production macOS AppKit application from `product/`:
 
@@ -62,11 +59,6 @@ For iPadOS, synchronize the same production assets into the Capacitor project be
 cd alpha
 bun run cap:sync
 ```
-
-The UIKit host is compiled into the existing Capacitor view controller. Both Apple hosts keep
-popups in the visible session, use the platform picker for uploads, block downloads and non-HTTP(S)
-top-level navigation, deny camera and microphone capture, and leave other WebKit permissions at
-their explicit defaults.
 
 ## Module seams
 
@@ -90,8 +82,7 @@ fallback for older Hosts.
 
 Portal provides Workspace and Agent listing, durable Thread identity, explicit archive and restore, and ACP recovery,
 plus Workspace-scoped filesystem browsing, UTF-8 reads, full content hashes, conditional writes, directory and file
-mutations, bounded search, and connection-scoped change observation. Alpha exposes the filesystem through a read-only
-Workspace browser. Portal also exposes product-owned persistent user terminals behind the `terminal.*` protocol.
+mutations, bounded search, and connection-scoped change observation. Alpha no longer mounts or subscribes a file browser. Portal also exposes product-owned persistent user terminals behind the `terminal.*` protocol.
 Its private tmux adapter keeps Workspace-scoped shells alive across client disconnects and Portal restarts, while the
 public service enforces one controller, multiple observers, bounded output, typed conflicts, and explicit detach versus
 close. Alpha renders those shells with xterm in independently persisted Bottom and Right docks. Run

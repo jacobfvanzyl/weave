@@ -84,7 +84,7 @@ const panelOpen = (
   ? state.browserOpen
   : state.projectOpen;
 
-const panels: AlphaDockPanelId[] = ['terminal', 'browser', 'project'];
+const panels: AlphaDockPanelId[] = ['terminal'];
 
 const snapshotFromState = (
   state: PersistedAlphaDockState,
@@ -300,8 +300,6 @@ const saveState = (state: PersistedAlphaDockState) => {
 export const alphaDockButtons = (snapshot: AlphaDockSnapshot) => {
   const buttons = [
     { panelId: 'terminal' as const, position: snapshot.panelPosition.terminal, order: 1 },
-    { panelId: 'browser' as const, position: snapshot.panelPosition.browser, order: 2 },
-    { panelId: 'project' as const, position: 'right' as const, order: 3 },
   ];
   const bottom = buttons.filter(({ position }) => position === 'bottom')
     .sort((left, right) => left.order - right.order);

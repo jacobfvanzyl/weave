@@ -139,11 +139,11 @@ export type AlphaActions = {
   selectThread(threadId: string): Promise<void> | void;
   archiveThread(threadId: string): Promise<void> | void;
   restoreThread(threadId: string): Promise<void> | void;
-  openWorkspaceDirectory(path: string): Promise<void> | void;
-  openWorkspaceFile(path: string): Promise<void> | void;
-  activateWorkspaceFile(path: string): void;
-  closeWorkspaceFile(path: string): void;
-  reloadWorkspaceFile(): Promise<void> | void;
+  openWorkspaceDirectory?(path: string): Promise<void> | void;
+  openWorkspaceFile?(path: string): Promise<void> | void;
+  activateWorkspaceFile?(path: string): void;
+  closeWorkspaceFile?(path: string): void;
+  reloadWorkspaceFile?(): Promise<void> | void;
   showTerminals?(): Promise<void> | void;
   hideTerminals?(): Promise<void> | void;
   createTerminal?(): Promise<void> | void;

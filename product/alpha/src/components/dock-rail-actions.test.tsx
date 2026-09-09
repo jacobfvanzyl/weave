@@ -6,35 +6,6 @@ import { DockRailActions } from './dock-rail-actions';
 
 describe('DockRailActions', () => {
   afterEach(() => vi.useRealTimers());
-  it('orders Terminal before Browser and Project and separates dock groups once', () => {
-    const snapshot = createAlphaDockSnapshot();
-    snapshot.docks.bottom = { open: true, activePanelId: 'terminal' };
-    snapshot.docks.right = { open: true, activePanelId: 'project' };
-    const { container } = render(
-      <DockRailActions
-        snapshot={snapshot}
-        disabled={false}
-        onToggle={vi.fn()}
-        onMovePanel={vi.fn()}
-      />,
-    );
-
-    const buttons = screen.getAllByRole('button');
-    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-      'Hide Terminal Pane',
-      'Show Browser Pane',
-      'Hide Project Pane',
-    ]);
-    expect(buttons[0]).toHaveClass('text-primary');
-    expect(buttons[1]).not.toHaveClass('text-primary');
-    expect(buttons[2]).toHaveClass('text-primary');
-    expect(buttons[2]).not.toHaveClass('mr-6');
-    expect(container.querySelectorAll('[data-slot="dock-group-divider"]'))
-      .toHaveLength(1);
-    expect(container.querySelector('[data-slot="dock-group-divider"]'))
-      .toHaveClass('my-1', 'self-stretch', 'w-px');
-  });
-
   it('moves Terminal through the rail icon context menu and supports keyboard context-menu activation', async () => {
     const user = userEvent.setup();
     const move = vi.fn();
@@ -98,24 +69,4 @@ describe('DockRailActions', () => {
     expect(toggle).not.toHaveBeenCalled();
   });
 
-  it('gives Browser the same bottom/right placement menu as Terminal', async () => {
-    const user = userEvent.setup();
-    const move = vi.fn();
-    render(
-      <DockRailActions
-        snapshot={createAlphaDockSnapshot()}
-        disabled={false}
-        onToggle={vi.fn()}
-        onMovePanel={move}
-      />,
-    );
-
-    fireEvent.contextMenu(screen.getByRole('button', { name: 'Show Browser Pane' }));
-    expect(screen.getByRole('menu', { name: 'Browser dock position' }))
-      .toBeInTheDocument();
-    expect(screen.getByRole('menuitemradio', { name: 'Dock Right' }))
-      .toHaveAttribute('aria-checked', 'true');
-    await user.click(screen.getByRole('menuitemradio', { name: 'Dock Bottom' }));
-    expect(move).toHaveBeenCalledWith('browser', 'bottom');
-  });
 });

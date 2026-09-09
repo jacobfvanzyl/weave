@@ -173,104 +173,32 @@ private extension Data {
 }
 
 final class WeaveBridgeViewController: CAPBridgeViewController {
-    private var alphaBrowserHost: AlphaBrowserHost?
-#if DEBUG
-    private var browserAcceptanceStarted = false
-#endif
-
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(PortalCredentialPlugin())
-        if let webView {
-            alphaBrowserHost = AlphaBrowserHost(shell: webView)
-        }
     }
-
+#if DEBUG
+    private var acceptanceStarted = false
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-#if DEBUG
-        loadBrowserAcceptanceShellIfRequested()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.startBrowserAcceptanceIfRequested()
-        }
-#endif
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        alphaBrowserHost?.layoutBrowser()
-    }
-
-#if DEBUG
-    private func loadBrowserAcceptanceShellIfRequested() {
-        guard
-            argument(after: "--browser-acceptance-run-id") != nil,
-            let webView,
-            var components = URLComponents(
-                url: webView.url ?? URL(string: "capacitor://localhost/")!,
-                resolvingAgainstBaseURL: false
-            )
-        else { return }
-        var items = components.queryItems ?? []
-        items.removeAll { $0.name == "mock" }
-        items.append(URLQueryItem(name: "mock", value: "sidebar"))
-        components.queryItems = items
-        if let url = components.url {
-            webView.load(URLRequest(url: url))
-        }
-    }
-
-    private func startBrowserAcceptanceIfRequested() {
-        guard
-            !browserAcceptanceStarted,
-            let host = alphaBrowserHost,
-            let runId = argument(after: "--browser-acceptance-run-id"),
-            runId.range(of: #"^[A-Za-z0-9-]{1,80}$"#, options: .regularExpression) != nil,
-            let fixtureValue = argument(after: "--browser-acceptance-fixture-url"),
-            let fixtureURL = URL(string: fixtureValue)
-        else { return }
-        browserAcceptanceStarted = true
+        guard !acceptanceStarted, ProcessInfo.processInfo.arguments.contains("--shell-acceptance") else { return }
+        acceptanceStarted = true
         Task { @MainActor in
-            let stage = argument(after: "--browser-acceptance-stage") ?? "full"
-            var report = await host.runAcceptance(baseURL: fixtureURL, stage: stage)
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let screenshotURL = documents.appendingPathComponent(
-                "alpha-browser-acceptance-\(runId).png"
-            )
-            let reportURL = documents.appendingPathComponent(
-                "alpha-browser-acceptance-\(runId).json"
-            )
-            report["runId"] = runId
-            report["screenshotWritten"] = writeAcceptanceScreenshot(to: screenshotURL)
-            if JSONSerialization.isValidJSONObject(report),
-               let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) {
-                try? data.write(to: reportURL, options: .atomic)
+            guard let webView else { return }
+            webView.load(URLRequest(url: URL(string: "capacitor://localhost/?mock=chat&acceptance=1")!))
+            for _ in 0..<150 {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if let result = try? await webView.evaluateJavaScript("JSON.stringify(window.alphaAcceptance || null)"),
+                   let json = result as? String, json != "null" {
+                    let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    try? Data(json.utf8).write(to: documents.appendingPathComponent("shell-acceptance.json"), options: .atomic)
+                    let renderer = UIGraphicsImageRenderer(bounds: view.bounds)
+                    let image = renderer.image { _ in view.drawHierarchy(in: view.bounds, afterScreenUpdates: true) }
+                    try? image.pngData()?.write(to: documents.appendingPathComponent("shell-acceptance.png"), options: .atomic)
+                    print("ALPHA_ACCEPTANCE " + json)
+                    return
+                }
             }
-        }
-    }
-
-    private func argument(after flag: String) -> String? {
-        let arguments = ProcessInfo.processInfo.arguments
-        guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else {
-            return nil
-        }
-        return arguments[index + 1]
-    }
-
-    @MainActor
-    private func writeAcceptanceScreenshot(to url: URL) -> Bool {
-        guard let view = viewIfLoaded, view.bounds.width > 0, view.bounds.height > 0 else {
-            return false
-        }
-        let renderer = UIGraphicsImageRenderer(bounds: view.bounds)
-        let image = renderer.image { _ in
-            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
-        }
-        guard let data = image.pngData() else { return false }
-        do {
-            try data.write(to: url, options: .atomic)
-            return true
-        } catch {
-            return false
+            print("ALPHA_ACCEPTANCE timed out")
         }
     }
 #endif

@@ -1,5 +1,4 @@
 import {
-  parseBrowserControlErrorData,
   parsePortalAuthResponse,
   parsePortalPairRequest,
   parsePortalRpcParams,
@@ -15,12 +14,11 @@ import {
   WORKSPACE_FILE_RPC_METHODS,
   WORKSPACE_FILE_WATCH_EVENT_METHOD,
 } from '@weave/product-protocol';
-import { error, idKey, type JsonRpcMessage, parseJsonRpcMessage, request as rpcRequest, result } from './json-rpc.ts';
+import { error, type JsonRpcMessage, parseJsonRpcMessage, result } from './json-rpc.ts';
 import { Portal, PortalThreadLifecycleError } from './portal.ts';
 import { type PortalPrincipal, PortalSecurityError } from './security.ts';
 import { WorkspaceFileError } from './workspace-files.ts';
 import { PortalTerminalError } from './terminals.ts';
-import { BrowserControlError, type BrowserHostConnection } from './browser-control.ts';
 
 const protocols = (request: Request) =>
   (request.headers.get('sec-websocket-protocol') ?? '')
@@ -135,34 +133,6 @@ const rpcWebSocket = (request: Request, portal: Portal) => {
   let principal: PortalPrincipal | undefined;
   let session: ReturnType<Portal['connectRpc']> | undefined;
   let stopMonitor: (() => void) | undefined;
-  const browserConnectionId = crypto.randomUUID();
-  let nextBrowserRequestId = 0;
-  const browserPending = new Map<string, {
-    resolve(value: unknown): void;
-    reject(cause: unknown): void;
-    cleanup(): void;
-  }>();
-  const browserHost: BrowserHostConnection = {
-    connectionId: browserConnectionId,
-    invoke: (params, signal) =>
-      new Promise((resolve, reject) => {
-        if (signal.aborted) return reject(signal.reason);
-        const id = `browser:${++nextBrowserRequestId}`;
-        const onAbort = () => {
-          browserPending.delete(idKey(id));
-          send(upgraded.socket, rpcRequest(null, 'browser.control.cancel', { requestId: params.requestId }));
-          reject(signal.reason);
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-        browserPending.set(idKey(id), {
-          resolve,
-          reject,
-          cleanup: () => signal.removeEventListener('abort', onAbort),
-        });
-        send(upgraded.socket, rpcRequest(id, 'browser.control.execute', params));
-      }),
-  };
-
   upgraded.socket.onopen = () => sendJson(upgraded.socket, challenge);
   upgraded.socket.onmessage = async (event) => {
     if (!principal) {
@@ -185,7 +155,6 @@ const rpcWebSocket = (request: Request, portal: Portal) => {
               method: TERMINAL_EVENT_METHOD,
               params: notification,
             }),
-          browserHost,
         );
         stopMonitor = activeCredentialMonitor(
           portal,
@@ -220,21 +189,6 @@ const rpcWebSocket = (request: Request, portal: Portal) => {
       );
       return;
     }
-    if (message.id !== undefined && !message.method) {
-      const pending = browserPending.get(idKey(message.id));
-      if (!pending) return;
-      browserPending.delete(idKey(message.id));
-      pending.cleanup();
-      if (message.error) {
-        try {
-          const data = parseBrowserControlErrorData(message.error.data);
-          pending.reject(new BrowserControlError(data.code, message.error.message, data.retryable));
-        } catch {
-          pending.reject(new Error(message.error.message));
-        }
-      } else pending.resolve(message.result);
-      return;
-    }
     if (message.id === undefined || !message.method) return;
     if (!PORTAL_RPC_METHODS.includes(message.method as PortalRpcMethod)) {
       send(
@@ -265,8 +219,6 @@ const rpcWebSocket = (request: Request, portal: Portal) => {
             code: cause.code,
             auditId: cause.auditId,
           })
-          : cause instanceof BrowserControlError
-          ? error(message.id, -32013, cause.message, cause.data)
           : error(
             message.id,
             -32000,
@@ -282,11 +234,6 @@ const rpcWebSocket = (request: Request, portal: Portal) => {
   upgraded.socket.onclose = () => {
     stopMonitor?.();
     session?.close();
-    for (const pending of browserPending.values()) {
-      pending.cleanup();
-      pending.reject(new BrowserControlError('HOST_DISCONNECTED', 'The Browser host disconnected.', true));
-    }
-    browserPending.clear();
   };
   return upgraded.response;
 };
