@@ -3,9 +3,11 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { cn } from '@/lib/utils';
+import type { TerminalOutputSource } from '@/terminal/output-stream';
 
 export function XtermTerminalView({
-  data,
+  data = '',
+  output,
   dataEpoch = 0,
   dataOffset = 0,
   readOnly,
@@ -13,7 +15,8 @@ export function XtermTerminalView({
   onInput,
   onResize,
 }: {
-  data: string;
+  data?: string;
+  output?: TerminalOutputSource;
   dataEpoch?: number;
   dataOffset?: number;
   readOnly: boolean;
@@ -129,7 +132,7 @@ export function XtermTerminalView({
 
   useEffect(() => {
     const terminal = terminalRef.current;
-    if (!terminal) return;
+    if (!terminal || output) return;
     const endOffset = dataOffset + data.length;
     if (renderedEpochRef.current !== dataEpoch) {
       const replayToken = ++replayTokenRef.current;
@@ -149,7 +152,25 @@ export function XtermTerminalView({
     const start = Math.max(0, renderedEndOffsetRef.current - dataOffset);
     terminal.write(data.slice(start));
     renderedEndOffsetRef.current = endOffset;
-  }, [data, dataEpoch, dataOffset]);
+  }, [data, dataEpoch, dataOffset, output]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal || !output) return;
+    let disposed = false;
+    replayInProgressRef.current = true;
+    const write = (data: string) => new Promise<void>((resolve) => terminal.write(data, resolve));
+    const unsubscribe = output.subscribe({
+      reset: async (data) => {
+        replayInProgressRef.current = true;
+        terminal.reset();
+        await write(data);
+        if (!disposed) replayInProgressRef.current = false;
+      },
+      write,
+    });
+    return () => { disposed = true; unsubscribe(); };
+  }, [output]);
 
   return (
     <div

@@ -102,12 +102,16 @@ const target = {
 describe('useAlphaTerminals', () => {
   it('creates and controls the first Terminal and preserves its attachment across hide and reopen', async () => {
     const host = client();
-    const { result } = renderHook(() => useAlphaTerminals({ target, client: host }));
+    let renders = 0;
+    const { result } = renderHook(() => { renders++; return useAlphaTerminals({ target, client: host }); });
+    let rendered = '';
+    result.current.model.output!.subscribe({ reset: async (data) => { rendered = data; }, write: async (data) => { rendered += data; } });
 
     await act(() => result.current.actions.show());
     expect(host.createTerminal).toHaveBeenCalledWith('workspace-1');
     expect(result.current.model.attachmentMode).toBe('control');
-    expect(result.current.model.data).toBe('$ ');
+    expect(rendered).toBe('$ ');
+    const beforeOutput = renders;
 
     act(() =>
       host.emit({
@@ -119,7 +123,9 @@ describe('useAlphaTerminals', () => {
         event: { type: 'output', data: 'ready\r\n' },
       })
     );
-    expect(result.current.model.data).toBe('$ ready\r\n');
+    await waitFor(() => expect(rendered).toBe('$ ready\r\n'));
+    expect(renders).toBe(beforeOutput);
+    expect(result.current.model.data).toBe('');
 
     await act(() => result.current.actions.input('echo ready\r'));
     expect(host.inputTerminal).toHaveBeenCalledWith(
@@ -214,7 +220,26 @@ describe('useAlphaTerminals', () => {
     const { result } = renderHook(() => useAlphaTerminals({ target, client: host }));
 
     await act(() => result.current.actions.show());
-    expect(result.current.model.data).toBe('$ raced\r\n');
+    let rendered = '';
+    result.current.model.output!.subscribe({ reset: async (data) => { rendered = data; }, write: async (data) => { rendered += data; } });
+    await waitFor(() => expect(rendered).toBe('$ raced\r\n'));
+  });
+
+  it('recovers a renderer overflow by reattaching the same terminal without creating or terminating a process', async () => {
+    const host = client({ terminals: [terminal()] });
+    const { result } = renderHook(() => useAlphaTerminals({ target: { ...target, terminalId: 'terminal-1' }, client: host }));
+    await waitFor(() => expect(result.current.model.attachmentId).toBe('attachment-control'));
+    const stop = result.current.model.output!.subscribe({ reset: async () => undefined, write: async () => undefined });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      host.emit({ attachmentId: 'attachment-control', terminalId: 'terminal-1', workspaceId: 'workspace-1', generation: 'generation-1', sequence: 1, event: { type: 'output', data: 'x'.repeat(2 * 1024 * 1024 + 1) } });
+    });
+    await waitFor(() => expect(host.attachTerminal).toHaveBeenCalledTimes(2));
+    expect(host.createTerminal).not.toHaveBeenCalled();
+    expect(host.closeTerminal).not.toHaveBeenCalled();
+    expect(host.detachTerminal).toHaveBeenCalledOnce();
+    expect(result.current.model.activeTerminalId).toBe('terminal-1');
+    stop();
   });
 
   it('clears a naturally exited attachment and reconciles a replacement Terminal', async () => {

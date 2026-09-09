@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import type { TerminalOutputSource } from '@/terminal/output-stream';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -16,7 +18,11 @@ vi.mock('@/app/portal-connection-storage', () => ({
   loadPortalConnections: async () => ({ connections: ['one', 'two'].map((hostId) => ({ hostId, displayName: hostId, hostUrl: `ws://${hostId}.test`, credentialId: hostId, keyId: hostId })) }),
   savePortalConnections: vi.fn(),
 }));
-vi.mock('./xterm-terminal-view', () => ({ XtermTerminalView: ({ data, onInput }: { data: string; onInput(data: string): void }) => <textarea aria-label='Terminal input' value={data} onChange={(event) => onInput(event.target.value)} /> }));
+vi.mock('./xterm-terminal-view', () => ({ XtermTerminalView: ({ data = '', output, onInput }: { data?: string; output?: TerminalOutputSource; onInput(data: string): void }) => {
+  const [text, setText] = useState(data);
+  useEffect(() => output?.subscribe({ reset: async (value) => { setText(value); }, write: async (value) => { setText((current) => current + value); } }), [output]);
+  return <textarea aria-label='Terminal input' value={text} onChange={(event) => onInput(event.target.value)} />;
+} }));
 beforeEach(() => storage.clear());
 
 it('renders independent terminal and agent selection, compact groups, and non-destructive view closure', async () => {

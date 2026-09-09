@@ -189,6 +189,7 @@ export function TerminalPane({
           )
           : (
             <XtermTerminalView
+              output={model.output}
               data={model.data}
               dataEpoch={model.dataEpoch}
               dataOffset={model.dataOffset}

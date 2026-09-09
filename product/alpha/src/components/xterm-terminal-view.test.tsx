@@ -1,5 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TerminalOutputStream } from '@/terminal/output-stream';
 import { XtermTerminalView } from './xterm-terminal-view';
 
 const xterm = vi.hoisted(() => {
@@ -100,6 +101,29 @@ describe('XtermTerminalView', () => {
 
     unmount();
     await waitFor(() => expect(xterm.dispose).toHaveBeenCalledOnce());
+  });
+
+
+  it('consumes live output without React prop updates and gates protocol replies during a streamed snapshot', async () => {
+    const resync = vi.fn();
+    const output = new TerminalOutputStream(resync);
+    const input = vi.fn();
+    let finish: (() => void) | undefined;
+    xterm.write.mockImplementationOnce((_data: string, callback?: () => void) => { finish = callback; });
+    output.reset('snapshot');
+    const { container, unmount } = render(<XtermTerminalView output={output} readOnly={false} onInput={input} />);
+    fireEvent.pointerDown(container.querySelector('[data-slot="xterm-terminal"]')!);
+    act(() => xterm.emitData('snapshot protocol reply'));
+    expect(input).not.toHaveBeenCalled();
+    output.write('live');
+    expect(xterm.write).toHaveBeenCalledTimes(1);
+    await act(async () => { finish!(); });
+    expect(xterm.write.mock.calls.map(([data]) => data)).toEqual(['snapshot', 'live']);
+    act(() => xterm.emitData('typed input'));
+    expect(input).toHaveBeenCalledWith('typed input');
+    unmount();
+    render(<XtermTerminalView output={output} readOnly={false} />);
+    expect(resync).toHaveBeenCalledOnce();
   });
 
   it('puts viewport padding on xterm so fitting reserves the final input row', () => {

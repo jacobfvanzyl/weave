@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { TerminalOutputStream, type TerminalOutputSource } from '@/terminal/output-stream';
 import type { TerminalAttachmentMode, TerminalNotification, TerminalSummary } from '@weave/product-protocol';
 import { type DirectHostClient, PortalRpcError } from '@/portal-client';
 import {
@@ -30,7 +31,9 @@ export type AlphaTerminalsModel = {
   activeTerminalId?: string;
   attachmentId?: string;
   attachmentMode?: TerminalAttachmentMode;
+  /** Legacy preview data. Live attachments deliver bytes through output. */
   data: string;
+  output?: TerminalOutputSource;
   dataEpoch: number;
   dataOffset: number;
   loading: boolean;
@@ -65,8 +68,6 @@ const controlledElsewhere = (cause: unknown) =>
     'terminal' &&
   (cause.data as { code?: unknown }).code === 'TERMINAL_CONTROLLED';
 
-const MAX_RETAINED_TERMINAL_DATA = 1024 * 1024;
-
 export function useAlphaTerminals({
   target,
   client,
@@ -81,6 +82,12 @@ export function useAlphaTerminals({
   const closingRef = useRef(new Set<string>());
   const reconcileExitedRef = useRef<(preferredTerminalId?: string) => void>(() => undefined);
   const operationRef = useRef(Promise.resolve());
+  const [output] = useState(() => new TerminalOutputStream(() => {
+    const active = attachmentRef.current;
+    if (!active) return;
+    setModel((current) => ({ ...current, attachmentId: undefined, attachmentMode: undefined, error: 'Terminal renderer fell behind. Reconnecting from a fresh snapshot.' }));
+    queueMicrotask(() => reconcileExitedRef.current(active.terminalId));
+  }));
   const scopeKey = target ? alphaTerminalScopeKey(target.scope) : '';
   const targetKey = target
     ? JSON.stringify([scopeKey, target.scope.workspaceId, target.supported, target.terminalId])
@@ -117,8 +124,10 @@ export function useAlphaTerminals({
 
   const receive = (notification: TerminalNotification) => {
     const active = attachmentRef.current;
-    if (!active || active.attachmentId !== notification.attachmentId) return;
+    if (!lifetime.alive || !active || active.attachmentId !== notification.attachmentId) return;
     const event = notification.event;
+    if (event.type === 'output') { output.write(event.data); return; }
+    if (event.type === 'exit' || event.type === 'resync') output.clear();
     if (event.type === 'exit' || event.type === 'resync') {
       const explicitClose = event.type === 'exit' &&
         closingRef.current.has(notification.terminalId);
@@ -127,15 +136,6 @@ export function useAlphaTerminals({
     }
     setModel((current) => {
       if (current.activeTerminalId !== notification.terminalId) return current;
-      if (event.type === 'output') {
-        const combined = `${current.data}${event.data}`;
-        const dropped = Math.max(0, combined.length - MAX_RETAINED_TERMINAL_DATA);
-        return {
-          ...current,
-          data: dropped > 0 ? combined.slice(dropped) : combined,
-          dataOffset: current.dataOffset + dropped,
-        };
-      }
       if (event.type === 'title') {
         return {
           ...current,
@@ -225,6 +225,7 @@ export function useAlphaTerminals({
       scopeKey,
       attached.snapshot.terminal.terminalId,
     );
+    output.reset(attached.snapshot.data);
     setModel((current) => ({
       ...current,
       scope: target.scope,
@@ -239,7 +240,7 @@ export function useAlphaTerminals({
       activeTerminalId: attached.snapshot.terminal.terminalId,
       attachmentId: attached.attachment.attachmentId,
       attachmentMode: attached.attachment.mode,
-      data: attached.snapshot.data,
+      data: '',
       dataEpoch: current.dataEpoch + 1,
       dataOffset: 0,
       loading: false,
@@ -315,6 +316,7 @@ export function useAlphaTerminals({
     void serialized(async () => {
       await detachCurrent();
       if (disposed) return;
+      output.clear();
       setModel(emptyModel(target));
       if (target?.terminalId || requestedScopeKeysRef.current.has(scopeKey)) {
         requestedScopeKeysRef.current.add(scopeKey);
@@ -341,6 +343,7 @@ export function useAlphaTerminals({
     return () => {
       lifetimeRef.current.alive = false;
       requestedScopeKeysRef.current.clear();
+      output.clear();
       void detachCurrent();
     };
   }, []);
@@ -453,5 +456,5 @@ export function useAlphaTerminals({
       }),
   };
 
-  return { model, actions };
+  return { model: { ...model, output }, actions };
 }
