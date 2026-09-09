@@ -1,45 +1,19 @@
 # Weave
 
-Weave is split into an owned Deno server plus clients and local runtime pieces.
+Weave Alpha connects directly to Hosts to run structured ACP conversations and persistent terminals. The application uses the newer stack under `product/`. Filetree, dedicated Editor, embedded Browser, and Automation are outside the active product.
 
-## Layout
+## Develop
 
-| Path | Purpose |
-| --- | --- |
-| `server/` | Deno server, backend modules, Agent implementation, Docker files, and server env templates. |
-| `packages/client/` | Shared React client package used by web, desktop, and mobile shells. |
-| `desktop/` | Electron desktop app. |
-| `web/` | Browser web app. |
-| `mobile/` | Capacitor mobile app. |
-| `portal/` | Deno Portal daemon for local terminal/editor/workspace access. |
-| `tui/` | Deno terminal UI. |
-| `docs/` | Architecture notes and implementation plans. |
+Use Bun 1.3.14 from the repository root:
 
-## Development
-
-Bun 1.3.14 is the sole package manager for every Node dependency in the workspace. Install once from the repository root:
-
-```bash
-bun install
+```sh
+bun install --frozen-lockfile
+bun run dev:alpha
+bun run check
 ```
 
-The root development interface is intentionally limited to four commands:
+See [product notes](product/README.md), [Host configuration](product/portal/README.md), and the [domain glossary](CONTEXT.md). The Host Deno-to-Bun port is WVE-70; Electron desktop and iPad platform cleanup are WVE-71. Housekeeping retains xterm.js; libghostty starts in WVE-65.
 
-```bash
-bun run dev:server
-bun run dev:desktop
-bun run dev:web
-bun run dev:mobile -- [mobile options]
-```
+The repository-pinned Linear CLI is intentionally a separate tooling install: `bun install --cwd .agents/tools/linear --frozen-lockfile`. Its credential isolation and usage are documented in [the tracker guide](docs/agents/issue-tracker.md).
 
-Deno remains the runtime for the server, Portal, and TUI. Their checks and operational tasks stay on their owning Deno surfaces; Portal development is package-local:
-
-```bash
-deno task server:build
-cd portal && deno task dev
-deno task portal:check
-deno task portal:test
-deno task tui:check
-```
-
-The root `bun.lock` is the only Node dependency lock. Deno lockfiles remain runtime locks. The server `.env`, `.env.example`, Deno runtime, Agent/Mastra implementation, and deploy files live under `server/`.
+Old application source is recoverable in Git. Local ignored artifacts and state retained during WVE-69 were moved intact to the private `~/.local/share/weave/legacy-wve66-20260909/` backup. No remote services or durable Host state were deleted.

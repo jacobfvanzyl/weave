@@ -6,16 +6,18 @@ This directory is the self-contained Weave product stack:
 - `portal/` is the directly connected host daemon.
 - `protocol/` is their only shared wire-contract module.
 
-The product must build and run without importing the repository's earlier applications or shared packages. Run `bun run check:boundary` from this directory to enforce that rule mechanically.
+The product must build and run without importing the repository's earlier applications or shared packages. Run `bun run check:boundary` from the repository root to enforce that rule mechanically.
 
 ## Development
+
+Run these commands from the repository root.
 
 ```bash
 bun install --frozen-lockfile
 bun run check
 ```
 
-Portal remains a Deno executable and is checked from its own directory. Alpha and the protocol use the product-local Bun workspace.
+Portal remains a Deno executable and is checked from its own directory. Alpha and the protocol share the root Bun workspace.
 
 ### Alpha UI mocks
 
@@ -40,7 +42,7 @@ remain interactive in the mocked shell.
 
 Alpha currently exposes ACP conversations and xterm.js terminals. Filetree, Editor, and embedded Browser are deferred; their reference snapshots live in `deferred/` outside active builds.
 
-Build the production macOS AppKit application from `product/`:
+Build the production macOS AppKit application from the repository root:
 
 ```bash
 bun run build:alpha:macos
@@ -56,7 +58,7 @@ For iPadOS, synchronize the same production assets into the Capacitor project be
 `alpha/ios/App/App.xcodeproj`:
 
 ```bash
-cd alpha
+cd product/alpha
 bun run cap:sync
 ```
 

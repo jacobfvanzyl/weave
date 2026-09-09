@@ -12,10 +12,10 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.5.0"),
-        .package(name: "CapacitorApp", path: "../../../../node_modules/.bun/@capacitor+app@8.1.1+6139e07751574bda/node_modules/@capacitor/app"),
-        .package(name: "CapacitorKeyboard", path: "../../../../node_modules/.bun/@capacitor+keyboard@8.0.5+6139e07751574bda/node_modules/@capacitor/keyboard"),
-        .package(name: "CapacitorPreferences", path: "../../../../node_modules/.bun/@capacitor+preferences@8.0.1+6139e07751574bda/node_modules/@capacitor/preferences"),
-        .package(name: "CapacitorStatusBar", path: "../../../../node_modules/.bun/@capacitor+status-bar@8.0.3+6139e07751574bda/node_modules/@capacitor/status-bar")
+        .package(name: "CapacitorApp", path: "../../../../../node_modules/.bun/@capacitor+app@8.1.1+6139e07751574bda/node_modules/@capacitor/app"),
+        .package(name: "CapacitorKeyboard", path: "../../../../../node_modules/.bun/@capacitor+keyboard@8.0.5+6139e07751574bda/node_modules/@capacitor/keyboard"),
+        .package(name: "CapacitorPreferences", path: "../../../../../node_modules/.bun/@capacitor+preferences@8.0.1+6139e07751574bda/node_modules/@capacitor/preferences"),
+        .package(name: "CapacitorStatusBar", path: "../../../../../node_modules/.bun/@capacitor+status-bar@8.0.3+6139e07751574bda/node_modules/@capacitor/status-bar")
     ],
     targets: [
         .target(

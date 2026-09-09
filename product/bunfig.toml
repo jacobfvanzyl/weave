@@ -1,4 +1,0 @@
-[install]
-auto = "disable"
-globalStore = false
-linker = "isolated"
