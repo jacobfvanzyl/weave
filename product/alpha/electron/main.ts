@@ -50,8 +50,9 @@ else {
       for (let attempt = 0; attempt < 1800 && !result; attempt++) {
         result = await contents.executeJavaScript('window.alphaAcceptance');
         const stage = await contents.executeJavaScript('window.alphaAcceptanceStage');
-        if (liveAcceptance && stage && !handled.has(stage)) {
-          handled.add(stage);
+        const stageKey = `${await contents.executeJavaScript('window.alphaAcceptanceIndex')}:${stage}`;
+        if (liveAcceptance && stage && !handled.has(stageKey)) {
+          handled.add(stageKey);
           if (stage === 'native-terminal') {
             await paste("printf 'WEAVE_NATIVE_PASTE_OK\\n'"); key('Enter');
             window?.setSize(1100, 780);

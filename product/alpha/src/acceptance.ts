@@ -71,6 +71,9 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       set('#pairing-token', input.pairingToken);
       await wait(() => button('Pair and Connect') && !button('Pair and Connect')!.disabled);
       button('Pair and Connect')!.click();
+      // An already-known Host can expose its workspace while a failed pairing
+      // dialog still blocks native input. Require successful dialog dismissal.
+      await wait(() => !document.querySelector('#pairing-token'));
     }
     stage = 'create thread';
     await wait(() => button(`New thread in ${input.workspaceName}`) && !button(`New thread in ${input.workspaceName}`)!.disabled);

@@ -58,4 +58,11 @@ if (!requirement.includes(`identifier "${identifier}"`) || requirement.includes(
   throw new Error(`Portal designated requirement is not stable: ${requirement}`);
 }
 
+const manifestFile = Bun.file(`${target}.json`);
+if (await manifestFile.exists()) {
+  const manifest = await manifestFile.json();
+  manifest.sha256 = new Bun.CryptoHasher('sha256').update(await Bun.file(target).arrayBuffer()).digest('hex');
+  manifest.signingIdentifier = identifier;
+  await Bun.write(manifestFile, JSON.stringify(manifest, null, 2) + '\n');
+}
 console.log(`Signed ${target} as ${identifier}.`);

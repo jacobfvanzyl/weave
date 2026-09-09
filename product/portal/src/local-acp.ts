@@ -1,3 +1,5 @@
+import { lstat } from 'node:fs/promises';
+import { recoverStaleSocket, removeOwnedSocket } from './local-socket.ts';
 import { createServer } from 'node:net';
 import { localStream, connectLocal, stdinStream, stdoutStream, type LocalStream } from './local-stream.ts';
 import { chmod, mkdir, removePath } from './host-files.ts';
@@ -287,6 +289,7 @@ export const localAcpSocketPath = async (config: Pick<PortalConfig, 'stateDirect
 export const serveLocalAcpGateway = async (portal: Portal): Promise<LocalAcpGateway> => {
   const path = await localAcpSocketPath(portal.config);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await recoverStaleSocket(path);
   const connections = new Set<LocalStream>();
   let closing = false;
 
@@ -341,6 +344,7 @@ export const serveLocalAcpGateway = async (portal: Portal): Promise<LocalAcpGate
     } finally { process.umask(previousMask); }
   });
   await chmod(path, 0o600);
+  const socketIdentity = await lstat(path);
   const finished = new Promise<void>((resolve, reject) => {
     listener.once('close', resolve);
     listener.once('error', reject);
@@ -361,7 +365,7 @@ export const serveLocalAcpGateway = async (portal: Portal): Promise<LocalAcpGate
         }
       }
       await finished.catch(() => undefined);
-      await removePath(path).catch((cause) => {
+      await removeOwnedSocket(path, socketIdentity).catch((cause) => {
         if (!(isFsError(cause, 'ENOENT'))) throw cause;
       });
     },

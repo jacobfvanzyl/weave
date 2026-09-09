@@ -114,7 +114,10 @@ test('Portal Pairing Tokens are one-time and Host identity survives restart', as
       label: 'One use',
       publicKey: key.publicKey,
     } as const;
-    const altered = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`;
+    // Change significant signature bits; the final base64url character can
+    // differ only in padding bits and still decode to the same signature.
+    const signatureStart = token.lastIndexOf('.') + 1;
+    const altered = `${token.slice(0, signatureStart)}${token[signatureStart] === 'A' ? 'B' : 'A'}${token.slice(signatureStart + 1)}`;
     await assertRejects(
       () => security.redeemPairing({ ...request, token: altered }),
       PortalSecurityError,

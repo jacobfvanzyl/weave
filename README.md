@@ -8,11 +8,18 @@ Use Bun 1.3.14 from the repository root:
 
 ```sh
 bun install --frozen-lockfile
-bun run dev:alpha
+bun run dev:desktop
 bun run check
+bun run build:host
+bun run build:desktop
 ```
 
-See [product notes](product/README.md), [Host configuration](product/portal/README.md), and the [domain glossary](CONTEXT.md). The Host uses Bun; Electron is the macOS runtime and Capacitor targets iPad only. Housekeeping retains xterm.js; libghostty starts in WVE-65.
+Bun runs the package scripts, TypeScript checks, Vite, Vitest, Host and build tools.
+Electron supplies its own desktop runtime; Xcode supplies the iPad toolchain.
+`bun run dev:alpha` remains the renderer development server; `bun run dev:ipad`
+syncs and opens the iPad project, and `bun run build:ipad` builds it.
+
+See [Host operations](product/portal/OPERATIONS.md), [product notes](product/README.md), [Host configuration](product/portal/README.md), and the [domain glossary](CONTEXT.md). The Host uses Bun; Electron is the macOS runtime and Capacitor targets iPad only. Housekeeping retains xterm.js; libghostty starts in WVE-65.
 
 The repository-pinned Linear CLI is intentionally a separate tooling install: `bun install --cwd .agents/tools/linear --frozen-lockfile`. Its credential isolation and usage are documented in [the tracker guide](docs/agents/issue-tracker.md).
 

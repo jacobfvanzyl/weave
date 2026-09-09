@@ -200,6 +200,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
         Task { @MainActor in
             guard let webView else { return }
             let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            try? FileManager.default.removeItem(at: documents.appendingPathComponent("shell-acceptance.json"))
             let status = UILabel(frame: CGRect(x: 16, y: 28, width: 280, height: 20))
             status.accessibilityIdentifier = "AcceptanceStage"
             status.font = .systemFont(ofSize: 10)
@@ -216,6 +217,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
                         do {
                             _ = try await webView.evaluateJavaScript("window.alphaAcceptanceInput = " + input)
                             configured = true
+                            try? FileManager.default.removeItem(at: documents.appendingPathComponent("host-acceptance-input.json"))
                         } catch {}
                     }
                     if let stage = try? await webView.evaluateJavaScript("window.alphaAcceptanceStage || window.alphaAcceptanceDetail || 'starting'"), let stage = stage as? String {

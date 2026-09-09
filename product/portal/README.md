@@ -5,6 +5,8 @@ WebSocket interface to Alpha, and owns ACP Agent processes and Thread identity.
 
 It has no source or package dependency on the earlier Weave server or Portal implementation.
 
+See [installation, service lifecycle and diagnostics](OPERATIONS.md).
+
 ## Configure
 
 Copy `portal.config.example.json` to the ignored `portal.config.json` and set absolute state, certificate, key, and

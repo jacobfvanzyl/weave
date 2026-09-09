@@ -1,6 +1,7 @@
 // Own the subprocess stream/exit contract once for ACP and tmux on Bun.
 type ProcessOptions = {
   args?: string[];
+  detached?: boolean;
   cwd?: string;
   env?: Record<string, string | undefined>;
   stdin?: 'pipe' | 'ignore' | 'inherit';
@@ -9,7 +10,7 @@ type ProcessOptions = {
 };
 export function spawnProcess(command: string, options: ProcessOptions = {}) {
   const child = Bun.spawn([command, ...(options.args ?? [])], {
-    cwd: options.cwd, env: options.env,
+    cwd: options.cwd, env: options.env, detached: options.detached,
     stdin: options.stdin ?? 'ignore', stdout: options.stdout ?? 'pipe', stderr: options.stderr ?? 'pipe',
   });
   const sink = child.stdin;
@@ -23,7 +24,11 @@ export function spawnProcess(command: string, options: ProcessOptions = {}) {
     abort() { child.kill('SIGTERM'); },
   });
   const status = child.exited.then((code) => ({ success: code === 0, code, signal: child.signalCode ?? undefined }));
-  return { stdin, stdout: child.stdout ?? new ReadableStream<Uint8Array>({ start(c) { c.close(); } }), stderr: child.stderr ?? new ReadableStream<Uint8Array>({ start(c) { c.close(); } }), status, pid: child.pid, kill: (signal: NodeJS.Signals = 'SIGTERM') => child.kill(signal) };
+  return { stdin, stdout: child.stdout ?? new ReadableStream<Uint8Array>({ start(c) { c.close(); } }), stderr: child.stderr ?? new ReadableStream<Uint8Array>({ start(c) { c.close(); } }), status, pid: child.pid, kill: (signal: NodeJS.Signals = 'SIGTERM') => {
+    if (options.detached && process.platform !== 'win32') {
+      try { process.kill(-child.pid, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+    } else child.kill(signal);
+  } };
 }
 export type HostProcess = ReturnType<typeof spawnProcess>;
 export async function runProcess(command: string, options: ProcessOptions = {}) {

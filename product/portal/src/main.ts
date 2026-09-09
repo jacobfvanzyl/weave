@@ -1,3 +1,6 @@
+import { hostVersion } from './version.ts';
+import { manageService } from './service.ts';
+import { diagnose } from './diagnostics.ts';
 import { resolve } from 'node:path';
 import { loadPortalConfig } from './config.ts';
 import { localAcpSocketPath, runStdioAcpConnector, serveLocalAcpGateway } from './local-acp.ts';
@@ -8,6 +11,9 @@ import { WorkspaceCatalog } from './workspace-catalog.ts';
 
 const usage = () =>
   `Usage:
+  weave-portal --version
+  weave-portal diagnose --config <path> [--url <https://host:port>]
+  weave-portal service <install|upgrade|rollback|start|stop|restart|status|uninstall> --name <name> [--config <path>] [--binary <path>] [--unit <name.service>] [--adopt]
   weave-portal serve --config <path>
   weave-portal acp connect --config <path> --agent <agent-id> [--workspace <workspace-id>]
   weave-portal pairing create --config <path> [--ttl-minutes <1-60>]
@@ -27,7 +33,16 @@ const configFrom = async (args: string[]) => {
 
 if (import.meta.main) {
   const [command, subcommand, ...args] = process.argv.slice(2);
-  if (command === 'serve') {
+  if (command === '--version' || command === 'version') {
+    console.log(JSON.stringify(hostVersion));
+  } else if (command === 'service') {
+    await manageService(subcommand, args);
+  } else if (command === 'diagnose') {
+    const diagnosticArgs = [subcommand, ...args].filter((value): value is string => value !== undefined);
+    const result = await diagnose(await configFrom(diagnosticArgs), option(diagnosticArgs, '--url'));
+    console.log(JSON.stringify(result, null, 2));
+    if (result.checks.some((check) => !check.ok)) process.exitCode = 1;
+  } else if (command === 'serve') {
     const serveArgs = [subcommand, ...args].filter((value): value is string => value !== undefined);
     const portal = await Portal.open(await configFrom(serveArgs));
     const protocol = portal.config.tls ? 'wss' : 'ws';

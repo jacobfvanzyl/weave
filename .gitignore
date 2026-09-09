@@ -22,3 +22,5 @@ target/
 # Electron staging and packaged desktop output
 product/alpha/.electron/
 product/alpha/release/
+
+product/alpha/.ipad-build/

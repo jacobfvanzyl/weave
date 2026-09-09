@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
-const ignoredDirectories = new Set(['node_modules', 'dist', 'ios', '.git', 'deferred', '.electron', 'release']);
+const ignoredDirectories = new Set(['node_modules', 'dist', 'ios', '.git', 'deferred', '.electron', 'release', '.ipad-build']);
 const forbiddenPackages = new Set([
   '@weave/client',
   '@weave/protocol',

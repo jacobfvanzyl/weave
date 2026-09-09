@@ -3,3 +3,7 @@ auto = "disable"
 globalStore = false
 linker = "isolated"
 publicHoistPattern = ["@types/node"]
+
+[run]
+bun = true
+shell = "bun"

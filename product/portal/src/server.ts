@@ -1,3 +1,4 @@
+import { hostVersion } from './version.ts';
 import { HostWebSocket, type HostUpgrade } from './host-websocket.ts';
 import { readTextSync } from './host-files.ts';
 import {
@@ -344,6 +345,7 @@ export const startPortalServer = (
         return Response.json({
           status: 'ok',
           product: 'weave-portal',
+          build: hostVersion,
           hostId: portal.security.hostId,
           displayName: portal.config.displayName,
         });

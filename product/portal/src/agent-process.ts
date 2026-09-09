@@ -60,6 +60,7 @@ export class AgentProcess {
     this.#onExit = onExit;
     this.#child = spawnProcess(agent.command, {
       args: agent.args,
+      detached: true,
       cwd,
       env: { ...inheritedEnvironment(), ...agent.env },
       stdin: 'pipe',
@@ -97,8 +98,15 @@ export class AgentProcess {
     } catch (cause) {
       if (!(isFsError(cause, 'ENOENT'))) throw cause;
     }
-    await this.#writer.close().catch(() => undefined);
-    await this.#child.status.catch(() => undefined);
+    const timer = setTimeout(() => this.#child.kill('SIGKILL'), 2000);
+    try {
+      await this.#writer.close().catch(() => undefined);
+      await this.#child.status.catch(() => undefined);
+    } finally {
+      clearTimeout(timer);
+      // A launcher may exit before its descendants. Reap only its private group.
+      this.#child.kill('SIGKILL');
+    }
   }
 
   async #readMessages() {

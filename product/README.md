@@ -48,10 +48,13 @@ From the repository root:
 ```bash
 bun run dev:desktop
 bun run build:desktop
+bun run install:desktop
 bun run run:desktop
 ```
 
 Electron packages the renderer under `alpha/release/Weave Alpha-darwin-<arch>/`.
+`install:desktop` copies it to `~/Applications/Weave Alpha.app`, retaining a
+previous same-identity bundle privately. The desktop profile stays intact.
 Its sandboxed renderer uses the secure `weave://app` origin and has no Node or
 general-purpose IPC access. The small preload identifies the desktop platform.
 Native menus provide standard editing, zoom, window and application commands.
