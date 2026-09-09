@@ -5,6 +5,8 @@ import type {
   WorkspaceFileMetadata,
 } from "@weave/product-protocol";
 import type { AcpTranscript } from "@/chat/acp-transcript";
+import type { WorkspaceCompositionActions, WorkspaceCompositionsModel } from "./use-workspace-compositions";
+import type { AlphaTerminalClient } from "./use-alpha-terminals";
 import type { AlphaTerminalsModel } from "./use-alpha-terminals";
 
 export type AlphaConnectionStatus =
@@ -40,6 +42,7 @@ export type AlphaWorkspace = {
   hostId: string;
   hostName: string;
   name: string;
+  canonicalPath?: string;
   repositoryIdentity?: RepositoryIdentity;
   placements?: AlphaWorkspacePlacement[];
   threads: AlphaThread[];
@@ -105,6 +108,7 @@ export type AlphaViewModel = {
   transcript?: AcpTranscript;
   workspaceFiles?: AlphaWorkspaceFiles;
   terminals?: AlphaTerminalsModel;
+  workspaceCompositions?: WorkspaceCompositionsModel;
   busy: boolean;
   error?: string;
 };
@@ -168,6 +172,8 @@ export type AlphaActions = {
 
 export type AlphaController = {
   model: AlphaViewModel;
+  workspaceActions?: WorkspaceCompositionActions;
+  terminalClient?(hostId: string): AlphaTerminalClient | undefined;
   actions: AlphaActions;
 };
 

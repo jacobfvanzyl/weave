@@ -55,7 +55,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     }
     throw new Error(`Timed out at ${stage}`);
   };
-  const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((el) => el.getAttribute('aria-label') === name || el.textContent?.trim() === name);
+  const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button, [role=menuitem]')].find((el) => el.getAttribute('aria-label') === name || el.textContent?.trim() === name);
   const set = (selector: string, value: string) => {
     const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
     const prototype = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -76,6 +76,8 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       await wait(() => !document.querySelector('#pairing-token'));
     }
     stage = 'create thread';
+    await wait(() => button('New agent thread'));
+    button('New agent thread')!.click();
     await wait(() => button(`New thread in ${input.workspaceName}`) && !button(`New thread in ${input.workspaceName}`)!.disabled);
     button(`New thread in ${input.workspaceName}`)!.click();
     await wait(() => document.querySelector('[aria-label="Message agent"]') && document.body.textContent?.includes('Start a conversation with the agent.'));
@@ -102,10 +104,20 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       await wait(() => [...document.querySelectorAll('[data-slot="message"][data-align="start"]')].some((el) => el.textContent?.trim() === 'WEAVE_DESKTOP_REAL_PROVIDER_OK') && button('Send message') && !button('Stop response'));
     }
     stage = 'terminal';
-    button('Show Terminal Pane')?.click();
-    await wait(() => button('New Terminal') && !button('New Terminal')!.disabled);
-    button('New Terminal')!.click();
+    button('Open…')!.click();
+    await wait(() => button(`Open workspace in ${input.workspaceName}`));
+    button(`Open workspace in ${input.workspaceName}`)!.click();
+    await wait(() => button(`Workspace actions for ${input.workspaceName}`));
+    button(`Workspace actions for ${input.workspaceName}`)!.click();
+    await wait(() => button('New terminal workspace'));
+    const previousContext = document.querySelector('[aria-label="Active terminal context"]')?.textContent;
+    button('New terminal workspace')!.click();
+    await wait(() => document.querySelector('[aria-label="Active terminal context"]')?.textContent !== previousContext);
+    await wait(() => button('Start terminal') && !button('Start terminal')!.disabled);
+    button('Start terminal')!.click();
     await wait(() => document.querySelector('.xterm-rows')?.textContent?.trim());
+    const terminalBounds = document.querySelector('.xterm-screen')!.getBoundingClientRect();
+    if (terminalBounds.width < 200 || terminalBounds.height < 100 || terminalBounds.right > innerWidth + 1) throw new Error('Terminal is not visibly laid out in the application window.');
     await new Promise((resolve) => setTimeout(resolve, 300));
     document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!.focus();
     state.alphaAcceptanceStage = 'native-terminal';

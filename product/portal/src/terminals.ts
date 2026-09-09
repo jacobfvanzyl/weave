@@ -166,6 +166,10 @@ export class TerminalService {
     return session;
   }
 
+  async knownTerminalIds(workspaceId: string) {
+    return new Set((await this.#backend.list()).filter((terminal) => terminal.workspaceId === workspaceId).map((terminal) => terminal.terminalId));
+  }
+
   async close() {
     if (this.#closed) return;
     this.#closed = true;

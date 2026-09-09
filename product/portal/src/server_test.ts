@@ -2185,3 +2185,72 @@ test('Authenticated context summaries preserve Host identity and filter canonica
     await removePath(root, { recursive: true });
   }
 });
+
+test('Authenticated compositions enforce ownership and revisions, survive restart, and never control terminal lifetime', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-composition-rpc-' });
+  await mkdir(join(root, 'allowed'));
+  await mkdir(join(root, 'private'));
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Composition Host', allowedOrigins: [],
+    stateDirectory: join(root, 'state'), agents: [], workspaces: [
+      { workspaceId: 'allowed', name: 'Allowed', path: join(root, 'allowed') },
+      { workspaceId: 'private', name: 'Private', path: join(root, 'private') },
+    ],
+  };
+  const backend = new InMemoryTerminalBackend();
+  let portal = await Portal.open(config, { terminalBackend: backend });
+  let server = startPortalServer(portal);
+  const credential = await pairTestCredential(portal);
+  const sockets: RpcSocket[] = [];
+  const connect = async (signer = credential) => {
+    const socket = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, signer);
+    sockets.push(socket);
+    return socket;
+  };
+  try {
+    const first = await connect();
+    const second = await connect();
+    const capabilities = await first.request('portal.capabilities') as { capabilities: string[] };
+    assertEquals(capabilities.capabilities.includes('workspace.composition.replace'), true);
+    const initial = { composition: { schemaVersion: 1, workspaceId: 'allowed', revision: 0, tabs: [] } };
+    assertEquals(await first.request('workspace.composition.get', { workspaceId: 'allowed' }), initial);
+    const { terminal } = await first.request('terminal.create', { workspaceId: 'allowed', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
+    const { terminal: privateTerminal } = await first.request('terminal.create', { workspaceId: 'private', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
+    const tabs = [{ tabId: 'tab', name: 'Build', layout: { kind: 'terminal', nodeId: 'node', paneId: 'pane', terminalId: terminal.terminalId } }];
+    const replace = (rpc: RpcSocket, expectedRevision: number, nextTabs: unknown = tabs, workspaceId = 'allowed') => rpc.request('workspace.composition.replace', { workspaceId, expectedRevision, tabs: nextTabs });
+    const concurrent = await Promise.allSettled([replace(first, 0), replace(second, 0)]);
+    assertEquals(concurrent.filter((result) => result.status === 'fulfilled').length, 1);
+    const conflict = concurrent.find((result) => result.status === 'rejected') as PromiseRejectedResult;
+    assertEquals(conflict.reason instanceof RpcResponseError && conflict.reason.data, { domain: 'composition', code: 'STALE_REVISION', currentRevision: 1 });
+    for (const terminalId of ['missing-terminal', privateTerminal.terminalId]) {
+      const invalid = await assertRejects(() => replace(first, 1, [{ ...tabs[0], layout: { ...tabs[0]!.layout, terminalId } }]));
+      assertEquals(invalid instanceof RpcResponseError && invalid.data, { domain: 'composition', code: 'INVALID_TARGET' });
+    }
+    // A reader of one context cannot inspect another, nor edit even its own context.
+    const key = await generatePortalKey();
+    const grants = portal.security.defaultGrants();
+    grants.workspaceIds = ['allowed'];
+    grants.actions = ['portal.inspect', 'workspace.inspect'];
+    const token = await portal.security.createPairingToken(60_000, grants);
+    const paired = await portal.security.redeemPairing({ type: PORTAL_PAIR_REQUEST_TYPE, token, label: 'Read only', publicKey: key.publicKey });
+    const reader = await connect({ ...key, credentialId: paired.principal.credentialId });
+    await assertRejects(() => reader.request('workspace.composition.get', { workspaceId: 'private' }));
+    await assertRejects(() => replace(reader, 1));
+    assertEquals(await reader.request('workspace.composition.get', { workspaceId: 'allowed' }), { composition: { ...initial.composition, revision: 1, tabs } });
+    for (const socket of sockets.splice(0)) socket.close();
+    await server.shutdown();
+    await portal.close();
+    portal = await Portal.open(config, { terminalBackend: backend });
+    server = startPortalServer(portal);
+    const restored = await connect();
+    assertEquals(await restored.request('workspace.composition.get', { workspaceId: 'allowed' }), { composition: { ...initial.composition, revision: 1, tabs } });
+    await replace(restored, 1, []);
+    const terminals = await restored.request('terminal.list', { workspaceId: 'allowed' }) as { terminals: Array<{ terminalId: string }> };
+    assertEquals(terminals.terminals.some((item) => item.terminalId === terminal.terminalId), true);
+  } finally {
+    for (const socket of sockets) socket.close();
+    await server.shutdown();
+    await portal.close();
+    await removePath(root, { recursive: true });
+  }
+});

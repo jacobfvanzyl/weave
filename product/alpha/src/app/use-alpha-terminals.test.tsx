@@ -309,3 +309,26 @@ describe('useAlphaTerminals', () => {
     expect(result.current.model.activeTerminalId).toBe('terminal-2');
   });
 });
+
+it('retains a missing composition target without creating or attaching another terminal', async () => {
+  const host = client({ terminals: [terminal('unrelated')] });
+  const { result } = renderHook(() => useAlphaTerminals({ target: { ...target, terminalId: 'missing' }, client: host }));
+  await waitFor(() => expect(result.current.model.error).toContain('pane is retained'));
+  expect(host.createTerminal).not.toHaveBeenCalled();
+  expect(host.attachTerminal).not.toHaveBeenCalled();
+  expect(result.current.model.activeTerminalId).toBeUndefined();
+});
+
+it('detaches a late attachment after its composition pane has unmounted', async () => {
+  const host = client({ terminals: [terminal()] });
+  const original = host.attachTerminal;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  host.attachTerminal = vi.fn(async (...args: Parameters<typeof original>) => { await gate; return original(...args); });
+  const { unmount } = renderHook(() => useAlphaTerminals({ target: { ...target, terminalId: 'terminal-1' }, client: host }));
+  await waitFor(() => expect(host.attachTerminal).toHaveBeenCalled());
+  unmount();
+  await act(async () => { release(); await gate; });
+  await waitFor(() => expect(host.detachTerminal).toHaveBeenCalledWith('workspace-1', 'terminal-1', 'attachment-control'));
+  expect(host.closeTerminal).not.toHaveBeenCalled();
+});

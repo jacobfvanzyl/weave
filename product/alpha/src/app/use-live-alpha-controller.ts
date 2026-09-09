@@ -29,6 +29,8 @@ import {
   savePortalConnections,
 } from "./portal-connection-storage";
 import { useAppResume } from "./use-app-resume";
+import { useSavedThreadSelection } from "./use-saved-thread-selection";
+import { useWorkspaceCompositions } from "./use-workspace-compositions";
 import { useAlphaTerminals } from "./use-alpha-terminals";
 
 export const HOST_SNAPSHOT_REFRESH_INTERVAL_MS = 5_000;
@@ -109,8 +111,8 @@ const logicalProjectId = (
   workspace: HostSnapshot["workspaces"][number],
   connection: PersistedPortalConnection,
 ) =>
-  workspace.repositoryIdentity
-    ? `repository:${workspace.repositoryIdentity.canonicalKey}`
+  workspace.canonicalPath
+    ? `context:${resourceId(connection.hostId, workspace.canonicalPath)}`
     : `workspace:${resourceId(connection.hostId, workspace.workspaceId)}`;
 
 const mapHostWorkspaces = (
@@ -132,6 +134,7 @@ const mapHostWorkspaces = (
       hostId: connection.hostId,
       hostName: connection.displayName,
       name: workspace.name,
+      canonicalPath: workspace.canonicalPath,
       placements: [
         {
           id: resourceId(connection.hostId, workspace.workspaceId),
@@ -152,7 +155,7 @@ const mapHostWorkspaces = (
             projectId,
           ),
         )
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+        .sort((left, right) => left.id.localeCompare(right.id)),
       repositoryIdentity: workspace.repositoryIdentity,
     };
   });
@@ -184,7 +187,7 @@ const groupHostWorkspaces = (workspaces: AlphaWorkspace[]) => {
       placements: members.flatMap(({ placements }) => placements ?? []),
       threads: members
         .flatMap(({ threads }) => threads)
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+        .sort((left, right) => left.id.localeCompare(right.id)),
     };
   });
 };
@@ -213,9 +216,6 @@ const mapHostArchivedThreads = (
     ),
   );
 };
-
-const workspaceRecency = (workspace: AlphaWorkspace) =>
-  workspace.threads[0]?.updatedAt ?? "";
 
 type SessionInfoUpdate = Extract<
   Extract<AcpTranscriptEvent, { type: "session/update" }>["update"],
@@ -547,16 +547,9 @@ export function useLiveAlphaController(
             setLoadingThreadId(undefined);
           }
         }
-        if (
-          activeThreadId &&
-          activeThreadId === selectedThreadIdRef.current &&
-          belongsToHost(activeThreadId, connection.hostId)
-        ) {
-          activeThreadIdsRef.current.delete(connection.hostId);
-          selectedThreadIdRef.current = undefined;
-          setSelectedThreadId(undefined);
-          setLoadingThreadId(undefined);
-        }
+        // A disconnected Host retains the selected durable Thread and its last
+        // transcript. Reconnection can restore the same attachment without moving focus.
+        if (activeThreadId === selectedThreadIdRef.current) setLoadingThreadId(undefined);
       }
       return false;
     }
@@ -640,13 +633,10 @@ export function useLiveAlphaController(
     () =>
       groupHostWorkspaces(
         connections.flatMap((connection) =>
-          statuses[connection.hostId] === "connected" ||
-          statuses[connection.hostId] === "reconnecting"
-            ? mapHostWorkspaces(snapshots[connection.hostId], connection)
-            : [],
+          mapHostWorkspaces(snapshots[connection.hostId], connection),
         ),
       ).sort((left, right) =>
-        workspaceRecency(right).localeCompare(workspaceRecency(left)),
+        left.id.localeCompare(right.id),
       ),
     [connections, snapshots, statuses],
   );
@@ -684,36 +674,20 @@ export function useLiveAlphaController(
 
   const allThreads = modelWorkspaces.flatMap((workspace) => workspace.threads);
   const selected = allThreads.find((thread) => thread.id === selectedThreadId);
-  const selectedProject = selected
-    ? modelWorkspaces.find((workspace) =>
-        workspace.threads.some(({ id }) => id === selected.id),
-      )
-    : undefined;
   const selectedConnection = connections.find(
     (connection) => connection.hostId === selected?.hostId,
   );
   const selectedHostReconnecting = selected
     ? statuses[selected.hostId] === "reconnecting"
     : false;
-  const terminalController = useAlphaTerminals({
-    target:
-      selected && selectedProject
-        ? {
-            scope: {
-              hostId: selected.hostId,
-              projectId: selected.projectId ?? selectedProject.id,
-              workspaceId: selected.workspaceId,
-              worktreeId: selected.worktreeId,
-            },
-            supported: Boolean(
-              snapshots[selected.hostId]?.capabilities.includes(
-                "terminal.attach",
-              ),
-            ),
-          }
-        : undefined,
-    client: selected ? clientsRef.current.get(selected.hostId) : undefined,
-  });
+  const workspaceController = useWorkspaceCompositions(modelWorkspaces, connections.map((connection) => ({
+    hostId: connection.hostId,
+    available: statuses[connection.hostId] === "connected",
+    supported: Boolean(snapshots[connection.hostId]?.capabilities.includes("workspace.composition.get") && snapshots[connection.hostId]?.capabilities.includes("workspace.composition.replace")),
+    client: clientsRef.current.get(connection.hostId),
+  })));
+  // Terminal attachments are owned by individual composition panes. No Thread selection retargets them.
+  const terminalController = useAlphaTerminals({});
   const aggregateStatus = Object.values(statuses).includes("connected")
     ? ("connected" as const)
     : Object.values(statuses).some(
@@ -932,6 +906,9 @@ export function useLiveAlphaController(
     }
   };
 
+  useSavedThreadSelection(selectedThreadId, Boolean(selected && !selected.draft),
+    allThreads.filter((thread) => !thread.draft && statuses[thread.hostId] === "connected").map((thread) => thread.id), selectThread);
+
   const model: AlphaViewModel = {
     platform: window.weaveDesktop?.platform ?? Capacitor.getPlatform(),
     connectionsLoaded,
@@ -967,6 +944,7 @@ export function useLiveAlphaController(
         ? transcripts[selectedThreadId]
         : undefined,
     terminals: terminalController.model,
+    workspaceCompositions: workspaceController.model,
     busy,
     error: selectedHostReconnecting
       ? undefined
@@ -975,6 +953,8 @@ export function useLiveAlphaController(
 
   return {
     model,
+    workspaceActions: workspaceController.actions,
+    terminalClient: (hostId) => statuses[hostId] === "connected" ? clientsRef.current.get(hostId) : undefined,
     actions: {
       setSearchQuery,
       openConnections: () => setConnectionsOpen(true),

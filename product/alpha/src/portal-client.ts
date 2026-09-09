@@ -16,6 +16,7 @@ import {
   type WorkspaceFileErrorData,
   type WorkspaceFileWatchEvent,
   type WorkspaceSummary,
+  type WorkspaceTab,
 } from "@weave/product-protocol";
 import type {
   ContentBlock,
@@ -431,6 +432,14 @@ export class DirectHostClient {
         }).catch(() => undefined);
       },
     };
+  }
+
+  getWorkspaceComposition(workspaceId: string) {
+    return this.request("workspace.composition.get", { workspaceId });
+  }
+
+  replaceWorkspaceComposition(workspaceId: string, expectedRevision: number, tabs: WorkspaceTab[]) {
+    return this.request("workspace.composition.replace", { workspaceId, expectedRevision, tabs });
   }
 
   listTerminals(workspaceId: string) {

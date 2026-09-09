@@ -278,6 +278,7 @@ describe("useLiveAlphaController", () => {
         ...snapshot.workspaces.map((workspace) => ({
           ...workspace,
           repositoryIdentity,
+          canonicalPath: "/code/weave",
         })),
         { workspaceId: "scratch", name: "Scratch" },
       ],
@@ -368,16 +369,17 @@ describe("useLiveAlphaController", () => {
       { hostId: "host-2", status: "connected" },
     ]);
     expect(result.current.model.workspaces.map(({ id }) => id)).toEqual([
-      "repository:github.com/veezee/weave",
+      "context:host-1:%2Fcode%2Fweave",
+      "context:host-2:%2Fcode%2Fweave",
       "workspace:host-1:scratch",
       "workspace:host-2:scratch",
     ]);
-    expect(result.current.model.workspaces[0].placements).toHaveLength(2);
+    expect(result.current.model.workspaces[0].placements).toHaveLength(1);
     expect(
       result.current.model.workspaces
         .slice(1)
         .map(({ placements }) => placements?.length),
-    ).toEqual([1, 1]);
+    ).toEqual([1, 1, 1]);
     expect(
       result.current.model.workspaces
         .flatMap(({ threads }) => threads)
@@ -417,7 +419,7 @@ describe("useLiveAlphaController", () => {
 
     await act(async () =>
       result.current.actions.createThread(
-        "repository:github.com/veezee/weave",
+        "context:host-1:%2Fcode%2Fweave",
         "host-1:weave",
       ),
     );
@@ -434,7 +436,7 @@ describe("useLiveAlphaController", () => {
       result.current.model.connections.find(({ hostId }) => hostId === "host-1")
         ?.status,
     ).toBe("connected");
-    expect(result.current.model.workspaces).toHaveLength(3);
+    expect(result.current.model.workspaces).toHaveLength(4);
   });
 
   it("registers a project through the chosen connected Portal and refreshes only that Host", async () => {
@@ -1016,8 +1018,8 @@ describe("useLiveAlphaController", () => {
       error:
         "Couldn’t reconnect to this Portal Host. Check that Portal is running and try again.",
     });
-    expect(result.current.model.workspaces).toEqual([]);
-    expect(result.current.model.selectedThreadId).toBeUndefined();
+    expect(result.current.model.workspaces[0]?.threads).toHaveLength(1);
+    expect(result.current.model.selectedThreadId).toBe("host-1:thread-1");
     expect(result.current.model.workspaceFiles).toBeUndefined();
     expect(result.current.model.error).toBeUndefined();
   });

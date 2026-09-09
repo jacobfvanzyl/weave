@@ -19,6 +19,8 @@ export const WEAVE_ACP_THREAD_EVENTS_SYNC_METHOD = '_weave.dev/thread_events/syn
 export const WEAVE_ACP_RUNTIME_STATE_METHOD = '_weave.dev/runtime/state' as const;
 
 export * from './browser-control.ts';
+export * from './composition.ts';
+import { COMPOSITION_RPC_METHODS, parseCompositionRpcParams, parseCompositionRpcResult, type CompositionRpcContracts, type CompositionRpcMethod } from './composition.ts';
 
 export {
   parseWorkspaceFileErrorData,
@@ -333,6 +335,7 @@ type BasePortalRpcContracts = {
 export type PortalRpcContracts =
   & BasePortalRpcContracts
   & WorkspaceFileRpcContracts
+  & CompositionRpcContracts
   & TerminalRpcContracts;
 
 export type PortalRpcMethod = keyof PortalRpcContracts;
@@ -354,6 +357,7 @@ export const PORTAL_RPC_METHODS = [
   'credential.rotate',
   'credential.revoke',
   ...WORKSPACE_FILE_RPC_METHODS,
+  ...COMPOSITION_RPC_METHODS,
   ...TERMINAL_RPC_METHODS,
 ] as const satisfies readonly PortalRpcMethod[];
 export type PortalRpcParams<Method extends PortalRpcMethod> = PortalRpcContracts[Method]['params'];
@@ -363,6 +367,9 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
   method: Method,
   value: unknown,
 ): PortalRpcParams<Method> => {
+  if (COMPOSITION_RPC_METHODS.includes(method as CompositionRpcMethod)) {
+    return parseCompositionRpcParams(method as CompositionRpcMethod, value) as PortalRpcParams<Method>;
+  }
   if (WORKSPACE_FILE_RPC_METHODS.includes(method as WorkspaceFileRpcMethod)) {
     return parseWorkspaceFileRpcParams(
       method as WorkspaceFileRpcMethod,
@@ -546,6 +553,9 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
   method: Method,
   value: unknown,
 ): PortalRpcResult<Method> => {
+  if (COMPOSITION_RPC_METHODS.includes(method as CompositionRpcMethod)) {
+    return parseCompositionRpcResult(value) as PortalRpcResult<Method>;
+  }
   if (WORKSPACE_FILE_RPC_METHODS.includes(method as WorkspaceFileRpcMethod)) {
     return parseWorkspaceFileRpcResult(
       method as WorkspaceFileRpcMethod,

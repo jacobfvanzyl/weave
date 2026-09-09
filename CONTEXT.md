@@ -9,9 +9,13 @@ A durable parent that groups related Workspaces.
 _Avoid_: Repository, vault, workspace
 
 **Workspace**:
-The primary selectable working context that scopes the files, conversations, terminals, and activity currently in focus.
+A Host-owned authorized execution context for files, conversations and terminals, independent of which conversation or terminal arrangement a client is viewing.
 All Workspaces follow the same domain rules; there is no special personal or root Workspace.
 _Avoid_: Project, repository, worktree
+
+**Execution Context**:
+A stable Host identity together with an exact working directory canonicalized by that Host. A Workspace represents the authorized context; a shell's later directory change does not move it.
+_Avoid_: Repository identity, basename, active selection
 
 **Host**:
 A computer that owns one or more Workspaces and the runtime state needed to work in them. A client connects to a Host directly.
@@ -46,7 +50,7 @@ The format generation of a Workspace Composition, advanced by an identity-preser
 _Avoid_: Composition Revision, client version, release version
 
 **Client Presentation State**:
-The client-session-owned transient view over a Workspace Composition, such as the active Workspace Tab, Focused Pane, and maximized Pane.
+A client's independently recoverable view over Workspace Compositions: its open Workspace Tabs, active tab, Focused Pane and selected Thread. Closing a tab in this view detaches it without deleting its composition or stopping its processes.
 _Avoid_: Workspace state, shared layout
 
 **Thread**:
@@ -55,7 +59,7 @@ A Thread cannot exist without a Workspace.
 _Avoid_: Agent Session, run, invocation
 
 **Pane**:
-A region within a Workspace Tab that presents one type of Workspace content, such as a Thread, file editor, or terminal.
+A region within a Workspace Tab that presents Workspace content. The active product uses Terminal Panes; conversations have an independent selection and do not require a Pane in that arrangement.
 _Avoid_: Sidebar, window
 
 **Project Pane**:
@@ -115,7 +119,7 @@ The ordered set of pinned files durably owned by one Editor Pane and shared with
 _Avoid_: Open files, recent files, preview tabs
 
 **Thread Pane**:
-An open Pane that presents a Thread within its owning Workspace's main work area. A Thread has at most one open Thread Pane across that Workspace's Tabs.
+The conversation region presenting the independently selected Thread from any connected Host. Its selection and lifetime are independent of open terminal Workspace Tabs.
 _Avoid_: Agent pane, chat window
 
 **Browser Session**:

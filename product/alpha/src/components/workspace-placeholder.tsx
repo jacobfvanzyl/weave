@@ -32,9 +32,10 @@ export function WorkspacePlaceholder({
   const reconnecting = Boolean(
     thread && model.connections.some(
       ({ hostId, status }) =>
-        hostId === thread.hostId && status === "reconnecting",
+        hostId === thread.hostId && status !== "connected",
     ),
   );
+  const context = model.workspaces.find((workspace) => workspace.threads.some((item) => item.id === thread?.id));
   const shouldFocusComposer = !isCapacitorPlatform(model.platform) ||
     model.composerFocusThreadId === thread?.id;
 
@@ -63,9 +64,9 @@ export function WorkspacePlaceholder({
                 <p className="truncate text-xs font-medium">
                   {thread.title || "Weave"}
                 </p>
-                {model.showHostIdentity && (
+                {(model.showHostIdentity || model.workspaceCompositions) && (
                   <p className="truncate text-[0.625rem] text-muted-foreground">
-                    {thread.hostName || model.connection.hostName}
+                    {thread.hostName || model.connection.hostName}{model.workspaceCompositions ? ` · ${context?.canonicalPath ?? context?.name ?? thread.workspaceId}` : ""}
                   </p>
                 )}
               </div>

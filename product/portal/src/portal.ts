@@ -11,6 +11,8 @@ import {
   type ThreadSummary,
   WORKSPACE_FILE_RPC_METHODS,
   WORKSPACE_CONTEXT_CAPABILITY,
+  COMPOSITION_RPC_METHODS,
+  terminalPaneTargets,
   type WorkspaceFileWatchNotification,
 } from '@weave/product-protocol';
 import { isAbsolute, relative } from 'node:path';
@@ -25,6 +27,7 @@ import { type PortalTerminalSession, type TerminalBackend, TerminalService } fro
 import { HostedThread, type ThreadAttachment, ThreadPromptActiveError } from './thread-runtime.ts';
 import { type RegisteredWorkspace, WorkspaceCatalog, workspaceSummary } from './workspace-catalog.ts';
 import { WorkspaceFileService, type WorkspaceFileWatchSession } from './workspace-files.ts';
+import { CompositionError, CompositionStore } from './composition-store.ts';
 
 export class PortalRpcSession {
   readonly #portal: Portal;
@@ -116,6 +119,7 @@ export class Portal {
   readonly #workspaceFiles: WorkspaceFileService;
   readonly #terminals?: TerminalService;
   readonly #workspaceCatalog: WorkspaceCatalog;
+  readonly #compositions: CompositionStore;
   readonly security: PortalSecurity;
   readonly #workspaces: Map<string, RegisteredWorkspace>;
   readonly #agents: Map<string, AgentDefinition>;
@@ -137,6 +141,7 @@ export class Portal {
     this.#journal = journal;
     this.#runtimeStates = runtimeStates;
     this.#workspaceCatalog = workspaceCatalog;
+    this.#compositions = new CompositionStore(config.stateDirectory);
     this.#workspaceFiles = workspaceFiles;
     this.#terminals = terminals;
     this.security = security;
@@ -218,6 +223,7 @@ export class Portal {
           capabilities: [
             'workspace.list',
             WORKSPACE_CONTEXT_CAPABILITY,
+            ...COMPOSITION_RPC_METHODS,
             'workspace.add',
             'workspace.remove',
             'agent.list',
@@ -255,6 +261,25 @@ export class Portal {
         return { workspace: workspaceSummary(workspace) } as PortalRpcResult<
           Method
         >;
+      }
+      case 'workspace.composition.get': {
+        const { workspaceId } = params as PortalRpcParams<'workspace.composition.get'>;
+        this.#workspace(workspaceId);
+        return { composition: await this.#compositions.get(workspaceId) } as PortalRpcResult<Method>;
+      }
+      case 'workspace.composition.replace': {
+        const { workspaceId, expectedRevision, tabs } = params as PortalRpcParams<'workspace.composition.replace'>;
+        this.#workspace(workspaceId);
+        const composition = await this.#compositions.replace(workspaceId, expectedRevision, tabs, async (current, next) => {
+          const existing = new Map(terminalPaneTargets(current.tabs).map((pane) => [pane.paneId, pane.terminalId]));
+          const available = await this.#terminals?.knownTerminalIds(workspaceId) ?? new Set<string>();
+          for (const pane of terminalPaneTargets(next)) {
+            if (pane.terminalId !== null && !available.has(pane.terminalId) && existing.get(pane.paneId) !== pane.terminalId) {
+              throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+            }
+          }
+        });
+        return { composition } as PortalRpcResult<Method>;
       }
       case 'workspace.remove': {
         const input = params as PortalRpcParams<'workspace.remove'>;
@@ -508,9 +533,9 @@ export class Portal {
     }
     const action: PortalAction = method === 'portal.capabilities'
       ? 'portal.inspect'
-      : method === 'workspace.list'
+      : method === 'workspace.list' || method === 'workspace.composition.get'
       ? 'workspace.inspect'
-      : method === 'workspace.add' || method === 'workspace.remove'
+      : method === 'workspace.add' || method === 'workspace.remove' || method === 'workspace.composition.replace'
       ? 'workspace.manage'
       : method === 'agent.list'
       ? 'agent.use'

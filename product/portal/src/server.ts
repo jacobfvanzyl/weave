@@ -19,6 +19,7 @@ import {
 } from '@weave/product-protocol';
 import { error, type JsonRpcMessage, parseJsonRpcMessage, result } from './json-rpc.ts';
 import { Portal, PortalThreadLifecycleError } from './portal.ts';
+import { CompositionError } from './composition-store.ts';
 import { type PortalPrincipal, PortalSecurityError } from './security.ts';
 import { WorkspaceFileError } from './workspace-files.ts';
 import { PortalTerminalError } from './terminals.ts';
@@ -217,6 +218,8 @@ const rpcWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) =>
           ? error(message.id, -32011, cause.message, cause.data)
           : cause instanceof PortalTerminalError
           ? error(message.id, -32012, cause.message, cause.data)
+          : cause instanceof CompositionError
+          ? error(message.id, -32013, cause.message, cause.data)
           : cause instanceof PortalSecurityError
           ? error(message.id, -32003, cause.message, {
             code: cause.code,

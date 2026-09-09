@@ -20,6 +20,7 @@ import { ConnectionsDialog } from './connections-dialog';
 import { ArchivedThreadsDialog } from './archived-threads-dialog';
 import { DockRailActions } from './dock-rail-actions';
 import { GlobalBottomRail } from './global-bottom-rail';
+import { TerminalFirstShell } from './terminal-first-shell';
 import { TerminalPane } from './terminal-pane';
 import { ThreadSidebar } from './thread-sidebar';
 import { WorkspacePlaceholder } from './workspace-placeholder';
@@ -489,7 +490,7 @@ export function AlphaShell({ controller }: { controller: AlphaController }) {
   }
   return (
     <>
-      <ConnectedShell controller={controller} />
+      {controller.model.workspaceCompositions ? <TerminalFirstShell controller={controller} /> : <ConnectedShell controller={controller} />}
       <ArchivedThreadsDialog controller={controller} />
       <ConnectionsDialog controller={controller} />
     </>
