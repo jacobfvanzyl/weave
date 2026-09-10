@@ -4,16 +4,43 @@
 #include <cmath>
 #include <vector>
 
+static NSString *macKey(unsigned short code) {
+  static NSDictionary<NSNumber *, NSString *> *keys;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    keys = @{@82:@"Numpad0", @83:@"Numpad1", @84:@"Numpad2", @85:@"Numpad3", @86:@"Numpad4", @87:@"Numpad5", @88:@"Numpad6", @89:@"Numpad7", @91:@"Numpad8", @92:@"Numpad9", @76:@"NumpadEnter", @69:@"NumpadAdd", @78:@"NumpadSubtract", @67:@"NumpadMultiply", @75:@"NumpadDivide", @65:@"NumpadDecimal", @81:@"NumpadEqual", @71:@"NumLock", @0:@"KeyA", @1:@"KeyS", @2:@"KeyD", @3:@"KeyF", @4:@"KeyH", @5:@"KeyG", @6:@"KeyZ", @7:@"KeyX", @8:@"KeyC", @9:@"KeyV", @11:@"KeyB", @12:@"KeyQ", @13:@"KeyW", @14:@"KeyE", @15:@"KeyR", @16:@"KeyY", @17:@"KeyT",
+      @18:@"Digit1", @19:@"Digit2", @20:@"Digit3", @21:@"Digit4", @22:@"Digit6", @23:@"Digit5", @24:@"Equal", @25:@"Digit9", @26:@"Digit7", @27:@"Minus", @28:@"Digit8", @29:@"Digit0", @30:@"BracketRight", @31:@"KeyO", @32:@"KeyU", @33:@"BracketLeft", @34:@"KeyI", @35:@"KeyP", @36:@"Enter", @37:@"KeyL", @38:@"KeyJ", @39:@"Quote", @40:@"KeyK", @41:@"Semicolon", @42:@"Backslash", @43:@"Comma", @44:@"Slash", @45:@"KeyN", @46:@"KeyM", @47:@"Period", @48:@"Tab", @49:@"Space", @50:@"Backquote", @51:@"Backspace", @53:@"Escape",
+      @122:@"F1", @120:@"F2", @99:@"F3", @118:@"F4", @96:@"F5", @97:@"F6", @98:@"F7", @100:@"F8", @101:@"F9", @109:@"F10", @103:@"F11", @111:@"F12", @105:@"F13", @107:@"F14", @113:@"F15", @106:@"F16", @64:@"F17", @79:@"F18", @80:@"F19", @90:@"F20",
+      @115:@"Home", @119:@"End", @116:@"PageUp", @121:@"PageDown", @114:@"Insert", @117:@"Delete", @123:@"ArrowLeft", @124:@"ArrowRight", @125:@"ArrowDown", @126:@"ArrowUp"};
+  });
+  return keys[@(code)] ?: @"Unidentified";
+}
+static NSUInteger weaveKeyModifiers(NSEventModifierFlags flags) {
+  return ((flags & NSEventModifierFlagShift) ? 1 : 0) | ((flags & NSEventModifierFlagControl) ? 2 : 0) |
+    ((flags & NSEventModifierFlagOption) ? 4 : 0) | ((flags & NSEventModifierFlagCommand) ? 8 : 0) |
+    ((flags & NSEventModifierFlagCapsLock) ? 16 : 0);
+}
+static NSString *printableText(NSString *text) {
+  for (NSUInteger i = 0; i < text.length; i++) { unichar c = [text characterAtIndex:i]; if (c < 32 || c == 127 || (c >= 0xF700 && c <= 0xF8FF)) return @""; }
+  return text ?: @"";
+}
 @interface WeaveTerminalNSView : NSView <NSTextInputClient>
 @property(nonatomic, strong) WeaveTerminalRenderer *terminal;
 @property(nonatomic, copy) void (^event)(NSDictionary *value);
 @property(nonatomic) NSRange selection;
 @property(nonatomic, strong) NSMutableAttributedString *marked;
+@property(nonatomic, strong) NSEvent *interpretingEvent;
+@property(nonatomic, strong) NSMutableSet<NSNumber *> *pressedKeys;
 @end
 @implementation WeaveTerminalNSView
 - (BOOL)isFlipped { return YES; }
 - (BOOL)acceptsFirstResponder { return !self.terminal.readOnly; }
 - (BOOL)becomeFirstResponder { if (self.event) self.event(@{@"kind": @"focus"}); return YES; }
+- (BOOL)resignFirstResponder {
+  for (NSNumber *code in self.pressedKeys) [self.terminal sendKey:macKey(code.unsignedShortValue) text:@"" modifiers:weaveKeyModifiers(NSEvent.modifierFlags) action:0];
+  [self.pressedKeys removeAllObjects];
+  return [super resignFirstResponder];
+}
 - (void)drawRect:(NSRect)rect {
   [self.terminal drawInContext:NSGraphicsContext.currentContext.CGContext size:self.bounds.size];
   if (self.selection.length) {
@@ -24,28 +51,47 @@
     }
   }
 }
-- (void)emitInput:(NSString *)text {
-  if (self.terminal.readOnly || !text.length) return;
+- (void)sendKey:(NSString *)key text:(NSString *)text event:(NSEvent *)event modifiers:(NSUInteger)modifiers {
+  if (self.terminal.readOnly) return;
   self.selection = NSMakeRange(0, 0);
-  self.event(@{@"kind": @"input", @"data": [[text dataUsingEncoding:NSUTF8StringEncoding] base64EncodedStringWithOptions:0]});
+  if ([self.terminal sendKey:key text:text modifiers:modifiers action:event.isARepeat ? 2 : 1] && event) {
+    if (!self.pressedKeys) self.pressedKeys = [NSMutableSet set];
+    [self.pressedKeys addObject:@(event.keyCode)];
+  }
   self.needsDisplay = YES;
 }
 - (void)keyDown:(NSEvent *)event {
   if (self.terminal.readOnly) return;
-  if (event.charactersIgnoringModifiers.length && (event.modifierFlags & NSEventModifierFlagControl)) {
-    unichar key = [event.charactersIgnoringModifiers.lowercaseString characterAtIndex:0];
-    if (key >= '@' && key <= 127) { unichar control = key & 31; [self emitInput:[NSString stringWithCharacters:&control length:1]]; return; }
+  NSString *key = macKey(event.keyCode);
+  NSString *text = printableText(event.charactersIgnoringModifiers);
+  BOOL special = [key hasPrefix:@"Arrow"] || [key hasPrefix:@"F"] || [key hasPrefix:@"Numpad"] ||
+    [@[@"Enter", @"Escape", @"Tab", @"Backspace", @"Delete", @"Home", @"End", @"PageUp", @"PageDown", @"Insert"] containsObject:key];
+  // Let the input method own composition and ordinary layout text. Physical
+  // control/function keys use the VT's current keyboard protocol directly.
+  if (!self.hasMarkedText && (special || (event.modifierFlags & NSEventModifierFlagControl))) {
+    [self sendKey:key text:text event:event modifiers:weaveKeyModifiers(event.modifierFlags)]; return;
   }
+  self.interpretingEvent = event;
   [self interpretKeyEvents:@[event]];
+  self.interpretingEvent = nil;
+}
+- (void)keyUp:(NSEvent *)event {
+  if (![self.pressedKeys containsObject:@(event.keyCode)]) return;
+  [self.pressedKeys removeObject:@(event.keyCode)];
+  [self.terminal sendKey:macKey(event.keyCode) text:printableText(event.charactersIgnoringModifiers) modifiers:weaveKeyModifiers(event.modifierFlags) action:0];
 }
 - (void)insertText:(id)value replacementRange:(NSRange)range {
   NSString *text = [value isKindOfClass:NSAttributedString.class] ? [value string] : value;
-  self.marked = nil; [self emitInput:text];
+  NSEvent *event = self.hasMarkedText ? nil : self.interpretingEvent;
+  self.marked = nil;
+  [self sendKey:event ? macKey(event.keyCode) : @"Unidentified" text:text event:event modifiers:event ? weaveKeyModifiers(event.modifierFlags) : 0];
 }
 - (void)doCommandBySelector:(SEL)selector {
-  NSDictionary *commands = @{@"insertNewline:": @"\r", @"deleteBackward:": @"\177", @"deleteForward:": @"\033[3~", @"insertTab:": @"\t", @"insertBacktab:": @"\033[Z", @"cancelOperation:": @"\033", @"moveUp:": @"\033[A", @"moveDown:": @"\033[B", @"moveRight:": @"\033[C", @"moveLeft:": @"\033[D", @"moveToBeginningOfLine:": @"\033[H", @"moveToEndOfLine:": @"\033[F", @"pageUp:": @"\033[5~", @"pageDown:": @"\033[6~"};
-  NSString *input = commands[NSStringFromSelector(selector)];
-  if (input) [self emitInput:input];
+  NSDictionary *commands = @{@"insertNewline:": @"Enter", @"deleteBackward:": @"Backspace", @"deleteForward:": @"Delete", @"insertTab:": @"Tab", @"insertBacktab:": @"Tab", @"cancelOperation:": @"Escape", @"moveUp:": @"ArrowUp", @"moveDown:": @"ArrowDown", @"moveRight:": @"ArrowRight", @"moveLeft:": @"ArrowLeft", @"moveToBeginningOfLine:": @"Home", @"moveToEndOfLine:": @"End", @"pageUp:": @"PageUp", @"pageDown:": @"PageDown"};
+  NSString *key = commands[NSStringFromSelector(selector)];
+  NSUInteger modifiers = weaveKeyModifiers(self.interpretingEvent.modifierFlags);
+  if (selector == @selector(insertBacktab:)) modifiers |= 1;
+  if (key) [self sendKey:key text:@"" event:self.interpretingEvent modifiers:modifiers];
 }
 - (void)setMarkedText:(id)value selectedRange:(NSRange)selection replacementRange:(NSRange)replacement {
   self.marked = [[NSMutableAttributedString alloc] initWithAttributedString:[value isKindOfClass:NSAttributedString.class] ? value : [[NSAttributedString alloc] initWithString:value]];
@@ -214,6 +260,7 @@ static napi_value close(napi_env env, napi_callback_info info) {
   WeaveNativeSurface *entry = surfaces[@(id)];
   if (entry) {
     entry.view.event = nil; entry.view.terminal.writeInput = nil;
+    if (entry.view.window.firstResponder == entry.view) [entry.view.window makeFirstResponder:nil];
     [entry.view removeFromSuperview];
     napi_release_threadsafe_function(entry.callback, napi_tsfn_abort); entry.callback = NULL;
     [surfaces removeObjectForKey:@(id)];
@@ -235,7 +282,7 @@ static napi_value acceptance(napi_env env, napi_callback_info info) {
   if (!view || !action || !value) return error(env, "No focused native terminal for acceptance");
   if ([action isEqualToString:@"key"]) {
     NSString *characters = [value isEqualToString:@"Enter"] ? @"\r" : [value isEqualToString:@"Escape"] ? @"\033" : value;
-    NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:view.window.windowNumber context:nil characters:characters charactersIgnoringModifiers:characters isARepeat:NO keyCode:[value isEqualToString:@"Enter"] ? 36 : 0];
+    NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:view.window.windowNumber context:nil characters:characters charactersIgnoringModifiers:characters isARepeat:NO keyCode:[value isEqualToString:@"Enter"] ? 36 : [value isEqualToString:@"Escape"] ? 53 : [value isEqualToString:@"i"] ? 34 : 0];
     [view keyDown:event];
   } else if ([action isEqualToString:@"paste"]) {
     [view paste:nil];

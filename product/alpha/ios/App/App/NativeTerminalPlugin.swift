@@ -71,7 +71,31 @@ private final class GhosttyTerminalTextView: UITextView {
     }
     private func input(_ value: String) {
         guard !terminal.readOnly else { return }
-        sendInput?(Data(value.utf8).base64EncodedString())
+        var text = ""
+        func flush() {
+            if !text.isEmpty { _ = terminal.sendKey("Unidentified", text: text, modifiers: 0, action: 1); text = "" }
+        }
+        for scalar in value.unicodeScalars {
+            if scalar.value < 32 || scalar.value == 127 {
+                flush()
+                let key: String
+                var modifiers: UInt = 0
+                switch scalar.value {
+                case 10, 13: key = "Enter"
+                case 9: key = "Tab"
+                case 27: key = "Escape"
+                case 127: key = "Backspace"
+                case 0: key = "Space"; modifiers = 2
+                case 28: key = "Backslash"; modifiers = 2
+                case 29: key = "BracketRight"; modifiers = 2
+                case 30: key = "Digit6"; modifiers = 2
+                case 31: key = "Minus"; modifiers = 2
+                default: key = "Key" + String(UnicodeScalar(scalar.value + 64)!); modifiers = 2
+                }
+                _ = terminal.sendKey(key, text: "", modifiers: modifiers, action: 1)
+            } else { text.unicodeScalars.append(scalar) }
+        }
+        flush()
     }
     override func insertText(_ text: String) {
         input(text.replacingOccurrences(of: "\n", with: "\r"))
@@ -81,15 +105,20 @@ private final class GhosttyTerminalTextView: UITextView {
     }
     override func deleteBackward() { input("\u{7f}") }
     override var keyCommands: [UIKeyCommand]? {
+        if markedTextRange != nil { return super.keyCommands }
         let arrows = [UIKeyCommand.inputUpArrow, UIKeyCommand.inputDownArrow, UIKeyCommand.inputRightArrow, UIKeyCommand.inputLeftArrow, UIKeyCommand.inputEscape, "\t"]
-        let keys = arrows.map { UIKeyCommand(input: $0, modifierFlags: [], action: #selector(terminalKey(_:))) }
-        return keys + "abcdefghijklmnopqrstuvwxyz".map { UIKeyCommand(input: String($0), modifierFlags: .control, action: #selector(terminalKey(_:))) }
+        let modifierSets: [UIKeyModifierFlags] = [[], .shift, .control, .alternate, [.shift, .control], [.shift, .alternate]]
+        let keys = arrows.flatMap { input in modifierSets.map { UIKeyCommand(input: input, modifierFlags: $0, action: #selector(terminalKey(_:))) } }
+        let commands = keys + "abcdefghijklmnopqrstuvwxyz".map { UIKeyCommand(input: String($0), modifierFlags: .control, action: #selector(terminalKey(_:))) }
+        commands.forEach { $0.wantsPriorityOverSystemBehavior = true }
+        return commands
     }
     @objc private func terminalKey(_ key: UIKeyCommand) {
         guard let value = key.input else { return }
-        if key.modifierFlags.contains(.control), let byte = value.utf8.first { input(String(UnicodeScalar(Int(byte & 31))!)); return }
-        let sequences = [UIKeyCommand.inputUpArrow: "\u{1b}[A", UIKeyCommand.inputDownArrow: "\u{1b}[B", UIKeyCommand.inputRightArrow: "\u{1b}[C", UIKeyCommand.inputLeftArrow: "\u{1b}[D", UIKeyCommand.inputEscape: "\u{1b}", "\t": "\t"]
-        if let sequence = sequences[value] { input(sequence) }
+        let names = [UIKeyCommand.inputUpArrow: "ArrowUp", UIKeyCommand.inputDownArrow: "ArrowDown", UIKeyCommand.inputRightArrow: "ArrowRight", UIKeyCommand.inputLeftArrow: "ArrowLeft", UIKeyCommand.inputEscape: "Escape", "\t": "Tab"]
+        let name = names[value] ?? "Key" + value.uppercased()
+        let modifiers: UInt = (key.modifierFlags.contains(.shift) ? 1 : 0) | (key.modifierFlags.contains(.control) ? 2 : 0) | (key.modifierFlags.contains(.alternate) ? 4 : 0)
+        _ = terminal.sendKey(name, text: names[value] == nil ? value : "", modifiers: modifiers, action: 1)
     }
     @objc private func scrollTerminal(_ recognizer: UIPanGestureRecognizer) {
         let movement = recognizer.translation(in: self).y

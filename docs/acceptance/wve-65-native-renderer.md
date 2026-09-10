@@ -56,11 +56,20 @@ Validation on 10 September 2026:
   fixes were rebuilt and rerun at their native acceptance boundary. The final
   native-view tests and desktop/tools typechecks also passed.
 
+A subsequent keyboard checkpoint routes special keys through Ghostty's encoder,
+refreshing its options from the current terminal modes for every event. The probe
+covers application cursor mode, Ctrl-C, Shift-Tab, application keypad mode,
+Kitty press/release encoding and returning to legacy behavior after the mode is
+popped. AppKit maps physical keys, modifiers, repeats and releases; UIKit routes
+its special-key commands and text-entry controls through the same encoder.
+Packaged Electron pairing/relaunch passed at `/tmp/weave-desktop-RGKQ1b` and the
+physical-iPad app-driven regression passed at `/tmp/wve65-keyboard-ipad.json`,
+with fixture cleanup confirmed by `/tmp/wve65-keyboard-ipad-cleanup.json`.
+
 Before enabling this by default, complete physical-iPad acceptance and native
-keyboard/IME/selection work. Special keys currently use basic escape sequences;
-full terminal-mode-aware key encoding, modifier/release handling, mouse reporting,
-IME marked-text presentation and selection across wrapped/wide text need further
-work. UIKit TextKit supplies selection/accessibility over the visible text, whose
+keyboard/IME/selection work. UIKit still needs full hardware key/release coverage.
+Mouse reporting, IME marked-text presentation and selection across wrapped/wide
+text need further work. UIKit TextKit supplies selection/accessibility over the visible text, whose
 geometry must be checked against the native renderer on-device. CoreText currently
 draws complete frames; sustained-output performance, dirty-region drawing and
 accessibility need acceptance. The prepared iOS library targets physical arm64

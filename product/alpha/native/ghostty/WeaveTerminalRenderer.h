@@ -17,6 +17,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)resizeToSize:(CGSize)size;
 - (void)drawInContext:(CGContextRef)context size:(CGSize)size;
 - (NSString *)textFromCell:(NSUInteger)start count:(NSUInteger)count;
+// Modifiers: Shift=1, Control=2, Option=4, Command=8.
+// Actions: release=0, press=1, repeat=2. Key names are physical W3C names.
+- (BOOL)sendKey:(NSString *)name text:(NSString *)text modifiers:(NSUInteger)modifiers action:(NSUInteger)action;
 - (BOOL)pasteText:(NSString *)text;
 - (void)scrollLines:(NSInteger)lines;
 @end

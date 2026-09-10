@@ -11,6 +11,8 @@ struct WeaveCell {
 };
 @implementation WeaveTerminalRenderer {
   GhosttyTerminal _terminal;
+  GhosttyKeyEncoder _keyEncoder;
+  GhosttyKeyEvent _keyEvent;
   GhosttyRenderState _frame;
   GhosttyRenderStateRowIterator _iterator;
   GhosttyRenderStateRowCells _cells;
@@ -41,12 +43,16 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   _cellWidth = advance.width;
   _ascent = ceil(CTFontGetAscent(_font));
   _cellHeight = ceil(_ascent + CTFontGetDescent(_font) + 2);
-  if (ghostty_render_state_new(NULL, &_frame) != GHOSTTY_SUCCESS ||
+  if (ghostty_key_encoder_new(NULL, &_keyEncoder) != GHOSTTY_SUCCESS ||
+      ghostty_key_event_new(NULL, &_keyEvent) != GHOSTTY_SUCCESS ||
+      ghostty_render_state_new(NULL, &_frame) != GHOSTTY_SUCCESS ||
       ghostty_render_state_row_iterator_new(NULL, &_iterator) != GHOSTTY_SUCCESS ||
       ghostty_render_state_row_cells_new(NULL, &_cells) != GHOSTTY_SUCCESS || ![self newTerminal]) return nil;
   return self;
 }
 - (void)dealloc {
+  ghostty_key_encoder_free(_keyEncoder);
+  ghostty_key_event_free(_keyEvent);
   ghostty_terminal_free(_terminal);
   ghostty_render_state_row_cells_free(_cells);
   ghostty_render_state_row_iterator_free(_iterator);
@@ -141,6 +147,62 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
     if ((i + 1) % _columns == 0 && i + 1 < end) [text appendString:@"\n"];
   }
   return text;
+}
+static GhosttyKey physicalKey(NSString *name) {
+  if (name.length == 4 && [name hasPrefix:@"Key"]) {
+    unichar letter = [name characterAtIndex:3];
+    if (letter >= 'A' && letter <= 'Z') return (GhosttyKey)(GHOSTTY_KEY_A + letter - 'A');
+  }
+  if (name.length == 6 && [name hasPrefix:@"Digit"]) {
+    unichar digit = [name characterAtIndex:5];
+    if (digit >= '0' && digit <= '9') return (GhosttyKey)(GHOSTTY_KEY_DIGIT_0 + digit - '0');
+  }
+  if (name.length == 7 && [name hasPrefix:@"Numpad"]) {
+    unichar digit = [name characterAtIndex:6];
+    if (digit >= '0' && digit <= '9') return (GhosttyKey)(GHOSTTY_KEY_NUMPAD_0 + digit - '0');
+  }
+  static NSDictionary<NSString *, NSNumber *> *keys;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    keys = @{@"NumpadEnter": @(GHOSTTY_KEY_NUMPAD_ENTER), @"NumpadAdd": @(GHOSTTY_KEY_NUMPAD_ADD), @"NumpadSubtract": @(GHOSTTY_KEY_NUMPAD_SUBTRACT), @"NumpadMultiply": @(GHOSTTY_KEY_NUMPAD_MULTIPLY), @"NumpadDivide": @(GHOSTTY_KEY_NUMPAD_DIVIDE), @"NumpadDecimal": @(GHOSTTY_KEY_NUMPAD_DECIMAL), @"NumpadEqual": @(GHOSTTY_KEY_NUMPAD_EQUAL), @"NumLock": @(GHOSTTY_KEY_NUM_LOCK), @"ArrowUp": @(GHOSTTY_KEY_ARROW_UP), @"ArrowDown": @(GHOSTTY_KEY_ARROW_DOWN), @"ArrowLeft": @(GHOSTTY_KEY_ARROW_LEFT), @"ArrowRight": @(GHOSTTY_KEY_ARROW_RIGHT),
+      @"Enter": @(GHOSTTY_KEY_ENTER), @"Escape": @(GHOSTTY_KEY_ESCAPE), @"Backspace": @(GHOSTTY_KEY_BACKSPACE), @"Tab": @(GHOSTTY_KEY_TAB), @"Space": @(GHOSTTY_KEY_SPACE),
+      @"Home": @(GHOSTTY_KEY_HOME), @"End": @(GHOSTTY_KEY_END), @"PageUp": @(GHOSTTY_KEY_PAGE_UP), @"PageDown": @(GHOSTTY_KEY_PAGE_DOWN), @"Insert": @(GHOSTTY_KEY_INSERT), @"Delete": @(GHOSTTY_KEY_DELETE),
+      @"Backquote": @(GHOSTTY_KEY_BACKQUOTE), @"Backslash": @(GHOSTTY_KEY_BACKSLASH), @"BracketLeft": @(GHOSTTY_KEY_BRACKET_LEFT), @"BracketRight": @(GHOSTTY_KEY_BRACKET_RIGHT), @"Comma": @(GHOSTTY_KEY_COMMA),
+      @"Equal": @(GHOSTTY_KEY_EQUAL), @"Minus": @(GHOSTTY_KEY_MINUS), @"Period": @(GHOSTTY_KEY_PERIOD), @"Quote": @(GHOSTTY_KEY_QUOTE), @"Semicolon": @(GHOSTTY_KEY_SEMICOLON), @"Slash": @(GHOSTTY_KEY_SLASH)};
+  });
+  if ([name hasPrefix:@"F"] && name.length <= 3) {
+    NSInteger function = [[name substringFromIndex:1] integerValue];
+    if (function >= 1 && function <= 25) return (GhosttyKey)(GHOSTTY_KEY_F1 + function - 1);
+  }
+  return keys[name] ? (GhosttyKey)keys[name].intValue : GHOSTTY_KEY_UNIDENTIFIED;
+}
+- (BOOL)sendKey:(NSString *)name text:(NSString *)text modifiers:(NSUInteger)modifiers action:(NSUInteger)action {
+  if (self.readOnly || !self.writeInput || action > 2 || modifiers > 63) return NO;
+  NSData *utf8 = [text dataUsingEncoding:NSUTF8StringEncoding];
+  if (utf8.length > 1024 * 1024) return NO;
+  // The encoder accepts printable layout text, never Cocoa function characters
+  // or already transformed control bytes. Special keys use their logical code.
+  for (NSUInteger i = 0; i < text.length; i++) {
+    unichar character = [text characterAtIndex:i];
+    if (character < 32 || character == 127 || (character >= 0xF700 && character <= 0xF8FF)) return NO;
+  }
+  ghostty_key_encoder_setopt_from_terminal(_keyEncoder, _terminal);
+  ghostty_key_event_set_action(_keyEvent, (GhosttyKeyAction)action);
+  ghostty_key_event_set_key(_keyEvent, physicalKey(name));
+  ghostty_key_event_set_mods(_keyEvent, (GhosttyMods)modifiers);
+  ghostty_key_event_set_consumed_mods(_keyEvent, 0);
+  ghostty_key_event_set_composing(_keyEvent, false);
+  ghostty_key_event_set_unshifted_codepoint(_keyEvent, text.length == 1 ? [text.lowercaseString characterAtIndex:0] : 0);
+  ghostty_key_event_set_utf8(_keyEvent, (const char *)utf8.bytes, utf8.length);
+  std::vector<char> bytes(utf8.length + 256); size_t written = 0;
+  GhosttyResult result = ghostty_key_encoder_encode(_keyEncoder, _keyEvent, bytes.data(), bytes.size(), &written);
+  if (result == GHOSTTY_OUT_OF_SPACE && written <= 2 * 1024 * 1024) {
+    bytes.resize(written);
+    result = ghostty_key_encoder_encode(_keyEncoder, _keyEvent, bytes.data(), bytes.size(), &written);
+  }
+  if (result != GHOSTTY_SUCCESS) return NO;
+  if (written) self.writeInput([NSData dataWithBytes:bytes.data() length:written]);
+  return YES;
 }
 - (BOOL)pasteText:(NSString *)text {
   if (self.readOnly || !self.writeInput) return NO;
