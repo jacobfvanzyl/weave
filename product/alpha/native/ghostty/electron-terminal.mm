@@ -28,6 +28,10 @@ static NSString *printableText(NSString *text) {
 @property(nonatomic, strong) WeaveTerminalRenderer *terminal;
 @property(nonatomic, copy) void (^event)(NSDictionary *value);
 @property(nonatomic) NSRange selection;
+@property(nonatomic) NSRange markedSelection;
+@property(nonatomic) NSUInteger selectionAnchor;
+@property(nonatomic) BOOL selecting;
+@property(nonatomic, strong) NSTrackingArea *mouseArea;
 @property(nonatomic, strong) NSMutableAttributedString *marked;
 @property(nonatomic, strong) NSEvent *interpretingEvent;
 @property(nonatomic, strong) NSMutableSet<NSNumber *> *pressedKeys;
@@ -43,6 +47,10 @@ static NSString *printableText(NSString *text) {
 }
 - (void)drawRect:(NSRect)rect {
   [self.terminal drawInContext:NSGraphicsContext.currentContext.CGContext size:self.bounds.size];
+  if (self.marked.length) {
+    [self.marked addAttributes:@{NSFontAttributeName: [NSFont fontWithName:@"Menlo" size:13], NSForegroundColorAttributeName:NSColor.textColor, NSBackgroundColorAttributeName:NSColor.textBackgroundColor, NSUnderlineStyleAttributeName:@(NSUnderlineStyleSingle)} range:NSMakeRange(0, self.marked.length)];
+    [self.marked drawAtPoint:self.terminal.cursorRect.origin];
+  }
   if (self.selection.length) {
     [[NSColor.selectedTextBackgroundColor colorWithAlphaComponent:0.35] setFill];
     NSUInteger cols = self.terminal.columns;
@@ -83,7 +91,7 @@ static NSString *printableText(NSString *text) {
 - (void)insertText:(id)value replacementRange:(NSRange)range {
   NSString *text = [value isKindOfClass:NSAttributedString.class] ? [value string] : value;
   NSEvent *event = self.hasMarkedText ? nil : self.interpretingEvent;
-  self.marked = nil;
+  self.marked = nil; self.needsDisplay = YES;
   [self sendKey:event ? macKey(event.keyCode) : @"Unidentified" text:text event:event modifiers:event ? weaveKeyModifiers(event.modifierFlags) : 0];
 }
 - (void)doCommandBySelector:(SEL)selector {
@@ -94,36 +102,54 @@ static NSString *printableText(NSString *text) {
   if (key) [self sendKey:key text:@"" event:self.interpretingEvent modifiers:modifiers];
 }
 - (void)setMarkedText:(id)value selectedRange:(NSRange)selection replacementRange:(NSRange)replacement {
+  if (self.terminal.readOnly) return;
+  self.markedSelection = selection; self.needsDisplay = YES;
   self.marked = [[NSMutableAttributedString alloc] initWithAttributedString:[value isKindOfClass:NSAttributedString.class] ? value : [[NSAttributedString alloc] initWithString:value]];
 }
-- (void)unmarkText { self.marked = nil; }
+- (void)unmarkText { NSString *text = self.marked.string; self.marked = nil; self.needsDisplay = YES; if (text.length) [self sendKey:@"Unidentified" text:text event:nil modifiers:0]; }
 - (BOOL)hasMarkedText { return self.marked.length > 0; }
 - (NSRange)markedRange { return self.marked.length ? NSMakeRange(0, self.marked.length) : NSMakeRange(NSNotFound, 0); }
-- (NSRange)selectedRange { return self.selection; }
+- (NSRange)selectedRange { return self.marked.length ? self.markedSelection : NSMakeRange(NSNotFound, 0); }
 - (NSArray *)validAttributesForMarkedText { return @[]; }
 - (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range actualRange:(NSRangePointer)actual { if (actual) *actual = NSMakeRange(NSNotFound, 0); return nil; }
 - (NSUInteger)characterIndexForPoint:(NSPoint)point { return NSNotFound; }
 - (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actual {
   if (actual) *actual = NSMakeRange(0, 0);
-  return [self.window convertRectToScreen:[self convertRect:NSMakeRect(8, 8, self.terminal.cellWidth, self.terminal.cellHeight) toView:nil]];
+  return [self.window convertRectToScreen:[self convertRect:self.terminal.cursorRect toView:nil]];
 }
 - (NSUInteger)cellAt:(NSPoint)point {
   NSInteger x = MAX(0, MIN((NSInteger)self.terminal.columns - 1, (NSInteger)((point.x - 8) / self.terminal.cellWidth)));
   NSInteger y = MAX(0, MIN((NSInteger)self.terminal.rows - 1, (NSInteger)((point.y - 8) / self.terminal.cellHeight)));
   return y * self.terminal.columns + x;
 }
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (self.mouseArea) [self removeTrackingArea:self.mouseArea];
+  self.mouseArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect owner:self userInfo:nil];
+  [self addTrackingArea:self.mouseArea];
+}
+- (BOOL)reportMouse:(NSEvent *)event button:(NSUInteger)button action:(NSUInteger)action {
+  return [self.terminal sendMouseAt:[self convertPoint:event.locationInWindow fromView:nil] button:button action:action modifiers:weaveKeyModifiers(event.modifierFlags)];
+}
 - (void)mouseDown:(NSEvent *)event {
   [self.window makeFirstResponder:self];
-  NSUInteger anchor = [self cellAt:[self convertPoint:event.locationInWindow fromView:nil]];
-  self.selection = NSMakeRange(anchor, 0);
-  while (YES) {
-    NSEvent *next = [self.window nextEventMatchingMask:NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp];
-    NSUInteger cell = [self cellAt:[self convertPoint:next.locationInWindow fromView:nil]];
-    self.selection = NSMakeRange(MIN(anchor, cell), MAX(anchor, cell) - MIN(anchor, cell) + (next.type == NSEventTypeLeftMouseDragged ? 1 : 0));
-    self.needsDisplay = YES;
-    if (next.type == NSEventTypeLeftMouseUp) break;
-  }
+  self.selecting = ![self reportMouse:event button:1 action:0];
+  if (self.selecting) { self.selectionAnchor = [self cellAt:[self convertPoint:event.locationInWindow fromView:nil]]; self.selection = NSMakeRange(self.selectionAnchor, 0); self.needsDisplay = YES; }
 }
+- (void)mouseDragged:(NSEvent *)event {
+  if (!self.selecting) { [self reportMouse:event button:1 action:2]; return; }
+  NSUInteger cell = [self cellAt:[self convertPoint:event.locationInWindow fromView:nil]];
+  self.selection = NSMakeRange(MIN(self.selectionAnchor, cell), MAX(self.selectionAnchor, cell) - MIN(self.selectionAnchor, cell) + 1);
+  self.needsDisplay = YES;
+}
+- (void)mouseUp:(NSEvent *)event { if (!self.selecting) [self reportMouse:event button:1 action:1]; self.selecting = NO; }
+- (void)mouseMoved:(NSEvent *)event { [self reportMouse:event button:0 action:2]; }
+- (void)rightMouseDown:(NSEvent *)event { if (![self reportMouse:event button:2 action:0]) [super rightMouseDown:event]; }
+- (void)rightMouseUp:(NSEvent *)event { [self reportMouse:event button:2 action:1]; }
+- (void)rightMouseDragged:(NSEvent *)event { [self reportMouse:event button:2 action:2]; }
+- (void)otherMouseDown:(NSEvent *)event { [self reportMouse:event button:3 action:0]; }
+- (void)otherMouseUp:(NSEvent *)event { [self reportMouse:event button:3 action:1]; }
+- (void)otherMouseDragged:(NSEvent *)event { [self reportMouse:event button:3 action:2]; }
 - (void)copy:(id)sender {
   if (!self.selection.length) return;
   // Clipboard extraction uses the renderer's cell identities, not NSString offsets.
@@ -136,6 +162,7 @@ static NSString *printableText(NSString *text) {
   if (value && !self.terminal.readOnly) [self.terminal pasteText:value];
 }
 - (void)scrollWheel:(NSEvent *)event {
+  if (event.scrollingDeltaY && [self reportMouse:event button:event.scrollingDeltaY > 0 ? 4 : 5 action:0]) return;
   [self.terminal scrollLines:(NSInteger)(-event.scrollingDeltaY)]; self.needsDisplay = YES;
 }
 - (BOOL)isAccessibilityElement { return YES; }
@@ -285,6 +312,13 @@ static napi_value acceptance(napi_env env, napi_callback_info info) {
     NSString *characters = [value isEqualToString:@"Enter"] ? @"\r" : [value isEqualToString:@"Escape"] ? @"\033" : value;
     NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:view.window.windowNumber context:nil characters:characters charactersIgnoringModifiers:characters isARepeat:NO keyCode:[value isEqualToString:@"Enter"] ? 36 : [value isEqualToString:@"Escape"] ? 53 : [value isEqualToString:@"i"] ? 34 : 0];
     [view keyDown:event];
+  } else if ([action isEqualToString:@"composition"]) {
+    void (^writer)(NSData *) = view.terminal.writeInput; __block BOOL premature = NO;
+    view.terminal.writeInput = ^(NSData *data) { premature = YES; };
+    [view setMarkedText:value selectedRange:NSMakeRange(value.length, 0) replacementRange:NSMakeRange(NSNotFound, 0)];
+    view.terminal.writeInput = writer;
+    if (premature) return error(env, "Composition sent uncommitted input");
+    [view insertText:value replacementRange:NSMakeRange(NSNotFound, 0)];
   } else if ([action isEqualToString:@"paste"]) {
     [view paste:nil];
   } else if ([action isEqualToString:@"copyMarker"]) {

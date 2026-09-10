@@ -13,6 +13,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) CGFloat cellWidth;
 @property(nonatomic, readonly) CGFloat cellHeight;
 @property(nonatomic, readonly) NSString *visibleText;
+@property(nonatomic, readonly) CGRect cursorRect;
+@property(nonatomic, readonly) BOOL mouseReporting;
+- (NSString *)textForVisibleRange:(NSRange)range;
+// Mouse actions: press=0, release=1, motion=2; buttons: left=1, right=2,
+// middle=3, wheel-up=4, wheel-down=5, no button=0. Shift keeps local selection.
+- (BOOL)sendMouseAt:(CGPoint)point button:(NSUInteger)button action:(NSUInteger)action modifiers:(NSUInteger)modifiers NS_SWIFT_NAME(sendMouse(at:button:action:modifiers:));
 - (BOOL)restoreData:(NSData *)data columns:(NSUInteger)columns rows:(NSUInteger)rows NS_SWIFT_NAME(restore(_:columns:rows:));
 - (BOOL)consume:(NSData *)data reset:(BOOL)reset;
 - (BOOL)resizeToSize:(CGSize)size;

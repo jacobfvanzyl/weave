@@ -64,6 +64,26 @@ int main(int argc, char **argv) {
     [renderer resizeToSize:CGSizeMake(800, 400)];
     if (replies.length) return 23;
     [renderer resizeToSize:CGSizeMake(720, 360)];
+    [renderer resizeToSize:CGSizeMake(16 + renderer.cellWidth * 6 + 0.1, 16 + renderer.cellHeight * 4 + 0.1)];
+    [renderer consume:[@"ABCDEFGHIJ" dataUsingEncoding:NSUTF8StringEncoding] reset:YES];
+    if (![[renderer textFromCell:0 count:10] isEqualToString:@"ABCDEFGHIJ"]) return 28;
+    [renderer consume:[@"界é👩🏽‍💻" dataUsingEncoding:NSUTF8StringEncoding] reset:YES];
+    if (![[renderer textFromCell:1 count:1] isEqualToString:@"界"]) return 29;
+    if (![[renderer textForVisibleRange:NSMakeRange(1, 2)] isEqualToString:@"é"]) return 30;
+    [renderer consume:[@"\033[?1002h\033[?1006h" dataUsingEncoding:NSUTF8StringEncoding] reset:NO];
+    [replies setLength:0];
+    CGPoint point = CGPointMake(8 + renderer.cellWidth * 2.2, 8 + renderer.cellHeight * 1.2);
+    if (![renderer sendMouseAt:point button:1 action:0 modifiers:0] || ![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\033[<0;3;2M"]) return 31;
+    [replies setLength:0];
+    [renderer sendMouseAt:point button:1 action:1 modifiers:0];
+    if (![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\033[<0;3;2m"]) return 32;
+    [replies setLength:0];
+    if ([renderer sendMouseAt:point button:1 action:0 modifiers:1] || replies.length) return 33;
+    renderer.readOnly = YES;
+    if ([renderer sendMouseAt:point button:1 action:0 modifiers:0] || [renderer sendKey:@"KeyX" text:@"x" modifiers:0 action:1] || replies.length) return 34;
+    if (![[renderer textFromCell:1 count:1] isEqualToString:@"界"]) return 35;
+    renderer.readOnly = NO;
+    [renderer resizeToSize:CGSizeMake(720, 360)];
     const char *snapshotPath = getenv("WEAVE_SNAPSHOT_PROBE_INPUT");
     if (snapshotPath) {
       NSDictionary *snapshot = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:@(snapshotPath)] options:0 error:NULL];
@@ -90,7 +110,7 @@ int main(int argc, char **argv) {
     BOOL saved = CGImageDestinationFinalize(output);
     CFRelease(output); CGImageRelease(image); CGContextRelease(context);
     if (!saved) return 7;
-    puts("{\"passed\":true,\"fragmentedUtf8\":true,\"alternateScreen\":true,\"protocolReplies\":true,\"snapshotReplySuppression\":true,\"coreTextRendered\":true,\"wideGraphemeText\":true,\"bracketedPaste\":true,\"readOnlyInput\":true,\"applicationCursorKeys\":true,\"modifiedKeys\":true,\"kittyTransportDisabled\":true,\"applicationKeypad\":true}");
+    puts("{\"passed\":true,\"fragmentedUtf8\":true,\"alternateScreen\":true,\"protocolReplies\":true,\"snapshotReplySuppression\":true,\"coreTextRendered\":true,\"wideGraphemeText\":true,\"bracketedPaste\":true,\"readOnlyInput\":true,\"applicationCursorKeys\":true,\"modifiedKeys\":true,\"kittyTransportDisabled\":true,\"applicationKeypad\":true,\"wrappedCopy\":true,\"wideSelection\":true,\"sgrMouse\":true,\"observerCopy\":true}");
   }
   return 0;
 }

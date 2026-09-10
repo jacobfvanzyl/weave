@@ -79,3 +79,47 @@ This checkpoint passed the full root check (193 Alpha, 76 Host, 24 protocol,
 signed iPad native compilation. The real tmux-to-native probe evidence is at
 `/tmp/weave-native-renderer-gyk0TU`; its input was generated from a disposable
 live tmux session, not from the user's terminal state.
+
+## 4. Native input baseline
+
+The native adapters now display marked IME text and anchor candidate rectangles
+at the terminal cursor. A composition remains local until committed. iPad special
+and Control keys use physical HID identities and preserve press/release/cancel
+state; ordinary text and input methods stay with UIKit. Electron retains its
+physical-key and input-method paths. Kitty event reporting remains disabled by
+the transport restriction above.
+
+Both adapters use libghostty mouse encoding for application mouse input;
+Shift retains local selection. The iPad pointer recognizer handles indirect
+pointer buttons and motion, with hover and scroll reporting. The shared renderer
+extracts logical wrapped lines without inserted newlines and respects wide-cell
+and grapheme boundaries. iPad copy maps TextKit's UTF-16 selection back to cells.
+Observers retain copy and focus while input and Host resizing remain blocked.
+
+Validation:
+
+- Full root check passed: 193 Alpha, 76 Host, 24 protocol, 2 boundary tests and
+  builds/typechecks.
+- Shared native probe passed wrapped copy, wide/grapheme selection, SGR mouse
+  press/release, Shift override and observer copy/input checks. Evidence:
+  `/tmp/weave-native-renderer-SnUsLW`.
+- Packaged native Electron pairing and relaunch passed, including the same native
+  pane through split/maximize/restore, clipboard/Neovim, reattachment, and a
+  marked composition committed into Neovim. Evidence:
+  `/tmp/weave-desktop-M4dz57`. Its web-content screenshots omit the native sibling
+  view; `native-reattached.png` was separately inspected and shows the terminal.
+- Signed physical-iPad app-driven acceptance passed the corresponding flow,
+  including `WEAVE_NEOVIM_INPUT_REATTACHED界é`. Result/image:
+  `/tmp/wve65-input-ipad-result.json`, `/tmp/wve65-input-ipad.png`.
+  The image was inspected. Fresh fixture cleanup returned `removed: true`;
+  the disposable Host and tmux server were stopped.
+
+This is not physical-keyboard, trackpad, system IME candidate-picker, or full
+accessibility acceptance. Those interactions still need an attended device pass;
+prior XCTest runs failed while enabling UI automation before any test executed.
+The native candidate remains opt-in, and WVE-65 remains In Progress.
+
+Implementation references: Apple's [physical key representation](https://developer.apple.com/documentation/uikit/uikey),
+[press event handling](https://developer.apple.com/documentation/uikit/uiresponder/pressesbegan(_:with:)),
+and [marked text contract](https://developer.apple.com/documentation/uikit/uitextinput/setmarkedtext(_:selectedrange:));
+libghostty's pinned public mouse encoder and row-wrap APIs in the vendored headers.

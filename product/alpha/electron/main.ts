@@ -64,6 +64,8 @@ else {
           } else if (stage === 'native-neovim-input') {
             if (native) key('i'); else { key('I'); contents.sendInputEvent({ type: 'char', keyCode: 'i' }); }
             await paste('WEAVE_NEOVIM_INPUT');
+          } else if (stage === 'native-composition') {
+            native?.acceptance('composition', '界é');
           } else if (stage === 'native-reattached-input') {
             await paste('_REATTACHED');
           } else if (stage === 'native-finish') {

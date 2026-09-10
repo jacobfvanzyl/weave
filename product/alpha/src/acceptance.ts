@@ -56,7 +56,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     }
     throw new Error(`Timed out at ${stage}`);
   };
-  const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button, [role=menuitem]')].find((el) => el.getAttribute('aria-label') === name || el.textContent?.trim() === name);
+  const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button, [role=menuitem]')].find((el) => el.getBoundingClientRect().height > 0 && (el.getAttribute('aria-label') === name || el.textContent?.trim() === name));
   const set = (selector: string, value: string) => {
     const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
     const prototype = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -133,6 +133,17 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     if (!terminalId) throw new Error('No terminal session identity');
     const terminalBounds = (nativeSurface()?.[0] ?? document.querySelector('.xterm-screen'))!.getBoundingClientRect();
     if (terminalBounds.width < 200 || terminalBounds.height < 100 || terminalBounds.right > innerWidth + 1) throw new Error('Terminal is not visibly laid out in the application window.');
+    if (nativeSurface()) {
+      stage = 'persistent split and maximize';
+      const original = nativeSurface()![0];
+      const maximize = () => [...original.closest('section')!.querySelectorAll('button')].find((el) => el.textContent === 'Maximize / restore')!;
+      button('Split right')!.click();
+      await wait(() => document.querySelectorAll('[data-pane-id]').length === 2);
+      maximize().click(); await wait(() => original.getBoundingClientRect().width >= terminalBounds.width - 10);
+      maximize().click(); await wait(() => original.getBoundingClientRect().width < terminalBounds.width - 10);
+      maximize().click(); await wait(() => original.getBoundingClientRect().width >= terminalBounds.width - 10);
+      if (nativeSurface()?.[0] !== original) throw new Error('Layout recreated the native terminal');
+    }
     await new Promise((resolve) => setTimeout(resolve, 300));
     if (nativeSurface()) await nativeSurface()![1].focus();
     else document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!.focus();
@@ -163,8 +174,13 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     state.alphaAcceptanceStage = 'native-reattached-input';
     stage = 'input after terminal reattachment';
     await wait(async () => (await terminalText()).includes('WEAVE_NEOVIM_INPUT_REATTACHED'));
+    if (nativeSurface()) {
+      stage = 'native IME composition'; state.alphaAcceptanceStage = 'native-composition';
+      await wait(async () => (await terminalText()).includes('界é'));
+    }
+
 
     if (document.querySelector('[data-slot="browser-pane"], [data-slot="editor-pane"], [data-symbol="project-pane"]')) throw new Error('Deferred surface mounted');
-    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), permissionSurvivesConversationSwitch: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, runningTerminalReattached: true, deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
+    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), permissionSurvivesConversationSwitch: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, runningTerminalReattached: true, nativePaneLifetime: Boolean(nativeSurface()), nativeCompositionCommit: Boolean(nativeSurface()), deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
   } catch (error) { return { passed: false, stage, error: String(error) }; }
 }

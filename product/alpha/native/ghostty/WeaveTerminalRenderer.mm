@@ -7,10 +7,12 @@
 struct WeaveCell {
   __strong NSString *text = @"";
   GhosttyColorRgb foreground{}, background{};
-  bool spacer = false, bold = false, italic = false, underline = false, strike = false, invisible = false;
+  bool tail = false, spacer = false, bold = false, italic = false, underline = false, strike = false, invisible = false;
 };
 @implementation WeaveTerminalRenderer {
   GhosttyTerminal _terminal;
+  GhosttyMouseEncoder _mouseEncoder;
+  GhosttyMouseEvent _mouseEvent;
   GhosttyKeyEncoder _keyEncoder;
   GhosttyKeyEvent _keyEvent;
   GhosttyRenderState _frame;
@@ -21,6 +23,7 @@ struct WeaveCell {
   CGFloat _cellWidth, _cellHeight, _ascent;
   BOOL _replaying;
   std::vector<WeaveCell> _visible;
+  std::vector<bool> _wrapped;
   GhosttyRenderStateCursor _cursor;
 }
 @synthesize columns = _columns, rows = _rows, cellWidth = _cellWidth, cellHeight = _cellHeight;
@@ -43,7 +46,7 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   _cellWidth = advance.width;
   _ascent = ceil(CTFontGetAscent(_font));
   _cellHeight = ceil(_ascent + CTFontGetDescent(_font) + 2);
-  if (ghostty_key_encoder_new(NULL, &_keyEncoder) != GHOSTTY_SUCCESS ||
+  if (ghostty_mouse_encoder_new(NULL, &_mouseEncoder) != GHOSTTY_SUCCESS || ghostty_mouse_event_new(NULL, &_mouseEvent) != GHOSTTY_SUCCESS || ghostty_key_encoder_new(NULL, &_keyEncoder) != GHOSTTY_SUCCESS ||
       ghostty_key_event_new(NULL, &_keyEvent) != GHOSTTY_SUCCESS ||
       ghostty_render_state_new(NULL, &_frame) != GHOSTTY_SUCCESS ||
       ghostty_render_state_row_iterator_new(NULL, &_iterator) != GHOSTTY_SUCCESS ||
@@ -51,6 +54,7 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   return self;
 }
 - (void)dealloc {
+  ghostty_mouse_event_free(_mouseEvent); ghostty_mouse_encoder_free(_mouseEncoder);
   ghostty_key_encoder_free(_keyEncoder);
   ghostty_key_event_free(_keyEvent);
   ghostty_terminal_free(_terminal);
@@ -125,14 +129,19 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   ghostty_render_state_get(_frame, GHOSTTY_RENDER_STATE_DATA_COLOR_BACKGROUND, &background);
   ghostty_render_state_get(_frame, GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND, &foreground);
   ghostty_render_state_get(_frame, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &_iterator);
+  _wrapped.clear();
   _visible.clear(); _visible.reserve(_rows * _columns);
   while (ghostty_render_state_row_iterator_next(_iterator)) {
+    GhosttyRow row; bool wrapped = false;
+    ghostty_render_state_row_get(_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_RAW, &row);
+    ghostty_row_get(row, GHOSTTY_ROW_DATA_WRAP, &wrapped); _wrapped.push_back(wrapped);
     ghostty_render_state_row_get(_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &_cells);
     while (ghostty_render_state_row_cells_next(_cells)) {
       WeaveCell cell;
       GhosttyCell raw; GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
       ghostty_render_state_row_cells_get(_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw);
       ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide);
+      cell.tail = wide == GHOSTTY_CELL_WIDE_SPACER_TAIL;
       cell.spacer = wide == GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD;
       cell.background = background; cell.foreground = foreground;
       ghostty_render_state_row_cells_get(_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &cell.background);
@@ -158,16 +167,63 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   ghostty_render_state_get(_frame, GHOSTTY_RENDER_STATE_DATA_CURSOR, &_cursor);
   return _visible.size() == _rows * _columns;
 }
-- (NSString *)visibleText { return [self textFromCell:0 count:_visible.size()]; }
-- (NSString *)textFromCell:(NSUInteger)start count:(NSUInteger)count {
+- (CGRect)cursorRect { return CGRectMake(8 + _cursor.viewport_x * _cellWidth, 8 + _cursor.viewport_y * _cellHeight, _cellWidth, _cellHeight); }
+- (NSString *)visibleText {
   NSMutableString *text = [NSMutableString string];
-  if (start >= _visible.size()) return text;
-  NSUInteger end = start + MIN(count, _visible.size() - start);
-  for (NSUInteger i = start; i < end; i++) {
+  for (NSUInteger i = 0; i < _visible.size(); i++) {
     if (!_visible[i].spacer) [text appendString:_visible[i].text.length ? _visible[i].text : @" "];
-    if ((i + 1) % _columns == 0 && i + 1 < end) [text appendString:@"\n"];
+    if ((i + 1) % _columns == 0 && i + 1 < _visible.size()) [text appendString:@"\n"];
   }
   return text;
+}
+- (NSString *)textForVisibleRange:(NSRange)range {
+  if (!range.length || range.location == NSNotFound) return @"";
+  NSUInteger offset = 0, start = NSNotFound, end = 0;
+  for (NSUInteger i = 0; i < _visible.size(); i++) {
+    NSUInteger length = _visible[i].spacer ? 0 : MAX((NSUInteger)1, _visible[i].text.length);
+    if (offset + length > range.location && offset < NSMaxRange(range)) { if (start == NSNotFound) start = i; end = i + 1; }
+    offset += length;
+    if ((i + 1) % _columns == 0) offset++;
+  }
+  return start == NSNotFound ? @"" : [self textFromCell:start count:end - start];
+}
+- (NSString *)textFromCell:(NSUInteger)start count:(NSUInteger)count {
+  NSMutableString *text = [NSMutableString string];
+  if (start >= _visible.size() || !count) return text;
+  NSUInteger end = start + MIN(count, _visible.size() - start);
+  if (_visible[start].tail && start > 0) start--;
+  for (NSUInteger i = start; i < end; i++) {
+    if (!_visible[i].spacer) [text appendString:_visible[i].text.length ? _visible[i].text : @" "];
+    if ((i + 1) % _columns == 0 && i + 1 < end && !_wrapped[i / _columns]) {
+      while ([text hasSuffix:@" "]) [text deleteCharactersInRange:NSMakeRange(text.length - 1, 1)];
+      [text appendString:@"\n"];
+    }
+  }
+  return text;
+}
+- (BOOL)mouseReporting {
+  bool mode = false;
+  ghostty_terminal_get(_terminal, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &mode);
+  return mode && !self.readOnly;
+}
+- (BOOL)sendMouseAt:(CGPoint)point button:(NSUInteger)button action:(NSUInteger)action modifiers:(NSUInteger)modifiers {
+  if (!self.mouseReporting || !self.writeInput || (modifiers & 1) || button > 11 || action > 2) return NO;
+  ghostty_mouse_encoder_setopt_from_terminal(_mouseEncoder, _terminal);
+  // Encode cell coordinates using integral cell units; font advances can be fractional.
+  GhosttyMouseEncoderSize size = GHOSTTY_INIT_SIZED(GhosttyMouseEncoderSize);
+  size.screen_width = (uint32_t)_columns; size.screen_height = (uint32_t)_rows; size.cell_width = 1; size.cell_height = 1;
+  ghostty_mouse_encoder_setopt(_mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
+  bool pressed = button >= 1 && button <= 3 && action != 1;
+  ghostty_mouse_encoder_setopt(_mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &pressed);
+  ghostty_mouse_event_set_action(_mouseEvent, (GhosttyMouseAction)action);
+  if (button) ghostty_mouse_event_set_button(_mouseEvent, (GhosttyMouseButton)button); else ghostty_mouse_event_clear_button(_mouseEvent);
+  ghostty_mouse_event_set_mods(_mouseEvent, (GhosttyMods)modifiers);
+  GhosttyMousePosition position = {(float)MAX(0, (point.x - 8) / _cellWidth), (float)MAX(0, (point.y - 8) / _cellHeight)};
+  ghostty_mouse_event_set_position(_mouseEvent, position);
+  char bytes[128]; size_t written = 0;
+  if (ghostty_mouse_encoder_encode(_mouseEncoder, _mouseEvent, bytes, sizeof(bytes), &written) != GHOSTTY_SUCCESS) return NO;
+  if (written) self.writeInput([NSData dataWithBytes:bytes length:written]);
+  return YES;
 }
 static GhosttyKey physicalKey(NSString *name) {
   if (name.length == 4 && [name hasPrefix:@"Key"]) {

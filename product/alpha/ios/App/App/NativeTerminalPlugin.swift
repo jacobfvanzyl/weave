@@ -2,6 +2,26 @@ import Capacitor
 import UIKit
 import WebKit
 
+private final class TerminalPointerRecognizer: UIGestureRecognizer {
+    private let report: (CGPoint, UInt, UInt, UInt) -> Void
+    private var button: UInt = 1
+    init(report: @escaping (CGPoint, UInt, UInt, UInt) -> Void) { self.report = report; super.init(target: nil, action: nil) }
+    private func send(_ touches: Set<UITouch>, _ event: UIEvent, _ action: UInt) {
+        guard let touch = touches.first else { return }
+        let flags = event.modifierFlags
+        let modifiers: UInt = (flags.contains(.shift) ? 1 : 0) | (flags.contains(.control) ? 2 : 0) | (flags.contains(.alternate) ? 4 : 0)
+        report(touch.location(in: view), button, action, modifiers)
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if event.modifierFlags.contains(.shift) { state = .failed; return }
+        button = event.buttonMask.contains(.secondary) ? 2 : 1
+        state = .began; send(touches, event, 0)
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) { state = .changed; send(touches, event, 2) }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { send(touches, event, 1); state = .ended }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { send(touches, event, 1); state = .cancelled }
+}
+
 private final class GhosttyTerminalTextView: UITextView {
     let terminal: WeaveTerminalRenderer
     var sendInput: ((String) -> Void)?
@@ -9,6 +29,9 @@ private final class GhosttyTerminalTextView: UITextView {
     var didFocus: (() -> Void)?
     private var updatingFrame = false
     private var panRemainder: CGFloat = 0
+    private var composition: String?
+    private var heldKeys: [Int: (String, UInt)] = [:]
+    private var pointer: TerminalPointerRecognizer?
 
     init(terminal: WeaveTerminalRenderer) {
         self.terminal = terminal
@@ -29,7 +52,15 @@ private final class GhosttyTerminalTextView: UITextView {
         terminal.writeInput = { [weak self] data in self?.sendInput?(data.base64EncodedString()) }
         let pan = UIPanGestureRecognizer(target: self, action: #selector(scrollTerminal(_:)))
         pan.minimumNumberOfTouches = 2
+        pan.allowedScrollTypesMask = .all
         addGestureRecognizer(pan)
+        let pointer = TerminalPointerRecognizer { [weak self] point, button, action, modifiers in
+            _ = self?.terminal.sendMouse(at: point, button: button, action: action, modifiers: modifiers)
+        }
+        pointer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        pointer.isEnabled = false
+        addGestureRecognizer(pointer); self.pointer = pointer
+        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hoverTerminal(_:))))
     }
     required init?(coder: NSCoder) { fatalError("Not a storyboard view") }
     override var canBecomeFirstResponder: Bool { true }
@@ -38,9 +69,18 @@ private final class GhosttyTerminalTextView: UITextView {
         if focused { didFocus?() }
         return focused
     }
-    override func caretRect(for position: UITextPosition) -> CGRect { .zero }
+    override func resignFirstResponder() -> Bool {
+        for (_, key) in heldKeys { _ = terminal.sendKey(key.0, text: "", modifiers: key.1, action: 0) }
+        heldKeys.removeAll()
+        return super.resignFirstResponder()
+    }
+    override func caretRect(for position: UITextPosition) -> CGRect { terminal.cursorRect }
+    override func firstRect(for range: UITextRange) -> CGRect { terminal.cursorRect }
     override func draw(_ rect: CGRect) {
         if let context = UIGraphicsGetCurrentContext() { terminal.draw(in: context, size: bounds.size) }
+        if let composition, !composition.isEmpty {
+            (composition as NSString).draw(at: terminal.cursorRect.origin, withAttributes: [.font: font!, .foregroundColor: UIColor.label, .backgroundColor: UIColor.systemBackground, .underlineStyle: NSUnderlineStyle.single.rawValue])
+        }
     }
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -60,6 +100,7 @@ private final class GhosttyTerminalTextView: UITextView {
         updatingFrame = true
         // TextKit supplies native selection, copy and accessibility; libghostty
         // owns the screen/cursor and CoreText owns all visible terminal drawing.
+        pointer?.isEnabled = terminal.mouseReporting
         let visible = terminal.visibleText
         if markedTextRange == nil, text != visible {
             let selection = selectedRange
@@ -98,34 +139,86 @@ private final class GhosttyTerminalTextView: UITextView {
         }
         flush()
     }
+    override func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+        guard !terminal.readOnly else { return }
+        composition = markedText
+        super.setMarkedText(markedText, selectedRange: selectedRange)
+        setNeedsDisplay()
+    }
+    override func unmarkText() {
+        let committed = composition; composition = nil
+        super.unmarkText()
+        if let committed, !committed.isEmpty { input(committed) }
+        refreshText()
+    }
     override func insertText(_ text: String) {
+        composition = nil
+        if markedTextRange != nil { super.unmarkText() }
         input(text.replacingOccurrences(of: "\n", with: "\r"))
+        refreshText()
+    }
+    override func copy(_ sender: Any?) {
+        guard selectedRange.length > 0 else { return }
+        UIPasteboard.general.string = terminal.text(forVisibleRange: selectedRange)
     }
     override func paste(_ sender: Any?) {
         if let text = UIPasteboard.general.string { _ = terminal.pasteText(text) }
     }
     override func deleteBackward() { input("\u{7f}") }
-    override var keyCommands: [UIKeyCommand]? {
-        if markedTextRange != nil { return super.keyCommands }
-        let arrows = [UIKeyCommand.inputUpArrow, UIKeyCommand.inputDownArrow, UIKeyCommand.inputRightArrow, UIKeyCommand.inputLeftArrow, UIKeyCommand.inputEscape, "\t"]
-        let modifierSets: [UIKeyModifierFlags] = [[], .shift, .control, .alternate, [.shift, .control], [.shift, .alternate]]
-        let keys = arrows.flatMap { input in modifierSets.map { UIKeyCommand(input: input, modifierFlags: $0, action: #selector(terminalKey(_:))) } }
-        let commands = keys + "abcdefghijklmnopqrstuvwxyz".map { UIKeyCommand(input: String($0), modifierFlags: .control, action: #selector(terminalKey(_:))) }
-        commands.forEach { $0.wantsPriorityOverSystemBehavior = true }
-        return commands
+    private func modifiers(_ flags: UIKeyModifierFlags) -> UInt {
+        (flags.contains(.shift) ? 1 : 0) | (flags.contains(.control) ? 2 : 0) | (flags.contains(.alternate) ? 4 : 0) | (flags.contains(.command) ? 8 : 0) | (flags.contains(.alphaShift) ? 16 : 0)
     }
-    @objc private func terminalKey(_ key: UIKeyCommand) {
-        guard let value = key.input else { return }
-        let names = [UIKeyCommand.inputUpArrow: "ArrowUp", UIKeyCommand.inputDownArrow: "ArrowDown", UIKeyCommand.inputRightArrow: "ArrowRight", UIKeyCommand.inputLeftArrow: "ArrowLeft", UIKeyCommand.inputEscape: "Escape", "\t": "Tab"]
-        let name = names[value] ?? "Key" + value.uppercased()
-        let modifiers: UInt = (key.modifierFlags.contains(.shift) ? 1 : 0) | (key.modifierFlags.contains(.control) ? 2 : 0) | (key.modifierFlags.contains(.alternate) ? 4 : 0)
-        _ = terminal.sendKey(name, text: names[value] == nil ? value : "", modifiers: modifiers, action: 1)
+    private func keyName(_ code: Int) -> String? {
+        if (4...29).contains(code) { return "Key" + String(UnicodeScalar(code - 4 + 65)!) }
+        if (30...38).contains(code) { return "Digit" + String(code - 29) }
+        if (58...69).contains(code) { return "F" + String(code - 57) }
+        if (104...115).contains(code) { return "F" + String(code - 91) }
+        if (89...97).contains(code) { return "Numpad" + String(code - 88) }
+        return [39:"Digit0",40:"Enter",41:"Escape",42:"Backspace",43:"Tab",44:"Space",45:"Minus",46:"Equal",47:"BracketLeft",48:"BracketRight",49:"Backslash",51:"Semicolon",52:"Quote",53:"Backquote",54:"Comma",55:"Period",56:"Slash",73:"Insert",74:"Home",75:"PageUp",76:"Delete",77:"End",78:"PageDown",79:"ArrowRight",80:"ArrowLeft",81:"ArrowDown",82:"ArrowUp",83:"NumLock",84:"NumpadDivide",85:"NumpadMultiply",86:"NumpadSubtract",87:"NumpadAdd",88:"NumpadEnter",98:"Numpad0",99:"NumpadDecimal"][code]
+    }
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        var remaining = presses
+        for press in presses {
+            guard let key = press.key, let name = keyName(key.keyCode.rawValue), markedTextRange == nil, !key.modifierFlags.contains(.command) else { continue }
+            let special = name.hasPrefix("Arrow") || name.hasPrefix("F") || name.hasPrefix("Numpad") || ["Enter","Escape","Backspace","Tab","Delete","Home","End","PageUp","PageDown","Insert"].contains(name)
+            guard special || key.modifierFlags.contains(.control) else { continue }
+            remaining.remove(press)
+            guard !terminal.readOnly else { continue }
+            let flags = modifiers(key.modifierFlags)
+            let text = key.charactersIgnoringModifiers.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 || (0xF700...0xF8FF).contains($0.value) }) ? "" : key.charactersIgnoringModifiers
+            _ = terminal.sendKey(name, text: text, modifiers: flags, action: heldKeys[key.keyCode.rawValue] == nil ? 1 : 2)
+            heldKeys[key.keyCode.rawValue] = (name, flags)
+        }
+        if !remaining.isEmpty { super.pressesBegan(remaining, with: event) }
+    }
+    private func release(_ presses: Set<UIPress>) -> Set<UIPress> {
+        var remaining = presses
+        for press in presses {
+            if let key = press.key, let held = heldKeys.removeValue(forKey: key.keyCode.rawValue) {
+                _ = terminal.sendKey(held.0, text: "", modifiers: modifiers(key.modifierFlags), action: 0)
+                remaining.remove(press)
+            }
+        }
+        return remaining
+    }
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let remaining = release(presses); if !remaining.isEmpty { super.pressesEnded(remaining, with: event) }
+    }
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let remaining = release(presses); if !remaining.isEmpty { super.pressesCancelled(remaining, with: event) }
+    }
+    @objc private func hoverTerminal(_ recognizer: UIHoverGestureRecognizer) {
+        _ = terminal.sendMouse(at: recognizer.location(in: self), button: 0, action: 2, modifiers: modifiers(recognizer.modifierFlags))
     }
     @objc private func scrollTerminal(_ recognizer: UIPanGestureRecognizer) {
         let movement = recognizer.translation(in: self).y
         recognizer.setTranslation(.zero, in: self)
         panRemainder -= movement
         let lines = Int(panRemainder / terminal.cellHeight)
+        if lines != 0, terminal.mouseReporting, !recognizer.modifierFlags.contains(.shift) {
+            for _ in 0..<min(20, abs(lines)) { _ = terminal.sendMouse(at: recognizer.location(in: self), button: lines < 0 ? 4 : 5, action: 0, modifiers: modifiers(recognizer.modifierFlags)) }
+            panRemainder -= CGFloat(lines) * terminal.cellHeight; return
+        }
         if lines != 0 { terminal.scrollLines(lines); panRemainder -= CGFloat(lines) * terminal.cellHeight; refreshText() }
     }
 }
@@ -217,7 +310,7 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
     // App-driven smoke only. XCTest remains responsible for real keyboard,
     // selection, rotation and accessibility acceptance on the physical iPad.
     func driveAcceptanceStage(_ stage: String) -> Bool {
-        guard ["native-terminal", "native-neovim", "native-reattached-input", "native-neovim-input"].contains(stage) else { return false }
+        guard ["native-terminal", "native-neovim", "native-reattached-input", "native-neovim-input", "native-composition"].contains(stage) else { return false }
         guard let view = surfaces.values.first(where: { !$0.isHidden && !$0.terminal.readOnly }) else { return false }
         _ = view.becomeFirstResponder()
         switch stage {
@@ -227,6 +320,14 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             view.insertText("\n")
         case "native-neovim":
             view.insertText("nvim -u NONE -i NONE\n")
+        case "native-composition":
+            let writer = view.terminal.writeInput
+            var premature = false
+            view.terminal.writeInput = { _ in premature = true }
+            view.setMarkedText("界é", selectedRange: NSRange(location: 3, length: 0))
+            view.terminal.writeInput = writer
+            guard !premature else { return false }
+            view.insertText("界é")
         case "native-reattached-input":
             guard view.terminal.pasteText("_REATTACHED") else { return false }
         case "native-neovim-input":
