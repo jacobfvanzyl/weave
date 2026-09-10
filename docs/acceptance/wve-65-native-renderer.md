@@ -66,6 +66,18 @@ Packaged Electron pairing/relaunch passed at `/tmp/weave-desktop-RGKQ1b` and the
 physical-iPad app-driven regression passed at `/tmp/wve65-keyboard-ipad.json`,
 with fixture cleanup confirmed by `/tmp/wve65-keyboard-ipad-cleanup.json`.
 
+The workspace arrangement checkpoint adds naming, local ordering and an explicit
+running-terminal picker. Its rendered shell scenario checks that those actions
+preserve the selected Thread and context group, and that a stale terminal choice
+cannot start or terminate a process. Native views receive their initial geometry
+before replaying a saved screen. Packaged Electron pairing and relaunch both pass
+at `/tmp/weave-desktop-eEmuE8`, including opening the same Neovim process in another
+arrangement and entering more text after reattachment; `native-reattached.png`
+was inspected. The full repository check passes with 191 Alpha, 73 Host, 24
+protocol and two boundary tests. The signed iPad app and updated XCTest target
+build successfully. The expanded physical-iPad smoke is still pending; these
+desktop results do not establish its reattachment or hardware-input acceptance.
+
 Before enabling this by default, complete physical-iPad acceptance and native
 keyboard/IME/selection work. UIKit still needs full hardware key/release coverage.
 Mouse reporting, IME marked-text presentation and selection across wrapped/wide

@@ -129,6 +129,8 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     const nativeSurface = () => nativeTerminalAcceptance.entries().next().value as [HTMLElement, { focus(): Promise<void>; read(): Promise<string> }] | undefined;
     const terminalText = async () => nativeSurface() ? await nativeSurface()![1].read() : document.querySelector('.xterm-rows')?.textContent ?? '';
     await wait(async () => (await terminalText()).trim());
+    const terminalId = document.querySelector('section[data-terminal-id]')?.getAttribute('data-terminal-id');
+    if (!terminalId) throw new Error('No terminal session identity');
     const terminalBounds = (nativeSurface()?.[0] ?? document.querySelector('.xterm-screen'))!.getBoundingClientRect();
     if (terminalBounds.width < 200 || terminalBounds.height < 100 || terminalBounds.right > innerWidth + 1) throw new Error('Terminal is not visibly laid out in the application window.');
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -145,7 +147,24 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     await wait(async () => { const text = await terminalText(); return text.includes('WEAVE_NEOVIM_INPUT') && text.includes('-- INSERT --'); });
     state.alphaAcceptanceStage = 'native-finish';
     await wait(() => state.alphaAcceptanceStage === 'native-finished');
+    stage = 'reattach running terminal in another arrangement';
+    button(`Workspace actions for ${input.workspaceName}`)!.click();
+    await wait(() => button('New terminal workspace'));
+    button('New terminal workspace')!.click();
+    await wait(() => button('Use running terminal…'));
+    button('Use running terminal…')!.click();
+    const runningTerminal = () => document.querySelector<HTMLButtonElement>(`button[data-terminal-id="${CSS.escape(terminalId)}"]`);
+    await wait(runningTerminal);
+    runningTerminal()!.click();
+    await wait(() => !document.querySelector('[role="dialog"]'));
+    await wait(async () => { const text = await terminalText(); return text.includes('WEAVE_NEOVIM_INPUT') && text.includes('-- INSERT --'); });
+    if (nativeSurface()) await nativeSurface()![1].focus();
+    else document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!.focus();
+    state.alphaAcceptanceStage = 'native-reattached-input';
+    stage = 'input after terminal reattachment';
+    await wait(async () => (await terminalText()).includes('WEAVE_NEOVIM_INPUT_REATTACHED'));
+
     if (document.querySelector('[data-slot="browser-pane"], [data-slot="editor-pane"], [data-symbol="project-pane"]')) throw new Error('Deferred surface mounted');
-    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), permissionSurvivesConversationSwitch: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
+    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), permissionSurvivesConversationSwitch: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, runningTerminalReattached: true, deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
   } catch (error) { return { passed: false, stage, error: String(error) }; }
 }

@@ -45,9 +45,9 @@ private final class GhosttyTerminalTextView: UITextView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let previous = (terminal.columns, terminal.rows)
-        if terminal.resize(to: bounds.size) {
+        if terminal.resize(to: bounds.size), previous != (terminal.columns, terminal.rows) {
             refreshText()
-            if previous != (terminal.columns, terminal.rows) { resized?(Int(terminal.columns), Int(terminal.rows)) }
+            resized?(Int(terminal.columns), Int(terminal.rows))
         }
     }
     func consume(_ data: Data, reset: Bool) -> Bool {
@@ -60,9 +60,10 @@ private final class GhosttyTerminalTextView: UITextView {
         updatingFrame = true
         // TextKit supplies native selection, copy and accessibility; libghostty
         // owns the screen/cursor and CoreText owns all visible terminal drawing.
-        if markedTextRange == nil {
+        let visible = terminal.visibleText
+        if markedTextRange == nil, text != visible {
             let selection = selectedRange
-            text = terminal.visibleText
+            text = visible
             let start = min(selection.location, (text as NSString).length)
             selectedRange = NSRange(location: start, length: min(selection.length, (text as NSString).length - start))
         }
@@ -214,6 +215,7 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
     // App-driven smoke only. XCTest remains responsible for real keyboard,
     // selection, rotation and accessibility acceptance on the physical iPad.
     func driveAcceptanceStage(_ stage: String) -> Bool {
+        guard ["native-terminal", "native-neovim", "native-reattached-input", "native-neovim-input"].contains(stage) else { return false }
         guard let view = surfaces.values.first(where: { !$0.isHidden && !$0.terminal.readOnly }) else { return false }
         _ = view.becomeFirstResponder()
         switch stage {
@@ -223,6 +225,8 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             view.insertText("\n")
         case "native-neovim":
             view.insertText("nvim -u NONE -i NONE\n")
+        case "native-reattached-input":
+            guard view.terminal.pasteText("_REATTACHED") else { return false }
         case "native-neovim-input":
             view.insertText("i")
             guard view.terminal.pasteText("WEAVE_NEOVIM_INPUT") else { return false }

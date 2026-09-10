@@ -64,6 +64,11 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
       const created = await nativeTerminalBridge.create();
       surfaceId = created.surfaceId;
       if (disposed) { await nativeTerminalBridge.close({ surfaceId }); return; }
+      // A saved screen must not be parsed using the new view's default 80×24
+      // grid. Fit the native surface before subscribing to its initial replay.
+      const initial = element.getBoundingClientRect();
+      await nativeTerminalBridge.layout({ surfaceId, x: initial.x, y: initial.y, width: initial.width, height: initial.height, visible: false, readOnly: latest.current.readOnly });
+      if (disposed) return;
       setError(undefined);
       element.dataset.nativeRenderer = created.renderer;
       const id = surfaceId;

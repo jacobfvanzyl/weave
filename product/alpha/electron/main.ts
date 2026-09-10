@@ -64,6 +64,8 @@ else {
           } else if (stage === 'native-neovim-input') {
             if (native) key('i'); else { key('I'); contents.sendInputEvent({ type: 'char', keyCode: 'i' }); }
             await paste('WEAVE_NEOVIM_INPUT');
+          } else if (stage === 'native-reattached-input') {
+            await paste('_REATTACHED');
           } else if (stage === 'native-finish') {
             if (native) {
               const saved = await Promise.all((await clipboard.read()).map(async (item) => new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]))))));
@@ -103,6 +105,10 @@ else {
       }
       if (result?.passed && !await contents.executeJavaScript('isSecureContext && typeof require === "undefined" && typeof window.ipcRenderer === "undefined"')) throw new Error('Renderer isolation check failed');
       await mkdir(evidence, { recursive: true });
+      if (result?.passed && native) {
+        const png = native.acceptance('capture');
+        if (png) await writeFile(join(evidence, 'native-reattached.png'), png);
+      }
       await writeFile(join(evidence, 'result.json'), JSON.stringify(result ?? { passed: false, error: 'Timed out' }));
       await writeFile(join(evidence, 'shell.png'), (await contents.capturePage()).toPNG());
       app.exit(result?.passed ? 0 : 1);

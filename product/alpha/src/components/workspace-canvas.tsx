@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from './ui/empty';
 import { Alert, AlertDescription } from './ui/alert';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './ui/resizable';
+import { RunningTerminalDialog } from './workspace-arrangement-dialogs';
 import { TerminalView } from './terminal-view';
 
 function TerminalSurface({ controller, reference, node }: { controller: AlphaController; reference: WorkspaceTabReference; node: Extract<TerminalLayoutNode, { kind: 'terminal' }> }) {
@@ -15,6 +16,7 @@ function TerminalSurface({ controller, reference, node }: { controller: AlphaCon
     client: controller.terminalClient?.(reference.hostId),
   });
   const [error, setError] = useState<string>();
+  const [choosingTerminal, setChoosingTerminal] = useState(false);
   const perform = async (action: () => Promise<unknown>) => {
     try { setError(undefined); await action(); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
@@ -23,9 +25,9 @@ function TerminalSurface({ controller, reference, node }: { controller: AlphaCon
   const directoryAvailable = context?.availability === undefined || context.availability === 'available';
   const pending = controller.model.workspaceCompositions?.pending;
   const connecting = model.loading || Boolean(node.terminalId && !model.attachmentId && !model.error && available);
-  return <section className='flex min-h-0 min-w-0 flex-1 flex-col' aria-label={`Terminal pane ${node.paneId}`} onFocusCapture={() => controller.workspaceActions?.focus(reference, node.paneId)}>
+  return <section className='flex min-h-0 min-w-0 flex-1 flex-col' aria-label={`Terminal pane ${node.paneId}`} data-terminal-id={node.terminalId ?? undefined} onFocusCapture={() => controller.workspaceActions?.focus(reference, node.paneId)}>
     <header className='flex shrink-0 items-center gap-1 border-b bg-title-bar px-2 py-1'>
-      <span className='min-w-0 flex-1 truncate text-xs'>{model.tabs[0]?.title ?? 'Terminal'}</span>
+      <span className='min-w-0 flex-1 truncate text-xs' aria-label='Terminal session'>{model.tabs[0]?.title ?? 'Terminal'}</span>
       <Button size='xs' variant='ghost' disabled={pending || !available} onClick={() => void controller.workspaceActions?.split(reference, node.paneId, 'horizontal')}>Split right</Button>
       <Button size='xs' variant='ghost' disabled={pending || !available} onClick={() => void controller.workspaceActions?.split(reference, node.paneId, 'vertical')}>Split down</Button>
       <Button size='xs' variant='ghost' onClick={() => controller.workspaceActions?.maximize(reference, node.paneId)}>Maximize / restore</Button>
@@ -36,8 +38,10 @@ function TerminalSurface({ controller, reference, node }: { controller: AlphaCon
     {model.attachmentMode === 'observe' && <div className='flex items-center gap-2 p-2 text-xs'><span>{model.readOnlyReason}</span><Button size='xs' variant='outline' onClick={() => void perform(actions.retryControl)}>Request control</Button></div>}
     {model.attachmentId ? <TerminalView output={model.output} data={model.data} dataEpoch={model.dataEpoch} dataOffset={model.dataOffset} readOnly={model.attachmentMode !== 'control' || !available} onInput={(data) => void perform(() => actions.input(data))} onResize={(cols, rows) => void perform(() => actions.resize(cols, rows))} /> : <Empty>
       <EmptyHeader><EmptyTitle>{connecting ? 'Connecting terminal…' : node.terminalId ? 'Terminal unavailable' : 'Empty terminal pane'}</EmptyTitle><EmptyDescription>{node.terminalId ? 'The saved terminal reference stays here until you explicitly replace it.' : 'Start a shell in this workspace directory.'}</EmptyDescription></EmptyHeader>
-      <Button disabled={!available || !directoryAvailable || pending || connecting} onClick={() => void controller.workspaceActions?.startTerminal(reference, node.paneId)}>{node.terminalId ? 'Start replacement terminal' : 'Start terminal'}</Button>
+      <div className='flex flex-wrap justify-center gap-2'><Button disabled={!available || !directoryAvailable || pending || connecting} onClick={() => void controller.workspaceActions?.startTerminal(reference, node.paneId)}>{node.terminalId ? 'Start replacement terminal' : 'Start terminal'}</Button>
+      <Button variant='outline' disabled={!available || pending || connecting} onClick={() => setChoosingTerminal(true)}>Use running terminal…</Button></div>
     </Empty>}
+    {choosingTerminal && <RunningTerminalDialog controller={controller} reference={reference} paneId={node.paneId} onClose={() => setChoosingTerminal(false)} />}
   </section>;
 }
 function Layout({ controller, reference, node }: { controller: AlphaController; reference: WorkspaceTabReference; node: TerminalLayoutNode }) {

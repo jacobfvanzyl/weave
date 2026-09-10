@@ -25,9 +25,16 @@ final class AlphaUITests: XCTestCase {
             terminal.typeText("\n")
             wait("native-neovim-input")
             terminal.typeText("iWEAVE_NEOVIM_INPUT")
-            let next = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label IN %@", ["passed", "failed", "native-terminal"]), object: stage)
+            let next = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label IN %@", ["passed", "failed", "native-terminal", "native-reattached-input"]), object: stage)
             XCTAssertEqual(XCTWaiter.wait(for: [next], timeout: 120), .completed)
             XCTAssertNotEqual(stage.label, "failed")
+            if stage.label == "native-reattached-input" {
+                terminal.tap()
+                terminal.typeText("_REATTACHED")
+                let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label IN %@", ["passed", "failed", "native-terminal"]), object: stage)
+                XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 90), .completed)
+                XCTAssertNotEqual(stage.label, "failed")
+            }
             if stage.label == "passed" { break }
         }
         XCTAssertEqual(stage.label, "passed")

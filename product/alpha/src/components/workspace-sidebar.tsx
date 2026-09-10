@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AlphaController, AlphaThread, AlphaWorkspace } from '@/app/alpha-controller';
 import { tabReferenceKey, workspaceReferenceKey, type WorkspaceTabReference } from '@/app/workspace-presentation';
+import { RenameWorkspaceDialog } from './workspace-arrangement-dialogs';
 import { AddProjectDialog } from './add-project-dialog';
 import { CodexIcon } from './codex-icon';
 import { Button } from './ui/button';
@@ -12,6 +13,7 @@ export function WorkspaceSidebar({ controller }: { controller: AlphaController }
   const { model, actions, workspaceActions } = controller;
   const state = model.workspaceCompositions!;
   const [adding, setAdding] = useState(false);
+  const [renaming, setRenaming] = useState<{ reference: WorkspaceTabReference; name: string }>();
   const openFor = (workspace: AlphaWorkspace) => state.presentation.openTabs.filter((tab) =>
     (workspace.placements ?? [workspace]).some((placement) => placement.hostId === tab.hostId && placement.workspaceId === tab.workspaceId));
   const nameFor = (ref: WorkspaceTabReference) => state.compositions[workspaceReferenceKey(ref.hostId, ref.workspaceId)]?.tabs.find((tab) => tab.tabId === ref.tabId)?.name ?? 'Unavailable workspace';
@@ -71,6 +73,7 @@ export function WorkspaceSidebar({ controller }: { controller: AlphaController }
                   <DropdownMenuContent><DropdownMenuGroup>
                     <DropdownMenuItem onClick={() => void workspaceActions?.open(workspace.id, true)}>New terminal workspace</DropdownMenuItem>
                     <DropdownMenuItem disabled={workspace.availability !== undefined && workspace.availability !== 'available'} onClick={() => void actions.createThread(workspace.id)}>New agent thread</DropdownMenuItem>
+                    {tabs.length === 1 && <DropdownMenuItem disabled={state.pending || !model.connections.some((connection) => connection.hostId === tabs[0]!.hostId && connection.status === 'connected')} onClick={() => setRenaming({ reference: tabs[0]!, name: nameFor(tabs[0]!) })}>Rename terminal workspace…</DropdownMenuItem>}
                     {tabs.length === 1 && <DropdownMenuItem onClick={() => workspaceActions?.close(tabs[0]!)}>Close workspace view</DropdownMenuItem>}
                   </DropdownMenuGroup></DropdownMenuContent>
                 </DropdownMenu>
@@ -78,8 +81,16 @@ export function WorkspaceSidebar({ controller }: { controller: AlphaController }
             </SidebarMenuItem></SidebarMenu>
             {!collapsed && <SidebarMenu className='pl-4'>
               {workspace.threads.filter((thread) => matches(workspace, thread)).map((thread) => threadRow(workspace, thread))}
-              {tabs.length > 1 && tabs.map((tab) => <SidebarMenuItem key={tabReferenceKey(tab)} data-workspace-tab={tab.tabId}>
-                <SidebarMenuButton isActive={tabReferenceKey(tab) === state.presentation.activeTab} aria-pressed={tabReferenceKey(tab) === state.presentation.activeTab} onClick={() => workspaceActions?.activate(tab)}>{nameFor(tab)}</SidebarMenuButton>
+              {tabs.length > 1 && tabs.map((tab, index) => <SidebarMenuItem key={tabReferenceKey(tab)} data-workspace-tab={tab.tabId}>
+                <SidebarMenuButton className='pr-14' isActive={tabReferenceKey(tab) === state.presentation.activeTab} aria-pressed={tabReferenceKey(tab) === state.presentation.activeTab} onClick={() => workspaceActions?.activate(tab)}>{nameFor(tab)}</SidebarMenuButton>
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={<SidebarMenuAction className='right-7' aria-label={`Actions for terminal workspace ${nameFor(tab)}`} />}>⋯</DropdownMenuTrigger>
+                  <DropdownMenuContent><DropdownMenuGroup>
+                    <DropdownMenuItem disabled={state.pending || !model.connections.some((connection) => connection.hostId === tab.hostId && connection.status === 'connected')} onClick={() => setRenaming({ reference: tab, name: nameFor(tab) })}>Rename terminal workspace…</DropdownMenuItem>
+                    <DropdownMenuItem disabled={index === 0} onClick={() => workspaceActions?.move(tab, -1)}>Move up</DropdownMenuItem>
+                    <DropdownMenuItem disabled={index === tabs.length - 1} onClick={() => workspaceActions?.move(tab, 1)}>Move down</DropdownMenuItem>
+                  </DropdownMenuGroup></DropdownMenuContent>
+                </DropdownMenu>
                 <SidebarMenuAction aria-label={`Close workspace view ${nameFor(tab)}`} onClick={() => workspaceActions?.close(tab)}>×</SidebarMenuAction>
               </SidebarMenuItem>)}
             </SidebarMenu>}
@@ -92,6 +103,7 @@ export function WorkspaceSidebar({ controller }: { controller: AlphaController }
         </SidebarGroup>
       </SidebarContent>
     </Sidebar>
+    {renaming && <RenameWorkspaceDialog controller={controller} reference={renaming.reference} initialName={renaming.name} onClose={() => setRenaming(undefined)} />}
     <AddProjectDialog controller={controller} open={adding} onOpenChange={setAdding} />
   </>;
 }

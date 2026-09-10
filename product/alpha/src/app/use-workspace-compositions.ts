@@ -8,7 +8,7 @@ import {
   type WorkspacePresentation, type WorkspaceTabReference,
 } from './workspace-presentation';
 
-export type CompositionClient = Pick<DirectHostClient, 'getWorkspaceComposition' | 'replaceWorkspaceComposition' | 'createTerminal'>;
+export type CompositionClient = Pick<DirectHostClient, 'getWorkspaceComposition' | 'replaceWorkspaceComposition' | 'createTerminal' | 'listTerminals'>;
 export type CompositionConnection = { hostId: string; available: boolean; supported: boolean; client?: CompositionClient };
 export type WorkspaceCompositionsModel = {
   presentation: WorkspacePresentation;
@@ -21,7 +21,9 @@ export type WorkspaceCompositionActions = {
   open(workspaceId: string, create?: boolean): Promise<void>;
   activate(tab: WorkspaceTabReference): void;
   close(tab: WorkspaceTabReference): void;
-  rename(tab: WorkspaceTabReference, name: string): Promise<void>;
+  rename(tab: WorkspaceTabReference, name: string): Promise<boolean>;
+  move(tab: WorkspaceTabReference, direction: -1 | 1): void;
+  adoptTerminal(tab: WorkspaceTabReference, paneId: string, terminalId: string): Promise<boolean>;
   split(tab: WorkspaceTabReference, paneId: string, axis: 'horizontal' | 'vertical'): Promise<void>;
   setRatio(tab: WorkspaceTabReference, nodeId: string, ratio: number): Promise<void>;
   startTerminal(tab: WorkspaceTabReference, paneId: string): Promise<void>;
@@ -144,7 +146,34 @@ export function useWorkspaceCompositions(workspaces: AlphaWorkspace[], connectio
     }),
     activate: (tab) => { if (!loading) updatePresentation((state) => activateWorkspaceTab(state, tab)); },
     close: (tab) => updatePresentation((state) => closeWorkspaceTab(state, tabReferenceKey(tab))),
-    rename: (tab, name) => edit(() => replace(tab, (item) => ({ ...item, name }))),
+    rename: async (tab, name) => {
+      await edit(() => replace(tab, (item) => ({ ...item, name: name.trim() })));
+      return state.current.compositions[workspaceReferenceKey(tab.hostId, tab.workspaceId)]?.tabs.find((item) => item.tabId === tab.tabId)?.name === name.trim();
+    },
+    move: (tab, direction) => updatePresentation((current) => {
+      const context = state.current.workspaces.find((workspace) => (workspace.placements ?? [workspace]).some((placement) => placement.hostId === tab.hostId && placement.workspaceId === tab.workspaceId));
+      if (!context) return current;
+      const placements = context.placements ?? [context];
+      const indices = current.openTabs.flatMap((item, index) => placements.some((placement) => placement.hostId === item.hostId && placement.workspaceId === item.workspaceId) ? [index] : []);
+      const currentIndex = current.openTabs.findIndex((item) => tabReferenceKey(item) === tabReferenceKey(tab));
+      const nextIndex = indices[indices.indexOf(currentIndex) + direction];
+      if (currentIndex < 0 || nextIndex === undefined) return current;
+      const openTabs = [...current.openTabs];
+      [openTabs[currentIndex], openTabs[nextIndex]] = [openTabs[nextIndex]!, openTabs[currentIndex]!];
+      return { ...current, openTabs };
+    }),
+    adoptTerminal: async (tab, paneId, terminalId) => {
+      await edit(async () => {
+        const current = state.current.compositions[workspaceReferenceKey(tab.hostId, tab.workspaceId)];
+        const arrangement = current?.tabs.find((item) => item.tabId === tab.tabId);
+        if (!arrangement || !terminalPaneTargets([arrangement]).some((pane) => pane.paneId === paneId)) throw new Error('This pane is no longer available. Refresh the arrangement.');
+        const { terminals } = await clientFor(tab.hostId).listTerminals(tab.workspaceId);
+        if (!terminals.some((terminal) => terminal.terminalId === terminalId && terminal.workspaceId === tab.workspaceId && terminal.status === 'running')) throw new Error('That terminal is no longer running in this workspace.');
+        await replace(tab, (item) => ({ ...item, layout: mapLayout(item.layout, (node) => node.kind === 'terminal' && node.paneId === paneId ? { ...node, terminalId } : node) }), current);
+      });
+      const arrangement = state.current.compositions[workspaceReferenceKey(tab.hostId, tab.workspaceId)]?.tabs.find((item) => item.tabId === tab.tabId);
+      return Boolean(arrangement && terminalPaneTargets([arrangement]).some((pane) => pane.paneId === paneId && pane.terminalId === terminalId));
+    },
     split: (tab, paneId, axis) => edit(() => replace(tab, (item) => ({ ...item, layout: mapLayout(item.layout, (node) => node.kind === 'terminal' && node.paneId === paneId
       ? { kind: 'split', nodeId: crypto.randomUUID(), axis, ratio: 0.5, children: [node, emptyPane()] } : node) }))),
     setRatio: (tab, nodeId, ratio) => edit(() => replace(tab, (item) => ({ ...item, layout: mapLayout(item.layout, (node) => node.kind === 'split' && node.nodeId === nodeId ? { ...node, ratio } : node) }))),

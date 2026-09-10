@@ -72,3 +72,14 @@ it('surfaces native input failure instead of treating the view as usable', async
   act(() => native.listener?.({ surfaceId: 'native-1', kind: 'error', message: 'Native input queue overflowed.' }));
   expect(getByRole('alert')).toHaveTextContent('Native input queue overflowed.');
 });
+
+it('waits for native geometry before replaying a saved screen', async () => {
+  let fitted!: (value: { cols: number; rows: number }) => void;
+  native.layout.mockImplementationOnce(() => new Promise((resolve) => { fitted = resolve; }));
+  const output = new TerminalOutputStream(vi.fn()); output.reset('saved viewport');
+  render(<NativeTerminalView output={output} readOnly={false} />);
+  await waitFor(() => expect(native.layout).toHaveBeenCalled());
+  expect(native.write).not.toHaveBeenCalled();
+  await act(async () => fitted({ cols: 120, rows: 40 }));
+  await waitFor(() => expect(native.write).toHaveBeenCalledWith({ surfaceId: 'native-1', data: btoa('saved viewport'), reset: true }));
+});

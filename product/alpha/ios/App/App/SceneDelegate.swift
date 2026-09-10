@@ -226,6 +226,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
                     }
                     if let stage = try? await webView.evaluateJavaScript("window.alphaAcceptanceStage || window.alphaAcceptanceDetail || 'starting'"), let stage = stage as? String {
                         status.text = stage
+                        try? Data(stage.utf8).write(to: documents.appendingPathComponent("native-smoke-stage.txt"), options: .atomic)
                         if nativeSmoke, !drivenStages.contains(stage), nativeTerminal.driveAcceptanceStage(stage) {
                             drivenStages.insert(stage)
                         }
