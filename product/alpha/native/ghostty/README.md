@@ -26,8 +26,25 @@ also directs external embedders to the public libraries. The public
 provides terminal cells, styles and dirty tracking; it is not a ready-made
 Metal view.
 
-WVE-65 still needs the actual macOS/Electron and UIKit rendering adapters,
-native input/selection/clipboard handling, stream lifecycle and packaged/device
-acceptance. The candidate is not linked into Alpha yet. xterm.js remains the
-active renderer until that replacement is proven. The existing Bun Host owns
-terminal processes and ACP recovery throughout this work.
+Alpha now has an opt-in shared CoreText renderer with UIKit and AppKit adapters.
+It consumes the renderer-owned terminal output stream. Electron uses a narrow
+Node-API bridge in the main process, while iPad uses a Capacitor plugin. Neither
+native adapter owns Host credentials or terminal processes.
+
+```sh
+bun run probe:native-renderer
+VITE_NATIVE_TERMINAL=1 VITE_ALPHA_ACCEPTANCE=1 bun run build:desktop
+VITE_NATIVE_TERMINAL=1 VITE_ALPHA_ACCEPTANCE=1 bun run build:ipad
+```
+
+The build scripts prepare ignored native artifacts under `native/.build/` and
+package Ghostty's license. Desktop headers match the exact Electron version;
+new downloads are checked against Electron's SHA-256 manifest. The iOS library
+currently targets physical arm64 iPads. The Simulator is not covered by this
+candidate.
+
+See [the native acceptance checkpoint](../../../../docs/acceptance/wve-65-native-renderer.md)
+for evidence and remaining input, rendering and device acceptance gaps. xterm.js
+remains the default until those are closed. Omit `VITE_ALPHA_ACCEPTANCE` for
+ordinary builds; native inspection and synthetic AppKit input helpers are only
+compiled into the desktop acceptance build.

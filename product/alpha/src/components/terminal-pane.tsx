@@ -11,7 +11,7 @@ import type { AlphaTerminalsModel } from '@/app/use-alpha-terminals';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
-import { XtermTerminalView } from './xterm-terminal-view';
+import { TerminalView } from './terminal-view';
 
 export function TerminalPane({
   model,
@@ -188,7 +188,7 @@ export function TerminalPane({
             </div>
           )
           : (
-            <XtermTerminalView
+            <TerminalView
               output={model.output}
               data={model.data}
               dataEpoch={model.dataEpoch}

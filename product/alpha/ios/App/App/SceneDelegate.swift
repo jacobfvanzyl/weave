@@ -173,8 +173,10 @@ private extension Data {
 }
 
 final class WeaveBridgeViewController: CAPBridgeViewController {
+    private let nativeTerminal = NativeTerminalPlugin()
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(PortalCredentialPlugin())
+        bridge?.registerPluginInstance(nativeTerminal)
         guard let webView else { return }
         let container = UIView(frame: webView.frame)
         container.backgroundColor = UIColor(red: 30 / 255, green: 30 / 255, blue: 46 / 255, alpha: 1)
@@ -208,6 +210,8 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
             if live { view.addSubview(status) }
             let url = live ? "capacitor://localhost/?acceptance=live" : "capacitor://localhost/?mock=chat&acceptance=1"
             webView.load(URLRequest(url: URL(string: url)!))
+            let nativeSmoke = ProcessInfo.processInfo.arguments.contains("--native-terminal-smoke")
+            var drivenStages = Set<String>()
             var configured = false
             for _ in 0..<900 {
                 try? await Task.sleep(nanoseconds: 200_000_000)
@@ -222,6 +226,9 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
                     }
                     if let stage = try? await webView.evaluateJavaScript("window.alphaAcceptanceStage || window.alphaAcceptanceDetail || 'starting'"), let stage = stage as? String {
                         status.text = stage
+                        if nativeSmoke, !drivenStages.contains(stage), nativeTerminal.driveAcceptanceStage(stage) {
+                            drivenStages.insert(stage)
+                        }
                         if stage == "native-finish" {
                             _ = try? await webView.evaluateJavaScript("window.alphaAcceptanceStage = 'native-finished'")
                         }
@@ -230,10 +237,31 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
                 if let result = try? await webView.evaluateJavaScript("JSON.stringify(window.alphaAcceptance || null)"),
                    let json = result as? String, json != "null" {
                     let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    if nativeSmoke { try? Data("in-process UIKit smoke; not XCTest keyboard acceptance".utf8).write(to: documents.appendingPathComponent("native-smoke-driver.txt")) }
                     try? Data(json.utf8).write(to: documents.appendingPathComponent("shell-acceptance.json"), options: .atomic)
                     let renderer = UIGraphicsImageRenderer(bounds: view.bounds)
                     let image = renderer.image { _ in view.drawHierarchy(in: view.bounds, afterScreenUpdates: true) }
                     try? image.pngData()?.write(to: documents.appendingPathComponent("shell-acceptance.png"), options: .atomic)
+                    if nativeSmoke {
+                        do {
+                            let cleanup = try await webView.callAsyncJavaScript("""
+                              const url = window.alphaAcceptanceInput?.hostUrl;
+                              if (!url) throw new Error('Fixture URL missing');
+                              const wait = async (get) => { for (let n = 0; n < 50; n++) { const value = get(); if (value) return value; await new Promise(r => setTimeout(r, 100)); } throw new Error('Fixture cleanup timed out'); };
+                              const button = (name) => [...document.querySelectorAll('button')].find(el => el.getAttribute('aria-label') === name || el.textContent.trim() === name);
+                              const card = () => [...document.querySelectorAll('[data-slot="card"]')].find(el => [...el.querySelectorAll('span')].some(span => span.textContent === url));
+                              if (!document.querySelector('[aria-label="Configured Hosts"]')) (await wait(() => button('Settings'))).click();
+                              await wait(() => document.querySelector('[role="dialog"]'));
+                              const fixture = card();
+                              if (!fixture) return JSON.stringify({ removed: true, alreadyAbsent: true });
+                              fixture.querySelector('button[aria-label^="Forget "]').click();
+                              (await wait(() => button('Forget Host'))).click();
+                              await wait(() => !card());
+                              return JSON.stringify({ removed: true });
+                            """, arguments: [:], in: nil, contentWorld: .page)
+                            if let cleanup = cleanup as? String { try? Data(cleanup.utf8).write(to: documents.appendingPathComponent("native-smoke-cleanup.json")) }
+                        } catch { try? Data("{\"removed\":false}".utf8).write(to: documents.appendingPathComponent("native-smoke-cleanup.json")) }
+                    }
                     status.text = json.contains("\"passed\":true") ? "passed" : "failed"
                     print("ALPHA_ACCEPTANCE " + json)
                     return

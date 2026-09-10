@@ -2,7 +2,9 @@ import { app, BrowserWindow, Menu, ClipboardItem, clipboard, net, protocol, sess
 import { join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { installNativeTerminals } from './native-terminal';
 declare const ALPHA_ACCEPTANCE: boolean;
+declare const ALPHA_NATIVE_TERMINAL: boolean;
 
 const appOrigin = 'weave://app';
 protocol.registerSchemesAsPrivileged([{ scheme: 'weave', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
@@ -26,6 +28,7 @@ else {
       backgroundColor: '#1e1e2e', show: false,
       webPreferences: { preload: join(import.meta.dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false },
     });
+    const native = ALPHA_NATIVE_TERMINAL ? installNativeTerminals(window) : undefined;
     const contents = window.webContents;
     contents.setWindowOpenHandler(({ url }) => { external(url); return { action: 'deny' }; });
     contents.on('will-navigate', (event, url) => { event.preventDefault(); external(url); });
@@ -42,10 +45,10 @@ else {
       const handled = new Set<string>();
       const paste = async (text: string) => {
         const saved = await Promise.all((await clipboard.read()).map(async (item) => new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]))))));
-        try { await clipboard.writeText(text); contents.paste(); await new Promise((resolve) => setTimeout(resolve, 200)); }
+        try { await clipboard.writeText(text); if (native) native.acceptance('paste'); else contents.paste(); await new Promise((resolve) => setTimeout(resolve, 200)); }
         finally { if (saved.length) await clipboard.write(saved); else clipboard.clear(); }
       };
-      const key = (keyCode: string) => { contents.sendInputEvent({ type: 'keyDown', keyCode }); contents.sendInputEvent({ type: 'keyUp', keyCode }); };
+      const key = (keyCode: string) => { if (native) { native.acceptance('key', keyCode); return; } contents.sendInputEvent({ type: 'keyDown', keyCode }); contents.sendInputEvent({ type: 'keyUp', keyCode }); };
       let result: { passed?: boolean } | undefined;
       for (let attempt = 0; attempt < 1800 && !result; attempt++) {
         result = await contents.executeJavaScript('window.alphaAcceptance');
@@ -59,9 +62,18 @@ else {
           } else if (stage === 'native-neovim') {
             await paste('nvim -u NONE -i NONE'); key('Enter');
           } else if (stage === 'native-neovim-input') {
-            key('I'); contents.sendInputEvent({ type: 'char', keyCode: 'i' });
+            if (native) key('i'); else { key('I'); contents.sendInputEvent({ type: 'char', keyCode: 'i' }); }
             await paste('WEAVE_NEOVIM_INPUT');
           } else if (stage === 'native-finish') {
+            if (native) {
+              const saved = await Promise.all((await clipboard.read()).map(async (item) => new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]))))));
+              try {
+                native.acceptance('copyMarker', 'WEAVE_NEOVIM_INPUT');
+                if (!(await clipboard.readText()).includes('WEAVE_NEOVIM_INPUT')) throw new Error('Native selection copy failed.');
+                const png = native.acceptance('capture');
+                if (png) await writeFile(join(evidence, 'native-terminal.png'), png);
+              } finally { if (saved.length) await clipboard.write(saved); else clipboard.clear(); }
+            } else {
             const rect = await contents.executeJavaScript(`(() => {
               const row = [...document.querySelectorAll('.xterm-rows > div')].find(el => el.textContent.includes('WEAVE_NEOVIM_INPUT'));
               const r = row.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height };
@@ -81,6 +93,7 @@ else {
                 throw new Error(`Native terminal copy failed: ${JSON.stringify(copied)}`);
               }
             } finally { if (saved.length) await clipboard.write(saved); else clipboard.clear(); }
+            }
             // Leave Neovim visible; the harness closes its dedicated tmux server.
             window?.setSize(1400, 920);
             await contents.executeJavaScript('window.alphaAcceptanceStage = "native-finished"');

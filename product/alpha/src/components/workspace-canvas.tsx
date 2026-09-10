@@ -7,7 +7,7 @@ import { Button } from './ui/button';
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from './ui/empty';
 import { Alert, AlertDescription } from './ui/alert';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './ui/resizable';
-import { XtermTerminalView } from './xterm-terminal-view';
+import { TerminalView } from './terminal-view';
 
 function TerminalSurface({ controller, reference, node }: { controller: AlphaController; reference: WorkspaceTabReference; node: Extract<TerminalLayoutNode, { kind: 'terminal' }> }) {
   const { model, actions } = useAlphaTerminals({
@@ -34,7 +34,7 @@ function TerminalSurface({ controller, reference, node }: { controller: AlphaCon
     {(error || model.error || !available) && <Alert variant='destructive'><AlertDescription>{error ?? (!available ? 'Host unavailable. This pane will reconnect when the Host returns.' : model.error)}</AlertDescription></Alert>}
     {!directoryAvailable && <Alert><AlertDescription>{context?.availability === 'path-changed' ? 'The registered directory has changed. Its saved identity is retained; new shells are disabled.' : 'The workspace directory is unavailable. Existing terminal processes can still be attached.'}</AlertDescription></Alert>}
     {model.attachmentMode === 'observe' && <div className='flex items-center gap-2 p-2 text-xs'><span>{model.readOnlyReason}</span><Button size='xs' variant='outline' onClick={() => void perform(actions.retryControl)}>Request control</Button></div>}
-    {model.attachmentId ? <XtermTerminalView output={model.output} data={model.data} dataEpoch={model.dataEpoch} dataOffset={model.dataOffset} readOnly={model.attachmentMode !== 'control' || !available} onInput={(data) => void perform(() => actions.input(data))} onResize={(cols, rows) => void perform(() => actions.resize(cols, rows))} /> : <Empty>
+    {model.attachmentId ? <TerminalView output={model.output} data={model.data} dataEpoch={model.dataEpoch} dataOffset={model.dataOffset} readOnly={model.attachmentMode !== 'control' || !available} onInput={(data) => void perform(() => actions.input(data))} onResize={(cols, rows) => void perform(() => actions.resize(cols, rows))} /> : <Empty>
       <EmptyHeader><EmptyTitle>{connecting ? 'Connecting terminal…' : node.terminalId ? 'Terminal unavailable' : 'Empty terminal pane'}</EmptyTitle><EmptyDescription>{node.terminalId ? 'The saved terminal reference stays here until you explicitly replace it.' : 'Start a shell in this workspace directory.'}</EmptyDescription></EmptyHeader>
       <Button disabled={!available || !directoryAvailable || pending || connecting} onClick={() => void controller.workspaceActions?.startTerminal(reference, node.paneId)}>{node.terminalId ? 'Start replacement terminal' : 'Start terminal'}</Button>
     </Empty>}

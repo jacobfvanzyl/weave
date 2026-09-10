@@ -1,9 +1,10 @@
+import { nativeTerminalAcceptance } from '@/terminal/native-terminal';
 // Included only in explicitly built acceptance artifacts.
 export async function runShellAcceptance() {
   let stage = "startup";
   const waitFor = async (predicate: () => unknown) => {
     for (let n = 0; n < 100; n++) {
-      if (predicate()) return;
+      if (await predicate()) return;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     throw new Error('Shell acceptance condition timed out.');
@@ -50,7 +51,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
   const wait = async (predicate: () => unknown) => {
     state.alphaAcceptanceDetail = stage;
     for (let n = 0; n < 600; n++) {
-      if (predicate()) return;
+      if (await predicate()) return;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     throw new Error(`Timed out at ${stage}`);
@@ -125,20 +126,23 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     await wait(() => document.querySelector('[aria-label="Active terminal context"]')?.textContent !== previousContext);
     await wait(() => button('Start terminal') && !button('Start terminal')!.disabled);
     button('Start terminal')!.click();
-    await wait(() => document.querySelector('.xterm-rows')?.textContent?.trim());
-    const terminalBounds = document.querySelector('.xterm-screen')!.getBoundingClientRect();
+    const nativeSurface = () => nativeTerminalAcceptance.entries().next().value as [HTMLElement, { focus(): Promise<void>; read(): Promise<string> }] | undefined;
+    const terminalText = async () => nativeSurface() ? await nativeSurface()![1].read() : document.querySelector('.xterm-rows')?.textContent ?? '';
+    await wait(async () => (await terminalText()).trim());
+    const terminalBounds = (nativeSurface()?.[0] ?? document.querySelector('.xterm-screen'))!.getBoundingClientRect();
     if (terminalBounds.width < 200 || terminalBounds.height < 100 || terminalBounds.right > innerWidth + 1) throw new Error('Terminal is not visibly laid out in the application window.');
     await new Promise((resolve) => setTimeout(resolve, 300));
-    document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!.focus();
+    if (nativeSurface()) await nativeSurface()![1].focus();
+    else document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!.focus();
     state.alphaAcceptanceStage = 'native-terminal';
     stage = 'native terminal input and paste';
-    await wait(() => [...document.querySelectorAll('.xterm-rows > div')].some((el) => el.textContent?.trim() === 'WEAVE_NATIVE_PASTE_OK'));
+    await wait(async () => nativeSurface() ? (await terminalText()).split('\n').some((line) => line.trim() === 'WEAVE_NATIVE_PASTE_OK') : [...document.querySelectorAll('.xterm-rows > div')].some((el) => el.textContent?.trim() === 'WEAVE_NATIVE_PASTE_OK'));
     state.alphaAcceptanceStage = 'native-neovim';
     stage = 'Neovim startup';
-    await wait(() => document.querySelector('.xterm-rows')?.textContent?.includes('[No Name]'));
+    await wait(async () => (await terminalText()).includes('[No Name]'));
     state.alphaAcceptanceStage = 'native-neovim-input';
     stage = 'Neovim';
-    await wait(() => document.querySelector('.xterm-rows')?.textContent?.includes('WEAVE_NEOVIM_INPUT') && document.querySelector('.xterm-rows')?.textContent?.includes('-- INSERT --'));
+    await wait(async () => { const text = await terminalText(); return text.includes('WEAVE_NEOVIM_INPUT') && text.includes('-- INSERT --'); });
     state.alphaAcceptanceStage = 'native-finish';
     await wait(() => state.alphaAcceptanceStage === 'native-finished');
     if (document.querySelector('[data-slot="browser-pane"], [data-slot="editor-pane"], [data-symbol="project-pane"]')) throw new Error('Deferred surface mounted');

@@ -24,3 +24,6 @@ product/alpha/.electron/
 product/alpha/release/
 
 product/alpha/.ipad-build/
+
+# Locally prepared pinned native terminal libraries
+product/alpha/native/.build/
