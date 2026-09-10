@@ -32,7 +32,7 @@ private final class GhosttyTerminalTextView: UITextView {
         addGestureRecognizer(pan)
     }
     required init?(coder: NSCoder) { fatalError("Not a storyboard view") }
-    override var canBecomeFirstResponder: Bool { !terminal.readOnly }
+    override var canBecomeFirstResponder: Bool { true }
     override func becomeFirstResponder() -> Bool {
         let focused = super.becomeFirstResponder()
         if focused { didFocus?() }
@@ -188,10 +188,10 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
                   let x = call.getDouble("x"), let y = call.getDouble("y"), let width = call.getDouble("width"), let height = call.getDouble("height"),
                   [x,y,width,height].allSatisfy({ $0.isFinite }), width >= 0, height >= 0 else { call.reject("Invalid native terminal geometry."); return }
             let rectangle = CGRect(x: x, y: y, width: width, height: height).intersection(web.bounds)
-            view.frame = web.convert(rectangle.isNull ? .zero : rectangle, to: parent)
+            if !rectangle.isEmpty && !rectangle.isNull { view.frame = web.convert(rectangle, to: parent) }
             view.isHidden = call.getBool("visible") != true || rectangle.isEmpty || rectangle.isNull
             let controlled = call.getBool("readOnly") != true
-            if view.isHidden || !controlled { view.resignFirstResponder() }
+            if view.isHidden { view.resignFirstResponder() }
             view.terminal.readOnly = !controlled
             view.isEditable = controlled
             view.layoutIfNeeded()

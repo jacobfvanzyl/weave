@@ -34,7 +34,7 @@ static NSString *printableText(NSString *text) {
 @end
 @implementation WeaveTerminalNSView
 - (BOOL)isFlipped { return YES; }
-- (BOOL)acceptsFirstResponder { return !self.terminal.readOnly; }
+- (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)becomeFirstResponder { if (self.event) self.event(@{@"kind": @"focus"}); return YES; }
 - (BOOL)resignFirstResponder {
   for (NSNumber *code in self.pressedKeys) [self.terminal sendKey:macKey(code.unsignedShortValue) text:@"" modifiers:weaveKeyModifiers(NSEvent.modifierFlags) action:0];
@@ -222,8 +222,8 @@ static napi_value layout(napi_env env, napi_callback_info info) {
   if (values[2] < 0 || values[3] < 0 || napi_get_value_bool(env, args[5], &visible) != napi_ok || napi_get_value_bool(env, args[6], &readOnly) != napi_ok) return error(env, "Invalid native geometry");
   NSView *parent = entry.view.superview;
   NSRect rectangle = NSMakeRect(values[0], parent.isFlipped ? values[1] : parent.bounds.size.height - values[1] - values[3], values[2], values[3]);
-  entry.view.frame = NSIntersectionRect(rectangle, parent.bounds);
-  if ((!visible || readOnly) && entry.view.window.firstResponder == entry.view) [entry.view.window makeFirstResponder:nil];
+  if (values[2] > 0 && values[3] > 0) entry.view.frame = NSIntersectionRect(rectangle, parent.bounds);
+  if ((!visible) && entry.view.window.firstResponder == entry.view) [entry.view.window makeFirstResponder:nil];
   entry.view.hidden = !visible; entry.view.terminal.readOnly = readOnly || entry.inputFailed;
   [entry.view.terminal resizeToSize:entry.view.bounds.size]; entry.view.needsDisplay = YES;
   napi_value result, cols, rows; napi_create_object(env, &result);

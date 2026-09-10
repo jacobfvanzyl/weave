@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { TerminalOutputSource } from '@/terminal/output-stream';
 import { decodeTerminalBytes, encodeTerminalBytes, nativeTerminalAcceptance, nativeTerminalBridge } from '@/terminal/native-terminal';
 
-export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
+export function NativeTerminalView({ output, readOnly, onInput, onResize, focusRequest }: {
+  focusRequest?: string;
   output: TerminalOutputSource; readOnly: boolean;
   onInput?(data: string): void; onResize?(cols: number, rows: number): void;
 }) {
@@ -11,6 +12,8 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
   latest.current = { readOnly, onInput, onResize };
   const [error, setError] = useState<string>();
   const updateGeometry = useRef<(() => void) | undefined>(undefined);
+  const requestedFocus = useRef<string | undefined>(focusRequest);
+  useEffect(() => { requestedFocus.current = focusRequest; updateGeometry.current?.(); }, [focusRequest]);
   useEffect(() => updateGeometry.current?.(), [readOnly]);
   useEffect(() => {
     const element = host.current;
@@ -24,6 +27,13 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
     let resizeEnabled = false;
     let geometryRevision = 0;
     let previousBounds = '';
+    let nativeFocused = false;
+    let overlayWasOpen = false;
+    const webFocus = (event: FocusEvent) => {
+      const target = event.target as HTMLElement;
+      if (target !== element && !target.closest?.('[role="dialog"], [role="menu"], [role="listbox"]')) nativeFocused = false;
+    };
+    document.addEventListener('focusin', webFocus);
     const fail = (cause: unknown) => {
       if (disposed) return;
       failed = true;
@@ -37,14 +47,19 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
         if (disposed || !surfaceId) return;
         const rect = element.getBoundingClientRect();
         const overlay = [...document.querySelectorAll('[role="dialog"], [role="menu"], [role="listbox"]')].some((item) => item.getBoundingClientRect().height > 0);
+        const restoreFocus = overlayWasOpen && !overlay && nativeFocused;
+        overlayWasOpen = overlay;
+        const shouldFocus = Boolean(requestedFocus.current) || restoreFocus;
         const bounds = { surfaceId, x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: !failed && !document.hidden && !overlay && element.isConnected && rect.width > 0 && rect.height > 0, readOnly: latest.current.readOnly };
         resizeEnabled = bounds.visible;
         const key = JSON.stringify(bounds);
-        if (key === previousBounds) return;
+        if (key === previousBounds && !shouldFocus) return;
         previousBounds = key;
         const revision = ++geometryRevision;
         void nativeTerminalBridge.layout(bounds).then(({ cols, rows }) => {
-          if (!disposed && revision === geometryRevision && resizeEnabled && bounds.visible && !latest.current.readOnly) latest.current.onResize?.(cols, rows);
+          if (disposed || revision !== geometryRevision || !resizeEnabled || !bounds.visible) return;
+          if (!latest.current.readOnly) latest.current.onResize?.(cols, rows);
+          if (shouldFocus) { requestedFocus.current = undefined; void nativeTerminalBridge.focus({ surfaceId: bounds.surfaceId }).catch(fail); }
         }).catch(fail);
       });
     };
@@ -62,7 +77,7 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
         // Only an acknowledged visible layout can resize the Host. UIKit also
         // emits provisional sizes while creating/hiding its native view.
         if (event.kind === 'error') fail(event.message ?? 'Native terminal input failed.');
-        if (event.kind === 'focus') element.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+        if (event.kind === 'focus') { nativeFocused = true; element.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); }
       });
       removeListener = () => listener.remove();
       if (disposed) { await listener.remove(); return; }
@@ -94,6 +109,7 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
       resize.disconnect(); mutations.disconnect();
       window.removeEventListener('resize', measure);
       document.removeEventListener('visibilitychange', measure);
+      document.removeEventListener('focusin', webFocus);
       unsubscribe?.();
       nativeTerminalAcceptance.delete(element);
       void removeListener?.();

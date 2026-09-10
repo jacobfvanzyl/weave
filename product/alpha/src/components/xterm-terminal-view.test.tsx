@@ -72,6 +72,7 @@ class TestResizeObserver {
 describe('XtermTerminalView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, width: 800, height: 480 } as DOMRect);
     TestResizeObserver.callback = undefined;
     vi.stubGlobal('ResizeObserver', TestResizeObserver);
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {

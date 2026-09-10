@@ -74,6 +74,17 @@ it('renders independent terminal and agent selection, compact groups, and non-de
   expect(root.querySelectorAll('[data-workspace-tab]')).toHaveLength(0);
   await user.click(screen.getByRole('button', { name: 'Start terminal' }));
   await waitFor(() => expect(screen.getByRole('textbox', { name: 'Terminal input' })).toHaveValue('ready'));
+  const originalInput = screen.getByRole('textbox', { name: 'Terminal input' });
+  await user.click(screen.getByRole('button', { name: 'Split right' }));
+  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Maximize / restore' })).toHaveLength(2));
+  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(originalInput);
+  await user.click(screen.getAllByRole('button', { name: 'Maximize / restore' })[0]!);
+  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Maximize / restore' })).toHaveLength(1));
+  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(originalInput);
+  await user.click(screen.getByRole('button', { name: 'Maximize / restore' }));
+  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Maximize / restore' })).toHaveLength(2));
+  expect(one.attachTerminal).toHaveBeenCalledTimes(1);
+  expect(one.detachTerminal).not.toHaveBeenCalled();
   const selectedTab = controller!.model.workspaceCompositions!.presentation.activeTab;
   const detachCount = one.detachTerminal.mock.calls.length;
   await user.click(screen.getByRole('button', { name: 'Agent Agent on one' }));

@@ -4,7 +4,7 @@ import { TerminalOutputStream } from '@/terminal/output-stream';
 import type { NativeTerminalEvent } from '@/terminal/native-terminal';
 import { NativeTerminalView } from './native-terminal-view';
 const native = vi.hoisted(() => ({
-  create: vi.fn(), layout: vi.fn(), write: vi.fn(), close: vi.fn(), remove: vi.fn(),
+  focus: vi.fn(), create: vi.fn(), layout: vi.fn(), write: vi.fn(), close: vi.fn(), remove: vi.fn(),
   listener: undefined as ((event: NativeTerminalEvent) => void) | undefined,
 }));
 vi.mock('@/terminal/native-terminal', async (importOriginal) => ({
@@ -23,6 +23,7 @@ beforeEach(() => {
   native.layout.mockResolvedValue({ cols: 80, rows: 24 });
   native.write.mockResolvedValue(undefined);
   native.close.mockResolvedValue(undefined);
+  native.focus.mockResolvedValue(undefined);
   native.remove.mockResolvedValue(undefined);
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0));
@@ -98,5 +99,24 @@ it('resizes the Host only for acknowledged visible geometry', async () => {
     rerender(content(true));
     await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false })));
     expect(resize).not.toHaveBeenCalled();
+  } finally { rectangle.mockRestore(); }
+});
+
+it('restores requested observer focus after layout, without recreating or resizing the terminal', async () => {
+  const rectangle = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, width: 720, height: 360 } as DOMRect);
+  const output = new TerminalOutputStream(vi.fn()); const resize = vi.fn(); const input = vi.fn();
+  const content = (overlay = false) => <><NativeTerminalView output={output} readOnly focusRequest='pane-1' onResize={resize} onInput={input} />{overlay && <div role='dialog'>Actions</div>}</>;
+  try {
+    const { rerender } = render(content());
+    await waitFor(() => expect(native.focus).toHaveBeenCalledOnce());
+    act(() => native.listener?.({ surfaceId: 'native-1', kind: 'focus' }));
+    rerender(content(true));
+    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false })));
+    rerender(content());
+    await waitFor(() => expect(native.focus).toHaveBeenCalledTimes(2));
+    expect(native.create).toHaveBeenCalledOnce(); expect(native.close).not.toHaveBeenCalled();
+    expect(resize).not.toHaveBeenCalled();
+    act(() => native.listener?.({ surfaceId: 'native-1', kind: 'input', data: btoa('blocked') }));
+    expect(input).not.toHaveBeenCalled();
   } finally { rectangle.mockRestore(); }
 });

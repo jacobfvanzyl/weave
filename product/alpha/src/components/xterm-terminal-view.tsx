@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import type { TerminalOutputSource } from '@/terminal/output-stream';
 
 export function XtermTerminalView({
+  focusRequest,
   data = '',
   output,
   dataEpoch = 0,
@@ -15,6 +16,7 @@ export function XtermTerminalView({
   onInput,
   onResize,
 }: {
+  focusRequest?: string;
   data?: string;
   output?: TerminalOutputSource;
   dataEpoch?: number;
@@ -91,9 +93,9 @@ export function XtermTerminalView({
       }
     });
     const fit = () => {
-      if (!host.isConnected) return;
+      if (!host.isConnected || host.getBoundingClientRect().width === 0) return;
       fitAddon.fit();
-      resizeRef.current?.(terminal.cols, terminal.rows);
+      if (!readOnlyRef.current) resizeRef.current?.(terminal.cols, terminal.rows);
     };
     const resizeObserver = new ResizeObserver(fit);
     resizeObserver.observe(host);
@@ -118,13 +120,15 @@ export function XtermTerminalView({
     };
   }, []);
 
+  useEffect(() => { if (focusRequest) { acceptsUserInputRef.current = true; terminalRef.current?.focus(); } }, [focusRequest]);
+
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
     terminal.options.disableStdin = readOnly;
     // The initial fit can precede the Host attachment. Publish the current
     // dimensions when control arrives, even if the pane has not changed size.
-    if (!readOnly) {
+    if (!readOnly && hostRef.current?.getBoundingClientRect().width) {
       fitRef.current?.fit();
       resizeRef.current?.(terminal.cols, terminal.rows);
     }
