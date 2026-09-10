@@ -233,9 +233,6 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
   const terminalModel = controller.model.terminals ?? {
     supported: false,
     tabs: [],
-    data: '',
-    dataEpoch: 0,
-    dataOffset: 0,
     loading: false,
     error: 'Select a Thread to open its Workspace Terminals.',
   };

@@ -1,4 +1,4 @@
-# Native terminal integration candidate
+# Native terminal integration
 
 `pin.json` fixes the Ghostty source revision and Zig version used by the WVE-65
 native-library probe. Run it from the repository root:
@@ -26,35 +26,41 @@ also directs external embedders to the public libraries. The public
 provides terminal cells, styles and dirty tracking; it is not a ready-made
 Metal view.
 
-Alpha now has an opt-in shared CoreText renderer with UIKit and AppKit adapters.
+Alpha uses the shared CoreText renderer with UIKit and AppKit adapters as its only terminal renderer.
 It consumes the renderer-owned terminal output stream. Electron uses a narrow
 Node-API bridge in the main process, while iPad uses a Capacitor plugin. Neither
 native adapter owns Host credentials or terminal processes.
 
 ```sh
 bun run probe:native-renderer
-VITE_NATIVE_TERMINAL=1 VITE_ALPHA_ACCEPTANCE=1 bun run build:desktop
-VITE_NATIVE_TERMINAL=1 VITE_ALPHA_ACCEPTANCE=1 bun run build:ipad
+VITE_ALPHA_ACCEPTANCE=1 bun run build:desktop
+VITE_ALPHA_ACCEPTANCE=1 bun run build:ipad
 ```
 
 The build scripts prepare ignored native artifacts under `native/.build/` and
 package Ghostty's license. Desktop headers match the exact Electron version;
 new downloads are checked against Electron's SHA-256 manifest. The iOS library
 currently targets physical arm64 iPads. The Simulator is not covered by this
-candidate.
+integration.
 
-See [the native acceptance checkpoint](../../../../docs/acceptance/wve-65-native-renderer.md)
-for evidence and remaining input, rendering and device acceptance gaps. xterm.js
-remains the default until those are closed. Omit `VITE_ALPHA_ACCEPTANCE` for
-ordinary builds; native inspection and synthetic AppKit input helpers are only
-compiled into the desktop acceptance build.
+Normal `build:desktop`, `dev:desktop` and `build:ipad` commands include native
+libghostty automatically. There is no JavaScript terminal fallback or renderer
+feature flag. Browser previews show an unavailable surface instead.
+
+WVE-65 delivers this default. Remaining attended device acceptance, the complete
+terminal stress/handoff matrix, restoration-contract work and the permission-card
+status defect are deferred to [WVE-72](https://linear.app/jacobfvanzyl/issue/WVE-72).
+See [the default-renderer evidence](../../../../docs/acceptance/wve-65-native-default.md)
+for completed checks and their limits. Set `VITE_ALPHA_ACCEPTANCE=1` only for
+acceptance artifacts; ordinary builds omit native inspection and synthetic
+AppKit input helpers.
 
 ### tmux transport restoration limits
 
-The candidate uses tmux's persisted pane state for reconnect snapshots. It now
+The integration uses tmux's persisted pane state for reconnect snapshots. It now
 restores both screens and the supported input/display modes documented in
 `docs/acceptance/wve-65-completion-priorities.md`. Kitty keyboard flag stacks are
-not available from tmux, so this candidate suppresses Kitty discovery replies
+not available from tmux, so the transport suppresses Kitty discovery replies
 and forces its key encoder to use the supported legacy/modifyOtherKeys modes.
 The standalone upstream library supports Kitty; this transport does not yet
 promise it. DEC 2048 resize reporting also remains disabled until it can be

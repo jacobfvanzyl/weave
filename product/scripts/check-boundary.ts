@@ -4,6 +4,8 @@ import { dirname, extname, relative, resolve, sep } from 'node:path';
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
 const ignoredDirectories = new Set(['node_modules', 'dist', 'ios', '.git', 'deferred', '.electron', 'release', '.ipad-build']);
 const forbiddenPackages = new Set([
+  '@xterm/xterm',
+  '@xterm/addon-fit',
   '@weave/client',
   '@weave/protocol',
   'weave-server',

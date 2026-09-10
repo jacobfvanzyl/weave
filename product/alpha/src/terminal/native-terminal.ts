@@ -10,7 +10,7 @@ export type NativeTerminalBridge = {
   inspect(input: { surfaceId: string }): Promise<{ text: string; renderer: string }>;
   addListener(event: 'event', listener: (value: NativeTerminalEvent) => void): Promise<PluginListenerHandle>;
 };
-export const nativeTerminalEnabled = import.meta.env.VITE_NATIVE_TERMINAL === '1' && (Capacitor.getPlatform() === 'ios' || window.weaveDesktop?.platform === 'macos');
+export const nativeTerminalAvailable = Capacitor.getPlatform() === 'ios' || Boolean(window.weaveDesktop?.nativeTerminal);
 export const nativeTerminalBridge = window.weaveDesktop?.nativeTerminal ?? registerPlugin<NativeTerminalBridge>('NativeTerminal');
 export const nativeTerminalAcceptance = new Map<HTMLElement, { focus(): Promise<void>; read(): Promise<string> }>();
 export function encodeTerminalBytes(value: string) {

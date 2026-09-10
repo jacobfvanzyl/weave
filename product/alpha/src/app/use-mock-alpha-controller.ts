@@ -194,7 +194,6 @@ export function useMockAlphaController(
     },
   ]);
   const [activeTerminalId, setActiveTerminalId] = useState("mock-terminal-1");
-  const [terminalData, setTerminalData] = useState("Welcome to Weave\r\n$ ");
   const terminalProject = workspaces.find((workspace) =>
     workspace.threads.some(({ id }) => id === selectedThreadId),
   );
@@ -259,9 +258,6 @@ export function useMockAlphaController(
         activeTerminalId: selectedThreadId ? activeTerminalId : undefined,
         attachmentId: selectedThreadId ? "mock-attachment" : undefined,
         attachmentMode: selectedThreadId ? "control" : undefined,
-        data: selectedThreadId ? terminalData : "",
-        dataEpoch: 1,
-        dataOffset: 0,
         loading: false,
       },
       busy: scenario === "busy" || Boolean(loadingThreadId),
@@ -286,7 +282,6 @@ export function useMockAlphaController(
       workspaces,
       terminalTabs,
       activeTerminalId,
-      terminalData,
       terminalProject,
       terminalThread,
     ],
@@ -513,7 +508,6 @@ export function useMockAlphaController(
           },
         ]);
         setActiveTerminalId(terminalId);
-        setTerminalData("$ ");
       },
       selectTerminal: setActiveTerminalId,
       closeTerminal: (terminalId) => {
@@ -526,8 +520,7 @@ export function useMockAlphaController(
         });
       },
       retryTerminalControl: () => undefined,
-      inputTerminal: (data) =>
-        setTerminalData((current) => `${current}${data}`),
+      inputTerminal: () => undefined,
       resizeTerminal: () => undefined,
       sendPrompt: (text) => {
         setWorkspaces((current) =>

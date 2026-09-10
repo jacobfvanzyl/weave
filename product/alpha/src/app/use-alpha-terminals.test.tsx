@@ -125,7 +125,6 @@ describe('useAlphaTerminals', () => {
     );
     await waitFor(() => expect(rendered).toBe('$ ready\r\n'));
     expect(renders).toBe(beforeOutput);
-    expect(result.current.model.data).toBe('');
 
     await act(() => result.current.actions.input('echo ready\r'));
     expect(host.inputTerminal).toHaveBeenCalledWith(

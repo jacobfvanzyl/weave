@@ -190,9 +190,6 @@ export function TerminalPane({
           : (
             <TerminalView
               output={model.output}
-              data={model.data}
-              dataEpoch={model.dataEpoch}
-              dataOffset={model.dataOffset}
               readOnly={readOnly}
               onInput={(data) => void onInput?.(data)}
               onResize={(cols, rows) => void onResize?.(cols, rows)}

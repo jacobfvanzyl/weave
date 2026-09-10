@@ -40,7 +40,9 @@ remain interactive in the mocked shell.
 
 ### Desktop and iPad Alpha
 
-Alpha exposes ACP conversations and xterm.js terminals. Filetree, Editor and
+Alpha exposes ACP conversations and native libghostty terminals in Electron and on iPad.
+Desktop and iPad builds prepare the pinned native library automatically; no renderer flag is needed.
+Browser previews show an explicit unavailable terminal surface. Filetree, Editor and
 embedded Browser remain in `deferred/`, outside active builds.
 
 From the repository root:
@@ -101,7 +103,8 @@ plus Workspace-scoped filesystem browsing, UTF-8 reads, full content hashes, con
 mutations, bounded search, and connection-scoped change observation. Alpha no longer mounts or subscribes a file browser. Portal also exposes product-owned persistent user terminals behind the `terminal.*` protocol.
 Its private tmux adapter keeps Workspace-scoped shells alive across client disconnects and Portal restarts, while the
 public service enforces one controller, multiple observers, bounded output, typed conflicts, and explicit detach versus
-close. Alpha renders those shells with xterm in independently persisted Bottom and Right docks. Run
+close. Alpha renders those shells with native libghostty in Host-owned workspace arrangements.
+The client retains independent open-workspace, focused-pane and selected-Thread state. Run
 `bun run acceptance:terminal` from `product/portal` with `PORTAL_URL`, `PORTAL_PAIRING_TOKEN`, and
 `PORTAL_WORKSPACE_ID` to exercise the two-client lifecycle against a configured Host.
 

@@ -197,7 +197,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         let live = ProcessInfo.processInfo.arguments.contains("--host-acceptance")
-        guard !acceptanceStarted, live || ProcessInfo.processInfo.arguments.contains("--shell-acceptance") else { return }
+        guard !acceptanceStarted, live else { return }
         acceptanceStarted = true
         Task { @MainActor in
             guard let webView else { return }
@@ -209,7 +209,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
             status.font = .systemFont(ofSize: 10)
             status.textColor = .white
             if live { view.addSubview(status) }
-            let url = live ? "capacitor://localhost/?acceptance=live" : "capacitor://localhost/?mock=chat&acceptance=1"
+            let url = "capacitor://localhost/?acceptance=live"
             webView.load(URLRequest(url: URL(string: url)!))
             let nativeSmoke = ProcessInfo.processInfo.arguments.contains("--native-terminal-smoke")
             var drivenStages = Set<String>()

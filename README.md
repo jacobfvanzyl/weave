@@ -19,7 +19,7 @@ Electron supplies its own desktop runtime; Xcode supplies the iPad toolchain.
 `bun run dev:alpha` remains the renderer development server; `bun run dev:ipad`
 syncs and opens the iPad project, and `bun run build:ipad` builds it.
 
-See [Host operations](product/portal/OPERATIONS.md), [product notes](product/README.md), [Host configuration](product/portal/README.md), and the [domain glossary](CONTEXT.md). The Host uses Bun; Electron is the macOS runtime and Capacitor targets iPad only. Housekeeping retains xterm.js; libghostty starts in WVE-65.
+See [Host operations](product/portal/OPERATIONS.md), [product notes](product/README.md), [Host configuration](product/portal/README.md), and the [domain glossary](CONTEXT.md). The Host uses Bun; Electron is the macOS runtime and Capacitor targets iPad only. Both apps use native libghostty terminals by default. Browser previews support the shared UI without a terminal renderer.
 
 The repository-pinned Linear CLI is intentionally a separate tooling install: `bun install --cwd .agents/tools/linear --frozen-lockfile`. Its credential isolation and usage are documented in [the tracker guide](docs/agents/issue-tracker.md).
 

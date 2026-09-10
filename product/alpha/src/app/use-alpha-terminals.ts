@@ -31,11 +31,7 @@ export type AlphaTerminalsModel = {
   activeTerminalId?: string;
   attachmentId?: string;
   attachmentMode?: TerminalAttachmentMode;
-  /** Legacy preview data. Live attachments deliver bytes through output. */
-  data: string;
   output?: TerminalOutputSource;
-  dataEpoch: number;
-  dataOffset: number;
   loading: boolean;
   readOnlyReason?: string;
   error?: string;
@@ -56,9 +52,6 @@ const emptyModel = (
   scope: target?.scope,
   supported: target?.supported ?? false,
   tabs: [],
-  data: '',
-  dataEpoch: 0,
-  dataOffset: 0,
   loading: false,
 });
 
@@ -153,9 +146,6 @@ export function useAlphaTerminals({
           activeTerminalId: undefined,
           attachmentId: undefined,
           attachmentMode: undefined,
-          data: '',
-          dataEpoch: current.dataEpoch + 1,
-          dataOffset: 0,
           readOnlyReason: undefined,
         };
       }
@@ -240,9 +230,6 @@ export function useAlphaTerminals({
       activeTerminalId: attached.snapshot.terminal.terminalId,
       attachmentId: attached.attachment.attachmentId,
       attachmentMode: attached.attachment.mode,
-      data: '',
-      dataEpoch: current.dataEpoch + 1,
-      dataOffset: 0,
       loading: false,
       readOnlyReason,
       error: undefined,
@@ -446,9 +433,6 @@ export function useAlphaTerminals({
           activeTerminalId: undefined,
           attachmentId: undefined,
           attachmentMode: undefined,
-          data: '',
-          dataEpoch: current.dataEpoch + 1,
-          dataOffset: 0,
         }));
         if (!target.terminalId && tabs[0] && requestedScopeKeysRef.current.has(scopeKey)) {
           await attach(tabs[0]);

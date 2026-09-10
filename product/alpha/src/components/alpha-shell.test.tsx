@@ -9,9 +9,9 @@ vi.mock("@/hooks/use-mobile", () => ({
   useIsMobile: () => mobileViewport.value,
 }));
 
-vi.mock("./xterm-terminal-view", () => ({
-  XtermTerminalView: ({ data }: { data: string }) => (
-    <div data-slot="mock-xterm">{data}</div>
+vi.mock("./terminal-view", () => ({
+  TerminalView: () => (
+    <div data-slot="mock-terminal" />
   ),
 }));
 
@@ -222,9 +222,6 @@ describe("AlphaShell", () => {
       },
       supported: true,
       tabs: [],
-      data: "",
-      dataEpoch: 0,
-      dataOffset: 0,
       loading: false,
     };
     value.actions.showTerminals = vi.fn();
@@ -297,9 +294,6 @@ describe("AlphaShell", () => {
       },
       supported: true,
       tabs: [],
-      data: "",
-      dataEpoch: 0,
-      dataOffset: 0,
       loading: false,
     };
     value.actions.showTerminals = vi.fn();
@@ -364,9 +358,6 @@ describe("AlphaShell", () => {
       },
       supported: true,
       tabs: [],
-      data: "",
-      dataEpoch: 0,
-      dataOffset: 0,
       loading: false,
     };
     rerender(<AlphaShell controller={value} />);
@@ -405,9 +396,6 @@ describe("AlphaShell", () => {
       },
       supported: true,
       tabs: [],
-      data: "",
-      dataEpoch: 0,
-      dataOffset: 0,
       loading: false,
     };
     rerender(<AlphaShell controller={value} />);

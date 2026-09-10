@@ -18,8 +18,8 @@ vi.mock('@/app/portal-connection-storage', () => ({
   loadPortalConnections: async () => ({ connections: ['one', 'two'].map((hostId) => ({ hostId, displayName: hostId, hostUrl: `ws://${hostId}.test`, credentialId: hostId, keyId: hostId })) }),
   savePortalConnections: vi.fn(),
 }));
-vi.mock('./xterm-terminal-view', () => ({ XtermTerminalView: ({ data = '', output, onInput }: { data?: string; output?: TerminalOutputSource; onInput(data: string): void }) => {
-  const [text, setText] = useState(data);
+vi.mock('./terminal-view', () => ({ TerminalView: ({ output, onInput }: { output?: TerminalOutputSource; onInput(data: string): void }) => {
+  const [text, setText] = useState('');
   useEffect(() => output?.subscribe({ reset: async (value) => { setText(value); }, write: async (value) => { setText((current) => current + value); } }), [output]);
   return <textarea aria-label='Terminal input' value={text} onChange={(event) => onInput(event.target.value)} />;
 } }));

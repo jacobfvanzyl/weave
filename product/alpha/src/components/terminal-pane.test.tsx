@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AlphaTerminalsModel } from '@/app/use-alpha-terminals';
 import { TerminalPane } from './terminal-pane';
 
-vi.mock('./xterm-terminal-view', () => ({
-  XtermTerminalView: ({ data, readOnly }: { data: string; readOnly: boolean }) => (
-    <div data-slot='mock-xterm' data-read-only={readOnly}>{data}</div>
+vi.mock('./terminal-view', () => ({
+  TerminalView: ({ readOnly }: { readOnly: boolean }) => (
+    <div data-slot='mock-terminal' data-read-only={readOnly} />
   ),
 }));
 
@@ -28,9 +28,6 @@ const model = (change: Partial<AlphaTerminalsModel> = {}): AlphaTerminalsModel =
   activeTerminalId: 'terminal-1',
   attachmentId: 'attachment-1',
   attachmentMode: 'control',
-  data: '$ ',
-  dataEpoch: 1,
-  dataOffset: 0,
   loading: false,
   ...change,
 });
@@ -132,7 +129,7 @@ describe('TerminalPane', () => {
     );
 
     expect(screen.getByRole('status')).toHaveTextContent('Controlled elsewhere.');
-    expect(document.querySelector('[data-slot="mock-xterm"]')).toHaveAttribute(
+    expect(document.querySelector('[data-slot="mock-terminal"]')).toHaveAttribute(
       'data-read-only',
       'true',
     );

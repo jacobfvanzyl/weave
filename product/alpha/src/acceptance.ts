@@ -1,49 +1,5 @@
 import { nativeTerminalAcceptance } from '@/terminal/native-terminal';
 // Included only in explicitly built acceptance artifacts.
-export async function runShellAcceptance() {
-  let stage = "startup";
-  const waitFor = async (predicate: () => unknown) => {
-    for (let n = 0; n < 100; n++) {
-      if (await predicate()) return;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    throw new Error('Shell acceptance condition timed out.');
-  };
-  const button = (name: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`);
-  try {
-    await waitFor(() => button('Show Terminal Pane') || button('Hide Terminal Pane'));
-    stage = 'terminal mount';
-    if (document.querySelector('[data-slot="browser-pane"], [data-slot="editor-pane"], [data-symbol="project-pane"], [data-symbol="browser-pane"]')) throw new Error('Deferred surface is active.');
-    button('Show Terminal Pane')?.click();
-    await waitFor(() => document.querySelector('.xterm-screen'));
-    const screen = document.querySelector('.xterm-screen')!.getBoundingClientRect();
-    if (screen.width < 100 || screen.height < 30) throw new Error('Terminal geometry is invalid.');
-    stage = 'terminal input';
-    const input = document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!;
-    await waitFor(() => document.querySelector('.xterm-rows')?.textContent?.includes('$'));
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    input.focus();
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', code: 'KeyX', keyCode: 88, which: 88, bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent('keypress', { key: 'x', code: 'KeyX', keyCode: 120, charCode: 120, which: 120, bubbles: true }));
-    await waitFor(() => document.querySelector('.xterm-rows')?.textContent?.includes('$ x'));
-    stage = 'composer';
-    button('Hide Terminal Pane')!.click();
-    const composer = document.querySelector<HTMLTextAreaElement>('[aria-label="Message agent"]')!;
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(composer, 'WVE shell acceptance');
-    composer.dispatchEvent(new Event('input', { bubbles: true }));
-    await waitFor(() => button('Send message') && !button('Send message')!.disabled);
-    button('Send message')!.click();
-    await waitFor(() => button('Stop response'));
-    button('Stop response')!.click();
-    await waitFor(() => button('Send message'));
-    button('Show Terminal Pane')?.click();
-    await waitFor(() => document.querySelector('.xterm-screen'));
-    return { passed: true, deferredSurfacesAbsent: true, terminalInputAndGeometry: true, composerSendAndCancel: true, width: innerWidth, height: innerHeight };
-  } catch (error) {
-    return { passed: false, stage, error: String(error) };
-  }
-}
-
 export type LiveAcceptanceInput = { hostUrl: string; pairingToken?: string; workspaceName: string; permission?: boolean };
 export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
   let stage = 'pairing';
@@ -127,11 +83,12 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     await wait(() => button('Start terminal') && !button('Start terminal')!.disabled);
     button('Start terminal')!.click();
     const nativeSurface = () => nativeTerminalAcceptance.entries().next().value as [HTMLElement, { focus(): Promise<void>; read(): Promise<string> }] | undefined;
-    const terminalText = async () => nativeSurface() ? await nativeSurface()![1].read() : document.querySelector('.xterm-rows')?.textContent ?? '';
+    const terminalText = async () => nativeSurface() ? await nativeSurface()![1].read() : '';
+    await wait(nativeSurface);
     await wait(async () => (await terminalText()).trim());
     const terminalId = document.querySelector('section[data-terminal-id]')?.getAttribute('data-terminal-id');
     if (!terminalId) throw new Error('No terminal session identity');
-    const terminalBounds = (nativeSurface()?.[0] ?? document.querySelector('.xterm-screen'))!.getBoundingClientRect();
+    const terminalBounds = nativeSurface()![0].getBoundingClientRect();
     if (terminalBounds.width < 200 || terminalBounds.height < 100 || terminalBounds.right > innerWidth + 1) throw new Error('Terminal is not visibly laid out in the application window.');
     if (nativeSurface()) {
       stage = 'persistent split and maximize';
@@ -145,11 +102,10 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       if (nativeSurface()?.[0] !== original) throw new Error('Layout recreated the native terminal');
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
-    if (nativeSurface()) await nativeSurface()![1].focus();
-    else document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!.focus();
+    await nativeSurface()![1].focus();
     state.alphaAcceptanceStage = 'native-terminal';
     stage = 'native terminal input and paste';
-    await wait(async () => nativeSurface() ? (await terminalText()).split('\n').some((line) => line.trim() === 'WEAVE_NATIVE_PASTE_OK') : [...document.querySelectorAll('.xterm-rows > div')].some((el) => el.textContent?.trim() === 'WEAVE_NATIVE_PASTE_OK'));
+    await wait(async () => (await terminalText()).split('\n').some((line) => line.trim() === 'WEAVE_NATIVE_PASTE_OK'));
     state.alphaAcceptanceStage = 'native-neovim';
     stage = 'Neovim startup';
     await wait(async () => (await terminalText()).includes('[No Name]'));
@@ -169,8 +125,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     runningTerminal()!.click();
     await wait(() => !document.querySelector('[role="dialog"]'));
     await wait(async () => { const text = await terminalText(); return text.includes('WEAVE_NEOVIM_INPUT') && text.includes('-- INSERT --'); });
-    if (nativeSurface()) await nativeSurface()![1].focus();
-    else document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!.focus();
+    await nativeSurface()![1].focus();
     state.alphaAcceptanceStage = 'native-reattached-input';
     stage = 'input after terminal reattachment';
     await wait(async () => (await terminalText()).includes('WEAVE_NEOVIM_INPUT_REATTACHED'));
