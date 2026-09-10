@@ -203,6 +203,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
             guard let webView else { return }
             let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             try? FileManager.default.removeItem(at: documents.appendingPathComponent("shell-acceptance.json"))
+            try? FileManager.default.removeItem(at: documents.appendingPathComponent("native-smoke-cleanup.json"))
             let status = UILabel(frame: CGRect(x: 16, y: 28, width: 280, height: 20))
             status.accessibilityIdentifier = "AcceptanceStage"
             status.font = .systemFont(ofSize: 10)

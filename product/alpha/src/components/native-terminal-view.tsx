@@ -21,6 +21,8 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
     let unsubscribe: (() => void) | undefined;
     let removeListener: (() => Promise<void>) | undefined;
     let frame: number | undefined;
+    let resizeEnabled = false;
+    let geometryRevision = 0;
     let previousBounds = '';
     const fail = (cause: unknown) => {
       if (disposed) return;
@@ -35,12 +37,14 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
         if (disposed || !surfaceId) return;
         const rect = element.getBoundingClientRect();
         const overlay = [...document.querySelectorAll('[role="dialog"], [role="menu"], [role="listbox"]')].some((item) => item.getBoundingClientRect().height > 0);
-        const bounds = { surfaceId, x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: !failed && !document.hidden && !overlay && element.isConnected, readOnly: latest.current.readOnly };
+        const bounds = { surfaceId, x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: !failed && !document.hidden && !overlay && element.isConnected && rect.width > 0 && rect.height > 0, readOnly: latest.current.readOnly };
+        resizeEnabled = bounds.visible;
         const key = JSON.stringify(bounds);
         if (key === previousBounds) return;
         previousBounds = key;
+        const revision = ++geometryRevision;
         void nativeTerminalBridge.layout(bounds).then(({ cols, rows }) => {
-          if (!disposed && !latest.current.readOnly) latest.current.onResize?.(cols, rows);
+          if (!disposed && revision === geometryRevision && resizeEnabled && bounds.visible && !latest.current.readOnly) latest.current.onResize?.(cols, rows);
         }).catch(fail);
       });
     };
@@ -55,7 +59,8 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize }: {
       const listener = await nativeTerminalBridge.addListener('event', (event) => {
         if (disposed || event.surfaceId !== surfaceId) return;
         if (!failed && event.kind === 'input' && event.data && !latest.current.readOnly) latest.current.onInput?.(decodeTerminalBytes(event.data));
-        if (event.kind === 'resize' && event.cols && event.rows && !latest.current.readOnly) latest.current.onResize?.(event.cols, event.rows);
+        // Only an acknowledged visible layout can resize the Host. UIKit also
+        // emits provisional sizes while creating/hiding its native view.
         if (event.kind === 'error') fail(event.message ?? 'Native terminal input failed.');
         if (event.kind === 'focus') element.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
       });

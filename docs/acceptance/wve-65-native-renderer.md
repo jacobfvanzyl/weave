@@ -75,8 +75,29 @@ at `/tmp/weave-desktop-eEmuE8`, including opening the same Neovim process in ano
 arrangement and entering more text after reattachment; `native-reattached.png`
 was inspected. The full repository check passes with 191 Alpha, 73 Host, 24
 protocol and two boundary tests. The signed iPad app and updated XCTest target
-build successfully. The expanded physical-iPad smoke is still pending; these
-desktop results do not establish its reattachment or hardware-input acceptance.
+build successfully.
+
+The expanded physical-iPad smoke exposed a resize-ordering failure. The test
+Host trace showed libghostty sending an in-band resize report before the Host
+resized tmux's PTY. Neovim drew into the old grid and lost visible content.
+The adapter now reports DEC 2048 unavailable and suppresses its resize reports;
+the Host remains responsible for PTY resize. Native geometry must also be
+visible and acknowledged before it can resize the Host. This matches
+[Neovim's mode negotiation](https://github.com/neovim/neovim/blob/v0.12.4/src/nvim/tui/tui.c#L199),
+which enables resize events when the terminal advertises the mode.
+
+With that fix, the iPad passes ACP permission handoff, paste, Neovim input,
+reattachment into another arrangement and further input. Evidence:
+`/tmp/wve65-resize-order-ipad-verified.json` and the inspected
+`/tmp/wve65-resize-order-ipad-verified.png`. Fixture cleanup is confirmed by
+`/tmp/wve65-resize-order-ipad-verified-cleanup.json`. This remains an in-process
+UIKit smoke, not hardware-keyboard or touch acceptance. The native probe covers
+unavailable-mode reporting and suppressed in-band resize at
+`/tmp/weave-native-renderer-vYzJMv`. Packaged Electron pairing/relaunch passes at
+`/tmp/weave-desktop-elefd8`. The repository check passes with 192 Alpha tests,
+73 Host tests, 24 protocol tests and two boundary tests; the final native changes
+also pass the probe, desktop build/acceptance, signed iPad build/smoke and XCTest
+build-for-testing. No XCTest execution is claimed.
 
 Before enabling this by default, complete physical-iPad acceptance and native
 keyboard/IME/selection work. UIKit still needs full hardware key/release coverage.

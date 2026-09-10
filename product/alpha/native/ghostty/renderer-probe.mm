@@ -56,6 +56,14 @@ int main(int argc, char **argv) {
     [renderer consume:[@"\033=\033[?1035l" dataUsingEncoding:NSUTF8StringEncoding] reset:NO];
     [replies setLength:0];
     if (![renderer sendKey:@"Numpad1" text:@"1" modifiers:0 action:1] || ![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\033Oq"]) return 21;
+    [replies setLength:0];
+    [renderer consume:[@"\033[?2048$p" dataUsingEncoding:NSUTF8StringEncoding] reset:NO];
+    if (![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\033[?2048;0$y"]) return 22;
+    [replies setLength:0];
+    [renderer consume:[@"\033[?2048h" dataUsingEncoding:NSUTF8StringEncoding] reset:NO];
+    [renderer resizeToSize:CGSizeMake(800, 400)];
+    if (replies.length) return 23;
+    [renderer resizeToSize:CGSizeMake(720, 360)];
     [renderer consume:bytes reset:YES];
     size_t width = 720, height = 360;
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();

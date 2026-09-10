@@ -63,6 +63,14 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   if (_boldItalicFont) CFRelease(_boldItalicFont);
 }
 - (void)acceptReply:(NSData *)data {
+  // The Host resizes the PTY after the client fits its view. Advertising
+  // in-band resize here lets a TUI redraw into the old tmux grid before that
+  // resize reaches the Host. Keep DEC 2048 unavailable until the transport
+  // can order the notification after its authoritative PTY resize.
+  NSString *reply = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+  if ([reply hasPrefix:@"\033[48;"] && [reply hasSuffix:@"t"]) return;
+  if ([reply isEqualToString:@"\033[?2048;1$y"] || [reply isEqualToString:@"\033[?2048;2$y"])
+    data = [@"\033[?2048;0$y" dataUsingEncoding:NSUTF8StringEncoding];
   if (!_replaying && !self.readOnly && self.writeInput) self.writeInput(data);
 }
 - (BOOL)newTerminal {

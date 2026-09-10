@@ -83,3 +83,20 @@ it('waits for native geometry before replaying a saved screen', async () => {
   await act(async () => fitted({ cols: 120, rows: 40 }));
   await waitFor(() => expect(native.write).toHaveBeenCalledWith({ surfaceId: 'native-1', data: btoa('saved viewport'), reset: true }));
 });
+
+it('resizes the Host only for acknowledged visible geometry', async () => {
+  const rectangle = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, width: 720, height: 360 } as DOMRect);
+  const resize = vi.fn();
+  const output = new TerminalOutputStream(vi.fn());
+  const content = (overlay = false) => <><NativeTerminalView output={output} readOnly={false} onResize={resize} />{overlay && <div role='dialog'>Workspace actions</div>}</>;
+  try {
+    const { rerender } = render(content());
+    await waitFor(() => expect(resize).toHaveBeenCalledWith(80, 24));
+    resize.mockClear();
+    act(() => native.listener?.({ surfaceId: 'native-1', kind: 'resize', cols: 2, rows: 2 }));
+    expect(resize).not.toHaveBeenCalled();
+    rerender(content(true));
+    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false })));
+    expect(resize).not.toHaveBeenCalled();
+  } finally { rectangle.mockRestore(); }
+});
