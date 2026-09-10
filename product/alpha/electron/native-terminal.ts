@@ -8,7 +8,7 @@ const channel = 'weave:terminal';
 type Addon = {
   create(parent: Buffer, event: (json: string) => void): number;
   layout(id: number, x: number, y: number, width: number, height: number, visible: boolean, readOnly: boolean): { cols: number; rows: number };
-  write(id: number, bytes: Buffer, reset: boolean): void;
+  write(id: number, bytes: Buffer, reset: boolean, cols: number, rows: number): void;
   focus(id: number): void;
   inspect(id: number): string;
   close(id: number): void;
@@ -50,7 +50,9 @@ export function installNativeTerminals(window: BrowserWindow) {
         if (typeof value.data !== 'string' || value.data.length > 3 * 1024 * 1024 || typeof value.reset !== 'boolean') throw new Error('Invalid terminal output.');
         const bytes = Buffer.from(value.data, 'base64');
         if (bytes.toString('base64') !== value.data) throw new Error('Invalid terminal output encoding.');
-        addon.write(id, bytes, value.reset); return;
+        const cols = value.cols ?? 0, rows = value.rows ?? 0;
+        if (!(cols === 0 && rows === 0) && (!value.reset || !Number.isInteger(cols) || !Number.isInteger(rows) || (cols as number) < 2 || (cols as number) > 500 || (rows as number) < 2 || (rows as number) > 300)) throw new Error('Invalid terminal snapshot grid.');
+        addon.write(id, bytes, value.reset, cols as number, rows as number); return;
       }
       case 'focus': addon.focus(id); return;
       case 'inspect': {

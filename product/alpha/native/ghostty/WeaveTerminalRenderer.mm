@@ -68,6 +68,9 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   // resize reaches the Host. Keep DEC 2048 unavailable until the transport
   // can order the notification after its authoritative PTY resize.
   NSString *reply = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+  // tmux cannot reconstruct Kitty's flag stack across Host/client restarts.
+  // Do not answer its discovery query or use flags from live raw output.
+  if ([reply hasPrefix:@"\033[?"] && [reply hasSuffix:@"u"]) return;
   if ([reply hasPrefix:@"\033[48;"] && [reply hasSuffix:@"t"]) return;
   if ([reply isEqualToString:@"\033[?2048;1$y"] || [reply isEqualToString:@"\033[?2048;2$y"])
     data = [@"\033[?2048;0$y" dataUsingEncoding:NSUTF8StringEncoding];
@@ -88,6 +91,16 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_USERDATA, (__bridge void *)self);
   ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, (const void *)writePty);
   return YES;
+}
+- (BOOL)restoreData:(NSData *)data columns:(NSUInteger)columns rows:(NSUInteger)rows {
+  if (columns < 2 || columns > 500 || rows < 2 || rows > 300) return NO;
+  NSUInteger displayColumns = _columns, displayRows = _rows;
+  _columns = columns; _rows = rows;
+  if (![self consume:data reset:YES]) return NO;
+  // Reflow only after parsing the authoritative snapshot at its original grid.
+  ghostty_terminal_resize(_terminal, (uint16_t)displayColumns, (uint16_t)displayRows, (uint32_t)ceil(_cellWidth), (uint32_t)ceil(_cellHeight));
+  _columns = displayColumns; _rows = displayRows;
+  return [self updateFrame];
 }
 - (BOOL)consume:(NSData *)data reset:(BOOL)reset {
   NSAssert(NSThread.isMainThread, @"Native terminal must be used on the main thread");
@@ -195,6 +208,8 @@ static GhosttyKey physicalKey(NSString *name) {
     if (character < 32 || character == 127 || (character >= 0xF700 && character <= 0xF8FF)) return NO;
   }
   ghostty_key_encoder_setopt_from_terminal(_keyEncoder, _terminal);
+  GhosttyKittyKeyFlags kitty = GHOSTTY_KITTY_KEY_DISABLED;
+  ghostty_key_encoder_setopt(_keyEncoder, GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS, &kitty);
   ghostty_key_event_set_action(_keyEvent, (GhosttyKeyAction)action);
   ghostty_key_event_set_key(_keyEvent, physicalKey(name));
   ghostty_key_event_set_mods(_keyEvent, (GhosttyMods)modifiers);

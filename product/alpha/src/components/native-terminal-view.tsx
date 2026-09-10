@@ -93,7 +93,7 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
       element.dataset.nativeRenderer = created.renderer;
       const id = surfaceId;
       unsubscribe = output.subscribe({
-        reset: (data) => nativeTerminalBridge.write({ surfaceId: id, data: encodeTerminalBytes(data), reset: true }),
+        reset: (data, grid) => nativeTerminalBridge.write({ surfaceId: id, data: encodeTerminalBytes(data), reset: true, ...(grid ? { cols: grid.cols, rows: grid.rows } : {}) }),
         write: (data) => nativeTerminalBridge.write({ surfaceId: id, data: encodeTerminalBytes(data), reset: false }),
       });
       if (import.meta.env.VITE_ALPHA_ACCEPTANCE === '1') nativeTerminalAcceptance.set(element, {

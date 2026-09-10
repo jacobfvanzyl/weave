@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) CGFloat cellWidth;
 @property(nonatomic, readonly) CGFloat cellHeight;
 @property(nonatomic, readonly) NSString *visibleText;
+- (BOOL)restoreData:(NSData *)data columns:(NSUInteger)columns rows:(NSUInteger)rows NS_SWIFT_NAME(restore(_:columns:rows:));
 - (BOOL)consume:(NSData *)data reset:(BOOL)reset;
 - (BOOL)resizeToSize:(CGSize)size;
 - (void)drawInContext:(CGContextRef)context size:(CGSize)size;

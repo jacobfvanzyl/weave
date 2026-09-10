@@ -6,10 +6,10 @@ import { resolveTmuxExecutable, TmuxTerminalBackend } from './tmux-terminal-back
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const waitFor = async (predicate: () => boolean, timeoutMs = 5_000) => {
+const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000) => {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await delay(25);
   }
   throw new Error('Timed out waiting for the tmux Terminal backend.');
@@ -101,7 +101,7 @@ test({
       assertEquals({ cols: resized.cols, rows: resized.rows }, { cols: 111, rows: 35 });
       const captured = await first.capture(terminalId);
       assertEquals(captured.data.includes(marker), true);
-      assertEquals(captured.data.startsWith('\x1b[2J\x1b[H'), true);
+      assertEquals(captured.data.includes('\x1b[2J\x1b[H'), true);
       const cursor = new TextDecoder().decode(
         (await runProcess('tmux', {
           args: [
@@ -142,4 +142,25 @@ test({
       await removePath(cwd, { recursive: true }).catch(() => undefined);
     }
   },
+});
+
+test('TmuxTerminalBackend captures live application modes and saved screen across adapter restart', async () => {
+  if (!await tmuxAvailable()) return;
+  const stateDirectory = await temporaryDirectory({ dir: '/tmp', prefix: 'weave-mode-state-' });
+  const terminalId = crypto.randomUUID();
+  let backend = new TmuxTerminalBackend({ stateDirectory, env: sparseServiceEnvironment() });
+  try {
+    await backend.create({ terminalId, workspaceId: 'modes', cwd: stateDirectory, cols: 80, rows: 24, env: { TERM: 'xterm-256color' } });
+    await backend.input(terminalId, "printf '\\033[2J\\033[HPRIMARY\\033[?1049h\\033[2J\\033[HALT\\033[?1h\\033=\\033[?2004h\\033[?1002h\\033[?1006h'; sleep 30\r");
+    let captured = '';
+    await waitFor(async () => { captured = (await backend.capture(terminalId)).data; return captured.includes('\x1b[?1h') && captured.includes('\x1b[?1049h'); });
+    await backend.dispose();
+    backend = new TmuxTerminalBackend({ stateDirectory, env: sparseServiceEnvironment() });
+    captured = (await backend.capture(terminalId)).data;
+    for (const value of ['PRIMARY', 'ALT', '\x1b[?1h', '\x1b=', '\x1b[?2004h', '\x1b[?1002h', '\x1b[?1006h']) assertEquals(captured.includes(value), true);
+    if (process.env.WEAVE_SNAPSHOT_PROBE_INPUT) await Bun.write(process.env.WEAVE_SNAPSHOT_PROBE_INPUT, JSON.stringify({ data: captured, cols: 80, rows: 24 }));
+  } finally {
+    await backend.close(terminalId).catch(() => undefined); await backend.dispose();
+    await removePath(stateDirectory, { recursive: true });
+  }
 });

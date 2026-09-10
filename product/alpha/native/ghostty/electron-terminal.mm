@@ -232,11 +232,12 @@ static napi_value layout(napi_env env, napi_callback_info info) {
   return result;
 }
 static napi_value write(napi_env env, napi_callback_info info) {
-  size_t count = 3, length; napi_value args[3]; void *bytes; bool reset;
+  size_t count = 5, length; napi_value args[5]; void *bytes; bool reset; uint32_t cols, rows;
   napi_get_cb_info(env, info, &count, args, NULL, NULL);
-  if (count != 3 || napi_get_buffer_info(env, args[1], &bytes, &length) != napi_ok || length > 2 * 1024 * 1024 || napi_get_value_bool(env, args[2], &reset) != napi_ok) return error(env, "Invalid native output");
+  if (count != 5 || napi_get_value_uint32(env, args[3], &cols) != napi_ok || napi_get_value_uint32(env, args[4], &rows) != napi_ok || napi_get_buffer_info(env, args[1], &bytes, &length) != napi_ok || length > 2 * 1024 * 1024 || napi_get_value_bool(env, args[2], &reset) != napi_ok) return error(env, "Invalid native output");
   WeaveNativeSurface *entry = surface(env, args[0]);
-  if (!entry || ![entry.view.terminal consume:[NSData dataWithBytes:bytes length:length] reset:reset]) return error(env, "Native output could not be consumed");
+  NSData *data = [NSData dataWithBytes:bytes length:length];
+  if (!entry || !(reset && cols ? [entry.view.terminal restoreData:data columns:cols rows:rows] : [entry.view.terminal consume:data reset:reset])) return error(env, "Native output could not be consumed");
   if (reset) entry.view.selection = NSMakeRange(0, 0);
   entry.view.needsDisplay = YES; return undefined(env);
 }

@@ -50,8 +50,8 @@ private final class GhosttyTerminalTextView: UITextView {
             resized?(Int(terminal.columns), Int(terminal.rows))
         }
     }
-    func consume(_ data: Data, reset: Bool) -> Bool {
-        guard terminal.consume(data, reset: reset) else { return false }
+    func consume(_ data: Data, reset: Bool, cols: Int = 0, rows: Int = 0) -> Bool {
+        guard (reset && cols > 0 ? terminal.restore(data, columns: UInt(cols), rows: UInt(rows)) : terminal.consume(data, reset: reset)) else { return false }
         refreshText()
         return true
     }
@@ -200,7 +200,9 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
     }
     @objc func write(_ call: CAPPluginCall) {
         withSurface(call) { view in
-            guard let encoded = call.getString("data"), encoded.count <= 3 * 1024 * 1024, let data = Data(base64Encoded: encoded), view.consume(data, reset: call.getBool("reset") == true) else { call.reject("Native terminal output could not be consumed."); return }
+            let cols = call.getInt("cols") ?? 0, rows = call.getInt("rows") ?? 0
+            guard (cols == 0 && rows == 0) || (call.getBool("reset") == true && (2...500).contains(cols) && (2...300).contains(rows)) else { call.reject("Invalid terminal snapshot grid."); return }
+            guard let encoded = call.getString("data"), encoded.count <= 3 * 1024 * 1024, let data = Data(base64Encoded: encoded), view.consume(data, reset: call.getBool("reset") == true, cols: cols, rows: rows) else { call.reject("Native terminal output could not be consumed."); return }
             call.resolve()
         }
     }

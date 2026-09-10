@@ -4,7 +4,7 @@ export type NativeTerminalBounds = { surfaceId: string; x: number; y: number; wi
 export type NativeTerminalBridge = {
   create(): Promise<{ surfaceId: string; renderer: string }>;
   layout(bounds: NativeTerminalBounds): Promise<{ cols: number; rows: number }>;
-  write(input: { surfaceId: string; data: string; reset: boolean }): Promise<void>;
+  write(input: { surfaceId: string; data: string; reset: boolean; cols?: number; rows?: number }): Promise<void>;
   focus(input: { surfaceId: string }): Promise<void>;
   close(input: { surfaceId: string }): Promise<void>;
   inspect(input: { surfaceId: string }): Promise<{ text: string; renderer: string }>;

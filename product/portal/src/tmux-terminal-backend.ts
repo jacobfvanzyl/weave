@@ -1,3 +1,4 @@
+import { terminalSnapshot, terminalSnapshotFormat } from './terminal-snapshot.ts';
 import { chmod, mkdir, statSync, writeText } from './host-files.ts';
 import { isFsError } from './host-files.ts';
 import { spawnProcess, runProcess } from './host-process.ts';
@@ -580,25 +581,20 @@ export class TmuxTerminalBackend implements TerminalBackend {
     const pause = ['refresh-client', '-A', `${record.paneId}:pause`].map(shellQuote).join(' ');
     const capture = ['capture-pane', '-p', '-e', '-J', '-S', '-', '-t', record.paneId]
       .map(shellQuote).join(' ');
-    const state = ['display-message', '-p', '-t', record.paneId, `${marker}#{cursor_x}\t#{cursor_y}`]
+    const pending = ['capture-pane', '-p', '-P', '-t', record.paneId].map(shellQuote).join(' ');
+    const saved = ['capture-pane', '-p', '-e', '-J', '-a', '-q', '-S', '-', '-t', record.paneId].map(shellQuote).join(' ');
+    const state = ['display-message', '-p', '-t', record.paneId, `${marker}${terminalSnapshotFormat}`]
       .map(shellQuote).join(' ');
     const resume = ['refresh-client', '-A', `${record.paneId}:continue`].map(shellQuote).join(' ');
     const client = this.#controlClient;
     if (!client) throw new Error('tmux control client is unavailable.');
     this.#manuallyPausedPanes.add(record.paneId);
     try {
-      const [paused, captured, cursorState] = await client.commands([pause, capture, state, resume]);
+      const [paused, captured, savedScreen, cursorState, partial] = await client.commands([pause, capture, saved, state, pending, resume]);
       const value = cursorState.stdout.trimEnd();
       if (!value.startsWith(marker)) throw new Error('tmux did not return the Terminal capture state.');
-      const [x = '', y = ''] = value.slice(marker.length).split('\t');
-      const cursorX = Number(x);
-      const cursorY = Number(y);
-      if (!Number.isInteger(cursorX) || !Number.isInteger(cursorY)) {
-        throw new Error('tmux returned invalid Terminal cursor coordinates.');
-      }
-      const screen = captured.stdout.replace(/\r?\n$/, '').replace(/\r?\n/g, '\r\n');
       return {
-        data: `\x1b[2J\x1b[H${screen}\x1b[${cursorY + 1};${cursorX + 1}H`,
+        data: terminalSnapshot(captured.stdout, savedScreen.stdout, value.slice(marker.length)) + partial.stdout.replace(/\n$/, ''),
         boundary: paused.boundary,
       };
     } finally {

@@ -1,14 +1,15 @@
 /** A renderer consumes one snapshot followed by ordered live output. Resolving a
  * write acknowledges consumption, so a slow native bridge cannot grow a queue
  * without bound. A new renderer must obtain a fresh snapshot after detachment. */
+export type TerminalSnapshotGrid = { cols: number; rows: number };
 export type TerminalOutputSink = {
-  reset(data: string): Promise<void>;
+  reset(data: string, grid?: TerminalSnapshotGrid): Promise<void>;
   write(data: string): Promise<void>;
 };
 export type TerminalOutputSource = {
   subscribe(sink: TerminalOutputSink): () => void;
 };
-type Frame = { kind: 'reset' | 'write'; data: string; generation: number; bytes: number };
+type Frame = { grid?: TerminalSnapshotGrid; kind: 'reset' | 'write'; data: string; generation: number; bytes: number };
 const encoder = new TextEncoder();
 
 export class TerminalOutputStream implements TerminalOutputSource {
@@ -26,10 +27,10 @@ export class TerminalOutputStream implements TerminalOutputSource {
     this.#limit = limitBytes;
   }
 
-  reset(data: string) {
+  reset(data: string, grid?: TerminalSnapshotGrid) {
     this.clear();
     this.#valid = true;
-    this.#enqueue('reset', data);
+    this.#enqueue('reset', data, grid);
   }
 
   write(data: string) {
@@ -61,11 +62,11 @@ export class TerminalOutputStream implements TerminalOutputSource {
     };
   }
 
-  #enqueue(kind: Frame['kind'], data: string) {
+  #enqueue(kind: Frame['kind'], data: string, grid?: TerminalSnapshotGrid) {
     const bytes = encoder.encode(data).byteLength;
     if (this.#queue.length >= 1024 || this.#bytes + bytes > this.#limit) { this.#gap(); return; }
     this.#bytes += bytes;
-    this.#queue.push({ kind, data, bytes, generation: this.#generation });
+    this.#queue.push({ kind, data, bytes, grid, generation: this.#generation });
     this.#pump();
   }
 
@@ -85,7 +86,8 @@ export class TerminalOutputStream implements TerminalOutputSource {
           const frame = this.#queue.shift()!;
           this.#consumed = true;
           try {
-            await consumer.sink[frame.kind](frame.data);
+            if (frame.kind === 'reset' && frame.grid) await consumer.sink.reset(frame.data, frame.grid);
+            else await consumer.sink[frame.kind](frame.data);
           } catch {
             if (this.#consumer === consumer && frame.generation === this.#generation) this.#gap();
           } finally {

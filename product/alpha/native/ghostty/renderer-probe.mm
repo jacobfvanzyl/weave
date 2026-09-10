@@ -43,11 +43,11 @@ int main(int argc, char **argv) {
     if (![renderer sendKey:@"KeyC" text:@"c" modifiers:2 action:1] || ![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\003"]) return 15;
     [replies setLength:0];
     if (![renderer sendKey:@"Tab" text:@"" modifiers:1 action:1] || ![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\033[Z"]) return 16;
-    [renderer consume:[@"\033[>11u" dataUsingEncoding:NSUTF8StringEncoding] reset:NO];
+    [renderer consume:[@"\033[>11u\033[?u" dataUsingEncoding:NSUTF8StringEncoding] reset:NO];
     [replies setLength:0];
-    if (![renderer sendKey:@"Backspace" text:@"" modifiers:0 action:1] || ![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\033[127u"]) { fprintf(stderr, "Kitty press result: %s\n", [[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] UTF8String]); return 17; }
+    if (![renderer sendKey:@"Backspace" text:@"" modifiers:0 action:1] || ![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\177"]) return 17;
     [replies setLength:0];
-    if (![renderer sendKey:@"Backspace" text:@"" modifiers:0 action:0] || ![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\033[127;1:3u"]) return 18;
+    if (![renderer sendKey:@"Backspace" text:@"" modifiers:0 action:0] || replies.length) return 18;
     [renderer consume:[@"\033[<u" dataUsingEncoding:NSUTF8StringEncoding] reset:NO];
     [replies setLength:0];
     if (![renderer sendKey:@"Backspace" text:@"" modifiers:0 action:1] || ![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\177"]) return 19;
@@ -64,6 +64,18 @@ int main(int argc, char **argv) {
     [renderer resizeToSize:CGSizeMake(800, 400)];
     if (replies.length) return 23;
     [renderer resizeToSize:CGSizeMake(720, 360)];
+    const char *snapshotPath = getenv("WEAVE_SNAPSHOT_PROBE_INPUT");
+    if (snapshotPath) {
+      NSDictionary *snapshot = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:@(snapshotPath)] options:0 error:NULL];
+      if (!snapshot || ![renderer restoreData:[snapshot[@"data"] dataUsingEncoding:NSUTF8StringEncoding] columns:[snapshot[@"cols"] unsignedIntegerValue] rows:[snapshot[@"rows"] unsignedIntegerValue]]) return 24;
+      [replies setLength:0];
+      [renderer sendKey:@"ArrowUp" text:@"" modifiers:0 action:1];
+      if (![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\033OA"]) return 25;
+      [replies setLength:0]; [renderer pasteText:@"restored"];
+      if (![[[NSString alloc] initWithData:replies encoding:NSUTF8StringEncoding] isEqualToString:@"\033[200~restored\033[201~"]) return 26;
+      [renderer consume:[@"\033[?1049l" dataUsingEncoding:NSUTF8StringEncoding] reset:NO];
+      if (![renderer.visibleText containsString:@"PRIMARY"]) return 27;
+    }
     [renderer consume:bytes reset:YES];
     size_t width = 720, height = 360;
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
@@ -78,7 +90,7 @@ int main(int argc, char **argv) {
     BOOL saved = CGImageDestinationFinalize(output);
     CFRelease(output); CGImageRelease(image); CGContextRelease(context);
     if (!saved) return 7;
-    puts("{\"passed\":true,\"fragmentedUtf8\":true,\"alternateScreen\":true,\"protocolReplies\":true,\"snapshotReplySuppression\":true,\"coreTextRendered\":true,\"wideGraphemeText\":true,\"bracketedPaste\":true,\"readOnlyInput\":true,\"applicationCursorKeys\":true,\"modifiedKeys\":true,\"kittyPressRelease\":true,\"applicationKeypad\":true}");
+    puts("{\"passed\":true,\"fragmentedUtf8\":true,\"alternateScreen\":true,\"protocolReplies\":true,\"snapshotReplySuppression\":true,\"coreTextRendered\":true,\"wideGraphemeText\":true,\"bracketedPaste\":true,\"readOnlyInput\":true,\"applicationCursorKeys\":true,\"modifiedKeys\":true,\"kittyTransportDisabled\":true,\"applicationKeypad\":true}");
   }
   return 0;
 }

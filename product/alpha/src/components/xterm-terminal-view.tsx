@@ -165,10 +165,12 @@ export function XtermTerminalView({
     replayInProgressRef.current = true;
     const write = (data: string) => new Promise<void>((resolve) => terminal.write(data, resolve));
     const unsubscribe = output.subscribe({
-      reset: async (data) => {
+      reset: async (data, grid) => {
         replayInProgressRef.current = true;
         terminal.reset();
+        if (grid) terminal.resize(grid.cols, grid.rows);
         await write(data);
+        if (hostRef.current?.getBoundingClientRect().width) fitRef.current?.fit();
         if (!disposed) replayInProgressRef.current = false;
       },
       write,

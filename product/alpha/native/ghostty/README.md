@@ -48,3 +48,15 @@ for evidence and remaining input, rendering and device acceptance gaps. xterm.js
 remains the default until those are closed. Omit `VITE_ALPHA_ACCEPTANCE` for
 ordinary builds; native inspection and synthetic AppKit input helpers are only
 compiled into the desktop acceptance build.
+
+### tmux transport restoration limits
+
+The candidate uses tmux's persisted pane state for reconnect snapshots. It now
+restores both screens and the supported input/display modes documented in
+`docs/acceptance/wve-65-completion-priorities.md`. Kitty keyboard flag stacks are
+not available from tmux, so this candidate suppresses Kitty discovery replies
+and forces its key encoder to use the supported legacy/modifyOtherKeys modes.
+The standalone upstream library supports Kitty; this transport does not yet
+promise it. DEC 2048 resize reporting also remains disabled until it can be
+ordered after the Host's authoritative resize. Arbitrary VT state serialization
+is a remaining backend limitation, not a claimed property of screen capture.

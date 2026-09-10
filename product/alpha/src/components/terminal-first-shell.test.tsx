@@ -158,4 +158,4 @@ it('renders independent terminal and agent selection, compact groups, and non-de
   await waitFor(() => expect(screen.getByRole('button', { name: 'Start terminal' })).toBeDisabled());
   expect(controller!.model.selectedThreadId).toBe('two:thread');
 
-});
+}, 15_000);

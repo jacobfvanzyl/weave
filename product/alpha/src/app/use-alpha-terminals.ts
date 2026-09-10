@@ -225,7 +225,7 @@ export function useAlphaTerminals({
       scopeKey,
       attached.snapshot.terminal.terminalId,
     );
-    output.reset(attached.snapshot.data);
+    output.reset(attached.snapshot.data, { cols: attached.snapshot.terminal.cols, rows: attached.snapshot.terminal.rows });
     setModel((current) => ({
       ...current,
       scope: target.scope,

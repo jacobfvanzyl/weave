@@ -18,6 +18,7 @@ const xterm = vi.hoisted(() => {
   const fit = vi.fn();
   const disposeFit = vi.fn();
   const terminal = {
+    resize: vi.fn(),
     cols: 100,
     rows: 30,
     options: { disableStdin: false },
