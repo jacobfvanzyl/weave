@@ -84,7 +84,7 @@ describe('useAlphaDockLayout', () => {
     });
   });
 
-  it('hides the final Terminal without restoring deferred Project', () => {
+  it('hides the final Terminal without restoring deferred ExecutionContext', () => {
     const { result } = renderHook(() => useAlphaDockLayout(scopeA));
 
     act(() => result.current.togglePanel('terminal'));
@@ -143,7 +143,7 @@ describe('useAlphaDockLayout', () => {
     });
   });
 
-  it('migrates the v2 Terminal and Project state while adding Browser closed on Right', () => {
+  it('migrates the v2 Terminal and ExecutionContext state while adding Browser closed on Right', () => {
     window.localStorage.setItem('weave.alpha.docks.v2', JSON.stringify({
       schemaVersion: 2,
       panelPosition: { terminal: 'bottom', project: 'right' },
@@ -178,7 +178,7 @@ describe('useAlphaDockLayout', () => {
     });
   });
 
-  it('restores Terminal openness independently for each Host and Project scope', () => {
+  it('restores Terminal openness independently for each Host and ExecutionContext scope', () => {
     const { result, rerender } = renderHook(
       ({ scope }) => useAlphaDockLayout(scope),
       { initialProps: { scope: scopeA } },

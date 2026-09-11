@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Menu, ClipboardItem, clipboard, net, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, ClipboardItem, clipboard, net, protocol, session, shell } from 'electron';
 import { join, relative, resolve } from 'node:path';
+import { release } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { installNativeTerminals } from './native-terminal';
@@ -25,10 +26,39 @@ else {
     window = new BrowserWindow({
       title: 'Weave Alpha', width: 1400, height: 920, minWidth: 680, minHeight: 480,
       backgroundColor: '#1e1e2e', show: false,
+      ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, titleBarOverlay: true, trafficLightPosition: { x: 12, y: 9 } } : {}),
       webPreferences: { preload: join(import.meta.dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false },
     });
     const native = installNativeTerminals(window);
     const contents = window.webContents;
+    const hostWindow = window;
+    let topRailHeight = 32;
+    let windowButtonHeight: number | undefined;
+    let windowButtonInsetY = 9;
+    const positionWindowButtons = () => {
+      if (process.platform === 'darwin' && windowButtonHeight !== undefined && !hostWindow.isDestroyed() && !hostWindow.isFullScreen()) {
+        const y = Math.max(0, Math.round((topRailHeight * contents.getZoomFactor() - windowButtonHeight) / 2));
+        if (y === windowButtonInsetY) return;
+        windowButtonInsetY = y;
+        hostWindow.setWindowButtonPosition({ x: 12, y });
+      }
+    };
+    ipcMain.handle('weave:top-rail-height', (event, height: unknown, overlayHeight: unknown) => {
+      if (event.sender !== contents || event.senderFrame !== contents.mainFrame || !event.senderFrame.url.startsWith(`${appOrigin}/`) || typeof height !== 'number' || !Number.isFinite(height) || height < 16 || height > 128 || typeof overlayHeight !== 'number' || !Number.isFinite(overlayHeight) || overlayHeight < 0 || overlayHeight > 256) throw new Error('Invalid window rail geometry.');
+      // Electron's overlay height is the Cocoa button frame plus twice its
+      // vertical inset. Calibrate once from native geometry instead of assuming
+      // a fixed macOS button height; overlay coordinates are already CSS pixels.
+      if (windowButtonHeight === undefined && overlayHeight > 0 && !hostWindow.isFullScreen()) {
+        const measured = Math.round(overlayHeight * contents.getZoomFactor()) - 2 * windowButtonInsetY;
+        if (measured >= 10 && measured <= 24) windowButtonHeight = measured;
+      }
+      topRailHeight = height; positionWindowButtons();
+      // Match the titlebar-only native window corner, in zoom-adjusted CSS units.
+      const radius = Number.parseInt(release(), 10) >= 25 ? 16 : 10;
+      return hostWindow.isFullScreen() ? 0 : radius / contents.getZoomFactor();
+    });
+    hostWindow.on('leave-full-screen', positionWindowButtons);
+    hostWindow.once('closed', () => ipcMain.removeHandler('weave:top-rail-height'));
     contents.setWindowOpenHandler(({ url }) => { external(url); return { action: 'deny' }; });
     contents.on('will-navigate', (event, url) => { event.preventDefault(); external(url); });
     contents.on('will-redirect', (event) => event.preventDefault());
@@ -43,7 +73,7 @@ else {
       }
       const handled = new Set<string>();
       const paste = async (text: string) => {
-        const saved = await Promise.all((await clipboard.read()).map(async (item) => new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]))))));
+        const saved = await Promise.all((await clipboard.read()).filter(item => item.types.length > 0).map(async (item) => new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]))))));
         try { await clipboard.writeText(text); native.acceptance('paste'); await new Promise((resolve) => setTimeout(resolve, 200)); }
         finally { if (saved.length) await clipboard.write(saved); else clipboard.clear(); }
       };
@@ -54,6 +84,13 @@ else {
         const stage = await contents.executeJavaScript('window.alphaAcceptanceStage');
         const stageKey = `${await contents.executeJavaScript('window.alphaAcceptanceIndex')}:${stage}`;
         if (liveAcceptance && stage && !handled.has(stageKey)) {
+          window?.show(); app.focus({ steal: true }); window?.focus();
+          // Native input needs an exposed AppKit surface. macOS can occlude the
+          // acceptance window while the driver awaits clipboard operations.
+          for (let retry = 0; ; retry++) {
+            try { await contents.executeJavaScript('window.alphaAcceptanceFocusTerminal?.()'); break; }
+            catch (error) { if (retry >= 20) throw error; await new Promise(resolve => setTimeout(resolve, 100)); }
+          }
           handled.add(stageKey);
           if (stage === 'native-terminal') {
             await paste("printf 'WEAVE_NATIVE_PASTE_OK\\n'"); key('Enter');
@@ -69,7 +106,7 @@ else {
             await paste('_REATTACHED');
           } else if (stage === 'native-finish') {
             if (native) {
-              const saved = await Promise.all((await clipboard.read()).map(async (item) => new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]))))));
+              const saved = await Promise.all((await clipboard.read()).filter(item => item.types.length > 0).map(async (item) => new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]))))));
               try {
                 native.acceptance('copyMarker', 'WEAVE_NEOVIM_INPUT');
                 if (!(await clipboard.readText()).includes('WEAVE_NEOVIM_INPUT')) throw new Error('Native selection copy failed.');
@@ -77,7 +114,7 @@ else {
                 if (png) await writeFile(join(evidence, 'native-terminal.png'), png);
               } finally { if (saved.length) await clipboard.write(saved); else clipboard.clear(); }
             }
-            // Leave Neovim visible; the harness closes its dedicated tmux server.
+            // Leave Neovim visible; the harness closes its dedicated Terminal Service.
             window?.setSize(1400, 920);
             await contents.executeJavaScript('window.alphaAcceptanceStage = "native-finished"');
           }

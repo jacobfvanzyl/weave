@@ -4,7 +4,9 @@ import { join, resolve } from 'node:path';
 const root = resolve(import.meta.dir, '..');
 const repo = resolve(root, '../..');
 const target = process.argv.includes('--linux') ? 'bun-linux-x64' : 'bun';
-const outfile = join(root, 'dist', target === 'bun' ? 'weave-portal' : 'weave-portal-linux-x64');
+const terminalBuild = Bun.spawn(['bun', join(root, 'scripts/build-terminal-service.ts'), ...(process.argv.includes('--linux') ? ['--linux'] : [])], { stdout: 'inherit', stderr: 'inherit' });
+if (await terminalBuild.exited !== 0) throw new Error('Terminal Service packaging failed');
+const outfile = join(root, 'dist', ...(target === 'bun' ? [] : ['linux-x64']), 'weave-portal');
 const hash = createHash('sha256');
 async function visit(path: string) {
   for (const item of (await readdir(path, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -14,6 +16,7 @@ async function visit(path: string) {
   }
 }
 await visit(join(root, 'src'));
+await visit(join(root, 'native'));
 await visit(join(repo, 'product/protocol/src'));
 hash.update(await readFile(join(repo, 'bun.lock')));
 const git = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: repo });
@@ -22,4 +25,4 @@ await mkdir(join(root, 'dist'), { recursive: true });
 const build = Bun.spawn(['bun', 'build', '--compile', `--target=${target}`, '--outfile', outfile, '--define', `WEAVE_BUILD=${JSON.stringify(metadata)}`, join(root, 'src/main.ts')], { stdout: 'inherit', stderr: 'inherit' });
 if (await build.exited !== 0) throw new Error('Host compilation failed');
 const sha256 = createHash('sha256').update(await readFile(outfile)).digest('hex');
-await writeFile(`${outfile}.json`, JSON.stringify({ ...metadata, target, sha256, protocolVersion: 2, stateFormat: 1, bun: Bun.version }, null, 2) + '\n');
+await writeFile(`${outfile}.json`, JSON.stringify({ ...metadata, target, sha256, protocolVersion: 6, stateFormat: 3, bun: Bun.version }, null, 2) + '\n');

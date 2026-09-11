@@ -7,5 +7,5 @@ export const hostVersion = {
   platform: process.platform,
   arch: process.arch,
   protocolVersion: PORTAL_PROTOCOL_VERSION,
-  stateFormat: 1,
+  stateFormat: 3,
 };

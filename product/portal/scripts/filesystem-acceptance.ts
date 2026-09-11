@@ -3,7 +3,7 @@ import { pairPortalCredential, required, RpcResponseError, RpcSocket, waitFor } 
 
 const baseUrl = required('PORTAL_URL').replace(/\/$/, '');
 const credential = await pairPortalCredential(baseUrl, required('PORTAL_PAIRING_TOKEN'), 'Filesystem acceptance');
-const workspaceId = required('PORTAL_WORKSPACE_ID');
+const executionContextId = required('PORTAL_WORKSPACE_ID');
 const marker = process.env['PORTAL_FILESYSTEM_ACCEPTANCE_MARKER']?.trim() || `WVE42_${crypto.randomUUID()}`;
 const fixture = `.weave-acceptance/wve-42-${crypto.randomUUID()}`;
 const originalPath = `${fixture}/original.txt`;
@@ -18,27 +18,27 @@ try {
     if (!capabilities.capabilities.includes(capability)) throw new Error(`Portal does not advertise ${capability}.`);
   }
 
-  await rpc.request('workspace.directory.create', { workspaceId, path: fixture });
+  await rpc.request('context.directory.create', { executionContextId, path: fixture });
   fixtureCreated = true;
-  const created = await rpc.request('workspace.file.write', {
-    workspaceId,
+  const created = await rpc.request('context.file.write', {
+    executionContextId,
     path: originalPath,
     content: marker,
     expectedContentHash: null,
   }) as { contentHash: string };
-  const read = await rpc.request('workspace.file.read', { workspaceId, path: originalPath }) as {
+  const read = await rpc.request('context.file.read', { executionContextId, path: originalPath }) as {
     content: string;
     contentHash: string;
   };
   if (read.content !== marker || read.contentHash !== created.contentHash) {
     throw new Error('Portal did not read back the accepted Workspace file content.');
   }
-  const hashed = await rpc.request('workspace.file.hash', { workspaceId, path: originalPath }) as {
+  const hashed = await rpc.request('context.file.hash', { executionContextId, path: originalPath }) as {
     contentHash: string;
   };
   if (hashed.contentHash !== created.contentHash) throw new Error('Portal returned an inconsistent content hash.');
 
-  const listed = await rpc.request('workspace.file.list', { workspaceId, path: fixture }) as {
+  const listed = await rpc.request('context.file.list', { executionContextId, path: fixture }) as {
     entries: Array<{ path: string }>;
   };
   if (!listed.entries.some((entry) => entry.path === originalPath)) {
@@ -46,8 +46,8 @@ try {
   }
 
   const updatedContent = `${marker}_UPDATED`;
-  const updated = await rpc.request('workspace.file.write', {
-    workspaceId,
+  const updated = await rpc.request('context.file.write', {
+    executionContextId,
     path: originalPath,
     content: updatedContent,
     expectedContentHash: created.contentHash,
@@ -55,8 +55,8 @@ try {
 
   let stale: unknown;
   try {
-    await rpc.request('workspace.file.write', {
-      workspaceId,
+    await rpc.request('context.file.write', {
+      executionContextId,
       path: originalPath,
       content: 'MUST_NOT_OVERWRITE',
       expectedContentHash: created.contentHash,
@@ -71,14 +71,14 @@ try {
     throw new Error('Portal did not reject a stale conditional write.');
   }
 
-  const afterStale = await rpc.request('workspace.file.hash', { workspaceId, path: originalPath }) as {
+  const afterStale = await rpc.request('context.file.hash', { executionContextId, path: originalPath }) as {
     contentHash: string;
   };
   if (afterStale.contentHash !== updated.contentHash) throw new Error('A stale write changed the Workspace file.');
 
-  await rpc.request('workspace.file.move', { workspaceId, fromPath: originalPath, toPath: movedPath });
-  const search = await rpc.request('workspace.file.search', {
-    workspaceId,
+  await rpc.request('context.file.move', { executionContextId, fromPath: originalPath, toPath: movedPath });
+  const search = await rpc.request('context.file.search', {
+    executionContextId,
     path: fixture,
     query: updatedContent,
     scope: 'content',
@@ -88,12 +88,12 @@ try {
     throw new Error('Portal search did not find the marker.');
   }
 
-  const watch = await rpc.request('workspace.file.watch.start', { workspaceId, paths: [fixture] }) as {
+  const watch = await rpc.request('context.file.watch.start', { executionContextId, paths: [fixture] }) as {
     subscriptionId: string;
   };
-  await rpc.request('workspace.file.watch.update', { subscriptionId: watch.subscriptionId, paths: [fixture] });
-  await rpc.request('workspace.file.write', {
-    workspaceId,
+  await rpc.request('context.file.watch.update', { subscriptionId: watch.subscriptionId, paths: [fixture] });
+  await rpc.request('context.file.write', {
+    executionContextId,
     path: observedPath,
     content: 'observed',
     expectedContentHash: null,
@@ -103,12 +103,12 @@ try {
       message.method === WORKSPACE_FILE_WATCH_EVENT_METHOD && JSON.stringify(message.params).includes(observedPath)
     )
   );
-  await rpc.request('workspace.file.watch.stop', { subscriptionId: watch.subscriptionId });
-  await rpc.request('workspace.file.delete', { workspaceId, path: observedPath });
+  await rpc.request('context.file.watch.stop', { subscriptionId: watch.subscriptionId });
+  await rpc.request('context.file.delete', { executionContextId, path: observedPath });
 
   let traversal: unknown;
   try {
-    await rpc.request('workspace.file.read', { workspaceId, path: '../outside.txt' });
+    await rpc.request('context.file.read', { executionContextId, path: '../outside.txt' });
   } catch (cause) {
     traversal = cause;
   }
@@ -119,9 +119,9 @@ try {
     throw new Error('Portal did not reject Workspace path traversal.');
   }
 
-  console.log(JSON.stringify({ ok: true, workspaceId, fixture, marker }));
+  console.log(JSON.stringify({ ok: true, executionContextId, fixture, marker }));
 } finally {
-  if (fixtureCreated) await rpc.request('workspace.file.delete', { workspaceId, path: fixture, recursive: true });
+  if (fixtureCreated) await rpc.request('context.file.delete', { executionContextId, path: fixture, recursive: true });
   await rpc.request('credential.revoke').catch(() => undefined);
   rpc.close();
 }

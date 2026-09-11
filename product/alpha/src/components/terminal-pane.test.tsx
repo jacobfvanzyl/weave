@@ -13,13 +13,13 @@ vi.mock('./terminal-view', () => ({
 const model = (change: Partial<AlphaTerminalsModel> = {}): AlphaTerminalsModel => ({
   scope: {
     hostId: 'host-1',
-    projectId: 'project-1',
-    workspaceId: 'workspace-1',
+    contextId: 'project-1',
+    executionContextId: 'workspace-1',
   },
   supported: true,
   tabs: [{
     terminalId: 'terminal-1',
-    workspaceId: 'workspace-1',
+    executionContextId: 'workspace-1',
     title: 'jaco — zsh',
     status: 'running',
     cols: 100,
@@ -27,7 +27,7 @@ const model = (change: Partial<AlphaTerminalsModel> = {}): AlphaTerminalsModel =
   }],
   activeTerminalId: 'terminal-1',
   attachmentId: 'attachment-1',
-  attachmentMode: 'control',
+  attachmentMode: 'shared',
   loading: false,
   ...change,
 });
@@ -84,7 +84,7 @@ describe('TerminalPane', () => {
     const create = screen.getByRole('button', { name: 'New Terminal' });
     const expand = screen.getByRole('button', { name: 'Maximize Terminal' });
 
-    expect(header).toHaveClass('h-11');
+    expect(header).toHaveClass('h-[var(--rail-height)]');
     expect(header).not.toHaveClass('border-b');
     expect(actions).toHaveClass('border-l', 'border-b', 'border-border');
     expect(create).toHaveClass('w-11', 'border-0');

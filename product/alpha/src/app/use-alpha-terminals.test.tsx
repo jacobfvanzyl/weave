@@ -1,3 +1,5 @@
+import { TERMINAL_CODEC } from '@weave/product-protocol';
+const bytes = (text: string) => new TextEncoder().encode(text);
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { TerminalAttachmentMode, TerminalNotification, TerminalSummary } from '@weave/product-protocol';
@@ -6,7 +8,7 @@ import { type AlphaTerminalClient, useAlphaTerminals } from './use-alpha-termina
 
 const terminal = (terminalId = 'terminal-1'): TerminalSummary => ({
   terminalId,
-  workspaceId: 'workspace-1',
+  executionContextId: 'workspace-1',
   title: 'zsh',
   status: 'running',
   cols: 80,
@@ -30,46 +32,31 @@ const client = (
     createTerminal: vi.fn(async () => ({ terminal: terminal() })),
     attachTerminal: vi.fn(
       async (
-        _workspaceId: string,
+        _executionContextId: string,
         terminalId: string,
         mode: TerminalAttachmentMode,
         listener: (notification: TerminalNotification) => void,
       ) => {
-        if (mode === 'control' && options.controlled) {
-          throw new PortalRpcError(
-            -32012,
-            'Terminal is controlled by another attachment.',
-            { domain: 'terminal', code: 'TERMINAL_CONTROLLED' },
-          );
-        }
         onEvent = listener;
         const result = {
           attachment: { attachmentId: `attachment-${mode}`, mode },
-          snapshot: {
+          snapshot: { codec: TERMINAL_CODEC as typeof TERMINAL_CODEC,
             terminal: terminal(terminalId),
             generation: 'generation-1',
             cursor: 0,
             retainedFrom: 1,
-            data: '$ ',
-            controller: mode === 'control'
-              ? {
-                controlled: true as const,
-                attachmentId: 'attachment-control',
-              }
-              : {
-                controlled: true as const,
-                attachmentId: 'another-controller',
-              },
+            data: bytes('$ '),
+
           },
           startEvents: () => {
             if (!options.eventDuringAttach) return;
             listener({
               attachmentId: `attachment-${mode}`,
               terminalId,
-              workspaceId: 'workspace-1',
+              executionContextId: 'workspace-1',
               generation: 'generation-1',
               sequence: 1,
-              event: { type: 'output', data: 'raced\r\n' },
+              event: { type: 'output', data: bytes('raced\r\n') },
             });
           },
         };
@@ -93,8 +80,8 @@ const client = (
 const target = {
   scope: {
     hostId: 'host-1',
-    projectId: 'project-1',
-    workspaceId: 'workspace-1',
+    contextId: 'project-1',
+    executionContextId: 'workspace-1',
   },
   supported: true,
 };
@@ -105,22 +92,22 @@ describe('useAlphaTerminals', () => {
     let renders = 0;
     const { result } = renderHook(() => { renders++; return useAlphaTerminals({ target, client: host }); });
     let rendered = '';
-    result.current.model.output!.subscribe({ reset: async (data) => { rendered = data; }, write: async (data) => { rendered += data; } });
+    result.current.model.output!.subscribe({ reset: async (data) => { rendered = new TextDecoder().decode(data); }, write: async (data) => { rendered += new TextDecoder().decode(data); } });
 
     await act(() => result.current.actions.show());
     expect(host.createTerminal).toHaveBeenCalledWith('workspace-1');
-    expect(result.current.model.attachmentMode).toBe('control');
+    expect(result.current.model.attachmentMode).toBe('shared');
     expect(rendered).toBe('$ ');
     const beforeOutput = renders;
 
     act(() =>
       host.emit({
-        attachmentId: 'attachment-control',
+        attachmentId: 'attachment-shared',
         terminalId: 'terminal-1',
-        workspaceId: 'workspace-1',
+        executionContextId: 'workspace-1',
         generation: 'generation-1',
         sequence: 1,
-        event: { type: 'output', data: 'ready\r\n' },
+        event: { type: 'output', data: bytes('ready\r\n') },
       })
     );
     await waitFor(() => expect(rendered).toBe('$ ready\r\n'));
@@ -130,17 +117,17 @@ describe('useAlphaTerminals', () => {
     expect(host.inputTerminal).toHaveBeenCalledWith(
       'workspace-1',
       'terminal-1',
-      'attachment-control',
+      'attachment-shared',
       'echo ready\r',
     );
     await act(() => result.current.actions.hide());
     expect(host.detachTerminal).not.toHaveBeenCalled();
-    expect(result.current.model.attachmentId).toBe('attachment-control');
+    expect(result.current.model.attachmentId).toBe('attachment-shared');
 
     await act(() => result.current.actions.show());
     expect(host.listTerminals).toHaveBeenCalledOnce();
     expect(host.attachTerminal).toHaveBeenCalledOnce();
-    expect(result.current.model.attachmentId).toBe('attachment-control');
+    expect(result.current.model.attachmentId).toBe('attachment-shared');
     expect(host.closeTerminal).not.toHaveBeenCalled();
   });
 
@@ -158,8 +145,8 @@ describe('useAlphaTerminals', () => {
       nextTarget: {
         scope: {
           hostId: 'host-2',
-          projectId: 'project-2',
-          workspaceId: 'workspace-2',
+          contextId: 'project-2',
+          executionContextId: 'workspace-2',
         },
         supported: true,
       },
@@ -170,7 +157,7 @@ describe('useAlphaTerminals', () => {
     expect(first.detachTerminal).toHaveBeenCalledWith(
       'workspace-1',
       'terminal-1',
-      'attachment-control',
+      'attachment-shared',
     );
     expect(second.listTerminals).not.toHaveBeenCalled();
     expect(second.createTerminal).not.toHaveBeenCalled();
@@ -184,34 +171,19 @@ describe('useAlphaTerminals', () => {
     expect(second.detachTerminal).toHaveBeenCalledWith(
       'workspace-2',
       'terminal-1',
-      'attachment-control',
+      'attachment-shared',
     );
   });
 
-  it('falls back to an explicit read-only observer when control is held elsewhere', async () => {
+  it('opens shared input even when a legacy controller is attached elsewhere', async () => {
     const host = client({ controlled: true, terminals: [terminal()] });
     const { result } = renderHook(() => useAlphaTerminals({ target, client: host }));
-
     await act(() => result.current.actions.show());
-    expect(host.attachTerminal).toHaveBeenNthCalledWith(
-      1,
-      'workspace-1',
-      'terminal-1',
-      'control',
-      expect.any(Function),
-    );
-    expect(host.attachTerminal).toHaveBeenNthCalledWith(
-      2,
-      'workspace-1',
-      'terminal-1',
-      'observe',
-      expect.any(Function),
-    );
-    expect(result.current.model.attachmentMode).toBe('observe');
-    expect(result.current.model.readOnlyReason).toContain('controlled');
-
-    await act(() => result.current.actions.input('forbidden'));
-    expect(host.inputTerminal).not.toHaveBeenCalled();
+    expect(host.attachTerminal).toHaveBeenCalledExactlyOnceWith('workspace-1', 'terminal-1', 'shared', expect.any(Function));
+    expect(result.current.model.attachmentMode).toBe('shared');
+    expect(result.current.model.readOnlyReason).toBeUndefined();
+    await act(() => result.current.actions.input('hello'));
+    expect(host.inputTerminal).toHaveBeenCalledWith('workspace-1', 'terminal-1', 'attachment-shared', 'hello');
   });
 
   it('installs the snapshot before releasing attach-time notifications', async () => {
@@ -220,18 +192,18 @@ describe('useAlphaTerminals', () => {
 
     await act(() => result.current.actions.show());
     let rendered = '';
-    result.current.model.output!.subscribe({ reset: async (data) => { rendered = data; }, write: async (data) => { rendered += data; } });
+    result.current.model.output!.subscribe({ reset: async (data) => { rendered = new TextDecoder().decode(data); }, write: async (data) => { rendered += new TextDecoder().decode(data); } });
     await waitFor(() => expect(rendered).toBe('$ raced\r\n'));
   });
 
   it('recovers a renderer overflow by reattaching the same terminal without creating or terminating a process', async () => {
     const host = client({ terminals: [terminal()] });
     const { result } = renderHook(() => useAlphaTerminals({ target: { ...target, terminalId: 'terminal-1' }, client: host }));
-    await waitFor(() => expect(result.current.model.attachmentId).toBe('attachment-control'));
+    await waitFor(() => expect(result.current.model.attachmentId).toBe('attachment-shared'));
     const stop = result.current.model.output!.subscribe({ reset: async () => undefined, write: async () => undefined });
     await act(async () => { await Promise.resolve(); });
     await act(async () => {
-      host.emit({ attachmentId: 'attachment-control', terminalId: 'terminal-1', workspaceId: 'workspace-1', generation: 'generation-1', sequence: 1, event: { type: 'output', data: 'x'.repeat(2 * 1024 * 1024 + 1) } });
+      host.emit({ attachmentId: 'attachment-shared', terminalId: 'terminal-1', executionContextId: 'workspace-1', generation: 'generation-1', sequence: 1, event: { type: 'output', data: bytes('x'.repeat(2 * 1024 * 1024 + 1)) } });
     });
     await waitFor(() => expect(host.attachTerminal).toHaveBeenCalledTimes(2));
     expect(host.createTerminal).not.toHaveBeenCalled();
@@ -249,9 +221,9 @@ describe('useAlphaTerminals', () => {
     host.setTerminals([]);
     await act(async () => {
       host.emit({
-        attachmentId: 'attachment-control',
+        attachmentId: 'attachment-shared',
         terminalId: 'terminal-1',
-        workspaceId: 'workspace-1',
+        executionContextId: 'workspace-1',
         generation: 'generation-1',
         sequence: 1,
         event: { type: 'exit', exitCode: 0 },
@@ -262,11 +234,11 @@ describe('useAlphaTerminals', () => {
     expect(host.detachTerminal).toHaveBeenCalledWith(
       'workspace-1',
       'terminal-1',
-      'attachment-control',
+      'attachment-shared',
     );
     expect(host.createTerminal).toHaveBeenCalledOnce();
     expect(host.attachTerminal).toHaveBeenCalledTimes(2);
-    expect(result.current.model.attachmentMode).toBe('control');
+    expect(result.current.model.attachmentMode).toBe('shared');
   });
 
   it('awaits resync detachment and preserves the active Terminal', async () => {
@@ -285,9 +257,9 @@ describe('useAlphaTerminals', () => {
 
     await act(async () => {
       host.emit({
-        attachmentId: 'attachment-control',
+        attachmentId: 'attachment-shared',
         terminalId: 'terminal-2',
-        workspaceId: 'workspace-1',
+        executionContextId: 'workspace-1',
         generation: 'generation-1',
         sequence: 1,
         event: { type: 'resync', retainedFrom: 1 },
@@ -304,7 +276,7 @@ describe('useAlphaTerminals', () => {
     expect(host.attachTerminal).toHaveBeenLastCalledWith(
       'workspace-1',
       'terminal-2',
-      'control',
+      'shared',
       expect.any(Function),
     );
     expect(result.current.model.activeTerminalId).toBe('terminal-2');
@@ -321,23 +293,29 @@ describe('useAlphaTerminals', () => {
 
     await act(() => result.current.actions.show());
     await act(() => result.current.actions.select('terminal-2'));
+    vi.mocked(first.detachTerminal).mockRejectedValue(new Error('Previous Host connection closed'));
     rerender({ host: second });
 
     await waitFor(() => expect(second.attachTerminal).toHaveBeenCalled());
     expect(second.attachTerminal).toHaveBeenLastCalledWith(
       'workspace-1',
       'terminal-2',
-      'control',
+      'shared',
       expect.any(Function),
     );
     expect(result.current.model.activeTerminalId).toBe('terminal-2');
+    await act(() => result.current.actions.close('terminal-2'));
+    expect(second.closeTerminal).toHaveBeenCalledWith('workspace-1', 'terminal-2', expect.any(String));
+    expect(first.closeTerminal).not.toHaveBeenCalled();
   });
 });
 
-it('retains a missing composition target without creating or attaching another terminal', async () => {
+it('reports a missing composition terminal for removal without creating or attaching a replacement', async () => {
   const host = client({ terminals: [terminal('unrelated')] });
-  const { result } = renderHook(() => useAlphaTerminals({ target: { ...target, terminalId: 'missing' }, client: host }));
-  await waitFor(() => expect(result.current.model.error).toContain('pane is retained'));
+  const onExit = vi.fn();
+  const { result } = renderHook(() => useAlphaTerminals({ target: { ...target, terminalId: 'missing' }, client: host, onExit }));
+  await waitFor(() => expect(onExit).toHaveBeenCalledWith('missing'));
+  expect(result.current.model.error).toBeUndefined();
   expect(host.createTerminal).not.toHaveBeenCalled();
   expect(host.attachTerminal).not.toHaveBeenCalled();
   expect(result.current.model.activeTerminalId).toBeUndefined();
@@ -353,6 +331,40 @@ it('detaches a late attachment after its composition pane has unmounted', async 
   await waitFor(() => expect(host.attachTerminal).toHaveBeenCalled());
   unmount();
   await act(async () => { release(); await gate; });
-  await waitFor(() => expect(host.detachTerminal).toHaveBeenCalledWith('workspace-1', 'terminal-1', 'attachment-control'));
+  await waitFor(() => expect(host.detachTerminal).toHaveBeenCalledWith('workspace-1', 'terminal-1', 'attachment-shared'));
   expect(host.closeTerminal).not.toHaveBeenCalled();
+});
+
+
+it('replaces the authoritative grid without reattaching or reporting a local resize', async () => {
+  const host = client();
+  const { result, unmount } = renderHook(() => useAlphaTerminals({ target, client: host }));
+  const reset = vi.fn(async () => undefined), write = vi.fn(async () => undefined);
+  result.current.model.output!.subscribe({ reset, write });
+  await act(() => result.current.actions.show());
+  reset.mockClear();
+  const notification = { attachmentId: 'attachment-shared', terminalId: 'terminal-1', executionContextId: 'workspace-1', generation: 'generation-1' };
+  await act(async () => {
+    host.emit({ ...notification, sequence: 1, event: { type: 'screen', terminal: { ...terminal(), cols: 150, rows: 50 }, data: bytes('remote screen') } });
+    host.emit({ ...notification, sequence: 2, event: { type: 'output', data: bytes('later output') } });
+  });
+  expect(reset).toHaveBeenCalledWith(bytes('remote screen'), { cols: 150, rows: 50 });
+  expect(write).toHaveBeenCalledWith(bytes('later output'));
+  expect(result.current.model.tabs[0]).toMatchObject({ cols: 150, rows: 50 });
+  expect(host.attachTerminal).toHaveBeenCalledTimes(1);
+  expect(host.resizeTerminal).not.toHaveBeenCalled();
+  unmount();
+});
+
+it('reports a pinned terminal exit once without reconnecting or creating a new shell', async () => {
+  const host = client({ terminals: [terminal(), terminal('other')] });
+  const onExit = vi.fn();
+  const { result } = renderHook(() => useAlphaTerminals({ target: { ...target, terminalId: 'terminal-1' }, client: host, onExit }));
+  await waitFor(() => expect(result.current.model.attachmentId).toBe('attachment-shared'));
+  await act(async () => host.emit({ attachmentId: 'attachment-shared', terminalId: 'terminal-1', executionContextId: 'workspace-1', generation: 'generation-1', sequence: 2, event: { type: 'exit', exitCode: 0 } }));
+  expect(onExit).toHaveBeenCalledExactlyOnceWith('terminal-1');
+  expect(result.current.model.attachmentId).toBeUndefined();
+  expect(host.attachTerminal).toHaveBeenCalledTimes(1);
+  expect(host.listTerminals).toHaveBeenCalledTimes(1);
+  expect(host.createTerminal).not.toHaveBeenCalled();
 });

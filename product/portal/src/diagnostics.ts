@@ -1,3 +1,4 @@
+import { TerminalServiceClient } from './terminal-service/client.ts';
 import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { X509Certificate } from 'node:crypto';
@@ -18,17 +19,15 @@ export async function diagnose(config: PortalConfig, url?: string) {
     await access(config.stateDirectory, constants.R_OK | constants.W_OK);
     return 'State exists and is private and writable.';
   });
-  for (const workspace of config.workspaces) await check('filesystem', workspace.workspaceId, async () => {
+  for (const workspace of config.executionContexts) await check('filesystem', workspace.executionContextId, async () => {
     if (!(await stat(workspace.path)).isDirectory()) throw new Error('Workspace is not a directory.');
     await access(workspace.path, constants.R_OK | constants.X_OK);
     return 'Workspace directory is accessible.';
   });
-  await check('terminal', 'tmux', async () => {
-    if (!Bun.which('tmux')) throw new Error('tmux is missing from the service PATH.');
-    const child = Bun.spawn(['tmux', '-V'], { stdout: 'pipe', stderr: 'pipe' });
-    const output = await new Response(child.stdout).text();
-    if (await child.exited !== 0) throw new Error('tmux could not start.');
-    return output.trim();
+  await check('terminal', 'Terminal Service', async () => {
+    const connection = new TerminalServiceClient(config.stateDirectory);
+    try { const terminals = await connection.list(); return `Compatible Terminal Service ${connection.generation}; ${terminals.length} live terminals.`; }
+    finally { connection.dispose(); }
   });
   await check('trust', 'TLS and allowed origins', async () => {
     if (config.tls) {
@@ -43,7 +42,7 @@ export async function diagnose(config: PortalConfig, url?: string) {
   });
   for (const agent of config.agents) await check('acp-provider', agent.agentId, async () => {
     if (!Bun.which(agent.command, { PATH: agent.env.PATH ?? process.env.PATH })) throw new Error('Provider executable is missing from its configured PATH.');
-    const provider = new AgentProcess(agent, config.workspaces[0]?.path ?? config.stateDirectory, () => undefined);
+    const provider = new AgentProcess(agent, config.executionContexts[0]?.path ?? config.stateDirectory, () => undefined);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const response = await Promise.race([provider.request('initialize', { protocolVersion: 1, clientCapabilities: {} }), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('ACP initialize timed out. Check provider installation and logs.')), 5000); })]);

@@ -4,6 +4,7 @@ import {
   type DirectHostClient,
   type HostSnapshot,
   PortalRpcError,
+  PortalTransportError,
 } from "@/portal-client";
 import { loadPortalConnections } from "./portal-connection-storage";
 import { useLiveAlphaController } from "./use-live-alpha-controller";
@@ -29,16 +30,16 @@ vi.mock("./portal-connection-storage", () => ({
 const snapshot: HostSnapshot = {
   hostId: "host-1",
   displayName: "Bazzite",
-  capabilities: ["workspace.add"],
-  workspaces: [{ workspaceId: "weave", name: "Weave" }],
+  capabilities: ["context.add"],
+  executionContexts: [{ executionContextId: "weave", name: "Weave" }],
   agents: [{ agentId: "codex", name: "Codex" }],
   archivedThreads: [],
   threads: [
     {
       threadId: "thread-1",
       agentId: "codex",
-      workspaceId: "weave",
-      acpSessionId: "session-1",
+      executionContextId: "weave",
+      workspaceId: 'workspace', membershipRevision: 0, acpSessionId: "session-1",
       title: "Acceptance",
       status: "active",
       createdAt: "2026-08-25T00:00:00.000Z",
@@ -53,14 +54,39 @@ afterEach(() => {
 });
 
 describe("useLiveAlphaController", () => {
+  it("recovers automatically when a Host stays offline beyond the immediate reconnect", async () => {
+    vi.useFakeTimers();
+    let disconnected: ((error: Error) => void) | undefined;
+    const ready = { snapshot: vi.fn(async () => snapshot), close: vi.fn() };
+    const offline = { snapshot: vi.fn(async () => { throw new PortalTransportError('Host WebSocket closed (1006).', 1006); }), close: vi.fn() };
+    let attempts = 0;
+    const factory = vi.fn((_url, _signer, _events, onClose) => {
+      disconnected = onClose;
+      return ([2, 4].includes(++attempts) ? offline : ready) as unknown as DirectHostClient;
+    });
+    const { result, unmount } = renderHook(() => useLiveAlphaController(factory));
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.model.connections[0]?.status).toBe('connected');
+    await act(async () => disconnected?.(new PortalTransportError('Host restarted.', 1006)));
+    expect(result.current.model.connections[0]?.status).toBe('disconnected');
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(result.current.model.connections[0]?.status).toBe('connected');
+    expect(factory).toHaveBeenCalledTimes(3);
+    await act(async () => disconnected?.(new PortalTransportError('Host restarted again.', 1006)));
+    expect(result.current.model.connections[0]?.status).toBe('disconnected');
+    unmount();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(factory).toHaveBeenCalledTimes(4);
+  });
+
   it("removes the selected Host placement and refreshes only that Portal", async () => {
     const removableSnapshot: HostSnapshot = {
       ...snapshot,
-      capabilities: ["workspace.add", "workspace.remove"],
+      capabilities: ["context.add", "context.remove"],
     };
     const removedSnapshot: HostSnapshot = {
       ...removableSnapshot,
-      workspaces: [],
+      executionContexts: [],
       threads: [],
     };
     let currentSnapshot = removableSnapshot;
@@ -79,16 +105,16 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    const workspace = result.current.model.workspaces[0]!;
+    const workspace = result.current.model.executionContexts[0]!;
     const placement = workspace.placements?.[0];
 
     await act(async () =>
-      result.current.actions.removeProject?.(workspace.id, placement?.id),
+      result.current.actions.removeExecutionContext?.(workspace.id, placement?.id),
     );
 
     expect(client.removeWorkspace).toHaveBeenCalledWith("weave");
     expect(client.snapshot).toHaveBeenCalledTimes(2);
-    expect(result.current.model.workspaces).toEqual([]);
+    expect(result.current.model.executionContexts).toEqual([]);
     expect(result.current.model.error).toBeUndefined();
   });
 
@@ -103,7 +129,7 @@ describe("useLiveAlphaController", () => {
         truncated: false,
       })),
       watchWorkspaceFiles: vi.fn(
-        async (_workspaceId: string, paths: string[]) => ({
+        async (_executionContextId: string, paths: string[]) => ({
           subscriptionId: "watch-title",
           paths,
           update: vi.fn(async (nextPaths: string[]) => nextPaths),
@@ -148,7 +174,7 @@ describe("useLiveAlphaController", () => {
     );
 
     expect(result.current.model.transcript?.title).toBe("Agent-selected title");
-    expect(result.current.model.workspaces[0]?.threads[0]).toMatchObject({
+    expect(result.current.model.threads?.[0]).toMatchObject({
       id: "host-1:thread-1",
       title: "Agent-selected title",
       updatedAt: "2026-08-28T06:00:00.000Z",
@@ -165,7 +191,7 @@ describe("useLiveAlphaController", () => {
       }),
     );
     expect(result.current.model.transcript?.title).toBeNull();
-    expect(result.current.model.workspaces[0]?.threads[0]).toMatchObject({
+    expect(result.current.model.threads?.[0]).toMatchObject({
       title: "Weave",
       updatedAt: "2026-08-28T06:05:00.000Z",
     });
@@ -176,7 +202,7 @@ describe("useLiveAlphaController", () => {
     const secondThread = {
       ...snapshot.threads[0],
       threadId: "thread-2",
-      acpSessionId: "session-2",
+      workspaceId: 'workspace', membershipRevision: 0, acpSessionId: "session-2",
       title: "Second Thread",
       updatedAt: "2026-08-26T00:00:00.000Z",
     };
@@ -203,7 +229,7 @@ describe("useLiveAlphaController", () => {
         truncated: false,
       })),
       watchWorkspaceFiles: vi.fn(
-        async (_workspaceId: string, paths: string[]) => ({
+        async (_executionContextId: string, paths: string[]) => ({
           subscriptionId: "watch-1",
           paths,
           update: vi.fn(async (nextPaths: string[]) => nextPaths),
@@ -280,13 +306,13 @@ describe("useLiveAlphaController", () => {
     };
     const firstSnapshot: HostSnapshot = {
       ...snapshot,
-      workspaces: [
-        ...snapshot.workspaces.map((workspace) => ({
+      executionContexts: [
+        ...snapshot.executionContexts.map((workspace) => ({
           ...workspace,
           repositoryIdentity,
           canonicalPath: "/code/weave",
         })),
-        { workspaceId: "scratch", name: "Scratch" },
+        { executionContextId: "scratch", name: "Scratch" },
       ],
     };
     const secondSnapshot: HostSnapshot = {
@@ -334,7 +360,7 @@ describe("useLiveAlphaController", () => {
           truncated: false,
         })),
         watchWorkspaceFiles: vi.fn(
-          async (_workspaceId: string, paths: string[]) => ({
+          async (_executionContextId: string, paths: string[]) => ({
             subscriptionId: `${hostId}-watch`,
             paths,
             update: vi.fn(async (nextPaths: string[]) => nextPaths),
@@ -374,20 +400,20 @@ describe("useLiveAlphaController", () => {
       { hostId: "host-1", status: "connected" },
       { hostId: "host-2", status: "connected" },
     ]);
-    expect(result.current.model.workspaces.map(({ id }) => id)).toEqual([
-      "context:host-1:%2Fcode%2Fweave",
-      "context:host-2:%2Fcode%2Fweave",
-      "workspace:host-1:scratch",
-      "workspace:host-2:scratch",
+    expect(result.current.model.executionContexts.map(({ id }) => id)).toEqual([
+      "host-1:scratch",
+      "host-1:weave",
+      "host-2:scratch",
+      "host-2:weave",
     ]);
-    expect(result.current.model.workspaces[0].placements).toHaveLength(1);
+    expect(result.current.model.executionContexts[0].placements).toHaveLength(1);
     expect(
-      result.current.model.workspaces
+      result.current.model.executionContexts
         .slice(1)
         .map(({ placements }) => placements?.length),
     ).toEqual([1, 1, 1]);
     expect(
-      result.current.model.workspaces
+      result.current.model.executionContexts
         .flatMap(({ threads }) => threads)
         .map(({ id }) => id)
         .sort(),
@@ -411,7 +437,7 @@ describe("useLiveAlphaController", () => {
     ).toBe("connected");
     expect(result.current.model.selectedThreadId).toBe("host-2:thread-1");
     expect(
-      result.current.model.workspaces.flatMap(({ threads }) => threads),
+      result.current.model.executionContexts.flatMap(({ threads }) => threads),
     ).toHaveLength(2);
 
     await act(async () => {
@@ -425,13 +451,14 @@ describe("useLiveAlphaController", () => {
 
     await act(async () =>
       result.current.actions.createThread(
-        "context:host-1:%2Fcode%2Fweave",
         "host-1:weave",
+        "host-1:weave",
+        "workspace",
       ),
     );
     expect(host2.createThread).not.toHaveBeenCalled();
     expect(host1.createThread).not.toHaveBeenCalled();
-    expect(result.current.model.workspaces[0]?.threads[0]).toMatchObject({
+    expect(result.current.model.threads?.[0]).toMatchObject({
       draft: true,
       hostId: "host-1",
       title: "New thread",
@@ -442,14 +469,14 @@ describe("useLiveAlphaController", () => {
       result.current.model.connections.find(({ hostId }) => hostId === "host-1")
         ?.status,
     ).toBe("connected");
-    expect(result.current.model.workspaces).toHaveLength(4);
+    expect(result.current.model.executionContexts).toHaveLength(4);
   });
 
   it("registers a project through the chosen connected Portal and refreshes only that Host", async () => {
     const client = {
       snapshot: vi.fn(async () => snapshot),
       addWorkspace: vi.fn(async () => ({
-        workspaceId: "odin",
+        executionContextId: "odin",
         name: "Odin",
       })),
       close: vi.fn(),
@@ -463,7 +490,7 @@ describe("useLiveAlphaController", () => {
     });
 
     await act(async () =>
-      result.current.actions.addProject?.({
+      result.current.actions.addExecutionContext?.({
         hostId: "host-1",
         path: "/srv/odin",
         name: "Odin",
@@ -478,7 +505,7 @@ describe("useLiveAlphaController", () => {
     const createdThread = {
       ...snapshot.threads[0],
       threadId: "thread-created",
-      acpSessionId: "session-created",
+      workspaceId: 'workspace', membershipRevision: 0, acpSessionId: "session-created",
       title: "Created Thread",
     };
     let currentSnapshot = snapshot;
@@ -503,7 +530,7 @@ describe("useLiveAlphaController", () => {
         truncated: false,
       })),
       watchWorkspaceFiles: vi.fn(
-        async (_workspaceId: string, paths: string[]) => ({
+        async (_executionContextId: string, paths: string[]) => ({
           subscriptionId: "watch-created",
           paths,
           update: vi.fn(async (nextPaths: string[]) => nextPaths),
@@ -519,17 +546,17 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    const workspaceId = result.current.model.workspaces[0]!.id;
+    const executionContextId = result.current.model.executionContexts[0]!.id;
 
     await act(async () => {
-      await result.current.actions.createThread(workspaceId);
+      await result.current.actions.createThread(executionContextId, undefined, 'workspace');
     });
 
     const draftId = result.current.model.selectedThreadId;
     const firstFocusRequest = result.current.model.composerFocusRequest;
     expect(result.current.model.composerFocusThreadId).toBe(draftId);
     expect(client.createThread).not.toHaveBeenCalled();
-    expect(result.current.model.workspaces[0]?.threads[0]).toMatchObject({
+    expect(result.current.model.threads?.[0]).toMatchObject({
       id: draftId,
       draft: true,
       title: "New thread",
@@ -537,7 +564,7 @@ describe("useLiveAlphaController", () => {
     expect(result.current.model.transcript?.entries).toEqual([]);
 
     await act(async () => {
-      await result.current.actions.createThread(workspaceId);
+      await result.current.actions.createThread(executionContextId, undefined, 'workspace');
     });
     expect(result.current.model.selectedThreadId).toBe(draftId);
     expect(result.current.model.composerFocusThreadId).toBe(draftId);
@@ -554,22 +581,22 @@ describe("useLiveAlphaController", () => {
     });
 
     expect(client.createThread).toHaveBeenCalledOnce();
-    expect(result.current.model.creatingThreadWorkspaceId).toBe(workspaceId);
+    expect(result.current.model.creatingThreadExecutionContextId).toBe(executionContextId);
 
     await act(async () => {
       resolveCreate();
       await Promise.all([firstSend, duplicateSend]);
     });
     expect(client.createThread).toHaveBeenCalledOnce();
-    expect(client.createThread).toHaveBeenCalledWith("weave", "codex");
+    expect(client.createThread).toHaveBeenCalledWith("weave", "codex", undefined, "workspace");
     expect(client.prompt).toHaveBeenCalledOnce();
     expect(client.prompt).toHaveBeenCalledWith([
       { type: "text", text: "Start the work" },
     ]);
-    expect(result.current.model.creatingThreadWorkspaceId).toBeUndefined();
+    expect(result.current.model.creatingThreadExecutionContextId).toBeUndefined();
     expect(result.current.model.selectedThreadId).toBe("host-1:thread-created");
     expect(
-      result.current.model.workspaces[0]?.threads.some(({ draft }) => draft),
+      result.current.model.executionContexts[0]?.threads.some(({ draft }) => draft),
     ).toBe(false);
   });
 
@@ -577,7 +604,7 @@ describe("useLiveAlphaController", () => {
     const prepared = {
       ...snapshot.threads[0],
       threadId: "draft-prepared",
-      acpSessionId: "session-prepared",
+      workspaceId: 'workspace', membershipRevision: 0, acpSessionId: "session-prepared",
       title: undefined,
       createdAt: "2026-08-28T00:00:00.000Z",
       updatedAt: "2026-08-28T00:00:00.000Z",
@@ -639,7 +666,7 @@ describe("useLiveAlphaController", () => {
         truncated: false,
       })),
       watchWorkspaceFiles: vi.fn(
-        async (_workspaceId: string, paths: string[]) => ({
+        async (_executionContextId: string, paths: string[]) => ({
           subscriptionId: "watch-prepared",
           paths,
           update: vi.fn(async (nextPaths: string[]) => nextPaths),
@@ -666,13 +693,13 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    const workspaceId = result.current.model.workspaces[0]!.id;
+    const executionContextId = result.current.model.executionContexts[0]!.id;
 
     await act(async () => {
-      await result.current.actions.createThread(workspaceId);
+      await result.current.actions.createThread(executionContextId, undefined, 'workspace');
     });
 
-    expect(client.createThreadDraft).toHaveBeenCalledWith("weave", "codex");
+    expect(client.createThreadDraft).toHaveBeenCalledWith("weave", "codex", undefined, "workspace");
     expect(client.createThread).not.toHaveBeenCalled();
     expect(client.attach).toHaveBeenCalledWith("draft-prepared");
     expect(result.current.model.transcript).toMatchObject({
@@ -701,11 +728,11 @@ describe("useLiveAlphaController", () => {
     expect(client.prompt).toHaveBeenCalledWith([
       { type: "text", text: "Use these settings" },
     ]);
-    expect(result.current.model.workspaces[0]?.threads[0]?.id).toBe(
+    expect(result.current.model.threads?.[0]?.id).toBe(
       "host-1:draft-prepared",
     );
     expect(
-      result.current.model.workspaces[0]?.threads[0]?.draft,
+      result.current.model.threads?.[0]?.draft,
     ).toBeUndefined();
   });
 
@@ -713,7 +740,7 @@ describe("useLiveAlphaController", () => {
     const prepared = {
       ...snapshot.threads[0],
       threadId: "draft-discarded",
-      acpSessionId: "session-discarded",
+      workspaceId: 'workspace', membershipRevision: 0, acpSessionId: "session-discarded",
     };
     const client = {
       snapshot: vi.fn(async () => ({
@@ -730,7 +757,7 @@ describe("useLiveAlphaController", () => {
         truncated: false,
       })),
       watchWorkspaceFiles: vi.fn(
-        async (_workspaceId: string, paths: string[]) => ({
+        async (_executionContextId: string, paths: string[]) => ({
           subscriptionId: "watch-draft",
           paths,
           update: vi.fn(async (nextPaths: string[]) => nextPaths),
@@ -746,13 +773,13 @@ describe("useLiveAlphaController", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    const workspaceId = result.current.model.workspaces[0]!.id;
+    const executionContextId = result.current.model.executionContexts[0]!.id;
 
     await act(async () => {
-      await result.current.actions.createThread(workspaceId);
+      await result.current.actions.createThread(executionContextId, undefined, 'workspace');
     });
     const draftId = result.current.model.selectedThreadId;
-    expect(result.current.model.workspaces[0]?.threads[0]?.id).toBe(draftId);
+    expect(result.current.model.threads?.[0]?.id).toBe(draftId);
 
     await act(async () => {
       await result.current.actions.selectThread("host-1:thread-1");
@@ -761,8 +788,8 @@ describe("useLiveAlphaController", () => {
     expect(client.createThread).not.toHaveBeenCalled();
     expect(client.discardThreadDraft).toHaveBeenCalledWith("draft-discarded");
     expect(result.current.model.selectedThreadId).toBe("host-1:thread-1");
-    expect(result.current.model.workspaces[0]?.threads).toHaveLength(1);
-    expect(result.current.model.workspaces[0]?.threads[0]?.id).toBe(
+    expect(result.current.model.executionContexts[0]?.threads).toHaveLength(1);
+    expect(result.current.model.threads?.[0]?.id).toBe(
       "host-1:thread-1",
     );
   });
@@ -802,7 +829,7 @@ describe("useLiveAlphaController", () => {
         truncated: false,
       })),
       watchWorkspaceFiles: vi.fn(
-        async (_workspaceId: string, paths: string[]) => ({
+        async (_executionContextId: string, paths: string[]) => ({
           subscriptionId: "watch-1",
           paths,
           update: vi.fn(async (nextPaths: string[]) => nextPaths),
@@ -828,7 +855,7 @@ describe("useLiveAlphaController", () => {
       result.current.actions.archiveThread("host-1:thread-1"),
     );
     expect(result.current.model.selectedThreadId).toBeUndefined();
-    expect(result.current.model.workspaces[0].threads).toEqual([]);
+    expect(result.current.model.executionContexts[0].threads).toEqual([]);
     expect(
       result.current.model.archivedThreads.map(({ id, status }) => ({
         id,
@@ -840,7 +867,7 @@ describe("useLiveAlphaController", () => {
       result.current.actions.restoreThread("host-1:thread-1"),
     );
     expect(result.current.model.archivedThreads).toEqual([]);
-    expect(result.current.model.workspaces[0].threads[0]).toMatchObject({
+    expect(result.current.model.executionContexts[0].threads[0]).toMatchObject({
       id: "host-1:thread-1",
       status: "active",
     });
@@ -857,7 +884,7 @@ describe("useLiveAlphaController", () => {
         truncated: false,
       })),
       watchWorkspaceFiles: vi.fn(
-        async (_workspaceId: string, paths: string[]) => ({
+        async (_executionContextId: string, paths: string[]) => ({
           subscriptionId: "watch-1",
           paths,
           update: vi.fn(async (nextPaths: string[]) => nextPaths),
@@ -975,7 +1002,7 @@ describe("useLiveAlphaController", () => {
         truncated: false,
       })),
       watchWorkspaceFiles: vi.fn(
-        async (_workspaceId: string, paths: string[]) => ({
+        async (_executionContextId: string, paths: string[]) => ({
           subscriptionId: "watch-1",
           paths,
           update: vi.fn(async (nextPaths: string[]) => nextPaths),
@@ -1012,7 +1039,7 @@ describe("useLiveAlphaController", () => {
 
     act(() => connectionClosed?.(new Error("Socket closed.")));
     expect(result.current.model.connections[0]?.status).toBe("reconnecting");
-    expect(result.current.model.workspaces[0]?.threads).toHaveLength(1);
+    expect(result.current.model.executionContexts[0]?.threads).toHaveLength(1);
     expect(result.current.model.selectedThreadId).toBe("host-1:thread-1");
     expect(result.current.model.error).toBeUndefined();
 
@@ -1024,7 +1051,7 @@ describe("useLiveAlphaController", () => {
       error:
         "Couldn’t reconnect to this Portal Host. Check that Portal is running and try again.",
     });
-    expect(result.current.model.workspaces[0]?.threads).toHaveLength(1);
+    expect(result.current.model.executionContexts[0]?.threads).toHaveLength(1);
     expect(result.current.model.selectedThreadId).toBe("host-1:thread-1");
     expect(result.current.model.workspaceFiles).toBeUndefined();
     expect(result.current.model.error).toBeUndefined();
@@ -1039,7 +1066,7 @@ it('releases navigation after the first prompt is accepted, while retaining its 
   const prompt = new Promise<void>((_resolve, reject) => { rejectPrompt = reject; });
   const client = {
     snapshot: vi.fn(async () => ({ ...snapshot, capabilities: ['thread.draft'] })),
-    createThreadDraft: vi.fn(async () => ({ ...snapshot.threads[0], threadId: `draft-${++count}`, acpSessionId: `session-${count}` })),
+    createThreadDraft: vi.fn(async () => ({ ...snapshot.threads[0], threadId: `draft-${++count}`, workspaceId: 'workspace', membershipRevision: 0, acpSessionId: `session-${count}` })),
     attach: vi.fn(async (threadId: string) => {
       onEvent?.({ type: 'history/reset', sessionId: threadId }, threadId);
       return { ...snapshot.threads[0], threadId };
@@ -1048,8 +1075,8 @@ it('releases navigation after the first prompt is accepted, while retaining its 
   } as unknown as DirectHostClient;
   const { result } = renderHook(() => useLiveAlphaController((_url, _credential, events) => { onEvent = events; return client; }));
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-  const context = result.current.model.workspaces[0]!.id;
-  await act(async () => result.current.actions.createThread(context));
+  const context = result.current.model.executionContexts[0]!.id;
+  await act(async () => result.current.actions.createThread(context, undefined, 'workspace'));
   let sending: Promise<void> | void;
   act(() => { sending = result.current.actions.sendPrompt('Inspect this'); });
   expect(result.current.model.busy).toBe(true);
@@ -1057,7 +1084,7 @@ it('releases navigation after the first prompt is accepted, while retaining its 
     sessionId: 'session-1', toolCall: { toolCallId: 'tool', title: 'Read', status: 'pending' }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
   } }, 'draft-1'));
   expect(result.current.model.busy).toBe(false);
-  await act(async () => result.current.actions.createThread(context));
+  await act(async () => result.current.actions.createThread(context, undefined, 'workspace'));
   expect(result.current.model.selectedThreadId).toBe('host-1:draft-2');
   await act(async () => { rejectPrompt(new Error('Old conversation transport detached')); await sending; });
   expect(result.current.model.selectedThreadId).toBe('host-1:draft-2');

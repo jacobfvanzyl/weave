@@ -1,3 +1,5 @@
+import { assertLegacyCutover } from './terminal-service/maintenance.ts';
+import { createHash } from 'node:crypto';
 import { realpath } from './host-files.ts';
 import {
   PORTAL_ACP_PATH,
@@ -9,24 +11,30 @@ import {
   type TerminalNotification,
   type TerminalRpcMethod,
   type ThreadSummary,
+  type Workspace,
   THREAD_ATTENTION_CAPABILITY,
   WORKSPACE_FILE_RPC_METHODS,
   WORKSPACE_CONTEXT_CAPABILITY,
   COMPOSITION_RPC_METHODS,
+  WORKSPACE_LIFECYCLE_RPC_METHODS,
+  type WorkspaceClosePlan,
+  type WorkspaceComposition,
+  COMPOSITION_TERMINAL_CREATION_CAPABILITY,
+  type TerminalLayoutNode,
   terminalPaneTargets,
   type WorkspaceFileWatchNotification,
 } from '@weave/product-protocol';
 import { isAbsolute, relative } from 'node:path';
-import { ThreadCatalog } from './catalog.ts';
-import type { AgentDefinition, PortalConfig, WorkspaceDefinition } from './config.ts';
+import { ThreadCatalog, ThreadMembershipError } from './catalog.ts';
+import type { AgentDefinition, PortalConfig, ExecutionContextDefinition } from './config.ts';
 import type { JsonRpcMessage } from './json-rpc.ts';
 import { RuntimeStateStore } from './runtime-state.ts';
 import { type PortalAction, type PortalPrincipal, PortalSecurity, PortalSecurityError } from './security.ts';
 import { ThreadEventJournal } from './thread-journal.ts';
-import { TmuxTerminalBackend } from './tmux-terminal-backend.ts';
-import { type PortalTerminalSession, type TerminalBackend, TerminalService } from './terminals.ts';
+import { TerminalServiceConnection } from './terminal-service/connection.ts';
+import { type PortalTerminalSession, type TerminalExecution, TerminalAccess } from './terminals.ts';
 import { HostedThread, type ThreadAttachment, ThreadPromptActiveError } from './thread-runtime.ts';
-import { type RegisteredWorkspace, WorkspaceCatalog, workspaceSummary } from './workspace-catalog.ts';
+import { type RegisteredExecutionContext, ExecutionContextCatalog, workspaceSummary } from './workspace-catalog.ts';
 import { WorkspaceFileService, type WorkspaceFileWatchSession } from './workspace-files.ts';
 import { CompositionError, CompositionStore } from './composition-store.ts';
 
@@ -53,23 +61,23 @@ export class PortalRpcSession {
   ): Promise<PortalRpcResult<Method>> {
     if (this.#closed) throw new Error('Portal RPC session is closed.');
     await this.#portal.authorizeRequest(this.principal, method, params);
-    if (method === 'workspace.file.watch.start') {
+    if (method === 'context.file.watch.start') {
       return await this.#watches.start(
-        params as PortalRpcParams<'workspace.file.watch.start'>,
+        params as PortalRpcParams<'context.file.watch.start'>,
       ) as PortalRpcResult<
         Method
       >;
     }
-    if (method === 'workspace.file.watch.update') {
+    if (method === 'context.file.watch.update') {
       return await this.#watches.update(
-        params as PortalRpcParams<'workspace.file.watch.update'>,
+        params as PortalRpcParams<'context.file.watch.update'>,
       ) as PortalRpcResult<
         Method
       >;
     }
-    if (method === 'workspace.file.watch.stop') {
+    if (method === 'context.file.watch.stop') {
       return await this.#watches.stop(
-        params as PortalRpcParams<'workspace.file.watch.stop'>,
+        params as PortalRpcParams<'context.file.watch.stop'>,
       ) as PortalRpcResult<
         Method
       >;
@@ -108,7 +116,7 @@ export type LocalAcpContext = {
   hostId: string;
   agentId: string;
   agentName: string;
-  workspaceId: string;
+  executionContextId: string;
   workspaceName: string;
   cwd: string;
 };
@@ -118,39 +126,41 @@ export class Portal {
   readonly #journal: ThreadEventJournal;
   readonly #runtimeStates: RuntimeStateStore;
   readonly #workspaceFiles: WorkspaceFileService;
-  readonly #terminals?: TerminalService;
-  readonly #workspaceCatalog: WorkspaceCatalog;
+  readonly #terminals?: TerminalAccess;
+  readonly #workspaceCatalog: ExecutionContextCatalog;
   readonly #compositions: CompositionStore;
   readonly security: PortalSecurity;
-  readonly #workspaces: Map<string, RegisteredWorkspace>;
+  readonly #executionContexts: Map<string, RegisteredExecutionContext>;
   readonly #agents: Map<string, AgentDefinition>;
   readonly #runtimes = new Map<string, Promise<HostedThread>>();
   readonly #liveRuntimes = new Map<string, HostedThread>();
   readonly #drafts = new Map<string, ThreadSummary>();
   #lifecycleQueue = Promise.resolve();
+  readonly #closingWorkspaces = new Set<string>();
 
   private constructor(
     readonly config: PortalConfig,
     catalog: ThreadCatalog,
     journal: ThreadEventJournal,
     runtimeStates: RuntimeStateStore,
-    workspaceCatalog: WorkspaceCatalog,
+    workspaceCatalog: ExecutionContextCatalog,
     workspaceFiles: WorkspaceFileService,
-    terminals: TerminalService | undefined,
+    terminals: TerminalAccess | undefined,
     security: PortalSecurity,
+    compositions: CompositionStore,
   ) {
     this.#catalog = catalog;
     this.#journal = journal;
     this.#runtimeStates = runtimeStates;
     this.#workspaceCatalog = workspaceCatalog;
-    this.#compositions = new CompositionStore(config.stateDirectory);
+    this.#compositions = compositions;
     this.#workspaceFiles = workspaceFiles;
     this.#terminals = terminals;
     this.security = security;
-    this.#workspaces = new Map(
+    this.#executionContexts = new Map(
       workspaceCatalog.list().map((
         workspace,
-      ) => [workspace.workspaceId, workspace]),
+      ) => [workspace.executionContextId, workspace]),
     );
     this.#agents = new Map(
       config.agents.map((agent) => [agent.agentId, agent]),
@@ -159,41 +169,46 @@ export class Portal {
 
   static async open(
     config: PortalConfig,
-    options: { terminalBackend?: TerminalBackend | false } = {},
+    options: { terminalBackend?: TerminalExecution | false } = {},
   ) {
     const catalog = new ThreadCatalog(config.stateDirectory);
-    const workspaceCatalog = await WorkspaceCatalog.open(
+    const workspaceCatalog = await ExecutionContextCatalog.open(
       config.stateDirectory,
-      config.workspaces,
+      config.executionContexts,
     );
-    const workspaces = workspaceCatalog.list();
+    const executionContexts = workspaceCatalog.list();
     const [, journal, runtimeStates, workspaceFiles, security] = await Promise
       .all([
-        catalog.load(),
+        Promise.resolve(),
         ThreadEventJournal.open(
           config.stateDirectory,
           config.threadEventRetentionLimit,
         ),
         RuntimeStateStore.open(config.stateDirectory),
-        WorkspaceFileService.open(workspaces, {}, { resolveWorkspaceRoot: (id) => workspaceCatalog.requireAvailable(id) }),
+        WorkspaceFileService.open(executionContexts, {}, { resolveWorkspaceRoot: (id) => workspaceCatalog.requireAvailable(id) }),
         PortalSecurity.open(
           config,
-          workspaces.map(({ workspaceId }) => workspaceId),
+          executionContexts.map(({ executionContextId }) => executionContextId),
         ),
       ]);
+    if (options.terminalBackend === undefined) await assertLegacyCutover(config.stateDirectory);
     const terminalBackend = options.terminalBackend === false ? undefined : options.terminalBackend ??
-      (await TmuxTerminalBackend.available()
-        ? new TmuxTerminalBackend({ stateDirectory: config.stateDirectory })
-        : undefined);
+      new TerminalServiceConnection({ stateDirectory: config.stateDirectory });
+    const compositions = new CompositionStore(config.stateDirectory);
+    await compositions.migrate(security.hostId, executionContexts.map((context) => context.executionContextId));
+    let portal: Portal | undefined;
     const terminals = terminalBackend
-      ? new TerminalService({
+      ? new TerminalAccess({
         backend: terminalBackend,
+        onTerminalExit: (terminalId) => { void (portal ? portal.#mutateLifecycle(async () => { await compositions.removeTerminal(security.hostId, terminalId); await portal!.#pruneEmptyWorkspaces(); }) : compositions.removeTerminal(security.hostId, terminalId)).catch((error) => console.error('Could not remove exited terminal pane:', error)); },
         assertWorkspaceAvailable: (id) => workspaceCatalog.requireAvailable(id),
-        resolveWorkspace: (workspaceId) =>
-          workspaceCatalog.list().find((workspace) => workspace.workspaceId === workspaceId),
+        resolveWorkspace: (executionContextId) =>
+          workspaceCatalog.list().find((workspace) => workspace.executionContextId === executionContextId),
       })
       : undefined;
-    return new Portal(
+    await catalog.load((id, preferred, assigned) => compositions.ensureThreadWorkspace(security.hostId, id, executionContexts.find((context) => context.executionContextId === id)?.name ?? id, preferred, assigned));
+    if (terminals) await compositions.reconcileTerminals(security.hostId, () => terminals.knownTerminalIds());
+    portal = new Portal(
       config,
       catalog,
       journal,
@@ -202,7 +217,10 @@ export class Portal {
       workspaceFiles,
       terminals,
       security,
+      compositions,
     );
+    await portal.#pruneEmptyWorkspaces();
+    return portal;
   }
 
   async request<Method extends PortalRpcMethod>(
@@ -224,14 +242,17 @@ export class Portal {
             label: principal.label,
           },
           capabilities: [
-            'workspace.list',
+            'context.list',
             WORKSPACE_CONTEXT_CAPABILITY,
             ...COMPOSITION_RPC_METHODS,
-            'workspace.add',
-            'workspace.remove',
+            ...WORKSPACE_LIFECYCLE_RPC_METHODS,
+            ...(this.#terminals ? [COMPOSITION_TERMINAL_CREATION_CAPABILITY] : []),
+            'context.add',
+            'context.remove',
             'agent.list',
             'thread.list',
             THREAD_ATTENTION_CAPABILITY,
+            'thread.assign',
             'thread.create',
             'thread.draft',
             'thread.attach',
@@ -244,52 +265,126 @@ export class Portal {
             'acp.v1',
           ],
         } as PortalRpcResult<Method>;
-      case 'workspace.list':
+      case 'context.list':
         await this.#workspaceCatalog.refresh();
         return {
-          workspaces: [...this.#workspaces.values()]
-            .filter(({ workspaceId }) =>
-              this.security.allows(principal, 'workspace.inspect', {
-                workspaceId,
+          executionContexts: [...this.#executionContexts.values()]
+            .filter(({ executionContextId }) =>
+              this.security.allows(principal, 'context.inspect', {
+                executionContextId,
               })
             )
             .map(workspaceSummary),
         } as PortalRpcResult<Method>;
-      case 'workspace.add': {
-        const input = params as PortalRpcParams<'workspace.add'>;
+      case 'context.add': {
+        const input = params as PortalRpcParams<'context.add'>;
         const workspace = await this.#workspaceCatalog.add(input);
-        if (!this.#workspaces.has(workspace.workspaceId)) {
+        if (!this.#executionContexts.has(workspace.executionContextId)) {
           await this.#workspaceFiles.addRoot(workspace);
-          this.#workspaces.set(workspace.workspaceId, workspace);
+          this.#executionContexts.set(workspace.executionContextId, workspace);
         }
-        await this.security.registerWorkspace(principal, workspace.workspaceId);
+        await this.security.registerWorkspace(principal, workspace.executionContextId);
         return { workspace: workspaceSummary(workspace) } as PortalRpcResult<
           Method
         >;
       }
+      case 'workspace.close': {
+        const input = params as PortalRpcParams<'workspace.close'>;
+        return await this.#mutateLifecycle(async () => {
+          if (input.hostId !== this.security.hostId) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+          const current = await this.#compositions.get(input.hostId);
+          if (!current.workspaces.some((workspace) => workspace.workspaceId === input.workspaceId)) return { composition: this.#visibleComposition(principal, current) } as PortalRpcResult<Method>;
+          // Freeze existing agent input while the Host rechecks a clean close;
+          // another attachment must not start a turn during asynchronous checks.
+          const releases = this.#workspaceThreads().filter((thread) => thread.workspaceId === input.workspaceId).flatMap((thread) => {
+            const runtime = this.#liveRuntimes.get(thread.threadId);
+            return runtime ? [runtime.reserveWorkspaceClose()] : [];
+          });
+          try {
+            const plan = await this.#workspaceClosePlan(principal, input.hostId, input.workspaceId);
+            if (plan.token !== input.token) throw new Error('The workspace changed. Review its current contents before closing.');
+            if (!input.confirmed && [...plan.terminals, ...plan.threads].some((item) => item.dirty)) throw new Error('This workspace has active or uncertain work. Confirmation is required.');
+            this.#closingWorkspaces.add(input.workspaceId);
+            try {
+              const members = this.#workspaceThreads().filter((thread) => thread.workspaceId === input.workspaceId);
+              // Stop every runtime before removing membership or structure. On
+              // failure, retain the workspace so the remaining work is recoverable.
+              const stopped = await Promise.allSettled([
+                this.#terminals?.stopWorkspaceTerminals(plan.terminals.map((terminal) => terminal.terminalId)),
+                ...members.map(async (thread) => {
+                  const runtime = this.#runtimes.get(thread.threadId);
+                  if (runtime) await (await runtime).stopForWorkspaceClose();
+                  this.#runtimes.delete(thread.threadId);
+                  this.#liveRuntimes.delete(thread.threadId);
+                }),
+              ]);
+              const failure = stopped.find((result) => result.status === 'rejected');
+              if (failure?.status === 'rejected') throw failure.reason;
+              for (const thread of members) {
+                // Drafts may contain in-flight journal entries. Archive them too;
+                // stopping a workspace never destroys conversation history.
+                if (this.#drafts.has(thread.threadId)) await this.#catalog.put(thread);
+                this.#drafts.delete(thread.threadId);
+                this.#runtimes.delete(thread.threadId);
+                this.#liveRuntimes.delete(thread.threadId);
+              }
+              const archived = await this.#catalog.archiveWorkspace(input.workspaceId);
+              const composition = await this.#compositions.replace(input.hostId, current.revision, current.workspaces.filter((workspace) => workspace.workspaceId !== input.workspaceId), async () => undefined);
+              for (const thread of archived) await this.security.auditThreadLifecycle(principal, 'thread.archived', thread, true);
+              return { composition: this.#visibleComposition(principal, composition) } as PortalRpcResult<Method>;
+            } finally { this.#closingWorkspaces.delete(input.workspaceId); }
+          } finally { releases.forEach((release) => release()); }
+        });
+      }
+      case 'workspace.close.preview': {
+        const { hostId, workspaceId } = params as PortalRpcParams<'workspace.close.preview'>;
+        return await this.#mutateLifecycle(async () => ({ plan: await this.#workspaceClosePlan(principal, hostId, workspaceId) })) as PortalRpcResult<Method>;
+      }
       case 'workspace.composition.get': {
-        const { workspaceId } = params as PortalRpcParams<'workspace.composition.get'>;
-        this.#workspace(workspaceId);
-        return { composition: await this.#compositions.get(workspaceId) } as PortalRpcResult<Method>;
+        const { hostId } = params as PortalRpcParams<'workspace.composition.get'>;
+        if (hostId !== this.security.hostId) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+        const composition = await this.#mutateLifecycle(async () => {
+          if (this.#terminals) await this.#compositions.reconcileTerminals(hostId, () => this.#terminals!.knownTerminalIds());
+          return this.#pruneEmptyWorkspaces();
+        });
+        // Restricted clients must not receive names or paths from other scopes.
+        return { composition: this.#visibleComposition(principal, composition) } as PortalRpcResult<Method>;
       }
       case 'workspace.composition.replace': {
-        const { workspaceId, expectedRevision, tabs } = params as PortalRpcParams<'workspace.composition.replace'>;
-        this.#workspace(workspaceId);
-        const composition = await this.#compositions.replace(workspaceId, expectedRevision, tabs, async (current, next) => {
-          const existing = new Map(terminalPaneTargets(current.tabs).map((pane) => [pane.paneId, pane.terminalId]));
-          const available = await this.#terminals?.knownTerminalIds(workspaceId) ?? new Set<string>();
+        const { hostId, expectedRevision, workspaces } = params as PortalRpcParams<'workspace.composition.replace'>;
+        if (hostId !== this.security.hostId) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+        const composition = await this.#mutateLifecycle(() => this.#compositions.replace(hostId, expectedRevision, workspaces, async (current, next) => {
+          const nextIds = new Set(next.map((workspace) => workspace.workspaceId));
+          if (this.#workspaceThreads().some((thread) => !nextIds.has(thread.workspaceId))) throw new Error('Move the workspace’s Threads to another Workspace before deleting it.');
+          // A filtered client cannot overwrite arrangements it cannot inspect.
+          for (const workspace of [...current.workspaces, ...next]) for (const executionContextId of this.#workspaceContextIds(workspace)) await this.security.authorize(principal, 'context.manage', { executionContextId });
           for (const pane of terminalPaneTargets(next)) {
-            if (pane.terminalId !== null && !available.has(pane.terminalId) && existing.get(pane.paneId) !== pane.terminalId) {
-              throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
-            }
+            this.#workspace(pane.executionContextId);
+            const available = await this.#terminals?.knownTerminalIds(pane.executionContextId) ?? new Set<string>();
+            if (pane.terminalId !== null && !available.has(pane.terminalId)) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
           }
-        });
+          const retainedTerminals = new Set(terminalPaneTargets(next).map((pane) => pane.terminalId));
+          const liveTerminals = await this.#terminals?.knownTerminalIds() ?? new Set<string>();
+          if (terminalPaneTargets(current.workspaces).some((pane) => pane.terminalId && liveTerminals.has(pane.terminalId) && !retainedTerminals.has(pane.terminalId))) throw new Error('Close the workspace or terminal before removing its layout.');
+          const provision = async (node: TerminalLayoutNode): Promise<TerminalLayoutNode> => {
+            if (node.kind === 'split') return { ...node, children: [await provision(node.children[0]), await provision(node.children[1])] };
+            if (node.terminalId) return node;
+            await this.security.authorize(principal, 'terminal.control', { executionContextId: node.executionContextId });
+            if (!this.#terminals) throw new Error('Terminals are unavailable on this Host.');
+            const terminal = await this.#terminals.ensurePaneTerminal(node.executionContextId, current.revision, node.paneId, node.launchDirectory);
+            return { ...node, terminalId: terminal.terminalId };
+          };
+          const provisioned = [];
+          for (const workspace of next) provisioned.push({ ...workspace, layout: workspace.layout ? await provision(workspace.layout) : null });
+          const occupied = new Set(this.#workspaceThreads().map((thread) => thread.workspaceId));
+          return provisioned.filter((workspace) => workspace.layout !== null || occupied.has(workspace.workspaceId));
+        }));
         return { composition } as PortalRpcResult<Method>;
       }
-      case 'workspace.remove': {
-        const input = params as PortalRpcParams<'workspace.remove'>;
+      case 'context.remove': {
+        const input = params as PortalRpcParams<'context.remove'>;
         const workspace = await this.#workspaceCatalog.remove(
-          input.workspaceId,
+          input.executionContextId,
         );
         if (!workspace) {
           throw new PortalSecurityError(
@@ -297,11 +392,11 @@ export class Portal {
             'Resource is unavailable.',
           );
         }
-        this.#workspaceFiles.removeRoot(workspace.workspaceId);
-        this.#workspaces.delete(workspace.workspaceId);
+        this.#workspaceFiles.removeRoot(workspace.executionContextId);
+        this.#executionContexts.delete(workspace.executionContextId);
         await this.security.unregisterWorkspace(
           principal,
-          workspace.workspaceId,
+          workspace.executionContextId,
         );
         return { removed: true } as PortalRpcResult<Method>;
       }
@@ -320,45 +415,57 @@ export class Portal {
           ).filter((thread) =>
             this.security.allows(principal, 'thread.inspect', {
               threadId: thread.threadId,
-              workspaceId: thread.workspaceId,
+              executionContextId: thread.executionContextId,
               agentId: thread.agentId,
             })
-          ).map((thread) => ({ ...thread, attention: this.#liveRuntimes.get(thread.threadId)?.attention() ?? { state: 'uncertain', observedAt: new Date().toISOString() } })),
+          ).map((thread) => ({ ...thread, attention: this.#liveRuntimes.get(thread.threadId)?.attention() ?? { state: 'uncertain', uncertaintyReason: 'runtime_not_loaded', observedAt: new Date().toISOString() } })),
         } as PortalRpcResult<Method>;
-      case 'thread.create': {
-        const input = params as PortalRpcParams<'thread.create'>;
-        return {
-          thread: await this.#createThread(
-            input.workspaceId,
-            input.agentId,
-            input.title,
-          ),
-        } as PortalRpcResult<Method>;
-      }
+      case 'thread.create':
       case 'thread.draft.create': {
-        const input = params as PortalRpcParams<'thread.draft.create'>;
-        return {
-          thread: await this.#createDraftThread(
-            input.workspaceId,
-            input.agentId,
-            input.title,
-          ),
-        } as PortalRpcResult<Method>;
+        const input = params as PortalRpcParams<'thread.create'>;
+        return await this.#mutateLifecycle(async () => {
+          const workspaceId = input.workspaceId === undefined ? await this.#ensureThreadWorkspace(input.executionContextId) : input.workspaceId;
+          await this.#validateAssignment(principal, this.security.hostId, workspaceId);
+          try {
+            const thread = method === 'thread.create'
+              ? await this.#createThread(input.executionContextId, input.agentId, input.title, workspaceId)
+              : await this.#createDraftThread(input.executionContextId, input.agentId, input.title, workspaceId);
+            return { thread } as PortalRpcResult<Method>;
+          } finally { await this.#pruneEmptyWorkspaces(); }
+        });
       }
       case 'thread.draft.discard': {
         const input = params as PortalRpcParams<'thread.draft.discard'>;
         await this.#discardDraftThread(input.threadId);
         return { discarded: true } as PortalRpcResult<Method>;
       }
+      case 'thread.assign': {
+        const input = params as PortalRpcParams<'thread.assign'>;
+        return await this.#mutateLifecycle(async () => {
+          await this.#validateAssignment(principal, input.hostId, input.workspaceId);
+          const draft = this.#drafts.get(input.threadId);
+          if (draft) {
+            if (draft.membershipRevision !== input.expectedRevision) throw new ThreadMembershipError();
+            draft.workspaceId = input.workspaceId;
+            draft.membershipRevision += 1;
+            await this.#pruneEmptyWorkspaces();
+            return { thread: { ...draft } } as PortalRpcResult<Method>;
+          }
+          const thread = await this.#catalog.assign(input.threadId, input.workspaceId, input.expectedRevision);
+          await this.#pruneEmptyWorkspaces();
+          return { thread } as PortalRpcResult<Method>;
+        });
+      }
       case 'thread.attach': {
         const input = params as PortalRpcParams<'thread.attach'>;
-        const thread = (await this.#runtime(input.threadId)).thread;
+        await this.#runtime(input.threadId);
+        const thread = this.#thread(input.threadId);
         return {
           thread,
           connection: {
             path: PORTAL_ACP_PATH,
             threadId: thread.threadId,
-            cwd: this.#workspace(thread.workspaceId).path,
+            cwd: this.#workspace(thread.executionContextId).path,
           },
         } as PortalRpcResult<Method>;
       }
@@ -390,6 +497,7 @@ export class Portal {
             thread,
             changed,
           );
+          await this.#pruneEmptyWorkspaces();
           return { thread } as PortalRpcResult<Method>;
         });
       }
@@ -398,6 +506,10 @@ export class Portal {
         return await this.#mutateLifecycle(async () => {
           const current = this.#catalogThread(input.threadId);
           const changed = current.status === 'archived';
+          if (changed && !(await this.#compositions.get(this.security.hostId)).workspaces.some((workspace) => workspace.workspaceId === current.workspaceId)) {
+            const workspaceId = await this.#ensureThreadWorkspace(current.executionContextId);
+            await this.#catalog.assign(current.threadId, workspaceId, current.membershipRevision);
+          }
           const thread = changed ? await this.#catalog.setArchived(input.threadId, false) : current;
           if (!thread) throw new Error('Thread is unavailable.');
           await this.security.auditThreadLifecycle(
@@ -422,55 +534,55 @@ export class Portal {
       case 'credential.revoke':
         await this.security.revoke(principal);
         return { revoked: true } as PortalRpcResult<Method>;
-      case 'workspace.file.list':
+      case 'context.file.list':
         return await this.#workspaceFiles.list(
-          params as PortalRpcParams<'workspace.file.list'>,
+          params as PortalRpcParams<'context.file.list'>,
         ) as PortalRpcResult<
           Method
         >;
-      case 'workspace.file.read':
+      case 'context.file.read':
         return await this.#workspaceFiles.read(
-          params as PortalRpcParams<'workspace.file.read'>,
+          params as PortalRpcParams<'context.file.read'>,
         ) as PortalRpcResult<
           Method
         >;
-      case 'workspace.file.hash':
+      case 'context.file.hash':
         return await this.#workspaceFiles.hash(
-          params as PortalRpcParams<'workspace.file.hash'>,
+          params as PortalRpcParams<'context.file.hash'>,
         ) as PortalRpcResult<
           Method
         >;
-      case 'workspace.file.write':
+      case 'context.file.write':
         return await this.#workspaceFiles.write(
-          params as PortalRpcParams<'workspace.file.write'>,
+          params as PortalRpcParams<'context.file.write'>,
         ) as PortalRpcResult<
           Method
         >;
-      case 'workspace.directory.create':
+      case 'context.directory.create':
         return await this.#workspaceFiles.createDirectory(
-          params as PortalRpcParams<'workspace.directory.create'>,
+          params as PortalRpcParams<'context.directory.create'>,
         ) as PortalRpcResult<Method>;
-      case 'workspace.file.move':
+      case 'context.file.move':
         return await this.#workspaceFiles.move(
-          params as PortalRpcParams<'workspace.file.move'>,
+          params as PortalRpcParams<'context.file.move'>,
         ) as PortalRpcResult<
           Method
         >;
-      case 'workspace.file.delete':
+      case 'context.file.delete':
         return await this.#workspaceFiles.delete(
-          params as PortalRpcParams<'workspace.file.delete'>,
+          params as PortalRpcParams<'context.file.delete'>,
         ) as PortalRpcResult<
           Method
         >;
-      case 'workspace.file.search':
+      case 'context.file.search':
         return await this.#workspaceFiles.search(
-          params as PortalRpcParams<'workspace.file.search'>,
+          params as PortalRpcParams<'context.file.search'>,
         ) as PortalRpcResult<
           Method
         >;
-      case 'workspace.file.watch.start':
-      case 'workspace.file.watch.update':
-      case 'workspace.file.watch.stop':
+      case 'context.file.watch.start':
+      case 'context.file.watch.update':
+      case 'context.file.watch.stop':
         throw new Error('Workspace file watches require an RPC session.');
       case 'terminal.list':
       case 'terminal.create':
@@ -492,14 +604,16 @@ export class Portal {
     params: PortalRpcParams<Method>,
   ) {
     const input = params as {
-      workspaceId?: string;
+      executionContextId?: string;
       agentId?: string;
       threadId?: string;
       terminalId?: string;
-      mode?: 'observe' | 'control';
+      mode?: 'observe' | 'control' | 'shared';
     };
     if (method.startsWith('browser.')) throw new Error('Browser is unavailable.');
     if (method === 'thread.create' || method === 'thread.draft.create') {
+      const workspaceId = (params as PortalRpcParams<'thread.create'>).workspaceId;
+      if (workspaceId !== undefined) await this.#validateAssignment(principal, this.security.hostId, workspaceId);
       await this.security.authorize(principal, 'thread.create', input);
       await this.security.authorize(principal, 'agent.use', input);
       return;
@@ -507,11 +621,11 @@ export class Portal {
     if (
       method === 'thread.attach' || method === 'thread.draft.discard' ||
       method === 'thread.archive' ||
-      method === 'thread.restore'
+      method === 'thread.restore' || method === 'thread.assign'
     ) {
       let thread: ThreadSummary;
       try {
-        thread = method === 'thread.attach' || method === 'thread.draft.discard'
+        thread = method === 'thread.attach' || method === 'thread.draft.discard' || method === 'thread.assign'
           ? this.#thread(input.threadId ?? '')
           : this.#catalogThread(input.threadId ?? '');
       } catch {
@@ -522,7 +636,7 @@ export class Portal {
       }
       await this.security.authorize(principal, 'thread.attach', {
         threadId: thread.threadId,
-        workspaceId: thread.workspaceId,
+        executionContextId: thread.executionContextId,
         agentId: thread.agentId,
       });
       return;
@@ -531,7 +645,7 @@ export class Portal {
       const action: PortalAction = method === 'terminal.create' ||
           method === 'terminal.input' || method === 'terminal.resize' ||
           method === 'terminal.close' ||
-          (method === 'terminal.attach' && input.mode === 'control')
+          (method === 'terminal.attach' && input.mode !== 'observe')
         ? 'terminal.control'
         : 'terminal.observe';
       await this.security.authorize(principal, action, input);
@@ -539,10 +653,10 @@ export class Portal {
     }
     const action: PortalAction = method === 'portal.capabilities'
       ? 'portal.inspect'
-      : method === 'workspace.list' || method === 'workspace.composition.get'
-      ? 'workspace.inspect'
-      : method === 'workspace.add' || method === 'workspace.remove' || method === 'workspace.composition.replace'
-      ? 'workspace.manage'
+      : method === 'context.list' || method === 'workspace.composition.get'
+      ? 'context.inspect'
+      : method === 'context.add' || method === 'context.remove' || method === 'workspace.composition.replace' || WORKSPACE_LIFECYCLE_RPC_METHODS.includes(method as typeof WORKSPACE_LIFECYCLE_RPC_METHODS[number])
+      ? 'context.manage'
       : method === 'agent.list'
       ? 'agent.use'
       : method === 'thread.list'
@@ -551,14 +665,14 @@ export class Portal {
       ? 'credential.rotate'
       : method === 'credential.revoke'
       ? 'credential.revoke'
-      : method === 'workspace.file.read' || method === 'workspace.file.hash' ||
-          method === 'workspace.file.list' ||
-          method === 'workspace.file.search' ||
-          method === 'workspace.file.watch.start' ||
-          method === 'workspace.file.watch.update' ||
-          method === 'workspace.file.watch.stop'
-      ? 'workspace.file.read'
-      : 'workspace.file.write';
+      : method === 'context.file.read' || method === 'context.file.hash' ||
+          method === 'context.file.list' ||
+          method === 'context.file.search' ||
+          method === 'context.file.watch.start' ||
+          method === 'context.file.watch.update' ||
+          method === 'context.file.watch.stop'
+      ? 'context.file.read'
+      : 'context.file.write';
     await this.security.authorize(principal, action, input);
   }
 
@@ -587,7 +701,7 @@ export class Portal {
     const thread = this.#thread(threadId);
     await this.security.authorize(principal, 'thread.attach', {
       threadId,
-      workspaceId: thread.workspaceId,
+      executionContextId: thread.executionContextId,
       agentId: thread.agentId,
     });
     return (await this.#runtime(threadId)).connect(send, disconnect);
@@ -595,13 +709,13 @@ export class Portal {
 
   async resolveLocalAcpContext(input: {
     agentId: string;
-    workspaceId?: string;
+    executionContextId?: string;
     workspacePath?: string;
   }): Promise<LocalAcpContext> {
     const agent = this.#agent(input.agentId);
-    let workspace: WorkspaceDefinition | undefined;
-    if (input.workspaceId) {
-      workspace = await this.#workspaceCatalog.requireAvailable(input.workspaceId);
+    let workspace: ExecutionContextDefinition | undefined;
+    if (input.executionContextId) {
+      workspace = await this.#workspaceCatalog.requireAvailable(input.executionContextId);
     } else if (input.workspacePath) {
       const path = await realpath(input.workspacePath);
       await this.#workspaceCatalog.refresh();
@@ -622,7 +736,7 @@ export class Portal {
       hostId: this.security.hostId,
       agentId: agent.agentId,
       agentName: agent.name,
-      workspaceId: workspace.workspaceId,
+      executionContextId: workspace.executionContextId,
       workspaceName: workspace.name,
       cwd: workspace.path,
     };
@@ -633,17 +747,13 @@ export class Portal {
     return this.#catalog.list('all').filter((thread) =>
       thread.status !== 'closed' &&
       thread.agentId === context.agentId &&
-      thread.workspaceId === context.workspaceId
+      thread.executionContextId === context.executionContextId
     );
   }
 
   async createLocalAcpThread(context: LocalAcpContext, title?: string) {
     this.#assertLocalAcpContext(context);
-    return await this.#createThread(
-      context.workspaceId,
-      context.agentId,
-      title,
-    );
+    return await this.#mutateLifecycle(async () => this.#createThread(context.executionContextId, context.agentId, title, await this.#ensureThreadWorkspace(context.executionContextId)));
   }
 
   async connectLocalAcpThread(
@@ -654,7 +764,7 @@ export class Portal {
     this.#assertLocalAcpContext(context);
     const thread = this.#thread(threadId);
     if (
-      thread.workspaceId !== context.workspaceId ||
+      thread.executionContextId !== context.executionContextId ||
       thread.agentId !== context.agentId
     ) {
       throw new Error('Thread is unavailable.');
@@ -680,6 +790,54 @@ export class Portal {
     }));
     this.#workspaceFiles.close();
     await this.#terminals?.close();
+    await this.#compositions.get(this.security.hostId);
+  }
+
+  #visibleComposition(principal: PortalPrincipal, composition: WorkspaceComposition) {
+    return { ...composition, workspaces: composition.workspaces.filter((workspace) => this.#workspaceContextIds(workspace).every((executionContextId) => this.security.allows(principal, 'context.inspect', { executionContextId }))) };
+  }
+
+  #workspaceThreads() { return [...this.#catalog.list('active'), ...this.#drafts.values()]; }
+
+  #pruneEmptyWorkspaces() {
+    return this.#compositions.pruneEmpty(this.security.hostId, new Set(this.#workspaceThreads().map((thread) => thread.workspaceId)));
+  }
+
+  async #workspaceClosePlan(principal: PortalPrincipal, hostId: string, workspaceId: string): Promise<WorkspaceClosePlan> {
+    await this.#validateAssignment(principal, hostId, workspaceId);
+    const composition = await this.#compositions.get(hostId);
+    const workspace = composition.workspaces.find((workspace) => workspace.workspaceId === workspaceId)!;
+    const members = this.#workspaceThreads().filter((thread) => thread.workspaceId === workspaceId);
+    const panes = terminalPaneTargets([workspace]);
+    // Authorize every consequence before inspecting or stopping any process.
+    for (const pane of panes) await this.security.authorize(principal, 'terminal.control', { executionContextId: pane.executionContextId });
+    for (const thread of members) await this.security.authorize(principal, 'thread.attach', { executionContextId: thread.executionContextId, threadId: thread.threadId, agentId: thread.agentId });
+    if (panes.length && !this.#terminals) throw new Error('Terminal state is unavailable. The workspace cannot be closed.');
+    const terminals = await this.#terminals?.closePlan(panes.flatMap((pane) => pane.terminalId ? [pane.terminalId] : [])) ?? [];
+    const threads = members.map((thread) => ({ threadId: thread.threadId, title: thread.title || 'Agent', dirty: !['idle', 'completed'].includes(this.#liveRuntimes.get(thread.threadId)?.attention().state ?? 'uncertain') }));
+    // A confirmation is tied to exactly these members and their live activity.
+    const token = createHash('sha256').update(JSON.stringify([workspace, terminals, threads, members.map((thread) => [thread.threadId, thread.membershipRevision])])).digest('hex');
+    return { workspaceId, name: workspace.name, token, terminals, threads };
+  }
+
+  #workspaceContextIds(workspace: Workspace) {
+    return [...new Set([...terminalPaneTargets([workspace]).map((pane) => pane.executionContextId), ...[...this.#catalog.list(), ...this.#drafts.values()].filter((thread) => thread.workspaceId === workspace.workspaceId).map((thread) => thread.executionContextId)])];
+  }
+
+  async #ensureThreadWorkspace(executionContextId: string) {
+    const context = await this.#workspaceCatalog.requireAvailable(executionContextId);
+    const assigned = this.#workspaceThreads().filter((thread) => thread.executionContextId === executionContextId).map((thread) => thread.workspaceId);
+    return await this.#compositions.ensureThreadWorkspace(this.security.hostId, executionContextId, context.name, undefined, assigned);
+  }
+
+  async #validateAssignment(principal: PortalPrincipal, hostId: string, workspaceId: string) {
+    if (hostId !== this.security.hostId) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+    if (this.#closingWorkspaces.has(workspaceId)) throw new Error('Workspace is closing.');
+    if (typeof workspaceId !== 'string' || !workspaceId.trim()) throw new Error('A Workspace is required.');
+    const workspace = (await this.#compositions.get(hostId)).workspaces.find((item) => item.workspaceId === workspaceId);
+    if (!workspace) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+    await this.security.authorize(principal, 'context.manage');
+    for (const executionContextId of this.#workspaceContextIds(workspace)) await this.security.authorize(principal, 'context.inspect', { executionContextId });
   }
 
   #thread(threadId: string): ThreadSummary {
@@ -706,9 +864,9 @@ export class Portal {
     return await result;
   }
 
-  #workspace(workspaceId: string) {
-    const workspace = this.#workspaces.get(workspaceId);
-    if (!workspace) throw new Error(`Workspace is unavailable: ${workspaceId}`);
+  #workspace(executionContextId: string) {
+    const workspace = this.#executionContexts.get(executionContextId);
+    if (!workspace) throw new Error(`Workspace is unavailable: ${executionContextId}`);
     return workspace;
   }
 
@@ -721,15 +879,15 @@ export class Portal {
   #assertLocalAcpContext(context: LocalAcpContext) {
     if (
       context.hostId !== this.security.hostId ||
-      this.#workspace(context.workspaceId).path !== context.cwd ||
+      this.#workspace(context.executionContextId).path !== context.cwd ||
       this.#agent(context.agentId).name !== context.agentName
     ) {
       throw new Error('Local ACP context is unavailable.');
     }
   }
 
-  async #createThread(workspaceId: string, agentId: string, title?: string) {
-    const workspace = await this.#workspaceCatalog.requireAvailable(workspaceId);
+  async #createThread(executionContextId: string, agentId: string, title: string | undefined, workspaceId: string) {
+    const workspace = await this.#workspaceCatalog.requireAvailable(executionContextId);
     const agent = this.#agent(agentId);
     const runtime = await HostedThread.create(
       workspace,
@@ -740,7 +898,8 @@ export class Portal {
       this.#runtimeStates,
       () => [],
       undefined,
-      () => this.#workspaceCatalog.requireAvailable(workspaceId),
+      () => this.#workspaceCatalog.requireAvailable(executionContextId),
+      workspaceId,
     );
     this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
     this.#liveRuntimes.set(runtime.thread.threadId, runtime);
@@ -749,11 +908,12 @@ export class Portal {
   }
 
   async #createDraftThread(
-    workspaceId: string,
+    executionContextId: string,
     agentId: string,
-    title?: string,
+    title: string | undefined,
+    workspaceId: string,
   ) {
-    const workspace = await this.#workspaceCatalog.requireAvailable(workspaceId);
+    const workspace = await this.#workspaceCatalog.requireAvailable(executionContextId);
     const agent = this.#agent(agentId);
     const runtime = await HostedThread.create(
       workspace,
@@ -766,7 +926,8 @@ export class Portal {
       this.#runtimeStates,
       () => [],
       (thread) => this.#promoteDraftThread(thread),
-      () => this.#workspaceCatalog.requireAvailable(workspaceId),
+      () => this.#workspaceCatalog.requireAvailable(executionContextId),
+      workspaceId,
     );
     this.#drafts.set(runtime.thread.threadId, runtime.thread);
     this.#runtimes.set(runtime.thread.threadId, Promise.resolve(runtime));
@@ -775,11 +936,14 @@ export class Portal {
   }
 
   async #promoteDraftThread(thread: ThreadSummary) {
-    await this.#mutateLifecycle(async () => {
-      if (!this.#drafts.delete(thread.threadId)) return;
-      thread.updatedAt = new Date().toISOString();
-      await this.#catalog.put(thread);
-    });
+    if (this.#closingWorkspaces.has(thread.workspaceId)) return;
+    if (!this.#drafts.has(thread.threadId)) return;
+    // Keep the draft counted until its durable record exists. Do not wait on
+    // the lifecycle queue: close drains provider output while holding it.
+    // The catalog serializes persistence and retains current membership.
+    thread.updatedAt = new Date().toISOString();
+    await this.#catalog.put(thread);
+    this.#drafts.delete(thread.threadId);
   }
 
   async #discardDraftThread(threadId: string) {
@@ -796,14 +960,16 @@ export class Portal {
         throw new Error(`Thread draft contains conversation data: ${threadId}`);
       }
       await this.#runtimeStates.delete(threadId);
+      await this.#pruneEmptyWorkspaces();
     });
   }
 
   #runtime(threadId: string) {
+    if (this.#closingWorkspaces.has(this.#thread(threadId).workspaceId)) throw new Error('Workspace is closing.');
     let runtime = this.#runtimes.get(threadId);
     if (!runtime) {
       const thread = this.#thread(threadId);
-      runtime = this.#workspaceCatalog.requireAvailable(thread.workspaceId).then((workspace) => HostedThread.restore(
+      runtime = this.#workspaceCatalog.requireAvailable(thread.executionContextId).then((workspace) => HostedThread.restore(
         thread,
         workspace,
         this.#agent(thread.agentId),
@@ -811,7 +977,7 @@ export class Portal {
         this.#journal,
         this.#runtimeStates,
         () => [],
-        () => this.#workspaceCatalog.requireAvailable(thread.workspaceId),
+        () => this.#workspaceCatalog.requireAvailable(thread.executionContextId),
       ));
       this.#runtimes.set(threadId, runtime);
       const restoring = runtime;

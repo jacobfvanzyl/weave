@@ -60,7 +60,7 @@ test('Zed-facing local ACP lists, reloads, resumes, and continues a Portal-owned
     displayName: 'Zed Import Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    executionContexts: [{ executionContextId: 'workspace', name: 'Workspace', path: workspacePath }],
     agents: [{
       agentId: 'fake',
       name: 'Fake',
@@ -184,7 +184,7 @@ test('Agent title updates persist in Portal and appear in Zed session listing af
     displayName: 'Agent Title Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    executionContexts: [{ executionContextId: 'workspace', name: 'Workspace', path: workspacePath }],
     agents: [{
       agentId: 'fake',
       name: 'Fake',
@@ -287,7 +287,7 @@ test('Zed-facing load follows a provider session replaced during empty Thread re
     displayName: 'Zed Replacement Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    executionContexts: [{ executionContextId: 'workspace', name: 'Workspace', path: workspacePath }],
     agents: [{
       agentId: 'fake',
       name: 'Fake',
@@ -342,7 +342,7 @@ test('stdio ACP connector exits when the Portal gateway closes', async () => {
     displayName: 'Zed Disconnect Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    executionContexts: [{ executionContextId: 'workspace', name: 'Workspace', path: workspacePath }],
     agents: [{
       agentId: 'fake',
       name: 'Fake',

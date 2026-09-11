@@ -86,7 +86,7 @@ export function ConnectionsDialog({ controller }: { controller: AlphaController 
                   </span>
                   <span className='min-w-0 flex-1'>
                     <span className='flex items-center gap-2'>
-                      <span className='truncate font-medium'>{connection.displayName}</span>
+                      {model.showHostIdentity && <span className='truncate font-medium'>{connection.displayName}</span>}
                       <Badge variant={connection.status === 'connected' ? 'default' : 'secondary'}>
                         {connection.status}
                       </Badge>
@@ -100,12 +100,12 @@ export function ConnectionsDialog({ controller }: { controller: AlphaController 
                     </Button>
                   ) : null}
                   <AlertDialog>
-                    <AlertDialogTrigger render={<Button variant='ghost' size='icon' aria-label={`Forget ${connection.displayName}`} />}>
+                    <AlertDialogTrigger render={<Button variant='ghost' size='icon' aria-label={`Forget ${model.showHostIdentity ? connection.displayName : connection.hostUrl}`} />}>
                       <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
                     </AlertDialogTrigger>
                     <AlertDialogContent>
                       <AlertDialogHeader>
-                        <AlertDialogTitle>Forget {connection.displayName}?</AlertDialogTitle>
+                        <AlertDialogTitle>Forget {model.showHostIdentity ? connection.displayName : connection.hostUrl}?</AlertDialogTitle>
                         <AlertDialogDescription>
                           This removes the local Host entry and device key. It does not revoke the credential on Portal.
                         </AlertDialogDescription>

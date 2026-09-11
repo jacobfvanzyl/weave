@@ -38,6 +38,7 @@ static NSString *printableText(NSString *text) {
 @end
 @implementation WeaveTerminalNSView
 - (BOOL)isFlipped { return YES; }
+- (BOOL)clipsToBounds { return YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)becomeFirstResponder { if (self.event) self.event(@{@"kind": @"focus"}); return YES; }
 - (BOOL)resignFirstResponder {
@@ -48,16 +49,17 @@ static NSString *printableText(NSString *text) {
 - (void)drawRect:(NSRect)rect {
   [self.terminal drawInContext:NSGraphicsContext.currentContext.CGContext size:self.bounds.size];
   if (self.marked.length) {
-    [self.marked addAttributes:@{NSFontAttributeName: [NSFont fontWithName:@"Menlo" size:13], NSForegroundColorAttributeName:NSColor.textColor, NSBackgroundColorAttributeName:NSColor.textBackgroundColor, NSUnderlineStyleAttributeName:@(NSUnderlineStyleSingle)} range:NSMakeRange(0, self.marked.length)];
+    [self.marked addAttributes:@{NSFontAttributeName: [NSFont fontWithName:self.terminal.fontName size:13], NSForegroundColorAttributeName:NSColor.textColor, NSBackgroundColorAttributeName:NSColor.textBackgroundColor, NSUnderlineStyleAttributeName:@(NSUnderlineStyleSingle)} range:NSMakeRange(0, self.marked.length)];
     [self.marked drawAtPoint:self.terminal.cursorRect.origin];
   }
   if (self.selection.length) {
-    [[NSColor.selectedTextBackgroundColor colorWithAlphaComponent:0.35] setFill];
+    [[NSColor colorWithSRGBRed:180/255.0 green:190/255.0 blue:254/255.0 alpha:0.35] setFill];
     NSUInteger cols = self.terminal.columns;
     for (NSUInteger index = self.selection.location; index < NSMaxRange(self.selection); index++) {
       NSRectFillUsingOperation(NSMakeRect(8 + index % cols * self.terminal.cellWidth, 8 + index / cols * self.terminal.cellHeight, self.terminal.cellWidth, self.terminal.cellHeight), NSCompositingOperationSourceOver);
     }
   }
+  [self.terminal drawFocusBorderInContext:NSGraphicsContext.currentContext.CGContext size:self.bounds.size];
 }
 - (void)sendKey:(NSString *)key text:(NSString *)text event:(NSEvent *)event modifiers:(NSUInteger)modifiers {
   if (self.terminal.readOnly) return;
@@ -203,11 +205,16 @@ static WeaveNativeSurface *surface(napi_env env, napi_value id) {
   return surfaces[@(number)];
 }
 static napi_value create(napi_env env, napi_callback_info info) {
-  size_t count = 2, length; napi_value args[2]; void *bytes;
+  size_t count = 3, length; napi_value args[3]; void *bytes;
   napi_get_cb_info(env, info, &count, args, NULL, NULL);
-  if (count != 2 || napi_get_buffer_info(env, args[0], &bytes, &length) != napi_ok || length != sizeof(void *) || surfaces.count >= 64) return error(env, "Invalid native terminal container");
+  if (count != 3 || napi_get_buffer_info(env, args[0], &bytes, &length) != napi_ok || length != sizeof(void *) || surfaces.count >= 64) return error(env, "Invalid native terminal container");
   NSView *parent = (__bridge NSView *)(*(void **)bytes);
   if (!parent || !parent.window) return error(env, "Native window is unavailable");
+  size_t fontLength = 0;
+  if (napi_get_value_string_utf8(env, args[2], NULL, 0, &fontLength) != napi_ok || fontLength > 4096) return error(env, "Invalid terminal font directory");
+  std::vector<char> fontPath(fontLength + 1);
+  napi_get_value_string_utf8(env, args[2], fontPath.data(), fontPath.size(), &fontLength);
+  if (![WeaveTerminalRenderer registerFontsAtURL:[NSURL fileURLWithPath:@(fontPath.data())]]) return error(env, "Bundled terminal fonts are unavailable");
   WeaveTerminalRenderer *terminal = [WeaveTerminalRenderer make];
   if (!terminal) return error(env, "Native terminal allocation failed");
   WeaveNativeSurface *entry = [WeaveNativeSurface new];
@@ -240,31 +247,34 @@ static napi_value create(napi_env env, napi_callback_info info) {
   napi_value result; napi_create_int64(env, id, &result); return result;
 }
 static napi_value layout(napi_env env, napi_callback_info info) {
-  size_t count = 7; napi_value args[7]; napi_get_cb_info(env, info, &count, args, NULL, NULL);
-  if (count != 7) return error(env, "Invalid native geometry");
+  size_t count = 10; napi_value args[10]; napi_get_cb_info(env, info, &count, args, NULL, NULL);
+  if (count != 10) return error(env, "Invalid native geometry");
   WeaveNativeSurface *entry = surface(env, args[0]);
   if (!entry) return error(env, "Native terminal is unavailable");
   double values[4]; bool visible, readOnly;
   for (size_t i = 0; i < 4; i++) if (napi_get_value_double(env, args[i+1], &values[i]) != napi_ok || !std::isfinite(values[i])) return error(env, "Invalid native geometry");
   if (values[2] < 0 || values[3] < 0 || napi_get_value_bool(env, args[5], &visible) != napi_ok || napi_get_value_bool(env, args[6], &readOnly) != napi_ok) return error(env, "Invalid native geometry");
+  double borderWidth, borderRadius; uint32_t borderRGB;
+  if (napi_get_value_double(env, args[7], &borderWidth) != napi_ok || napi_get_value_double(env, args[8], &borderRadius) != napi_ok || napi_get_value_uint32(env, args[9], &borderRGB) != napi_ok || !std::isfinite(borderWidth) || !std::isfinite(borderRadius) || borderWidth < 0 || borderRadius < 0 || borderWidth > 1000 || borderRadius > 1000 || borderRGB > 0xffffff) return error(env, "Invalid native border");
+  entry.view.terminal.focusBorderWidth = borderWidth; entry.view.terminal.focusBorderRadius = borderRadius; entry.view.terminal.focusBorderRGB = borderRGB;
   NSView *parent = entry.view.superview;
   NSRect rectangle = NSMakeRect(values[0], parent.isFlipped ? values[1] : parent.bounds.size.height - values[1] - values[3], values[2], values[3]);
   if (values[2] > 0 && values[3] > 0) entry.view.frame = NSIntersectionRect(rectangle, parent.bounds);
   if ((!visible) && entry.view.window.firstResponder == entry.view) [entry.view.window makeFirstResponder:nil];
   entry.view.hidden = !visible; entry.view.terminal.readOnly = readOnly || entry.inputFailed;
-  [entry.view.terminal resizeToSize:entry.view.bounds.size]; entry.view.needsDisplay = YES;
+  CGSize grid = [entry.view.terminal gridForViewportSize:entry.view.bounds.size]; entry.view.needsDisplay = YES;
   napi_value result, cols, rows; napi_create_object(env, &result);
-  napi_create_uint32(env, (uint32_t)entry.view.terminal.columns, &cols); napi_set_named_property(env, result, "cols", cols);
-  napi_create_uint32(env, (uint32_t)entry.view.terminal.rows, &rows); napi_set_named_property(env, result, "rows", rows);
+  napi_create_uint32(env, (uint32_t)grid.width, &cols); napi_set_named_property(env, result, "cols", cols);
+  napi_create_uint32(env, (uint32_t)grid.height, &rows); napi_set_named_property(env, result, "rows", rows);
   return result;
 }
 static napi_value write(napi_env env, napi_callback_info info) {
-  size_t count = 5, length; napi_value args[5]; void *bytes; bool reset; uint32_t cols, rows;
+  size_t count = 6, length; napi_value args[6]; void *bytes; bool reset, history; uint32_t cols, rows;
   napi_get_cb_info(env, info, &count, args, NULL, NULL);
-  if (count != 5 || napi_get_value_uint32(env, args[3], &cols) != napi_ok || napi_get_value_uint32(env, args[4], &rows) != napi_ok || napi_get_buffer_info(env, args[1], &bytes, &length) != napi_ok || length > 2 * 1024 * 1024 || napi_get_value_bool(env, args[2], &reset) != napi_ok) return error(env, "Invalid native output");
+  if (count != 6 || napi_get_value_bool(env, args[5], &history) != napi_ok || napi_get_value_uint32(env, args[3], &cols) != napi_ok || napi_get_value_uint32(env, args[4], &rows) != napi_ok || napi_get_buffer_info(env, args[1], &bytes, &length) != napi_ok || length > 64 * 1024 * 1024 || napi_get_value_bool(env, args[2], &reset) != napi_ok) return error(env, "Invalid native output");
   WeaveNativeSurface *entry = surface(env, args[0]);
-  NSData *data = [NSData dataWithBytes:bytes length:length];
-  if (!entry || !(reset && cols ? [entry.view.terminal restoreData:data columns:cols rows:rows] : [entry.view.terminal consume:data reset:reset])) return error(env, "Native output could not be consumed");
+  NSData *data = [NSData dataWithBytesNoCopy:bytes length:length freeWhenDone:NO];
+  if (!entry || !(history ? [entry.view.terminal appendHistory:data] : reset && cols ? [entry.view.terminal restoreData:data columns:cols rows:rows] : [entry.view.terminal consume:data reset:reset])) return error(env, "Native output could not be consumed");
   if (reset) entry.view.selection = NSMakeRange(0, 0);
   entry.view.needsDisplay = YES; return undefined(env);
 }
@@ -272,7 +282,8 @@ static napi_value focus(napi_env env, napi_callback_info info) {
   size_t count = 1; napi_value args[1]; napi_get_cb_info(env, info, &count, args, NULL, NULL);
   WeaveNativeSurface *entry = count == 1 ? surface(env, args[0]) : nil;
   if (!entry) return error(env, "Native terminal is unavailable");
-  [entry.view.window makeFirstResponder:entry.view]; return undefined(env);
+  if (entry.view.hidden || !entry.view.window || ![entry.view.window makeFirstResponder:entry.view]) return error(env, "Native terminal is not visible for input");
+  return undefined(env);
 }
 static napi_value inspect(napi_env env, napi_callback_info info) {
   size_t count = 1; napi_value args[1]; napi_get_cb_info(env, info, &count, args, NULL, NULL);
@@ -340,6 +351,7 @@ static napi_value acceptance(napi_env env, napi_callback_info info) {
 }
 #endif
 static napi_value initialize(napi_env env, napi_value exports) {
+  napi_value codec; napi_create_string_utf8(env, WeaveTerminalRenderer.codecIdentity.UTF8String, NAPI_AUTO_LENGTH, &codec); napi_set_named_property(env, exports, "codec", codec);
   surfaces = [NSMutableDictionary dictionary];
   const napi_property_descriptor properties[] = {
 #if WEAVE_ACCEPTANCE

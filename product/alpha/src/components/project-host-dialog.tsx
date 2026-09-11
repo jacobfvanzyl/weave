@@ -3,8 +3,8 @@ import { ComputerIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type {
   AlphaHostConnection,
-  AlphaWorkspace,
-  AlphaWorkspacePlacement,
+  AlphaExecutionContext,
+  AlphaExecutionContextPlacement,
 } from "@/app/alpha-controller";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,20 +15,22 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-export function ProjectHostDialog({
+export function ExecutionContextHostDialog({
   workspace,
   connections,
+  showHostIdentity = false,
   open,
   description,
   onOpenChange,
   onSelect,
 }: {
-  workspace?: AlphaWorkspace;
+  workspace?: AlphaExecutionContext;
   connections: AlphaHostConnection[];
+  showHostIdentity?: boolean;
   open: boolean;
   description: ReactNode;
   onOpenChange(open: boolean): void;
-  onSelect(placement: AlphaWorkspacePlacement): void;
+  onSelect(placement: AlphaExecutionContextPlacement): void;
 }) {
   const connectionStatus = new Map(
     connections.map(({ hostId, status }) => [hostId, status]),
@@ -38,8 +40,8 @@ export function ProjectHostDialog({
     (workspace
       ? [
           {
-            id: `${workspace.hostId}:${workspace.workspaceId}`,
-            workspaceId: workspace.workspaceId,
+            id: `${workspace.hostId}:${workspace.executionContextId}`,
+            executionContextId: workspace.executionContextId,
             hostId: workspace.hostId,
             hostName: workspace.hostName,
           },
@@ -58,7 +60,7 @@ export function ProjectHostDialog({
           <DialogTitle>Choose a Host</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-2" aria-label="Project Hosts">
+        <div className="grid gap-2" aria-label="ExecutionContext Hosts">
           {hostPlacements.map((placement) => {
             const status =
               connectionStatus.get(placement.hostId) ?? "disconnected";
@@ -79,7 +81,7 @@ export function ProjectHostDialog({
                   <HugeiconsIcon icon={ComputerIcon} strokeWidth={2} />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate">{placement.hostName}</span>
+                  <span className="block truncate">{showHostIdentity ? placement.hostName : connections.find((connection) => connection.hostId === placement.hostId)?.hostUrl}</span>
                   {!connected && (
                     <span className="block capitalize text-muted-foreground">
                       {status}

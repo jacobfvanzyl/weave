@@ -17,6 +17,23 @@ const actions = (): ChatPaneActions => ({
 });
 
 describe('ChatPane', () => {
+  it('defers requested focus until the mobile sidebar dialog has closed', async () => {
+    const bounds = HTMLElement.prototype.getBoundingClientRect;
+    const rectangle = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'dialog' ? new DOMRect(0, 0, 250, 500) : bounds.call(this);
+    });
+    const model = createTranscript('sidebar-focus');
+    const handlers = actions();
+    const content = (open: boolean) => <>{open && <div role='dialog'>Sidebar</div>}<ChatPane model={model} actions={handlers} focusRequest={1} /></>;
+    try {
+      const view = render(content(true));
+      const composer = screen.getByRole('textbox', { name: 'Message agent' });
+      expect(composer).not.toHaveFocus();
+      view.rerender(content(false));
+      await waitFor(() => expect(composer).toHaveFocus());
+    } finally { rectangle.mockRestore(); }
+  });
+
   it('focuses the composer when a new focus request arrives', () => {
     const model = createTranscript('draft-thread');
     const handlers = actions();

@@ -1,3 +1,5 @@
+import { decodeHostMessage, encodeHostMessage, TERMINAL_CODEC } from '@weave/product-protocol';
+const bytes = (text: string) => new TextEncoder().encode(text);
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DirectHostClient, PortalTransportError } from './portal-client';
 
@@ -12,7 +14,7 @@ class FakeWebSocket {
 
   onopen?: () => void;
   onerror?: () => void;
-  onmessage?: (event: { data: string }) => void;
+  onmessage?: (event: { data: string | Uint8Array }) => void;
   onclose?: (event: { code: number; reason: string }) => void;
   sent: string[] = [];
 
@@ -33,13 +35,54 @@ class FakeWebSocket {
   }
 
   receive(value: unknown) {
-    this.onmessage?.({ data: JSON.stringify(value) });
+    this.onmessage?.({ data: encodeHostMessage(value) });
   }
 }
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('DirectHostClient', () => {
+  it('rejects terminal cleanup after a socket closes instead of hanging the replacement attachment', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
+    const socket = FakeWebSocket.instance;
+    socket.receive({ type: 'weave.portal.auth.authenticated', principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' } });
+    socket.close(1006, 'Connection lost');
+    const result = await Promise.race([
+      client.detachTerminal('context', 'terminal', 'attachment').catch((error) => error),
+      new Promise((resolve) => setTimeout(() => resolve('request hung'), 100)),
+    ]);
+    expect(result).toBeInstanceOf(PortalTransportError);
+    expect(socket.sent).toHaveLength(0);
+    client.close();
+  });
+
+  it('releases pending and later requests on explicit close without waiting for the browser close event', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
+    const socket = FakeWebSocket.instance;
+    socket.receive({ type: 'weave.portal.auth.authenticated', principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' } });
+    const pending = client.listTerminals('context');
+    const rejected = expect(pending).rejects.toBeInstanceOf(PortalTransportError);
+    await Promise.resolve();
+    const sent = socket.sent.length;
+    socket.close = () => {};
+    client.close();
+    await rejected;
+    await expect(client.detachTerminal('context', 'terminal', 'attachment')).rejects.toBeInstanceOf(PortalTransportError);
+    expect(socket.sent).toHaveLength(sent);
+  });
+
+  it('rejects requests waiting for authentication when the connection closes', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
+    const pending = client.listTerminals('context');
+    const rejected = expect(pending).rejects.toBeInstanceOf(PortalTransportError);
+    FakeWebSocket.instance.close(1006, 'Connection lost before authentication');
+    await rejected;
+    client.close();
+  });
+
   it('does not reinterpret active Threads from a pre-lifecycle Portal as archived', async () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
@@ -69,11 +112,11 @@ describe('DirectHostClient', () => {
       jsonrpc: '2.0',
       id: capabilitiesRequest.id,
       result: {
-        protocolVersion: 2,
+        protocolVersion: 6,
         hostId: 'host-1',
         displayName: 'Old Portal',
         principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' },
-        capabilities: ['workspace.list', 'agent.list', 'thread.list', 'thread.attach'],
+        capabilities: ['context.list', 'agent.list', 'thread.list', 'thread.attach'],
       },
     });
     for (let attempt = 0; attempt < 20 && socket.sent.length < 5; attempt += 1) {
@@ -82,16 +125,16 @@ describe('DirectHostClient', () => {
     const requests = socket.sent.slice(2).map((value) => JSON.parse(value));
     expect(requests.filter(({ method }) => method === 'thread.list')).toHaveLength(1);
     for (const request of requests) {
-      const result = request.method === 'workspace.list'
-        ? { workspaces: [{ workspaceId: 'weave', name: 'Weave' }] }
+      const result = request.method === 'context.list'
+        ? { executionContexts: [{ executionContextId: 'weave', name: 'Weave' }] }
         : request.method === 'agent.list'
         ? { agents: [{ agentId: 'codex', name: 'Codex' }] }
         : {
           threads: [{
             threadId: 'thread-1',
             agentId: 'codex',
-            workspaceId: 'weave',
-            acpSessionId: 'session-1',
+            executionContextId: 'weave',
+            workspaceId: 'workspace', membershipRevision: 0, acpSessionId: 'session-1',
             status: 'active',
             createdAt: '2026-08-26T00:00:00.000Z',
             updatedAt: '2026-08-26T00:00:00.000Z',
@@ -148,7 +191,7 @@ describe('DirectHostClient', () => {
     });
     await Promise.resolve();
     const request = JSON.parse(socket.sent[1]);
-    expect(request).toMatchObject({ method: 'workspace.file.list', params: { workspaceId: 'weave', path: '' } });
+    expect(request).toMatchObject({ method: 'context.file.list', params: { executionContextId: 'weave', path: '' } });
     socket.receive({
       jsonrpc: '2.0',
       id: request.id,
@@ -187,7 +230,7 @@ describe('DirectHostClient', () => {
     const attached = client.attachTerminal(
       'weave',
       'terminal-1',
-      'control',
+      'shared',
       onTerminalEvent,
     );
     socket.receive({
@@ -209,7 +252,7 @@ describe('DirectHostClient', () => {
     const request = JSON.parse(socket.sent[1]);
     expect(request).toMatchObject({
       method: 'terminal.attach',
-      params: { workspaceId: 'weave', terminalId: 'terminal-1', mode: 'control' },
+      params: { executionContextId: 'weave', terminalId: 'terminal-1', mode: 'shared' },
     });
 
     socket.receive({
@@ -217,22 +260,22 @@ describe('DirectHostClient', () => {
       method: 'terminal.event',
       params: {
         attachmentId: 'attachment-1',
-        workspaceId: 'weave',
+        executionContextId: 'weave',
         terminalId: 'terminal-1',
         generation: 'generation-1',
         sequence: 5,
-        event: { type: 'output', data: 'after snapshot' },
+        event: { type: 'output', data: bytes('after snapshot') },
       },
     });
     socket.receive({
       jsonrpc: '2.0',
       id: request.id,
       result: {
-        attachment: { attachmentId: 'attachment-1', mode: 'control' },
-        snapshot: {
+        attachment: { attachmentId: 'attachment-1', mode: 'shared' },
+        snapshot: { codec: TERMINAL_CODEC,
           terminal: {
             terminalId: 'terminal-1',
-            workspaceId: 'weave',
+            executionContextId: 'weave',
             title: 'zsh',
             status: 'running',
             cols: 80,
@@ -241,7 +284,7 @@ describe('DirectHostClient', () => {
           generation: 'generation-1',
           cursor: 4,
           retainedFrom: 1,
-          data: 'snapshot',
+          data: bytes('snapshot'),
           controller: { controlled: true, attachmentId: 'attachment-1' },
         },
       },
@@ -249,14 +292,14 @@ describe('DirectHostClient', () => {
     const result = await attached;
     expect(result).toMatchObject({
       attachment: { attachmentId: 'attachment-1' },
-      snapshot: { cursor: 4, data: 'snapshot' },
+      snapshot: { codec: TERMINAL_CODEC, cursor: 4, data: bytes('snapshot') },
     });
     expect(onTerminalEvent).not.toHaveBeenCalled();
     result.startEvents();
     expect(onTerminalEvent).toHaveBeenCalledTimes(1);
     expect(onTerminalEvent).toHaveBeenCalledWith(expect.objectContaining({
       sequence: 5,
-      event: { type: 'output', data: 'after snapshot' },
+      event: { type: 'output', data: bytes('after snapshot') },
     }));
 
     socket.receive({
@@ -264,11 +307,11 @@ describe('DirectHostClient', () => {
       method: 'terminal.event',
       params: {
         attachmentId: 'attachment-1',
-        workspaceId: 'weave',
+        executionContextId: 'weave',
         terminalId: 'terminal-1',
         generation: 'generation-1',
         sequence: 4,
-        event: { type: 'output', data: 'duplicate' },
+        event: { type: 'output', data: bytes('duplicate') },
       },
     });
     expect(onTerminalEvent).toHaveBeenCalledTimes(1);
@@ -280,7 +323,7 @@ describe('DirectHostClient', () => {
     const onTerminalEvent = vi.fn();
     const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
     const socket = FakeWebSocket.instance;
-    const attached = client.attachTerminal('weave', 'terminal-1', 'control', onTerminalEvent);
+    const attached = client.attachTerminal('weave', 'terminal-1', 'shared', onTerminalEvent);
     socket.receive({
       type: 'weave.portal.auth.challenge',
       challengeId: 'challenge-1',
@@ -304,11 +347,11 @@ describe('DirectHostClient', () => {
         method: 'terminal.event',
         params: {
           attachmentId: 'attachment-1',
-          workspaceId: 'weave',
+          executionContextId: 'weave',
           terminalId: 'terminal-1',
           generation: 'generation-1',
           sequence,
-          event: { type: 'output', data: 'x' },
+          event: { type: 'output', data: bytes('x') },
         },
       });
     }
@@ -316,11 +359,11 @@ describe('DirectHostClient', () => {
       jsonrpc: '2.0',
       id: request.id,
       result: {
-        attachment: { attachmentId: 'attachment-1', mode: 'control' },
-        snapshot: {
+        attachment: { attachmentId: 'attachment-1', mode: 'shared' },
+        snapshot: { codec: TERMINAL_CODEC,
           terminal: {
             terminalId: 'terminal-1',
-            workspaceId: 'weave',
+            executionContextId: 'weave',
             title: 'zsh',
             status: 'running',
             cols: 80,
@@ -329,7 +372,7 @@ describe('DirectHostClient', () => {
           generation: 'generation-1',
           cursor: 0,
           retainedFrom: 1,
-          data: '',
+          data: bytes(''),
           controller: { controlled: true, attachmentId: 'attachment-1' },
         },
       },
@@ -344,11 +387,11 @@ describe('DirectHostClient', () => {
     client.close();
   });
 
-  it('preserves typed Terminal control errors', async () => {
+  it('preserves typed Terminal write-permission errors', async () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
     const socket = FakeWebSocket.instance;
-    const attaching = client.attachTerminal('weave', 'terminal-1', 'control', vi.fn());
+    const attaching = client.attachTerminal('weave', 'terminal-1', 'shared', vi.fn());
     socket.receive({
       type: 'weave.portal.auth.challenge',
       challengeId: 'challenge-1',
@@ -371,19 +414,53 @@ describe('DirectHostClient', () => {
       id: request.id,
       error: {
         code: -32012,
-        message: 'Terminal is controlled by another attachment.',
+        message: 'Terminal attachment is read-only.',
         data: {
           domain: 'terminal',
-          code: 'TERMINAL_CONTROLLED',
-          workspaceId: 'weave',
+          code: 'TERMINAL_WRITE_REQUIRED',
+          executionContextId: 'weave',
           terminalId: 'terminal-1',
         },
       },
     });
     await expect(attaching).rejects.toMatchObject({
       code: -32012,
-      data: { domain: 'terminal', code: 'TERMINAL_CONTROLLED' },
+      data: { domain: 'terminal', code: 'TERMINAL_WRITE_REQUIRED' },
     });
     client.close();
   });
+});
+
+
+it('sends ordered binary input before earlier acknowledgements and never replays uncertain input', async () => {
+  vi.stubGlobal('WebSocket', FakeWebSocket);
+  const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
+  const socket = FakeWebSocket.instance;
+  socket.receive({ type: 'weave.portal.auth.authenticated', principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' } });
+  const first = client.inputTerminal('context', 'terminal', 'attachment', new Uint8Array([27, 91, 77, 255, 128, 160]));
+  const second = client.inputTerminal('context', 'terminal', 'attachment', 'second');
+  const rejected = expect(second).rejects.toBeInstanceOf(PortalTransportError);
+  await Promise.resolve();
+  expect(socket.sent).toHaveLength(2); // Neither response has arrived.
+  const requests = socket.sent.map(value => decodeHostMessage(value)) as { id: number; params: { data: Uint8Array } }[];
+  expect(requests[0].params.data).toEqual(new Uint8Array([27, 91, 77, 255, 128, 160]));
+  expect(requests[1].params.data).toEqual(bytes('second'));
+  socket.receive({ jsonrpc: '2.0', id: requests[0].id, result: { accepted: true } });
+  await first;
+  socket.close(1006, 'Connection lost'); await rejected;
+  expect(socket.sent).toHaveLength(2);
+  client.close();
+});
+
+it('fails pending work on malformed binary transport instead of leaving input hanging', async () => {
+  vi.stubGlobal('WebSocket', FakeWebSocket);
+  const client = new DirectHostClient('127.0.0.1', credential, vi.fn());
+  const socket = FakeWebSocket.instance;
+  socket.receive({ type: 'weave.portal.auth.authenticated', principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' } });
+  const pending = client.inputTerminal('context', 'terminal', 'attachment', 'input');
+  const rejected = expect(pending).rejects.toBeInstanceOf(PortalTransportError);
+  await Promise.resolve();
+  socket.onmessage?.({ data: new Uint8Array([0, 1, 2]) });
+  await rejected;
+  client.close();
 });

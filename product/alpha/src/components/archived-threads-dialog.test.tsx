@@ -23,7 +23,7 @@ const controller = (): AlphaController => ({
       hostName: 'bazzite',
     },
     searchQuery: '',
-    workspaces: [],
+    executionContexts: [],
     archivedThreads: [{
       id: 'host-1:thread-1',
       threadId: 'thread-1',
@@ -34,7 +34,7 @@ const controller = (): AlphaController => ({
       status: 'archived',
       updatedAt: '2026-08-26T00:00:00.000Z',
       archivedAt: '2026-08-26T00:00:00.000Z',
-      workspaceId: 'weave',
+      executionContextId: 'weave',
     }],
     showHostIdentity: false,
     busy: false,

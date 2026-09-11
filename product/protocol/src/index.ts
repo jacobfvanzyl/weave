@@ -1,4 +1,4 @@
-export const PORTAL_PROTOCOL_VERSION = 2 as const;
+export const PORTAL_PROTOCOL_VERSION = 6 as const;
 export const PORTAL_RPC_PATH = '/rpc' as const;
 export const PORTAL_ACP_PATH = '/acp' as const;
 export const PORTAL_PAIR_PATH = '/pair' as const;
@@ -20,6 +20,8 @@ export const WEAVE_ACP_RUNTIME_STATE_METHOD = '_weave.dev/runtime/state' as cons
 
 export * from './browser-control.ts';
 export * from './composition.ts';
+export * from './workspace-lifecycle.ts';
+import { WORKSPACE_LIFECYCLE_RPC_METHODS, parseWorkspaceLifecycleParams, parseWorkspaceLifecycleResult, type WorkspaceLifecycleRpcContracts, type WorkspaceLifecycleRpcMethod } from './workspace-lifecycle.ts';
 import { COMPOSITION_RPC_METHODS, parseCompositionRpcParams, parseCompositionRpcResult, type CompositionRpcContracts, type CompositionRpcMethod } from './composition.ts';
 
 export {
@@ -54,7 +56,6 @@ export {
 export type {
   TerminalAttachment,
   TerminalAttachmentMode,
-  TerminalControllerState,
   TerminalErrorCode,
   TerminalErrorData,
   TerminalEvent,
@@ -100,8 +101,8 @@ export type RepositoryIdentity = {
   displayName?: string;
   name?: string;
 };
-export type WorkspaceSummary = {
-  workspaceId: string;
+export type ExecutionContextSummary = {
+  executionContextId: string;
   name: string;
   rootName?: string;
   /** Exact directory resolved by the owning Host; absent on older Hosts. */
@@ -110,7 +111,7 @@ export type WorkspaceSummary = {
   availability?: 'available' | 'unavailable' | 'path-changed';
   repositoryIdentity?: RepositoryIdentity;
 };
-export const WORKSPACE_CONTEXT_CAPABILITY = 'workspace.context.v1';
+export const WORKSPACE_CONTEXT_CAPABILITY = 'context.workspace.v1';
 export type AgentSummary = { agentId: string; name: string };
 export type PortalPrincipalSummary = {
   principalId: string;
@@ -242,12 +243,14 @@ export const parsePortalPairResult = (value: unknown): PortalPairResult => {
   };
 };
 export const THREAD_ATTENTION_CAPABILITY = 'thread.attention.v1';
-export type ThreadAttention = { state: 'working' | 'waiting' | 'completed' | 'idle' | 'unavailable' | 'uncertain'; observedAt: string; generation?: number };
+export type ThreadAttention = { state: 'working' | 'waiting' | 'completed' | 'idle' | 'unavailable' | 'uncertain'; observedAt: string; generation?: number; uncertaintyReason?: 'runtime_not_loaded' | 'prompt_outcome_unknown' };
 export type ThreadStatus = 'active' | 'archived' | 'closed';
 export type ThreadSummary = {
   threadId: string;
   agentId: string;
+  executionContextId: string;
   workspaceId: string;
+  membershipRevision: number;
   acpSessionId: string;
   title?: string;
   status: ThreadStatus;
@@ -268,16 +271,16 @@ type BasePortalRpcContracts = {
       capabilities: string[];
     };
   };
-  'workspace.list': {
+  'context.list': {
     params: Record<string, never>;
-    result: { workspaces: WorkspaceSummary[] };
+    result: { executionContexts: ExecutionContextSummary[] };
   };
-  'workspace.add': {
+  'context.add': {
     params: { path: string; name?: string };
-    result: { workspace: WorkspaceSummary };
+    result: { workspace: ExecutionContextSummary };
   };
-  'workspace.remove': {
-    params: { workspaceId: string };
+  'context.remove': {
+    params: { executionContextId: string };
     result: { removed: true };
   };
   'agent.list': {
@@ -289,16 +292,20 @@ type BasePortalRpcContracts = {
     result: { threads: ThreadSummary[] };
   };
   'thread.create': {
-    params: { workspaceId: string; agentId: string; title?: string };
+    params: { executionContextId: string; workspaceId?: string; agentId: string; title?: string };
     result: { thread: ThreadSummary };
   };
   'thread.draft.create': {
-    params: { workspaceId: string; agentId: string; title?: string };
+    params: { executionContextId: string; workspaceId?: string; agentId: string; title?: string };
     result: { thread: ThreadSummary };
   };
   'thread.draft.discard': {
     params: { threadId: string };
     result: { discarded: true };
+  };
+  'thread.assign': {
+    params: { threadId: string; hostId: string; workspaceId: string; expectedRevision: number };
+    result: { thread: ThreadSummary };
   };
   'thread.attach': {
     params: { threadId: string };
@@ -340,20 +347,22 @@ type BasePortalRpcContracts = {
 export type PortalRpcContracts =
   & BasePortalRpcContracts
   & WorkspaceFileRpcContracts
+  & WorkspaceLifecycleRpcContracts
   & CompositionRpcContracts
   & TerminalRpcContracts;
 
 export type PortalRpcMethod = keyof PortalRpcContracts;
 export const PORTAL_RPC_METHODS = [
   'portal.capabilities',
-  'workspace.list',
-  'workspace.add',
-  'workspace.remove',
+  'context.list',
+  'context.add',
+  'context.remove',
   'agent.list',
   'thread.list',
   'thread.create',
   'thread.draft.create',
   'thread.draft.discard',
+  'thread.assign',
   'thread.attach',
   'thread.archive',
   'thread.restore',
@@ -363,6 +372,7 @@ export const PORTAL_RPC_METHODS = [
   'credential.revoke',
   ...WORKSPACE_FILE_RPC_METHODS,
   ...COMPOSITION_RPC_METHODS,
+  ...WORKSPACE_LIFECYCLE_RPC_METHODS,
   ...TERMINAL_RPC_METHODS,
 ] as const satisfies readonly PortalRpcMethod[];
 export type PortalRpcParams<Method extends PortalRpcMethod> = PortalRpcContracts[Method]['params'];
@@ -372,6 +382,9 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
   method: Method,
   value: unknown,
 ): PortalRpcParams<Method> => {
+  if (WORKSPACE_LIFECYCLE_RPC_METHODS.includes(method as WorkspaceLifecycleRpcMethod)) {
+    return parseWorkspaceLifecycleParams(method as WorkspaceLifecycleRpcMethod, value) as PortalRpcParams<Method>;
+  }
   if (COMPOSITION_RPC_METHODS.includes(method as CompositionRpcMethod)) {
     return parseCompositionRpcParams(method as CompositionRpcMethod, value) as PortalRpcParams<Method>;
   }
@@ -390,17 +403,17 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
   const params = object(value, `${String(method)} params`);
   switch (method) {
     case 'portal.capabilities':
-    case 'workspace.list':
+    case 'context.list':
     case 'agent.list':
       return {} as PortalRpcParams<Method>;
-    case 'workspace.add':
+    case 'context.add':
       return {
         path: string(params.path, 'path'),
         ...(params.name === undefined ? {} : { name: string(params.name, 'name') }),
       } as PortalRpcParams<Method>;
-    case 'workspace.remove':
+    case 'context.remove':
       return {
-        workspaceId: string(params.workspaceId, 'workspaceId'),
+        executionContextId: string(params.executionContextId, 'executionContextId'),
       } as PortalRpcParams<Method>;
     case 'thread.list': {
       const status = params.status;
@@ -414,10 +427,14 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
         Method
       >;
     }
+    case 'thread.assign':
+      if (!Number.isSafeInteger(params.expectedRevision) || Number(params.expectedRevision) < 0) throw new Error('Invalid membership revision.');
+      return { threadId: string(params.threadId, 'threadId'), hostId: string(params.hostId, 'hostId'), workspaceId: string(params.workspaceId, 'workspaceId'), expectedRevision: params.expectedRevision } as PortalRpcParams<Method>;
     case 'thread.create':
     case 'thread.draft.create':
       return {
-        workspaceId: string(params.workspaceId, 'workspaceId'),
+        ...(params.workspaceId === undefined ? {} : { workspaceId: string(params.workspaceId, 'workspaceId') }),
+        executionContextId: string(params.executionContextId, 'executionContextId'),
         agentId: string(params.agentId, 'agentId'),
         ...(params.title === undefined ? {} : { title: string(params.title, 'title') }),
       } as PortalRpcParams<Method>;
@@ -463,12 +480,12 @@ const stringArray = (value: unknown, context: string) => {
   return value.map((item, index) => string(item, `${context}[${index}]`));
 };
 
-const workspace = (value: unknown): WorkspaceSummary => {
+const workspace = (value: unknown): ExecutionContextSummary => {
   const record = object(value, 'workspace');
   return {
-    workspaceId: string(record.workspaceId, 'workspace.workspaceId'),
-    name: string(record.name, 'workspace.name'),
-    ...(record.rootName === undefined ? {} : { rootName: string(record.rootName, 'workspace.rootName') }),
+    executionContextId: string(record.executionContextId, 'context.executionContextId'),
+    name: string(record.name, 'context.name'),
+    ...(record.rootName === undefined ? {} : { rootName: string(record.rootName, 'context.rootName') }),
     ...(record.canonicalPath === undefined ? {} : { canonicalPath: canonicalWorkspacePath(record.canonicalPath) }),
     ...(record.availability === undefined ? {} : { availability: workspaceAvailability(record.availability) }),
     ...(record.repositoryIdentity === undefined
@@ -477,54 +494,54 @@ const workspace = (value: unknown): WorkspaceSummary => {
   };
 };
 
-const workspaceAvailability = (value: unknown): NonNullable<WorkspaceSummary['availability']> => {
-  if (value !== 'available' && value !== 'unavailable' && value !== 'path-changed') throw new Error('workspace.availability is invalid.');
+const workspaceAvailability = (value: unknown): NonNullable<ExecutionContextSummary['availability']> => {
+  if (value !== 'available' && value !== 'unavailable' && value !== 'path-changed') throw new Error('context.availability is invalid.');
   return value;
 };
 
 const canonicalWorkspacePath = (value: unknown) => {
-  const path = string(value, 'workspace.canonicalPath');
+  const path = string(value, 'context.canonicalPath');
   // Supported Hosts use POSIX paths. Preserve case and the filesystem root.
   if (!path.startsWith('/') || path.includes('\0') ||
       (path !== '/' && path.split('/').slice(1).some((part) => !part || part === '.' || part === '..'))) {
-    throw new Error('workspace.canonicalPath must be a canonical absolute Host path.');
+    throw new Error('context.canonicalPath must be a canonical absolute Host path.');
   }
   return path;
 };
 
 const repositoryIdentity = (value: unknown): RepositoryIdentity => {
-  const record = object(value, 'workspace.repositoryIdentity');
+  const record = object(value, 'context.repositoryIdentity');
   const locator = object(
     record.locator,
-    'workspace.repositoryIdentity.locator',
+    'context.repositoryIdentity.locator',
   );
   if (locator.source !== 'git-remote') {
-    throw new Error('workspace.repositoryIdentity.locator.source is invalid.');
+    throw new Error('context.repositoryIdentity.locator.source is invalid.');
   }
   return {
     canonicalKey: string(
       record.canonicalKey,
-      'workspace.repositoryIdentity.canonicalKey',
+      'context.repositoryIdentity.canonicalKey',
     ),
     locator: {
       source: 'git-remote',
       remoteName: string(
         locator.remoteName,
-        'workspace.repositoryIdentity.locator.remoteName',
+        'context.repositoryIdentity.locator.remoteName',
       ),
       remoteUrl: string(
         locator.remoteUrl,
-        'workspace.repositoryIdentity.locator.remoteUrl',
+        'context.repositoryIdentity.locator.remoteUrl',
       ),
     },
     ...(record.displayName === undefined ? {} : {
       displayName: string(
         record.displayName,
-        'workspace.repositoryIdentity.displayName',
+        'context.repositoryIdentity.displayName',
       ),
     }),
     ...(record.name === undefined ? {} : {
-      name: string(record.name, 'workspace.repositoryIdentity.name'),
+      name: string(record.name, 'context.repositoryIdentity.name'),
     }),
   };
 };
@@ -544,7 +561,12 @@ const threadAttention = (value: unknown): ThreadAttention => {
   const observedAt = string(input.observedAt, 'thread.attention.observedAt');
   if (!Number.isFinite(Date.parse(observedAt))) throw new Error('thread.attention.observedAt is invalid.');
   if (input.generation !== undefined && (!Number.isSafeInteger(input.generation) || Number(input.generation) < 1)) throw new Error('thread.attention.generation is invalid.');
-  return { state: state as ThreadAttention['state'], observedAt, ...(input.generation === undefined ? {} : { generation: Number(input.generation) }) };
+  if (input.uncertaintyReason !== undefined && (state !== 'uncertain' || !['runtime_not_loaded', 'prompt_outcome_unknown'].includes(String(input.uncertaintyReason)))) throw new Error('thread.attention.uncertaintyReason is invalid.');
+  return { state: state as ThreadAttention['state'], observedAt, ...(input.uncertaintyReason === undefined ? {} : { uncertaintyReason: input.uncertaintyReason as ThreadAttention['uncertaintyReason'] }), ...(input.generation === undefined ? {} : { generation: Number(input.generation) }) };
+};
+const membershipRevision = (value: unknown): number => {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) throw new Error('Invalid membership revision.');
+  return Number(value);
 };
 const thread = (value: unknown): ThreadSummary => {
   const record = object(value, 'thread');
@@ -559,7 +581,9 @@ const thread = (value: unknown): ThreadSummary => {
   return {
     threadId: string(record.threadId, 'thread.threadId'),
     agentId: string(record.agentId, 'thread.agentId'),
+    executionContextId: string(record.executionContextId, 'thread.executionContextId'),
     workspaceId: string(record.workspaceId, 'thread.workspaceId'),
+    membershipRevision: membershipRevision(record.membershipRevision),
     acpSessionId: string(record.acpSessionId, 'thread.acpSessionId'),
     ...(record.title === undefined ? {} : { title: string(record.title, 'thread.title') }),
     status,
@@ -570,10 +594,15 @@ const thread = (value: unknown): ThreadSummary => {
   };
 };
 
+export const parseThreadSummary = thread;
+
 export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
   method: Method,
   value: unknown,
 ): PortalRpcResult<Method> => {
+  if (WORKSPACE_LIFECYCLE_RPC_METHODS.includes(method as WorkspaceLifecycleRpcMethod)) {
+    return parseWorkspaceLifecycleResult(method as WorkspaceLifecycleRpcMethod, value) as PortalRpcResult<Method>;
+  }
   if (COMPOSITION_RPC_METHODS.includes(method as CompositionRpcMethod)) {
     return parseCompositionRpcResult(value) as PortalRpcResult<Method>;
   }
@@ -602,20 +631,20 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
         principal: principal(result.principal),
         capabilities: stringArray(result.capabilities, 'capabilities'),
       } as PortalRpcResult<Method>;
-    case 'workspace.list':
-      if (!Array.isArray(result.workspaces)) {
-        throw new Error('workspaces must be an array.');
+    case 'context.list':
+      if (!Array.isArray(result.executionContexts)) {
+        throw new Error('executionContexts must be an array.');
       }
       return {
-        workspaces: result.workspaces.map(workspace),
+        executionContexts: result.executionContexts.map(workspace),
       } as PortalRpcResult<Method>;
-    case 'workspace.add':
+    case 'context.add':
       return { workspace: workspace(result.workspace) } as PortalRpcResult<
         Method
       >;
-    case 'workspace.remove':
+    case 'context.remove':
       if (result.removed !== true) {
-        throw new Error('workspace.remove result is invalid.');
+        throw new Error('context.remove result is invalid.');
       }
       return { removed: true } as PortalRpcResult<Method>;
     case 'agent.list':
@@ -650,6 +679,7 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
         },
       } as PortalRpcResult<Method>;
     }
+    case 'thread.assign':
     case 'thread.archive':
     case 'thread.restore':
       return { thread: thread(result.thread) } as PortalRpcResult<Method>;
@@ -682,3 +712,5 @@ const principal = (value: unknown): PortalPrincipalSummary => {
     label: string(record.label, 'principal.label'),
   };
 };
+
+export * from './terminal-wire.ts';

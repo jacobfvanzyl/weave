@@ -18,8 +18,8 @@ class AuthenticatedPortalSocket extends EventTarget {
   readonly OPEN = WebSocket.OPEN;
   readonly CLOSING = WebSocket.CLOSING;
   readonly CLOSED = WebSocket.CLOSED;
-  readonly binaryType = 'blob';
-  readonly bufferedAmount = 0;
+  readonly binaryType = 'arraybuffer';
+  get bufferedAmount() { return this.#socket.bufferedAmount; }
   readonly extensions = '';
   readonly protocol = PORTAL_WEBSOCKET_PROTOCOL;
   readonly url: string;
@@ -36,6 +36,7 @@ class AuthenticatedPortalSocket extends EventTarget {
     super();
     this.url = String(url);
     this.#socket = new WebSocket(url, PORTAL_WEBSOCKET_PROTOCOL);
+    this.#socket.binaryType = 'arraybuffer';
     this.#authenticationTimer = setTimeout(() => {
       this.#emit('error', new ErrorEvent('error', { message: 'Portal authentication timed out.' }));
       this.#socket.close(1008, 'Portal authentication timed out.');
@@ -51,6 +52,7 @@ class AuthenticatedPortalSocket extends EventTarget {
 
   send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
     if (!this.#authenticated) throw new DOMException('Portal authentication is not complete.', 'InvalidStateError');
+    if (this.readyState !== WebSocket.OPEN) throw new DOMException('Portal connection is closed.', 'InvalidStateError');
     this.#socket.send(data);
   }
 

@@ -7,7 +7,7 @@ const base = {
   listen: { hostname: '127.0.0.1', port: 4122 },
   displayName: 'Test Portal',
   stateDirectory: '/tmp/weave-portal-state',
-  workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: '/tmp' }],
+  executionContexts: [{ executionContextId: 'workspace', name: 'Workspace', path: '/tmp' }],
   agents: [{ agentId: 'agent', name: 'Agent', command: 'false' }],
 };
 
@@ -18,7 +18,7 @@ test('Portal permits a loopback-only development listener without TLS', () => {
 });
 
 test('Portal can start without preconfigured projects', () => {
-  assertEquals(parsePortalConfig({ ...base, workspaces: [] }).workspaces, []);
+  assertEquals(parsePortalConfig({ ...base, executionContexts: [] }).executionContexts, []);
 });
 
 test('Portal requires TLS and an explicit origin policy for non-loopback listeners', () => {

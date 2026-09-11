@@ -311,7 +311,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
     />
   );
 
-  const dockPane = (panelId: AlphaDockPanelId | null, _forceProject = false) => panelId === 'terminal' ? terminalPane() : null;
+  const dockPane = (panelId: AlphaDockPanelId | null, _forceExecutionContext = false) => panelId === 'terminal' ? terminalPane() : null;
   const bottomPanel = dockPane(dockLayout.snapshot.docks.bottom.activePanelId);
   const rightPanel = dockPane(dockLayout.snapshot.docks.right.activePanelId);
   const mobileActivePanel = mobilePanelId && dockLayout.isPanelActive(mobilePanelId)
@@ -335,7 +335,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
       style={{
         '--sidebar-width': alphaSidebarDefaultWidth,
         '--sidebar-width-mobile': alphaSidebarDefaultWidth,
-        '--bottom-rail-height': '2rem',
+        '--bottom-rail-height': 'var(--rail-height)',
       } as CSSProperties}
     >
       <div data-slot='alpha-dock-content' className='flex min-h-0 min-w-0 flex-1 overflow-hidden'>

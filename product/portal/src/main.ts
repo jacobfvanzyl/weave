@@ -1,3 +1,4 @@
+import { terminalMaintenance } from './terminal-service/maintenance.ts';
 import { hostVersion } from './version.ts';
 import { manageService } from './service.ts';
 import { diagnose } from './diagnostics.ts';
@@ -7,15 +8,16 @@ import { localAcpSocketPath, runStdioAcpConnector, serveLocalAcpGateway } from '
 import { Portal } from './portal.ts';
 import { PortalSecurity } from './security.ts';
 import { startPortalServer } from './server.ts';
-import { WorkspaceCatalog } from './workspace-catalog.ts';
+import { ExecutionContextCatalog } from './workspace-catalog.ts';
 
 const usage = () =>
   `Usage:
   weave-portal --version
   weave-portal diagnose --config <path> [--url <https://host:port>]
   weave-portal service <install|upgrade|rollback|start|stop|restart|status|uninstall> --name <name> [--config <path>] [--binary <path>] [--unit <name.service>] [--adopt]
+  weave-portal terminal <preflight|cutover|status|stop|accept-owner-loss> --config <path> [--confirm-stop|--confirm-loss]
   weave-portal serve --config <path>
-  weave-portal acp connect --config <path> --agent <agent-id> [--workspace <workspace-id>]
+  weave-portal acp connect --config <path> --agent <agent-id> [--context <execution-context-id>]
   weave-portal pairing create --config <path> [--ttl-minutes <1-60>]
   weave-portal credential list --config <path>
   weave-portal credential revoke --config <path> <credential-id>`;
@@ -35,6 +37,8 @@ if (import.meta.main) {
   const [command, subcommand, ...args] = process.argv.slice(2);
   if (command === '--version' || command === 'version') {
     console.log(JSON.stringify(hostVersion));
+  } else if (command === 'terminal') {
+    await terminalMaintenance((await configFrom(args)).stateDirectory, subcommand ?? '', args);
   } else if (command === 'service') {
     await manageService(subcommand, args);
   } else if (command === 'diagnose') {
@@ -77,11 +81,11 @@ if (import.meta.main) {
     const config = await configFrom(args);
     const agentId = option(args, '--agent');
     if (!agentId) throw new Error(usage());
-    const workspaceId = option(args, '--workspace');
+    const executionContextId = option(args, '--context') ?? option(args, '--workspace');
     await runStdioAcpConnector({
       path: await localAcpSocketPath(config),
       agentId,
-      ...(workspaceId ? { workspaceId } : { workspacePath: process.cwd() }),
+      ...(executionContextId ? { executionContextId } : { workspacePath: process.cwd() }),
     });
   } else if (command === 'pairing' && subcommand === 'create') {
     const config = await configFrom(args);
@@ -89,13 +93,13 @@ if (import.meta.main) {
     if (!Number.isFinite(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 60) {
       throw new Error(usage());
     }
-    const workspaces = (await WorkspaceCatalog.open(
+    const executionContexts = (await ExecutionContextCatalog.open(
       config.stateDirectory,
-      config.workspaces,
+      config.executionContexts,
     )).list();
     const security = await PortalSecurity.open(
       config,
-      workspaces.map(({ workspaceId }) => workspaceId),
+      executionContexts.map(({ executionContextId }) => executionContextId),
     );
     console.log(await security.createPairingToken(ttlMinutes * 60_000));
   } else if (command === 'credential' && subcommand === 'list') {

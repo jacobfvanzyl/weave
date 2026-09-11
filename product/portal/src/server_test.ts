@@ -1,3 +1,4 @@
+const bytes = (text: string) => new TextEncoder().encode(text);
 import { fileURLToPath } from 'node:url';
 import { test } from './test-support.ts';
 import { mkdir, readText, readTextSync, realpath, removePath, rename, symlink, temporaryDirectory, writeText } from './host-files.ts';
@@ -12,7 +13,7 @@ import { dirname, join } from 'node:path';
 import type { PortalConfig } from './config.ts';
 import { Portal } from './portal.ts';
 import { sendTerminal, startPortalServer } from './server.ts';
-import { InMemoryTerminalBackend } from './terminals.ts';
+import { InMemoryTerminalExecution } from './terminals.ts';
 import {
   generatePortalKey,
   type PortalCredentialSigner,
@@ -71,8 +72,8 @@ test('Portal RPC exposes persistent Terminal control and observer attachments', 
     displayName: 'Terminal Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -84,7 +85,7 @@ test('Portal RPC exposes persistent Terminal control and observer attachments', 
       env: {},
     }],
   };
-  const backend = new InMemoryTerminalBackend();
+  const backend = new InMemoryTerminalExecution();
   const portal = await Portal.open(config, { terminalBackend: backend });
   const credential = await pairTestCredential(portal);
   const server = startPortalServer(portal);
@@ -99,46 +100,36 @@ test('Portal RPC exposes persistent Terminal control and observer attachments', 
     assertEquals(capabilities.capabilities.includes('terminal.attach'), true);
 
     const created = await controller.request('terminal.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       cols: 90,
       rows: 28,
     }) as { terminal: { terminalId: string } };
     const controlled = await controller.request('terminal.attach', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       terminalId: created.terminal.terminalId,
-      mode: 'control',
+      mode: 'shared',
     }) as { attachment: { attachmentId: string } };
 
-    let conflict: unknown;
-    try {
-      await observer.request('terminal.attach', {
-        workspaceId: 'workspace',
-        terminalId: created.terminal.terminalId,
-        mode: 'control',
-      });
-    } catch (cause) {
-      conflict = cause;
-    }
-    assertEquals(
-      conflict instanceof RpcResponseError &&
-        { code: conflict.code, data: conflict.data },
-      {
-        code: -32012,
-        data: {
-          domain: 'terminal',
-          code: 'TERMINAL_CONTROLLED',
-          workspaceId: 'workspace',
-          terminalId: created.terminal.terminalId,
-        },
-      },
-    );
+    const shared = await observer.request('terminal.attach', {
+      executionContextId: 'workspace', terminalId: created.terminal.terminalId, mode: 'shared',
+    }) as { attachment: { attachmentId: string; mode: string } };
+    assertEquals(shared.attachment.mode, 'shared');
+    await observer.request('terminal.input', {
+      executionContextId: 'workspace', terminalId: created.terminal.terminalId,
+      attachmentId: shared.attachment.attachmentId, data: bytes('shared input'),
+    });
+    assertEquals(backend.inputs.at(-1)?.data, bytes('shared input'));
+    await observer.request('terminal.detach', {
+      executionContextId: 'workspace', terminalId: created.terminal.terminalId,
+      attachmentId: shared.attachment.attachmentId,
+    });
 
     const observed = await observer.request('terminal.attach', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       terminalId: created.terminal.terminalId,
       mode: 'observe',
     }) as { attachment: { attachmentId: string } };
-    await backend.emitOutput(created.terminal.terminalId, 'ready\r\n');
+    await backend.emitOutput(created.terminal.terminalId, bytes('ready\r\n'));
     await waitFor(() =>
       [controller, observer].every((socket) =>
         socket.notifications.some((message) => message.method === TERMINAL_EVENT_METHOD)
@@ -146,21 +137,21 @@ test('Portal RPC exposes persistent Terminal control and observer attachments', 
     );
 
     await controller.request('terminal.input', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       terminalId: created.terminal.terminalId,
       attachmentId: controlled.attachment.attachmentId,
-      data: 'echo ready\r',
+      data: bytes('echo ready\r'),
     });
-    assertEquals(backend.inputs.at(-1)?.data, 'echo ready\r');
+    assertEquals(backend.inputs.at(-1)?.data, bytes('echo ready\r'));
     for (const data of ['\r', ' ', '\t']) {
       await controller.request('terminal.input', {
-        workspaceId: 'workspace',
+        executionContextId: 'workspace',
         terminalId: created.terminal.terminalId,
         attachmentId: controlled.attachment.attachmentId,
-        data,
+        data: bytes(data),
       });
     }
-    assertEquals(backend.inputs.slice(-3).map(({ data }) => data), [
+    assertEquals(backend.inputs.slice(-3).map(({ data }) => new TextDecoder().decode(data)), [
       '\r',
       ' ',
       '\t',
@@ -168,7 +159,7 @@ test('Portal RPC exposes persistent Terminal control and observer attachments', 
 
     const restrictedKey = await generatePortalKey();
     const restrictedGrants = portal.security.defaultGrants();
-    restrictedGrants.workspaceIds = [];
+    restrictedGrants.executionContextIds = [];
     const restrictedToken = await portal.security.createPairingToken(
       60_000,
       restrictedGrants,
@@ -186,12 +177,15 @@ test('Portal RPC exposes persistent Terminal control and observer attachments', 
     const unauthorized = await assertRejects(
       () =>
         restricted.request('terminal.snapshot', {
-          workspaceId: 'workspace',
+          executionContextId: 'workspace',
           terminalId: created.terminal.terminalId,
         }),
       RpcResponseError,
       'Resource is unavailable.',
     );
+    await assertRejects(() => restricted.request('terminal.attach', {
+      executionContextId: 'workspace', terminalId: created.terminal.terminalId, mode: 'shared',
+    }), RpcResponseError, 'Resource is unavailable.');
     restricted.close();
     assertEquals({
       message: unauthorized.message,
@@ -208,9 +202,9 @@ test('Portal RPC exposes persistent Terminal control and observer attachments', 
     for (let attempt = 0; attempt < 100 && !replacement; attempt += 1) {
       try {
         replacement = await observer.request('terminal.attach', {
-          workspaceId: 'workspace',
+          executionContextId: 'workspace',
           terminalId: created.terminal.terminalId,
-          mode: 'control',
+          mode: 'shared',
         }) as { attachment: { attachmentId: string } };
       } catch {
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -221,7 +215,7 @@ test('Portal RPC exposes persistent Terminal control and observer attachments', 
       true,
     );
     await observer.request('terminal.detach', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       terminalId: created.terminal.terminalId,
       attachmentId: observed.attachment.attachmentId,
     });
@@ -240,10 +234,10 @@ test('Alpha registers and removes a durable project through its chosen Portal', 
   await mkdir(projectPath);
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 },
-    displayName: 'Project Portal',
+    displayName: 'ExecutionContext Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [],
+    executionContexts: [],
     agents: [{
       agentId: 'fake',
       name: 'Fake',
@@ -261,19 +255,19 @@ test('Alpha registers and removes a durable project through its chosen Portal', 
       `ws://127.0.0.1:${address.port}/rpc`,
       credential,
     );
-    const added = await rpc.request('workspace.add', {
+    const added = await rpc.request('context.add', {
       path: projectPath,
-      name: 'Project',
+      name: 'ExecutionContext',
     }) as {
-      workspace: { workspaceId: string; name: string; rootName: string };
+      workspace: { executionContextId: string; name: string; rootName: string };
     };
-    assertEquals(added.workspace.name, 'Project');
+    assertEquals(added.workspace.name, 'ExecutionContext');
     assertEquals(added.workspace.rootName, 'project');
     assertEquals(
-      (await rpc.request('workspace.list') as {
-        workspaces: Array<{ workspaceId: string }>;
-      }).workspaces.map(({ workspaceId }) => workspaceId),
-      [added.workspace.workspaceId],
+      (await rpc.request('context.list') as {
+        executionContexts: Array<{ executionContextId: string }>;
+      }).executionContexts.map(({ executionContextId }) => executionContextId),
+      [added.workspace.executionContextId],
     );
     rpc.close();
     await server.shutdown();
@@ -287,14 +281,14 @@ test('Alpha registers and removes a durable project through its chosen Portal', 
       credential,
     );
     assertEquals(
-      (await rpc.request('workspace.list') as {
-        workspaces: Array<
-          { workspaceId: string; name: string; rootName: string }
+      (await rpc.request('context.list') as {
+        executionContexts: Array<
+          { executionContextId: string; name: string; rootName: string }
         >;
-      }).workspaces,
+      }).executionContexts,
       [{
-        workspaceId: added.workspace.workspaceId,
-        name: 'Project',
+        executionContextId: added.workspace.executionContextId,
+        name: 'ExecutionContext',
         rootName: 'project',
         availability: 'available',
         canonicalPath: await realpath(projectPath),
@@ -302,14 +296,14 @@ test('Alpha registers and removes a durable project through its chosen Portal', 
     );
 
     assertEquals(
-      await rpc.request('workspace.remove', {
-        workspaceId: added.workspace.workspaceId,
+      await rpc.request('context.remove', {
+        executionContextId: added.workspace.executionContextId,
       }),
       { removed: true },
     );
     assertEquals(
-      (await rpc.request('workspace.list') as { workspaces: unknown[] })
-        .workspaces,
+      (await rpc.request('context.list') as { executionContexts: unknown[] })
+        .executionContexts,
       [],
     );
     rpc.close();
@@ -324,8 +318,8 @@ test('Alpha registers and removes a durable project through its chosen Portal', 
       credential,
     );
     assertEquals(
-      (await rpc.request('workspace.list') as { workspaces: unknown[] })
-        .workspaces,
+      (await rpc.request('context.list') as { executionContexts: unknown[] })
+        .executionContexts,
       [],
     );
     rpc.close();
@@ -350,8 +344,8 @@ test('Alpha-facing Portal creates and prompts an ACP Thread over the product pro
     displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -376,10 +370,10 @@ test('Alpha-facing Portal creates and prompts an ACP Thread over the product pro
     assertEquals(capabilities.capabilities.includes('thread.create'), true);
 
     const created = await rpc.request('thread.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       agentId: 'fake',
     }) as {
-      thread: { threadId: string; acpSessionId: string };
+      thread: { threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string };
     };
     assertEquals(created.thread.acpSessionId, 'fake-session');
     const listed = await rpc.request('thread.list') as {
@@ -561,8 +555,8 @@ test('Portal preflights draft config without listing it and promotes the same se
     displayName: 'Draft Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -574,7 +568,7 @@ test('Portal preflights draft config without listing it and promotes the same se
       env: {},
     }],
   };
-  const portal = await Portal.open(config);
+  const portal = await Portal.open(config, { terminalBackend: new InMemoryTerminalExecution() });
   const credential = await pairTestCredential(portal);
   const server = startPortalServer(portal);
   const address = server.addr as { hostname: string; port: number };
@@ -587,7 +581,7 @@ test('Portal preflights draft config without listing it and promotes the same se
     assertEquals(capabilities.capabilities.includes('thread.draft'), true);
 
     const disposable = await rpc.request('thread.draft.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       agentId: 'fake',
     }) as { thread: { threadId: string } };
     assertEquals(
@@ -603,10 +597,14 @@ test('Portal preflights draft config without listing it and promotes the same se
       'Resource is unavailable.',
     );
 
+    await rpc.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: 2, workspaces: ['draft-source', 'draft-destination'].map((id) => ({ workspaceId: id, name: id, layout: { kind: 'terminal', nodeId: `${id}-node`, paneId: `${id}-pane`, executionContextId: 'workspace', terminalId: null } })) });
     const prepared = await rpc.request('thread.draft.create', {
-      workspaceId: 'workspace',
+      workspaceId: 'draft-source',
+      executionContextId: 'workspace',
       agentId: 'fake',
-    }) as { thread: { threadId: string; acpSessionId: string } };
+    }) as { thread: { threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string } };
+    await rpc.request('thread.assign', { hostId: portal.security.hostId, threadId: prepared.thread.threadId, workspaceId: 'draft-destination', expectedRevision: 0 });
+    await rpc.request('thread.assign', { hostId: portal.security.hostId, threadId: prepared.thread.threadId, workspaceId: prepared.thread.workspaceId, expectedRevision: 1 });
     const attached = await rpc.request('thread.attach', {
       threadId: prepared.thread.threadId,
     }) as { connection: { path: string; threadId: string; cwd: string } };
@@ -645,12 +643,12 @@ test('Portal preflights draft config without listing it and promotes the same se
       prompt: [{ type: 'text', text: 'PROMOTE_DRAFT' }],
     });
     const listed = await rpc.request('thread.list') as {
-      threads: Array<{ threadId: string; acpSessionId: string }>;
+      threads: Array<{ threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string }>;
     };
     assertEquals(listed.threads, [{
       ...listed.threads[0],
       threadId: prepared.thread.threadId,
-      acpSessionId: prepared.thread.acpSessionId,
+      workspaceId: prepared.thread.workspaceId, membershipRevision: 2, acpSessionId: prepared.thread.acpSessionId,
     }]);
     acp.close();
     rpc.close();
@@ -677,8 +675,8 @@ test('Portal archives and restores durable Threads without conflating active pro
     displayName: 'Archive Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -709,10 +707,10 @@ test('Portal archives and restores durable Threads without conflating active pro
     assertEquals(capabilities.capabilities.includes('thread.restore'), true);
 
     const created = await rpc.request('thread.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       agentId: 'fake',
     }) as {
-      thread: { threadId: string; acpSessionId: string };
+      thread: { threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string };
     };
     const unknown = await assertRejects(
       () => rpc!.request('thread.archive', { threadId: crypto.randomUUID() }),
@@ -721,7 +719,7 @@ test('Portal archives and restores durable Threads without conflating active pro
     );
     const restrictedKey = await generatePortalKey();
     const restrictedGrants = portal.security.defaultGrants();
-    restrictedGrants.workspaceIds = [];
+    restrictedGrants.executionContextIds = [];
     const restrictedToken = await portal.security.createPairingToken(
       60_000,
       restrictedGrants,
@@ -801,7 +799,7 @@ test('Portal archives and restores durable Threads without conflating active pro
     }) as {
       thread: {
         threadId: string;
-        acpSessionId: string;
+        workspaceId: string, membershipRevision: number, acpSessionId: string;
         status: string;
         archivedAt?: string;
       };
@@ -844,18 +842,19 @@ test('Portal archives and restores durable Threads without conflating active pro
       status: 'archived',
     }) as {
       threads: Array<
-        { threadId: string; acpSessionId: string; status: string }
+        { threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string; status: string }
       >;
     };
     assertEquals(
       afterRestart.threads.map(({ threadId, acpSessionId, status }) => ({
+
         threadId,
         acpSessionId,
         status,
       })),
       [{
         threadId: created.thread.threadId,
-        acpSessionId: created.thread.acpSessionId,
+         acpSessionId: created.thread.acpSessionId,
         status: 'archived',
       }],
     );
@@ -865,7 +864,7 @@ test('Portal archives and restores durable Threads without conflating active pro
     }) as {
       thread: {
         threadId: string;
-        acpSessionId: string;
+        workspaceId: string, membershipRevision: number, acpSessionId: string;
         status: string;
         archivedAt?: string;
       };
@@ -936,8 +935,8 @@ test('Portal replays durable Thread events after a daemon restart', async () => 
     displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -961,10 +960,10 @@ test('Portal replays durable Thread events after a daemon restart', async () => 
       credential,
     );
     const created = await rpc.request('thread.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       agentId: 'fake',
     }) as {
-      thread: { threadId: string; acpSessionId: string };
+      thread: { threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string };
     };
     threadId = created.thread.threadId;
     const attached = await rpc.request('thread.attach', { threadId }) as {
@@ -1055,8 +1054,8 @@ test('Portal replaces a missing empty ACP session and closes the failed provider
     displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory,
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -1085,10 +1084,10 @@ test('Portal replaces a missing empty ACP session and closes the failed provider
       credential,
     );
     const created = await rpc.request('thread.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       agentId: 'fake',
     }) as {
-      thread: { threadId: string; acpSessionId: string };
+      thread: { threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string };
     };
     threadId = created.thread.threadId;
     assertEquals(created.thread.acpSessionId, 'fake-session');
@@ -1107,27 +1106,28 @@ test('Portal replaces a missing empty ACP session and closes the failed provider
       credential,
     );
     const attached = await rpc.request('thread.attach', { threadId }) as {
-      thread: { threadId: string; acpSessionId: string };
+      thread: { threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string };
       connection: { path: string; threadId: string; cwd: string };
     };
     assertEquals(
       {
         threadId: attached.thread.threadId,
-        acpSessionId: attached.thread.acpSessionId,
+         acpSessionId: attached.thread.acpSessionId,
       },
-      { threadId, acpSessionId: 'replacement-session' },
+      { threadId,  acpSessionId: 'replacement-session' },
     );
     const listed = await rpc.request('thread.list') as {
-      threads: Array<{ threadId: string; acpSessionId: string }>;
+      threads: Array<{ threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string }>;
     };
     assertEquals(
       listed.threads.map(({ threadId, acpSessionId }) => ({
+
         threadId,
         acpSessionId,
       })),
       [{
         threadId,
-        acpSessionId: 'replacement-session',
+         acpSessionId: 'replacement-session',
       }],
     );
 
@@ -1178,8 +1178,8 @@ test('Portal gives opted-in clients stable cursor replay without changing ordina
     displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -1199,7 +1199,7 @@ test('Portal gives opted-in clients stable cursor replay without changing ordina
   try {
     const rpc = await RpcSocket.open(`${baseUrl}/rpc`, credential);
     const created = await rpc.request('thread.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       agentId: 'fake',
     }) as {
       thread: { threadId: string };
@@ -1381,8 +1381,8 @@ test('Portal persists bounded replay gaps and enforces monotonic acknowledgement
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
     threadEventRetentionLimit: 2,
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -1409,7 +1409,7 @@ test('Portal persists bounded replay gaps and enforces monotonic acknowledgement
       credential,
     );
     const created = await rpc.request('thread.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       agentId: 'fake',
     }) as {
       thread: { threadId: string };
@@ -1593,8 +1593,8 @@ test('Portal recovers an uncertain prompt with durable fenced runtime generation
     displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -1621,7 +1621,7 @@ test('Portal recovers an uncertain prompt with durable fenced runtime generation
       credential,
     );
     const created = await rpc.request('thread.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       agentId: 'fake',
     }) as {
       thread: { threadId: string };
@@ -1710,6 +1710,9 @@ test('Portal recovers an uncertain prompt with durable fenced runtime generation
       acp.notifications.some((message) => JSON.stringify(message).includes('OBSOLETE_PROVIDER_EVENT')),
       false,
     );
+    const interruptedAttention = (await rpc.request('thread.list') as { threads: Array<{ attention: { state: string; uncertaintyReason?: string } }> }).threads[0]!.attention;
+    assertEquals(interruptedAttention.state, 'uncertain');
+    assertEquals(interruptedAttention.uncertaintyReason, 'prompt_outcome_unknown');
     await acp.request('session/prompt', {
       sessionId: 'fake-session',
       prompt: [{ type: 'text', text: 'AFTER_RECOVERY' }],
@@ -1805,8 +1808,8 @@ test('Portal exposes an explicit unavailable state when an Agent cannot resume',
     displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -1828,7 +1831,7 @@ test('Portal exposes an explicit unavailable state when an Agent cannot resume',
       credential,
     );
     const created = await rpc.request('thread.create', {
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       agentId: 'fake',
     }) as {
       thread: { threadId: string };
@@ -1921,7 +1924,7 @@ test('Portal rejects an unpaired key before exposing metadata', async () => {
     displayName: 'Authentication Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: root }],
+    executionContexts: [{ executionContextId: 'workspace', name: 'Workspace', path: root }],
     agents: [{
       agentId: 'fake',
       name: 'Fake',
@@ -1957,7 +1960,7 @@ test('Portal revocation rejects active requests and new key proofs', async () =>
     displayName: 'Revocation Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: root }],
+    executionContexts: [{ executionContextId: 'workspace', name: 'Workspace', path: root }],
     agents: [{
       agentId: 'fake',
       name: 'Fake',
@@ -2001,8 +2004,8 @@ test('Alpha-facing Portal exposes typed Workspace file operations and connection
     displayName: 'Test Portal',
     allowedOrigins: [],
     stateDirectory: join(root, 'state'),
-    workspaces: [{
-      workspaceId: 'workspace',
+    executionContexts: [{
+      executionContextId: 'workspace',
       name: 'Workspace',
       path: workspacePath,
     }],
@@ -2027,19 +2030,19 @@ test('Alpha-facing Portal exposes typed Workspace file operations and connection
       capabilities: string[];
     };
     assertEquals(
-      capabilities.capabilities.includes('workspace.file.read'),
+      capabilities.capabilities.includes('context.file.read'),
       true,
     );
 
-    const listed = await rpc.request('workspace.file.list', {
-      workspaceId: 'workspace',
+    const listed = await rpc.request('context.file.list', {
+      executionContextId: 'workspace',
       path: '',
     }) as {
       entries: Array<{ path: string }>;
     };
     assertEquals(listed.entries.map((entry) => entry.path), ['README.md']);
-    const read = await rpc.request('workspace.file.read', {
-      workspaceId: 'workspace',
+    const read = await rpc.request('context.file.read', {
+      executionContextId: 'workspace',
       path: 'README.md',
     }) as {
       content: string;
@@ -2049,8 +2052,8 @@ test('Alpha-facing Portal exposes typed Workspace file operations and connection
 
     let stale: unknown;
     try {
-      await rpc.request('workspace.file.write', {
-        workspaceId: 'workspace',
+      await rpc.request('context.file.write', {
+        executionContextId: 'workspace',
         path: 'README.md',
         content: 'stale',
         expectedContentHash: '0'.repeat(64),
@@ -2073,20 +2076,20 @@ test('Alpha-facing Portal exposes typed Workspace file operations and connection
       },
     );
 
-    await rpc.request('workspace.directory.create', {
-      workspaceId: 'workspace',
+    await rpc.request('context.directory.create', {
+      executionContextId: 'workspace',
       path: 'non-empty',
     });
-    await rpc.request('workspace.file.write', {
-      workspaceId: 'workspace',
+    await rpc.request('context.file.write', {
+      executionContextId: 'workspace',
       path: 'non-empty/file.txt',
       content: 'content',
       expectedContentHash: null,
     });
     let nonEmpty: unknown;
     try {
-      await rpc.request('workspace.file.delete', {
-        workspaceId: 'workspace',
+      await rpc.request('context.file.delete', {
+        executionContextId: 'workspace',
         path: 'non-empty',
       });
     } catch (cause) {
@@ -2106,14 +2109,14 @@ test('Alpha-facing Portal exposes typed Workspace file operations and connection
     );
     assertEquals(JSON.stringify(nonEmpty).includes(workspacePath), false);
 
-    const watch = await rpc.request('workspace.file.watch.start', {
-      workspaceId: 'workspace',
+    const watch = await rpc.request('context.file.watch.start', {
+      executionContextId: 'workspace',
       paths: [''],
     }) as {
       subscriptionId: string;
     };
-    await rpc.request('workspace.file.write', {
-      workspaceId: 'workspace',
+    await rpc.request('context.file.write', {
+      executionContextId: 'workspace',
       path: 'created.txt',
       content: 'created',
       expectedContentHash: null,
@@ -2127,7 +2130,7 @@ test('Alpha-facing Portal exposes typed Workspace file operations and connection
       )
     );
     assertEquals(
-      await rpc.request('workspace.file.watch.stop', {
+      await rpc.request('context.file.watch.stop', {
         subscriptionId: watch.subscriptionId,
       }),
       {
@@ -2150,17 +2153,17 @@ test('Authenticated context summaries preserve Host identity and filter canonica
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Context Host',
     allowedOrigins: [], stateDirectory: join(root, 'state'),
-    workspaces: [
-      { workspaceId: 'allowed-id', name: 'Checkout', path: join(root, 'alias') },
-      { workspaceId: 'private-id', name: 'Checkout', path: join(root, 'private') },
+    executionContexts: [
+      { executionContextId: 'allowed-id', name: 'Checkout', path: join(root, 'alias') },
+      { executionContextId: 'private-id', name: 'Checkout', path: join(root, 'private') },
     ],
     agents: [],
   };
   let portal = await Portal.open(config, { terminalBackend: false });
   const key = await generatePortalKey();
   const grants = portal.security.defaultGrants();
-  grants.workspaceIds = ['allowed-id'];
-  grants.actions = ['portal.inspect', 'workspace.inspect', 'workspace.file.read'];
+  grants.executionContextIds = ['allowed-id'];
+  grants.actions = ['portal.inspect', 'context.inspect', 'context.file.read'];
   const token = await portal.security.createPairingToken(60_000, grants);
   const paired = await portal.security.redeemPairing({ type: PORTAL_PAIR_REQUEST_TYPE, token, label: 'Context reader', publicKey: key.publicKey });
   const credential = { ...key, credentialId: paired.principal.credentialId };
@@ -2173,10 +2176,10 @@ test('Authenticated context summaries preserve Host identity and filter canonica
         const capabilities = await rpc.request('portal.capabilities') as { hostId: string; capabilities: string[] };
         assertEquals(capabilities.hostId, hostId);
         assertEquals(capabilities.capabilities.includes(WORKSPACE_CONTEXT_CAPABILITY), true);
-        assertEquals(await rpc.request('workspace.list'), {
-          workspaces: [{ workspaceId: 'allowed-id', name: 'Checkout', rootName: 'allowed', availability: 'available', canonicalPath: await realpath(join(root, 'allowed')) }],
+        assertEquals(await rpc.request('context.list'), {
+          executionContexts: [{ executionContextId: 'allowed-id', name: 'Checkout', rootName: 'allowed', availability: 'available', canonicalPath: await realpath(join(root, 'allowed')) }],
         });
-        await assertRejects(() => rpc.request('workspace.file.list', { workspaceId: 'private-id', path: '' }));
+        await assertRejects(() => rpc.request('context.file.list', { executionContextId: 'private-id', path: '' }));
       } finally { rpc.close(); }
       if (attempt === 0) {
         await server.shutdown();
@@ -2192,18 +2195,18 @@ test('Authenticated context summaries preserve Host identity and filter canonica
   }
 });
 
-test('Authenticated compositions enforce ownership and revisions, survive restart, and never control terminal lifetime', async () => {
+test('Authenticated compositions enforce ownership and revisions, survive restart, and reject orphaned terminals', async () => {
   const root = await temporaryDirectory({ prefix: 'weave-composition-rpc-' });
   await mkdir(join(root, 'allowed'));
   await mkdir(join(root, 'private'));
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Composition Host', allowedOrigins: [],
-    stateDirectory: join(root, 'state'), agents: [], workspaces: [
-      { workspaceId: 'allowed', name: 'Allowed', path: join(root, 'allowed') },
-      { workspaceId: 'private', name: 'Private', path: join(root, 'private') },
+    stateDirectory: join(root, 'state'), agents: [], executionContexts: [
+      { executionContextId: 'allowed', name: 'Allowed', path: join(root, 'allowed') },
+      { executionContextId: 'private', name: 'Private', path: join(root, 'private') },
     ],
   };
-  const backend = new InMemoryTerminalBackend();
+  const backend = new InMemoryTerminalExecution();
   let portal = await Portal.open(config, { terminalBackend: backend });
   let server = startPortalServer(portal);
   const credential = await pairTestCredential(portal);
@@ -2218,12 +2221,12 @@ test('Authenticated compositions enforce ownership and revisions, survive restar
     const second = await connect();
     const capabilities = await first.request('portal.capabilities') as { capabilities: string[] };
     assertEquals(capabilities.capabilities.includes('workspace.composition.replace'), true);
-    const initial = { composition: { schemaVersion: 1, workspaceId: 'allowed', revision: 0, tabs: [] } };
-    assertEquals(await first.request('workspace.composition.get', { workspaceId: 'allowed' }), initial);
-    const { terminal } = await first.request('terminal.create', { workspaceId: 'allowed', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
-    const { terminal: privateTerminal } = await first.request('terminal.create', { workspaceId: 'private', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
-    const tabs = [{ tabId: 'tab', name: 'Build', layout: { kind: 'terminal', nodeId: 'node', paneId: 'pane', terminalId: terminal.terminalId } }];
-    const replace = (rpc: RpcSocket, expectedRevision: number, nextTabs: unknown = tabs, workspaceId = 'allowed') => rpc.request('workspace.composition.replace', { workspaceId, expectedRevision, tabs: nextTabs });
+    const initial = { composition: { schemaVersion: 2, hostId: portal.security.hostId, revision: 0, workspaces: [] } };
+    assertEquals(await first.request('workspace.composition.get', { hostId: portal.security.hostId }), initial);
+    const { terminal } = await first.request('terminal.create', { executionContextId: 'allowed', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
+    const { terminal: privateTerminal } = await first.request('terminal.create', { executionContextId: 'private', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
+    const tabs = [{ workspaceId: 'tab', name: 'Build', layout: { kind: 'terminal', executionContextId: 'allowed', nodeId: 'node', paneId: 'pane', terminalId: terminal.terminalId } }];
+    const replace = (rpc: RpcSocket, expectedRevision: number, nextTabs: unknown = tabs, hostId = portal.security.hostId) => rpc.request('workspace.composition.replace', { hostId, expectedRevision, workspaces: nextTabs });
     const concurrent = await Promise.allSettled([replace(first, 0), replace(second, 0)]);
     assertEquals(concurrent.filter((result) => result.status === 'fulfilled').length, 1);
     const conflict = concurrent.find((result) => result.status === 'rejected') as PromiseRejectedResult;
@@ -2232,26 +2235,31 @@ test('Authenticated compositions enforce ownership and revisions, survive restar
       const invalid = await assertRejects(() => replace(first, 1, [{ ...tabs[0], layout: { ...tabs[0]!.layout, terminalId } }]));
       assertEquals(invalid instanceof RpcResponseError && invalid.data, { domain: 'composition', code: 'INVALID_TARGET' });
     }
-    // A reader of one context cannot inspect another, nor edit even its own context.
+    // A reader of one context cannot inspect another, nor edit even its own workspace.
     const key = await generatePortalKey();
     const grants = portal.security.defaultGrants();
-    grants.workspaceIds = ['allowed'];
-    grants.actions = ['portal.inspect', 'workspace.inspect'];
+    grants.executionContextIds = ['allowed'];
+    grants.actions = ['portal.inspect', 'context.inspect'];
     const token = await portal.security.createPairingToken(60_000, grants);
     const paired = await portal.security.redeemPairing({ type: PORTAL_PAIR_REQUEST_TYPE, token, label: 'Read only', publicKey: key.publicKey });
     const reader = await connect({ ...key, credentialId: paired.principal.credentialId });
-    await assertRejects(() => reader.request('workspace.composition.get', { workspaceId: 'private' }));
+    await assertRejects(() => reader.request('workspace.composition.get', { hostId: 'another-host' }));
     await assertRejects(() => replace(reader, 1));
-    assertEquals(await reader.request('workspace.composition.get', { workspaceId: 'allowed' }), { composition: { ...initial.composition, revision: 1, tabs } });
+    assertEquals(await reader.request('workspace.composition.get', { hostId: portal.security.hostId }), { composition: { ...initial.composition, revision: 1, workspaces: tabs } });
     for (const socket of sockets.splice(0)) socket.close();
     await server.shutdown();
     await portal.close();
     portal = await Portal.open(config, { terminalBackend: backend });
     server = startPortalServer(portal);
     const restored = await connect();
-    assertEquals(await restored.request('workspace.composition.get', { workspaceId: 'allowed' }), { composition: { ...initial.composition, revision: 1, tabs } });
-    await replace(restored, 1, []);
-    const terminals = await restored.request('terminal.list', { workspaceId: 'allowed' }) as { terminals: Array<{ terminalId: string }> };
+    assertEquals(await restored.request('workspace.composition.get', { hostId: portal.security.hostId }), { composition: { ...initial.composition, revision: 1, workspaces: tabs } });
+    const mixed = [{ ...tabs[0]!, layout: { kind: 'split', nodeId: 'multi-directory', axis: 'horizontal', ratio: 0.5, children: [tabs[0]!.layout, { kind: 'terminal', executionContextId: 'private', nodeId: 'private-node', paneId: 'private-pane', terminalId: privateTerminal.terminalId }] } }, { workspaceId: 'second-workspace', name: 'Same directory', layout: null }];
+    await replace(restored, 1, mixed);
+    const multiple = await restored.request('workspace.composition.get', { hostId: portal.security.hostId }) as any;
+    assertEquals(multiple.composition.workspaces.length, 1); // empty arrangements are discarded
+    assertEquals(multiple.composition.workspaces[0].layout.children.map((pane: any) => pane.executionContextId), ['allowed', 'private']);
+    await assertRejects(() => replace(restored, 2, []));
+    const terminals = await restored.request('terminal.list', { executionContextId: 'allowed' }) as { terminals: Array<{ terminalId: string }> };
     assertEquals(terminals.terminals.some((item) => item.terminalId === terminal.terminalId), true);
   } finally {
     for (const socket of sockets) socket.close();
@@ -2267,10 +2275,10 @@ test('Global attention and pending permissions survive conversation detachment w
   await mkdir(workspacePath);
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Global agents', allowedOrigins: [], stateDirectory: join(root, 'state'),
-    workspaces: [{ workspaceId: 'workspace', name: 'Workspace', path: workspacePath }],
+    executionContexts: [{ executionContextId: 'workspace', name: 'Workspace', path: workspacePath }],
     agents: [{ agentId: 'fake', name: 'Fake', command: process.execPath, args: [join(dirname(fileURLToPath(import.meta.url)), 'test-fixtures/fake-agent.ts')], env: {} }],
   };
-  let portal = await Portal.open(config, { terminalBackend: false });
+  let portal = await Portal.open(config, { terminalBackend: new InMemoryTerminalExecution() });
   const credential = await pairTestCredential(portal);
   let server = startPortalServer(portal);
   const sockets: RpcSocket[] = [];
@@ -2280,9 +2288,11 @@ test('Global attention and pending permissions survive conversation detachment w
   };
   try {
     let rpc = await connect();
-    const created = await rpc.request('thread.create', { workspaceId: 'workspace', agentId: 'fake' }) as { thread: { threadId: string; acpSessionId: string } };
+    const hostId = portal.security.hostId;
+    await rpc.request('workspace.composition.replace', { hostId, expectedRevision: 0, workspaces: ['first', 'second'].map((id) => ({ workspaceId: id, name: id, layout: { kind: 'terminal', nodeId: `${id}-node`, paneId: `${id}-pane`, terminalId: null, executionContextId: 'workspace' } })) });
+    const created = await rpc.request('thread.create', { workspaceId: 'first', executionContextId: 'workspace', agentId: 'fake' }) as { thread: { threadId: string; workspaceId: string, membershipRevision: number, acpSessionId: string } };
     const attention = async () => {
-      const { threads } = await rpc.request('thread.list') as { threads: Array<{ threadId: string; attention: { state: string; observedAt: string } }> };
+      const { threads } = await rpc.request('thread.list') as { threads: Array<{ threadId: string; attention: { state: string; observedAt: string; uncertaintyReason?: string } }> };
       return threads.find((thread) => thread.threadId === created.thread.threadId)!.attention;
     };
     assertEquals((await attention()).state, 'idle');
@@ -2297,6 +2307,34 @@ test('Global attention and pending permissions survive conversation detachment w
     await waitFor(() => first.notifications.some((message) => message.method === 'session/request_permission'));
     const request = first.notifications.find((message) => message.method === 'session/request_permission')!;
     assertEquals((await attention()).state, 'waiting');
+    const secondClient = await connect();
+    const assignment = { threadId: created.thread.threadId, hostId, workspaceId: 'second', expectedRevision: 0 };
+    const moved = await secondClient.request('thread.assign', assignment) as any;
+    assertEquals(moved.thread.executionContextId, 'workspace');
+    assertEquals(moved.thread.acpSessionId, created.thread.acpSessionId);
+    const stale = await assertRejects(() => rpc.request('thread.assign', { ...assignment, workspaceId: 'first' }));
+    assertEquals((stale as RpcResponseError).data, { domain: 'thread-membership', code: 'STALE_REVISION' });
+    await assertRejects(() => rpc.request('thread.assign', { ...assignment, hostId: 'other-host', expectedRevision: 1 }));
+    await assertRejects(() => rpc.request('thread.assign', { ...assignment, workspaceId: null, expectedRevision: 1 }));
+    await rpc.request('thread.assign', { ...assignment, workspaceId: 'first', expectedRevision: 1 });
+    const attached = await secondClient.request('thread.attach', { threadId: created.thread.threadId }) as any;
+    assertEquals(attached.thread.workspaceId, 'first');
+    assertEquals(attached.thread.membershipRevision, 2);
+    assertEquals(attached.connection.cwd, await realpath(workspacePath));
+    assertEquals(attached.thread.acpSessionId, created.thread.acpSessionId);
+    assertEquals((await attention()).state, 'waiting');
+    const key = await generatePortalKey();
+    const grants = portal.security.defaultGrants(); grants.executionContextIds = [];
+    const token = await portal.security.createPairingToken(60000, grants);
+    const paired = await portal.security.redeemPairing({ type: PORTAL_PAIR_REQUEST_TYPE, token, label: 'No directory access', publicKey: key.publicKey });
+    const denied = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, { ...key, credentialId: paired.principal.credentialId });
+    sockets.push(denied);
+    await assertRejects(() => denied.request('thread.attach', { threadId: created.thread.threadId }));
+    await assertRejects(() => denied.request('thread.assign', { ...assignment, expectedRevision: 2 }));
+    assertEquals((await denied.request('thread.list') as any).threads, []);
+    const filteredComposition = await denied.request('workspace.composition.get', { hostId }) as any;
+    assertEquals(filteredComposition.composition.workspaces.some((workspace: any) => workspace.workspaceId === 'first'), false);
+    await assertRejects(() => rpc.request('workspace.composition.replace', { hostId, expectedRevision: 1, workspaces: [{ workspaceId: 'second', name: 'Second', layout: null }] }));
     first.close();
     await prompting;
     // Only the metadata RPC connection remains. Polling must not start another provider or reject the request.
@@ -2329,10 +2367,16 @@ test('Global attention and pending permissions survive conversation detachment w
     await waitFor(async () => (await attention()).state === 'completed');
     for (const socket of sockets.splice(0)) socket.close();
     await server.shutdown(); await portal.close();
-    portal = await Portal.open(config, { terminalBackend: false }); server = startPortalServer(portal);
+    portal = await Portal.open(config, { terminalBackend: new InMemoryTerminalExecution() }); server = startPortalServer(portal);
     rpc = await connect();
     // After restart the Host does not claim current provider state from an old completion or launch ACP just for the sidebar.
     assertEquals((await attention()).state, 'uncertain');
+    assertEquals((await attention()).uncertaintyReason, 'runtime_not_loaded');
+    const recovered = (await rpc.request('thread.attach', { threadId: created.thread.threadId }) as any);
+    assertEquals(recovered.thread.workspaceId, 'first');
+    assertEquals(recovered.thread.membershipRevision, 2);
+    assertEquals(recovered.connection.cwd, await realpath(workspacePath));
+    assertEquals(recovered.thread.acpSessionId, created.thread.acpSessionId);
   } finally {
     for (const socket of sockets) socket.close();
     await server.shutdown(); await portal.close(); await removePath(root, { recursive: true });
@@ -2348,18 +2392,18 @@ test('Unavailable registered directories preserve authenticated layouts and term
   await writeText(join(directory, 'original.txt'), 'original');
   const config: PortalConfig = {
     listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Recovery Host', allowedOrigins: [],
-    stateDirectory: join(root, 'state'), workspaces: [{ workspaceId: 'stable', name: 'Checkout', path: directory }],
+    stateDirectory: join(root, 'state'), executionContexts: [{ executionContextId: 'stable', name: 'Checkout', path: directory }],
     agents: [{ agentId: 'fake', name: 'Fake', command: process.execPath, args: [fileURLToPath(new URL('./test-fixtures/fake-agent.ts', import.meta.url))], env: {} }],
   };
-  const backend = new InMemoryTerminalBackend();
+  const backend = new InMemoryTerminalExecution();
   let portal = await Portal.open(config, { terminalBackend: backend });
   let server = startPortalServer(portal);
   const credential = await pairTestCredential(portal);
   let rpc = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, credential);
   try {
-    const { thread } = await rpc.request('thread.create', { workspaceId: 'stable', agentId: 'fake' }) as { thread: { threadId: string } };
-    const { terminal } = await rpc.request('terminal.create', { workspaceId: 'stable' }) as { terminal: { terminalId: string } };
-    const saved = await rpc.request('workspace.composition.replace', { workspaceId: 'stable', expectedRevision: 0, tabs: [{ tabId: 'tab', name: 'Existing work', layout: { kind: 'terminal', nodeId: 'node', paneId: 'pane', terminalId: terminal.terminalId } }] });
+    const { terminal } = await rpc.request('terminal.create', { executionContextId: 'stable' }) as { terminal: { terminalId: string } };
+    const saved = await rpc.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: 0, workspaces: [{ workspaceId: 'tab', name: 'Existing work', layout: { kind: 'terminal', executionContextId: 'stable', nodeId: 'node', paneId: 'pane', terminalId: terminal.terminalId } }] });
+    const { thread } = await rpc.request('thread.create', { workspaceId: 'tab', executionContextId: 'stable', agentId: 'fake' }) as { thread: { threadId: string } };
     const acp = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/acp?threadId=${thread.threadId}`, credential);
     try {
       await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
@@ -2370,7 +2414,7 @@ test('Unavailable registered directories preserve authenticated layouts and term
       const attention = await rpc.request('thread.list') as { threads: Array<{ attention: { state: string } }> };
       assertEquals(attention.threads[0]!.attention.state, 'unavailable');
     } finally { acp.close(); }
-    const summary = async () => (await rpc.request('workspace.list') as { workspaces: Array<{ workspaceId: string; canonicalPath: string; availability: string }> }).workspaces[0]!;
+    const summary = async () => (await rpc.request('context.list') as { executionContexts: Array<{ executionContextId: string; canonicalPath: string; availability: string }> }).executionContexts[0]!;
     assertEquals((await summary()).availability, 'unavailable');
     rpc.close(); await server.shutdown(); await portal.close();
     // Startup and credential reuse work even though the directory is absent.
@@ -2378,28 +2422,129 @@ test('Unavailable registered directories preserve authenticated layouts and term
     server = startPortalServer(portal);
     rpc = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, credential);
     assertEquals((await summary()).canonicalPath, canonicalPath);
-    assertEquals(await rpc.request('workspace.composition.get', { workspaceId: 'stable' }), saved);
+    assertEquals(await rpc.request('workspace.composition.get', { hostId: portal.security.hostId }), saved);
     const threads = await rpc.request('thread.list') as { threads: Array<{ threadId: string }> };
     assertEquals(threads.threads[0]!.threadId, thread.threadId);
     // A replacement at the same spelling cannot take over the existing identity.
     await mkdir(directory);
     await writeText(join(directory, 'replacement.txt'), 'replacement');
     assertEquals((await summary()).availability, 'path-changed');
-    await assertRejects(() => rpc.request('terminal.create', { workspaceId: 'stable' }));
-    await assertRejects(() => rpc.request('thread.create', { workspaceId: 'stable', agentId: 'fake' }));
+    await assertRejects(() => rpc.request('terminal.create', { executionContextId: 'stable' }));
+    await assertRejects(() => rpc.request('thread.create', { executionContextId: 'stable', agentId: 'fake' }));
     await assertRejects(() => rpc.request('thread.attach', { threadId: thread.threadId }));
-    const fileError = await assertRejects(() => rpc.request('workspace.file.read', { workspaceId: 'stable', path: 'replacement.txt' }));
+    const fileError = await assertRejects(() => rpc.request('context.file.read', { executionContextId: 'stable', path: 'replacement.txt' }));
     assertEquals(fileError instanceof RpcResponseError && fileError.data, { domain: 'workspace-filesystem', code: 'WORKSPACE_UNAVAILABLE' });
-    const attached = await rpc.request('terminal.attach', { workspaceId: 'stable', terminalId: terminal.terminalId, mode: 'control' }) as { attachment: { attachmentId: string } };
-    await rpc.request('terminal.input', { workspaceId: 'stable', terminalId: terminal.terminalId, attachmentId: attached.attachment.attachmentId, data: 'still here' });
-    assertEquals(backend.inputs.at(-1)?.data, 'still here');
+    const attached = await rpc.request('terminal.attach', { executionContextId: 'stable', terminalId: terminal.terminalId, mode: 'shared' }) as { attachment: { attachmentId: string } };
+    await rpc.request('terminal.input', { executionContextId: 'stable', terminalId: terminal.terminalId, attachmentId: attached.attachment.attachmentId, data: bytes('still here') });
+    assertEquals(backend.inputs.at(-1)?.data, bytes('still here'));
     await removePath(directory, { recursive: true });
     await rename(join(root, 'original'), directory);
     assertEquals((await summary()).availability, 'available');
-    const file = await rpc.request('workspace.file.read', { workspaceId: 'stable', path: 'original.txt' }) as { content: string };
+    const file = await rpc.request('context.file.read', { executionContextId: 'stable', path: 'original.txt' }) as { content: string };
     assertEquals(file.content, 'original');
-    assertEquals(await rpc.request('workspace.composition.get', { workspaceId: 'stable' }), saved);
+    assertEquals(await rpc.request('workspace.composition.get', { hostId: portal.security.hostId }), saved);
   } finally {
     rpc.close(); await server.shutdown(); await portal.close(); await removePath(root, { recursive: true });
   }
+});
+
+test('composition writes create distinct pane terminals once across retries, concurrent devices and restart', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-pane-creation-' });
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Pane Host', allowedOrigins: [],
+    stateDirectory: join(root, 'state'), agents: [], executionContexts: [{ executionContextId: 'workspace', name: 'Workspace', path: root }],
+  };
+  const backend = new InMemoryTerminalExecution();
+  const create = backend.create.bind(backend);
+  let creates = 0;
+  backend.create = async (input) => {
+    if (++creates === 2) throw new Error('Simulated shell startup failure');
+    return create(input);
+  };
+  let portal = await Portal.open(config, { terminalBackend: backend });
+  let server = startPortalServer(portal);
+  const credential = await pairTestCredential(portal);
+  const sockets: RpcSocket[] = [];
+  const connect = async (signer = credential) => {
+    const socket = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, signer);
+    sockets.push(socket); return socket;
+  };
+  const tabs = [{ workspaceId: 'tab', name: 'Build', layout: { kind: 'split', nodeId: 'split', axis: 'horizontal', ratio: 0.5, children: [
+    { kind: 'terminal', executionContextId: 'workspace', nodeId: 'first', paneId: 'pane-first', terminalId: null },
+    { kind: 'terminal', executionContextId: 'workspace', nodeId: 'second', paneId: 'pane-second', terminalId: null },
+  ] } }];
+  const replace = (rpc: RpcSocket) => rpc.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: 0, workspaces: tabs });
+  try {
+    const first = await connect();
+    const second = await connect();
+    const capabilities = await first.request('portal.capabilities') as { capabilities: string[] };
+    assertEquals(capabilities.capabilities.includes('workspace.composition.terminal-create'), true);
+    // Workspace editing alone cannot implicitly gain terminal-control permission.
+    const key = await generatePortalKey();
+    const grants = portal.security.defaultGrants();
+    grants.actions = ['portal.inspect', 'context.inspect', 'context.manage'];
+    const token = await portal.security.createPairingToken(60_000, grants);
+    const paired = await portal.security.redeemPairing({ type: PORTAL_PAIR_REQUEST_TYPE, token, label: 'Arrange only', publicKey: key.publicKey });
+    const arranger = await connect({ ...key, credentialId: paired.principal.credentialId });
+    await assertRejects(() => replace(arranger));
+    assertEquals(creates, 0);
+
+    await assertRejects(() => replace(first));
+    assertEquals((await backend.list()).length, 1);
+    assertEquals(await first.request('workspace.composition.get', { hostId: portal.security.hostId }), { composition: { schemaVersion: 2, hostId: portal.security.hostId, revision: 0, workspaces: [] } });
+    const concurrent = await Promise.allSettled([replace(first), replace(second)]);
+    assertEquals(concurrent.filter((result) => result.status === 'fulfilled').length, 1);
+    assertEquals(creates, 3); // first shell reused; only the failed second shell retried
+    const persisted = await first.request('workspace.composition.get', { hostId: portal.security.hostId }) as { composition: { revision: number; workspaces: Array<{ layout: { children: Array<{ terminalId: string }> } }> } };
+    const ids = persisted.composition.workspaces[0]!.layout.children.map((pane) => pane.terminalId);
+    assertEquals(ids.every(Boolean), true);
+    assertEquals(new Set(ids).size, 2);
+    assertEquals((await backend.list()).map((record) => record.terminalId).sort(), [...ids].sort());
+    for (const socket of sockets.splice(0)) socket.close();
+    await server.shutdown(); await portal.close();
+    portal = await Portal.open(config, { terminalBackend: backend });
+    server = startPortalServer(portal);
+    const restored = await connect();
+    assertEquals(await restored.request('workspace.composition.get', { hostId: portal.security.hostId }), persisted);
+    assertEquals(creates, 3);
+    await assertRejects(() => restored.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: 1, workspaces: [] }));
+    assertEquals((await backend.list()).length, 2); // rejected layout removal preserves shells
+  } finally {
+    for (const socket of sockets) socket.close();
+    await server.shutdown(); await portal.close();
+    await removePath(root, { recursive: true });
+  }
+});
+
+test('terminal exits remove shared panes without attachments, and startup prunes exits missed while offline', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-terminal-pane-exit-' });
+  const config: PortalConfig = {
+    listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Exit test', allowedOrigins: [],
+    stateDirectory: join(root, 'state'), agents: [], executionContexts: [{ executionContextId: 'context', name: 'Context', path: root }],
+  };
+  const backend = new InMemoryTerminalExecution();
+  let portal = await Portal.open(config, { terminalBackend: backend });
+  let server = startPortalServer(portal);
+  const credential = await pairTestCredential(portal);
+  let rpc = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, credential);
+  try {
+    const { composition } = await rpc.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: 0, workspaces: [{ workspaceId: 'workspace', name: 'Keep me', layout: { kind: 'split', nodeId: 'split', axis: 'horizontal', ratio: 0.4, children: ['one', 'two'].map((id) => ({ kind: 'terminal', executionContextId: 'context', nodeId: `node-${id}`, paneId: id, terminalId: null })) } }] }) as any;
+    const [first, second] = composition.workspaces[0].layout.children;
+    // Read the persisted file, rather than composition.get, to prove the exit
+    // callback cleans up even with no Terminal attachment or reconciliation RPC.
+    backend.emitExit(first.terminalId, 0);
+    const { readdir, readFile } = await import('node:fs/promises');
+    const path = join(config.stateDirectory, 'compositions', (await readdir(join(config.stateDirectory, 'compositions'))).find((name) => name.startsWith('host-'))!);
+    await waitFor(async () => JSON.parse(await readFile(path, 'utf8')).revision === 2);
+    assertEquals(JSON.parse(await readFile(path, 'utf8')).workspaces[0].layout, second);
+    await assertRejects(() => rpc.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: 2, workspaces: composition.workspaces }));
+    rpc.close(); await server.shutdown(); await portal.close();
+    backend.emitExit(second.terminalId, 0);
+    portal = await Portal.open(config, { terminalBackend: backend });
+    server = startPortalServer(portal);
+    rpc = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, credential);
+    const restored = await rpc.request('workspace.composition.get', { hostId: portal.security.hostId }) as any;
+    assertEquals(restored.composition.workspaces, []);
+    assertEquals(restored.composition.revision, 4);
+  } finally { rpc.close(); await server.shutdown(); await portal.close(); await removePath(root, { recursive: true }); }
 });

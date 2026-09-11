@@ -36,7 +36,7 @@ const controller = (): AlphaController => ({
       hostName: "bazzite",
     },
     searchQuery: "",
-    workspaces: [],
+    executionContexts: [],
     archivedThreads: [],
     showHostIdentity: false,
     busy: false,
@@ -51,7 +51,7 @@ const controller = (): AlphaController => ({
     forgetHost: vi.fn(),
     reconnectHost: vi.fn(),
     refresh: vi.fn(),
-    addProject: vi.fn(),
+    addExecutionContext: vi.fn(),
     createThread: vi.fn(),
     selectThread: vi.fn(),
     archiveThread: vi.fn(),
@@ -134,7 +134,7 @@ describe("AlphaShell", () => {
       rememberedSize: { bottom: 32, right: 24 },
     }));
     const { container } = render(<AlphaShell controller={controller()} />);
-    expect(screen.queryByRole("button", { name: /(?:Browser|Project|Editor) Pane/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /(?:Browser|ExecutionContext|Editor) Pane/ })).not.toBeInTheDocument();
     expect(container.querySelector('[data-slot="browser-pane"], [data-slot="editor-pane"], [data-slot="project-pane"]')).toBeNull();
     expect(screen.getByRole("button", { name: "Show Terminal Pane" })).toBeDisabled();
   });
@@ -154,10 +154,10 @@ describe("AlphaShell", () => {
     );
     const value = controller();
     value.model.selectedThreadId = "thread-1";
-    value.model.workspaces = [
+    value.model.executionContexts = [
       {
         id: "weave",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-1",
         hostName: "bazzite",
         name: "Weave",
@@ -171,7 +171,7 @@ describe("AlphaShell", () => {
             hostName: "bazzite",
             status: "active",
             updatedAt: "2026-08-26T00:00:00.000Z",
-            workspaceId: "weave",
+            executionContextId: "weave",
           },
         ],
       },
@@ -192,10 +192,10 @@ describe("AlphaShell", () => {
     mobileViewport.value = true;
     const value = controller();
     value.model.selectedThreadId = "thread-1";
-    value.model.workspaces = [
+    value.model.executionContexts = [
       {
         id: "weave",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-1",
         hostName: "bazzite",
         name: "Weave",
@@ -209,7 +209,7 @@ describe("AlphaShell", () => {
             hostName: "bazzite",
             status: "active",
             updatedAt: "2026-08-26T00:00:00.000Z",
-            workspaceId: "weave",
+            executionContextId: "weave",
           },
         ],
       },
@@ -217,8 +217,8 @@ describe("AlphaShell", () => {
     value.model.terminals = {
       scope: {
         hostId: "host-1",
-        projectId: "weave",
-        workspaceId: "weave",
+        contextId: "weave",
+        executionContextId: "weave",
       },
       supported: true,
       tabs: [],
@@ -249,7 +249,7 @@ describe("AlphaShell", () => {
     ).toBeInTheDocument();
   });
 
-  it("switches Terminal pane state by Host and Project scope and restores it on return", async () => {
+  it("switches Terminal pane state by Host and ExecutionContext scope and restores it on return", async () => {
     window.localStorage.setItem(
       "weave.alpha.docks.v1",
       JSON.stringify({
@@ -264,10 +264,10 @@ describe("AlphaShell", () => {
     );
     const value = controller();
     value.model.selectedThreadId = "thread-1";
-    value.model.workspaces = [
+    value.model.executionContexts = [
       {
         id: "weave",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-1",
         hostName: "Bazzite",
         name: "Weave",
@@ -281,7 +281,7 @@ describe("AlphaShell", () => {
             hostName: "Bazzite",
             status: "active",
             updatedAt: "2026-08-28T00:00:00.000Z",
-            workspaceId: "weave",
+            executionContextId: "weave",
           },
         ],
       },
@@ -289,8 +289,8 @@ describe("AlphaShell", () => {
     value.model.terminals = {
       scope: {
         hostId: "host-1",
-        projectId: "weave",
-        workspaceId: "weave",
+        contextId: "weave",
+        executionContextId: "weave",
       },
       supported: true,
       tabs: [],
@@ -305,7 +305,7 @@ describe("AlphaShell", () => {
     expect(value.actions.showTerminals).toHaveBeenCalledOnce();
 
     value.model.selectedThreadId = "draft-same-scope";
-    value.model.workspaces[0].threads = [{
+    value.model.executionContexts[0].threads = [{
       id: "draft-same-scope",
       threadId: "draft-same-scope",
       hostId: "host-1",
@@ -314,7 +314,7 @@ describe("AlphaShell", () => {
       hostName: "Bazzite",
       status: "active",
       updatedAt: "2026-08-28T00:00:30.000Z",
-      workspaceId: "weave",
+      executionContextId: "weave",
       draft: true,
     }];
     rerender(<AlphaShell controller={value} />);
@@ -331,9 +331,9 @@ describe("AlphaShell", () => {
       selected: false,
     });
     value.model.selectedThreadId = "draft-2";
-    value.model.workspaces = [{
+    value.model.executionContexts = [{
       id: "weave",
-      workspaceId: "weave",
+      executionContextId: "weave",
       hostId: "host-1",
       hostName: "Bazzite",
       name: "Weave",
@@ -346,15 +346,15 @@ describe("AlphaShell", () => {
         hostName: "MacBook",
         status: "active",
         updatedAt: "2026-08-28T00:01:00.000Z",
-        workspaceId: "weave",
+        executionContextId: "weave",
         draft: true,
       }],
     }];
     value.model.terminals = {
       scope: {
         hostId: "host-2",
-        projectId: "weave",
-        workspaceId: "weave",
+        contextId: "weave",
+        executionContextId: "weave",
       },
       supported: true,
       tabs: [],
@@ -370,9 +370,9 @@ describe("AlphaShell", () => {
     expect(value.actions.hideTerminals).toHaveBeenCalled();
 
     value.model.selectedThreadId = "thread-1";
-    value.model.workspaces = [{
+    value.model.executionContexts = [{
       id: "weave",
-      workspaceId: "weave",
+      executionContextId: "weave",
       hostId: "host-1",
       hostName: "Bazzite",
       name: "Weave",
@@ -385,14 +385,14 @@ describe("AlphaShell", () => {
         hostName: "Bazzite",
         status: "active",
         updatedAt: "2026-08-28T00:00:00.000Z",
-        workspaceId: "weave",
+        executionContextId: "weave",
       }],
     }];
     value.model.terminals = {
       scope: {
         hostId: "host-1",
-        projectId: "weave",
-        workspaceId: "weave",
+        contextId: "weave",
+        executionContextId: "weave",
       },
       supported: true,
       tabs: [],
@@ -408,7 +408,7 @@ describe("AlphaShell", () => {
   it("shows only the sidebar and a blank Thread Pane when no Thread is selected", () => {
     const value = controller();
     value.model.workspaceFiles = {
-      workspaceId: "weave",
+      executionContextId: "weave",
       workspaceName: "Weave",
       activeFilePath: "README.md",
       openFiles: [
@@ -475,10 +475,10 @@ describe("AlphaShell", () => {
     const value = controller();
     value.model.platform = "ios";
     value.model.selectedThreadId = "thread-1";
-    value.model.workspaces = [
+    value.model.executionContexts = [
       {
         id: "weave",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-1",
         hostName: "bazzite",
         name: "Weave",
@@ -492,7 +492,7 @@ describe("AlphaShell", () => {
             hostName: "bazzite",
             status: "active",
             updatedAt: "2026-08-26T00:00:00.000Z",
-            workspaceId: "weave",
+            executionContextId: "weave",
           },
         ],
       },

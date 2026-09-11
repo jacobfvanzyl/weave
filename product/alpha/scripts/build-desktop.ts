@@ -24,12 +24,14 @@ const manifest = await Bun.file(resolve(root, 'package.json')).json();
 await writeFile(resolve(stage, 'package.json'), JSON.stringify({ name: 'weave-alpha', productName: 'Weave Alpha', version: manifest.version, main: 'main.mjs', type: 'module', private: true }));
 await cp(resolve(root, 'dist'), resolve(stage, 'web'), { recursive: true });
 if (process.argv.includes('--dev')) {
+  await cp(resolve(root, 'src/assets/fonts/TerminalFonts'), resolve(stage, 'TerminalFonts'), { recursive: true });
   await run(['bun', 'run', 'electron', stage]);
 } else {
   const identity = process.env.WEAVE_ALPHA_CODESIGN_IDENTITY?.trim();
   const paths = await packager({
     dir: stage, out: resolve(root, 'release'), name: 'Weave Alpha', platform: 'darwin', arch: process.arch,
     electronVersion: manifest.devDependencies.electron, appBundleId: 'com.veezee.alpha.macos',
+    extraResource: [resolve(root, 'src/assets/fonts/TerminalFonts')],
     appVersion: manifest.version, overwrite: true, asar: { unpack: '**/*.node' }, prune: false,
     ...(identity ? { osxSign: { identity, optionsForFile: () => ({ hardenedRuntime: false }) } } : {}),
   });

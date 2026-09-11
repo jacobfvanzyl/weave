@@ -1,8 +1,8 @@
 import { readText } from './host-files.ts';
 import { isAbsolute, resolve } from 'node:path';
 
-export type WorkspaceDefinition = {
-  workspaceId: string;
+export type ExecutionContextDefinition = {
+  executionContextId: string;
   name: string;
   path: string;
 };
@@ -20,7 +20,7 @@ export type PortalConfig = {
   allowedOrigins: string[];
   stateDirectory: string;
   threadEventRetentionLimit?: number;
-  workspaces: WorkspaceDefinition[];
+  executionContexts: ExecutionContextDefinition[];
   agents: AgentDefinition[];
 };
 
@@ -98,21 +98,22 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
     throw new Error('threadEventRetentionLimit must be a positive integer.');
   }
 
-  if (!Array.isArray(root.workspaces)) {
-    throw new Error('workspaces must be an array.');
+  root.executionContexts ??= root.workspaces; // Read-only compatibility for existing Host configuration.
+  if (!Array.isArray(root.executionContexts)) {
+    throw new Error('executionContexts must be an array.');
   }
-  const workspaces = root.workspaces.map((value, index) => {
-    const workspace = object(value, `workspaces[${index}]`);
-    const path = text(workspace.path, `workspaces[${index}].path`);
+  const executionContexts = root.executionContexts.map((value, index) => {
+    const workspace = object(value, `executionContexts[${index}]`);
+    const path = text(workspace.path, `executionContexts[${index}].path`);
     if (!isAbsolute(path)) {
-      throw new Error(`workspaces[${index}].path must be absolute.`);
+      throw new Error(`executionContexts[${index}].path must be absolute.`);
     }
     return {
-      workspaceId: text(
-        workspace.workspaceId,
-        `workspaces[${index}].workspaceId`,
+      executionContextId: text(
+        workspace.executionContextId ?? workspace.workspaceId,
+        `executionContexts[${index}].executionContextId`,
       ),
-      name: text(workspace.name, `workspaces[${index}].name`),
+      name: text(workspace.name, `executionContexts[${index}].name`),
       path: resolve(path),
     };
   });
@@ -136,7 +137,7 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
     };
   });
 
-  unique(workspaces.map((workspace) => workspace.workspaceId), 'workspaceId');
+  unique(executionContexts.map((workspace) => workspace.executionContextId), 'executionContextId');
   unique(agents.map((agent) => agent.agentId), 'agentId');
   return {
     listen: { hostname, port: Number(port) },
@@ -145,7 +146,7 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
     allowedOrigins: root.allowedOrigins === undefined ? [] : stringList(root.allowedOrigins, 'allowedOrigins'),
     stateDirectory: resolve(stateDirectory),
     threadEventRetentionLimit: Number(threadEventRetentionLimit),
-    workspaces,
+    executionContexts,
     agents,
   };
 };

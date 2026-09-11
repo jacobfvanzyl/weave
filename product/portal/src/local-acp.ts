@@ -21,7 +21,7 @@ const cursorPrefix = 'weave-page-v1:';
 type Handshake = {
   protocol: typeof gatewayProtocol;
   agentId: string;
-  workspaceId?: string;
+  executionContextId?: string;
   workspacePath?: string;
 };
 
@@ -70,18 +70,18 @@ const cursorFor = (offset: number) => `${cursorPrefix}${base64Url(String(offset)
 const parseHandshake = (value: unknown): Handshake => {
   const input = objectFrom(value);
   const agentId = typeof input.agentId === 'string' ? input.agentId.trim() : '';
-  const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId.trim() : undefined;
+  const executionContextId = typeof input.executionContextId === 'string' ? input.executionContextId.trim() : undefined;
   const workspacePath = typeof input.workspacePath === 'string' ? input.workspacePath.trim() : undefined;
   if (
     input.protocol !== gatewayProtocol || !agentId ||
-    Boolean(workspaceId) === Boolean(workspacePath)
+    Boolean(executionContextId) === Boolean(workspacePath)
   ) {
     throw new Error('Invalid local ACP connector handshake.');
   }
   return {
     protocol: gatewayProtocol,
     agentId,
-    ...(workspaceId ? { workspaceId } : {}),
+    ...(executionContextId ? { executionContextId } : {}),
     ...(workspacePath ? { workspacePath } : {}),
   };
 };
@@ -375,7 +375,7 @@ export const serveLocalAcpGateway = async (portal: Portal): Promise<LocalAcpGate
 export const runStdioAcpConnector = async (input: {
   path: string;
   agentId: string;
-  workspaceId?: string;
+  executionContextId?: string;
   workspacePath?: string;
   stdin?: ReadableStream<Uint8Array>;
   stdout?: WritableStream<Uint8Array>;
@@ -395,7 +395,7 @@ export const runStdioAcpConnector = async (input: {
       parseHandshake({
         protocol: gatewayProtocol,
         agentId: input.agentId,
-        workspaceId: input.workspaceId,
+        executionContextId: input.executionContextId,
         workspacePath: input.workspacePath,
       }),
     );

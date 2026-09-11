@@ -423,7 +423,25 @@ function Composer({
     };
   }, [discardDraftOnUnmount, model.sessionId]);
   useEffect(() => {
-    if (focusRequest !== undefined) textareaRef.current?.focus();
+    if (focusRequest === undefined) return;
+    let frame: number | undefined;
+    let focused = false;
+    const focus = () => {
+      const textarea = textareaRef.current;
+      if (focused || !textarea || textarea.closest('[hidden]')) return;
+      // A mobile sidebar's closing dialog still owns focus until it leaves.
+      const overlay = [...document.querySelectorAll('[role="dialog"], [role="menu"]')].some((item) => item.getBoundingClientRect().height > 0);
+      if (overlay) return;
+      textarea.focus({ preventScroll: true });
+      focused = document.activeElement === textarea;
+    };
+    const observer = new MutationObserver(() => {
+      if (focused || frame !== undefined) return;
+      frame = requestAnimationFrame(() => { frame = undefined; focus(); });
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'data-open', 'style'] });
+    focus();
+    return () => { observer.disconnect(); if (frame !== undefined) cancelAnimationFrame(frame); };
   }, [focusRequest]);
   const setText = (next: string) => {
     const updated = { revision: draftRef.current.revision + 1, text: next };

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, lstat, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, realpath, lstat, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { loadPortalConfig } from './config.ts';
@@ -78,6 +78,9 @@ export async function manageService(action: string | undefined, args: string[]) 
     await mkdir(release, { recursive: true, mode: 0o700 });
     const binary = join(release, 'weave-portal');
     if (!await exists(binary)) { await copyFile(source, binary); await chmod(binary, 0o700); }
+    for (const component of ['weave-terminal-service', 'terminal-vt.node']) {
+      await copyFile(join(dirname(await realpath(source)), component), join(release, component)); await chmod(join(release, component), 0o700);
+    }
     await atomicJson(join(release, 'version.json'), version);
     const unit = installed?.unit ?? option(args, '--unit') ?? `weave-host-${name}.service`;
     if (!/^weave-[a-z0-9-]+\.service$/.test(unit)) throw new Error('Unit name must be a weave-*.service basename.');

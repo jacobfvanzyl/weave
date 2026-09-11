@@ -15,7 +15,7 @@ import type {
   WorkspaceFileWatchNotification,
 } from '@weave/product-protocol';
 
-type WorkspaceRoot = { workspaceId: string; path: string };
+type WorkspaceRoot = { executionContextId: string; path: string };
 
 export type WorkspaceFileLimits = {
   maxReadBytes: number;
@@ -38,7 +38,7 @@ export type WorkspaceFileDependencies = {
   ): WorkspaceFileSystemWatcher;
   createId(): string;
   /** Catalog-owned roots stay pinned even while unavailable. Checked before file access. */
-  resolveWorkspaceRoot?(workspaceId: string): Promise<{ path: string }>;
+  resolveWorkspaceRoot?(executionContextId: string): Promise<{ path: string }>;
 };
 
 export const DEFAULT_WORKSPACE_FILE_LIMITS: WorkspaceFileLimits = {
@@ -191,7 +191,7 @@ export class WorkspaceFileService {
     const resolved = new Map<string, string>();
     for (const root of roots) {
       if (dependencies.resolveWorkspaceRoot) {
-        resolved.set(root.workspaceId, root.path);
+        resolved.set(root.executionContextId, root.path);
         continue;
       }
       try {
@@ -199,7 +199,7 @@ export class WorkspaceFileService {
         if (!(await stat(path)).isDirectory()) {
           return fail('WORKSPACE_UNAVAILABLE');
         }
-        resolved.set(root.workspaceId, path);
+        resolved.set(root.executionContextId, path);
       } catch (cause) {
         if (cause instanceof WorkspaceFileError) throw cause;
         return fail('WORKSPACE_UNAVAILABLE');
@@ -222,18 +222,18 @@ export class WorkspaceFileService {
     if (!(await stat(path)).isDirectory()) {
       return fail('WORKSPACE_UNAVAILABLE');
     }
-    this.#roots.set(root.workspaceId, path);
+    this.#roots.set(root.executionContextId, path);
   }
 
-  removeRoot(workspaceId: string) {
-    this.#roots.delete(workspaceId);
+  removeRoot(executionContextId: string) {
+    this.#roots.delete(executionContextId);
   }
 
   async list(
-    params: PortalRpcParams<'workspace.file.list'>,
-  ): Promise<PortalRpcResult<'workspace.file.list'>> {
+    params: PortalRpcParams<'context.file.list'>,
+  ): Promise<PortalRpcResult<'context.file.list'>> {
     const path = canonicalPath(params.path, true);
-    const absolutePath = await this.#existingPath(params.workspaceId, path);
+    const absolutePath = await this.#existingPath(params.executionContextId, path);
     if (!(await stat(absolutePath)).isDirectory()) {
       return fail('NOT_DIRECTORY', { path });
     }
@@ -263,10 +263,10 @@ export class WorkspaceFileService {
   }
 
   async read(
-    params: PortalRpcParams<'workspace.file.read'>,
-  ): Promise<PortalRpcResult<'workspace.file.read'>> {
+    params: PortalRpcParams<'context.file.read'>,
+  ): Promise<PortalRpcResult<'context.file.read'>> {
     const path = canonicalPath(params.path);
-    const absolutePath = await this.#regularFile(params.workspaceId, path);
+    const absolutePath = await this.#regularFile(params.executionContextId, path);
     const bytes = await this.#readBounded(
       absolutePath,
       path,
@@ -279,10 +279,10 @@ export class WorkspaceFileService {
   }
 
   async hash(
-    params: PortalRpcParams<'workspace.file.hash'>,
-  ): Promise<PortalRpcResult<'workspace.file.hash'>> {
+    params: PortalRpcParams<'context.file.hash'>,
+  ): Promise<PortalRpcResult<'context.file.hash'>> {
     const path = canonicalPath(params.path);
-    const absolutePath = await this.#regularFile(params.workspaceId, path);
+    const absolutePath = await this.#regularFile(params.executionContextId, path);
     const bytes = await this.#readBounded(
       absolutePath,
       path,
@@ -304,24 +304,24 @@ export class WorkspaceFileService {
   }
 
   async write(
-    params: PortalRpcParams<'workspace.file.write'>,
-  ): Promise<PortalRpcResult<'workspace.file.write'>> {
+    params: PortalRpcParams<'context.file.write'>,
+  ): Promise<PortalRpcResult<'context.file.write'>> {
     return await this.#withMutationLock(
-      params.workspaceId,
+      params.executionContextId,
       () => this.#writeUnlocked(params),
     );
   }
 
   async #writeUnlocked(
-    params: PortalRpcParams<'workspace.file.write'>,
-  ): Promise<PortalRpcResult<'workspace.file.write'>> {
+    params: PortalRpcParams<'context.file.write'>,
+  ): Promise<PortalRpcResult<'context.file.write'>> {
     const path = canonicalPath(params.path);
     const bytes = new TextEncoder().encode(params.content);
     if (bytes.byteLength > this.#limits.maxWriteBytes) {
       return fail('PAYLOAD_TOO_LARGE', { path });
     }
     const { absolutePath, parent } = await this.#writablePath(
-      params.workspaceId,
+      params.executionContextId,
       path,
     );
     const current = await this.#statMaybe(absolutePath);
@@ -399,19 +399,19 @@ export class WorkspaceFileService {
   }
 
   async createDirectory(
-    params: PortalRpcParams<'workspace.directory.create'>,
-  ): Promise<PortalRpcResult<'workspace.directory.create'>> {
+    params: PortalRpcParams<'context.directory.create'>,
+  ): Promise<PortalRpcResult<'context.directory.create'>> {
     return await this.#withMutationLock(
-      params.workspaceId,
+      params.executionContextId,
       () => this.#createDirectoryUnlocked(params),
     );
   }
 
   async #createDirectoryUnlocked(
-    params: PortalRpcParams<'workspace.directory.create'>,
-  ): Promise<PortalRpcResult<'workspace.directory.create'>> {
+    params: PortalRpcParams<'context.directory.create'>,
+  ): Promise<PortalRpcResult<'context.directory.create'>> {
     const path = canonicalPath(params.path);
-    const root = this.#root(params.workspaceId);
+    const root = this.#root(params.executionContextId);
     let current = root;
     for (const segment of path.split('/')) {
       current = `${current}/${segment}`;
@@ -426,23 +426,23 @@ export class WorkspaceFileService {
   }
 
   async move(
-    params: PortalRpcParams<'workspace.file.move'>,
-  ): Promise<PortalRpcResult<'workspace.file.move'>> {
+    params: PortalRpcParams<'context.file.move'>,
+  ): Promise<PortalRpcResult<'context.file.move'>> {
     return await this.#withMutationLock(
-      params.workspaceId,
+      params.executionContextId,
       () => this.#moveUnlocked(params),
     );
   }
 
   async #moveUnlocked(
-    params: PortalRpcParams<'workspace.file.move'>,
-  ): Promise<PortalRpcResult<'workspace.file.move'>> {
+    params: PortalRpcParams<'context.file.move'>,
+  ): Promise<PortalRpcResult<'context.file.move'>> {
     const fromPath = canonicalPath(params.fromPath);
     const toPath = canonicalPath(params.toPath);
     if (fromPath === toPath) return { ok: true, path: toPath };
-    const source = await this.#existingPath(params.workspaceId, fromPath);
+    const source = await this.#existingPath(params.executionContextId, fromPath);
     const { absolutePath: target } = await this.#writablePath(
-      params.workspaceId,
+      params.executionContextId,
       toPath,
     );
     const existingTarget = await this.#statMaybe(target);
@@ -458,19 +458,19 @@ export class WorkspaceFileService {
   }
 
   async delete(
-    params: PortalRpcParams<'workspace.file.delete'>,
-  ): Promise<PortalRpcResult<'workspace.file.delete'>> {
+    params: PortalRpcParams<'context.file.delete'>,
+  ): Promise<PortalRpcResult<'context.file.delete'>> {
     return await this.#withMutationLock(
-      params.workspaceId,
+      params.executionContextId,
       () => this.#deleteUnlocked(params),
     );
   }
 
   async #deleteUnlocked(
-    params: PortalRpcParams<'workspace.file.delete'>,
-  ): Promise<PortalRpcResult<'workspace.file.delete'>> {
+    params: PortalRpcParams<'context.file.delete'>,
+  ): Promise<PortalRpcResult<'context.file.delete'>> {
     const path = canonicalPath(params.path);
-    const absolutePath = await this.#existingPath(params.workspaceId, path);
+    const absolutePath = await this.#existingPath(params.executionContextId, path);
     const details = await lstat(absolutePath);
     if (details.isDirectory() && !params.recursive) {
       try {
@@ -488,10 +488,10 @@ export class WorkspaceFileService {
   }
 
   async search(
-    params: PortalRpcParams<'workspace.file.search'>,
-  ): Promise<PortalRpcResult<'workspace.file.search'>> {
+    params: PortalRpcParams<'context.file.search'>,
+  ): Promise<PortalRpcResult<'context.file.search'>> {
     const path = canonicalPath(params.path, true);
-    const directory = await this.#existingPath(params.workspaceId, path);
+    const directory = await this.#existingPath(params.executionContextId, path);
     if (!(await stat(directory)).isDirectory()) {
       return fail('NOT_DIRECTORY', { path });
     }
@@ -500,12 +500,12 @@ export class WorkspaceFileService {
       params.limit ?? this.#limits.maxSearchResults,
       this.#limits.maxSearchResults,
     );
-    const matches: PortalRpcResult<'workspace.file.search'>['matches'] = [];
+    const matches: PortalRpcResult<'context.file.search'>['matches'] = [];
     let visitedFiles = 0;
     let truncated = false;
 
     const add = (
-      match: PortalRpcResult<'workspace.file.search'>['matches'][number],
+      match: PortalRpcResult<'context.file.search'>['matches'][number],
     ) => {
       if (matches.length >= limit) {
         truncated = true;
@@ -602,7 +602,7 @@ export class WorkspaceFileService {
     const session = new WorkspaceFileWatchSession(
       this.#limits,
       this.#dependencies,
-      (workspaceId, paths) => this.#resolveWatchPaths(workspaceId, paths),
+      (executionContextId, paths) => this.#resolveWatchPaths(executionContextId, paths),
       send,
       () => this.#watchSessions.delete(session),
     );
@@ -614,19 +614,19 @@ export class WorkspaceFileService {
     for (const session of [...this.#watchSessions]) session.close();
   }
 
-  #root(workspaceId: string) {
-    const root = this.#roots.get(workspaceId);
+  #root(executionContextId: string) {
+    const root = this.#roots.get(executionContextId);
     if (!root) return fail('WORKSPACE_UNAVAILABLE');
     return root;
   }
 
-  async #existingPath(workspaceId: string, path: string) {
+  async #existingPath(executionContextId: string, path: string) {
     try {
-      const workspace = await this.#dependencies.resolveWorkspaceRoot?.(workspaceId);
-      if (workspace) this.#roots.set(workspaceId, workspace.path);
+      const workspace = await this.#dependencies.resolveWorkspaceRoot?.(executionContextId);
+      if (workspace) this.#roots.set(executionContextId, workspace.path);
     }
     catch { return fail('WORKSPACE_UNAVAILABLE'); }
-    const root = this.#root(workspaceId);
+    const root = this.#root(executionContextId);
     let current = root;
     for (const segment of path.split('/').filter(Boolean)) {
       current = `${current}/${segment}`;
@@ -653,16 +653,16 @@ export class WorkspaceFileService {
     return resolved;
   }
 
-  async #regularFile(workspaceId: string, path: string) {
-    const absolutePath = await this.#existingPath(workspaceId, path);
+  async #regularFile(executionContextId: string, path: string) {
+    const absolutePath = await this.#existingPath(executionContextId, path);
     if (!(await stat(absolutePath)).isFile()) {
       return fail('NOT_FILE', { path });
     }
     return absolutePath;
   }
 
-  async #writablePath(workspaceId: string, path: string) {
-    const parent = await this.#existingPath(workspaceId, parentPath(path));
+  async #writablePath(executionContextId: string, path: string) {
+    const parent = await this.#existingPath(executionContextId, parentPath(path));
     if (!(await stat(parent)).isDirectory()) {
       return fail('NOT_DIRECTORY', { path });
     }
@@ -706,17 +706,17 @@ export class WorkspaceFileService {
     }
   }
 
-  async #resolveWatchPaths(workspaceId: string, paths: string[]) {
+  async #resolveWatchPaths(executionContextId: string, paths: string[]) {
     if (!paths.length || paths.length > this.#limits.maxWatchPaths) {
       return fail('INVALID_PATH');
     }
-    const root = this.#root(workspaceId);
+    const root = this.#root(executionContextId);
     const unique = [...new Set(paths.map((path) => canonicalPath(path, true)))];
     const resolved: Array<{ path: string; absolutePath: string }> = [];
     for (const path of unique) {
       resolved.push({
         path,
-        absolutePath: await this.#existingPath(workspaceId, path),
+        absolutePath: await this.#existingPath(executionContextId, path),
       });
     }
     return { root, paths: resolved };
@@ -730,7 +730,7 @@ type ResolvedWatchPaths = {
 
 class WorkspaceFileWatchSubscription {
   readonly id: string;
-  readonly workspaceId: string;
+  readonly executionContextId: string;
   readonly #dependencies: WorkspaceFileDependencies;
   readonly #debounceMs: number;
   readonly #send: (notification: WorkspaceFileWatchNotification) => void;
@@ -748,14 +748,14 @@ class WorkspaceFileWatchSubscription {
 
   constructor(
     id: string,
-    workspaceId: string,
+    executionContextId: string,
     resolved: ResolvedWatchPaths,
     dependencies: WorkspaceFileDependencies,
     debounceMs: number,
     send: (notification: WorkspaceFileWatchNotification) => void,
   ) {
     this.id = id;
-    this.workspaceId = workspaceId;
+    this.executionContextId = executionContextId;
     this.#resolved = resolved;
     this.#dependencies = dependencies;
     this.#debounceMs = debounceMs;
@@ -865,7 +865,7 @@ export class WorkspaceFileWatchSession {
   readonly #limits: WorkspaceFileLimits;
   readonly #dependencies: WorkspaceFileDependencies;
   readonly #resolve: (
-    workspaceId: string,
+    executionContextId: string,
     paths: string[],
   ) => Promise<ResolvedWatchPaths>;
   readonly #send: (notification: WorkspaceFileWatchNotification) => void;
@@ -877,7 +877,7 @@ export class WorkspaceFileWatchSession {
     limits: WorkspaceFileLimits,
     dependencies: WorkspaceFileDependencies,
     resolve: (
-      workspaceId: string,
+      executionContextId: string,
       paths: string[],
     ) => Promise<ResolvedWatchPaths>,
     send: (notification: WorkspaceFileWatchNotification) => void,
@@ -891,14 +891,14 @@ export class WorkspaceFileWatchSession {
   }
 
   async start(
-    params: PortalRpcParams<'workspace.file.watch.start'>,
-  ): Promise<PortalRpcResult<'workspace.file.watch.start'>> {
+    params: PortalRpcParams<'context.file.watch.start'>,
+  ): Promise<PortalRpcResult<'context.file.watch.start'>> {
     if (this.#closed) return fail('WATCH_NOT_FOUND');
-    const resolved = await this.#resolve(params.workspaceId, params.paths);
+    const resolved = await this.#resolve(params.executionContextId, params.paths);
     const id = this.#dependencies.createId();
     const subscription = new WorkspaceFileWatchSubscription(
       id,
-      params.workspaceId,
+      params.executionContextId,
       resolved,
       this.#dependencies,
       this.#limits.watchDebounceMs,
@@ -910,12 +910,12 @@ export class WorkspaceFileWatchSession {
   }
 
   async update(
-    params: PortalRpcParams<'workspace.file.watch.update'>,
-  ): Promise<PortalRpcResult<'workspace.file.watch.update'>> {
+    params: PortalRpcParams<'context.file.watch.update'>,
+  ): Promise<PortalRpcResult<'context.file.watch.update'>> {
     const subscription = this.#subscriptions.get(params.subscriptionId);
     if (!subscription) return fail('WATCH_NOT_FOUND');
     const resolved = await this.#resolve(
-      subscription.workspaceId,
+      subscription.executionContextId,
       params.paths,
     );
     subscription.update(resolved);
@@ -923,8 +923,8 @@ export class WorkspaceFileWatchSession {
   }
 
   stop(
-    params: PortalRpcParams<'workspace.file.watch.stop'>,
-  ): PortalRpcResult<'workspace.file.watch.stop'> {
+    params: PortalRpcParams<'context.file.watch.stop'>,
+  ): PortalRpcResult<'context.file.watch.stop'> {
     const subscription = this.#subscriptions.get(params.subscriptionId);
     if (!subscription) return fail('WATCH_NOT_FOUND');
     subscription.close();

@@ -1,3 +1,5 @@
+import { TERMINAL_CODEC } from '@weave/product-protocol';
+const bytes = (text: string) => new TextEncoder().encode(text);
 import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { TerminalOutputStream } from '@/terminal/output-stream';
@@ -19,7 +21,7 @@ vi.mock('@/terminal/native-terminal', async (importOriginal) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   native.listener = undefined;
-  native.create.mockResolvedValue({ surfaceId: 'native-1', renderer: 'libghostty-vt-coretext' });
+  native.create.mockResolvedValue({ surfaceId: 'native-1', renderer: 'libghostty-vt-coretext', codec: TERMINAL_CODEC });
   native.layout.mockResolvedValue({ cols: 80, rows: 24 });
   native.write.mockResolvedValue(undefined);
   native.close.mockResolvedValue(undefined);
@@ -33,11 +35,11 @@ it('awaits native snapshot consumption before live output and fences read-only a
   let consume!: () => void;
   native.write.mockImplementationOnce(() => new Promise<void>((resolve) => { consume = resolve; }));
   const output = new TerminalOutputStream(vi.fn());
-  output.reset('snapshot 界');
+  output.reset(bytes('snapshot 界'));
   const input = vi.fn();
   const { rerender, unmount } = render(<NativeTerminalView output={output} readOnly={false} onInput={input} />);
   await waitFor(() => expect(native.write).toHaveBeenCalledOnce());
-  output.write('live');
+  output.write(bytes('live'));
   expect(native.write).toHaveBeenCalledTimes(1);
   await act(async () => consume());
   await waitFor(() => expect(native.write).toHaveBeenCalledTimes(2));
@@ -45,7 +47,9 @@ it('awaits native snapshot consumption before live output and fences read-only a
   act(() => native.listener?.({ surfaceId: 'other', kind: 'input', data: btoa('foreign') }));
   expect(input).not.toHaveBeenCalled();
   act(() => native.listener?.({ surfaceId: 'native-1', kind: 'input', data: btoa('typed') }));
-  expect(input).toHaveBeenCalledWith('typed');
+  expect(input).toHaveBeenCalledWith(bytes('typed'));
+  act(() => native.listener?.({ surfaceId: 'native-1', kind: 'input', data: btoa('\x1b[M\xff\x80\xa0') }));
+  expect(input).toHaveBeenLastCalledWith(new Uint8Array([27, 91, 77, 255, 128, 160]));
   input.mockClear();
   rerender(<NativeTerminalView output={output} readOnly onInput={input} />);
   act(() => native.listener?.({ surfaceId: 'native-1', kind: 'input', data: btoa('readonly') }));
@@ -59,7 +63,7 @@ it('awaits native snapshot consumption before live output and fences read-only a
 it('closes a view created after unmount without attaching an output consumer', async () => {
   let created!: (value: { surfaceId: string; renderer: string }) => void;
   native.create.mockImplementationOnce(() => new Promise((resolve) => { created = resolve; }));
-  const output = new TerminalOutputStream(vi.fn()); output.reset('pending');
+  const output = new TerminalOutputStream(vi.fn()); output.reset(bytes('pending'));
   const { unmount } = render(<NativeTerminalView output={output} readOnly={false} />);
   await waitFor(() => expect(native.create).toHaveBeenCalledOnce());
   unmount();
@@ -77,7 +81,7 @@ it('surfaces native input failure instead of treating the view as usable', async
 it('waits for native geometry before replaying a saved screen', async () => {
   let fitted!: (value: { cols: number; rows: number }) => void;
   native.layout.mockImplementationOnce(() => new Promise((resolve) => { fitted = resolve; }));
-  const output = new TerminalOutputStream(vi.fn()); output.reset('saved viewport');
+  const output = new TerminalOutputStream(vi.fn()); output.reset(bytes('saved viewport'));
   render(<NativeTerminalView output={output} readOnly={false} />);
   await waitFor(() => expect(native.layout).toHaveBeenCalled());
   expect(native.write).not.toHaveBeenCalled();
@@ -118,5 +122,25 @@ it('restores requested observer focus after layout, without recreating or resizi
     expect(resize).not.toHaveBeenCalled();
     act(() => native.listener?.({ surfaceId: 'native-1', kind: 'input', data: btoa('blocked') }));
     expect(input).not.toHaveBeenCalled();
+  } finally { rectangle.mockRestore(); }
+});
+
+it('honors repeated input focus requests and cancels focus pending in native layout', async () => {
+  const rectangle = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, width: 720, height: 360 } as DOMRect);
+  const output = new TerminalOutputStream(vi.fn());
+  const content = (focusRequest?: string) => <NativeTerminalView output={output} readOnly={false} focusRequest={focusRequest} />;
+  try {
+    const { rerender } = render(content('selection-1'));
+    await waitFor(() => expect(native.focus).toHaveBeenCalledTimes(1));
+    rerender(content('selection-2'));
+    await waitFor(() => expect(native.focus).toHaveBeenCalledTimes(2));
+    let finishLayout: ((size: { cols: number; rows: number }) => void) | undefined;
+    native.layout.mockImplementationOnce(() => new Promise((resolve) => { finishLayout = resolve; }));
+    rerender(content('selection-3'));
+    await waitFor(() => expect(finishLayout).toBeDefined());
+    rerender(content());
+    await act(async () => finishLayout!({ cols: 80, rows: 24 }));
+    expect(native.focus).toHaveBeenCalledTimes(2);
+    expect(native.create).toHaveBeenCalledOnce();
   } finally { rectangle.mockRestore(); }
 });

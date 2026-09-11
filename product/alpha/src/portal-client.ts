@@ -1,3 +1,4 @@
+import { encodeHostMessage, decodeHostMessage } from '@weave/product-protocol';
 import {
   type AgentSummary,
   parsePortalRpcResult,
@@ -15,8 +16,8 @@ import {
   WORKSPACE_FILE_WATCH_EVENT_METHOD,
   type WorkspaceFileErrorData,
   type WorkspaceFileWatchEvent,
-  type WorkspaceSummary,
-  type WorkspaceTab,
+  type ExecutionContextSummary,
+  type Workspace,
 } from "@weave/product-protocol";
 import type {
   ContentBlock,
@@ -63,6 +64,8 @@ class JsonRpcWebSocket {
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
   private opened: Promise<void>;
   private closedByClient = false;
+  private transportError?: PortalTransportError;
+  private rejectOpened!: (error: Error) => void;
 
   constructor(
     private readonly socket: WebSocket,
@@ -71,47 +74,70 @@ class JsonRpcWebSocket {
     private readonly onRequest?: RequestHandler,
   ) {
     this.opened = new Promise<void>((resolve, reject) => {
+      this.rejectOpened = reject;
       socket.onopen = () => resolve();
       socket.onerror = () =>
         reject(
           new PortalTransportError("The Host WebSocket could not be opened."),
         );
     });
-    socket.onmessage = (event) => void this.receive(String(event.data));
+    // Closing before the first request must not leave an unhandled rejection.
+    void this.opened.catch(() => undefined);
+    socket.onmessage = (event) => { void this.receive(event.data).catch(() => {
+      const error = new PortalTransportError('The Host sent an invalid frame.');
+      this.rejectTransport(error); this.socket.close(1002, error.message);
+      if (!this.closedByClient) this.onUnexpectedClose?.(error);
+    }); };
     socket.onclose = (event) => {
       const error = new PortalTransportError(
         event.reason || `The Host WebSocket closed (${event.code}).`,
         event.code,
       );
-      for (const request of this.pending.values()) request.reject(error);
-      this.pending.clear();
+      this.rejectTransport(error);
       if (!this.closedByClient) this.onUnexpectedClose?.(error);
     };
   }
 
   async request(method: string, params?: unknown): Promise<unknown> {
+    if (this.transportError) throw this.transportError;
     await this.opened;
+    // A close may arrive while this request is waiting for authentication.
+    if (this.transportError) throw this.transportError;
+    if (this.pending.size >= 1024 || this.socket.bufferedAmount > 2 * 1024 * 1024) throw new PortalTransportError('Terminal input queue is full; input was not sent.');
     const id = ++this.nextId;
     return await new Promise((resolve, reject) => {
       this.pending.set(id, { method, resolve, reject });
-      this.socket.send(
-        JSON.stringify({
+      try {
+        this.socket.send(encodeHostMessage({
           jsonrpc: "2.0",
           id,
           method,
           ...(params === undefined ? {} : { params }),
-        }),
-      );
+        }));
+      } catch (cause) {
+        this.pending.delete(id);
+        reject(new PortalTransportError(cause instanceof Error ? cause.message : 'The Host WebSocket could not send the request.'));
+      }
     });
   }
 
   close() {
     this.closedByClient = true;
+    // Browser close events are asynchronous. Release queues immediately so a
+    // new client never waits on cleanup through this retired connection.
+    this.rejectTransport(new PortalTransportError('Weave disconnected.'));
     this.socket.close(1000, "Weave disconnected.");
   }
 
-  private async receive(text: string) {
-    const message = JSON.parse(text) as Record<string, unknown>;
+  private rejectTransport(error: PortalTransportError) {
+    this.transportError ??= error;
+    this.rejectOpened(this.transportError);
+    for (const request of this.pending.values()) request.reject(this.transportError);
+    this.pending.clear();
+  }
+
+  private async receive(text: string | ArrayBuffer) {
+    const message = decodeHostMessage(text) as Record<string, unknown>;
     if (typeof message.method === "string") {
       if (typeof message.id === "number" || typeof message.id === "string") {
         try {
@@ -179,7 +205,7 @@ export type HostSnapshot = {
   hostId: string;
   displayName: string;
   capabilities: string[];
-  workspaces: WorkspaceSummary[];
+  executionContexts: ExecutionContextSummary[];
   agents: AgentSummary[];
   threads: ThreadSummary[];
   archivedThreads: ThreadSummary[];
@@ -231,8 +257,8 @@ export class DirectHostClient {
     const supportsThreadLifecycle =
       capabilities.capabilities.includes("thread.archive") &&
       capabilities.capabilities.includes("thread.restore");
-    const [workspaces, agents, threads, archivedThreads] = await Promise.all([
-      this.request("workspace.list", {}),
+    const [executionContexts, agents, threads, archivedThreads] = await Promise.all([
+      this.request("context.list", {}),
       this.request("agent.list", {}),
       this.request("thread.list", { status: "active" }),
       supportsThreadLifecycle
@@ -243,7 +269,7 @@ export class DirectHostClient {
       hostId: capabilities.hostId,
       displayName: capabilities.displayName,
       capabilities: capabilities.capabilities,
-      workspaces: workspaces.workspaces,
+      executionContexts: executionContexts.executionContexts,
       agents: agents.agents,
       threads: threads.threads,
       archivedThreads: archivedThreads.threads,
@@ -273,9 +299,10 @@ export class DirectHostClient {
     return prepared.thread;
   }
 
-  async createThread(workspaceId: string, agentId: string, title?: string) {
+  async createThread(executionContextId: string, agentId: string, title?: string, workspaceId?: string) {
     return (
       await this.request("thread.create", {
+        executionContextId,
         workspaceId,
         agentId,
         ...(title ? { title } : {}),
@@ -284,12 +311,14 @@ export class DirectHostClient {
   }
 
   async createThreadDraft(
-    workspaceId: string,
+    executionContextId: string,
     agentId: string,
     title?: string,
+    workspaceId?: string,
   ) {
     return (
       await this.request("thread.draft.create", {
+        executionContextId,
         workspaceId,
         agentId,
         ...(title ? { title } : {}),
@@ -308,15 +337,19 @@ export class DirectHostClient {
 
   async addWorkspace(path: string, name?: string) {
     return (
-      await this.request("workspace.add", {
+      await this.request("context.add", {
         path,
         ...(name ? { name } : {}),
       })
     ).workspace;
   }
 
-  async removeWorkspace(workspaceId: string) {
-    await this.request("workspace.remove", { workspaceId });
+  async removeWorkspace(executionContextId: string) {
+    await this.request("context.remove", { executionContextId });
+  }
+
+  async assignThread(threadId: string, hostId: string, workspaceId: string, expectedRevision: number) {
+    return (await this.request('thread.assign', { threadId, hostId, workspaceId, expectedRevision })).thread;
   }
 
   async archiveThread(threadId: string) {
@@ -334,67 +367,67 @@ export class DirectHostClient {
     return (await this.request("thread.restore", { threadId })).thread;
   }
 
-  listWorkspaceFiles(workspaceId: string, path: string) {
-    return this.request("workspace.file.list", { workspaceId, path });
+  listWorkspaceFiles(executionContextId: string, path: string) {
+    return this.request("context.file.list", { executionContextId, path });
   }
 
-  readWorkspaceFile(workspaceId: string, path: string) {
-    return this.request("workspace.file.read", { workspaceId, path });
+  readWorkspaceFile(executionContextId: string, path: string) {
+    return this.request("context.file.read", { executionContextId, path });
   }
 
-  hashWorkspaceFile(workspaceId: string, path: string) {
-    return this.request("workspace.file.hash", { workspaceId, path });
+  hashWorkspaceFile(executionContextId: string, path: string) {
+    return this.request("context.file.hash", { executionContextId, path });
   }
 
   writeWorkspaceFile(
-    workspaceId: string,
+    executionContextId: string,
     path: string,
     content: string,
     expectedContentHash: string | null,
   ) {
-    return this.request("workspace.file.write", {
-      workspaceId,
+    return this.request("context.file.write", {
+      executionContextId,
       path,
       content,
       expectedContentHash,
     });
   }
 
-  createWorkspaceDirectory(workspaceId: string, path: string) {
-    return this.request("workspace.directory.create", { workspaceId, path });
+  createWorkspaceDirectory(executionContextId: string, path: string) {
+    return this.request("context.directory.create", { executionContextId, path });
   }
 
   moveWorkspaceFile(
-    workspaceId: string,
+    executionContextId: string,
     fromPath: string,
     toPath: string,
     overwrite?: boolean,
   ) {
-    return this.request("workspace.file.move", {
-      workspaceId,
+    return this.request("context.file.move", {
+      executionContextId,
       fromPath,
       toPath,
       ...(overwrite === undefined ? {} : { overwrite }),
     });
   }
 
-  deleteWorkspaceFile(workspaceId: string, path: string, recursive?: boolean) {
-    return this.request("workspace.file.delete", {
-      workspaceId,
+  deleteWorkspaceFile(executionContextId: string, path: string, recursive?: boolean) {
+    return this.request("context.file.delete", {
+      executionContextId,
       path,
       ...(recursive === undefined ? {} : { recursive }),
     });
   }
 
   searchWorkspaceFiles(
-    workspaceId: string,
+    executionContextId: string,
     path: string,
     query: string,
     scope: "path" | "content" | "both" = "both",
     limit?: number,
   ) {
-    return this.request("workspace.file.search", {
-      workspaceId,
+    return this.request("context.file.search", {
+      executionContextId,
       path,
       query,
       scope,
@@ -403,12 +436,12 @@ export class DirectHostClient {
   }
 
   async watchWorkspaceFiles(
-    workspaceId: string,
+    executionContextId: string,
     paths: string[],
     onEvent: (event: WorkspaceFileWatchEvent) => void,
   ) {
-    const started = await this.request("workspace.file.watch.start", {
-      workspaceId,
+    const started = await this.request("context.file.watch.start", {
+      executionContextId,
       paths,
     });
     this.workspaceFileWatchListeners.set(started.subscriptionId, onEvent);
@@ -417,7 +450,7 @@ export class DirectHostClient {
       subscriptionId: started.subscriptionId,
       paths: started.paths,
       update: async (nextPaths: string[]) => {
-        const updated = await this.request("workspace.file.watch.update", {
+        const updated = await this.request("context.file.watch.update", {
           subscriptionId: started.subscriptionId,
           paths: nextPaths,
         });
@@ -427,45 +460,53 @@ export class DirectHostClient {
         if (closed) return;
         closed = true;
         this.workspaceFileWatchListeners.delete(started.subscriptionId);
-        await this.request("workspace.file.watch.stop", {
+        await this.request("context.file.watch.stop", {
           subscriptionId: started.subscriptionId,
         }).catch(() => undefined);
       },
     };
   }
 
-  getWorkspaceComposition(workspaceId: string) {
-    return this.request("workspace.composition.get", { workspaceId });
+  previewWorkspaceClose(hostId: string, workspaceId: string) {
+    return this.request('workspace.close.preview', { hostId, workspaceId });
   }
 
-  replaceWorkspaceComposition(workspaceId: string, expectedRevision: number, tabs: WorkspaceTab[]) {
-    return this.request("workspace.composition.replace", { workspaceId, expectedRevision, tabs });
+  closeWorkspace(hostId: string, workspaceId: string, token: string, confirmed: boolean) {
+    return this.request('workspace.close', { hostId, workspaceId, token, confirmed });
   }
 
-  listTerminals(workspaceId: string) {
-    return this.request("terminal.list", { workspaceId });
+  getWorkspaceComposition(hostId: string) {
+    return this.request("workspace.composition.get", { hostId });
   }
 
-  createTerminal(workspaceId: string, cols?: number, rows?: number) {
+  replaceWorkspaceComposition(hostId: string, expectedRevision: number, workspaces: Workspace[]) {
+    return this.request("workspace.composition.replace", { hostId, expectedRevision, workspaces });
+  }
+
+  listTerminals(executionContextId: string) {
+    return this.request("terminal.list", { executionContextId });
+  }
+
+  createTerminal(executionContextId: string, cols?: number, rows?: number) {
     return this.request("terminal.create", {
-      workspaceId,
+      executionContextId,
       ...(cols === undefined ? {} : { cols }),
       ...(rows === undefined ? {} : { rows }),
     });
   }
 
-  snapshotTerminal(workspaceId: string, terminalId: string) {
-    return this.request("terminal.snapshot", { workspaceId, terminalId });
+  snapshotTerminal(executionContextId: string, terminalId: string) {
+    return this.request("terminal.snapshot", { executionContextId, terminalId });
   }
 
   async attachTerminal(
-    workspaceId: string,
+    executionContextId: string,
     terminalId: string,
     mode: TerminalAttachmentMode,
     onEvent: (event: TerminalNotification) => void,
   ) {
     const result = await this.request("terminal.attach", {
-      workspaceId,
+      executionContextId,
       terminalId,
       mode,
     });
@@ -491,7 +532,7 @@ export class DirectHostClient {
           onEvent({
             attachmentId: result.attachment.attachmentId,
             terminalId: result.snapshot.terminal.terminalId,
-            workspaceId: result.snapshot.terminal.workspaceId,
+            executionContextId: result.snapshot.terminal.executionContextId,
             generation: result.snapshot.generation,
             sequence: result.snapshot.cursor + 1,
             event: {
@@ -515,29 +556,33 @@ export class DirectHostClient {
     };
   }
 
+  historyTerminal(executionContextId: string, terminalId: string, attachmentId: string, token: string, page: number) {
+    return this.request('terminal.history', { executionContextId, terminalId, attachmentId, token, page });
+  }
+
   inputTerminal(
-    workspaceId: string,
+    executionContextId: string,
     terminalId: string,
     attachmentId: string,
-    data: string,
+    data: string | Uint8Array,
   ) {
     return this.request("terminal.input", {
-      workspaceId,
+      executionContextId,
       terminalId,
       attachmentId,
-      data,
+      data: typeof data === 'string' ? new TextEncoder().encode(data) : data,
     });
   }
 
   resizeTerminal(
-    workspaceId: string,
+    executionContextId: string,
     terminalId: string,
     attachmentId: string,
     cols: number,
     rows: number,
   ) {
     return this.request("terminal.resize", {
-      workspaceId,
+      executionContextId,
       terminalId,
       attachmentId,
       cols,
@@ -546,7 +591,7 @@ export class DirectHostClient {
   }
 
   async detachTerminal(
-    workspaceId: string,
+    executionContextId: string,
     terminalId: string,
     attachmentId: string,
   ) {
@@ -554,19 +599,19 @@ export class DirectHostClient {
     this.pendingTerminalNotifications.delete(attachmentId);
     this.overflowedTerminalAttachments.delete(attachmentId);
     return await this.request("terminal.detach", {
-      workspaceId,
+      executionContextId,
       terminalId,
       attachmentId,
     });
   }
 
   async closeTerminal(
-    workspaceId: string,
+    executionContextId: string,
     terminalId: string,
     attachmentId: string,
   ) {
     const result = await this.request("terminal.close", {
-      workspaceId,
+      executionContextId,
       terminalId,
       attachmentId,
     });

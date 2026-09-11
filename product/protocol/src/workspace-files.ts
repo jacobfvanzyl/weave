@@ -1,4 +1,4 @@
-export const WORKSPACE_FILE_WATCH_EVENT_METHOD = 'workspace.file.watch.event' as const;
+export const WORKSPACE_FILE_WATCH_EVENT_METHOD = 'context.file.watch.event' as const;
 
 export type WorkspaceFileEntry = {
   name: string;
@@ -60,37 +60,37 @@ export type WorkspaceFileErrorData = {
 };
 
 export type WorkspaceFileRpcContracts = {
-  'workspace.file.list': {
-    params: { workspaceId: string; path: string };
+  'context.file.list': {
+    params: { executionContextId: string; path: string };
     result: { path: string; entries: WorkspaceFileEntry[]; truncated: boolean };
   };
-  'workspace.file.read': {
-    params: { workspaceId: string; path: string };
+  'context.file.read': {
+    params: { executionContextId: string; path: string };
     result: WorkspaceFileMetadata & { content: string };
   };
-  'workspace.file.hash': {
-    params: { workspaceId: string; path: string };
+  'context.file.hash': {
+    params: { executionContextId: string; path: string };
     result: WorkspaceFileMetadata & { lineCount?: number };
   };
-  'workspace.file.write': {
-    params: { workspaceId: string; path: string; content: string; expectedContentHash: string | null };
+  'context.file.write': {
+    params: { executionContextId: string; path: string; content: string; expectedContentHash: string | null };
     result: WorkspaceFileMetadata;
   };
-  'workspace.directory.create': {
-    params: { workspaceId: string; path: string };
+  'context.directory.create': {
+    params: { executionContextId: string; path: string };
     result: { ok: true; path: string };
   };
-  'workspace.file.move': {
-    params: { workspaceId: string; fromPath: string; toPath: string; overwrite?: boolean };
+  'context.file.move': {
+    params: { executionContextId: string; fromPath: string; toPath: string; overwrite?: boolean };
     result: { ok: true; path: string };
   };
-  'workspace.file.delete': {
-    params: { workspaceId: string; path: string; recursive?: boolean };
+  'context.file.delete': {
+    params: { executionContextId: string; path: string; recursive?: boolean };
     result: { ok: true; path: string };
   };
-  'workspace.file.search': {
+  'context.file.search': {
     params: {
-      workspaceId: string;
+      executionContextId: string;
       path: string;
       query: string;
       scope: 'path' | 'content' | 'both';
@@ -98,15 +98,15 @@ export type WorkspaceFileRpcContracts = {
     };
     result: { path: string; matches: WorkspaceFileSearchMatch[]; truncated: boolean };
   };
-  'workspace.file.watch.start': {
-    params: { workspaceId: string; paths: string[] };
+  'context.file.watch.start': {
+    params: { executionContextId: string; paths: string[] };
     result: { subscriptionId: string; paths: string[] };
   };
-  'workspace.file.watch.update': {
+  'context.file.watch.update': {
     params: { subscriptionId: string; paths: string[] };
     result: { subscriptionId: string; paths: string[] };
   };
-  'workspace.file.watch.stop': {
+  'context.file.watch.stop': {
     params: { subscriptionId: string };
     result: { ok: true };
   };
@@ -114,17 +114,17 @@ export type WorkspaceFileRpcContracts = {
 
 export type WorkspaceFileRpcMethod = keyof WorkspaceFileRpcContracts;
 export const WORKSPACE_FILE_RPC_METHODS = [
-  'workspace.file.list',
-  'workspace.file.read',
-  'workspace.file.hash',
-  'workspace.file.write',
-  'workspace.directory.create',
-  'workspace.file.move',
-  'workspace.file.delete',
-  'workspace.file.search',
-  'workspace.file.watch.start',
-  'workspace.file.watch.update',
-  'workspace.file.watch.stop',
+  'context.file.list',
+  'context.file.read',
+  'context.file.hash',
+  'context.file.write',
+  'context.directory.create',
+  'context.file.move',
+  'context.file.delete',
+  'context.file.search',
+  'context.file.watch.start',
+  'context.file.watch.update',
+  'context.file.watch.stop',
 ] as const satisfies readonly WorkspaceFileRpcMethod[];
 
 const object = (value: unknown, context: string): Record<string, unknown> => {
@@ -166,7 +166,7 @@ const hash = (value: unknown, context: string) => {
 
 const workspaceParams = (value: unknown, method: string) => {
   const input = object(value, `${method} params`);
-  return { input, workspaceId: text(input.workspaceId, 'workspaceId') };
+  return { input, executionContextId: text(input.executionContextId, 'executionContextId') };
 };
 
 const operationResult = (value: unknown, context: string) => {
@@ -205,56 +205,56 @@ export const parseWorkspaceFileRpcParams = <Method extends WorkspaceFileRpcMetho
   method: Method,
   value: unknown,
 ): WorkspaceFileRpcContracts[Method]['params'] => {
-  if (method === 'workspace.file.watch.update') {
+  if (method === 'context.file.watch.update') {
     const input = object(value, `${method} params`);
     return {
       subscriptionId: text(input.subscriptionId, 'subscriptionId'),
       paths: stringArray(input.paths, 'paths'),
     } as WorkspaceFileRpcContracts[Method]['params'];
   }
-  if (method === 'workspace.file.watch.stop') {
+  if (method === 'context.file.watch.stop') {
     const input = object(value, `${method} params`);
     return {
       subscriptionId: text(input.subscriptionId, 'subscriptionId'),
     } as WorkspaceFileRpcContracts[Method]['params'];
   }
 
-  const { input, workspaceId } = workspaceParams(value, method);
+  const { input, executionContextId } = workspaceParams(value, method);
   switch (method) {
-    case 'workspace.file.list':
-    case 'workspace.file.read':
-    case 'workspace.file.hash':
-    case 'workspace.directory.create':
+    case 'context.file.list':
+    case 'context.file.read':
+    case 'context.file.hash':
+    case 'context.directory.create':
       return {
-        workspaceId,
-        path: text(input.path, 'path', method === 'workspace.file.list'),
+        executionContextId,
+        path: text(input.path, 'path', method === 'context.file.list'),
       } as WorkspaceFileRpcContracts[Method]['params'];
-    case 'workspace.file.write':
+    case 'context.file.write':
       if (input.expectedContentHash !== null && input.expectedContentHash === undefined) {
         throw new Error('expectedContentHash is required.');
       }
       return {
-        workspaceId,
+        executionContextId,
         path: text(input.path, 'path'),
         content: text(input.content, 'content', true),
         expectedContentHash: input.expectedContentHash === null
           ? null
           : hash(input.expectedContentHash, 'expectedContentHash'),
       } as WorkspaceFileRpcContracts[Method]['params'];
-    case 'workspace.file.move':
+    case 'context.file.move':
       return {
-        workspaceId,
+        executionContextId,
         fromPath: text(input.fromPath, 'fromPath'),
         toPath: text(input.toPath, 'toPath'),
         ...(input.overwrite === undefined ? {} : { overwrite: boolean(input.overwrite, 'overwrite') }),
       } as WorkspaceFileRpcContracts[Method]['params'];
-    case 'workspace.file.delete':
+    case 'context.file.delete':
       return {
-        workspaceId,
+        executionContextId,
         path: text(input.path, 'path'),
         ...(input.recursive === undefined ? {} : { recursive: boolean(input.recursive, 'recursive') }),
       } as WorkspaceFileRpcContracts[Method]['params'];
-    case 'workspace.file.search': {
+    case 'context.file.search': {
       const scope = input.scope ?? 'both';
       if (scope !== 'path' && scope !== 'content' && scope !== 'both') throw new Error('scope is invalid.');
       const limit = input.limit === undefined ? undefined : nonNegativeInteger(input.limit, 'limit');
@@ -262,15 +262,15 @@ export const parseWorkspaceFileRpcParams = <Method extends WorkspaceFileRpcMetho
       const query = text(input.query, 'query');
       if (query.length > 256) throw new Error('query must be at most 256 characters.');
       return {
-        workspaceId,
+        executionContextId,
         path: text(input.path ?? '', 'path', true),
         query,
         scope,
         ...(limit === undefined ? {} : { limit }),
       } as WorkspaceFileRpcContracts[Method]['params'];
     }
-    case 'workspace.file.watch.start':
-      return { workspaceId, paths: stringArray(input.paths, 'paths') } as WorkspaceFileRpcContracts[Method]['params'];
+    case 'context.file.watch.start':
+      return { executionContextId, paths: stringArray(input.paths, 'paths') } as WorkspaceFileRpcContracts[Method]['params'];
     default:
       throw new Error(`Unknown Workspace file method: ${method}`);
   }
@@ -282,30 +282,30 @@ export const parseWorkspaceFileRpcResult = <Method extends WorkspaceFileRpcMetho
 ): WorkspaceFileRpcContracts[Method]['result'] => {
   const result = object(value, `${method} result`);
   switch (method) {
-    case 'workspace.file.list':
+    case 'context.file.list':
       if (!Array.isArray(result.entries)) throw new Error('entries must be an array.');
       return {
         path: text(result.path, 'path', true),
         entries: result.entries.map(entry),
         truncated: boolean(result.truncated, 'truncated'),
       } as WorkspaceFileRpcContracts[Method]['result'];
-    case 'workspace.file.read':
+    case 'context.file.read':
       return {
         ...metadata(result, 'file'),
         content: text(result.content, 'content', true),
       } as WorkspaceFileRpcContracts[Method]['result'];
-    case 'workspace.file.hash':
+    case 'context.file.hash':
       return {
         ...metadata(result, 'file'),
         ...(result.lineCount === undefined ? {} : { lineCount: nonNegativeInteger(result.lineCount, 'lineCount') }),
       } as WorkspaceFileRpcContracts[Method]['result'];
-    case 'workspace.file.write':
+    case 'context.file.write':
       return metadata(result, 'file') as WorkspaceFileRpcContracts[Method]['result'];
-    case 'workspace.directory.create':
-    case 'workspace.file.move':
-    case 'workspace.file.delete':
+    case 'context.directory.create':
+    case 'context.file.move':
+    case 'context.file.delete':
       return operationResult(result, method) as WorkspaceFileRpcContracts[Method]['result'];
-    case 'workspace.file.search': {
+    case 'context.file.search': {
       if (!Array.isArray(result.matches)) throw new Error('matches must be an array.');
       return {
         path: text(result.path, 'path', true),
@@ -323,13 +323,13 @@ export const parseWorkspaceFileRpcResult = <Method extends WorkspaceFileRpcMetho
         truncated: boolean(result.truncated, 'truncated'),
       } as WorkspaceFileRpcContracts[Method]['result'];
     }
-    case 'workspace.file.watch.start':
-    case 'workspace.file.watch.update':
+    case 'context.file.watch.start':
+    case 'context.file.watch.update':
       return {
         subscriptionId: text(result.subscriptionId, 'subscriptionId'),
         paths: stringArray(result.paths, 'paths'),
       } as WorkspaceFileRpcContracts[Method]['result'];
-    case 'workspace.file.watch.stop':
+    case 'context.file.watch.stop':
       if (result.ok !== true) throw new Error('ok must be true.');
       return { ok: true } as WorkspaceFileRpcContracts[Method]['result'];
   }

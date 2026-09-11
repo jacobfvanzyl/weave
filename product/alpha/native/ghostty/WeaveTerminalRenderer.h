@@ -6,8 +6,15 @@ NS_ASSUME_NONNULL_BEGIN
  * Host connection, PTY, workspace identity, credential or process lifetime. */
 @interface WeaveTerminalRenderer : NSObject
 + (nullable instancetype)make;
++ (NSString *)codecIdentity;
++ (BOOL)registerFontsAtURL:(NSURL *)directory;
+@property(nonatomic, readonly) NSString *fontName;
 @property(nonatomic, copy, nullable) void (^writeInput)(NSData *data);
 @property(nonatomic) BOOL readOnly;
+@property(nonatomic) CGFloat focusBorderWidth;
+@property(nonatomic) CGFloat focusBorderRadius;
+@property(nonatomic) uint32_t focusBorderRGB;
+- (void)drawFocusBorderInContext:(CGContextRef)context size:(CGSize)size NS_SWIFT_NAME(drawFocusBorder(in:size:));
 @property(nonatomic, readonly) NSUInteger columns;
 @property(nonatomic, readonly) NSUInteger rows;
 @property(nonatomic, readonly) CGFloat cellWidth;
@@ -20,8 +27,11 @@ NS_ASSUME_NONNULL_BEGIN
 // middle=3, wheel-up=4, wheel-down=5, no button=0. Shift keeps local selection.
 - (BOOL)sendMouseAt:(CGPoint)point button:(NSUInteger)button action:(NSUInteger)action modifiers:(NSUInteger)modifiers NS_SWIFT_NAME(sendMouse(at:button:action:modifiers:));
 - (BOOL)restoreData:(NSData *)data columns:(NSUInteger)columns rows:(NSUInteger)rows NS_SWIFT_NAME(restore(_:columns:rows:));
+- (BOOL)appendHistory:(NSData *)data;
 - (BOOL)consume:(NSData *)data reset:(BOOL)reset;
 - (BOOL)resizeToSize:(CGSize)size;
+// Local viewport capacity is independent of the authoritative emulation grid.
+- (CGSize)gridForViewportSize:(CGSize)size NS_SWIFT_NAME(grid(forViewportSize:));
 - (void)drawInContext:(CGContextRef)context size:(CGSize)size;
 - (NSString *)textFromCell:(NSUInteger)start count:(NSUInteger)count;
 // Modifiers: Shift=1, Control=2, Option=4, Command=8.

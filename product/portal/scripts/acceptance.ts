@@ -15,7 +15,7 @@ const notificationText = (messages: JsonRpcMessage[]) =>
 
 const baseUrl = required('PORTAL_URL').replace(/\/$/, '');
 const credential = await pairPortalCredential(baseUrl, required('PORTAL_PAIRING_TOKEN'), 'Portal acceptance');
-const workspaceId = required('PORTAL_WORKSPACE_ID');
+const executionContextId = required('PORTAL_WORKSPACE_ID');
 const agentId = required('PORTAL_AGENT_ID');
 const marker = required('PORTAL_ACCEPTANCE_MARKER');
 const recovery = process.env['PORTAL_ACCEPTANCE_RECOVERY'] === 'true';
@@ -26,7 +26,7 @@ try {
   const thread = existingThreadId
     ? ((await rpc.request('thread.list') as { threads: Array<{ threadId: string; acpSessionId: string }> }).threads
       .find((candidate) => candidate.threadId === existingThreadId))
-    : (await rpc.request('thread.create', { workspaceId, agentId, title: `Acceptance ${marker}` }) as {
+    : (await rpc.request('thread.create', { executionContextId, agentId, title: `Acceptance ${marker}` }) as {
       thread: { threadId: string; acpSessionId: string };
     }).thread;
   if (!thread) throw new Error(`Acceptance Thread is unavailable: ${existingThreadId}`);

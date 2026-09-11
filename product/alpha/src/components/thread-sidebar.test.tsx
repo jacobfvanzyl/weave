@@ -30,10 +30,10 @@ const controller = (platform = "ios"): AlphaController => ({
       hostName: "bazzite",
     },
     searchQuery: "",
-    workspaces: [
+    executionContexts: [
       {
         id: "weave",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-1",
         hostName: "bazzite",
         name: "weave",
@@ -48,7 +48,7 @@ const controller = (platform = "ios"): AlphaController => ({
             supportsThreadLifecycle: true,
             status: "active",
             updatedAt: new Date().toISOString(),
-            workspaceId: "weave",
+            executionContextId: "weave",
           },
         ],
       },
@@ -67,8 +67,8 @@ const controller = (platform = "ios"): AlphaController => ({
     forgetHost: vi.fn(),
     reconnectHost: vi.fn(),
     refresh: vi.fn(),
-    addProject: vi.fn(async () => undefined),
-    removeProject: vi.fn(async () => undefined),
+    addExecutionContext: vi.fn(async () => undefined),
+    removeExecutionContext: vi.fn(async () => undefined),
     createThread: vi.fn(),
     selectThread: vi.fn(),
     archiveThread: vi.fn(),
@@ -101,7 +101,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("ThreadSidebar", () => {
   it("leaves an empty workspace section blank beneath its header", () => {
     const value = controller();
-    value.model.workspaces[0].threads = [];
+    value.model.executionContexts[0].threads = [];
     render(
       <SidebarProvider>
         <ThreadSidebar controller={value} />
@@ -120,7 +120,7 @@ describe("ThreadSidebar", () => {
 
   it("replaces the active new-thread action with a disabled spinner", () => {
     const value = controller();
-    value.model.creatingThreadWorkspaceId = "weave";
+    value.model.creatingThreadExecutionContextId = "weave";
     const { container } = render(
       <SidebarProvider>
         <ThreadSidebar controller={value} />
@@ -156,16 +156,16 @@ describe("ThreadSidebar", () => {
 
   it("asks which connected Host should create a thread for a merged project", async () => {
     const value = controller();
-    value.model.workspaces[0].placements = [
+    value.model.executionContexts[0].placements = [
       {
         id: "host-1:weave",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-1",
         hostName: "Bazzite",
       },
       {
         id: "host-2:weave",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-2",
         hostName: "Jaco’s MacBook Air",
       },
@@ -194,7 +194,7 @@ describe("ThreadSidebar", () => {
       "Create a new thread for weave on:",
     );
     await user.click(
-      screen.getByRole("button", { name: "Jaco’s MacBook Air" }),
+      screen.getByRole("button", { name: "macbook" }),
     );
 
     expect(value.actions.createThread).toHaveBeenCalledWith(
@@ -206,16 +206,16 @@ describe("ThreadSidebar", () => {
 
   it("shows unavailable project Hosts in the picker without allowing selection", async () => {
     const value = controller();
-    value.model.workspaces[0].placements = [
+    value.model.executionContexts[0].placements = [
       {
         id: "host-1:weave",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-1",
         hostName: "Bazzite",
       },
       {
         id: "host-2:weave",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-2",
         hostName: "Jaco’s MacBook Air",
       },
@@ -239,7 +239,7 @@ describe("ThreadSidebar", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: /Jaco’s MacBook Air disconnected/ }),
+      screen.getByRole("button", { name: /macbook disconnected/ }),
     ).toBeDisabled();
   });
 
@@ -253,15 +253,15 @@ describe("ThreadSidebar", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: "Project settings for weave" }),
+      screen.getByRole("button", { name: "ExecutionContext settings for weave" }),
     );
     const remove = await screen.findByRole("menuitem", {
-      name: "Remove Project",
+      name: "Remove ExecutionContext",
     });
     expect(screen.getAllByRole("menuitem")).toHaveLength(1);
     await user.click(remove);
 
-    expect(value.actions.removeProject).toHaveBeenCalledWith(
+    expect(value.actions.removeExecutionContext).toHaveBeenCalledWith(
       "weave",
       "host-1:weave",
     );
@@ -270,16 +270,16 @@ describe("ThreadSidebar", () => {
 
   it("asks which Host placement to remove for a merged project", async () => {
     const value = controller();
-    value.model.workspaces[0].placements = [
+    value.model.executionContexts[0].placements = [
       {
         id: "placement-1",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-1",
         hostName: "Bazzite",
       },
       {
         id: "placement-2",
-        workspaceId: "weave",
+        executionContextId: "weave",
         hostId: "host-2",
         hostName: "Jaco’s MacBook Air",
       },
@@ -299,19 +299,19 @@ describe("ThreadSidebar", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: "Project settings for weave" }),
+      screen.getByRole("button", { name: "ExecutionContext settings for weave" }),
     );
     await user.click(
-      await screen.findByRole("menuitem", { name: "Remove Project" }),
+      await screen.findByRole("menuitem", { name: "Remove ExecutionContext" }),
     );
 
     expect(screen.getByRole("dialog")).toHaveTextContent("Choose a Host");
     expect(screen.getByRole("dialog")).toHaveTextContent("Remove weave from:");
     await user.click(
-      screen.getByRole("button", { name: "Jaco’s MacBook Air" }),
+      screen.getByRole("button", { name: "macbook" }),
     );
 
-    expect(value.actions.removeProject).toHaveBeenCalledWith(
+    expect(value.actions.removeExecutionContext).toHaveBeenCalledWith(
       "weave",
       "placement-2",
     );
@@ -327,7 +327,7 @@ describe("ThreadSidebar", () => {
     );
 
     expect(
-      screen.getByLabelText("Reconnecting bazzite thread"),
+      screen.getByLabelText("Reconnecting thread"),
     ).toHaveAttribute("data-slot", "reconnecting-thread");
     expect(
       container.querySelector('[data-slot="skeleton"]'),
@@ -338,7 +338,7 @@ describe("ThreadSidebar", () => {
     ).toBeDisabled();
   });
 
-  it("keeps search compact until activated and places Add Project in the top rail", async () => {
+  it("keeps search compact until activated and places Add ExecutionContext in the top rail", async () => {
     const user = userEvent.setup();
     const { container } = render(
       <SidebarProvider>
@@ -357,17 +357,17 @@ describe("ThreadSidebar", () => {
     ).not.toBeInTheDocument();
     expect(
       within(topRail as HTMLElement).getByRole("button", {
-        name: "Add Project",
+        name: "Add ExecutionContext",
       }),
     ).toHaveClass("w-6");
     expect(
       within(topRail as HTMLElement).getByRole("button", {
-        name: "Add Project",
+        name: "Add ExecutionContext",
       }),
     ).toHaveAttribute("data-slot", "sidebar-group-action");
     expect(
       within(footer as HTMLElement).queryByRole("button", {
-        name: "Add Project",
+        name: "Add ExecutionContext",
       }),
     ).not.toBeInTheDocument();
 
@@ -480,7 +480,7 @@ describe("ThreadSidebar", () => {
 
   it("does not advertise lifecycle actions for an older Portal", () => {
     const value = controller();
-    value.model.workspaces[0].threads[0].supportsThreadLifecycle = false;
+    value.model.executionContexts[0].threads[0].supportsThreadLifecycle = false;
     render(
       <SidebarProvider>
         <ThreadSidebar controller={value} />
@@ -537,23 +537,23 @@ describe("ThreadSidebar", () => {
       </SidebarProvider>,
     );
 
-    await user.click(screen.getByRole("button", { name: "Add Project" }));
+    await user.click(screen.getByRole("button", { name: "Add ExecutionContext" }));
     expect(screen.getByRole("dialog")).toHaveTextContent(
-      "Choose the Portal that can access the project",
+      "Choose the Host that can access the directory",
     );
-    await user.click(screen.getByRole("combobox", { name: "Portal" }));
+    await user.click(screen.getByRole("combobox", { name: "Host" }));
     await user.click(await screen.findByRole("option", { name: "macbook" }));
-    expect(screen.getByRole("combobox", { name: "Portal" })).toHaveTextContent(
+    expect(screen.getByRole("combobox", { name: "Host" })).toHaveTextContent(
       "macbook",
     );
     await user.type(
-      screen.getByLabelText("Project path"),
+      screen.getByLabelText("Directory path"),
       "/srv/projects/odin",
     );
     await user.type(screen.getByLabelText("Name (optional)"), "Odin");
-    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await user.click(screen.getByRole("button", { name: "Add directory" }));
 
-    expect(value.actions.addProject).toHaveBeenCalledWith({
+    expect(value.actions.addExecutionContext).toHaveBeenCalledWith({
       hostId: "host-2",
       path: "/srv/projects/odin",
       name: "Odin",
@@ -587,7 +587,7 @@ describe("ThreadSidebar", () => {
       screen.getByRole("button", { name: "New thread in weave" }),
     ).toHaveClass("top-2", "w-6");
     expect(
-      screen.getByRole("button", { name: "Project settings for weave" }),
+      screen.getByRole("button", { name: "ExecutionContext settings for weave" }),
     ).toHaveClass("top-2", "w-6");
   });
 

@@ -6,33 +6,30 @@ import {
 } from './alpha-terminal-scope';
 
 describe('Alpha Terminal scope', () => {
-  it('uses Host, Project, and optional Worktree identity, not Portal routing identity', () => {
+  it('uses Host and execution-context identity independently of organizational aliases', () => {
     const base = {
       hostId: 'host-1',
-      projectId: 'project-1',
-      workspaceId: 'workspace-route-1',
+      contextId: 'project-1',
+      executionContextId: 'workspace-route-1',
     };
 
-    expect(alphaTerminalScopeKey(base)).toBe(
-      alphaTerminalScopeKey({ ...base, workspaceId: 'workspace-route-2' }),
+    expect(alphaTerminalScopeKey(base)).not.toBe(
+      alphaTerminalScopeKey({ ...base, executionContextId: 'workspace-route-2' }),
     );
     expect(alphaTerminalScopeKey(base)).not.toBe(
       alphaTerminalScopeKey({ ...base, hostId: 'host-2' }),
     );
-    expect(alphaTerminalScopeKey(base)).not.toBe(
-      alphaTerminalScopeKey({ ...base, projectId: 'project-2' }),
-    );
-    expect(alphaTerminalScopeKey(base)).not.toBe(
-      alphaTerminalScopeKey({ ...base, worktreeId: 'worktree-1' }),
+    expect(alphaTerminalScopeKey(base)).toBe(
+      alphaTerminalScopeKey({ ...base, contextId: 'project-2' }),
     );
   });
 
-  it('derives the logical Project from the selected Thread container', () => {
+  it('derives the logical ExecutionContext from the selected Thread container', () => {
     const model = {
       selectedThreadId: 'thread-1',
-      workspaces: [{
+      executionContexts: [{
         id: 'repository:github.com/veezee/weave',
-        workspaceId: 'workspace-1',
+        executionContextId: 'workspace-1',
         hostId: 'host-1',
         hostName: 'Bazzite',
         name: 'Weave',
@@ -45,17 +42,16 @@ describe('Alpha Terminal scope', () => {
           hostName: 'Bazzite',
           status: 'active',
           updatedAt: '2026-08-29T00:00:00.000Z',
-          workspaceId: 'workspace-1',
+          executionContextId: 'workspace-1',
           worktreeId: 'worktree-1',
         }],
       }],
-    } as AlphaViewModel;
+    } as unknown as AlphaViewModel;
 
     expect(selectedTerminalScope(model)).toEqual({
       hostId: 'host-1',
-      projectId: 'repository:github.com/veezee/weave',
-      workspaceId: 'workspace-1',
-      worktreeId: 'worktree-1',
+      contextId: 'workspace-1',
+      executionContextId: 'workspace-1',
     });
   });
 });

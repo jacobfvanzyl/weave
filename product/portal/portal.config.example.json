@@ -8,8 +8,8 @@
   "allowedOrigins": ["http://localhost:5174", "capacitor://localhost", "weave://app"],
   "stateDirectory": "/absolute/path/to/portal-state",
   "threadEventRetentionLimit": 10000,
-  "workspaces": [
-    { "workspaceId": "workspace", "name": "Workspace", "path": "/absolute/path/to/workspace" }
+  "executionContexts": [
+    { "executionContextId": "workspace", "name": "Workspace", "path": "/absolute/path/to/workspace" }
   ],
   "agents": [
     { "agentId": "codex", "name": "Codex", "command": "codex-acp", "args": [] }

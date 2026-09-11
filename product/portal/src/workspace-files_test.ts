@@ -6,11 +6,11 @@ import { WorkspaceFileError, WorkspaceFileService, type WorkspaceFileSystemWatch
 
 test('Workspace files retain a filesystem-root context without treating it as unavailable', async () => {
   const directory = await temporaryDirectory({ prefix: 'weave-root-context-' });
-  const files = await WorkspaceFileService.open([{ workspaceId: 'root', path: '/' }]);
+  const files = await WorkspaceFileService.open([{ executionContextId: 'root', path: '/' }]);
   try {
     await writeText(`${directory}/owned.txt`, 'root context');
     const path = (await realpath(`${directory}/owned.txt`)).slice(1);
-    const result = await files.read({ workspaceId: 'root', path });
+    const result = await files.read({ executionContextId: 'root', path });
     assertEquals(result.content, 'root context');
   } finally {
     files.close();
@@ -51,7 +51,7 @@ const withWorkspace = async (
 ) => {
   const root = await temporaryDirectory({ prefix: 'weave-product-workspace-' });
   const outside = await temporaryDirectory({ prefix: 'weave-product-outside-' });
-  const service = await WorkspaceFileService.open([{ workspaceId: 'workspace', path: root }], {
+  const service = await WorkspaceFileService.open([{ executionContextId: 'workspace', path: root }], {
     maxReadBytes: 1_024,
     maxWriteBytes: 1_024,
     maxDirectoryEntries: 2,
@@ -75,7 +75,7 @@ test('Workspace files list directories and read and hash UTF-8 files', async () 
     await mkdir(`${root}/src`);
     await writeText(`${root}/README.md`, '# hello\n');
 
-    const listed = await service.list({ workspaceId: 'workspace', path: '' });
+    const listed = await service.list({ executionContextId: 'workspace', path: '' });
     assertEquals(listed.path, '');
     assertEquals(listed.entries.map((entry) => `${entry.type}:${entry.name}`), [
       'directory:src',
@@ -83,7 +83,7 @@ test('Workspace files list directories and read and hash UTF-8 files', async () 
     ]);
     assertEquals(listed.truncated, false);
 
-    assertEquals(await service.read({ workspaceId: 'workspace', path: 'README.md' }), {
+    assertEquals(await service.read({ executionContextId: 'workspace', path: 'README.md' }), {
       path: 'README.md',
       content: '# hello\n',
       contentHash: '9e8b62f81ea5c66fa06ee53da032751386b37702153070c0e14dd1d316282fa7',
@@ -91,7 +91,7 @@ test('Workspace files list directories and read and hash UTF-8 files', async () 
       mtimeMs: (await stat(`${root}/README.md`)).mtime?.getTime(),
     });
 
-    assertEquals(await service.hash({ workspaceId: 'workspace', path: 'README.md' }), {
+    assertEquals(await service.hash({ executionContextId: 'workspace', path: 'README.md' }), {
       path: 'README.md',
       contentHash: '9e8b62f81ea5c66fa06ee53da032751386b37702153070c0e14dd1d316282fa7',
       size: 8,
@@ -106,12 +106,12 @@ test('Workspace file listings and limited searches are deterministic and bounded
     await writeText(`${root}/a-first.txt`, 'marker');
     await writeText(`${root}/m-middle.txt`, 'marker');
 
-    const listed = await service.list({ workspaceId: 'workspace', path: '' });
+    const listed = await service.list({ executionContextId: 'workspace', path: '' });
     assertEquals(listed.entries.map((entry) => entry.name), ['a-first.txt', 'm-middle.txt']);
     assertEquals(listed.truncated, true);
 
     assertEquals(
-      await service.search({ workspaceId: 'workspace', path: '', query: 'marker', scope: 'content', limit: 1 }),
+      await service.search({ executionContextId: 'workspace', path: '', query: 'marker', scope: 'content', limit: 1 }),
       {
         path: '',
         matches: [{ path: 'a-first.txt', kind: 'content', line: 1, preview: 'marker' }],
@@ -123,7 +123,7 @@ test('Workspace file listings and limited searches are deterministic and bounded
 test('Workspace files require create-only or hash-conditional writes', async () =>
   await withWorkspace(async ({ root, service }) => {
     const created = await service.write({
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       path: 'notes.txt',
       content: 'first',
       expectedContentHash: null,
@@ -132,13 +132,13 @@ test('Workspace files require create-only or hash-conditional writes', async () 
 
     await assertRejects(
       () =>
-        service.write({ workspaceId: 'workspace', path: 'notes.txt', content: 'duplicate', expectedContentHash: null }),
+        service.write({ executionContextId: 'workspace', path: 'notes.txt', content: 'duplicate', expectedContentHash: null }),
       WorkspaceFileError,
       'already exists',
     );
 
     const replaced = await service.write({
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       path: 'notes.txt',
       content: 'second',
       expectedContentHash: created.contentHash,
@@ -149,7 +149,7 @@ test('Workspace files require create-only or hash-conditional writes', async () 
     await assertRejects(
       () =>
         service.write({
-          workspaceId: 'workspace',
+          executionContextId: 'workspace',
           path: 'notes.txt',
           content: 'third',
           expectedContentHash: replaced.contentHash,
@@ -163,20 +163,20 @@ test('Workspace files require create-only or hash-conditional writes', async () 
 test('Workspace files serialize competing conditional writes', async () =>
   await withWorkspace(async ({ service }) => {
     const created = await service.write({
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       path: 'shared.txt',
       content: 'base',
       expectedContentHash: null,
     });
     const writes = await Promise.allSettled([
       service.write({
-        workspaceId: 'workspace',
+        executionContextId: 'workspace',
         path: 'shared.txt',
         content: 'first',
         expectedContentHash: created.contentHash,
       }),
       service.write({
-        workspaceId: 'workspace',
+        executionContextId: 'workspace',
         path: 'shared.txt',
         content: 'second',
         expectedContentHash: created.contentHash,
@@ -189,19 +189,19 @@ test('Workspace files create, move, delete, and search within bounded roots', as
   await withWorkspace(async ({ root, service }) => {
     await mkdir(`${root}/.git`);
     await mkdir(`${root}/node_modules`);
-    assertEquals(await service.createDirectory({ workspaceId: 'workspace', path: 'src/nested' }), {
+    assertEquals(await service.createDirectory({ executionContextId: 'workspace', path: 'src/nested' }), {
       ok: true,
       path: 'src/nested',
     });
     await service.write({
-      workspaceId: 'workspace',
+      executionContextId: 'workspace',
       path: 'src/nested/main.ts',
       content: 'export const marker = "WVE42";\n',
       expectedContentHash: null,
     });
     assertEquals(
       await service.move({
-        workspaceId: 'workspace',
+        executionContextId: 'workspace',
         fromPath: 'src/nested/main.ts',
         toPath: 'src/main.ts',
       }),
@@ -210,7 +210,7 @@ test('Workspace files create, move, delete, and search within bounded roots', as
     assertEquals(await readText(`${root}/src/main.ts`), 'export const marker = "WVE42";\n');
 
     assertEquals(
-      await service.search({ workspaceId: 'workspace', path: '', query: 'WVE42', scope: 'both', limit: 5 }),
+      await service.search({ executionContextId: 'workspace', path: '', query: 'WVE42', scope: 'both', limit: 5 }),
       {
         path: '',
         matches: [{ path: 'src/main.ts', kind: 'content', line: 1, preview: 'export const marker = "WVE42";' }],
@@ -218,7 +218,7 @@ test('Workspace files create, move, delete, and search within bounded roots', as
       },
     );
 
-    const nonRecursiveError = await service.delete({ workspaceId: 'workspace', path: 'src', recursive: false })
+    const nonRecursiveError = await service.delete({ executionContextId: 'workspace', path: 'src', recursive: false })
       .then(() => undefined)
       .catch((cause) => cause);
     assertEquals(nonRecursiveError instanceof WorkspaceFileError, true);
@@ -229,7 +229,7 @@ test('Workspace files create, move, delete, and search within bounded roots', as
     });
     assertEquals(JSON.stringify(nonRecursiveError.data).includes(root), false);
 
-    assertEquals(await service.delete({ workspaceId: 'workspace', path: 'src', recursive: true }), {
+    assertEquals(await service.delete({ executionContextId: 'workspace', path: 'src', recursive: true }), {
       ok: true,
       path: 'src',
     });
@@ -244,25 +244,25 @@ test('Workspace files reject traversal, symlinks, binary content, and oversized 
 
     for (const path of ['../secret.txt', '/tmp/secret.txt', 'src//main.ts', 'src/./main.ts', 'src\\main.ts']) {
       await assertRejects(
-        () => service.read({ workspaceId: 'workspace', path }),
+        () => service.read({ executionContextId: 'workspace', path }),
         WorkspaceFileError,
         'invalid',
       );
     }
     await assertRejects(
-      () => service.read({ workspaceId: 'workspace', path: 'escape' }),
+      () => service.read({ executionContextId: 'workspace', path: 'escape' }),
       WorkspaceFileError,
       'Symbolic links',
     );
     await assertRejects(
-      () => service.read({ workspaceId: 'workspace', path: 'binary.dat' }),
+      () => service.read({ executionContextId: 'workspace', path: 'binary.dat' }),
       WorkspaceFileError,
       'UTF-8',
     );
     await assertRejects(
       () =>
         service.write({
-          workspaceId: 'workspace',
+          executionContextId: 'workspace',
           path: 'large.txt',
           content: 'x'.repeat(1_025),
           expectedContentHash: null,
@@ -271,12 +271,12 @@ test('Workspace files reject traversal, symlinks, binary content, and oversized 
       'too large',
     );
     await assertRejects(
-      () => service.delete({ workspaceId: 'workspace', path: '', recursive: true }),
+      () => service.delete({ executionContextId: 'workspace', path: '', recursive: true }),
       WorkspaceFileError,
       'invalid',
     );
     await assertRejects(
-      () => service.list({ workspaceId: 'other-workspace', path: '' }),
+      () => service.list({ executionContextId: 'other-workspace', path: '' }),
       WorkspaceFileError,
       'unavailable',
     );
@@ -286,7 +286,7 @@ test('Workspace file watches normalize changes and belong to one client session'
   const root = await temporaryDirectory({ prefix: 'weave-product-watch-' });
   const watchers: FakeWatcher[] = [];
   const service = await WorkspaceFileService.open(
-    [{ workspaceId: 'workspace', path: root }],
+    [{ executionContextId: 'workspace', path: root }],
     { watchDebounceMs: 0 },
     {
       createId: () => 'watch-1',
@@ -302,7 +302,7 @@ test('Workspace file watches normalize changes and belong to one client session'
   try {
     await mkdir(`${root}/src`);
     const realRoot = await realpath(root);
-    assertEquals(await session.start({ workspaceId: 'workspace', paths: ['', 'src'] }), {
+    assertEquals(await session.start({ executionContextId: 'workspace', paths: ['', 'src'] }), {
       subscriptionId: 'watch-1',
       paths: ['', 'src'],
     });

@@ -1,6 +1,6 @@
 import { stat } from '../src/host-files.ts';
 import { runProcess } from '../src/host-process.ts';
-import { resolve } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
 
 const DEFAULT_IDENTIFIER = 'xyz.veezee.weave.portal';
 
@@ -58,6 +58,13 @@ if (!requirement.includes(`identifier "${identifier}"`) || requirement.includes(
   throw new Error(`Portal designated requirement is not stable: ${requirement}`);
 }
 
+// The PTY owner and its addon form one matching release with the Host.
+for (const component of ['weave-terminal-service', 'terminal-vt.node']) {
+  const file = join(dirname(target), component);
+  if (!(await stat(file)).isFile()) throw new Error(`Missing Terminal Service component: ${component}`);
+  await run(['--force', '--sign', identity, '--identifier', `${identifier}.${component.replaceAll('.', '-')}`, '--timestamp=none', file]);
+  await run(['--verify', '--strict', '--verbose=2', file]);
+}
 const manifestFile = Bun.file(`${target}.json`);
 if (await manifestFile.exists()) {
   const manifest = await manifestFile.json();

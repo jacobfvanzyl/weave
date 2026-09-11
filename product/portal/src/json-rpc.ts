@@ -22,8 +22,8 @@ export const error = (id: JsonRpcId, code: number, message: string, data?: unkno
   error: { code, message, ...(data === undefined ? {} : { data }) },
 });
 
-export const parseJsonRpcMessage = (value: string): JsonRpcMessage => {
-  const parsed = JSON.parse(value) as unknown;
+export const parseJsonRpcMessage = (value: unknown): JsonRpcMessage => {
+  const parsed = typeof value === 'string' ? JSON.parse(value) as unknown : value;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('JSON-RPC message must be an object.');
   }

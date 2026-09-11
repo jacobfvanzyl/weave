@@ -1,4 +1,4 @@
-// Own the subprocess stream/exit contract once for ACP and tmux on Bun.
+// Own the subprocess stream/exit contract once for ACP on Bun.
 type ProcessOptions = {
   args?: string[];
   detached?: boolean;

@@ -38,7 +38,10 @@
     "host": "bun product/portal/src/main.ts",
     "test": "bun run test:boundary && bun run test:protocol && bun run test:alpha && bun run test:portal",
     "check:tooling": "bun scripts/check-tooling.ts",
-    "install:desktop": "bun product/alpha/scripts/install-desktop.ts"
+    "install:desktop": "bun product/alpha/scripts/install-desktop.ts",
+    "test:terminal-service": "bun product/portal/scripts/terminal-service-acceptance.ts",
+    "test:terminal-cutover": "bun product/portal/scripts/terminal-cutover-acceptance.ts",
+    "benchmark:native-renderer": "bun product/alpha/scripts/benchmark-native-renderer.ts"
   },
   "description": "Weave Alpha and Host Daemon",
   "trustedDependencies": [

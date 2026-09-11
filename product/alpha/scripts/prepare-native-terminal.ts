@@ -1,3 +1,4 @@
+import { prepareTerminalCodecHeader } from '../../scripts/terminal-codec';
 import { mkdir, cp } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -15,6 +16,7 @@ for (const platform of ['macos', 'ios']) {
   const output = join(root, 'native/.build', platform);
   await mkdir(output, { recursive: true });
   await cp(join(cache, platform, 'include'), join(output, 'include'), { recursive: true });
+  await prepareTerminalCodecHeader(join(output, 'include'), pin.revision);
   await cp(join(cache, platform, 'lib'), join(output, 'lib'), { recursive: true });
   await cp(join(root, 'native/ghostty/LICENSE'), join(output, 'GHOSTTY-LICENSE'));
 }

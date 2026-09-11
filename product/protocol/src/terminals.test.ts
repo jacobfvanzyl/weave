@@ -1,3 +1,5 @@
+import { TERMINAL_CODEC } from './terminal-wire';
+const bytes = (text: string) => new TextEncoder().encode(text);
 import { describe, expect, test } from "bun:test";
 import {
   parseTerminalErrorData,
@@ -16,6 +18,7 @@ describe("Terminal protocol", () => {
       "terminal.snapshot",
       "terminal.attach",
       "terminal.input",
+      "terminal.history",
       "terminal.resize",
       "terminal.detach",
       "terminal.close",
@@ -23,22 +26,22 @@ describe("Terminal protocol", () => {
 
     expect(
       parseTerminalRpcParams("terminal.create", {
-        workspaceId: "workspace-1",
+        executionContextId: "workspace-1",
         cols: 120,
         rows: 32,
       }),
-    ).toEqual({ workspaceId: "workspace-1", cols: 120, rows: 32 });
+    ).toEqual({ executionContextId: "workspace-1", cols: 120, rows: 32 });
     expect(
       parseTerminalRpcParams("terminal.attach", {
-        workspaceId: "workspace-1",
+        executionContextId: "workspace-1",
         terminalId: "terminal-1",
-        mode: "control",
+        mode: "shared",
         cursor: 14,
       }),
     ).toEqual({
-      workspaceId: "workspace-1",
+      executionContextId: "workspace-1",
       terminalId: "terminal-1",
-      mode: "control",
+      mode: "shared",
       cursor: 14,
     });
   });
@@ -50,10 +53,10 @@ describe("Terminal protocol", () => {
           attachmentId: "attachment-1",
           mode: "observe",
         },
-        snapshot: {
+        snapshot: { codec: TERMINAL_CODEC,
           terminal: {
             terminalId: "terminal-1",
-            workspaceId: "workspace-1",
+            executionContextId: "workspace-1",
             title: "zsh",
             status: "running",
             cols: 80,
@@ -62,19 +65,18 @@ describe("Terminal protocol", () => {
           generation: "generation-1",
           cursor: 7,
           retainedFrom: 3,
-          data: "$ echo ready\r\nready\r\n",
-          controller: { controlled: true, attachmentId: "attachment-2" },
-        },
+          data: bytes("$ echo ready\r\nready\r\n"),
+          },
       }),
     ).toEqual({
       attachment: {
         attachmentId: "attachment-1",
         mode: "observe",
       },
-      snapshot: {
+      snapshot: { codec: TERMINAL_CODEC,
         terminal: {
           terminalId: "terminal-1",
-          workspaceId: "workspace-1",
+          executionContextId: "workspace-1",
           title: "zsh",
           status: "running",
           cols: 80,
@@ -83,8 +85,7 @@ describe("Terminal protocol", () => {
         generation: "generation-1",
         cursor: 7,
         retainedFrom: 3,
-        data: "$ echo ready\r\nready\r\n",
-        controller: { controlled: true, attachmentId: "attachment-2" },
+        data: bytes("$ echo ready\r\nready\r\n"),
       },
     });
   });
@@ -92,14 +93,14 @@ describe("Terminal protocol", () => {
   test("rejects invalid dimensions, attachment modes, cursors, and input", () => {
     expect(() =>
       parseTerminalRpcParams("terminal.create", {
-        workspaceId: "workspace-1",
+        executionContextId: "workspace-1",
         cols: 1,
         rows: 24,
       }),
     ).toThrow("cols");
     expect(() =>
       parseTerminalRpcParams("terminal.resize", {
-        workspaceId: "workspace-1",
+        executionContextId: "workspace-1",
         terminalId: "terminal-1",
         attachmentId: "attachment-1",
         cols: 80,
@@ -108,14 +109,14 @@ describe("Terminal protocol", () => {
     ).toThrow("rows");
     expect(() =>
       parseTerminalRpcParams("terminal.attach", {
-        workspaceId: "workspace-1",
+        executionContextId: "workspace-1",
         terminalId: "terminal-1",
         mode: "write",
       }),
     ).toThrow("mode");
     expect(() =>
       parseTerminalRpcParams("terminal.attach", {
-        workspaceId: "workspace-1",
+        executionContextId: "workspace-1",
         terminalId: "terminal-1",
         mode: "observe",
         cursor: -1,
@@ -123,10 +124,10 @@ describe("Terminal protocol", () => {
     ).toThrow("cursor");
     expect(() =>
       parseTerminalRpcParams("terminal.input", {
-        workspaceId: "workspace-1",
+        executionContextId: "workspace-1",
         terminalId: "terminal-1",
         attachmentId: "attachment-1",
-        data: "",
+        data: bytes(""),
       }),
     ).toThrow("data");
   });
@@ -135,48 +136,47 @@ describe("Terminal protocol", () => {
     test(`accepts raw whitespace and control input ${JSON.stringify(data)}`, () => {
       expect(
         parseTerminalRpcParams("terminal.input", {
-          workspaceId: "workspace-1",
+          executionContextId: "workspace-1",
           terminalId: "terminal-1",
           attachmentId: "attachment-1",
-          data,
+          data: bytes(data),
         }),
       ).toEqual({
-        workspaceId: "workspace-1",
+        executionContextId: "workspace-1",
         terminalId: "terminal-1",
         attachmentId: "attachment-1",
-        data,
+        data: bytes(data),
       });
     });
   }
 
-  test("parses sequenced output, control, title, exit, and resync notifications", () => {
+  test("parses sequenced output, title, exit, and resync notifications", () => {
     expect(
       parseTerminalNotification(TERMINAL_EVENT_METHOD, {
         attachmentId: "attachment-1",
         terminalId: "terminal-1",
-        workspaceId: "workspace-1",
+        executionContextId: "workspace-1",
         generation: "generation-1",
         sequence: 8,
-        event: { type: "output", data: "ready\r\n" },
+        event: { type: "output", data: bytes("ready\r\n") },
       }).event,
-    ).toEqual({ type: "output", data: "ready\r\n" });
+    ).toEqual({ type: "output", data: bytes("ready\r\n") });
 
     for (const data of ["\r\n", " ", "\t"]) {
       expect(
         parseTerminalNotification(TERMINAL_EVENT_METHOD, {
           attachmentId: "attachment-1",
           terminalId: "terminal-1",
-          workspaceId: "workspace-1",
+          executionContextId: "workspace-1",
           generation: "generation-1",
           sequence: 9,
-          event: { type: "output", data },
+          event: { type: "output", data: bytes(data) },
         }).event,
-      ).toEqual({ type: "output", data });
+      ).toEqual({ type: "output", data: bytes(data) });
     }
 
     for (const event of [
       { type: "title", title: "vim" },
-      { type: "control", controlled: false },
       { type: "exit", exitCode: 0 },
       { type: "resync", retainedFrom: 12 },
     ]) {
@@ -184,7 +184,7 @@ describe("Terminal protocol", () => {
         parseTerminalNotification(TERMINAL_EVENT_METHOD, {
           attachmentId: "attachment-1",
           terminalId: "terminal-1",
-          workspaceId: "workspace-1",
+          executionContextId: "workspace-1",
           generation: "generation-1",
           sequence: 9,
           event,
@@ -197,14 +197,14 @@ describe("Terminal protocol", () => {
     expect(
       parseTerminalErrorData({
         domain: "terminal",
-        code: "TERMINAL_CONTROLLED",
-        workspaceId: "workspace-1",
+        code: "TERMINAL_WRITE_REQUIRED",
+        executionContextId: "workspace-1",
         terminalId: "terminal-1",
       }),
     ).toEqual({
       domain: "terminal",
-      code: "TERMINAL_CONTROLLED",
-      workspaceId: "workspace-1",
+      code: "TERMINAL_WRITE_REQUIRED",
+      executionContextId: "workspace-1",
       terminalId: "terminal-1",
     });
     expect(() =>
@@ -214,4 +214,13 @@ describe("Terminal protocol", () => {
       }),
     ).toThrow("code");
   });
+});
+
+
+test('screen replacements validate the authoritative grid and payload', () => {
+  const notification = { attachmentId: 'a', terminalId: 't', executionContextId: 'e', generation: 'g', sequence: 1,
+    event: { type: 'screen', terminal: { terminalId: 't', executionContextId: 'e', title: 'shell', status: 'running', cols: 150, rows: 50 }, data: bytes('screen') } };
+  expect(parseTerminalNotification(TERMINAL_EVENT_METHOD, notification)).toEqual(notification);
+  expect(() => parseTerminalNotification(TERMINAL_EVENT_METHOD, { ...notification, event: { ...notification.event, terminal: { ...notification.event.terminal, cols: 0 } } })).toThrow('cols');
+  expect(() => parseTerminalNotification(TERMINAL_EVENT_METHOD, { ...notification, event: { ...notification.event, data: 1 } })).toThrow('data');
 });

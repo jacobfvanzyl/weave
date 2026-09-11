@@ -18,13 +18,13 @@ import type { PortalConfig } from './config.ts';
 
 export const PORTAL_ACTIONS = [
   'portal.inspect',
-  'workspace.inspect',
-  'workspace.manage',
+  'context.inspect',
+  'context.manage',
   'thread.inspect',
   'thread.create',
   'thread.attach',
-  'workspace.file.read',
-  'workspace.file.write',
+  'context.file.read',
+  'context.file.write',
   'agent.use',
   'terminal.observe',
   'terminal.control',
@@ -34,14 +34,14 @@ export const PORTAL_ACTIONS = [
 
 export type PortalAction = typeof PORTAL_ACTIONS[number];
 export type PortalResource = {
-  workspaceId?: string;
+  executionContextId?: string;
   agentId?: string;
   threadId?: string;
   terminalId?: string;
 };
 export type PortalGrants = {
   actions: PortalAction[];
-  workspaceIds: string[];
+  executionContextIds: string[];
   agentIds: string[];
 };
 
@@ -68,7 +68,7 @@ type StoredPairingOffer = {
 };
 
 type SecurityState = {
-  version: 1;
+  version: 2;
   hostId: string;
   credentials: StoredCredential[];
   pairingOffers: StoredPairingOffer[];
@@ -192,7 +192,7 @@ const unique = <Value>(values: Value[]) => [...new Set(values)];
 
 const normalizeGrants = (grants: PortalGrants): PortalGrants => ({
   actions: unique(grants.actions).filter((action) => PORTAL_ACTIONS.includes(action)),
-  workspaceIds: unique(grants.workspaceIds.filter(Boolean)),
+  executionContextIds: unique(grants.executionContextIds.filter(Boolean)),
   agentIds: unique(grants.agentIds.filter(Boolean)),
 });
 
@@ -221,9 +221,18 @@ const parseState = (value: unknown): SecurityState => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Security state must be an object.');
   }
-  const state = value as SecurityState;
+  const legacy = value as any;
+  if (legacy.version === 1) {
+    for (const entry of [...(legacy.credentials ?? []), ...(legacy.pairingOffers ?? [])]) {
+      entry.grants.executionContextIds ??= entry.grants.workspaceIds;
+      delete entry.grants.workspaceIds;
+      entry.grants.actions = entry.grants.actions.map((action: string) => action.replace(/^workspace\./, 'context.'));
+    }
+    legacy.version = 2;
+  }
+  const state = legacy as SecurityState;
   if (
-    state.version !== 1 || typeof state.hostId !== 'string' || !state.hostId
+    state.version !== 2 || typeof state.hostId !== 'string' || !state.hostId
   ) {
     throw new Error('Security state version or Host identity is invalid.');
   }
@@ -253,7 +262,7 @@ export class PortalSecurity {
   readonly #statePath: string;
   readonly #auditPath: string;
   readonly #pairingTokenKey: CryptoKey;
-  readonly #workspaceIds: Set<string>;
+  readonly #executionContextIds: Set<string>;
   #state: SecurityState;
   #mutationQueue = Promise.resolve();
 
@@ -261,18 +270,18 @@ export class PortalSecurity {
     readonly config: PortalConfig,
     state: SecurityState,
     pairingTokenKey: CryptoKey,
-    workspaceIds: string[],
+    executionContextIds: string[],
   ) {
     this.#statePath = join(config.stateDirectory, 'security.json');
     this.#auditPath = join(config.stateDirectory, 'security-audit.jsonl');
     this.#pairingTokenKey = pairingTokenKey;
-    this.#workspaceIds = new Set(workspaceIds);
+    this.#executionContextIds = new Set(executionContextIds);
     this.#state = state;
   }
 
   static async open(
     config: PortalConfig,
-    workspaceIds = config.workspaces.map(({ workspaceId }) => workspaceId),
+    executionContextIds = config.executionContexts.map(({ executionContextId }) => executionContextId),
   ) {
     const pairingTokenKey = await loadPairingTokenKey(config.stateDirectory);
     const statePath = join(config.stateDirectory, 'security.json');
@@ -283,9 +292,10 @@ export class PortalSecurity {
         config,
         state,
         pairingTokenKey,
-        workspaceIds,
+        executionContextIds,
       );
       await security.#upgradeAdministrativeGrants();
+      await security.#persist();
       return security;
     } catch (cause) {
       if (!(isFsError(cause, 'ENOENT'))) {
@@ -294,13 +304,13 @@ export class PortalSecurity {
       const security = new PortalSecurity(
         config,
         {
-          version: 1,
+          version: 2,
           hostId: crypto.randomUUID(),
           credentials: [],
           pairingOffers: [],
         },
         pairingTokenKey,
-        workspaceIds,
+        executionContextIds,
       );
       await security.#persist();
       return security;
@@ -314,7 +324,7 @@ export class PortalSecurity {
   defaultGrants(): PortalGrants {
     return {
       actions: [...PORTAL_ACTIONS],
-      workspaceIds: [...this.#workspaceIds],
+      executionContextIds: [...this.#executionContextIds],
       agentIds: this.config.agents.map((agent) => agent.agentId),
     };
   }
@@ -636,51 +646,51 @@ export class PortalSecurity {
     principal.grants = credential.grants;
   }
 
-  async registerWorkspace(principal: PortalPrincipal, workspaceId: string) {
-    this.#workspaceIds.add(workspaceId);
+  async registerWorkspace(principal: PortalPrincipal, executionContextId: string) {
+    this.#executionContextIds.add(executionContextId);
     await this.#mutate(async (state) => {
       for (const credential of state.credentials) {
-        if (!credential.grants.actions.includes('workspace.manage')) continue;
-        credential.grants.workspaceIds = unique([
-          ...credential.grants.workspaceIds,
-          workspaceId,
+        if (!credential.grants.actions.includes('context.manage')) continue;
+        credential.grants.executionContextIds = unique([
+          ...credential.grants.executionContextIds,
+          executionContextId,
         ]);
       }
       for (const offer of state.pairingOffers) {
-        if (!offer.grants.actions.includes('workspace.manage')) continue;
-        offer.grants.workspaceIds = unique([
-          ...offer.grants.workspaceIds,
-          workspaceId,
+        if (!offer.grants.actions.includes('context.manage')) continue;
+        offer.grants.executionContextIds = unique([
+          ...offer.grants.executionContextIds,
+          executionContextId,
         ]);
       }
-      await this.#audit('workspace.registered', {
+      await this.#audit('context.registered', {
         auditId: crypto.randomUUID(),
         principalId: principal.principalId,
         credentialId: principal.credentialId,
-        workspaceId,
+        executionContextId,
       });
     });
     await this.assertActive(principal);
   }
 
-  async unregisterWorkspace(principal: PortalPrincipal, workspaceId: string) {
-    this.#workspaceIds.delete(workspaceId);
+  async unregisterWorkspace(principal: PortalPrincipal, executionContextId: string) {
+    this.#executionContextIds.delete(executionContextId);
     await this.#mutate(async (state) => {
       for (const credential of state.credentials) {
-        credential.grants.workspaceIds = credential.grants.workspaceIds.filter(
-          (candidate) => candidate !== workspaceId,
+        credential.grants.executionContextIds = credential.grants.executionContextIds.filter(
+          (candidate) => candidate !== executionContextId,
         );
       }
       for (const offer of state.pairingOffers) {
-        offer.grants.workspaceIds = offer.grants.workspaceIds.filter(
-          (candidate) => candidate !== workspaceId,
+        offer.grants.executionContextIds = offer.grants.executionContextIds.filter(
+          (candidate) => candidate !== executionContextId,
         );
       }
-      await this.#audit('workspace.unregistered', {
+      await this.#audit('context.unregistered', {
         auditId: crypto.randomUUID(),
         principalId: principal.principalId,
         credentialId: principal.credentialId,
-        workspaceId,
+        executionContextId,
       });
     });
     await this.assertActive(principal);
@@ -693,8 +703,8 @@ export class PortalSecurity {
   ) {
     if (!principal.grants.actions.includes(action)) return false;
     if (
-      resource.workspaceId &&
-      !principal.grants.workspaceIds.includes(resource.workspaceId)
+      resource.executionContextId &&
+      !principal.grants.executionContextIds.includes(resource.executionContextId)
     ) return false;
     if (
       resource.agentId && !principal.grants.agentIds.includes(resource.agentId)
@@ -715,7 +725,7 @@ export class PortalSecurity {
       principalId: principal.principalId,
       credentialId: principal.credentialId,
       action,
-      ...(resource.workspaceId ? { workspaceId: resource.workspaceId } : {}),
+      ...(resource.executionContextId ? { executionContextId: resource.executionContextId } : {}),
       ...(resource.agentId ? { agentId: resource.agentId } : {}),
       ...(resource.threadId ? { threadId: resource.threadId } : {}),
       ...(resource.terminalId ? { terminalId: resource.terminalId } : {}),
@@ -731,7 +741,7 @@ export class PortalSecurity {
     principal: PortalPrincipal,
     event: 'thread.archived' | 'thread.restored',
     resource: Required<
-      Pick<PortalResource, 'threadId' | 'workspaceId' | 'agentId'>
+      Pick<PortalResource, 'threadId' | 'executionContextId' | 'agentId'>
     >,
     changed: boolean,
   ) {
@@ -740,7 +750,7 @@ export class PortalSecurity {
       principalId: principal.principalId,
       credentialId: principal.credentialId,
       threadId: resource.threadId,
-      workspaceId: resource.workspaceId,
+      executionContextId: resource.executionContextId,
       agentId: resource.agentId,
       changed,
     });
@@ -818,22 +828,18 @@ export class PortalSecurity {
   }
 
   async #upgradeAdministrativeGrants() {
-    const newlyAddedActions: PortalAction[] = ['workspace.manage'];
+    const newlyAddedActions: PortalAction[] = ['context.manage'];
     const legacyActions = PORTAL_ACTIONS.filter((action) => !newlyAddedActions.includes(action));
     const configuredAgentIds = this.config.agents.map(({ agentId }) => agentId);
     const upgrade = (grants: PortalGrants) => {
+      if (grants.actions.includes('context.manage')) return false;
       const wasAdministrative = legacyActions.every((action) => grants.actions.includes(action)) &&
-        configuredAgentIds.every((agentId) => grants.agentIds.includes(agentId));
+        configuredAgentIds.every((agentId) => grants.agentIds.includes(agentId)) &&
+        [...this.#executionContextIds].every((id) => grants.executionContextIds.includes(id));
       if (!wasAdministrative) return false;
       const actions = unique([...grants.actions, ...newlyAddedActions]);
-      const workspaceIds = unique([
-        ...grants.workspaceIds,
-        ...this.#workspaceIds,
-      ]);
-      const changed = actions.length !== grants.actions.length ||
-        workspaceIds.length !== grants.workspaceIds.length;
+      const changed = actions.length !== grants.actions.length;
       grants.actions = actions;
-      grants.workspaceIds = workspaceIds;
       return changed;
     };
     let changed = false;
@@ -886,7 +892,7 @@ export class PortalSecurity {
       this.#auditPath,
       `${
         JSON.stringify({
-          version: 1,
+          version: 2,
           event,
           createdAt: new Date().toISOString(),
           ...fields,

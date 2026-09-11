@@ -59,7 +59,7 @@ export function ArchivedThreadsDialog({ controller }: { controller: AlphaControl
                   <CardHeader>
                     <CardTitle>{thread.title}</CardTitle>
                     <CardDescription>
-                      {model.showHostIdentity ? `${thread.hostName} · ` : ''}{thread.workspaceId}
+                      {model.showHostIdentity ? `${thread.hostName} · ` : ''}{thread.executionContextId}
                     </CardDescription>
                     <CardAction>
                       <Button

@@ -7,7 +7,7 @@ export type BrowserAddress = {
   hostId: string;
   threadId: string;
   clientId: string;
-  tabId: string;
+  workspaceId: string;
 };
 
 export type BrowserControlLimits = {
@@ -25,7 +25,7 @@ export type BrowserControlAuthorization = {
 export type BrowserProviderOffer = {
   version: typeof BROWSER_CONTROL_VERSION;
   clientId: string;
-  tabId: string;
+  workspaceId: string;
   generation: number;
   controlRevision: number;
   platform: 'macOS' | 'iPadOS';
@@ -69,7 +69,7 @@ export type BrowserScreenshot =
 
 export type BrowserView = {
   id: string;
-  tabId: string;
+  workspaceId: string;
   generation: number;
   controlRevision: number;
   url: string;
@@ -239,7 +239,7 @@ export const parseBrowserProviderOffer = (value: unknown): BrowserProviderOffer 
   return {
     version: BROWSER_CONTROL_VERSION,
     clientId: text(input.clientId, 'clientId'),
-    tabId: text(input.tabId, 'tabId'),
+    workspaceId: text(input.workspaceId, 'workspaceId'),
     generation: integer(input.generation, 'generation', 1),
     controlRevision: integer(input.controlRevision, 'controlRevision'),
     platform: input.platform,
@@ -273,7 +273,7 @@ const address = (value: unknown): BrowserAddress => {
     hostId: text(input.hostId, 'address.hostId'),
     threadId: text(input.threadId, 'address.threadId'),
     clientId: text(input.clientId, 'address.clientId'),
-    tabId: text(input.tabId, 'address.tabId'),
+    workspaceId: text(input.workspaceId, 'address.workspaceId'),
   };
 };
 
@@ -321,7 +321,7 @@ const browserView = (value: unknown): BrowserView => {
   }
   return {
     id: text(input.id, 'view.id'),
-    tabId: text(input.tabId, 'view.tabId'),
+    workspaceId: text(input.workspaceId, 'view.workspaceId'),
     generation: integer(input.generation, 'view.generation', 1),
     controlRevision: integer(input.controlRevision, 'view.controlRevision'),
     url: text(input.url, 'view.url'),

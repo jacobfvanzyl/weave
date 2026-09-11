@@ -1,3 +1,5 @@
+import { encodeHostMessage, decodeHostMessage } from '@weave/product-protocol';
+import { ThreadMembershipError } from './catalog.ts';
 import { hostVersion } from './version.ts';
 import { HostWebSocket, type HostUpgrade } from './host-websocket.ts';
 import { readTextSync } from './host-files.ts';
@@ -32,7 +34,7 @@ const protocols = (request: Request) =>
 
 const sendJson = (socket: HostWebSocket, message: unknown) => {
   if (socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(message));
+    socket.send(encodeHostMessage(message));
   }
 };
 
@@ -44,9 +46,9 @@ export const sendTerminal = (
   message: JsonRpcMessage,
 ) => {
   if (socket.readyState !== WebSocket.OPEN) return false;
-  const encoded = JSON.stringify(message);
+  const encoded = encodeHostMessage(message);
   if (
-    socket.bufferedAmount + new TextEncoder().encode(encoded).byteLength >
+    socket.bufferedAmount + (typeof encoded === 'string' ? new TextEncoder().encode(encoded).byteLength : encoded.byteLength) >
       TERMINAL_SOCKET_BACKLOG_LIMIT
   ) {
     socket.close(1013, 'Terminal stream fell behind; reconnect to resync.');
@@ -178,7 +180,7 @@ const rpcWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) =>
     let message: JsonRpcMessage;
     try {
       await portal.security.assertActive(principal);
-      message = parseJsonRpcMessage(String(event.data));
+      message = parseJsonRpcMessage(decodeHostMessage(event.data));
     } catch (cause) {
       if (cause instanceof PortalSecurityError) {
         return closeAuthenticationFailure(upgraded.socket, cause);
@@ -218,7 +220,7 @@ const rpcWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) =>
           ? error(message.id, -32011, cause.message, cause.data)
           : cause instanceof PortalTerminalError
           ? error(message.id, -32012, cause.message, cause.data)
-          : cause instanceof CompositionError
+          : cause instanceof CompositionError || cause instanceof ThreadMembershipError
           ? error(message.id, -32013, cause.message, cause.data)
           : cause instanceof PortalSecurityError
           ? error(message.id, -32003, cause.message, {
@@ -236,6 +238,18 @@ const rpcWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) =>
           ),
       );
     }
+  };
+  const receiveOrdered = upgraded.socket.onmessage;
+  let receiveQueue = Promise.resolve();
+  let queuedBytes = 0;
+  upgraded.socket.onmessage = (event) => {
+    const size = typeof event.data === 'string' ? event.data.length * 2 : event.data.byteLength;
+    queuedBytes += size;
+    if (queuedBytes > 2 * 1024 * 1024) { upgraded.socket.close(1013, 'Input queue exceeded; pending input is uncertain.'); return; }
+    receiveQueue = receiveQueue.then(async () => {
+      if (upgraded.socket.readyState === WebSocket.OPEN) await receiveOrdered?.(event);
+    }).finally(() => { queuedBytes -= size; });
+    return receiveQueue;
   };
   upgraded.socket.onclose = () => {
     stopMonitor?.();

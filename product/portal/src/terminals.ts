@@ -1,3 +1,7 @@
+import { TERMINAL_CODEC } from '@weave/product-protocol';
+import { realpath } from 'node:fs/promises';
+import { isAbsolute, relative } from 'node:path';
+import { createHash } from 'node:crypto';
 import type {
   TerminalAttachment,
   TerminalErrorCode,
@@ -9,39 +13,40 @@ import type {
   TerminalSummary,
 } from '@weave/product-protocol';
 
-export type TerminalWorkspace = { workspaceId: string; path: string };
+export type TerminalExecutionContext = { executionContextId: string; path: string };
 
-export type TerminalBackendRecord = TerminalSummary & {
-  paneId?: string;
-  windowId?: string;
-};
+export type TerminalExecutionRecord = TerminalSummary;
 
-export type TerminalBackendEvent =
-  | { terminalId: string; backendSequence: number; type: 'output'; data: string }
+export type TerminalExecutionEvent =
+  | { terminalId: string; backendSequence: number; type: 'unavailable' }
+  | { terminalId: string; backendSequence: number; type: 'directory'; currentDirectory: string }
+  | { terminalId: string; backendSequence: number; type: 'output'; data: Uint8Array }
   | { terminalId: string; backendSequence: number; type: 'title'; title: string; processName?: string }
   | { terminalId: string; backendSequence: number; type: 'exit'; exitCode?: number };
 
-export type TerminalBackendCapture = {
-  data: string;
+export type TerminalExecutionCapture = {
+  history?: Uint8Array[];
+  data: Uint8Array;
   /** Last backend event known to be represented by `data`. */
   boundary: number;
 };
 
-export interface TerminalBackend {
-  list(): Promise<TerminalBackendRecord[]>;
+export interface TerminalExecution {
+  list(): Promise<TerminalExecutionRecord[]>;
   create(input: {
     terminalId: string;
-    workspaceId: string;
+    executionContextId: string;
     cwd: string;
     cols: number;
     rows: number;
     env: Record<string, string>;
-  }): Promise<TerminalBackendRecord>;
-  capture(terminalId: string): Promise<TerminalBackendCapture>;
-  input(terminalId: string, data: string): Promise<void>;
+  }): Promise<TerminalExecutionRecord>;
+  capture(terminalId: string): Promise<TerminalExecutionCapture>;
+  input(terminalId: string, data: Uint8Array): Promise<void>;
   resize(terminalId: string, cols: number, rows: number): Promise<void>;
   close(terminalId: string): Promise<void>;
-  subscribe(listener: (event: TerminalBackendEvent) => void): () => void;
+  stopGracefully?(terminalId: string): Promise<void>;
+  subscribe(listener: (event: TerminalExecutionEvent) => void): () => void;
   dispose(): void | Promise<void>;
 }
 
@@ -49,7 +54,7 @@ export class PortalTerminalError extends Error {
   readonly data: {
     domain: 'terminal';
     code: TerminalErrorCode;
-    workspaceId?: string;
+    executionContextId?: string;
     terminalId?: string;
     retainedFrom?: number;
   };
@@ -57,7 +62,7 @@ export class PortalTerminalError extends Error {
   constructor(
     code: TerminalErrorCode,
     message: string,
-    resource: { workspaceId?: string; terminalId?: string; retainedFrom?: number } = {},
+    resource: { executionContextId?: string; terminalId?: string; retainedFrom?: number } = {},
   ) {
     super(message);
     this.name = 'PortalTerminalError';
@@ -65,26 +70,28 @@ export class PortalTerminalError extends Error {
   }
 }
 
-type RetainedOutput = { sequence: number; data: string; bytes: number };
+type RetainedOutput = { sequence: number; data: Uint8Array; bytes: number };
 
 type TerminalRuntime = {
   terminalId: string;
-  workspaceId: string;
+  executionContextId: string;
   generation: string;
   sequence: number;
   retainedFrom: number;
   retainedBytes: number;
   retained: RetainedOutput[];
-  pendingBackendEvents: TerminalBackendEvent[];
-  controllerAttachmentId?: string;
+  pendingBackendEvents: TerminalExecutionEvent[];
+  resizeAttachmentId?: string;
   attachments: Set<string>;
   queue: Promise<unknown>;
 };
 
 type AttachmentState = TerminalAttachment & {
+  history?: { token: string; pages: Uint8Array[]; next: number; expires: number };
+  size?: { cols: number; rows: number };
   connectionId: string;
   terminalId: string;
-  workspaceId: string;
+  executionContextId: string;
   send: (notification: TerminalNotification) => unknown;
   pending: TerminalNotification[];
   pendingBytes: number;
@@ -93,9 +100,10 @@ type AttachmentState = TerminalAttachment & {
 };
 
 type TerminalServiceOptions = {
-  backend: TerminalBackend;
-  resolveWorkspace: (workspaceId: string) => TerminalWorkspace | undefined;
-  assertWorkspaceAvailable?: (workspaceId: string) => Promise<unknown>;
+  backend: TerminalExecution;
+  onTerminalExit?: (terminalId: string) => void;
+  resolveWorkspace: (executionContextId: string) => TerminalExecutionContext | undefined;
+  assertWorkspaceAvailable?: (executionContextId: string) => Promise<unknown>;
   retentionLimitBytes?: number;
   attachmentQueueLimitBytes?: number;
   env?: Record<string, string | undefined>;
@@ -106,7 +114,7 @@ const DEFAULT_ROWS = 24;
 const DEFAULT_RETENTION_LIMIT_BYTES = 1024 * 1024;
 const DEFAULT_ATTACHMENT_QUEUE_LIMIT_BYTES = 256 * 1024;
 
-const byteLength = (value: string) => new TextEncoder().encode(value).byteLength;
+const byteLength = (value: Uint8Array) => value.byteLength;
 
 const cleanEnvironment = (source: Record<string, string | undefined>) => {
   const blocked = new Set([
@@ -116,6 +124,8 @@ const cleanEnvironment = (source: Record<string, string | undefined>) => {
     'WEAVE_TERMINAL_ID',
     'WEAVE_WORKSPACE_ID',
     'WEAVE_WORKSPACE',
+    'WEAVE_EXECUTION_CONTEXT_ID',
+    'WEAVE_EXECUTION_DIRECTORY',
   ]);
   return Object.fromEntries(
     Object.entries(source).filter((entry): entry is [string, string] =>
@@ -124,10 +134,12 @@ const cleanEnvironment = (source: Record<string, string | undefined>) => {
   );
 };
 
-const publicRecord = (record: TerminalBackendRecord): TerminalSummary => ({
+const publicRecord = (record: TerminalExecutionRecord): TerminalSummary => ({
   terminalId: record.terminalId,
-  workspaceId: record.workspaceId,
+  executionContextId: record.executionContextId,
   title: record.title,
+  initialDirectory: record.initialDirectory,
+  currentDirectory: record.currentDirectory,
   status: record.status,
   cols: record.cols,
   rows: record.rows,
@@ -135,8 +147,9 @@ const publicRecord = (record: TerminalBackendRecord): TerminalSummary => ({
   ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }),
 });
 
-export class TerminalService {
-  readonly #backend: TerminalBackend;
+export class TerminalAccess {
+  readonly #onTerminalExit: TerminalServiceOptions['onTerminalExit'];
+  readonly #backend: TerminalExecution;
   readonly #resolveWorkspace: TerminalServiceOptions['resolveWorkspace'];
   readonly #assertWorkspaceAvailable: TerminalServiceOptions['assertWorkspaceAvailable'];
   readonly #retentionLimitBytes: number;
@@ -151,6 +164,7 @@ export class TerminalService {
 
   constructor(options: TerminalServiceOptions) {
     this.#backend = options.backend;
+    this.#onTerminalExit = options.onTerminalExit;
     this.#resolveWorkspace = options.resolveWorkspace;
     this.#assertWorkspaceAvailable = options.assertWorkspaceAvailable;
     this.#retentionLimitBytes = options.retentionLimitBytes ?? DEFAULT_RETENTION_LIMIT_BYTES;
@@ -169,8 +183,70 @@ export class TerminalService {
     return session;
   }
 
-  async knownTerminalIds(workspaceId: string) {
-    return new Set((await this.#backend.list()).filter((terminal) => terminal.workspaceId === workspaceId).map((terminal) => terminal.terminalId));
+  // Called under the workspace composition lock. A retry after a failed save
+  // reuses any shell already created for this revision/pane rather than leaking one.
+  async ensurePaneTerminal(executionContextId: string, revision: number, paneId: string, launchDirectory?: string) {
+    const terminalId = `pane-${createHash('sha256').update(JSON.stringify([executionContextId, revision, paneId])).digest('hex')}`;
+    const existing = (await this.#backend.list()).find((record) => record.executionContextId === executionContextId && record.terminalId === terminalId);
+    return existing ? publicRecord(existing) : this.#createTerminal(executionContextId, terminalId, DEFAULT_COLS, DEFAULT_ROWS, launchDirectory);
+  }
+
+  async #createTerminal(executionContextId: string, terminalId: string = crypto.randomUUID(), cols = DEFAULT_COLS, rows = DEFAULT_ROWS, launchDirectory?: string) {
+    if (this.#closed) throw new Error('Terminal service is closed.');
+    const workspace = this.#workspace(executionContextId);
+    await this.#assertWorkspaceAvailable?.(executionContextId);
+    const cwd = launchDirectory ? await realpath(launchDirectory) : workspace.path;
+    const within = relative(workspace.path, cwd);
+    if (within === '..' || within.startsWith('../') || isAbsolute(within)) throw new Error('Launch directory is outside the execution context.');
+    const record = await this.#backend.create({
+      terminalId,
+      executionContextId: workspace.executionContextId,
+      cwd,
+      cols,
+      rows,
+      env: {
+        ...cleanEnvironment(this.#env),
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor',
+        ZVM_VI_HIGHLIGHT_BACKGROUND: this.#env.ZVM_VI_HIGHLIGHT_BACKGROUND || '#b4befe',
+        ZVM_VI_HIGHLIGHT_FOREGROUND: this.#env.ZVM_VI_HIGHLIGHT_FOREGROUND || '#11111b',
+        WEAVE_TERMINAL_ID: terminalId,
+        WEAVE_EXECUTION_CONTEXT_ID: workspace.executionContextId,
+        WEAVE_EXECUTION_DIRECTORY: cwd,
+      },
+    });
+    this.#runtime(record);
+    return publicRecord(record);
+  }
+
+  async closePlan(terminalIds: string[]) {
+    const records = await this.#backend.list();
+    return terminalIds.flatMap((terminalId) => {
+      const terminal = records.find((record) => record.terminalId === terminalId && record.status === 'running');
+      // No shell prompt/job/input contract exists yet. Unknown activity is
+      // dirty; a foreground command name alone cannot prove an idle shell.
+      return terminal ? [{ terminalId, title: terminal.title || 'Terminal', dirty: true }] : [];
+    });
+  }
+
+  async stopWorkspaceTerminals(terminalIds: string[]) {
+    await Promise.all(terminalIds.map(async (terminalId) => {
+      const record = (await this.#backend.list()).find((record) => record.terminalId === terminalId);
+      if (!record) return;
+      const runtime = this.#runtime(record);
+      await this.#serialized(runtime, async () => {
+        if (this.#backend.stopGracefully) await this.#backend.stopGracefully(terminalId);
+        else await this.#backend.close(terminalId);
+        if ((await this.#backend.list()).some((record) => record.terminalId === terminalId && record.status === 'running')) throw new Error('A terminal did not stop. The workspace has been kept.');
+        this.#onTerminalExit?.(terminalId);
+        this.#finalizeExit(runtime, {});
+        this.#runtimes.delete(terminalId);
+      });
+    }));
+  }
+
+  async knownTerminalIds(executionContextId?: string) {
+    return new Set((await this.#backend.list()).filter((terminal) => terminal.status === 'running' && (executionContextId === undefined || terminal.executionContextId === executionContextId)).map((terminal) => terminal.terminalId));
   }
 
   async close() {
@@ -187,62 +263,38 @@ export class TerminalService {
     params: TerminalRpcParams<Method>,
   ): Promise<TerminalRpcResult<Method>> {
     if (this.#closed) throw new Error('Terminal service is closed.');
-    const workspace = this.#workspace(params.workspaceId);
+    const workspace = this.#workspace(params.executionContextId);
     switch (method) {
       case 'terminal.list':
         return {
           terminals: (await this.#backend.list())
-            .filter((terminal) => terminal.workspaceId === workspace.workspaceId)
+            .filter((terminal) => terminal.executionContextId === workspace.executionContextId)
             .map(publicRecord),
         } as TerminalRpcResult<Method>;
       case 'terminal.create': {
-        await this.#assertWorkspaceAvailable?.(workspace.workspaceId);
         const input = params as TerminalRpcParams<'terminal.create'>;
-        const terminalId = crypto.randomUUID();
-        const record = await this.#backend.create({
-          terminalId,
-          workspaceId: workspace.workspaceId,
-          cwd: workspace.path,
-          cols: input.cols ?? DEFAULT_COLS,
-          rows: input.rows ?? DEFAULT_ROWS,
-          env: {
-            ...cleanEnvironment(this.#env),
-            TERM: 'xterm-256color',
-            COLORTERM: 'truecolor',
-            WEAVE_TERMINAL_ID: terminalId,
-            WEAVE_WORKSPACE_ID: workspace.workspaceId,
-            WEAVE_WORKSPACE: workspace.path,
-          },
-        });
-        this.#runtime(record);
-        return { terminal: publicRecord(record) } as TerminalRpcResult<Method>;
+        return { terminal: await this.#createTerminal(workspace.executionContextId, undefined, input.cols, input.rows) } as TerminalRpcResult<Method>;
       }
       case 'terminal.snapshot': {
         const input = params as TerminalRpcParams<'terminal.snapshot'>;
-        const record = await this.#terminal(workspace.workspaceId, input.terminalId);
+        const record = await this.#terminal(workspace.executionContextId, input.terminalId);
         return { snapshot: await this.#snapshot(record) } as TerminalRpcResult<Method>;
       }
       case 'terminal.attach': {
         const input = params as TerminalRpcParams<'terminal.attach'>;
-        const record = await this.#terminal(workspace.workspaceId, input.terminalId);
+        const record = await this.#terminal(workspace.executionContextId, input.terminalId);
         const runtime = this.#runtime(record);
         return await this.#serialized(runtime, async () => {
+          session.assertOpen();
           if (input.cursor !== undefined && input.cursor < runtime.retainedFrom - 1) {
             throw new PortalTerminalError(
               'TERMINAL_REPLAY_GAP',
               'Requested Terminal retained output is no longer available; request a fresh snapshot.',
               {
-                workspaceId: workspace.workspaceId,
+                executionContextId: workspace.executionContextId,
                 terminalId: record.terminalId,
                 retainedFrom: runtime.retainedFrom,
               },
-            );
-          }
-          if (input.mode === 'control' && runtime.controllerAttachmentId) {
-            throw new PortalTerminalError(
-              'TERMINAL_CONTROLLED',
-              'Terminal is controlled by another attachment.',
-              { workspaceId: workspace.workspaceId, terminalId: record.terminalId },
             );
           }
           const attachment: AttachmentState = {
@@ -250,7 +302,7 @@ export class TerminalService {
             mode: input.mode,
             connectionId: session.connectionId,
             terminalId: record.terminalId,
-            workspaceId: workspace.workspaceId,
+            executionContextId: workspace.executionContextId,
             send: session.send,
             pending: [],
             pendingBytes: 0,
@@ -259,14 +311,6 @@ export class TerminalService {
           this.#attachments.set(attachment.attachmentId, attachment);
           runtime.attachments.add(attachment.attachmentId);
           session.addAttachment(attachment.attachmentId);
-          if (attachment.mode === 'control') {
-            runtime.controllerAttachmentId = attachment.attachmentId;
-            this.#publish(runtime, {
-              type: 'control',
-              controlled: true,
-              attachmentId: attachment.attachmentId,
-            });
-          }
           try {
             return {
               attachment: {
@@ -281,29 +325,59 @@ export class TerminalService {
           }
         });
       }
+      case 'terminal.history': {
+        const input = params as TerminalRpcParams<'terminal.history'>;
+        const attachment = this.#attachments.get(input.attachmentId);
+        if (!attachment || attachment.connectionId !== session.connectionId || attachment.terminalId !== input.terminalId || attachment.executionContextId !== input.executionContextId) throw new PortalTerminalError('TERMINAL_ATTACHMENT_UNAVAILABLE', 'Terminal history attachment unavailable');
+        const history = attachment.history;
+        if (!history || history.token !== input.token || history.next !== input.page || history.expires < Date.now()) throw new PortalTerminalError('TERMINAL_REPLAY_GAP', 'Terminal history was superseded or expired; resync');
+        const data = history.pages[history.next]; history.pages[history.next++] = new Uint8Array();
+        const finished = history.next === history.pages.length;
+        if (finished) attachment.history = undefined;
+        return { data, finished } as TerminalRpcResult<Method>;
+      }
       case 'terminal.input': {
         const input = params as TerminalRpcParams<'terminal.input'>;
-        const { runtime } = await this.#controlledAttachment(session, workspace.workspaceId, input);
-        await this.#serialized(runtime, () => this.#backend.input(input.terminalId, input.data));
+        const { attachment, runtime } = await this.#controlledAttachment(session, workspace.executionContextId, input);
+        await this.#serialized(runtime, async () => {
+          this.#assertAttached(session, attachment);
+          if (attachment.mode === 'shared') {
+            if (runtime.resizeAttachmentId !== attachment.attachmentId && attachment.size) {
+              await this.#resize(runtime, attachment.size.cols, attachment.size.rows);
+            }
+            runtime.resizeAttachmentId = attachment.attachmentId;
+          }
+          await this.#backend.input(input.terminalId, input.data);
+        });
         return { accepted: true } as TerminalRpcResult<Method>;
       }
       case 'terminal.resize': {
         const input = params as TerminalRpcParams<'terminal.resize'>;
-        const { runtime } = await this.#controlledAttachment(session, workspace.workspaceId, input);
-        await this.#serialized(runtime, () => this.#backend.resize(input.terminalId, input.cols, input.rows));
+        const { attachment, runtime } = await this.#controlledAttachment(session, workspace.executionContextId, input);
+        await this.#serialized(runtime, async () => {
+          this.#assertAttached(session, attachment);
+          attachment.size = { cols: input.cols, rows: input.rows };
+          if (attachment.mode === 'shared') {
+            // A passive device records its viewport without resizing the shell.
+            // The next input from that device applies its size before its bytes.
+            if (runtime.resizeAttachmentId !== attachment.attachmentId) return;
+          }
+          await this.#resize(runtime, input.cols, input.rows);
+        });
         return { accepted: true } as TerminalRpcResult<Method>;
       }
       case 'terminal.detach': {
         const input = params as TerminalRpcParams<'terminal.detach'>;
-        await this.#terminal(workspace.workspaceId, input.terminalId);
+        await this.#terminal(workspace.executionContextId, input.terminalId);
         this.detach(session, input.attachmentId, input.terminalId);
         return { detached: true } as TerminalRpcResult<Method>;
       }
       case 'terminal.close': {
         const input = params as TerminalRpcParams<'terminal.close'>;
-        const { runtime } = await this.#controlledAttachment(session, workspace.workspaceId, input);
+        const { runtime } = await this.#controlledAttachment(session, workspace.executionContextId, input);
         await this.#serialized(runtime, async () => {
           await this.#backend.close(input.terminalId);
+          this.#onTerminalExit?.(input.terminalId);
           this.#finalizeExit(runtime, {});
           this.#runtimes.delete(input.terminalId);
         });
@@ -336,10 +410,10 @@ export class TerminalService {
 
   async #controlledAttachment(
     session: PortalTerminalSession,
-    workspaceId: string,
+    executionContextId: string,
     input: { terminalId: string; attachmentId: string },
   ) {
-    const record = await this.#terminal(workspaceId, input.terminalId);
+    const record = await this.#terminal(executionContextId, input.terminalId);
     const runtime = this.#runtime(record);
     const attachment = this.#attachments.get(input.attachmentId);
     if (
@@ -349,51 +423,58 @@ export class TerminalService {
       throw new PortalTerminalError(
         'TERMINAL_ATTACHMENT_UNAVAILABLE',
         'Terminal attachment is unavailable.',
-        { workspaceId, terminalId: input.terminalId },
+        { executionContextId, terminalId: input.terminalId },
       );
     }
-    if (attachment.mode !== 'control' || runtime.controllerAttachmentId !== attachment.attachmentId) {
+    if (attachment.mode !== 'shared') {
       throw new PortalTerminalError(
-        'TERMINAL_CONTROL_REQUIRED',
-        'A live control attachment is required for this Terminal operation.',
-        { workspaceId, terminalId: input.terminalId },
+        'TERMINAL_WRITE_REQUIRED',
+        'A live writable attachment is required for this Terminal operation.',
+        { executionContextId, terminalId: input.terminalId },
       );
     }
     return { attachment, runtime };
   }
 
-  #workspace(workspaceId: string) {
-    const workspace = this.#resolveWorkspace(workspaceId);
+  #assertAttached(session: PortalTerminalSession, attachment: AttachmentState) {
+    session.assertOpen();
+    if (this.#attachments.get(attachment.attachmentId) !== attachment) {
+      throw new PortalTerminalError('TERMINAL_ATTACHMENT_UNAVAILABLE', 'Terminal attachment is unavailable.');
+    }
+  }
+
+  #workspace(executionContextId: string) {
+    const workspace = this.#resolveWorkspace(executionContextId);
     if (!workspace) {
       throw new PortalTerminalError(
         'TERMINAL_UNAVAILABLE',
         'Terminal resource is unavailable.',
-        { workspaceId },
+        { executionContextId },
       );
     }
     return workspace;
   }
 
-  async #terminal(workspaceId: string, terminalId: string) {
+  async #terminal(executionContextId: string, terminalId: string) {
     const terminal = (await this.#backend.list()).find((candidate) =>
-      candidate.terminalId === terminalId && candidate.workspaceId === workspaceId
+      candidate.terminalId === terminalId && candidate.executionContextId === executionContextId
     );
     if (!terminal) {
       throw new PortalTerminalError(
         'TERMINAL_UNAVAILABLE',
         'Terminal resource is unavailable.',
-        { workspaceId, terminalId },
+        { executionContextId, terminalId },
       );
     }
     return terminal;
   }
 
-  #runtime(record: TerminalBackendRecord) {
+  #runtime(record: TerminalExecutionRecord) {
     let runtime = this.#runtimes.get(record.terminalId);
     if (!runtime) {
       runtime = {
         terminalId: record.terminalId,
-        workspaceId: record.workspaceId,
+        executionContextId: record.executionContextId,
         generation: this.#generation,
         sequence: 0,
         retainedFrom: 1,
@@ -408,40 +489,61 @@ export class TerminalService {
     return runtime;
   }
 
-  async #snapshot(record: TerminalBackendRecord) {
+  async #snapshot(record: TerminalExecutionRecord) {
     const runtime = this.#runtime(record);
     return await this.#serialized(runtime, () => this.#captureSnapshot(record, runtime));
   }
 
   async #captureSnapshot(
-    record: TerminalBackendRecord,
+    record: TerminalExecutionRecord,
     runtime: TerminalRuntime,
     attachment?: AttachmentState,
+    replaceScreens = false,
   ): Promise<TerminalSnapshot> {
     const captured = await this.#backend.capture(record.terminalId);
+    // Recount after the asynchronous capture, immediately before retaining it:
+    // concurrent Terminal captures must share one hard history budget.
+    const buffers = new Set<ArrayBufferLike>();
+    for (const current of this.#attachments.values()) {
+      if (current.history && current.history.expires < Date.now()) current.history = undefined;
+      if (current === attachment || replaceScreens && runtime.attachments.has(current.attachmentId)) continue;
+      for (const page of current.history?.pages ?? []) if (page.byteLength) buffers.add(page.buffer);
+    }
+    for (const page of captured.history ?? []) if (page.byteLength) buffers.add(page.buffer);
+    if ([...buffers].reduce((total, buffer) => total + buffer.byteLength, 0) > 64 * 1024 * 1024) throw new PortalTerminalError('TERMINAL_BACKPRESSURE', 'Terminal history budget is busy; retry after active restoration');
+    const historyToken = captured.history?.length ? crypto.randomUUID() : undefined;
+    const history = () => historyToken ? { token: historyToken, pages: [...captured.history!], next: 0, expires: Date.now() + 120000 } : undefined;
+    if (attachment) attachment.history = history();
+    if (replaceScreens) for (const id of runtime.attachments) { const current = this.#attachments.get(id); if (current) current.history = history(); }
     // The backend supplies a watermark from the same ordered stream that
     // samples the terminal screen. Events through this point are represented
     // by this attachment's snapshot. Existing attachments still receive those
     // events, while later events remain live output for every attachment.
     if (attachment) attachment.absorbedBackendThrough = captured.boundary;
+    if (replaceScreens) {
+      for (const id of runtime.attachments) {
+        const current = this.#attachments.get(id);
+        if (current) current.absorbedBackendThrough = captured.boundary;
+      }
+    }
     this.#drainBackendEvents(runtime, captured.boundary);
     if (this.#runtimes.get(record.terminalId) !== runtime) {
       throw new PortalTerminalError(
         'TERMINAL_UNAVAILABLE',
         'Terminal resource is unavailable.',
-        { workspaceId: record.workspaceId, terminalId: record.terminalId },
+        { executionContextId: record.executionContextId, terminalId: record.terminalId },
       );
     }
-    const latest = await this.#terminal(record.workspaceId, record.terminalId);
+    const latest = await this.#terminal(record.executionContextId, record.terminalId);
     return {
       terminal: publicRecord(latest),
       generation: runtime.generation,
       cursor: runtime.sequence,
       retainedFrom: runtime.retainedFrom,
       data: captured.data,
-      controller: runtime.controllerAttachmentId
-        ? { controlled: true, attachmentId: runtime.controllerAttachmentId }
-        : { controlled: false },
+      codec: TERMINAL_CODEC,
+      ...(historyToken ? { historyToken, historyPages: captured.history!.length } : {}),
+
     };
   }
 
@@ -451,7 +553,34 @@ export class TerminalService {
     return result;
   }
 
-  #acceptBackendEvent(event: TerminalBackendEvent) {
+  async #resize(runtime: TerminalRuntime, cols: number, rows: number) {
+    const record = await this.#terminal(runtime.executionContextId, runtime.terminalId);
+    if (record.cols === cols && record.rows === rows) return;
+    try {
+      await this.#backend.resize(runtime.terminalId, cols, rows);
+      // A resize may redraw before its command completes. Replace every screen
+      // at the capture watermark, then deliver only output after that boundary.
+      const snapshot = await this.#captureSnapshot(record, runtime, undefined, true);
+      runtime.retained = []; runtime.retainedBytes = 0;
+      runtime.retainedFrom = runtime.sequence + 1;
+      this.#publish(runtime, { type: 'screen', terminal: snapshot.terminal, data: snapshot.data, ...(snapshot.historyToken ? { historyToken: snapshot.historyToken, historyPages: snapshot.historyPages } : {}) });
+    } catch (cause) {
+      // The PTY may already have changed. Never leave clients on an old grid.
+      this.#publish(runtime, { type: 'resync', retainedFrom: runtime.retainedFrom });
+      throw cause;
+    }
+  }
+
+  #acceptBackendEvent(event: TerminalExecutionEvent) {
+    if (this.#closed) return;
+    if (event.type === 'unavailable') {
+      for (const runtime of this.#runtimes.values()) {
+        this.#publish(runtime, { type: 'resync', retainedFrom: runtime.retainedFrom });
+        for (const id of [...runtime.attachments]) this.#removeAttachment(id);
+      }
+      return;
+    }
+    if (event.type === 'exit') this.#onTerminalExit?.(event.terminalId);
     const runtime = this.#runtimes.get(event.terminalId);
     if (!runtime || this.#closed) return;
     runtime.pendingBackendEvents.push(event);
@@ -477,6 +606,10 @@ export class TerminalService {
         this.#notify(runtime, sequence, { type: 'output', data: event.data }, event.backendSequence);
         continue;
       }
+      if (event.type === 'directory') {
+        this.#notify(runtime, ++runtime.sequence, { type: 'directory', currentDirectory: event.currentDirectory }, event.backendSequence);
+        continue;
+      }
       if (event.type === 'title') {
         this.#notify(
           runtime,
@@ -486,6 +619,7 @@ export class TerminalService {
         );
         continue;
       }
+      if (event.type !== 'exit') continue;
       this.#finalizeExit(runtime, {
         ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }),
       });
@@ -514,7 +648,7 @@ export class TerminalService {
       this.#enqueueNotification(attachment, {
         attachmentId,
         terminalId: runtime.terminalId,
-        workspaceId: runtime.workspaceId,
+        executionContextId: runtime.executionContextId,
         generation: runtime.generation,
         sequence,
         event,
@@ -523,8 +657,11 @@ export class TerminalService {
   }
 
   #enqueueNotification(attachment: AttachmentState, notification: TerminalNotification) {
-    const bytes = byteLength(JSON.stringify(notification));
-    if (attachment.pendingBytes + bytes > this.#attachmentQueueLimitBytes) {
+    const bytes = 1024 + (notification.event.type === 'output' || notification.event.type === 'screen' ? notification.event.data.byteLength : 0);
+    // A screen replacement has the same bounded payload allowance as an
+    // initial snapshot; subsequent live output retains the smaller queue cap.
+    const limit = notification.event.type === 'screen' ? Math.max(this.#attachmentQueueLimitBytes, 3 * 1024 * 1024) : this.#attachmentQueueLimitBytes;
+    if (attachment.pendingBytes + bytes > limit) {
       const runtime = this.#runtimes.get(attachment.terminalId);
       attachment.pending = [];
       attachment.pendingBytes = 0;
@@ -532,7 +669,7 @@ export class TerminalService {
         attachment.send({
           attachmentId: attachment.attachmentId,
           terminalId: attachment.terminalId,
-          workspaceId: attachment.workspaceId,
+          executionContextId: attachment.executionContextId,
           generation: runtime?.generation ?? this.#generation,
           sequence: runtime?.sequence ?? notification.sequence,
           event: { type: 'resync', retainedFrom: runtime?.retainedFrom ?? notification.sequence },
@@ -587,7 +724,7 @@ export class TerminalService {
           attachment.send({
             attachmentId,
             terminalId: runtime.terminalId,
-            workspaceId: runtime.workspaceId,
+            executionContextId: runtime.executionContextId,
             generation: runtime.generation,
             sequence,
             event: { type: 'exit', ...event },
@@ -597,24 +734,21 @@ export class TerminalService {
         // One failed transport must not prevent the remaining attachments
         // from receiving the terminal's final lifecycle notification.
       } finally {
-        this.#removeAttachment(attachmentId, false);
+        this.#removeAttachment(attachmentId);
       }
     }
-    runtime.controllerAttachmentId = undefined;
   }
 
-  #removeAttachment(attachmentId: string, publishControl = true) {
+  #removeAttachment(attachmentId: string) {
     const attachment = this.#attachments.get(attachmentId);
     if (!attachment) return;
     this.#attachments.delete(attachmentId);
     const runtime = this.#runtimes.get(attachment.terminalId);
     runtime?.attachments.delete(attachmentId);
+    if (runtime?.resizeAttachmentId === attachmentId) runtime.resizeAttachmentId = undefined;
     const session = [...this.#sessions].find((candidate) => candidate.connectionId === attachment.connectionId);
     session?.removeAttachment(attachmentId);
-    if (runtime?.controllerAttachmentId === attachmentId) {
-      runtime.controllerAttachmentId = undefined;
-      if (publishControl) this.#publish(runtime, { type: 'control', controlled: false });
-    }
+
   }
 }
 
@@ -623,7 +757,7 @@ export class PortalTerminalSession {
   #closed = false;
 
   constructor(
-    readonly service: TerminalService,
+    readonly service: TerminalAccess,
     readonly connectionId: string,
     readonly send: (notification: TerminalNotification) => unknown,
   ) {}
@@ -634,6 +768,10 @@ export class PortalTerminalSession {
   ): Promise<TerminalRpcResult<Method>> {
     if (this.#closed) throw new Error('Portal Terminal session is closed.');
     return this.service.request(this, method, params);
+  }
+
+  assertOpen() {
+    if (this.#closed) throw new Error('Portal Terminal session is closed.');
   }
 
   addAttachment(attachmentId: string) {
@@ -655,13 +793,13 @@ export class PortalTerminalSession {
   }
 }
 
-export class InMemoryTerminalBackend implements TerminalBackend {
-  readonly inputs: Array<{ terminalId: string; data: string }> = [];
+export class InMemoryTerminalExecution implements TerminalExecution {
+  readonly inputs: Array<{ terminalId: string; data: Uint8Array }> = [];
   readonly resizes: Array<{ terminalId: string; cols: number; rows: number }> = [];
   readonly closed: string[] = [];
-  readonly #records = new Map<string, TerminalBackendRecord>();
-  readonly #captures = new Map<string, string>();
-  readonly #listeners = new Set<(event: TerminalBackendEvent) => void>();
+  readonly #records = new Map<string, TerminalExecutionRecord>();
+  readonly #captures = new Map<string, Uint8Array>();
+  readonly #listeners = new Set<(event: TerminalExecutionEvent) => void>();
   #eventSequence = 0;
 
   list() {
@@ -670,37 +808,37 @@ export class InMemoryTerminalBackend implements TerminalBackend {
 
   create(input: {
     terminalId: string;
-    workspaceId: string;
+    executionContextId: string;
     cwd: string;
     cols: number;
     rows: number;
     env: Record<string, string>;
   }) {
-    const record: TerminalBackendRecord = {
+    const record: TerminalExecutionRecord = {
       terminalId: input.terminalId,
-      workspaceId: input.workspaceId,
+      executionContextId: input.executionContextId,
       title: 'Terminal',
       status: 'running',
       cols: input.cols,
       rows: input.rows,
     };
     this.#records.set(record.terminalId, record);
-    this.#captures.set(record.terminalId, '');
+    this.#captures.set(record.terminalId, new Uint8Array());
     return Promise.resolve({ ...record });
   }
 
   capture(terminalId: string) {
     return Promise.resolve({
-      data: this.#captures.get(terminalId) ?? '',
+      data: this.#captures.get(terminalId) ?? new Uint8Array(),
       boundary: this.#eventSequence,
     });
   }
 
-  setCapture(terminalId: string, data: string) {
+  setCapture(terminalId: string, data: Uint8Array) {
     this.#captures.set(terminalId, data);
   }
 
-  input(terminalId: string, data: string) {
+  input(terminalId: string, data: Uint8Array) {
     this.#assertTerminal(terminalId);
     this.inputs.push({ terminalId, data });
     return Promise.resolve();
@@ -721,14 +859,16 @@ export class InMemoryTerminalBackend implements TerminalBackend {
     return Promise.resolve();
   }
 
-  subscribe(listener: (event: TerminalBackendEvent) => void) {
+  subscribe(listener: (event: TerminalExecutionEvent) => void) {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
 
-  emitOutput(terminalId: string, data: string) {
+  emitOutput(terminalId: string, data: Uint8Array) {
     this.#assertTerminal(terminalId);
-    this.#captures.set(terminalId, `${this.#captures.get(terminalId) ?? ''}${data}`);
+    const previous = this.#captures.get(terminalId) ?? new Uint8Array();
+    const combined = new Uint8Array(previous.length + data.length); combined.set(previous); combined.set(data, previous.length);
+    this.#captures.set(terminalId, combined);
     const event = { terminalId, backendSequence: ++this.#eventSequence, type: 'output' as const, data };
     for (const listener of this.#listeners) listener(event);
   }

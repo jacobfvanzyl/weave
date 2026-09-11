@@ -37,11 +37,15 @@ private final class GhosttyTerminalTextView: UITextView {
         self.terminal = terminal
         super.init(frame: .zero, textContainer: nil)
         backgroundColor = UIColor(red: 30/255, green: 30/255, blue: 46/255, alpha: 1)
-        font = UIFont(name: "Menlo-Regular", size: 13)
+        font = UIFont(name: terminal.fontName, size: 13)
+        tintColor = UIColor(red: 180/255, green: 190/255, blue: 254/255, alpha: 1)
         textColor = .clear // TextKit keeps selection/accessibility; CoreText draws glyphs.
         textContainerInset = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         textContainer.lineFragmentPadding = 0
         isScrollEnabled = false
+        clipsToBounds = true
+        textContainer.widthTracksTextView = false
+        textContainer.heightTracksTextView = false
         autocorrectionType = .no
         autocapitalizationType = .none
         spellCheckingType = .no
@@ -64,6 +68,13 @@ private final class GhosttyTerminalTextView: UITextView {
     }
     required init?(coder: NSCoder) { fatalError("Not a storyboard view") }
     override var canBecomeFirstResponder: Bool { true }
+    override var contentOffset: CGPoint {
+        get { super.contentOffset }
+        set { super.contentOffset = .zero }
+    }
+    override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
+        super.setContentOffset(.zero, animated: false)
+    }
     override func becomeFirstResponder() -> Bool {
         let focused = super.becomeFirstResponder()
         if focused { didFocus?() }
@@ -74,25 +85,25 @@ private final class GhosttyTerminalTextView: UITextView {
         heldKeys.removeAll()
         return super.resignFirstResponder()
     }
-    override func caretRect(for position: UITextPosition) -> CGRect { terminal.cursorRect }
+    override func caretRect(for position: UITextPosition) -> CGRect { .zero }
     override func firstRect(for range: UITextRange) -> CGRect { terminal.cursorRect }
     override func draw(_ rect: CGRect) {
+        refreshText()
         if let context = UIGraphicsGetCurrentContext() { terminal.draw(in: context, size: bounds.size) }
         if let composition, !composition.isEmpty {
             (composition as NSString).draw(at: terminal.cursorRect.origin, withAttributes: [.font: font!, .foregroundColor: UIColor.label, .backgroundColor: UIColor.systemBackground, .underlineStyle: NSUnderlineStyle.single.rawValue])
         }
+        if let context = UIGraphicsGetCurrentContext() { terminal.drawFocusBorder(in: context, size: bounds.size) }
     }
     override func layoutSubviews() {
         super.layoutSubviews()
-        let previous = (terminal.columns, terminal.rows)
-        if terminal.resize(to: bounds.size), previous != (terminal.columns, terminal.rows) {
-            refreshText()
-            resized?(Int(terminal.columns), Int(terminal.rows))
-        }
+        // UIKit lays out the viewport; only a Host screen replaces the VT grid.
+        if contentOffset != .zero { contentOffset = .zero }
     }
+
     func consume(_ data: Data, reset: Bool, cols: Int = 0, rows: Int = 0) -> Bool {
         guard (reset && cols > 0 ? terminal.restore(data, columns: UInt(cols), rows: UInt(rows)) : terminal.consume(data, reset: reset)) else { return false }
-        refreshText()
+        setNeedsDisplay()
         return true
     }
     private func refreshText() {
@@ -101,6 +112,7 @@ private final class GhosttyTerminalTextView: UITextView {
         // TextKit supplies native selection, copy and accessibility; libghostty
         // owns the screen/cursor and CoreText owns all visible terminal drawing.
         pointer?.isEnabled = terminal.mouseReporting
+        textContainer.size = CGSize(width: CGFloat(terminal.columns) * terminal.cellWidth, height: CGFloat(terminal.rows) * terminal.cellHeight)
         let visible = terminal.visibleText
         if markedTextRange == nil, text != visible {
             let selection = selectedRange
@@ -108,7 +120,6 @@ private final class GhosttyTerminalTextView: UITextView {
             let start = min(selection.location, (text as NSString).length)
             selectedRange = NSRange(location: start, length: min(selection.length, (text as NSString).length - start))
         }
-        setNeedsDisplay()
         updatingFrame = false
     }
     private func input(_ value: String) {
@@ -272,7 +283,7 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             view.didFocus = { [weak self] in self?.notifyListeners("event", data: ["surfaceId": id, "kind": "focus"]) }
             self.surfaces[id] = view
             parent.addSubview(view)
-            call.resolve(["surfaceId": id, "renderer": "libghostty-vt-coretext"])
+            call.resolve(["surfaceId": id, "renderer": "libghostty-vt-coretext", "codec": WeaveTerminalRenderer.codecIdentity()])
         }
     }
     @objc func layout(_ call: CAPPluginCall) {
@@ -280,6 +291,15 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let web = self.bridge?.webView, let parent = web.superview,
                   let x = call.getDouble("x"), let y = call.getDouble("y"), let width = call.getDouble("width"), let height = call.getDouble("height"),
                   [x,y,width,height].allSatisfy({ $0.isFinite }), width >= 0, height >= 0 else { call.reject("Invalid native terminal geometry."); return }
+            let border = call.getObject("focusBorder") ?? [:]
+            let borderWidth = (border["width"] as? NSNumber)?.doubleValue ?? 0
+            let borderRadius = (border["radius"] as? NSNumber)?.doubleValue ?? 0
+            let borderRGB = (border["rgb"] as? NSNumber)?.doubleValue ?? 0
+            guard [borderWidth, borderRadius, borderRGB].allSatisfy({ $0.isFinite }), (0...100).contains(borderWidth), (0...100).contains(borderRadius), (0...16777215).contains(borderRGB), borderRGB.rounded() == borderRGB else { call.reject("Invalid terminal border."); return }
+            view.terminal.focusBorderWidth = borderWidth
+            view.terminal.focusBorderRadius = borderRadius
+            view.terminal.focusBorderRGB = UInt32(borderRGB)
+            view.setNeedsDisplay()
             let rectangle = CGRect(x: x, y: y, width: width, height: height).intersection(web.bounds)
             if !rectangle.isEmpty && !rectangle.isNull { view.frame = web.convert(rectangle, to: parent) }
             view.isHidden = call.getBool("visible") != true || rectangle.isEmpty || rectangle.isNull
@@ -288,14 +308,16 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             view.terminal.readOnly = !controlled
             view.isEditable = controlled
             view.layoutIfNeeded()
-            call.resolve(["cols": view.terminal.columns, "rows": view.terminal.rows])
+            let grid = view.terminal.grid(forViewportSize: view.bounds.size)
+            call.resolve(["cols": Int(grid.width), "rows": Int(grid.height)])
         }
     }
     @objc func write(_ call: CAPPluginCall) {
         withSurface(call) { view in
             let cols = call.getInt("cols") ?? 0, rows = call.getInt("rows") ?? 0
             guard (cols == 0 && rows == 0) || (call.getBool("reset") == true && (2...500).contains(cols) && (2...300).contains(rows)) else { call.reject("Invalid terminal snapshot grid."); return }
-            guard let encoded = call.getString("data"), encoded.count <= 3 * 1024 * 1024, let data = Data(base64Encoded: encoded), view.consume(data, reset: call.getBool("reset") == true, cols: cols, rows: rows) else { call.reject("Native terminal output could not be consumed."); return }
+            guard let encoded = call.getString("data"), encoded.count <= 86 * 1024 * 1024, let data = Data(base64Encoded: encoded), (call.getBool("history") == true ? view.terminal.appendHistory(data) : view.consume(data, reset: call.getBool("reset") == true, cols: cols, rows: rows)) else { call.reject("Native terminal output could not be consumed."); return }
+            view.setNeedsDisplay()
             call.resolve()
         }
     }
@@ -307,8 +329,8 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
     #if DEBUG
-    // App-driven smoke only. XCTest remains responsible for real keyboard,
-    // selection, rotation and accessibility acceptance on the physical iPad.
+    // App-driven smoke only. XCTest adds synthetic typing/rotation coverage.
+    // Physical keyboard and system IME acceptance remains attended.
     func driveAcceptanceStage(_ stage: String) -> Bool {
         guard ["native-terminal", "native-neovim", "native-reattached-input", "native-neovim-input", "native-composition"].contains(stage) else { return false }
         guard let view = surfaces.values.first(where: { !$0.isHidden && !$0.terminal.readOnly }) else { return false }

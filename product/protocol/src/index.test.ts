@@ -18,18 +18,18 @@ import {
 
 describe('Portal protocol', () => {
   test('preserves exact Host context paths and accepts legacy summaries without guessing', () => {
-    const summary = { workspaceId: 'workspace-1', name: 'Checkout' };
+    const summary = { executionContextId: 'workspace-1', name: 'Checkout' };
     for (const canonicalPath of ['/', '/Users/Jaco/Code', '/home/jaco/worktree']) {
-      expect(parsePortalRpcResult('workspace.list', {
-        workspaces: [{ ...summary, canonicalPath }],
-      }).workspaces[0]).toEqual({ ...summary, canonicalPath });
+      expect(parsePortalRpcResult('context.list', {
+        executionContexts: [{ ...summary, canonicalPath }],
+      }).executionContexts[0]).toEqual({ ...summary, canonicalPath });
     }
-    expect(parsePortalRpcResult('workspace.list', { workspaces: [summary] }).workspaces[0])
+    expect(parsePortalRpcResult('context.list', { executionContexts: [summary] }).executionContexts[0])
       .toEqual(summary);
     for (const canonicalPath of ['', 'relative', '/work/../other', '/work/./tree', '/work//tree', '/work/', '/work\0hidden']) {
-      expect(() => parsePortalRpcResult('workspace.add', {
+      expect(() => parsePortalRpcResult('context.add', {
         workspace: { ...summary, canonicalPath },
-      })).toThrow('workspace.canonicalPath');
+      })).toThrow('context.canonicalPath');
     }
   });
   test('parses the bounded visible Browser capability and ergonomic commands', () => {
@@ -38,7 +38,7 @@ describe('Portal protocol', () => {
       offer: {
         version: 1,
         clientId: 'alpha-ipad',
-        tabId: 'visible-tab',
+        workspaceId: 'visible-tab',
         generation: 2,
         controlRevision: 4,
         platform: 'iPadOS',
@@ -51,7 +51,7 @@ describe('Portal protocol', () => {
           maxDurationMs: 30000,
         },
       },
-    }).offer.tabId).toBe('visible-tab');
+    }).offer.workspaceId).toBe('visible-tab');
     expect(parseBrowserControlCommand({
       kind: 'act',
       viewId: 'view-1',
@@ -129,8 +129,8 @@ describe('Portal protocol', () => {
         thread: {
           threadId: 'thread-1',
           agentId: 'codex',
-          workspaceId: 'weave',
-          acpSessionId: 'session-1',
+          executionContextId: 'weave',
+          workspaceId: 'workspace', membershipRevision: 0, acpSessionId: 'session-1',
           status: 'active',
           createdAt: '2026-08-24T00:00:00.000Z',
           updatedAt: '2026-08-24T00:00:00.000Z',
@@ -145,10 +145,10 @@ describe('Portal protocol', () => {
   });
 
   test('parses provisional Thread lifecycle requests and results', () => {
-    expect(parsePortalRpcParams('thread.draft.create', {
-      workspaceId: 'weave',
+    expect(parsePortalRpcParams('thread.draft.create', { workspaceId: 'workspace',
+      executionContextId: 'weave',
       agentId: 'codex',
-    })).toEqual({ workspaceId: 'weave', agentId: 'codex' });
+    })).toEqual({ workspaceId: 'workspace', executionContextId: 'weave', agentId: 'codex' });
     expect(parsePortalRpcParams('thread.draft.discard', {
       threadId: 'draft-1',
     })).toEqual({ threadId: 'draft-1' });
@@ -157,8 +157,8 @@ describe('Portal protocol', () => {
         thread: {
           threadId: 'draft-1',
           agentId: 'codex',
-          workspaceId: 'weave',
-          acpSessionId: 'session-1',
+          executionContextId: 'weave',
+          workspaceId: 'workspace', membershipRevision: 0, acpSessionId: 'session-1',
           status: 'active',
           createdAt: '2026-08-28T00:00:00.000Z',
           updatedAt: '2026-08-28T00:00:00.000Z',
@@ -171,18 +171,18 @@ describe('Portal protocol', () => {
   });
 
   test('parses host-local project removal requests and results', () => {
-    expect(parsePortalRpcParams('workspace.remove', {
-      workspaceId: 'workspace-1',
-    })).toEqual({ workspaceId: 'workspace-1' });
-    expect(parsePortalRpcResult('workspace.remove', { removed: true }))
+    expect(parsePortalRpcParams('context.remove', {
+      executionContextId: 'workspace-1',
+    })).toEqual({ executionContextId: 'workspace-1' });
+    expect(parsePortalRpcResult('context.remove', { removed: true }))
       .toEqual({ removed: true });
-    expect(() => parsePortalRpcResult('workspace.remove', { removed: false }))
-      .toThrow('workspace.remove');
+    expect(() => parsePortalRpcResult('context.remove', { removed: false }))
+      .toThrow('context.remove');
   });
 
   test('binds capabilities to a stable Host and authenticated principal', () => {
     expect(parsePortalRpcResult('portal.capabilities', {
-      protocolVersion: 2,
+      protocolVersion: 6,
       hostId: 'host-1',
       displayName: 'Portal',
       principal: {
@@ -192,7 +192,7 @@ describe('Portal protocol', () => {
       },
       capabilities: ['thread.list'],
     })).toEqual({
-      protocolVersion: 2,
+      protocolVersion: 6,
       hostId: 'host-1',
       displayName: 'Portal',
       principal: {
@@ -205,14 +205,14 @@ describe('Portal protocol', () => {
   });
 
   test('parses project registration and Git repository identity', () => {
-    expect(parsePortalRpcParams('workspace.add', {
+    expect(parsePortalRpcParams('context.add', {
       path: '/srv/projects/weave',
       name: 'Weave',
     })).toEqual({ path: '/srv/projects/weave', name: 'Weave' });
     expect(
-      parsePortalRpcResult('workspace.add', {
+      parsePortalRpcResult('context.add', {
         workspace: {
-          workspaceId: 'workspace-1',
+          executionContextId: 'workspace-1',
           name: 'Weave',
           rootName: 'weave',
           repositoryIdentity: {
@@ -231,7 +231,7 @@ describe('Portal protocol', () => {
       rootName: 'weave',
       repositoryIdentity: { canonicalKey: 'github.com/veezee/weave' },
     });
-    expect(() => parsePortalRpcParams('workspace.add', { path: '' })).toThrow(
+    expect(() => parsePortalRpcParams('context.add', { path: '' })).toThrow(
       'path',
     );
   });
@@ -248,8 +248,8 @@ describe('Portal protocol', () => {
         thread: {
           threadId: 'thread-1',
           agentId: 'codex',
-          workspaceId: 'weave',
-          acpSessionId: 'session-1',
+          executionContextId: 'weave',
+          workspaceId: 'workspace', membershipRevision: 0, acpSessionId: 'session-1',
           status: 'archived',
           createdAt: '2026-08-26T00:00:00.000Z',
           updatedAt: '2026-08-26T01:00:00.000Z',
@@ -261,21 +261,21 @@ describe('Portal protocol', () => {
 
   test('parses bounded Workspace file requests and results', () => {
     expect(
-      parsePortalRpcParams('workspace.file.write', {
-        workspaceId: 'weave',
+      parsePortalRpcParams('context.file.write', {
+        executionContextId: 'weave',
         path: 'src/main.ts',
         content: 'export {};\n',
         expectedContentHash: '0'.repeat(64),
       }),
     ).toEqual({
-      workspaceId: 'weave',
+      executionContextId: 'weave',
       path: 'src/main.ts',
       content: 'export {};\n',
       expectedContentHash: '0'.repeat(64),
     });
 
     expect(
-      parsePortalRpcResult('workspace.file.search', {
+      parsePortalRpcResult('context.file.search', {
         path: '',
         matches: [{
           path: 'src/main.ts',
@@ -297,8 +297,8 @@ describe('Portal protocol', () => {
     });
 
     expect(() =>
-      parsePortalRpcParams('workspace.file.search', {
-        workspaceId: 'weave',
+      parsePortalRpcParams('context.file.search', {
+        executionContextId: 'weave',
         path: '',
         query: 'x'.repeat(257),
         scope: 'both',
@@ -308,13 +308,13 @@ describe('Portal protocol', () => {
 
   test('routes Terminal contracts through the Portal protocol', () => {
     expect(parsePortalRpcParams('terminal.list', {
-      workspaceId: 'workspace-1',
-    })).toEqual({ workspaceId: 'workspace-1' });
+      executionContextId: 'workspace-1',
+    })).toEqual({ executionContextId: 'workspace-1' });
     expect(
       parsePortalRpcResult('terminal.create', {
         terminal: {
           terminalId: 'terminal-1',
-          workspaceId: 'workspace-1',
+          executionContextId: 'workspace-1',
           title: 'zsh',
           status: 'running',
           cols: 80,
@@ -326,18 +326,18 @@ describe('Portal protocol', () => {
       parseTerminalNotification(TERMINAL_EVENT_METHOD, {
         attachmentId: 'attachment-1',
         terminalId: 'terminal-1',
-        workspaceId: 'workspace-1',
+        executionContextId: 'workspace-1',
         generation: 'generation-1',
         sequence: 1,
-        event: { type: 'output', data: 'ready' },
+        event: { type: 'output', data: new TextEncoder().encode('ready') },
       }).event,
-    ).toEqual({ type: 'output', data: 'ready' });
+    ).toEqual({ type: 'output', data: new TextEncoder().encode('ready') });
   });
 
   test('requires conditional writes and validates watch notifications and typed errors', () => {
     expect(() =>
-      parsePortalRpcParams('workspace.file.write', {
-        workspaceId: 'weave',
+      parsePortalRpcParams('context.file.write', {
+        executionContextId: 'weave',
         path: 'src/main.ts',
         content: 'unsafe',
       })
@@ -380,21 +380,40 @@ describe('Portal protocol', () => {
 });
 
 test('Thread attention carries freshness separately from archive lifecycle and accepts older Hosts', () => {
-  const thread = { threadId: 'thread', workspaceId: 'workspace', agentId: 'agent', acpSessionId: 'session', status: 'active', createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' };
+  const thread = { threadId: 'thread', executionContextId: 'workspace', agentId: 'agent', workspaceId: 'workspace', membershipRevision: 0, acpSessionId: 'session', status: 'active', createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' };
   const result = (attention?: unknown) => parsePortalRpcResult('thread.list', { threads: [{ ...thread, ...(attention === undefined ? {} : { attention }) }] }).threads[0];
   expect(result()).toEqual(thread);
   for (const state of ['working', 'waiting', 'completed', 'idle', 'unavailable', 'uncertain']) {
     const attention = { state, observedAt: '2026-09-09T10:00:00Z', generation: 1 };
     expect(result(attention)).toEqual({ ...thread, attention });
   }
+  for (const uncertaintyReason of ['runtime_not_loaded', 'prompt_outcome_unknown']) {
+    const attention = { state: 'uncertain', observedAt: thread.createdAt, uncertaintyReason };
+    expect(result(attention)?.attention).toEqual(attention);
+  }
+  expect(() => result({ state: 'uncertain', observedAt: thread.createdAt, uncertaintyReason: 'unknown' })).toThrow('thread.attention');
+  expect(() => result({ state: 'idle', observedAt: thread.createdAt, uncertaintyReason: 'runtime_not_loaded' })).toThrow('thread.attention');
   for (const attention of [{ state: 'archived', observedAt: thread.createdAt }, { state: 'idle', observedAt: 'invalid' }, { state: 'idle', observedAt: thread.createdAt, generation: -1 }]) expect(() => result(attention)).toThrow('thread.attention');
 });
 
 
 test('Workspace directory availability preserves canonical identity and rejects unknown states', () => {
-  const workspace = { workspaceId: 'old-id', name: 'Checkout', canonicalPath: '/code/checkout' };
+  const workspace = { executionContextId: 'old-id', name: 'Checkout', canonicalPath: '/code/checkout' };
   for (const availability of ['available', 'unavailable', 'path-changed']) {
-    expect(parsePortalRpcResult('workspace.list', { workspaces: [{ ...workspace, availability }] }).workspaces[0]).toEqual({ ...workspace, availability });
+    expect(parsePortalRpcResult('context.list', { executionContexts: [{ ...workspace, availability }] }).executionContexts[0]).toEqual({ ...workspace, availability });
   }
-  expect(() => parsePortalRpcResult('workspace.list', { workspaces: [{ ...workspace, availability: 'connected' }] })).toThrow('workspace.availability');
+  expect(() => parsePortalRpcResult('context.list', { executionContexts: [{ ...workspace, availability: 'connected' }] })).toThrow('context.availability');
+});
+
+
+test('requires stored Thread membership and rejects null creation or move targets', () => {
+  const creation = { executionContextId: 'context', agentId: 'agent' };
+  expect(parsePortalRpcParams('thread.create', creation)).toEqual(creation);
+  for (const method of ['thread.create', 'thread.draft.create'] as const) {
+    expect(() => parsePortalRpcParams(method, { ...creation, workspaceId: null })).toThrow();
+  }
+  expect(() => parsePortalRpcParams('thread.assign', { threadId: 'thread', hostId: 'host', workspaceId: null, expectedRevision: 0 })).toThrow();
+  const record = { threadId: 'thread', executionContextId: 'context', agentId: 'agent', acpSessionId: 'session', status: 'active', createdAt: '2026-09-10', updatedAt: '2026-09-10', membershipRevision: 0 };
+  for (const workspaceId of [undefined, null, '']) expect(() => parsePortalRpcResult('thread.list', { threads: [{ ...record, workspaceId }] })).toThrow();
+  expect(() => parsePortalRpcResult('portal.capabilities', { protocolVersion: 3 })).toThrow();
 });

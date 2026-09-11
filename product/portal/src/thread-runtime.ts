@@ -11,7 +11,7 @@ import {
   withWeaveCapabilities,
 } from './acp-extension.ts';
 import { AgentProcess, type AgentProcessExit } from './agent-process.ts';
-import type { AgentDefinition, WorkspaceDefinition } from './config.ts';
+import type { AgentDefinition, ExecutionContextDefinition } from './config.ts';
 import { error, idKey, type JsonRpcId, type JsonRpcMessage, result } from './json-rpc.ts';
 import {
   ACP_INITIALIZE_PARAMS,
@@ -87,7 +87,7 @@ export class HostedThread {
   #process: AgentProcess;
   #initializeResult: unknown;
   #sessionLoadResult: Record<string, unknown>;
-  readonly #workspace: WorkspaceDefinition;
+  readonly #workspace: ExecutionContextDefinition;
   readonly #assertWorkspaceAvailable?: () => Promise<unknown>;
   readonly #agent: AgentDefinition;
   readonly #attachments = new Map<string, Attachment>();
@@ -106,6 +106,7 @@ export class HostedThread {
   #providerReplayCapture?: JsonRpcMessage[];
   #providerReplayTask?: Promise<{ messages: JsonRpcMessage[]; state: Record<string, unknown> }>;
   #generation: number;
+  #stoppedGeneration?: number;
   #recoveryState: 'ready' | 'restoring' | 'unavailable' = 'ready';
   #restoringInternally = false;
   #accepting = true;
@@ -113,7 +114,7 @@ export class HostedThread {
 
   private constructor(
     readonly thread: ThreadSummary,
-    workspace: WorkspaceDefinition,
+    workspace: ExecutionContextDefinition,
     agent: AgentDefinition,
     process: AgentProcess,
     generation: number,
@@ -141,7 +142,7 @@ export class HostedThread {
   }
 
   static async create(
-    workspace: WorkspaceDefinition,
+    workspace: ExecutionContextDefinition,
     agent: AgentDefinition,
     title: string | undefined,
     onThreadChanged: ThreadChanged,
@@ -150,7 +151,9 @@ export class HostedThread {
     mcpServersForThread: McpServersForThread,
     onFirstPrompt?: ThreadPromoted,
     assertWorkspaceAvailable?: () => Promise<unknown>,
+    workspaceId?: string,
   ) {
+    if (!workspaceId) throw new Error('A Workspace is required.');
     await assertWorkspaceAvailable?.();
     const threadId = crypto.randomUUID();
     const mcpServers = mcpServersForThread(threadId);
@@ -172,7 +175,9 @@ export class HostedThread {
     const hosted = new HostedThread(
       {
         threadId,
-        workspaceId: workspace.workspaceId,
+        executionContextId: workspace.executionContextId,
+        workspaceId,
+        membershipRevision: 0,
         agentId: agent.agentId,
         acpSessionId: sessionIdFrom(sessionResult),
         ...(title ? { title } : {}),
@@ -200,7 +205,7 @@ export class HostedThread {
 
   static async restore(
     thread: ThreadSummary,
-    workspace: WorkspaceDefinition,
+    workspace: ExecutionContextDefinition,
     agent: AgentDefinition,
     onThreadChanged: ThreadChanged,
     journal: ThreadEventJournal,
@@ -313,7 +318,7 @@ export class HostedThread {
       : this.#recoveryState !== 'ready' ? 'unavailable'
       : [...this.#agentPending.values()].some((pending) => HUMAN_AGENT_REQUESTS.has(pending.message.method ?? '')) ? 'waiting'
       : this.#activePromptAttachmentId ? 'working' : this.#lastPromptOutcome;
-    return { state, observedAt: new Date().toISOString(), generation: this.#generation };
+    return { state, observedAt: new Date().toISOString(), generation: this.#generation, ...(state === 'uncertain' ? { uncertaintyReason: 'prompt_outcome_unknown' as const } : {}) };
   }
 
   #deliverOrphanedRequests(attachment: Attachment) {
@@ -324,6 +329,22 @@ export class HostedThread {
       // Keep the request identity while changing only its authorized live recipient.
       attachment.send(pending.message);
     }
+  }
+
+  reserveWorkspaceClose() {
+    const accepting = this.#accepting;
+    this.#accepting = false;
+    return () => { if (!this.#closing) this.#accepting = accepting; };
+  }
+
+  async stopForWorkspaceClose() {
+    this.#accepting = false;
+    if (this.#activePromptAttachmentId) {
+      await this.#process.send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.thread.acpSessionId } }).catch(() => undefined);
+      const deadline = Date.now() + 750;
+      while (this.#activePromptAttachmentId && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await this.close('Workspace closed.');
   }
 
   async archive() {
@@ -529,19 +550,22 @@ export class HostedThread {
   }
 
   #receiveAgent(generation: number, message: JsonRpcMessage) {
-    if (generation !== this.#generation) return;
+    if (generation !== this.#generation || generation === this.#stoppedGeneration) return;
     if (this.#providerReplayCapture && message.method === 'session/update') {
       this.#providerReplayCapture.push(message);
       return;
     }
     if (this.#restoringInternally && message.method === 'session/update') return;
     this.#agentMessageQueue = this.#agentMessageQueue.then(async () => {
-      if (generation === this.#generation) await this.#handleAgentMessage(message);
+      if (generation === this.#generation && generation !== this.#stoppedGeneration) await this.#handleAgentMessage(message);
     });
   }
 
   async #providerStopped(generation: number, exit: AgentProcessExit) {
     if (this.#closing || generation !== this.#generation) return;
+    // Fence inherited stdout immediately, before persistence or filesystem
+    // checks can yield while a descendant of the exited provider still writes.
+    this.#stoppedGeneration = generation;
     if (this.#recoveryState === 'restoring') {
       this.#recoveryState = 'unavailable';
       await this.#runtimeStates.transition(this.thread.threadId, generation, 'unavailable', exit).catch(() =>

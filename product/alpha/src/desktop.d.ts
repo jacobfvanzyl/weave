@@ -1,3 +1,3 @@
 interface Window {
-  readonly weaveDesktop?: Readonly<{ runtime: 'electron'; platform: 'macos'; nativeTerminal?: import('./terminal/native-terminal').NativeTerminalBridge }>;
+  readonly weaveDesktop?: Readonly<{ runtime: 'electron'; platform: 'macos'; setTopRailHeight?(height: number, overlayHeight: number): Promise<number>; nativeTerminal?: import('./terminal/native-terminal').NativeTerminalBridge }>;
 }

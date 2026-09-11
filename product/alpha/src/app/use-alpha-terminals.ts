@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { TerminalOutputStream, type TerminalOutputSource } from '@/terminal/output-stream';
 import type { TerminalAttachmentMode, TerminalNotification, TerminalSummary } from '@weave/product-protocol';
-import { type DirectHostClient, PortalRpcError } from '@/portal-client';
+import { type DirectHostClient } from '@/portal-client';
 import {
   type AlphaTerminalScope,
   alphaTerminalScopeKey,
@@ -16,7 +16,7 @@ export type AlphaTerminalClient = Pick<
   | 'resizeTerminal'
   | 'detachTerminal'
   | 'closeTerminal'
->;
+> & Partial<Pick<DirectHostClient, 'historyTerminal'>>;
 
 export type AlphaTerminalTarget = {
   scope: AlphaTerminalScope;
@@ -39,7 +39,7 @@ export type AlphaTerminalsModel = {
 
 type ActiveAttachment = {
   scopeKey: string;
-  workspaceId: string;
+  executionContextId: string;
   terminalId: string;
   attachmentId: string;
   mode: TerminalAttachmentMode;
@@ -55,16 +55,12 @@ const emptyModel = (
   loading: false,
 });
 
-const controlledElsewhere = (cause: unknown) =>
-  cause instanceof PortalRpcError &&
-  (cause.data as { domain?: unknown; code?: unknown } | undefined)?.domain ===
-    'terminal' &&
-  (cause.data as { code?: unknown }).code === 'TERMINAL_CONTROLLED';
-
 export function useAlphaTerminals({
   target,
   client,
+  onExit,
 }: {
+  onExit?: (terminalId: string) => void;
   target?: AlphaTerminalTarget;
   client?: AlphaTerminalClient;
 }) {
@@ -72,6 +68,7 @@ export function useAlphaTerminals({
   const requestedScopeKeysRef = useRef(new Set<string>());
   const preferredTerminalIdsRef = useRef(new Map<string, string>());
   const attachmentRef = useRef<ActiveAttachment | undefined>(undefined);
+  const onExitRef = useRef(onExit); onExitRef.current = onExit;
   const closingRef = useRef(new Set<string>());
   const reconcileExitedRef = useRef<(preferredTerminalId?: string) => void>(() => undefined);
   const operationRef = useRef(Promise.resolve());
@@ -83,7 +80,7 @@ export function useAlphaTerminals({
   }));
   const scopeKey = target ? alphaTerminalScopeKey(target.scope) : '';
   const targetKey = target
-    ? JSON.stringify([scopeKey, target.scope.workspaceId, target.supported, target.terminalId])
+    ? JSON.stringify([scopeKey, target.scope.executionContextId, target.supported, target.terminalId])
     : '';
 
   const lifetimeRef = useRef({ key: targetKey, client, alive: true });
@@ -108,11 +105,34 @@ export function useAlphaTerminals({
     if (!attachment) return;
     await attachment.client
       .detachTerminal(
-        attachment.workspaceId,
+        attachment.executionContextId,
         attachment.terminalId,
         attachment.attachmentId,
       )
       .catch(() => undefined);
+  };
+
+  const historyTokenRef = useRef<string | undefined>(undefined);
+  const restoreHistory = (token?: string, pages = 0) => {
+    historyTokenRef.current = token;
+    const active = attachmentRef.current;
+    if (!token || !pages || !active?.client.historyTerminal) return;
+    void (async () => {
+      try {
+        for (let page = 0; page < pages; page++) {
+          if (!lifetime.alive || attachmentRef.current !== active || historyTokenRef.current !== token) return;
+          const history = await active.client.historyTerminal!(active.executionContextId, active.terminalId, active.attachmentId, token, page);
+          if (!lifetime.alive || attachmentRef.current !== active || historyTokenRef.current !== token) return;
+          if (!await output.history(history.data)) return;
+          if (history.finished) return;
+        }
+        throw new Error('Terminal history was truncated');
+      } catch {
+        if (lifetime.alive && attachmentRef.current === active && historyTokenRef.current === token) {
+          output.clear(); void serialized(async () => { const terminal = model.tabs.find(t => t.terminalId === active.terminalId); if (terminal) await attach(terminal, 'shared'); });
+        }
+      }
+    })();
   };
 
   const receive = (notification: TerminalNotification) => {
@@ -120,15 +140,25 @@ export function useAlphaTerminals({
     if (!lifetime.alive || !active || active.attachmentId !== notification.attachmentId) return;
     const event = notification.event;
     if (event.type === 'output') { output.write(event.data); return; }
+    if (event.type === 'screen') {
+      output.reset(event.data, { cols: event.terminal.cols, rows: event.terminal.rows });
+      restoreHistory(event.historyToken, event.historyPages);
+      setModel((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === notification.terminalId ? event.terminal : tab) }));
+      return;
+    }
     if (event.type === 'exit' || event.type === 'resync') output.clear();
     if (event.type === 'exit' || event.type === 'resync') {
       const explicitClose = event.type === 'exit' &&
         closingRef.current.has(notification.terminalId);
-      if (explicitClose) attachmentRef.current = undefined;
+      if (event.type === 'exit' && target?.terminalId) {
+        attachmentRef.current = undefined;
+        onExitRef.current?.(notification.terminalId);
+      } else if (explicitClose) attachmentRef.current = undefined;
       else queueMicrotask(() => reconcileExitedRef.current(event.type === 'resync' ? active.terminalId : undefined));
     }
     setModel((current) => {
       if (current.activeTerminalId !== notification.terminalId) return current;
+      if (event.type === 'directory') return { ...current, tabs: current.tabs.map((tab) => tab.terminalId === notification.terminalId ? { ...tab, currentDirectory: event.currentDirectory } : tab) };
       if (event.type === 'title') {
         return {
           ...current,
@@ -149,16 +179,6 @@ export function useAlphaTerminals({
           readOnlyReason: undefined,
         };
       }
-      if (
-        event.type === 'control' &&
-        !event.controlled &&
-        active.mode === 'observe'
-      ) {
-        return {
-          ...current,
-          readOnlyReason: 'This Terminal is available for control again.',
-        };
-      }
       if (event.type === 'resync') {
         return {
           ...current,
@@ -174,38 +194,23 @@ export function useAlphaTerminals({
 
   const attach = async (
     terminal: TerminalSummary,
-    preferredMode: TerminalAttachmentMode = 'control',
+    preferredMode: TerminalAttachmentMode = 'shared',
   ) => {
     if (!target || !client || !lifetime.alive) return;
     await detachCurrent();
-    let attached;
-    let readOnlyReason: string | undefined;
-    try {
-      attached = await client.attachTerminal(
-        target.scope.workspaceId,
-        terminal.terminalId,
-        preferredMode,
-        receive,
-      );
-    } catch (cause) {
-      if (preferredMode !== 'control' || !controlledElsewhere(cause)) {
-        throw cause;
-      }
-      attached = await client.attachTerminal(
-        target.scope.workspaceId,
-        terminal.terminalId,
-        'observe',
-        receive,
-      );
-      readOnlyReason = 'This Terminal is controlled from another attachment.';
-    }
+    const attached = await client.attachTerminal(
+      target.scope.executionContextId,
+      terminal.terminalId,
+      preferredMode,
+      receive,
+    );
     if (!lifetime.alive) {
-      await client.detachTerminal(target.scope.workspaceId, terminal.terminalId, attached.attachment.attachmentId).catch(() => undefined);
+      await client.detachTerminal(target.scope.executionContextId, terminal.terminalId, attached.attachment.attachmentId).catch(() => undefined);
       return;
     }
     attachmentRef.current = {
       scopeKey,
-      workspaceId: target.scope.workspaceId,
+      executionContextId: target.scope.executionContextId,
       terminalId: terminal.terminalId,
       attachmentId: attached.attachment.attachmentId,
       mode: attached.attachment.mode,
@@ -216,6 +221,7 @@ export function useAlphaTerminals({
       attached.snapshot.terminal.terminalId,
     );
     output.reset(attached.snapshot.data, { cols: attached.snapshot.terminal.cols, rows: attached.snapshot.terminal.rows });
+    restoreHistory(attached.snapshot.historyToken, attached.snapshot.historyPages);
     setModel((current) => ({
       ...current,
       scope: target.scope,
@@ -231,7 +237,7 @@ export function useAlphaTerminals({
       attachmentId: attached.attachment.attachmentId,
       attachmentMode: attached.attachment.mode,
       loading: false,
-      readOnlyReason,
+      readOnlyReason: undefined,
       error: undefined,
     }));
     attached.startEvents();
@@ -253,7 +259,7 @@ export function useAlphaTerminals({
     const currentAttachment = attachmentRef.current;
     if (
       currentAttachment?.scopeKey === scopeKey &&
-      currentAttachment.workspaceId === target.scope.workspaceId &&
+      currentAttachment.executionContextId === target.scope.executionContextId &&
       (!preferredTerminalId || currentAttachment.terminalId === preferredTerminalId)
     ) {
       return;
@@ -265,17 +271,18 @@ export function useAlphaTerminals({
       loading: true,
       error: undefined,
     }));
-    const listed = await client.listTerminals(target.scope.workspaceId);
+    const listed = await client.listTerminals(target.scope.executionContextId);
     if (!lifetime.alive) return;
-    let tabs = listed.terminals;
+    let tabs = listed.terminals.filter((terminal) => terminal.status === 'running');
     if (target.terminalId && !tabs.some((tab) => tab.terminalId === target.terminalId)) {
       await detachCurrent();
       setModel((current) => ({ ...current, tabs: [], loading: false, activeTerminalId: undefined, attachmentId: undefined, attachmentMode: undefined,
-        error: 'This terminal is unavailable. Its pane is retained; reconnect or explicitly start a replacement.' }));
+        error: undefined }));
+      onExitRef.current?.(target.terminalId);
       return;
     }
     if (!tabs.length) {
-      tabs = [(await client.createTerminal(target.scope.workspaceId)).terminal];
+      tabs = [(await client.createTerminal(target.scope.executionContextId)).terminal];
     }
     const terminal = tabs.find(({ terminalId }) => terminalId === preferredTerminalId) ??
       tabs[0];
@@ -353,7 +360,7 @@ export function useAlphaTerminals({
     create: () =>
       serialized(async () => {
         if (!target || !client || !target.supported) return;
-        const created = await client.createTerminal(target.scope.workspaceId);
+        const created = await client.createTerminal(target.scope.executionContextId);
         setModel((current) => ({
           ...current,
           tabs: [...current.tabs, created.terminal],
@@ -367,24 +374,24 @@ export function useAlphaTerminals({
         );
         if (terminal) await attach(terminal);
       }),
-    input: (data: string) => {
+    input: (data: string | Uint8Array) => {
       const attachment = attachmentRef.current;
-      return serialized(async () => {
-        if (!lifetime.alive || !attachment || attachmentRef.current !== attachment || attachment.mode !== 'control') return;
-        await attachment.client.inputTerminal(
-          attachment.workspaceId,
-          attachment.terminalId,
-          attachment.attachmentId,
-          data,
-        );
+      // Wait only for already queued lifecycle barriers. Successive keystrokes
+      // may be in flight together; the ordered transport acknowledges progress.
+      const barrier = operationRef.current;
+      return barrier.then(async () => {
+        if (!lifetime.alive || !attachment || attachmentRef.current !== attachment || attachment.mode === 'observe') return;
+        await attachment.client.inputTerminal(attachment.executionContextId, attachment.terminalId, attachment.attachmentId, data);
+      }).catch((cause) => {
+        if (lifetime.alive && attachmentRef.current === attachment) setModel(current => ({ ...current, error: cause instanceof Error ? cause.message : 'Terminal input acceptance is uncertain; it was not replayed.' }));
       });
     },
     resize: (cols: number, rows: number) => {
       const attachment = attachmentRef.current;
       return serialized(async () => {
-        if (!lifetime.alive || !attachment || attachmentRef.current !== attachment || attachment.mode !== 'control') return;
+        if (!lifetime.alive || !attachment || attachmentRef.current !== attachment || attachment.mode === 'observe') return;
         await attachment.client.resizeTerminal(
-          attachment.workspaceId,
+          attachment.executionContextId,
           attachment.terminalId,
           attachment.attachmentId,
           cols,
@@ -397,7 +404,7 @@ export function useAlphaTerminals({
         const terminal = model.tabs.find(
           ({ terminalId }) => terminalId === model.activeTerminalId,
         );
-        if (terminal) await attach(terminal, 'control');
+        if (terminal) await attach(terminal, 'shared');
       }),
     close: (terminalId: string) =>
       serialized(async () => {
@@ -407,7 +414,7 @@ export function useAlphaTerminals({
           !target ||
           !client ||
           !attachment ||
-          attachment.mode !== 'control' ||
+          attachment.mode === 'observe' ||
           attachment.terminalId !== terminalId
         ) {
           return;
@@ -415,7 +422,7 @@ export function useAlphaTerminals({
         closingRef.current.add(terminalId);
         try {
           await client.closeTerminal(
-            target.scope.workspaceId,
+            target.scope.executionContextId,
             terminalId,
             attachment.attachmentId,
           );

@@ -26,9 +26,9 @@ const controller = (): AlphaController => ({
       hostName: "bazzite",
     },
     searchQuery: "",
-    workspaces: [{
+    executionContexts: [{
       id: "weave",
-      workspaceId: "weave",
+      executionContextId: "weave",
       hostId: "host-1",
       hostName: "bazzite",
       name: "weave",
@@ -41,7 +41,7 @@ const controller = (): AlphaController => ({
         hostName: "bazzite",
         status: "active",
         updatedAt: "2026-08-25T00:00:00.000Z",
-        workspaceId: "weave",
+        executionContextId: "weave",
       }],
     }],
     archivedThreads: [],
@@ -212,13 +212,13 @@ describe("WorkspacePlaceholder", () => {
 
   it("renders a supplied icon-only control in its bottom rail", async () => {
     const user = userEvent.setup();
-    const showProjectPane = vi.fn();
+    const showExecutionContextPane = vi.fn();
     const { container } = render(
       <SidebarProvider defaultOpen={false}>
         <WorkspacePlaceholder
           controller={controller()}
           footerActions={
-            <Button aria-label="Test control" size="icon" onClick={showProjectPane} />
+            <Button aria-label="Test control" size="icon" onClick={showExecutionContextPane} />
           }
         />
       </SidebarProvider>,
@@ -228,7 +228,7 @@ describe("WorkspacePlaceholder", () => {
     expect(toggle).toHaveTextContent("");
     expect(toggle).toHaveClass("size-7", "items-center", "justify-center");
     await user.click(toggle);
-    expect(showProjectPane).toHaveBeenCalledOnce();
+    expect(showExecutionContextPane).toHaveBeenCalledOnce();
     expect(container.querySelector('[data-slot="main-bottom-rail"]'))
       .toBeInTheDocument();
   });

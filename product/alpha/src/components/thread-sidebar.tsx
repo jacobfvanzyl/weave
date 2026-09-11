@@ -12,10 +12,10 @@ import {
   Settings01Icon,
 } from "@hugeicons/core-free-icons";
 import type { AlphaController, AlphaThread } from "@/app/alpha-controller";
-import { AddProjectDialog } from "@/components/add-project-dialog";
+import { AddExecutionContextDialog } from "@/components/add-execution-context-dialog";
 import { CodexIcon } from "@/components/codex-icon";
 import { CreateThreadDialog } from "@/components/create-thread-dialog";
-import { ProjectHostDialog } from "@/components/project-host-dialog";
+import { ExecutionContextHostDialog } from "@/components/project-host-dialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -157,16 +157,16 @@ export function ThreadSidebar({
       .filter(({ status }) => status === "connected")
       .map(({ hostId }) => hostId),
   );
-  const selectedThreadIsDraft = model.workspaces.some(({ threads }) =>
+  const selectedThreadIsDraft = model.executionContexts.some(({ threads }) =>
     threads.some(({ draft, id }) => draft && id === model.selectedThreadId),
   );
   const threadSelectionBusy =
     model.busy &&
-    (!selectedThreadIsDraft || Boolean(model.creatingThreadWorkspaceId));
-  const [addProjectOpen, setAddProjectOpen] = useState(false);
-  const [createThreadWorkspaceId, setCreateThreadWorkspaceId] =
+    (!selectedThreadIsDraft || Boolean(model.creatingThreadExecutionContextId));
+  const [addExecutionContextOpen, setAddExecutionContextOpen] = useState(false);
+  const [createThreadExecutionContextId, setCreateThreadExecutionContextId] =
     useState<string>();
-  const [removeProjectWorkspaceId, setRemoveProjectWorkspaceId] =
+  const [removeExecutionContextExecutionContextId, setRemoveExecutionContextExecutionContextId] =
     useState<string>();
   const [searchExpanded, setSearchExpanded] = useState(
     Boolean(model.searchQuery),
@@ -178,9 +178,9 @@ export function ThreadSidebar({
   useEffect(() => {
     if (searchExpanded) searchInputRef.current?.focus();
   }, [searchExpanded]);
-  const workspaces = useMemo(
+  const executionContexts = useMemo(
     () =>
-      model.workspaces
+      model.executionContexts
         .map((workspace) => ({
           ...workspace,
           threads: workspace.threads.filter(
@@ -192,19 +192,19 @@ export function ThreadSidebar({
           ),
         }))
         .filter((workspace) => !query || workspace.threads.length > 0),
-    [model.workspaces, query],
+    [model.executionContexts, query],
   );
-  const createThreadWorkspace = model.workspaces.find(
-    ({ id }) => id === createThreadWorkspaceId,
+  const createThreadWorkspace = model.executionContexts.find(
+    ({ id }) => id === createThreadExecutionContextId,
   );
-  const removeProjectWorkspace = model.workspaces.find(
-    ({ id }) => id === removeProjectWorkspaceId,
+  const removeExecutionContextWorkspace = model.executionContexts.find(
+    ({ id }) => id === removeExecutionContextExecutionContextId,
   );
 
   return (
     <Sidebar collapsible="offcanvas" position="inline">
       <SidebarHeader
-        className="h-11 shrink-0 flex-row items-center gap-1 border-b border-sidebar-border bg-title-bar px-2.5 py-0"
+        className="h-[var(--rail-height)] shrink-0 flex-row items-center gap-1 border-b border-sidebar-border bg-title-bar px-2.5 py-0"
         data-slot="sidebar-top-rail"
       >
         <div
@@ -259,10 +259,10 @@ export function ThreadSidebar({
         </div>
         <SidebarGroupAction
           type="button"
-          aria-label="Add Project"
-          title="Add Project"
+          aria-label="Add ExecutionContext"
+          title="Add ExecutionContext"
           className="static ml-auto w-6 shrink-0"
-          onClick={() => setAddProjectOpen(true)}
+          onClick={() => setAddExecutionContextOpen(true)}
         >
           <HugeiconsIcon
             data-icon="inline-start"
@@ -273,9 +273,9 @@ export function ThreadSidebar({
       </SidebarHeader>
 
       <SidebarContent>
-        {workspaces.map((workspace) => {
+        {executionContexts.map((workspace) => {
           const creatingThread =
-            model.creatingThreadWorkspaceId === workspace.id;
+            model.creatingThreadExecutionContextId === workspace.id;
           const selectedDraft = workspace.threads.some(
             ({ draft, id }) => draft && id === model.selectedThreadId,
           );
@@ -307,9 +307,9 @@ export function ThreadSidebar({
                     render={
                       <SidebarGroupAction
                         className="top-2 right-9 w-6"
-                        title={`Project settings for ${workspace.name}`}
-                        aria-label={`Project settings for ${workspace.name}`}
-                        disabled={model.busy || !actions.removeProject}
+                        title={`ExecutionContext settings for ${workspace.name}`}
+                        aria-label={`ExecutionContext settings for ${workspace.name}`}
+                        disabled={model.busy || !actions.removeExecutionContext}
                       />
                     }
                   >
@@ -327,8 +327,8 @@ export function ThreadSidebar({
                         onClick={() => {
                           const placements = workspace.placements ?? [
                             {
-                              id: `${workspace.hostId}:${workspace.workspaceId}`,
-                              workspaceId: workspace.workspaceId,
+                              id: `${workspace.hostId}:${workspace.executionContextId}`,
+                              executionContextId: workspace.executionContextId,
                               hostId: workspace.hostId,
                               hostName: workspace.hostName,
                             },
@@ -337,17 +337,17 @@ export function ThreadSidebar({
                             placements.map(({ hostId }) => hostId),
                           ).size;
                           if (hostCount > 1) {
-                            setRemoveProjectWorkspaceId(workspace.id);
+                            setRemoveExecutionContextExecutionContextId(workspace.id);
                             return;
                           }
-                          void actions.removeProject?.(
+                          void actions.removeExecutionContext?.(
                             workspace.id,
                             placements[0]?.id,
                           );
                         }}
                       >
                         <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-                        Remove Project
+                        Remove ExecutionContext
                       </DropdownMenuItem>
                     </DropdownMenuGroup>
                   </DropdownMenuContent>
@@ -367,7 +367,7 @@ export function ThreadSidebar({
                   aria-busy={creatingThread}
                   disabled={
                     (!selectedDraft && model.busy) ||
-                    Boolean(model.creatingThreadWorkspaceId) ||
+                    Boolean(model.creatingThreadExecutionContextId) ||
                     !(workspace.placements ?? [workspace]).some(({ hostId }) =>
                       connectedHostIds.has(hostId),
                     )
@@ -379,7 +379,7 @@ export function ThreadSidebar({
                       ),
                     ).size;
                     if (hostCount > 1) {
-                      setCreateThreadWorkspaceId(workspace.id);
+                      setCreateThreadExecutionContextId(workspace.id);
                       return;
                     }
                     void actions.createThread(workspace.id);
@@ -400,7 +400,7 @@ export function ThreadSidebar({
                             <SidebarMenuSkeleton
                               showIcon
                               className="h-12"
-                              aria-label={`Reconnecting ${thread.hostName} thread`}
+                              aria-label={model.showHostIdentity ? `Reconnecting ${thread.hostName} thread` : "Reconnecting thread"}
                               data-slot="reconnecting-thread"
                             />
                           </SidebarMenuItem>
@@ -428,7 +428,7 @@ export function ThreadSidebar({
             </Collapsible>
           );
         })}
-        {!workspaces.length && (
+        {!executionContexts.length && (
           <Empty className="gap-1 p-4">
             <EmptyHeader>
               <EmptyTitle>No matching threads</EmptyTitle>
@@ -473,35 +473,37 @@ export function ThreadSidebar({
           </SidebarMenu>
         </SidebarFooter>
       )}
-      <AddProjectDialog
+      <AddExecutionContextDialog
         controller={controller}
-        open={addProjectOpen}
-        onOpenChange={setAddProjectOpen}
+        open={addExecutionContextOpen}
+        onOpenChange={setAddExecutionContextOpen}
       />
       <CreateThreadDialog
         workspace={createThreadWorkspace}
         connections={model.connections}
+        showHostIdentity={model.showHostIdentity}
         open={Boolean(createThreadWorkspace)}
         onOpenChange={(open) => {
-          if (!open) setCreateThreadWorkspaceId(undefined);
+          if (!open) setCreateThreadExecutionContextId(undefined);
         }}
-        onCreateThread={(workspaceId, placementId) => {
-          void actions.createThread(workspaceId, placementId);
+        onCreateThread={(executionContextId, placementId) => {
+          void actions.createThread(executionContextId, placementId);
         }}
       />
-      <ProjectHostDialog
-        workspace={removeProjectWorkspace}
+      <ExecutionContextHostDialog
+        workspace={removeExecutionContextWorkspace}
         connections={model.connections}
-        open={Boolean(removeProjectWorkspace)}
+        showHostIdentity={model.showHostIdentity}
+        open={Boolean(removeExecutionContextWorkspace)}
         description={
-          <>Remove {removeProjectWorkspace?.name ?? "this project"} from:</>
+          <>Remove {removeExecutionContextWorkspace?.name ?? "this project"} from:</>
         }
         onOpenChange={(open) => {
-          if (!open) setRemoveProjectWorkspaceId(undefined);
+          if (!open) setRemoveExecutionContextExecutionContextId(undefined);
         }}
         onSelect={(placement) => {
-          if (!removeProjectWorkspace) return;
-          void actions.removeProject?.(removeProjectWorkspace.id, placement.id);
+          if (!removeExecutionContextWorkspace) return;
+          void actions.removeExecutionContext?.(removeExecutionContextWorkspace.id, placement.id);
         }}
       />
     </Sidebar>

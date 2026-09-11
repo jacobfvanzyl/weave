@@ -10,7 +10,7 @@ import type {
   AlphaConnectionStatus,
   AlphaController,
   AlphaViewModel,
-  AlphaWorkspace,
+  AlphaExecutionContext,
 } from "./alpha-controller";
 
 export const MOCK_SCENARIOS = [
@@ -27,10 +27,10 @@ export const MOCK_SCENARIOS = [
 
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
-const WORKSPACES: AlphaWorkspace[] = [
+const WORKSPACES: AlphaExecutionContext[] = [
   {
     id: "workspace-weave",
-    workspaceId: "workspace-weave",
+    executionContextId: "workspace-weave",
     hostId: "mock-host",
     hostName: "bazzite",
     name: "weave",
@@ -45,7 +45,7 @@ const WORKSPACES: AlphaWorkspace[] = [
         supportsThreadLifecycle: true,
         status: "active",
         updatedAt: "2026-08-24T08:54:00.000Z",
-        workspaceId: "workspace-weave",
+        executionContextId: "workspace-weave",
       },
       {
         id: "thread-acp-host",
@@ -57,13 +57,13 @@ const WORKSPACES: AlphaWorkspace[] = [
         supportsThreadLifecycle: true,
         status: "active",
         updatedAt: "2026-08-23T17:22:00.000Z",
-        workspaceId: "workspace-weave",
+        executionContextId: "workspace-weave",
       },
     ],
   },
   {
     id: "workspace-odin",
-    workspaceId: "workspace-odin",
+    executionContextId: "workspace-odin",
     hostId: "mock-host",
     hostName: "bazzite",
     name: "odin",
@@ -78,7 +78,7 @@ const WORKSPACES: AlphaWorkspace[] = [
         supportsThreadLifecycle: true,
         status: "active",
         updatedAt: "2026-08-23T11:05:00.000Z",
-        workspaceId: "workspace-odin",
+        executionContextId: "workspace-odin",
       },
       {
         id: "thread-release",
@@ -90,7 +90,7 @@ const WORKSPACES: AlphaWorkspace[] = [
         supportsThreadLifecycle: true,
         status: "active",
         updatedAt: "2026-08-22T14:30:00.000Z",
-        workspaceId: "workspace-odin",
+        executionContextId: "workspace-odin",
       },
     ],
   },
@@ -152,7 +152,7 @@ export function useMockAlphaController(
   const [transcript, setTranscript] = useState<AcpTranscript | undefined>(() =>
     scenarioTranscript(scenario),
   );
-  const [workspaces, setWorkspaces] = useState<AlphaWorkspace[]>(
+  const [executionContexts, setExecutionContexts] = useState<AlphaExecutionContext[]>(
     scenario === "empty"
       ? WORKSPACES.map((workspace) => ({ ...workspace, threads: [] }))
       : scenario === "multi-host"
@@ -164,13 +164,13 @@ export function useMockAlphaController(
                   placements: [
                     {
                       id: "mock-host:workspace-weave",
-                      workspaceId: "workspace-weave",
+                      executionContextId: "workspace-weave",
                       hostId: "mock-host",
                       hostName: "Bazzite",
                     },
                     {
                       id: "mock-macbook:workspace-weave",
-                      workspaceId: "workspace-weave",
+                      executionContextId: "workspace-weave",
                       hostId: "mock-macbook",
                       hostName: "Jaco’s MacBook Air",
                     },
@@ -181,12 +181,12 @@ export function useMockAlphaController(
         : WORKSPACES,
   );
   const [archivedThreads, setArchivedThreads] = useState<
-    AlphaWorkspace["threads"]
+    AlphaExecutionContext["threads"]
   >([]);
   const [terminalTabs, setTerminalTabs] = useState([
     {
       terminalId: "mock-terminal-1",
-      workspaceId: "workspace-weave",
+      executionContextId: "workspace-weave",
       title: "zsh",
       status: "running" as const,
       cols: 100,
@@ -194,10 +194,10 @@ export function useMockAlphaController(
     },
   ]);
   const [activeTerminalId, setActiveTerminalId] = useState("mock-terminal-1");
-  const terminalProject = workspaces.find((workspace) =>
+  const terminalExecutionContext = executionContexts.find((workspace) =>
     workspace.threads.some(({ id }) => id === selectedThreadId),
   );
-  const terminalThread = terminalProject?.threads.find(
+  const terminalThread = terminalExecutionContext?.threads.find(
     ({ id }) => id === selectedThreadId,
   );
 
@@ -214,7 +214,7 @@ export function useMockAlphaController(
           hostUrl,
           status: connectionStatus,
           selected: true,
-          supportsProjectRegistration: true,
+          supportsExecutionContextRegistration: true,
         },
         ...(scenario === "multi-host"
           ? [
@@ -224,7 +224,7 @@ export function useMockAlphaController(
                 hostUrl: "macbook",
                 status: "connected" as const,
                 selected: false,
-                supportsProjectRegistration: true,
+                supportsExecutionContextRegistration: true,
               },
             ]
           : []),
@@ -235,7 +235,7 @@ export function useMockAlphaController(
         hostName: "bazzite",
       },
       searchQuery,
-      workspaces,
+      executionContexts,
       archivedThreads,
       showHostIdentity: scenario === "multi-host",
       selectedThreadId,
@@ -245,19 +245,18 @@ export function useMockAlphaController(
       transcript,
       terminals: {
         scope:
-          terminalProject && terminalThread
+          terminalExecutionContext && terminalThread
             ? {
                 hostId: terminalThread.hostId,
-                projectId: terminalThread.projectId ?? terminalProject.id,
-                workspaceId: terminalThread.workspaceId,
-                worktreeId: terminalThread.worktreeId,
+                contextId: terminalThread.contextId ?? terminalExecutionContext.id,
+                executionContextId: terminalThread.executionContextId,
               }
             : undefined,
         supported: true,
         tabs: selectedThreadId ? terminalTabs : [],
         activeTerminalId: selectedThreadId ? activeTerminalId : undefined,
         attachmentId: selectedThreadId ? "mock-attachment" : undefined,
-        attachmentMode: selectedThreadId ? "control" : undefined,
+        attachmentMode: selectedThreadId ? "shared" : undefined,
         loading: false,
       },
       busy: scenario === "busy" || Boolean(loadingThreadId),
@@ -279,10 +278,10 @@ export function useMockAlphaController(
       composerFocusThreadId,
       selectedThreadId,
       transcript,
-      workspaces,
+      executionContexts,
       terminalTabs,
       activeTerminalId,
-      terminalProject,
+      terminalExecutionContext,
       terminalThread,
     ],
   );
@@ -299,27 +298,27 @@ export function useMockAlphaController(
       forgetHost: () => undefined,
       reconnectHost: () => setConnectionStatus("connected"),
       refresh: () => undefined,
-      addProject: async ({ hostId, path, name }) => {
+      addExecutionContext: async ({ hostId, path, name }) => {
         if (hostId !== "mock-host") throw new Error("Portal is unavailable.");
         if (!path.startsWith("/")) {
-          throw new Error("Project path must be absolute.");
+          throw new Error("ExecutionContext path must be absolute.");
         }
         const workspaceName =
           name?.trim() || path.split("/").filter(Boolean).at(-1);
         if (!workspaceName) {
-          throw new Error("Project path must name a directory.");
+          throw new Error("ExecutionContext path must name a directory.");
         }
-        const workspaceId = `mock-workspace-${workspaceName
+        const executionContextId = `mock-workspace-${workspaceName
           .toLocaleLowerCase()
           .replaceAll(/[^a-z0-9]+/g, "-")}`;
-        setWorkspaces((current) =>
-          current.some((workspace) => workspace.id === workspaceId)
+        setExecutionContexts((current) =>
+          current.some((workspace) => workspace.id === executionContextId)
             ? current
             : [
                 ...current,
                 {
-                  id: workspaceId,
-                  workspaceId,
+                  id: executionContextId,
+                  executionContextId,
                   hostId,
                   hostName: "bazzite",
                   name: workspaceName,
@@ -328,14 +327,14 @@ export function useMockAlphaController(
               ],
         );
       },
-      removeProject: (workspaceId, placementId) => {
-        setWorkspaces((current) =>
+      removeExecutionContext: (executionContextId, placementId) => {
+        setExecutionContexts((current) =>
           current.flatMap((workspace) => {
-            if (workspace.id !== workspaceId) return [workspace];
+            if (workspace.id !== executionContextId) return [workspace];
             const placements = workspace.placements ?? [
               {
-                id: `${workspace.hostId}:${workspace.workspaceId}`,
-                workspaceId: workspace.workspaceId,
+                id: `${workspace.hostId}:${workspace.executionContextId}`,
+                executionContextId: workspace.executionContextId,
                 hostId: workspace.hostId,
                 hostName: workspace.hostName,
               },
@@ -358,14 +357,14 @@ export function useMockAlphaController(
           }),
         );
       },
-      createThread: (workspaceId, placementId) => {
-        const targetId = workspaceId || workspaces[0]?.id;
+      createThread: (executionContextId, placementId) => {
+        const targetId = executionContextId || executionContexts[0]?.id;
         if (!targetId) return;
-        const targetWorkspace = workspaces.find(({ id }) => id === targetId);
+        const targetWorkspace = executionContexts.find(({ id }) => id === targetId);
         const placement = placementId
           ? targetWorkspace?.placements?.find(({ id }) => id === placementId)
           : undefined;
-        const existingDraft = workspaces
+        const existingDraft = executionContexts
           .find(({ id }) => id === targetId)
           ?.threads.find(({ draft }) => draft);
         if (existingDraft) {
@@ -375,7 +374,7 @@ export function useMockAlphaController(
           return;
         }
         const id = `mock-thread-${Date.now()}`;
-        setWorkspaces((current) =>
+        setExecutionContexts((current) =>
           current.map((workspace) =>
             workspace.id === targetId
               ? {
@@ -391,8 +390,8 @@ export function useMockAlphaController(
                       supportsThreadLifecycle: false,
                       status: "active",
                       updatedAt: new Date().toISOString(),
-                      workspaceId:
-                        placement?.workspaceId ?? workspace.workspaceId,
+                      executionContextId:
+                        placement?.executionContextId ?? workspace.executionContextId,
                       draft: true,
                     },
                     ...workspace.threads,
@@ -408,14 +407,14 @@ export function useMockAlphaController(
         setTranscript(createTranscript(id));
         setComposerFocusThreadId(id);
         setComposerFocusRequest((current) => current + 1);
-        const workspace = workspaces.find(
+        const workspace = executionContexts.find(
           (candidate) => candidate.id === targetId,
         );
         if (workspace) {
         }
       },
       selectThread: async (threadId) => {
-        const thread = workspaces
+        const thread = executionContexts
           .flatMap((workspace) => workspace.threads)
           .find((candidate) => candidate.id === threadId);
         if (thread?.draft) {
@@ -424,14 +423,14 @@ export function useMockAlphaController(
           setComposerFocusRequest((current) => current + 1);
           return;
         }
-        setWorkspaces((current) =>
+        setExecutionContexts((current) =>
           current.map((workspace) => ({
             ...workspace,
             threads: workspace.threads.filter(({ draft }) => !draft),
           })),
         );
-        const workspace = workspaces.find(
-          (candidate) => candidate.id === thread?.workspaceId,
+        const workspace = executionContexts.find(
+          (candidate) => candidate.id === thread?.executionContextId,
         );
         setSelectedThreadId(threadId);
         setLoadingThreadId(threadId);
@@ -441,7 +440,7 @@ export function useMockAlphaController(
         setLoadingThreadId(undefined);
       },
       archiveThread: (threadId) => {
-        const thread = workspaces
+        const thread = executionContexts
           .flatMap((workspace) => workspace.threads)
           .find((candidate) => candidate.id === threadId);
         if (!thread) return;
@@ -453,7 +452,7 @@ export function useMockAlphaController(
           },
           ...current,
         ]);
-        setWorkspaces((current) =>
+        setExecutionContexts((current) =>
           current.map((workspace) => ({
             ...workspace,
             threads: workspace.threads.filter(
@@ -474,9 +473,9 @@ export function useMockAlphaController(
         setArchivedThreads((current) =>
           current.filter((candidate) => candidate.id !== threadId),
         );
-        setWorkspaces((current) =>
+        setExecutionContexts((current) =>
           current.map((workspace) =>
-            workspace.workspaceId === thread.workspaceId
+            workspace.executionContextId === thread.executionContextId
               ? {
                   ...workspace,
                   threads: [
@@ -500,7 +499,7 @@ export function useMockAlphaController(
           ...current,
           {
             terminalId,
-            workspaceId: "workspace-weave",
+            executionContextId: "workspace-weave",
             title: "zsh",
             status: "running",
             cols: 100,
@@ -523,7 +522,7 @@ export function useMockAlphaController(
       inputTerminal: () => undefined,
       resizeTerminal: () => undefined,
       sendPrompt: (text) => {
-        setWorkspaces((current) =>
+        setExecutionContexts((current) =>
           current.map((workspace) => ({
             ...workspace,
             threads: workspace.threads.map((thread) =>

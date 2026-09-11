@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils';
 import { RailDivider } from './rail-divider';
 
 const label = (panelId: AlphaDockPanelId) =>
-  panelId === 'terminal' ? 'Terminal' : panelId === 'browser' ? 'Browser' : 'Project';
+  panelId === 'terminal' ? 'Terminal' : panelId === 'browser' ? 'Browser' : 'ExecutionContext';
 
 const movable = (
   panelId: AlphaDockPanelId,

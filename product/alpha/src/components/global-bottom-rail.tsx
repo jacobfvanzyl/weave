@@ -1,11 +1,11 @@
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import {
   FileBoxIcon,
-  ServerIcon,
   SidebarLeftIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { AlphaController } from "@/app/alpha-controller";
+import { ConnectionsButton } from "./connections-button";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { RailDivider } from "./rail-divider";
@@ -43,26 +43,12 @@ export function GlobalBottomRail({
           <HugeiconsIcon icon={SidebarLeftIcon} strokeWidth={2} />
         </Button>
         <RailDivider slot="sidebar-rail-divider" />
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          aria-label="Archived Threads"
-          title="Archived Threads"
-          onClick={controller.actions.openArchivedThreads}
-        >
-          <HugeiconsIcon icon={FileBoxIcon} strokeWidth={2} />
-        </Button>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          aria-label="Settings"
-          title="Settings"
-          onClick={controller.actions.openConnections}
-        >
-          <HugeiconsIcon icon={ServerIcon} strokeWidth={2} />
-        </Button>
+        {!controller.model.workspaceCompositions && <>
+          <Button size="icon" variant="ghost" aria-label="Archived Threads" title="Archived Threads" onClick={controller.actions.openArchivedThreads}>
+            <HugeiconsIcon icon={FileBoxIcon} strokeWidth={2} />
+          </Button>
+          <ConnectionsButton controller={controller} />
+        </>}
       </div>
       {dockActions}
     </footer>

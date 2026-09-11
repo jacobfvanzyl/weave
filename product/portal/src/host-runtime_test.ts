@@ -5,7 +5,7 @@ import { runProcess } from './host-process.ts';
 import { Portal } from './portal.ts';
 import { startPortalServer } from './server.ts';
 import { serveLocalAcpGateway } from './local-acp.ts';
-import { InMemoryTerminalBackend } from './terminals.ts';
+import { InMemoryTerminalExecution } from './terminals.ts';
 import { PORTAL_WEBSOCKET_PROTOCOL } from '@weave/product-protocol';
 
 test('Bun subprocesses replace the environment, report exits, and drain both streams', async () => {
@@ -40,9 +40,9 @@ test('Host shuts down open WebSockets and removes its private ACP socket before 
   const root = await temporaryDirectory({ dir: '/tmp', prefix: 'wve-runtime-' });
   const portal = await Portal.open({
     listen: { hostname: '127.0.0.1', port: 0 }, displayName: 'Runtime test', allowedOrigins: [],
-    stateDirectory: root, workspaces: [{ workspaceId: 'test', name: 'Test', path: root }],
+    stateDirectory: root, executionContexts: [{ executionContextId: 'test', name: 'Test', path: root }],
     agents: [{ agentId: 'test', name: 'Test', command: 'false', args: [], env: {} }],
-  }, { terminalBackend: new InMemoryTerminalBackend() });
+  }, { terminalBackend: new InMemoryTerminalExecution() });
   const server = startPortalServer(portal);
   const gateway = await serveLocalAcpGateway(portal);
   try {

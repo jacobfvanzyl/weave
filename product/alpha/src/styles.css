@@ -90,6 +90,9 @@
   --zed-icon-muted: #7f849c;
   --zed-accent: #cba6f7;
   --zed-focus: #b4befe;
+  --terminal-focus: #89b4fa;
+  --terminal-focus-foreground: var(--zed-rail-background);
+  --rail-height: 2rem;
   --zed-border: #313244;
   --zed-info: #94e2d5;
   --zed-info-background: #9399b233;
@@ -170,6 +173,8 @@
   --font-mono: "JetBrains Mono Nerd Font", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --color-status-bar: var(--status-bar);
   --color-title-bar: var(--title-bar);
+  --color-terminal-focus: var(--terminal-focus);
+  --color-terminal-focus-foreground: var(--terminal-focus-foreground);
   --color-status-active: var(--status-active);
   --color-success-background: var(--success-background);
   --color-success: var(--success);
@@ -261,4 +266,90 @@
   [role="button"]:not(:disabled) {
     cursor: pointer;
   }
+}
+
+/* Keep the terminal mounted while its sibling conversation is maximized. */
+[data-panel][hidden] { display: none !important; }
+
+/* Native window controls remain native; only the existing top rails drag. */
+[data-window-top-rail] { -webkit-app-region: drag; }
+[data-window-top-rail] :is(button, a, input, textarea, select, [role="button"], [role="separator"]) { -webkit-app-region: no-drag; }
+[data-window-controls-leading] { padding-left: calc(env(titlebar-area-x, 0px) + 8px); }
+
+/* Clip the composer separately so the shared outline can extend over the seam. */
+[data-slot="thread-pane"] {
+  --agent-bottom-radius: calc(var(--radius-sm) + 2px);
+  border-radius: 0 0 var(--agent-bottom-radius) var(--agent-bottom-radius);
+  background: linear-gradient(var(--title-bar) 0 var(--rail-height), var(--background) var(--rail-height));
+}
+[data-slot="thread-pane-contents"] {
+  border-radius: 0 0 var(--agent-bottom-radius) var(--agent-bottom-radius);
+}
+[data-slot="thread-top-rail"] {
+  border-top-left-radius: var(--alpha-window-corner-radius, 16px);
+}
+
+/* Share one painted edge while retaining the separator's wider drag target.
+   The terminal's focus border paints over the agent outline at the overlap. */
+[data-agent-seam="overlap"] > [data-slot="resizable-handle"] {
+  width: 0;
+  background: transparent;
+  z-index: 2;
+}
+[data-agent-seam="overlap"] > #agent-conversation {
+  margin-left: -1px;
+}
+[data-agent-seam="overlap"] > #terminal-workspace {
+  position: relative;
+  z-index: 1;
+}
+[data-slot="thread-pane"]::before,
+[data-slot="thread-pane"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+[data-slot="thread-pane"]::before {
+  left: var(--agent-border-offset, 0px);
+  border-right: 1px solid var(--primary);
+  border-bottom: 1px solid var(--primary);
+  border-radius: 0 0 var(--agent-bottom-radius) var(--agent-bottom-radius);
+}
+[data-slot="thread-pane"]::after {
+  border-left: 1px solid var(--primary);
+  border-bottom-left-radius: var(--agent-bottom-radius);
+  border-top-left-radius: var(--alpha-window-corner-radius, 16px);
+  mask-image: var(--agent-border-mask, none);
+  transform: translateX(var(--agent-border-offset, 0px));
+}
+
+/* Mirror the shared edge for Left Dock. The outside edge remains unmasked. */
+[data-agent-dock="left"] [data-slot="thread-top-rail"] {
+  border-top-right-radius: var(--alpha-window-corner-radius, 16px);
+}
+[data-agent-seam="overlap"][data-agent-dock="left"] > #agent-conversation {
+  margin-left: 0;
+  margin-right: -1px;
+}
+[data-agent-dock="left"] [data-slot="thread-pane"]::before {
+  left: 0;
+  right: calc(-1 * var(--agent-border-offset, 0px));
+  border-right: 0;
+  border-left: 1px solid var(--primary);
+  border-top-left-radius: var(--alpha-window-corner-radius, 16px);
+}
+[data-agent-dock="left"] [data-slot="thread-pane"]::after {
+  border-left: 0;
+  border-right: 1px solid var(--primary);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-top-right-radius: var(--alpha-window-corner-radius, 16px);
+  border-bottom-right-radius: var(--agent-bottom-radius);
+}
+[data-agent-leading="true"] > [data-slot="resizable-handle"] {
+  width: 0;
+  background: transparent;
+  z-index: 2;
 }

@@ -1,3 +1,4 @@
+import { PathLabel } from '@/components/path-label';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
   AlertCircleIcon,
@@ -31,7 +32,7 @@ function AcpToolContent({ tool }: { tool: TranscriptToolCall }) {
       {tool.locations.map((location) => (
         <div key={`${location.path}:${location.line ?? ''}`} className="flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
           <HugeiconsIcon icon={FileEditIcon} strokeWidth={1.75} className="size-3" />
-          <span className="truncate">{location.path}</span>
+          <PathLabel path={location.path} />
           {location.line != null && <span className="ml-auto">:{location.line}</span>}
         </div>
       ))}
@@ -43,7 +44,7 @@ function AcpToolContent({ tool }: { tool: TranscriptToolCall }) {
           return (
             <div key={`diff-${index}`} className="overflow-hidden rounded-md border bg-input-background">
               <div className="border-b px-2 py-1 text-[0.625rem] text-muted-foreground">
-                {item.path}
+                <PathLabel path={item.path} />
               </div>
               {item.oldText != null && (
                 <pre className="overflow-x-auto bg-destructive-background px-2 py-1 text-xs/relaxed whitespace-pre-wrap">

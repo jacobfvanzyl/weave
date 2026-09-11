@@ -1,3 +1,5 @@
+import { compactTerminalTitle } from '@/lib/display-path';
+import { TerminalTitle } from './path-label';
 import type { KeyboardEvent, ReactNode } from 'react';
 import {
   Add01Icon,
@@ -39,10 +41,10 @@ export function TerminalPane({
   onClose?(terminalId: string): Promise<void> | void;
   onToggleMaximized?(): void;
   onRetryControl?(): Promise<void> | void;
-  onInput?(data: string): Promise<void> | void;
+  onInput?(data: string | Uint8Array): Promise<void> | void;
   onResize?(cols: number, rows: number): Promise<void> | void;
 }) {
-  const readOnly = model.attachmentMode !== 'control';
+  const readOnly = model.attachmentMode !== 'shared';
   const activateOnKeyboard = (
     event: KeyboardEvent<HTMLDivElement>,
     terminalId: string,
@@ -60,7 +62,7 @@ export function TerminalPane({
     >
       <header
         data-slot='terminal-top-rail'
-        className='flex h-11 shrink-0 items-stretch bg-title-bar'
+        className='flex h-[var(--rail-height)] shrink-0 items-stretch bg-title-bar'
       >
         <div className='scrollbar-none min-w-0 flex-1 overflow-x-auto overflow-y-hidden'>
           <div
@@ -76,7 +78,7 @@ export function TerminalPane({
                   role='tab'
                   tabIndex={active ? 0 : -1}
                   aria-selected={active}
-                  aria-label={terminal.title}
+                  aria-label={compactTerminalTitle(terminal.title)}
                   data-slot='terminal-tab'
                   data-active={active ? '' : undefined}
                   className={cn(
@@ -89,14 +91,14 @@ export function TerminalPane({
                   onKeyDown={(event) => activateOnKeyboard(event, terminal.terminalId)}
                 >
                   <HugeiconsIcon icon={TerminalIcon} strokeWidth={1.75} className='size-3.5 shrink-0' />
-                  <span className='min-w-0 flex-1 truncate'>{terminal.title}</span>
+                  <TerminalTitle title={terminal.title} className='flex-1' />
                   <Button
                     type='button'
                     size='icon-xs'
                     variant='ghost'
-                    aria-label={`Close ${terminal.title}`}
+                    aria-label={`Close ${compactTerminalTitle(terminal.title)}`}
                     className='size-5 shrink-0 opacity-60 hover:opacity-100'
-                    disabled={disabled || !active || model.attachmentMode !== 'control'}
+                    disabled={disabled || !active || model.attachmentMode !== 'shared'}
                     onClick={(event) => {
                       event.stopPropagation();
                       void onClose?.(terminal.terminalId);

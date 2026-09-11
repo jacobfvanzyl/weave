@@ -26,7 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-export function AddProjectDialog({
+export function AddExecutionContextDialog({
   controller,
   open,
   onOpenChange,
@@ -38,8 +38,8 @@ export function AddProjectDialog({
   const connectedHosts = controller.model.connections
     .filter(({ status }) => status === "connected")
     .filter(
-      ({ supportsProjectRegistration }) =>
-        supportsProjectRegistration !== false,
+      ({ supportsExecutionContextRegistration }) =>
+        supportsExecutionContextRegistration !== false,
     );
   const [hostId, setHostId] = useState("");
   const [path, setPath] = useState("");
@@ -57,10 +57,10 @@ export function AddProjectDialog({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!controller.actions.addProject || !hostId || !path.trim()) return;
+    if (!controller.actions.addExecutionContext || !hostId || !path.trim()) return;
     setError(undefined);
     try {
-      await controller.actions.addProject({
+      await controller.actions.addExecutionContext({
         hostId,
         path: path.trim(),
         ...(name.trim() ? { name: name.trim() } : {}),
@@ -77,9 +77,9 @@ export function AddProjectDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Add project</DialogTitle>
+          <DialogTitle>Add directory</DialogTitle>
           <DialogDescription>
-            Choose the Portal that can access the project, then enter its
+            Choose the Host that can access the directory, then enter its
             absolute path on that Host.
           </DialogDescription>
         </DialogHeader>
@@ -89,26 +89,25 @@ export function AddProjectDialog({
         >
           <FieldGroup>
             <Field data-invalid={!connectedHosts.length || undefined}>
-              <FieldLabel htmlFor="add-project-portal">Portal</FieldLabel>
+              <FieldLabel htmlFor="add-directory-portal">Host</FieldLabel>
               <Select
                 value={hostId}
                 onValueChange={(value) => setHostId(value ?? "")}
               >
                 <SelectTrigger
-                  id="add-project-portal"
+                  id="add-directory-portal"
                   className="w-full"
                   aria-invalid={!connectedHosts.length || undefined}
                 >
-                  <SelectValue placeholder="Choose a connected Portal">
-                    {connectedHosts.find((host) => host.hostId === hostId)
-                      ?.displayName}
+                  <SelectValue placeholder="Choose a connected Host">
+                    {connectedHosts.find((host) => host.hostId === hostId)?.[controller.model.showHostIdentity ? 'displayName' : 'hostUrl']}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
                     {connectedHosts.map((host) => (
                       <SelectItem key={host.hostId} value={host.hostId}>
-                        {host.displayName}
+                        {controller.model.showHostIdentity ? host.displayName : host.hostUrl}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -116,31 +115,31 @@ export function AddProjectDialog({
               </Select>
               {!connectedHosts.length && (
                 <FieldError>
-                  Connect a Portal before adding a project.
+                  Connect a Host before adding a directory.
                 </FieldError>
               )}
             </Field>
             <Field data-invalid={Boolean(error) || undefined}>
-              <FieldLabel htmlFor="add-project-path">Project path</FieldLabel>
+              <FieldLabel htmlFor="add-directory-path">Directory path</FieldLabel>
               <Input
-                id="add-project-path"
+                id="add-directory-path"
                 value={path}
-                placeholder="/absolute/path/to/project"
+                placeholder="/absolute/path/to/directory"
                 autoComplete="off"
                 aria-invalid={Boolean(error) || undefined}
                 onChange={(event) => setPath(event.target.value)}
               />
               <FieldDescription>
-                The directory must already exist on the selected Portal Host.
+                The directory must already exist on the selected Host.
               </FieldDescription>
               {error && <FieldError>{error}</FieldError>}
             </Field>
             <Field>
-              <FieldLabel htmlFor="add-project-name">
+              <FieldLabel htmlFor="add-directory-name">
                 Name (optional)
               </FieldLabel>
               <Input
-                id="add-project-name"
+                id="add-directory-name"
                 value={name}
                 placeholder="Derived from the folder name"
                 autoComplete="off"
@@ -152,11 +151,11 @@ export function AddProjectDialog({
             <Button
               type="submit"
               disabled={controller.model.busy ||
-                !controller.actions.addProject ||
+                !controller.actions.addExecutionContext ||
                 !hostId ||
                 !path.trim()}
             >
-              Add project
+              Add directory
             </Button>
           </DialogFooter>
         </form>

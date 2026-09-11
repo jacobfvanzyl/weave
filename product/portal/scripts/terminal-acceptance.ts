@@ -2,7 +2,7 @@ import { TERMINAL_EVENT_METHOD, TERMINAL_RPC_METHODS } from '@weave/product-prot
 import { pairPortalCredential, required, RpcResponseError, RpcSocket } from './rpc-client.ts';
 
 const baseUrl = required('PORTAL_URL').replace(/\/$/, '');
-const workspaceId = required('PORTAL_WORKSPACE_ID');
+const executionContextId = required('PORTAL_WORKSPACE_ID');
 const marker = process.env['PORTAL_TERMINAL_ACCEPTANCE_MARKER']?.trim() || `WVE43_${crypto.randomUUID()}`;
 const credential = await pairPortalCredential(
   baseUrl,
@@ -28,7 +28,7 @@ const output = (socket: RpcSocket, expectedTerminalId: string) =>
       params.terminalId === expectedTerminalId &&
       params.event?.type === 'output'
     )
-    .map((params) => String(params.event?.data ?? ''))
+    .map((params) => new TextDecoder().decode(params.event?.data as Uint8Array))
     .join('');
 
 try {
@@ -40,44 +40,29 @@ try {
   }
 
   const created = await controller.request('terminal.create', {
-    workspaceId,
+    executionContextId,
     cols: 91,
     rows: 27,
   }) as { terminal: { terminalId: string } };
   terminalId = created.terminal.terminalId;
   const controlled = await controller.request('terminal.attach', {
-    workspaceId,
+    executionContextId,
     terminalId,
-    mode: 'control',
+    mode: 'shared',
   }) as { attachment: { attachmentId: string } };
   controllerAttachmentId = controlled.attachment.attachmentId;
 
-  let conflict: unknown;
-  try {
-    await observer.request('terminal.attach', {
-      workspaceId,
-      terminalId,
-      mode: 'control',
-    });
-  } catch (cause) {
-    conflict = cause;
-  }
-  if (
-    !(conflict instanceof RpcResponseError) ||
-    (conflict.data as { code?: unknown } | undefined)?.code !== 'TERMINAL_CONTROLLED'
-  ) {
-    throw new Error('A second controller was not rejected with TERMINAL_CONTROLLED.');
-  }
+  await observer.request('terminal.attach', { executionContextId, terminalId, mode: 'shared' });
 
   const observed = await observer.request('terminal.attach', {
-    workspaceId,
+    executionContextId,
     terminalId,
     mode: 'observe',
   }) as { attachment: { attachmentId: string } };
   observerAttachmentId = observed.attachment.attachmentId;
 
   await controller.request('terminal.resize', {
-    workspaceId,
+    executionContextId,
     terminalId,
     attachmentId: controllerAttachmentId,
     cols: 91,
@@ -86,10 +71,10 @@ try {
   let converged = false;
   for (let attempt = 0; attempt < 20 && !converged; attempt += 1) {
     await controller.request('terminal.input', {
-      workspaceId,
+      executionContextId,
       terminalId,
       attachmentId: controllerAttachmentId,
-      data: `printf '${marker}\\n'; stty size\r`,
+      data: new TextEncoder().encode(`printf '${marker}\\n'; stty size\r`),
     });
     await new Promise((resolve) => setTimeout(resolve, 250));
     converged = [controller, observer].every((socket) =>
@@ -99,9 +84,9 @@ try {
   }
   if (!converged) {
     const snapshot = await controller.request('terminal.snapshot', {
-      workspaceId,
+      executionContextId,
       terminalId,
-    }) as { snapshot: { data: string } };
+    }) as { snapshot: { data: Uint8Array } };
     throw new Error(
       `Terminal output did not converge. controller=${JSON.stringify(output(controller, terminalId))} ` +
         `observer=${JSON.stringify(output(observer, terminalId))} ` +
@@ -110,31 +95,31 @@ try {
   }
 
   await controller.request('terminal.detach', {
-    workspaceId,
+    executionContextId,
     terminalId,
     attachmentId: controllerAttachmentId,
   });
   controllerAttachmentId = undefined;
   await observer.request('terminal.detach', {
-    workspaceId,
+    executionContextId,
     terminalId,
     attachmentId: observerAttachmentId,
   });
   observerAttachmentId = undefined;
 
   const reattached = await observer.request('terminal.attach', {
-    workspaceId,
+    executionContextId,
     terminalId,
-    mode: 'control',
+    mode: 'shared',
   }) as {
     attachment: { attachmentId: string };
-    snapshot: { data: string };
+    snapshot: { data: Uint8Array };
   };
   observerAttachmentId = reattached.attachment.attachmentId;
-  if (!reattached.snapshot.data.includes(marker)) {
-    throw new Error('Detached Terminal did not retain its snapshot output.');
+  if (new TextDecoder().decode(reattached.snapshot.data.subarray(0, 8)) !== 'GHOSTSNP') {
+    throw new Error('Detached Terminal did not return an upstream binary snapshot.');
   }
-  const listed = await observer.request('terminal.list', { workspaceId }) as {
+  const listed = await observer.request('terminal.list', { executionContextId }) as {
     terminals: Array<{ terminalId: string }>;
   };
   if (!listed.terminals.some((terminal) => terminal.terminalId === terminalId)) {
@@ -142,23 +127,23 @@ try {
   }
 
   await observer.request('terminal.close', {
-    workspaceId,
+    executionContextId,
     terminalId,
     attachmentId: observerAttachmentId,
   });
   observerAttachmentId = undefined;
   terminalId = undefined;
-  console.log(JSON.stringify({ ok: true, workspaceId, marker, clients: 2 }));
+  console.log(JSON.stringify({ ok: true, executionContextId, marker, clients: 2 }));
 } finally {
   if (terminalId && controllerAttachmentId) {
     await controller.request('terminal.close', {
-      workspaceId,
+      executionContextId,
       terminalId,
       attachmentId: controllerAttachmentId,
     }).catch(() => undefined);
   } else if (terminalId && observerAttachmentId) {
     await observer.request('terminal.close', {
-      workspaceId,
+      executionContextId,
       terminalId,
       attachmentId: observerAttachmentId,
     }).catch(() => undefined);

@@ -1,3 +1,4 @@
+import { terminalBytes, TERMINAL_CODEC } from './terminal-wire.ts';
 export const TERMINAL_EVENT_METHOD = "terminal.event" as const;
 
 export const TERMINAL_RPC_METHODS = [
@@ -6,19 +7,22 @@ export const TERMINAL_RPC_METHODS = [
   "terminal.snapshot",
   "terminal.attach",
   "terminal.input",
+  "terminal.history",
   "terminal.resize",
   "terminal.detach",
   "terminal.close",
 ] as const;
 
 export type TerminalRpcMethod = (typeof TERMINAL_RPC_METHODS)[number];
-export type TerminalAttachmentMode = "observe" | "control";
+export type TerminalAttachmentMode = "observe" | "shared";
 export type TerminalStatus = "running" | "exited";
 
 export type TerminalSummary = {
   terminalId: string;
-  workspaceId: string;
+  executionContextId: string;
   title: string;
+  initialDirectory?: string;
+  currentDirectory?: string;
   status: TerminalStatus;
   cols: number;
   rows: number;
@@ -26,16 +30,15 @@ export type TerminalSummary = {
   exitCode?: number;
 };
 
-export type TerminalControllerState =
-  { controlled: false } | { controlled: true; attachmentId: string };
-
 export type TerminalSnapshot = {
   terminal: TerminalSummary;
   generation: string;
   cursor: number;
   retainedFrom: number;
-  data: string;
-  controller: TerminalControllerState;
+  data: Uint8Array;
+  historyPages?: number;
+  historyToken?: string;
+  codec: typeof TERMINAL_CODEC;
 };
 
 export type TerminalAttachment = {
@@ -44,16 +47,17 @@ export type TerminalAttachment = {
 };
 
 export type TerminalEvent =
-  | { type: "output"; data: string }
+  | { type: "output"; data: Uint8Array }
+  | { type: "screen"; terminal: TerminalSummary; data: Uint8Array; historyPages?: number; historyToken?: string }
+  | { type: "directory"; currentDirectory: string }
   | { type: "title"; title: string }
-  | (TerminalControllerState & { type: "control" })
   | { type: "exit"; exitCode?: number }
   | { type: "resync"; retainedFrom: number };
 
 export type TerminalNotification = {
   attachmentId: string;
   terminalId: string;
-  workspaceId: string;
+  executionContextId: string;
   generation: string;
   sequence: number;
   event: TerminalEvent;
@@ -61,57 +65,60 @@ export type TerminalNotification = {
 
 export const TERMINAL_ERROR_CODES = [
   "TERMINAL_UNAVAILABLE",
-  "TERMINAL_CONTROLLED",
   "TERMINAL_ATTACHMENT_UNAVAILABLE",
-  "TERMINAL_CONTROL_REQUIRED",
+  "TERMINAL_WRITE_REQUIRED",
   "TERMINAL_REPLAY_GAP",
   "TERMINAL_BACKPRESSURE",
-  "TERMINAL_BACKEND_UNAVAILABLE",
+  "TERMINAL_SERVICE_UNAVAILABLE",
 ] as const;
 
 export type TerminalErrorCode = (typeof TERMINAL_ERROR_CODES)[number];
 export type TerminalErrorData = {
   domain: "terminal";
   code: TerminalErrorCode;
-  workspaceId?: string;
+  executionContextId?: string;
   terminalId?: string;
   retainedFrom?: number;
 };
 
 export type TerminalRpcContracts = {
   "terminal.list": {
-    params: { workspaceId: string };
+    params: { executionContextId: string };
     result: { terminals: TerminalSummary[] };
   };
   "terminal.create": {
-    params: { workspaceId: string; cols?: number; rows?: number };
+    params: { executionContextId: string; cols?: number; rows?: number };
     result: { terminal: TerminalSummary };
   };
   "terminal.snapshot": {
-    params: { workspaceId: string; terminalId: string };
+    params: { executionContextId: string; terminalId: string };
     result: { snapshot: TerminalSnapshot };
   };
   "terminal.attach": {
     params: {
-      workspaceId: string;
+      executionContextId: string;
       terminalId: string;
       mode: TerminalAttachmentMode;
       cursor?: number;
     };
     result: { attachment: TerminalAttachment; snapshot: TerminalSnapshot };
   };
+  "terminal.history": {
+    params: { executionContextId: string; terminalId: string; attachmentId: string; page: number; token: string };
+    result: { data: Uint8Array; finished: boolean };
+  };
   "terminal.input": {
     params: {
-      workspaceId: string;
+      executionContextId: string;
       terminalId: string;
       attachmentId: string;
-      data: string;
+      data: Uint8Array;
     };
     result: { accepted: true };
   };
   "terminal.resize": {
     params: {
-      workspaceId: string;
+      executionContextId: string;
       terminalId: string;
       attachmentId: string;
       cols: number;
@@ -121,7 +128,7 @@ export type TerminalRpcContracts = {
   };
   "terminal.detach": {
     params: {
-      workspaceId: string;
+      executionContextId: string;
       terminalId: string;
       attachmentId: string;
     };
@@ -129,7 +136,7 @@ export type TerminalRpcContracts = {
   };
   "terminal.close": {
     params: {
-      workspaceId: string;
+      executionContextId: string;
       terminalId: string;
       attachmentId: string;
     };
@@ -193,8 +200,8 @@ const optionalDimension = (value: unknown, name: string) =>
   value === undefined ? undefined : dimension(value, name);
 
 const mode = (value: unknown): TerminalAttachmentMode => {
-  if (value !== "observe" && value !== "control") {
-    throw new Error("mode must be observe or control.");
+  if (value !== "observe" && value !== "shared") {
+    throw new Error("mode must be observe or shared.");
   }
   return value;
 };
@@ -210,8 +217,10 @@ const summary = (value: unknown): TerminalSummary => {
   const input = record(value, "Terminal summary");
   return {
     terminalId: string(input.terminalId, "terminalId"),
-    workspaceId: string(input.workspaceId, "workspaceId"),
+    executionContextId: string(input.executionContextId, "executionContextId"),
     title: string(input.title, "title", 1_024),
+    ...(input.initialDirectory === undefined ? {} : { initialDirectory: string(input.initialDirectory, "initialDirectory", 16384) }),
+    ...(input.currentDirectory === undefined ? {} : { currentDirectory: string(input.currentDirectory, "currentDirectory", 16384) }),
     status: status(input.status),
     cols: dimension(input.cols, "cols"),
     rows: dimension(input.rows, "rows"),
@@ -224,18 +233,6 @@ const summary = (value: unknown): TerminalSummary => {
   };
 };
 
-const controller = (value: unknown): TerminalControllerState => {
-  const input = record(value, "Terminal controller state");
-  if (input.controlled === false) return { controlled: false };
-  if (input.controlled === true) {
-    return {
-      controlled: true,
-      attachmentId: string(input.attachmentId, "attachmentId"),
-    };
-  }
-  throw new Error("Terminal controller state is invalid.");
-};
-
 const snapshot = (value: unknown): TerminalSnapshot => {
   const input = record(value, "Terminal snapshot");
   return {
@@ -243,13 +240,10 @@ const snapshot = (value: unknown): TerminalSnapshot => {
     generation: string(input.generation, "generation"),
     cursor: integer(input.cursor, "cursor"),
     retainedFrom: integer(input.retainedFrom, "retainedFrom"),
-    data:
-      typeof input.data === "string"
-        ? input.data
-        : (() => {
-            throw new Error("Terminal snapshot data must be a string.");
-          })(),
-    controller: controller(input.controller),
+    data: terminalBytes(input.data),
+    ...(input.historyToken === undefined ? {} : { historyToken: string(input.historyToken, "historyToken") }),
+    ...(input.historyPages === undefined ? {} : { historyPages: integer(input.historyPages, "historyPages", 0, 10000) }),
+    codec: input.codec === TERMINAL_CODEC ? TERMINAL_CODEC : (() => { throw new Error('Terminal codec mismatch; update Host and clients together'); })(),
   };
 };
 
@@ -266,37 +260,40 @@ export const parseTerminalRpcParams = <Method extends TerminalRpcMethod>(
   value: unknown,
 ): TerminalRpcParams<Method> => {
   const input = record(value, `${method} params`);
-  const workspaceId = string(input.workspaceId, "workspaceId");
+  const executionContextId = string(input.executionContextId, "executionContextId");
   switch (method) {
     case "terminal.list":
-      return { workspaceId } as TerminalRpcParams<Method>;
+      return { executionContextId } as TerminalRpcParams<Method>;
     case "terminal.create": {
       const cols = optionalDimension(input.cols, "cols");
       const rows = optionalDimension(input.rows, "rows");
       return {
-        workspaceId,
+        executionContextId,
         ...(cols === undefined ? {} : { cols }),
         ...(rows === undefined ? {} : { rows }),
       } as TerminalRpcParams<Method>;
     }
     case "terminal.snapshot":
       return {
-        workspaceId,
+        executionContextId,
         terminalId: string(input.terminalId, "terminalId"),
       } as TerminalRpcParams<Method>;
     case "terminal.attach":
       return {
-        workspaceId,
+        executionContextId,
         terminalId: string(input.terminalId, "terminalId"),
         mode: mode(input.mode),
         ...(input.cursor === undefined
           ? {}
           : { cursor: integer(input.cursor, "cursor") }),
       } as TerminalRpcParams<Method>;
+    case "terminal.history":
+      return { executionContextId, terminalId: string(input.terminalId, "terminalId"), attachmentId: string(input.attachmentId, "attachmentId"), page: integer(input.page, "page", 0, 10000), token: string(input.token, "token") } as TerminalRpcParams<Method>;
     case "terminal.input": {
-      const data = rawData(input.data, "data");
+      const data = terminalBytes(input.data, 65_536);
+      if (!data.byteLength) throw new Error("Terminal input data must not be empty");
       return {
-        workspaceId,
+        executionContextId,
         terminalId: string(input.terminalId, "terminalId"),
         attachmentId: string(input.attachmentId, "attachmentId"),
         data,
@@ -304,7 +301,7 @@ export const parseTerminalRpcParams = <Method extends TerminalRpcMethod>(
     }
     case "terminal.resize":
       return {
-        workspaceId,
+        executionContextId,
         terminalId: string(input.terminalId, "terminalId"),
         attachmentId: string(input.attachmentId, "attachmentId"),
         cols: dimension(input.cols, "cols"),
@@ -313,7 +310,7 @@ export const parseTerminalRpcParams = <Method extends TerminalRpcMethod>(
     case "terminal.detach":
     case "terminal.close":
       return {
-        workspaceId,
+        executionContextId,
         terminalId: string(input.terminalId, "terminalId"),
         attachmentId: string(input.attachmentId, "attachmentId"),
       } as TerminalRpcParams<Method>;
@@ -343,6 +340,9 @@ export const parseTerminalRpcResult = <Method extends TerminalRpcMethod>(
         attachment: attachment(input.attachment),
         snapshot: snapshot(input.snapshot),
       } as TerminalRpcResult<Method>;
+    case "terminal.history":
+      if (typeof input.finished !== 'boolean') throw new Error('Invalid terminal history completion');
+      return { data: terminalBytes(input.data), finished: input.finished } as TerminalRpcResult<Method>;
     case "terminal.input":
     case "terminal.resize":
       if (input.accepted !== true) throw new Error("accepted must be true.");
@@ -359,12 +359,14 @@ export const parseTerminalRpcResult = <Method extends TerminalRpcMethod>(
 const terminalEvent = (value: unknown): TerminalEvent => {
   const input = record(value, "Terminal event");
   switch (input.type) {
+    case "screen":
+      return { type: "screen", terminal: summary(input.terminal), data: terminalBytes(input.data), ...(input.historyToken === undefined ? {} : { historyToken: string(input.historyToken, "historyToken"), historyPages: integer(input.historyPages, "historyPages", 0, 10000) }) };
     case "output":
-      return { type: "output", data: rawData(input.data, "data", 1_048_576) };
+      return { type: "output", data: terminalBytes(input.data, 1_048_576) };
+    case "directory":
+      return { type: "directory", currentDirectory: string(input.currentDirectory, "currentDirectory", 16384) };
     case "title":
       return { type: "title", title: string(input.title, "title", 1_024) };
-    case "control":
-      return { type: "control", ...controller(input) };
     case "exit":
       return {
         type: "exit",
@@ -392,7 +394,7 @@ export const parseTerminalNotification = (
   return {
     attachmentId: string(input.attachmentId, "attachmentId"),
     terminalId: string(input.terminalId, "terminalId"),
-    workspaceId: string(input.workspaceId, "workspaceId"),
+    executionContextId: string(input.executionContextId, "executionContextId"),
     generation: string(input.generation, "generation"),
     sequence: integer(input.sequence, "sequence", 1),
     event: terminalEvent(input.event),
@@ -409,9 +411,9 @@ export const parseTerminalErrorData = (value: unknown): TerminalErrorData => {
   return {
     domain: "terminal",
     code: input.code as TerminalErrorCode,
-    ...(input.workspaceId === undefined
+    ...(input.executionContextId === undefined
       ? {}
-      : { workspaceId: string(input.workspaceId, "workspaceId") }),
+      : { executionContextId: string(input.executionContextId, "executionContextId") }),
     ...(input.terminalId === undefined
       ? {}
       : { terminalId: string(input.terminalId, "terminalId") }),

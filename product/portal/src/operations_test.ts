@@ -50,7 +50,7 @@ test('Host shutdown bounds a provider that ignores SIGTERM and reaps its descend
 test('diagnostics separates filesystem, provider, trust and network failures', async () => {
   const root = await mkdtemp('/tmp/weave-diagnose-');
   try {
-    const result = await diagnose({ displayName: 'Test', listen: { hostname: '127.0.0.1', port: 0 }, stateDirectory: root, allowedOrigins: [], workspaces: [{ workspaceId: 'missing', name: 'Missing', path: join(root, 'missing') }], agents: [{ agentId: 'missing', name: 'Missing', command: join(root, 'no-provider'), args: [], env: {} }] });
+    const result = await diagnose({ displayName: 'Test', listen: { hostname: '127.0.0.1', port: 0 }, stateDirectory: root, allowedOrigins: [], executionContexts: [{ executionContextId: 'missing', name: 'Missing', path: join(root, 'missing') }], agents: [{ agentId: 'missing', name: 'Missing', command: join(root, 'no-provider'), args: [], env: {} }] });
     expect(result.checks.find((check) => check.area === 'host')?.ok).toBe(true);
     expect(result.checks.find((check) => check.area === 'trust')?.ok).toBe(true);
     for (const area of ['filesystem', 'acp-provider', 'network']) expect(result.checks.find((check) => check.area === area)?.ok).toBe(false);

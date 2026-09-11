@@ -184,6 +184,11 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
         container.addSubview(webView)
         // One native owner for keyboard and rotation geometry. Alpha follows
         // the resulting viewport; Capacitor's notification resize is disabled.
+        // With the keyboard dismissed, extend the rail to the window edge
+        // instead of leaving an unused strip below the entire WebView.
+        if #available(iOS 17.0, *) {
+            view.keyboardLayoutGuide.usesBottomSafeArea = false
+        }
         webView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),

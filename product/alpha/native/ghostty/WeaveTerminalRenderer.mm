@@ -1,8 +1,17 @@
+#include <WeaveTerminalCodec.h>
 #import "WeaveTerminalRenderer.h"
 #import <CoreText/CoreText.h>
 #include <ghostty/vt.h>
 #include <vector>
 #include <algorithm>
+
+@interface WeaveTerminalRenderer (SnapshotReader)
+- (BOOL)readSnapshot:(uint8_t *)buffer length:(size_t)length count:(size_t *)count;
+@end
+static bool readSnapshot(void *context, uint8_t *buffer, size_t length, size_t *count) {
+  return [(__bridge WeaveTerminalRenderer *)context readSnapshot:buffer length:length count:count];
+}
+static BOOL fontsRegistered = NO;
 
 struct WeaveCell {
   __strong NSString *text = @"";
@@ -21,21 +30,45 @@ struct WeaveCell {
   CTFontRef _font, _boldFont, _italicFont, _boldItalicFont;
   NSUInteger _columns, _rows;
   CGFloat _cellWidth, _cellHeight, _ascent;
-  BOOL _replaying;
+  GhosttySnapshotDecoder _snapshotDecoder;
+  NSData *_snapshotBytes;
+  NSUInteger _snapshotOffset;
   std::vector<WeaveCell> _visible;
   std::vector<bool> _wrapped;
   GhosttyRenderStateCursor _cursor;
+  GhosttyColorRgb _cursorColor;
+  NSString *_visibleTextCache;
+  NSCache<NSString *, id> *_lineCache;
+  CGColorSpaceRef _colorSpace;
 }
++ (NSString *)codecIdentity { return @WEAVE_TERMINAL_CODEC; }
 @synthesize columns = _columns, rows = _rows, cellWidth = _cellWidth, cellHeight = _cellHeight;
-static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *data, size_t length) {
-  WeaveTerminalRenderer *renderer = (__bridge WeaveTerminalRenderer *)userdata;
-  [renderer acceptReply:[NSData dataWithBytes:data length:length]];
++ (BOOL)registerFontsAtURL:(NSURL *)directory {
+  if (fontsRegistered) return YES;
+  for (NSString *style in @[@"Regular", @"Bold", @"Italic", @"BoldItalic"]) {
+    NSURL *url = [directory URLByAppendingPathComponent:[NSString stringWithFormat:@"JetBrainsMonoNerdFont-%@.ttf", style]];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:url.path]) return NO;
+    CFErrorRef error = NULL;
+    BOOL registered = CTFontManagerRegisterFontsForURL((__bridge CFURLRef)url, kCTFontManagerScopeProcess, &error);
+    BOOL alreadyRegistered = error && CFErrorGetCode(error) == kCTFontManagerErrorAlreadyRegistered;
+    if (error) CFRelease(error);
+    if (!registered && !alreadyRegistered) return NO;
+  }
+  fontsRegistered = YES;
+  return YES;
 }
+- (NSString *)fontName { return CFBridgingRelease(CTFontCopyPostScriptName(_font)); }
 + (instancetype)make { return [[self alloc] init]; }
 - (instancetype)init {
   if (!(self = [super init])) return nil;
   _columns = 80; _rows = 24;
-  _font = CTFontCreateWithName(CFSTR("Menlo-Regular"), 13, NULL);
+  _lineCache = [NSCache new]; _lineCache.countLimit = 4096;
+  _colorSpace = CGColorSpaceCreateDeviceRGB();
+  // Web @font-face does not register fonts for CoreText. Both application
+  // bundles ship these exact fonts; standalone probes register the same files.
+  if (![WeaveTerminalRenderer registerFontsAtURL:[NSBundle.mainBundle.resourceURL URLByAppendingPathComponent:@"TerminalFonts"]]) return nil;
+  _font = CTFontCreateWithName(CFSTR("JetBrainsMonoNF-Regular"), 13, NULL);
+  if (![self.fontName isEqualToString:@"JetBrainsMonoNF-Regular"]) return nil;
   _boldFont = CTFontCreateCopyWithSymbolicTraits(_font, 0, NULL, kCTFontBoldTrait, kCTFontBoldTrait);
   _italicFont = CTFontCreateCopyWithSymbolicTraits(_font, 0, NULL, kCTFontItalicTrait, kCTFontItalicTrait);
   _boldItalicFont = CTFontCreateCopyWithSymbolicTraits(_font, 0, NULL, kCTFontBoldTrait | kCTFontItalicTrait, kCTFontBoldTrait | kCTFontItalicTrait);
@@ -54,6 +87,7 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   return self;
 }
 - (void)dealloc {
+  ghostty_snapshot_decoder_free(_snapshotDecoder);
   ghostty_mouse_event_free(_mouseEvent); ghostty_mouse_encoder_free(_mouseEncoder);
   ghostty_key_encoder_free(_keyEncoder);
   ghostty_key_event_free(_keyEvent);
@@ -61,24 +95,11 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   ghostty_render_state_row_cells_free(_cells);
   ghostty_render_state_row_iterator_free(_iterator);
   ghostty_render_state_free(_frame);
+  if (_colorSpace) CGColorSpaceRelease(_colorSpace);
   if (_font) CFRelease(_font);
   if (_boldFont) CFRelease(_boldFont);
   if (_italicFont) CFRelease(_italicFont);
   if (_boldItalicFont) CFRelease(_boldItalicFont);
-}
-- (void)acceptReply:(NSData *)data {
-  // The Host resizes the PTY after the client fits its view. Advertising
-  // in-band resize here lets a TUI redraw into the old tmux grid before that
-  // resize reaches the Host. Keep DEC 2048 unavailable until the transport
-  // can order the notification after its authoritative PTY resize.
-  NSString *reply = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-  // tmux cannot reconstruct Kitty's flag stack across Host/client restarts.
-  // Do not answer its discovery query or use flags from live raw output.
-  if ([reply hasPrefix:@"\033[?"] && [reply hasSuffix:@"u"]) return;
-  if ([reply hasPrefix:@"\033[48;"] && [reply hasSuffix:@"t"]) return;
-  if ([reply isEqualToString:@"\033[?2048;1$y"] || [reply isEqualToString:@"\033[?2048;2$y"])
-    data = [@"\033[?2048;0$y" dataUsingEncoding:NSUTF8StringEncoding];
-  if (!_replaying && !self.readOnly && self.writeInput) self.writeInput(data);
 }
 - (BOOL)newTerminal {
   GhosttyTerminal next = NULL;
@@ -87,37 +108,79 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   GhosttyColorRgb background = {30, 30, 46}, foreground = {205, 214, 244};
   ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &background);
   ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &foreground);
+  GhosttyColorRgb cursor = {245, 224, 220};
+  ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cursor);
+  GhosttyColorRgb palette[256];
+  ghostty_terminal_get(_terminal, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE, &palette);
+  const GhosttyColorRgb theme[] = {{69,71,90},{243,139,168},{166,227,161},{249,226,175},{137,180,250},{245,194,231},{148,226,213},{186,194,222},
+    {88,91,112},{243,139,168},{166,227,161},{249,226,175},{137,180,250},{245,194,231},{148,226,213},{166,173,200}};
+  std::copy(std::begin(theme), std::end(theme), palette);
+  ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, &palette);
   GhosttyTerminalModeConfig graphemes = { GHOSTTY_MODE_GRAPHEME_CLUSTER, true };
   ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_MODE_DEFAULT, &graphemes);
   size_t bytes = 16 * 1024 * 1024, lines = 10000;
   ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &bytes);
   ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &lines);
-  ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_USERDATA, (__bridge void *)self);
-  ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, (const void *)writePty);
+  // Display replicas never register PTY/effect callbacks. The Host authority
+  // answers application queries exactly once; human encoders remain enabled.
   return YES;
 }
 - (BOOL)restoreData:(NSData *)data columns:(NSUInteger)columns rows:(NSUInteger)rows {
   if (columns < 2 || columns > 500 || rows < 2 || rows > 300) return NO;
-  NSUInteger displayColumns = _columns, displayRows = _rows;
   _columns = columns; _rows = rows;
-  if (![self consume:data reset:YES]) return NO;
-  // Reflow only after parsing the authoritative snapshot at its original grid.
-  ghostty_terminal_resize(_terminal, (uint16_t)displayColumns, (uint16_t)displayRows, (uint32_t)ceil(_cellWidth), (uint32_t)ceil(_cellHeight));
-  _columns = displayColumns; _rows = displayRows;
-  return [self updateFrame];
+  return [self consume:data reset:YES];
 }
 - (BOOL)consume:(NSData *)data reset:(BOOL)reset {
   NSAssert(NSThread.isMainThread, @"Native terminal must be used on the main thread");
-  if (data.length > 2 * 1024 * 1024) return NO;
-  if (reset && ![self newTerminal]) return NO;
-  _replaying = reset;
-  ghostty_terminal_vt_write(_terminal, (const uint8_t *)data.bytes, data.length);
-  _replaying = NO;
-  return [self updateFrame];
+  if (data.length > 64 * 1024 * 1024) return NO;
+  if (reset) {
+    ghostty_snapshot_decoder_free(_snapshotDecoder); _snapshotDecoder = NULL; _snapshotBytes = nil;
+    GhosttySnapshotDecoder decoder = NULL; GhosttyTerminal next = NULL;
+    self->_snapshotBytes = data; self->_snapshotOffset = 0;
+    if (ghostty_snapshot_decoder_new(NULL, &decoder, {readSnapshot, (__bridge void *)self}) != GHOSTTY_SUCCESS) { _snapshotBytes = nil; _snapshotOffset = 0; return NO; }
+    if (ghostty_snapshot_decoder_ready(decoder, &next) != GHOSTTY_SUCCESS) { ghostty_snapshot_decoder_free(decoder); _snapshotBytes = nil; _snapshotOffset = 0; return NO; }
+    ghostty_terminal_free(_terminal); _terminal = next;
+    size_t noImages = 0;
+    ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &noImages);
+    _visible.clear(); _wrapped.clear(); _visibleTextCache = nil;
+    _snapshotBytes = data; _snapshotDecoder = decoder;
+    if (_snapshotOffset < data.length) {
+      GhosttyResult status;
+      do { status = ghostty_snapshot_decoder_next(decoder); } while (status == GHOSTTY_SUCCESS);
+      BOOL valid = status == GHOSTTY_NO_VALUE && _snapshotOffset == data.length;
+      ghostty_snapshot_decoder_free(decoder); _snapshotDecoder = NULL;
+      _snapshotBytes = nil; _snapshotOffset = 0;
+      if (!valid) return NO;
+    } else { _snapshotBytes = nil; _snapshotOffset = 0; }
+  } else {
+    ghostty_terminal_vt_write(_terminal, (const uint8_t *)data.bytes, data.length);
+  }
+  return YES;
 }
-- (BOOL)resizeToSize:(CGSize)size {
+- (BOOL)readSnapshot:(uint8_t *)buffer length:(size_t)length count:(size_t *)count {
+  *count = MIN(length, _snapshotBytes.length - _snapshotOffset);
+  if (*count) memcpy(buffer, (const uint8_t *)_snapshotBytes.bytes + _snapshotOffset, *count);
+  _snapshotOffset += *count; return YES;
+}
+- (BOOL)appendHistory:(NSData *)data {
+  if (!_snapshotDecoder || data.length > 2 * 1024 * 1024) return NO;
+  _snapshotBytes = data; _snapshotOffset = 0;
+  GhosttyResult result = ghostty_snapshot_decoder_next(_snapshotDecoder);
+  BOOL consumed = _snapshotOffset == data.length;
+  _snapshotBytes = nil; _snapshotOffset = 0;
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_snapshot_decoder_free(_snapshotDecoder); _snapshotDecoder = NULL;
+  }
+  return consumed && (result == GHOSTTY_SUCCESS || result == GHOSTTY_NO_VALUE);
+}
+- (CGSize)gridForViewportSize:(CGSize)size {
   NSUInteger columns = std::clamp((NSInteger)floor((size.width - 16) / _cellWidth), (NSInteger)2, (NSInteger)500);
   NSUInteger rows = std::clamp((NSInteger)floor((size.height - 16) / _cellHeight), (NSInteger)2, (NSInteger)300);
+  return CGSizeMake(columns, rows);
+}
+- (BOOL)resizeToSize:(CGSize)size {
+  CGSize grid = [self gridForViewportSize:size];
+  NSUInteger columns = grid.width, rows = grid.height;
   if (columns == _columns && rows == _rows) return YES;
   if (ghostty_terminal_resize(_terminal, (uint16_t)columns, (uint16_t)rows, (uint32_t)ceil(_cellWidth), (uint32_t)ceil(_cellHeight)) != GHOSTTY_SUCCESS) return NO;
   _columns = columns; _rows = rows;
@@ -129,12 +192,18 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   ghostty_render_state_get(_frame, GHOSTTY_RENDER_STATE_DATA_COLOR_BACKGROUND, &background);
   ghostty_render_state_get(_frame, GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND, &foreground);
   ghostty_render_state_get(_frame, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &_iterator);
-  _wrapped.clear();
-  _visible.clear(); _visible.reserve(_rows * _columns);
-  while (ghostty_render_state_row_iterator_next(_iterator)) {
+  if (_visible.size() != _rows * _columns) {
+    _visible.resize(_rows * _columns); _wrapped.resize(_rows); _visibleTextCache = nil;
+    GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
+    ghostty_render_state_set(_frame, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &dirty);
+  }
+  uint16_t y = 0;
+  while (ghostty_render_state_row_iterator_next_dirty(_iterator, &y)) {
+    if (y >= _rows) return NO;
+    NSUInteger x = 0;
     GhosttyRow row; bool wrapped = false;
     ghostty_render_state_row_get(_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_RAW, &row);
-    ghostty_row_get(row, GHOSTTY_ROW_DATA_WRAP, &wrapped); _wrapped.push_back(wrapped);
+    ghostty_row_get(row, GHOSTTY_ROW_DATA_WRAP, &wrapped); _wrapped[y] = wrapped;
     ghostty_render_state_row_get(_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &_cells);
     while (ghostty_render_state_row_cells_next(_cells)) {
       WeaveCell cell;
@@ -160,23 +229,32 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
         result = ghostty_render_state_row_cells_get(_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &buffer);
       }
       if (result == GHOSTTY_SUCCESS && buffer.len) cell.text = [[NSString alloc] initWithBytes:buffer.ptr length:buffer.len encoding:NSUTF8StringEncoding] ?: @"�";
-      _visible.push_back(cell);
+      if (x >= _columns) return NO;
+      auto &previous = _visible[y * _columns + x++];
+      if (previous.spacer != cell.spacer || ![previous.text isEqualToString:cell.text]) _visibleTextCache = nil;
+      previous = cell;
     }
   }
   _cursor = GHOSTTY_INIT_SIZED(GhosttyRenderStateCursor);
   ghostty_render_state_get(_frame, GHOSTTY_RENDER_STATE_DATA_CURSOR, &_cursor);
-  return _visible.size() == _rows * _columns;
+  _cursorColor = {245, 224, 220};
+  ghostty_render_state_get(_frame, GHOSTTY_RENDER_STATE_DATA_COLOR_CURSOR, &_cursorColor);
+  ghostty_render_state_clean(_frame);
+  return YES;
 }
-- (CGRect)cursorRect { return CGRectMake(8 + _cursor.viewport_x * _cellWidth, 8 + _cursor.viewport_y * _cellHeight, _cellWidth, _cellHeight); }
+- (CGRect)cursorRect { [self updateFrame]; return CGRectMake(8 + _cursor.viewport_x * _cellWidth, 8 + _cursor.viewport_y * _cellHeight, _cellWidth, _cellHeight); }
 - (NSString *)visibleText {
+  [self updateFrame];
+  if (_visibleTextCache) return _visibleTextCache;
   NSMutableString *text = [NSMutableString string];
   for (NSUInteger i = 0; i < _visible.size(); i++) {
     if (!_visible[i].spacer) [text appendString:_visible[i].text.length ? _visible[i].text : @" "];
     if ((i + 1) % _columns == 0 && i + 1 < _visible.size()) [text appendString:@"\n"];
   }
-  return text;
+  _visibleTextCache = [text copy]; return _visibleTextCache;
 }
 - (NSString *)textForVisibleRange:(NSRange)range {
+  [self updateFrame];
   if (!range.length || range.location == NSNotFound) return @"";
   NSUInteger offset = 0, start = NSNotFound, end = 0;
   for (NSUInteger i = 0; i < _visible.size(); i++) {
@@ -188,6 +266,7 @@ static void writePty(GhosttyTerminal terminal, void *userdata, const uint8_t *da
   return start == NSNotFound ? @"" : [self textFromCell:start count:end - start];
 }
 - (NSString *)textFromCell:(NSUInteger)start count:(NSUInteger)count {
+  [self updateFrame];
   NSMutableString *text = [NSMutableString string];
   if (start >= _visible.size() || !count) return text;
   NSUInteger end = start + MIN(count, _visible.size() - start);
@@ -264,8 +343,7 @@ static GhosttyKey physicalKey(NSString *name) {
     if (character < 32 || character == 127 || (character >= 0xF700 && character <= 0xF8FF)) return NO;
   }
   ghostty_key_encoder_setopt_from_terminal(_keyEncoder, _terminal);
-  GhosttyKittyKeyFlags kitty = GHOSTTY_KITTY_KEY_DISABLED;
-  ghostty_key_encoder_setopt(_keyEncoder, GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS, &kitty);
+
   ghostty_key_event_set_action(_keyEvent, (GhosttyKeyAction)action);
   ghostty_key_event_set_key(_keyEvent, physicalKey(name));
   ghostty_key_event_set_mods(_keyEvent, (GhosttyMods)modifiers);
@@ -298,40 +376,81 @@ static void fillColor(CGContextRef context, GhosttyColorRgb color) {
   CGContextSetRGBFillColor(context, color.r / 255.0, color.g / 255.0, color.b / 255.0, 1);
 }
 - (void)drawInContext:(CGContextRef)context size:(CGSize)size {
+  [self updateFrame];
   CGContextSaveGState(context);
+  CGContextClipToRect(context, CGRectMake(0, 0, size.width, size.height));
   CGContextSetRGBFillColor(context, 30/255.0, 30/255.0, 46/255.0, 1);
   CGContextFillRect(context, CGRectMake(0, 0, size.width, size.height));
   CGContextSetShouldAntialias(context, false);
   // Backgrounds precede glyphs so a wide glyph is not erased by its tail cell.
   for (NSUInteger i = 0; i < _visible.size(); i++) {
+    if (8 + i / _columns * _cellHeight >= size.height) break;
+    if (8 + i % _columns * _cellWidth >= size.width) continue;
     fillColor(context, _visible[i].background);
     CGContextFillRect(context, CGRectMake(8 + i % _columns * _cellWidth, 8 + i / _columns * _cellHeight, _cellWidth, _cellHeight));
   }
+  const BOOL cursorVisible = _cursor.visible && _cursor.viewport_has_value;
+  const NSUInteger cursorCell = cursorVisible ? _cursor.viewport_y * _columns + _cursor.viewport_x : NSNotFound;
+  const BOOL blockCursor = cursorVisible && _cursor.visual_style == GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
+  if (blockCursor) { fillColor(context, _cursorColor); CGContextFillRect(context, self.cursorRect); }
   for (NSUInteger i = 0; i < _visible.size(); i++) {
+    if (8 + i / _columns * _cellHeight >= size.height) break;
+    if (8 + i % _columns * _cellWidth >= size.width) continue;
     CGContextSetShouldAntialias(context, true);
     const auto &cell = _visible[i];
     if (!cell.text.length || cell.invisible) continue;
     CGFloat x = 8 + i % _columns * _cellWidth, y = 8 + i / _columns * _cellHeight;
-    CGFloat components[] = {cell.foreground.r/255.0, cell.foreground.g/255.0, cell.foreground.b/255.0, 1};
-    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    CGColorRef color = CGColorCreate(space, components); CGColorSpaceRelease(space);
-    CTFontRef font = cell.bold && cell.italic ? _boldItalicFont : cell.bold ? _boldFont : cell.italic ? _italicFont : _font;
-    NSDictionary *attributes = @{(__bridge NSString *)kCTFontAttributeName: (__bridge id)(font ?: _font), (__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)color};
-    NSAttributedString *string = [[NSAttributedString alloc] initWithString:cell.text attributes:attributes];
-    CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)string);
+    GhosttyColorRgb foreground = blockCursor && i == cursorCell ? cell.background : cell.foreground;
+    NSString *cacheKey = [NSString stringWithFormat:@"%d:%d:%u:%u:%u:%@", cell.bold, cell.italic, foreground.r, foreground.g, foreground.b, cell.text];
+    id cached = [_lineCache objectForKey:cacheKey];
+    CTLineRef line = (__bridge CTLineRef)cached;
+    if (!line) {
+      CGFloat components[] = {foreground.r/255.0, foreground.g/255.0, foreground.b/255.0, 1};
+      CGColorRef color = CGColorCreate(_colorSpace, components);
+      CTFontRef font = cell.bold && cell.italic ? _boldItalicFont : cell.bold ? _boldFont : cell.italic ? _italicFont : _font;
+      NSDictionary *attributes = @{(__bridge NSString *)kCTFontAttributeName: (__bridge id)(font ?: _font), (__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)color};
+      NSAttributedString *string = [[NSAttributedString alloc] initWithString:cell.text attributes:attributes];
+      line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)string);
+      cached = CFBridgingRelease(line); [_lineCache setObject:cached forKey:cacheKey]; CGColorRelease(color);
+    }
     CGContextSaveGState(context); CGContextTranslateCTM(context, x, y + _ascent); CGContextScaleCTM(context, 1, -1);
     CGContextSetTextMatrix(context, CGAffineTransformIdentity); CGContextSetTextPosition(context, 0, 0); CTLineDraw(line, context);
-    CGContextRestoreGState(context); CFRelease(line); CGColorRelease(color);
+    CGContextRestoreGState(context);
     fillColor(context, cell.foreground);
     if (cell.underline) CGContextFillRect(context, CGRectMake(x, y + _cellHeight - 2, _cellWidth, 1));
     if (cell.strike) CGContextFillRect(context, CGRectMake(x, y + _cellHeight / 2, _cellWidth, 1));
   }
-  if (_cursor.visible && _cursor.viewport_has_value) {
-    CGRect cursor = CGRectMake(8 + _cursor.viewport_x * _cellWidth, 8 + _cursor.viewport_y * _cellHeight, _cellWidth, _cellHeight);
-    CGContextSetRGBStrokeColor(context, 245/255.0, 224/255.0, 220/255.0, 1);
-    CGContextStrokeRectWithWidth(context, CGRectInset(cursor, 0.5, 0.5), 1);
+  if (cursorVisible && !blockCursor) {
+    CGRect cursor = self.cursorRect;
+    fillColor(context, _cursorColor);
+    switch (_cursor.visual_style) {
+      case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR:
+        cursor.size.width = 2; CGContextFillRect(context, cursor); break;
+      case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE:
+        cursor.origin.y += cursor.size.height - 2; cursor.size.height = 2;
+        CGContextFillRect(context, cursor); break;
+      default:
+        CGContextSetRGBStrokeColor(context, _cursorColor.r/255.0, _cursorColor.g/255.0, _cursorColor.b/255.0, 1);
+        CGContextStrokeRectWithWidth(context, CGRectInset(cursor, 0.5, 0.5), 1); break;
+    }
   }
   CGContextRestoreGState(context);
+}
+// The square native surface sits one CSS border-width inside the web frame.
+// Paint the part of its rounded stroke that overlaps this surface, after content,
+// so the native background cannot erase the corner arcs. Never round the clip.
+- (void)drawFocusBorderInContext:(CGContextRef)context size:(CGSize)size {
+  if (_focusBorderWidth <= 0 || size.width <= 0 || size.height <= 0) return;
+  CGFloat half = _focusBorderWidth / 2;
+  CGRect rect = CGRectInset(CGRectMake(0, 0, size.width, size.height), -half, -half);
+  CGFloat radius = MAX(0, _focusBorderRadius - half);
+  CGPathRef path = CGPathCreateWithRoundedRect(rect, radius, radius, NULL);
+  CGContextSaveGState(context);
+  CGContextClipToRect(context, CGRectMake(0, 0, size.width, size.height));
+  CGContextSetRGBStrokeColor(context, ((_focusBorderRGB >> 16) & 255)/255.0, ((_focusBorderRGB >> 8) & 255)/255.0, (_focusBorderRGB & 255)/255.0, 1);
+  CGContextSetLineWidth(context, _focusBorderWidth);
+  CGContextAddPath(context, path); CGContextStrokePath(context);
+  CGContextRestoreGState(context); CGPathRelease(path);
 }
 - (void)scrollLines:(NSInteger)lines {
   GhosttyTerminalScrollViewport scroll = {GHOSTTY_SCROLL_VIEWPORT_DELTA, {}};

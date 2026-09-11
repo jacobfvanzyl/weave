@@ -1,34 +1,37 @@
 import type {
   AlphaHostConnection,
-  AlphaWorkspace,
+  AlphaExecutionContext,
 } from "@/app/alpha-controller";
-import { ProjectHostDialog } from "@/components/project-host-dialog";
+import { ExecutionContextHostDialog } from "@/components/project-host-dialog";
 
 export function CreateThreadDialog({
   workspace,
   connections,
+  showHostIdentity,
   open,
   onOpenChange,
   onCreateThread,
 }: {
-  workspace?: AlphaWorkspace;
+  workspace?: AlphaExecutionContext;
   connections: AlphaHostConnection[];
+  showHostIdentity?: boolean;
   open: boolean;
   onOpenChange(open: boolean): void;
-  onCreateThread(workspaceId: string, placementId: string): void;
+  onCreateThread(executionContextId: string, placementId: string): void;
 }) {
-  const workspaceId = workspace?.id;
+  const executionContextId = workspace?.id;
   return (
-    <ProjectHostDialog
+    <ExecutionContextHostDialog
       workspace={workspace}
       connections={connections}
+      showHostIdentity={showHostIdentity}
       open={open}
       description={
         <>Create a new thread for {workspace?.name ?? "this project"} on:</>
       }
       onOpenChange={onOpenChange}
       onSelect={(placement) => {
-        if (workspaceId) onCreateThread(workspaceId, placement.id);
+        if (executionContextId) onCreateThread(executionContextId, placement.id);
       }}
     />
   );

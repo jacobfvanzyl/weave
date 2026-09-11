@@ -24,30 +24,32 @@ export type AlphaThread = {
   status: "active" | "archived" | "closed";
   updatedAt: string;
   archivedAt?: string;
-  workspaceId: string;
-  projectId?: string;
-  worktreeId?: string;
+  executionContextId: string;
+  contextId?: string;
+  workspaceId?: string;
+  membershipRevision?: number;
+  workingDirectory?: string;
   draft?: boolean;
   attention?: ThreadAttention;
 };
 
-export type AlphaWorkspacePlacement = {
+export type AlphaExecutionContextPlacement = {
   id: string;
-  workspaceId: string;
+  executionContextId: string;
   hostId: string;
   hostName: string;
 };
 
-export type AlphaWorkspace = {
+export type AlphaExecutionContext = {
   id: string;
-  workspaceId: string;
+  executionContextId: string;
   hostId: string;
   hostName: string;
   name: string;
   canonicalPath?: string;
   availability?: 'available' | 'unavailable' | 'path-changed';
   repositoryIdentity?: RepositoryIdentity;
-  placements?: AlphaWorkspacePlacement[];
+  placements?: AlphaExecutionContextPlacement[];
   threads: AlphaThread[];
 };
 
@@ -58,10 +60,10 @@ export type AlphaHostConnection = {
   status: AlphaConnectionStatus;
   selected: boolean;
   error?: string;
-  supportsProjectRegistration?: boolean;
+  supportsExecutionContextRegistration?: boolean;
 };
 
-export type AlphaWorkspaceFileTab =
+export type AlphaExecutionContextFileTab =
   | (WorkspaceFileMetadata & {
       kind: "text";
       content: string;
@@ -73,8 +75,8 @@ export type AlphaWorkspaceFileTab =
       reason: "unsupported" | "too-large";
     };
 
-export type AlphaWorkspaceFiles = {
-  workspaceId: string;
+export type AlphaExecutionContextFiles = {
+  executionContextId: string;
   workspaceName: string;
   workspaceRootName?: string;
   directories: Record<
@@ -84,7 +86,7 @@ export type AlphaWorkspaceFiles = {
       truncated: boolean;
     }
   >;
-  openFiles: AlphaWorkspaceFileTab[];
+  openFiles: AlphaExecutionContextFileTab[];
   activeFilePath?: string;
 };
 
@@ -100,16 +102,17 @@ export type AlphaViewModel = {
     hostName: string;
   };
   searchQuery: string;
-  workspaces: AlphaWorkspace[];
+  executionContexts: AlphaExecutionContext[];
+  threads?: AlphaThread[];
   archivedThreads: AlphaThread[];
   showHostIdentity: boolean;
   selectedThreadId?: string;
   loadingThreadId?: string;
-  creatingThreadWorkspaceId?: string;
+  creatingThreadExecutionContextId?: string;
   composerFocusRequest?: number;
   composerFocusThreadId?: string;
   transcript?: AcpTranscript;
-  workspaceFiles?: AlphaWorkspaceFiles;
+  workspaceFiles?: AlphaExecutionContextFiles;
   terminals?: AlphaTerminalsModel;
   workspaceCompositions?: WorkspaceCompositionsModel;
   busy: boolean;
@@ -130,19 +133,22 @@ export type AlphaActions = {
   forgetHost(hostId: string): Promise<void> | void;
   reconnectHost(hostId: string): Promise<void> | void;
   refresh(): Promise<void> | void;
-  addProject?(input: {
+  addExecutionContext?(input: {
     hostId: string;
     path: string;
     name?: string;
   }): Promise<void> | void;
-  removeProject?(
-    workspaceId: string,
+  removeExecutionContext?(
+    executionContextId: string,
     placementId?: string,
   ): Promise<void> | void;
   createThread(
-    workspaceId?: string,
+    executionContextId?: string,
     placementId?: string,
+    workspaceId?: string,
   ): Promise<void> | void;
+  createThreadInDirectory?(hostId: string, path: string, workspaceId: string): Promise<void> | void;
+  assignThread?(threadId: string, workspaceId: string): Promise<void> | void;
   selectThread(threadId: string): Promise<void> | void;
   archiveThread(threadId: string): Promise<void> | void;
   restoreThread(threadId: string): Promise<void> | void;
@@ -181,6 +187,5 @@ export type AlphaController = {
 };
 
 export const selectedThread = (model: AlphaViewModel) =>
-  model.workspaces
-    .flatMap((workspace) => workspace.threads)
+  (model.threads ?? model.executionContexts.flatMap((workspace) => workspace.threads))
     .find((thread) => thread.id === model.selectedThreadId);

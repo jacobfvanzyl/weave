@@ -1,3 +1,4 @@
+import { encodeHostMessage, decodeHostMessage } from '@weave/product-protocol';
 import {
   PORTAL_AUTH_CHALLENGE_TYPE,
   PORTAL_AUTH_RESPONSE_TYPE,
@@ -166,8 +167,9 @@ export class RpcSocket {
 
   private constructor(socket: WebSocket) {
     this.#socket = socket;
+    socket.binaryType = 'arraybuffer';
     socket.onmessage = (event) => {
-      const message = parseJsonRpcMessage(String(event.data));
+      const message = parseJsonRpcMessage(decodeHostMessage(event.data));
       if (message.id !== undefined && message.method === undefined) {
         const pending = this.#pending.get(idKey(message.id));
         if (!pending) return;
@@ -206,12 +208,12 @@ export class RpcSocket {
   request(method: string, params: unknown = {}) {
     const id = ++this.#nextId;
     const response = new Promise<unknown>((resolve, reject) => this.#pending.set(idKey(id), { resolve, reject }));
-    this.#socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+    this.#socket.send(encodeHostMessage({ jsonrpc: '2.0', id, method, params }));
     return response;
   }
 
   respond(id: string | number, result: unknown) {
-    this.#socket.send(JSON.stringify({ jsonrpc: "2.0", id, result }));
+    this.#socket.send(encodeHostMessage({ jsonrpc: "2.0", id, result }));
   }
 
   close() {

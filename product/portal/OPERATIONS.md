@@ -9,11 +9,13 @@ bun run build:host
 bun run build:host:linux
 ```
 
-Artifacts live in `product/portal/dist/`. Each binary has a JSON manifest with
+Mac artifacts live in `product/portal/dist/`; Linux x64 artifacts live in
+`product/portal/dist/linux-x64/`. Install `weave-portal`,
+`weave-terminal-service` and `terminal-vt.node` together. The Host has a JSON manifest with
 its SHA-256, source hash, Git revision, Bun version, wire protocol and state
 format. The compiled executable includes Bun; the destination does not need a
-source checkout, Bun CLI or Deno. Install tmux and each configured ACP provider
-separately. Providers own their model credentials and may require their own
+source checkout, Bun CLI or Deno. Builds require Zig 0.16.0 and a C++ toolchain.
+Install each configured ACP provider separately. Providers own their model credentials and may require their own
 runtime. Neovim is a terminal application, not an embedded Editor dependency.
 
 Keep configuration outside releases, use absolute paths, and keep state and TLS
@@ -24,15 +26,15 @@ require TLS. Use the certificate's hostname in client URLs and diagnostics.
 
 ## Linux systemd user service
 
-Copy the binary to the target user and run it without sudo:
+Copy all three matching files to the target user and run it without sudo:
 
 ```sh
-./weave-portal-linux-x64 --version
-./weave-portal-linux-x64 service install --name alpha --config /absolute/path/host.json
-./weave-portal-linux-x64 service status --name alpha
-./weave-portal-linux-x64 service restart --name alpha
-./weave-portal-linux-x64 service stop --name alpha
-./weave-portal-linux-x64 service start --name alpha
+./weave-portal --version
+./weave-portal service install --name alpha --config /absolute/path/host.json
+./weave-portal service status --name alpha
+./weave-portal service restart --name alpha
+./weave-portal service stop --name alpha
+./weave-portal service start --name alpha
 ```
 
 The installer copies the artifact under
@@ -53,17 +55,21 @@ journalctl --user -u weave-host-alpha.service -n 100 --no-pager
 
 An upgrade checks binary identity, architecture, protocol and state-format
 compatibility before activation. The preceding release remains available for
-rollback. State format 1 and protocol 2 retain existing Host IDs, credentials,
-Workspace catalogs, Thread IDs, journals, and tmux terminal identities. A
+rollback. State format 3 and protocol 6 retain Host IDs, credentials, Execution
+Contexts, Workspace and Thread identities, and journals. The terminal protocol
+is deliberately incompatible with old clients; update matching clients and
+complete the [legacy cutover preflight](src/terminal-service/README.md) first. A
 provider process is restarted; durable Thread recovery follows its ACP support.
 An interrupted prompt retains the established uncertainty semantics. Rollback
 never rewinds a journal or copies older state over current state.
 
 The service stops only the Host process. The Host terminates each private ACP
 process group, including launchers and descendants, with a bounded grace period.
-The separate tmux server survives a normal restart. A forced crash can leave a
-Unix socket; startup removes it only when it is owned by this user, is a socket,
-and has no accepting listener. Live sockets and unrelated paths are preserved.
+The independent Terminal Service and its PTYs survive graceful and abrupt Host
+Daemon restarts. Service discovery validates a private local socket and exact
+codec identity. Losing the PTY owner requires explicit loss maintenance; it
+never silently presents its old registry as an empty successful listing.
+Breaking service upgrades require a deliberate stop of live terminals.
 
 To adopt the existing Bazzite Alpha unit, use `--unit
 weave-portal-bazzite.service --adopt` on the first installation. The original
@@ -73,7 +79,7 @@ state. The initial Bun installation has no previous Bun release to roll back
 to; the prior-runtime backup is a separate recovery artifact.
 
 ```sh
-./weave-portal-linux-x64 service uninstall --name alpha
+./weave-portal service uninstall --name alpha
 ```
 
 Uninstall disables and removes the managed unit. Configuration, credentials,
@@ -84,7 +90,7 @@ can reuse the retained config/state. A stale `.operation` directory means an
 installer was interrupted: verify no installer is running before removing it.
 
 On macOS, run the packaged Host directly with `serve --config <path>`. Preserve
-its stable signing identity when replacing an installation that has macOS
+the three matching artifacts and its stable signing identity when replacing an installation that has macOS
 privacy grants; see `README.md` for signing. The systemd installer is Linux-only.
 
 ## Diagnostics and recovery
@@ -100,7 +106,7 @@ Diagnostics emits JSON and exits nonzero for failed checks. It separates:
 | Host | Owned, private, readable/writable state directory and packaged version |
 | ACP provider | Executable availability and a bounded ACP initialize exchange |
 | Filesystem | Configured Workspace directory access |
-| Terminal | tmux availability in the service PATH |
+| Terminal | Matching service, codec, private IPC and live registry availability |
 | Trust | TLS certificate expiry, key permissions and exact client origins |
 | Network | Health endpoint reachability with ordinary TLS verification |
 

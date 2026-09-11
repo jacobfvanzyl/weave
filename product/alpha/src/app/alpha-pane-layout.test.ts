@@ -86,7 +86,7 @@ describe('useAlphaPaneLayouts', () => {
         editor: 30,
         project: 20,
       });
-      result.current.setProjectVisible(false);
+      result.current.setExecutionContextVisible(false);
     });
 
     const firstThreadSnapshot = result.current.snapshot;

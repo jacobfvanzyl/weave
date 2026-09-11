@@ -18,6 +18,8 @@ export const alphaPaneMinimumWidths = {
 } as const satisfies Record<AlphaPaneId, number | string>;
 
 export const alphaSidebarDefaultWidth = '20rem';
+export const alphaPaneMinimumWidth = 375;
+export const alphaSidebarMinimumWidth = 250;
 export const alphaSidebarWidthStorageKey = 'weave.alpha.sidebar-width.v1';
 
 type PersistedAlphaSidebarWidth = {
@@ -129,7 +131,7 @@ export const layoutForPaneSet = (
 
 export function useAlphaPaneLayouts(activeThreadId: string | undefined) {
   const activeKey = threadKey(activeThreadId);
-  const defaultProjectVisible = projectPaneVisibleFromCookie();
+  const defaultExecutionContextVisible = projectPaneVisibleFromCookie();
   const [snapshots, setSnapshots] = useState<
     Record<string, AlphaThreadPaneLayout>
   >({});
@@ -137,8 +139,8 @@ export function useAlphaPaneLayouts(activeThreadId: string | undefined) {
   const snapshot = useMemo(
     () =>
       snapshots[activeKey] ??
-      createAlphaThreadPaneLayout(activeThreadId, defaultProjectVisible),
-    [activeKey, activeThreadId, defaultProjectVisible, snapshots],
+      createAlphaThreadPaneLayout(activeThreadId, defaultExecutionContextVisible),
+    [activeKey, activeThreadId, defaultExecutionContextVisible, snapshots],
   );
 
   const updateSnapshot = useCallback(
@@ -146,11 +148,11 @@ export function useAlphaPaneLayouts(activeThreadId: string | undefined) {
       setSnapshots((current) => {
         const existing =
           current[activeKey] ??
-          createAlphaThreadPaneLayout(activeThreadId, defaultProjectVisible);
+          createAlphaThreadPaneLayout(activeThreadId, defaultExecutionContextVisible);
         return { ...current, [activeKey]: update(existing) };
       });
     },
-    [activeKey, activeThreadId, defaultProjectVisible],
+    [activeKey, activeThreadId, defaultExecutionContextVisible],
   );
 
   const setThreadsVisible = useCallback(
@@ -163,7 +165,7 @@ export function useAlphaPaneLayouts(activeThreadId: string | undefined) {
     [updateSnapshot],
   );
 
-  const setProjectVisible = useCallback(
+  const setExecutionContextVisible = useCallback(
     (visible: boolean) => {
       updateSnapshot((current) => ({
         ...current,
@@ -203,7 +205,7 @@ export function useAlphaPaneLayouts(activeThreadId: string | undefined) {
     snapshot,
     sidebarWidth,
     setThreadsVisible,
-    setProjectVisible,
+    setExecutionContextVisible,
     rememberRowLayout,
     rememberSidebarWidth,
   };

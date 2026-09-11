@@ -54,9 +54,9 @@ const config = (root: string): PortalConfig => ({
   displayName: 'Security Test Portal',
   allowedOrigins: [],
   stateDirectory: join(root, 'state'),
-  workspaces: [
-    { workspaceId: 'allowed', name: 'Allowed', path: root },
-    { workspaceId: 'denied', name: 'Denied', path: root },
+  executionContexts: [
+    { executionContextId: 'allowed', name: 'Allowed', path: root },
+    { executionContextId: 'denied', name: 'Denied', path: root },
   ],
   agents: [{
     agentId: 'agent',
@@ -141,7 +141,7 @@ test('Portal Pairing Tokens use a strict minimal signed JWT profile', async () =
     const security = await PortalSecurity.open(config(root));
     const token = await security.createPairingToken(60_000, {
       actions: ['portal.inspect'],
-      workspaceIds: ['allowed'],
+      executionContextIds: ['allowed'],
       agentIds: ['agent'],
     });
     const [encodedHeader, encodedClaims] = token.split('.');
@@ -252,26 +252,26 @@ test('Portal authorization applies resource grants without revealing denied reso
   try {
     const security = await PortalSecurity.open(config(root));
     const credential = await pair(security, {
-      actions: ['portal.inspect', 'workspace.inspect', 'workspace.file.read'],
-      workspaceIds: ['allowed'],
+      actions: ['portal.inspect', 'context.inspect', 'context.file.read'],
+      executionContextIds: ['allowed'],
       agentIds: [],
     });
     const principal = await authenticate(security, credential);
-    await security.authorize(principal, 'workspace.file.read', {
-      workspaceId: 'allowed',
+    await security.authorize(principal, 'context.file.read', {
+      executionContextId: 'allowed',
     });
     await assertRejects(
       () =>
-        security.authorize(principal, 'workspace.file.read', {
-          workspaceId: 'denied',
+        security.authorize(principal, 'context.file.read', {
+          executionContextId: 'denied',
         }),
       PortalSecurityError,
       'Resource is unavailable.',
     );
     await assertRejects(
       () =>
-        security.authorize(principal, 'workspace.file.write', {
-          workspaceId: 'allowed',
+        security.authorize(principal, 'context.file.write', {
+          executionContextId: 'allowed',
         }),
       PortalSecurityError,
       'Resource is unavailable.',
@@ -281,13 +281,13 @@ test('Portal authorization applies resource grants without revealing denied reso
   }
 });
 
-test('Portal upgrades existing administrative pairings for project registration', async () => {
+test('Portal does not infer broader directory grants when reopening an older pairing', async () => {
   const root = await temporaryDirectory({ prefix: 'weave-portal-grants-' });
   try {
     const initial = await PortalSecurity.open(config(root));
     const credential = await pair(initial, {
-      actions: PORTAL_ACTIONS.filter((action) => action !== 'workspace.manage'),
-      workspaceIds: ['allowed', 'denied'],
+      actions: PORTAL_ACTIONS.filter((action) => action !== 'context.manage'),
+      executionContextIds: ['allowed', 'denied'],
       agentIds: ['agent'],
     });
     const reopened = await PortalSecurity.open(config(root), [
@@ -296,10 +296,9 @@ test('Portal upgrades existing administrative pairings for project registration'
       'registered-later',
     ]);
     const principal = await authenticate(reopened, credential);
-    await reopened.authorize(principal, 'workspace.manage');
-    await reopened.authorize(principal, 'workspace.inspect', {
-      workspaceId: 'registered-later',
-    });
+    await assertRejects(() => reopened.authorize(principal, 'context.manage'));
+    await assertRejects(() => reopened.authorize(principal, 'context.inspect', { executionContextId: 'registered-later' }));
+    await reopened.authorize(principal, 'context.inspect', { executionContextId: 'allowed' });
   } finally {
     await removePath(root, { recursive: true });
   }
