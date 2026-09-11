@@ -8,7 +8,7 @@ const channel = 'weave:terminal';
 type Addon = {
   codec: string;
   create(parent: Buffer, event: (json: string) => void, fontDirectory: string): number;
-  layout(id: number, x: number, y: number, width: number, height: number, visible: boolean, readOnly: boolean, borderWidth: number, borderRadius: number, borderRGB: number): { cols: number; rows: number };
+  layout(id: number, x: number, y: number, width: number, height: number, visible: boolean, readOnly: boolean, borderWidth: number, borderRadius: number, borderRGB: number, dimAmount: number): { cols: number; rows: number };
   write(id: number, bytes: Buffer, reset: boolean, cols: number, rows: number, history: boolean): void;
   focus(id: number): void;
   inspect(id: number): string;
@@ -22,9 +22,13 @@ export function installNativeTerminals(window: BrowserWindow) {
   const surfaces = new Map<string, number>();
   const contents = window.webContents;
   const streams = new Map<string, MessagePortMain>();
+  const activation = (kind: 'window-focus' | 'window-blur') => { if (!contents.isDestroyed()) contents.send(`${channel}:event`, { surfaceId: '', kind }); };
+  window.on('focus', () => activation('window-focus'));
+  window.on('blur', () => activation('window-blur'));
   const clear = () => { for (const port of streams.values()) port.close(); streams.clear(); for (const id of surfaces.values()) addon.close(id); surfaces.clear(); };
   const handler = (event: Electron.IpcMainInvokeEvent, method: unknown, input: unknown) => {
     if (event.sender !== contents || event.senderFrame !== contents.mainFrame || !event.senderFrame.url.startsWith('weave://app/')) throw new Error('Native terminal caller is unavailable.');
+    if (method === 'focusWeb') { contents.focus(); return; }
     if (method === 'create') {
       if (surfaces.size >= 64) throw new Error('Native terminal surface limit reached.');
       const surfaceId = randomUUID();
@@ -61,8 +65,10 @@ export function installNativeTerminals(window: BrowserWindow) {
         if (![x, y, width, height].every((n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 100000) || typeof visible !== 'boolean' || typeof readOnly !== 'boolean') throw new Error('Invalid terminal geometry.');
         const border = (value.focusBorder ?? { width: 0, radius: 0, rgb: 0 }) as Record<string, unknown>;
         if (![border.width, border.radius].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100) || !Number.isInteger(border.rgb) || (border.rgb as number) < 0 || (border.rgb as number) > 0xffffff) throw new Error('Invalid terminal border.');
+        const dimAmount = value.dimAmount ?? 0;
+        if (typeof dimAmount !== 'number' || !Number.isFinite(dimAmount) || dimAmount < 0 || dimAmount > 1) throw new Error('Invalid terminal dim amount.');
         const zoom = contents.getZoomFactor();
-        return addon.layout(id, (x as number) * zoom, (y as number) * zoom, (width as number) * zoom, (height as number) * zoom, visible, readOnly, (border.width as number) * zoom, (border.radius as number) * zoom, border.rgb as number);
+        return addon.layout(id, (x as number) * zoom, (y as number) * zoom, (width as number) * zoom, (height as number) * zoom, visible, readOnly, (border.width as number) * zoom, (border.radius as number) * zoom, border.rgb as number, dimAmount);
       }
       case 'write': {
         if (!(value.data instanceof Uint8Array) || value.data.byteLength > 64 * 1024 * 1024 || typeof value.reset !== 'boolean') throw new Error('Invalid terminal output.');

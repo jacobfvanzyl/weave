@@ -158,7 +158,8 @@
   --sidebar-accent: var(--zed-ghost-hover);
   --sidebar-accent-foreground: var(--foreground);
   --sidebar-active: var(--zed-ghost-active);
-  --sidebar-selected: var(--zed-ghost-selected);
+  /* Opaque resolved selection color shared with native terminal strokes. */
+  --sidebar-selected: #38394a;
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
 }
@@ -275,18 +276,21 @@
 [data-window-top-rail] { -webkit-app-region: drag; }
 [data-window-top-rail] :is(button, a, input, textarea, select, [role="button"], [role="separator"]) { -webkit-app-region: no-drag; }
 [data-window-controls-leading] { padding-left: calc(env(titlebar-area-x, 0px) + 8px); }
+[data-shell-controls-leading] { padding-left: calc(var(--alpha-window-controls-width, 0px) + var(--alpha-sidebar-toggle-width, 0px) + 16px); }
+[data-slot="sidebar-toggle-rail"] { -webkit-app-region: no-drag; }
 
 /* Clip the composer separately so the shared outline can extend over the seam. */
 [data-slot="thread-pane"] {
-  --agent-bottom-radius: calc(var(--radius-sm) + 2px);
-  border-radius: 0 0 var(--agent-bottom-radius) var(--agent-bottom-radius);
+  --agent-bottom-right-radius: 0px;
+  --agent-border-color: var(--sidebar-selected);
+  border-radius: 0 0 var(--agent-bottom-right-radius) 0;
   background: linear-gradient(var(--title-bar) 0 var(--rail-height), var(--background) var(--rail-height));
 }
 [data-slot="thread-pane-contents"] {
-  border-radius: 0 0 var(--agent-bottom-radius) var(--agent-bottom-radius);
+  border-radius: 0 0 var(--agent-bottom-right-radius) 0;
 }
 [data-slot="thread-top-rail"] {
-  border-top-left-radius: var(--alpha-window-corner-radius, 16px);
+  border-top-left-radius: 0px;
 }
 
 /* Share one painted edge while retaining the separator's wider drag target.
@@ -312,22 +316,25 @@
   z-index: 2;
 }
 [data-slot="thread-pane"]::before {
+  top: var(--rail-height);
   left: var(--agent-border-offset, 0px);
-  border-right: 1px solid var(--primary);
-  border-bottom: 1px solid var(--primary);
-  border-radius: 0 0 var(--agent-bottom-radius) var(--agent-bottom-radius);
+  border-top: 1px solid var(--agent-border-color);
+  border-right: 1px solid var(--agent-border-color);
+  border-bottom: 1px solid var(--agent-border-color);
+  border-radius: 0 0 var(--agent-bottom-right-radius) 0;
 }
 [data-slot="thread-pane"]::after {
-  border-left: 1px solid var(--primary);
-  border-bottom-left-radius: var(--agent-bottom-radius);
-  border-top-left-radius: var(--alpha-window-corner-radius, 16px);
+  clip-path: inset(var(--rail-height) 0 0 0);
+  border-left: 1px solid var(--agent-border-color);
+  border-bottom-left-radius: 0;
+  border-top-left-radius: 0px;
   mask-image: var(--agent-border-mask, none);
   transform: translateX(var(--agent-border-offset, 0px));
 }
 
 /* Mirror the shared edge for Left Dock. The outside edge remains unmasked. */
 [data-agent-dock="left"] [data-slot="thread-top-rail"] {
-  border-top-right-radius: var(--alpha-window-corner-radius, 16px);
+  border-top-right-radius: 0px;
 }
 [data-agent-seam="overlap"][data-agent-dock="left"] > #agent-conversation {
   margin-left: 0;
@@ -337,19 +344,26 @@
   left: 0;
   right: calc(-1 * var(--agent-border-offset, 0px));
   border-right: 0;
-  border-left: 1px solid var(--primary);
-  border-top-left-radius: var(--alpha-window-corner-radius, 16px);
+  border-left: 1px solid var(--agent-border-color);
+  border-top-left-radius: 0px;
 }
 [data-agent-dock="left"] [data-slot="thread-pane"]::after {
   border-left: 0;
-  border-right: 1px solid var(--primary);
+  border-right: 1px solid var(--agent-border-color);
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
-  border-top-right-radius: var(--alpha-window-corner-radius, 16px);
-  border-bottom-right-radius: var(--agent-bottom-radius);
+  border-top-right-radius: 0px;
+  border-bottom-right-radius: var(--agent-bottom-right-radius);
 }
 [data-agent-leading="true"] > [data-slot="resizable-handle"] {
   width: 0;
   background: transparent;
   z-index: 2;
 }
+
+[data-slot="thread-pane"][data-agent-input-focused="true"] { --agent-border-color: var(--primary); }
+[data-agent-seam="overlap"][data-input-owner="agent"] > #agent-conversation { position: relative; z-index: 2; }
+
+/* Only the pane at the outside bottom-right follows the OS window corner. */
+[data-slot="terminal-focus-border"][data-window-bottom-right] { border-bottom-right-radius: var(--alpha-window-corner-radius, 0px); }
+[data-slot="thread-pane"][data-window-bottom-right] { --agent-bottom-right-radius: var(--alpha-window-corner-radius, 0px); }

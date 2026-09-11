@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useComposerPaneFocus } from '@/app/pane-focus';
+import { useRef, useState } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { expect, it, vi } from 'vitest';
@@ -11,9 +12,9 @@ vi.mock('@/app/use-alpha-terminals', () => ({ useAlphaTerminals: ({ target }: { 
   model: { attachmentId: target.terminalId, attachmentMode: 'shared', tabs: [{ title: target.terminalId }] },
   actions: {},
 }) }));
-vi.mock('./terminal-view', () => ({ TerminalView: ({ focusRequest }: { focusRequest?: string }) => {
+vi.mock('./terminal-view', () => ({ TerminalView: () => {
   const input = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { if (focusRequest) input.current?.focus(); }, [focusRequest]);
+  useComposerPaneFocus(input);
   return <textarea ref={input} aria-label='Terminal input' />;
 } }));
 
@@ -51,29 +52,29 @@ it('focuses reselected tiles, reveals hidden panes, and waits for an agent trans
   const terminal = screen.getByRole('textbox', { name: 'Terminal input' });
   const composer = () => screen.getByRole('textbox', { name: 'Message agent' });
   await user.click(agentTile);
-  expect(composer()).toHaveFocus();
+  await waitFor(() => expect(composer()).toHaveFocus());
   await user.keyboard('draft');
   expect(composer()).toHaveValue('draft');
   for (let repeat = 0; repeat < 2; repeat++) {
     await user.click(terminalTile);
-    expect(terminal).toHaveFocus();
+    await waitFor(() => expect(terminal).toHaveFocus());
     await user.click(agentTile);
-    expect(composer()).toHaveFocus();
+    await waitFor(() => expect(composer()).toHaveFocus());
     expect(composer()).toHaveValue('draft');
   }
   await user.click(screen.getByRole('button', { name: 'Close agent pane' }));
   await user.click(agentTile);
-  expect(composer()).toHaveFocus();
+  await waitFor(() => expect(composer()).toHaveFocus());
   await user.click(screen.getByRole('button', { name: 'Maximize agent pane' }));
   await user.click(terminalTile);
   expect(terminal).toBeVisible();
-  expect(terminal).toHaveFocus();
+  await waitFor(() => expect(terminal).toHaveFocus());
   await user.keyboard('input');
   expect(terminal).toHaveValue('input');
   await user.click(screen.getByRole('button', { name: 'Maximize terminal' }));
   await user.click(agentTile);
   expect(composer()).toBeVisible();
-  expect(composer()).toHaveFocus();
+  await waitFor(() => expect(composer()).toHaveFocus());
   await user.click(screen.getByRole('button', { name: 'Agent other' }));
   await waitFor(() => expect(within(screen.getByRole('region', { name: 'Selected agent conversation' })).getByRole('textbox')).toHaveFocus());
 });

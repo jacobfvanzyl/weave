@@ -1,6 +1,48 @@
 import XCTest
 
 final class AlphaUITests: XCTestCase {
+    func testSoftwareKeyboardDismissalPreservesPaneSelection() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--host-acceptance"]
+        XCUIDevice.shared.orientation = .landscapeRight
+        app.launch()
+        defer {
+            app.buttons["Connections"].tap()
+            let fixture = app.buttons["Forget WVE-77 iPad acceptance"]
+            if fixture.waitForExistence(timeout: 5) {
+                fixture.tap(); app.buttons["Forget Host"].tap()
+                XCTAssertTrue(fixture.waitForNonExistence(timeout: 10))
+            }
+        }
+        let stage = app.staticTexts["AcceptanceStage"]
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'native-terminal' OR label == 'failed'"), object: stage)], timeout: 90), .completed)
+        XCTAssertEqual(stage.label, "native-terminal")
+        let terminal = app.textViews["Terminal input"].firstMatch
+        let keyboard = app.keyboards.firstMatch
+        func dismissKeyboard() {
+            XCTAssertTrue(keyboard.waitForExistence(timeout: 10))
+            keyboard.buttons["Hide keyboard"].tap()
+            XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+            // Catch the delayed native blur -> web focus-restoration loop.
+            sleep(2)
+            XCTAssertFalse(keyboard.exists, "The keyboard reopened without a pane selection")
+        }
+        terminal.tap(); dismissKeyboard()
+        terminal.tap(); XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        app.buttons["Restore terminal"].tap()
+        let composer = app.textViews["Message agent"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        composer.tap(); dismissKeyboard()
+        app.buttons["Collapse WVE-77 iPad acceptance"].tap()
+        sleep(1); XCTAssertFalse(keyboard.exists)
+        composer.tap(); XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Keyboard resumed by selecting composer"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testHostTerminalAndKeyboardAcrossOrientations() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

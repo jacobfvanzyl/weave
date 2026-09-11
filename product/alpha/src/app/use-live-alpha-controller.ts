@@ -1,4 +1,4 @@
-import { showWorkspaceHostIdentity } from './workspace-presentation';
+import { showWorkspaceHostIdentity, workspaceKey } from './workspace-presentation';
 import { COMPOSITION_TERMINAL_CREATION_CAPABILITY } from '@weave/product-protocol';
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
@@ -32,6 +32,7 @@ import {
 } from "./portal-connection-storage";
 import { useAppResume } from "./use-app-resume";
 import { useSavedThreadSelection } from "./use-saved-thread-selection";
+import { ThreadReadState } from './thread-read-state';
 import { useWorkspaceCompositions } from "./use-workspace-compositions";
 import { useAlphaTerminals } from "./use-alpha-terminals";
 
@@ -286,6 +287,8 @@ export function useLiveAlphaController(
   const activeThreadIdsRef = useRef(new Map<string, string>());
   const selectedThreadIdRef = useRef<string | undefined>(undefined);
   const localThreadDraftRef = useRef<LocalThreadDraft | undefined>(undefined);
+  const [threadReadState] = useState(() => new ThreadReadState());
+  const [, refreshThreadReadState] = useState(0);
   const connectionAttemptRef = useRef(new Map<string, number>());
   const reconnectTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const reconnectFailuresRef = useRef(new Map<string, number>());
@@ -317,12 +320,16 @@ export function useLiveAlphaController(
     creatingThreadRef.current = false;
     setBusy(false);
   };
+  const reconcileArchivedSelectionRef = useRef<(hostId: string, snapshot: HostSnapshot) => void>(() => {});
+  const pendingArchiveSelectionRef = useRef<{ threadId: string; workspace: string } | undefined>(undefined);
   const updateSnapshot = (hostId: string, snapshot: HostSnapshot, authoritative = true) => {
+    for (const thread of snapshot.threads) threadReadState.observe(resourceId(hostId, thread.threadId), thread.attention);
     if (authoritative) {
       const promoted = snapshot.threads.find((thread) => resourceId(hostId, thread.threadId) === promotingThreadIdRef.current);
       if (promoted) acknowledgePromotion(resourceId(hostId, promoted.threadId));
       const archivedIds = new Set(snapshot.archivedThreads.map((thread) => resourceId(hostId, thread.threadId)));
       if (selectedThreadIdRef.current && archivedIds.has(selectedThreadIdRef.current)) {
+        reconcileArchivedSelectionRef.current(hostId, snapshot);
         selectedThreadIdRef.current = undefined; setSelectedThreadId(undefined); setLoadingThreadId(undefined);
         activeThreadIdsRef.current.delete(hostId);
       }
@@ -396,6 +403,10 @@ export function useLiveAlphaController(
         (event, sourceThreadId) => {
           const id = sourceThreadId ? resourceId(connection.hostId, sourceThreadId) : activeThreadIdsRef.current.get(connection.hostId);
           if (!id) return;
+          if (event.type === 'turn/started') { threadReadState.started(id); refreshThreadReadState((value) => value + 1); }
+          if (event.type === 'turn/stopped' && ['end_turn', 'max_tokens', 'max_turn_requests', 'refusal'].includes(event.stopReason)) {
+            threadReadState.completed(id); refreshThreadReadState((value) => value + 1);
+          }
           if (event.type === "permission/requested" || event.type === "elicitation/requested" ||
               event.type === "session/update" && ["user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "tool_call"].includes(event.update.sessionUpdate)) acknowledgePromotion(id);
           if (
@@ -727,7 +738,7 @@ export function useLiveAlphaController(
     const agents = new Map(snapshot.agents.map((agent) => [agent.agentId, agent.name]));
     return snapshot.threads.map((thread) => {
       const context = snapshot.executionContexts.find((item) => item.executionContextId === thread.executionContextId);
-      return { ...mapThread(thread, context?.name ?? 'Thread', connection, agents, true, resourceId(connection.hostId, thread.executionContextId)), workingDirectory: context?.canonicalPath };
+      return { ...mapThread(thread, context?.name ?? 'Thread', connection, agents, true, resourceId(connection.hostId, thread.executionContextId)), workingDirectory: context?.canonicalPath, completionUnread: threadReadState.unread(resourceId(connection.hostId, thread.threadId)) };
     });
   });
   if (localThreadDraft) allThreads.unshift(localThreadDraft.thread);
@@ -777,7 +788,7 @@ export function useLiveAlphaController(
       focusComposer(id);
       return;
     }
-    if (id === selectedThreadId && !loadingThreadId) return;
+    if (id === selectedThreadIdRef.current && !loadingThreadId) return;
     const thread = allThreads.find((candidate) => candidate.id === id);
     const client = thread ? clientsRef.current.get(thread.hostId) : undefined;
     const snapshot = thread ? snapshots[thread.hostId] : undefined;
@@ -786,9 +797,9 @@ export function useLiveAlphaController(
     );
     if (!thread || !client) return;
     const previousSelectedThreadId =
-      selectedThreadId === draft?.thread.id ? undefined : selectedThreadId;
+      selectedThreadIdRef.current === draft?.thread.id ? undefined : selectedThreadIdRef.current;
     const previousActiveThreadId =
-      selectedThreadId === draft?.thread.id
+      selectedThreadIdRef.current === draft?.thread.id
         ? undefined
         : activeThreadIdsRef.current.get(thread.hostId);
     setBusy(true);
@@ -801,17 +812,44 @@ export function useLiveAlphaController(
       if (draft) await discardLocalThreadDraft();
       await client.attach(thread.threadId);
     } catch (cause) {
-      selectedThreadIdRef.current = previousSelectedThreadId;
-      setSelectedThreadId(previousSelectedThreadId);
-      if (previousActiveThreadId) {
-        activeThreadIdsRef.current.set(thread.hostId, previousActiveThreadId);
-      } else activeThreadIdsRef.current.delete(thread.hostId);
-      reportActionError(cause);
+      if (selectedThreadIdRef.current === id) {
+        selectedThreadIdRef.current = previousSelectedThreadId;
+        setSelectedThreadId(previousSelectedThreadId);
+        if (previousActiveThreadId) {
+          activeThreadIdsRef.current.set(thread.hostId, previousActiveThreadId);
+        } else activeThreadIdsRef.current.delete(thread.hostId);
+        reportActionError(cause);
+      }
     } finally {
       setLoadingThreadId((current) => (current === id ? undefined : current));
       setBusy(false);
     }
   };
+
+  // Snapshot callbacks outlive a render. Reconcile against the current navigation
+  // and then attach after the authoritative catalog has reached the model.
+  reconcileArchivedSelectionRef.current = (hostId, snapshot) => {
+    pendingArchiveSelectionRef.current = undefined;
+    const archived = snapshot.archivedThreads.find((thread) => resourceId(hostId, thread.threadId) === selectedThreadIdRef.current);
+    if (!archived?.workspaceId) return;
+    const workspace = workspaceKey({ hostId, workspaceId: archived.workspaceId });
+    if (workspaceController.model.presentation.activeWorkspace !== workspace) return;
+    const previous = allThreads.filter((thread) => thread.hostId === hostId && thread.workspaceId === archived.workspaceId);
+    const index = previous.findIndex((thread) => thread.id === selectedThreadIdRef.current);
+    const remaining = snapshot.threads.filter((thread) => thread.workspaceId === archived.workspaceId);
+    const remainingIds = new Set(remaining.map((thread) => resourceId(hostId, thread.threadId)));
+    const next = [...previous.slice(index + 1), ...previous.slice(0, index)].find((thread) => remainingIds.has(thread.id));
+    const threadId = next?.id ?? (remaining[0] && resourceId(hostId, remaining[0].threadId));
+    if (threadId) pendingArchiveSelectionRef.current = { threadId, workspace };
+  };
+  useEffect(() => {
+    const pending = pendingArchiveSelectionRef.current;
+    if (!pending) return;
+    pendingArchiveSelectionRef.current = undefined;
+    if (!selectedThreadIdRef.current && workspaceController.model.presentation.activeWorkspace === pending.workspace) {
+      void selectThread(pending.threadId);
+    }
+  });
 
   const createThread = async (executionContextId?: string, placementId?: string, workspaceId?: string, target?: { context: AlphaExecutionContext; snapshot: HostSnapshot }) => {
     const workspaceModel = target?.context ??
@@ -939,10 +977,6 @@ export function useLiveAlphaController(
     try {
       await client.archiveThread(thread.threadId);
       updateSnapshot(thread.hostId, await client.snapshot());
-      if (selectedThreadId === id) {
-        selectedThreadIdRef.current = undefined;
-        setSelectedThreadId(undefined);
-      }
     } catch (cause) {
       reportActionError(cause);
       throw cause;
@@ -1197,6 +1231,15 @@ export function useLiveAlphaController(
       },
       createThread,
       selectThread,
+      setFocusedAgentThread: (id) => { if (threadReadState.focus(id)) refreshThreadReadState((value) => value + 1); },
+      discardThreadDraft: async (id) => {
+        if (localThreadDraftRef.current?.thread.id !== id || promotingThreadIdRef.current === id) return;
+        if (selectedThreadIdRef.current === id) {
+          selectedThreadIdRef.current = undefined; setSelectedThreadId(undefined); setLoadingThreadId(undefined);
+        }
+        for (const [hostId, activeId] of activeThreadIdsRef.current) if (activeId === id) activeThreadIdsRef.current.delete(hostId);
+        await discardLocalThreadDraft();
+      },
       archiveThread,
       restoreThread,
       showTerminals: terminalController.actions.show,

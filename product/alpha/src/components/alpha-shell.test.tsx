@@ -519,8 +519,8 @@ describe("AlphaShell", () => {
       container.querySelector('[data-slot="project-pane"][data-side="right"]'),
     ).not.toBeInTheDocument();
     expect(
-      container.querySelector('[data-slot="global-bottom-rail"]'),
-    ).toHaveClass("h-[var(--bottom-rail-height)]");
+      container.querySelector('[data-slot="global-top-rail"]'),
+    ).toHaveClass("h-[var(--rail-height)]");
 
     const projectSidebar = container.querySelector(
       '[data-slot="project-pane"][data-side="right"]',

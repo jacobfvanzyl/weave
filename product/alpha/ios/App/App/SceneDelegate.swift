@@ -182,6 +182,9 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
         container.backgroundColor = UIColor(red: 30 / 255, green: 30 / 255, blue: 46 / 255, alpha: 1)
         view = container
         container.addSubview(webView)
+        if #available(iOS 26.0, *) {
+            webView.cornerConfiguration = .corners(radius: .containerConcentric(minimum: 0))
+        }
         // One native owner for keyboard and rotation geometry. Alpha follows
         // the resulting viewport; Capacitor's notification resize is disabled.
         // With the keyboard dismissed, extend the rail to the window edge
@@ -225,7 +228,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
                     if !configured, let data = try? Data(contentsOf: documents.appendingPathComponent("host-acceptance-input.json")),
                        let input = String(data: data, encoding: .utf8), !webView.isLoading {
                         do {
-                            _ = try await webView.evaluateJavaScript("window.alphaAcceptanceInput = " + input)
+                            _ = try await webView.evaluateJavaScript("window.alphaAcceptanceNativeSmoke = \(nativeSmoke ? "true" : "false"); window.alphaAcceptanceInput = " + input)
                             configured = true
                             try? FileManager.default.removeItem(at: documents.appendingPathComponent("host-acceptance-input.json"))
                         } catch {}
@@ -257,7 +260,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
                               const wait = async (get) => { for (let n = 0; n < 50; n++) { const value = get(); if (value) return value; await new Promise(r => setTimeout(r, 100)); } throw new Error('Fixture cleanup timed out'); };
                               const button = (name) => [...document.querySelectorAll('button')].find(el => el.getAttribute('aria-label') === name || el.textContent.trim() === name);
                               const card = () => [...document.querySelectorAll('[data-slot="card"]')].find(el => [...el.querySelectorAll('span')].some(span => span.textContent === url));
-                              if (!document.querySelector('[aria-label="Configured Hosts"]')) (await wait(() => button('Settings'))).click();
+                              if (!document.querySelector('[aria-label="Configured Hosts"]')) (await wait(() => button('Connections') || button('Settings'))).click();
                               await wait(() => document.querySelector('[role="dialog"]'));
                               const fixture = card();
                               if (!fixture) return JSON.stringify({ removed: true, alreadyAbsent: true });

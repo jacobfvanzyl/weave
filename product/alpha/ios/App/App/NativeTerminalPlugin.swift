@@ -27,6 +27,8 @@ private final class GhosttyTerminalTextView: UITextView {
     var sendInput: ((String) -> Void)?
     var resized: ((Int, Int) -> Void)?
     var didFocus: (() -> Void)?
+    var didSelect: (() -> Void)?
+    var didBlur: (() -> Void)?
     private var updatingFrame = false
     private var panRemainder: CGFloat = 0
     private var composition: String?
@@ -75,6 +77,10 @@ private final class GhosttyTerminalTextView: UITextView {
     override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
         super.setContentOffset(.zero, animated: false)
     }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        didSelect?()
+        super.touchesBegan(touches, with: event)
+    }
     override func becomeFirstResponder() -> Bool {
         let focused = super.becomeFirstResponder()
         if focused { didFocus?() }
@@ -83,7 +89,9 @@ private final class GhosttyTerminalTextView: UITextView {
     override func resignFirstResponder() -> Bool {
         for (_, key) in heldKeys { _ = terminal.sendKey(key.0, text: "", modifiers: key.1, action: 0) }
         heldKeys.removeAll()
-        return super.resignFirstResponder()
+        let resigned = super.resignFirstResponder()
+        if resigned { didBlur?() }
+        return resigned
     }
     override func caretRect(for position: UITextPosition) -> CGRect { .zero }
     override func firstRect(for range: UITextRange) -> CGRect { terminal.cursorRect }
@@ -93,7 +101,7 @@ private final class GhosttyTerminalTextView: UITextView {
         if let composition, !composition.isEmpty {
             (composition as NSString).draw(at: terminal.cursorRect.origin, withAttributes: [.font: font!, .foregroundColor: UIColor.label, .backgroundColor: UIColor.systemBackground, .underlineStyle: NSUnderlineStyle.single.rawValue])
         }
-        if let context = UIGraphicsGetCurrentContext() { terminal.drawFocusBorder(in: context, size: bounds.size) }
+        if let context = UIGraphicsGetCurrentContext() { terminal.drawDimming(in: context, size: bounds.size); terminal.drawFocusBorder(in: context, size: bounds.size) }
     }
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -239,15 +247,32 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
     let identifier = "NativeTerminalPlugin"
     let jsName = "NativeTerminal"
     let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "windowGeometry", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "create", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "layout", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "write", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "focus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "focusWeb", returnType: CAPPluginReturnPromise), CAPPluginMethod(name: "focus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "close", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "inspect", returnType: CAPPluginReturnPromise),
     ]
+    private var activationObservers: [NSObjectProtocol] = []
     private var navigationObservation: NSKeyValueObservation?
+    #if DEBUG
+    private var keyboardHideCount = 0
+    #endif
     override func load() {
+        for (name, kind) in [(UIApplication.didBecomeActiveNotification, "window-focus"), (UIApplication.willResignActiveNotification, "window-blur")] {
+            activationObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.notifyListeners("event", data: ["surfaceId": "", "kind": kind])
+            })
+        }
+        #if DEBUG
+        activationObservers.append(NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] notification in
+            guard UIApplication.shared.applicationState == .active,
+                  notification.userInfo?[UIResponder.keyboardIsLocalUserInfoKey] as? Bool != false else { return }
+            self?.keyboardHideCount += 1
+        })
+        #endif
         navigationObservation = bridge?.webView?.observe(\.isLoading, options: [.new]) { [weak self] web, _ in
             if web.isLoading { self?.closeAll() }
         }
@@ -260,6 +285,7 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
         surfaces.removeAll()
     }
     deinit {
+        for observer in activationObservers { NotificationCenter.default.removeObserver(observer) }
         let remaining = Array(surfaces.values)
         DispatchQueue.main.async { for view in remaining { view.resignFirstResponder(); view.removeFromSuperview() } }
     }
@@ -281,9 +307,23 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             view.sendInput = { [weak self] data in self?.notifyListeners("event", data: ["surfaceId": id, "kind": "input", "data": data]) }
             view.resized = { [weak self] cols, rows in self?.notifyListeners("event", data: ["surfaceId": id, "kind": "resize", "cols": cols, "rows": rows]) }
             view.didFocus = { [weak self] in self?.notifyListeners("event", data: ["surfaceId": id, "kind": "focus"]) }
+            view.didSelect = { [weak self] in self?.notifyListeners("event", data: ["surfaceId": id, "kind": "focus", "intent": "pointer"]) }
+            view.didBlur = { [weak self] in self?.notifyListeners("event", data: ["surfaceId": id, "kind": "blur"]) }
             self.surfaces[id] = view
             parent.addSubview(view)
             call.resolve(["surfaceId": id, "renderer": "libghostty-vt-coretext", "codec": WeaveTerminalRenderer.codecIdentity()])
+        }
+    }
+    @objc func windowGeometry(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let web = self.bridge?.webView, let window = web.window else { call.reject("Native window is unavailable."); return }
+            let bounds = web.convert(web.bounds, to: window)
+            let atWindowCorner = abs(bounds.maxX - window.bounds.maxX) < 1 && abs(bounds.maxY - window.bounds.maxY) < 1
+            var radius: CGFloat = 0
+            if #available(iOS 26.0, *), atWindowCorner {
+                radius = web.effectiveRadius(corner: .bottomRight)
+            }
+            call.resolve(["bottomRightRadius": radius, "width": web.bounds.width])
         }
     }
     @objc func layout(_ call: CAPPluginCall) {
@@ -296,8 +336,11 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             let borderRadius = (border["radius"] as? NSNumber)?.doubleValue ?? 0
             let borderRGB = (border["rgb"] as? NSNumber)?.doubleValue ?? 0
             guard [borderWidth, borderRadius, borderRGB].allSatisfy({ $0.isFinite }), (0...100).contains(borderWidth), (0...100).contains(borderRadius), (0...16777215).contains(borderRGB), borderRGB.rounded() == borderRGB else { call.reject("Invalid terminal border."); return }
+            let dimAmount = call.getDouble("dimAmount") ?? 0
+            guard dimAmount.isFinite, (0...1).contains(dimAmount) else { call.reject("Invalid terminal dim amount."); return }
+            view.terminal.dimAmount = dimAmount
             view.terminal.focusBorderWidth = borderWidth
-            view.terminal.focusBorderRadius = borderRadius
+            view.terminal.focusBorderBottomRightRadius = borderRadius
             view.terminal.focusBorderRGB = UInt32(borderRGB)
             view.setNeedsDisplay()
             let rectangle = CGRect(x: x, y: y, width: width, height: height).intersection(web.bounds)
@@ -321,7 +364,17 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve()
         }
     }
-    @objc func focus(_ call: CAPPluginCall) { withSurface(call) { view in _ = view.becomeFirstResponder(); call.resolve() } }
+    @objc func focusWeb(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let web = self.bridge?.webView, web.window != nil else { call.reject("Web input is unavailable."); return }
+            _ = web.becomeFirstResponder()
+            call.resolve()
+        }
+    }
+    @objc func focus(_ call: CAPPluginCall) { withSurface(call) { view in
+        guard !view.isHidden, view.window != nil, view.becomeFirstResponder() else { call.reject("Native terminal is not visible for input."); return }
+        call.resolve()
+    } }
     @objc func close(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             if let id = call.getString("surfaceId"), let view = self.surfaces.removeValue(forKey: id) { view.resignFirstResponder(); view.removeFromSuperview() }
@@ -332,6 +385,18 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
     // App-driven smoke only. XCTest adds synthetic typing/rotation coverage.
     // Physical keyboard and system IME acceptance remains attended.
     func driveAcceptanceStage(_ stage: String) -> Bool {
+        if stage == "dismiss-terminal-keyboard" || stage == "dismiss-composer-keyboard" {
+            guard let web = bridge?.webView, let window = web.window else { return false }
+            let previousHides = keyboardHideCount
+            window.endEditing(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak web, weak window] in
+                guard let self, let web, let window else { return }
+                func containsResponder(_ view: UIView) -> Bool { view.isFirstResponder || view.subviews.contains(where: containsResponder) }
+                let stayedHidden = self.keyboardHideCount > previousHides && !containsResponder(window) && window.keyboardLayoutGuide.layoutFrame.height < 100
+                web.evaluateJavaScript("window.alphaAcceptanceKeyboardDismissal = \(stayedHidden ? "true" : "false")", completionHandler: nil)
+            }
+            return true
+        }
         guard ["native-terminal", "native-neovim", "native-reattached-input", "native-neovim-input", "native-composition"].contains(stage) else { return false }
         guard let view = surfaces.values.first(where: { !$0.isHidden && !$0.terminal.readOnly }) else { return false }
         _ = view.becomeFirstResponder()

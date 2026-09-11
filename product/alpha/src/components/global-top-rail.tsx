@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { RailDivider } from "./rail-divider";
 
-export function GlobalBottomRail({
+export function GlobalTopRail({
   controller,
   dockActions,
   threadsVisible,
@@ -24,14 +24,14 @@ export function GlobalBottomRail({
   onToggleThreads(): void;
 }) {
   return (
-    <footer
-      data-slot="global-bottom-rail"
-      className="flex h-[var(--bottom-rail-height)] w-full shrink-0 items-center border-t border-border bg-status-bar px-4"
+    <header
+      data-slot="global-top-rail"
+      className="flex h-[var(--rail-height)] w-full shrink-0 items-center border-b border-border bg-title-bar px-2"
     >
       <div className="flex h-full items-center">
         <Button
           type="button"
-          size="icon"
+          size="icon-xs"
           variant="ghost"
           aria-label="Toggle threads"
           aria-pressed={threadsVisible}
@@ -44,13 +44,12 @@ export function GlobalBottomRail({
         </Button>
         <RailDivider slot="sidebar-rail-divider" />
         {!controller.model.workspaceCompositions && <>
-          <Button size="icon" variant="ghost" aria-label="Archived Threads" title="Archived Threads" onClick={controller.actions.openArchivedThreads}>
+          <Button size="icon-xs" variant="ghost" aria-label="Archived Threads" title="Archived Threads" onClick={controller.actions.openArchivedThreads}>
             <HugeiconsIcon icon={FileBoxIcon} strokeWidth={2} />
           </Button>
-          <ConnectionsButton controller={controller} />
         </>}
       </div>
-      {dockActions}
-    </footer>
+      <div className='ml-auto flex items-center gap-1'>{dockActions}<ConnectionsButton controller={controller} /></div>
+    </header>
   );
 }

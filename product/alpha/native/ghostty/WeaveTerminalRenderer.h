@@ -11,8 +11,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSString *fontName;
 @property(nonatomic, copy, nullable) void (^writeInput)(NSData *data);
 @property(nonatomic) BOOL readOnly;
+@property(nonatomic) CGFloat dimAmount;
+- (void)drawDimmingInContext:(CGContextRef)context size:(CGSize)size NS_SWIFT_NAME(drawDimming(in:size:));
 @property(nonatomic) CGFloat focusBorderWidth;
-@property(nonatomic) CGFloat focusBorderRadius;
+@property(nonatomic) CGFloat focusBorderBottomRightRadius;
 @property(nonatomic) uint32_t focusBorderRGB;
 - (void)drawFocusBorderInContext:(CGContextRef)context size:(CGSize)size NS_SWIFT_NAME(drawFocusBorder(in:size:));
 @property(nonatomic, readonly) NSUInteger columns;

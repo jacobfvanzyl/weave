@@ -436,6 +436,14 @@ static void fillColor(CGContextRef context, GhosttyColorRgb color) {
   }
   CGContextRestoreGState(context);
 }
+// Dimming is visual only; retain native hit testing, selection and input.
+- (void)drawDimmingInContext:(CGContextRef)context size:(CGSize)size {
+  if (_dimAmount <= 0) return;
+  CGContextSaveGState(context);
+  CGContextSetRGBFillColor(context, 30/255.0, 30/255.0, 46/255.0, MIN(1, _dimAmount));
+  CGContextFillRect(context, CGRectMake(0, 0, size.width, size.height));
+  CGContextRestoreGState(context);
+}
 // The square native surface sits one CSS border-width inside the web frame.
 // Paint the part of its rounded stroke that overlaps this surface, after content,
 // so the native background cannot erase the corner arcs. Never round the clip.
@@ -443,8 +451,13 @@ static void fillColor(CGContextRef context, GhosttyColorRgb color) {
   if (_focusBorderWidth <= 0 || size.width <= 0 || size.height <= 0) return;
   CGFloat half = _focusBorderWidth / 2;
   CGRect rect = CGRectInset(CGRectMake(0, 0, size.width, size.height), -half, -half);
-  CGFloat radius = MAX(0, _focusBorderRadius - half);
-  CGPathRef path = CGPathCreateWithRoundedRect(rect, radius, radius, NULL);
+  CGFloat radius = MAX(0, _focusBorderBottomRightRadius - half);
+  CGMutablePathRef path = CGPathCreateMutable();
+  CGPathMoveToPoint(path, NULL, CGRectGetMinX(rect), CGRectGetMinY(rect));
+  CGPathAddLineToPoint(path, NULL, CGRectGetMaxX(rect), CGRectGetMinY(rect));
+  CGPathAddArcToPoint(path, NULL, CGRectGetMaxX(rect), CGRectGetMaxY(rect), CGRectGetMinX(rect), CGRectGetMaxY(rect), radius);
+  CGPathAddLineToPoint(path, NULL, CGRectGetMinX(rect), CGRectGetMaxY(rect));
+  CGPathCloseSubpath(path);
   CGContextSaveGState(context);
   CGContextClipToRect(context, CGRectMake(0, 0, size.width, size.height));
   CGContextSetRGBStrokeColor(context, ((_focusBorderRGB >> 16) & 255)/255.0, ((_focusBorderRGB >> 8) & 255)/255.0, (_focusBorderRGB & 255)/255.0, 1);

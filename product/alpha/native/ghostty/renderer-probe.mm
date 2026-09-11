@@ -50,20 +50,40 @@ static BOOL focusBorderCorners(WeaveTerminalRenderer *renderer) {
   CGContextTranslateCTM(context, 0, height); CGContextScaleCTM(context, 4, -4);
   reset(renderer, [@"\033[?25l" dataUsingEncoding:NSUTF8StringEncoding]);
   [renderer drawInContext:context size:CGSizeMake(100, 60)];
-  renderer.focusBorderWidth = 1; renderer.focusBorderRadius = 5.6; renderer.focusBorderRGB = 0x89b4fa;
+  renderer.focusBorderWidth = 1; renderer.focusBorderBottomRightRadius = 5.6; renderer.focusBorderRGB = 0x89b4fa;
   [renderer drawFocusBorderInContext:context size:CGSizeMake(100, 60)];
   const uint8_t *pixels = (const uint8_t *)CGBitmapContextGetData(context);
   BOOL valid = YES;
   // The 45-degree apex lies inside the native square and used to erase the
-  // matching CSS arc. All four must now carry the theme-blue stroke.
+  // matching CSS arc. Only the bottom-right carries a curved stroke.
   for (NSUInteger y : {3ul, height - 4}) for (NSUInteger x : {3ul, width - 4}) {
     const uint8_t *p = pixels + (y * width + x) * 4;
-    if (p[0] < 80 || p[2] < 140) valid = NO;
+    const BOOL curved = y == height - 4 && x == width - 4;
+    if (curved ? (p[0] < 80 || p[2] < 140) : (p[0] != 30 || p[1] != 30 || p[2] != 46)) { fprintf(stderr, "Corner %lu,%lu: %u,%u,%u expected curved=%d\n", x, y, p[0], p[1], p[2], curved); valid = NO; }
   }
   // A rounded border must not turn the viewport itself into a rounded mask.
   const uint8_t *corner = pixels;
   if (corner[0] != 30 || corner[1] != 30 || corner[2] != 46 || corner[3] != 255) valid = NO;
   renderer.focusBorderWidth = 0;
+  CGContextRelease(context);
+  return valid;
+}
+
+static BOOL inactiveDimming(WeaveTerminalRenderer *renderer) {
+  CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+  CGContextRef context = CGBitmapContextCreate(NULL, 4, 4, 8, 16, space, kCGImageAlphaPremultipliedLast);
+  CGColorSpaceRelease(space);
+  CGContextSetRGBFillColor(context, 1, 0, 0, 1);
+  CGContextFillRect(context, CGRectMake(0, 0, 4, 4));
+  renderer.dimAmount = 0;
+  [renderer drawDimmingInContext:context size:CGSizeMake(4, 4)];
+  const uint8_t *pixels = (const uint8_t *)CGBitmapContextGetData(context);
+  BOOL valid = pixels[0] == 255 && pixels[1] == 0 && pixels[2] == 0;
+  NSString *before = renderer.visibleText;
+  renderer.dimAmount = 0.4;
+  [renderer drawDimmingInContext:context size:CGSizeMake(4, 4)];
+  valid = valid && pixels[0] >= 164 && pixels[0] <= 166 && pixels[1] >= 11 && pixels[1] <= 13 && pixels[2] >= 17 && pixels[2] <= 19 && [renderer.visibleText isEqualToString:before];
+  renderer.dimAmount = 0;
   CGContextRelease(context);
   return valid;
 }
@@ -253,7 +273,8 @@ int main(int argc, char **argv) {
     CFRelease(output); CGImageRelease(image); CGContextRelease(context);
     if (!saved) return 7;
     if (!focusBorderCorners(renderer)) return 41;
-    puts("{\"passed\":true,\"fragmentedUtf8\":true,\"alternateScreen\":true,\"replicaRepliesSuppressed\":true,\"snapshotReplySuppression\":true,\"coreTextRendered\":true,\"nerdGlyphCoverage\":true,\"cursorShapePixels\":true,\"wideGraphemeText\":true,\"bracketedPaste\":true,\"readOnlyInput\":true,\"applicationCursorKeys\":true,\"modifiedKeys\":true,\"kittyKeyboard\":true,\"applicationKeypad\":true,\"wrappedCopy\":true,\"wideSelection\":true,\"sgrMouse\":true,\"observerCopy\":true,\"authoritativeGridClipping\":true,\"roundedFocusBorder\":true,\"readyBeforeHistory\":true,\"liveDuringHistory\":true,\"snapshotParserContinuation\":true,\"corruptSnapshotRejected\":true}");
+    if (!inactiveDimming(renderer)) return 42;
+    puts("{\"passed\":true,\"fragmentedUtf8\":true,\"alternateScreen\":true,\"replicaRepliesSuppressed\":true,\"snapshotReplySuppression\":true,\"coreTextRendered\":true,\"nerdGlyphCoverage\":true,\"cursorShapePixels\":true,\"wideGraphemeText\":true,\"bracketedPaste\":true,\"readOnlyInput\":true,\"applicationCursorKeys\":true,\"modifiedKeys\":true,\"kittyKeyboard\":true,\"applicationKeypad\":true,\"wrappedCopy\":true,\"wideSelection\":true,\"sgrMouse\":true,\"observerCopy\":true,\"authoritativeGridClipping\":true,\"roundedFocusBorder\":true,\"inactiveDimming\":true,\"readyBeforeHistory\":true,\"liveDuringHistory\":true,\"snapshotParserContinuation\":true,\"corruptSnapshotRejected\":true}");
   }
   return 0;
 }

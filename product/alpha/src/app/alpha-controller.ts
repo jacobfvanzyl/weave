@@ -31,6 +31,7 @@ export type AlphaThread = {
   workingDirectory?: string;
   draft?: boolean;
   attention?: ThreadAttention;
+  completionUnread?: boolean;
 };
 
 export type AlphaExecutionContextPlacement = {
@@ -150,6 +151,8 @@ export type AlphaActions = {
   createThreadInDirectory?(hostId: string, path: string, workspaceId: string): Promise<void> | void;
   assignThread?(threadId: string, workspaceId: string): Promise<void> | void;
   selectThread(threadId: string): Promise<void> | void;
+  discardThreadDraft?(threadId: string): Promise<void> | void;
+  setFocusedAgentThread?(threadId?: string): void;
   archiveThread(threadId: string): Promise<void> | void;
   restoreThread(threadId: string): Promise<void> | void;
   openWorkspaceDirectory?(path: string): Promise<void> | void;

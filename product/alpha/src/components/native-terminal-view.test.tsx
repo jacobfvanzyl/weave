@@ -1,3 +1,5 @@
+import { useRef } from 'react';
+import { PaneFocusProvider, PaneFocusScope, usePaneFocus, useComposerPaneFocus, type PaneFocusOwner } from '@/app/pane-focus';
 import { TERMINAL_CODEC } from '@weave/product-protocol';
 const bytes = (text: string) => new TextEncoder().encode(text);
 import { act, render, waitFor } from '@testing-library/react';
@@ -142,5 +144,50 @@ it('honors repeated input focus requests and cancels focus pending in native lay
     await act(async () => finishLayout!({ cols: 80, rows: 24 }));
     expect(native.focus).toHaveBeenCalledTimes(2);
     expect(native.create).toHaveBeenCalledOnce();
+  } finally { rectangle.mockRestore(); }
+});
+
+
+it('updates native dimming and the muted active border without recreating the terminal', async () => {
+  const rectangle = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 720, 360));
+  const output = new TerminalOutputStream(vi.fn());
+  const content = (dimAmount: number, agent = false) => <section data-focused='true' data-agent-focused={agent || undefined}>
+    <div data-slot='terminal-focus-border' style={{ '--terminal-focus': '#89b4fa', '--sidebar-selected': '#38394a', borderWidth: '1px', borderRadius: '6px' } as React.CSSProperties}>
+      <NativeTerminalView output={output} readOnly={false} dimAmount={dimAmount} />
+    </div>
+  </section>;
+  try {
+    const { rerender } = render(content(0));
+    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ dimAmount: 0, focusBorder: expect.objectContaining({ rgb: 0x89b4fa }) })));
+    rerender(content(0, true));
+    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ dimAmount: 0, focusBorder: expect.objectContaining({ rgb: 0x38394a }) })));
+    rerender(content(0.4));
+    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ dimAmount: 0.4 })));
+    expect(native.create).toHaveBeenCalledOnce();
+  } finally { rectangle.mockRestore(); }
+});
+
+
+it('ignores native responder restoration after an overlay but honors a deliberate terminal click', async () => {
+  const rectangle = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 720, 360));
+  const output = new TerminalOutputStream(vi.fn());
+  let owner!: PaneFocusOwner;
+  function Composer() {
+    const ref = useRef<HTMLTextAreaElement>(null);
+    useComposerPaneFocus(ref); owner = usePaneFocus()!;
+    return <textarea ref={ref} aria-label='Composer' />;
+  }
+  try {
+    const { getByRole } = render(<PaneFocusProvider>
+      <PaneFocusScope id='terminal'><NativeTerminalView output={output} readOnly={false} /></PaneFocusScope>
+      <PaneFocusScope id='agent'><Composer /></PaneFocusScope>
+    </PaneFocusProvider>);
+    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ visible: true })));
+    act(() => owner.request('agent'));
+    await waitFor(() => expect(getByRole('textbox', { name: 'Composer' })).toHaveFocus());
+    act(() => native.listener?.({ surfaceId: 'native-1', kind: 'focus' }));
+    expect(owner.snapshot()).toBe('agent');
+    act(() => native.listener?.({ surfaceId: 'native-1', kind: 'focus', intent: 'pointer' }));
+    expect(owner.snapshot()).toBe('terminal');
   } finally { rectangle.mockRestore(); }
 });

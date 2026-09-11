@@ -21,7 +21,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Sidebar, SidebarHeader, SidebarContent, SidebarGroup, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarMenuAction } from './ui/sidebar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 
-export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThread, onSelectTerminal }: { controller: AlphaController; agentDock?: AgentDockPosition; onSelectThread?(threadId: string): void; onSelectTerminal?(workspace: WorkspaceReference, paneId: string): void }) {
+export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThread, onSelectTerminal, headerActions, sidebarToggle }: { headerActions?: ReactNode; sidebarToggle?: ReactNode; controller: AlphaController; agentDock?: AgentDockPosition; onSelectThread?(threadId: string): void; onSelectTerminal?(workspace: WorkspaceReference, paneId: string): void }) {
   const { model, actions, workspaceActions } = controller;
   const state = model.workspaceCompositions!;
   const [closing, setClosing] = useState<{ reference: WorkspaceReference; plan: WorkspaceClosePlan }>();
@@ -71,7 +71,7 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
     const available = connected(thread.hostId);
     return <SidebarMenuItem key={thread.id} data-thread-id={thread.id}>
       <SidebarMenuButton size='default' className='data-active:bg-primary data-active:text-primary-foreground data-active:hover:bg-primary data-active:hover:text-primary-foreground' isActive={selected} aria-label={`Agent ${thread.title}`} aria-describedby={`agent-activity-${thread.id}`} aria-pressed={selected} onClick={() => onSelectThread ? onSelectThread(thread.id) : void actions.selectThread(thread.id)} disabled={!available || model.busy}>
-        <CodexIcon /><span className='flex min-w-0 flex-1 items-center gap-2'><span className='min-w-0 flex-1 truncate'>{thread.title}</span><AgentActivityIndicator id={`agent-activity-${thread.id}`} attention={thread.attention} available={available} selected={selected} /></span>
+        <CodexIcon /><span className='flex min-w-0 flex-1 items-center gap-2 pr-0.5'><span className='min-w-0 flex-1 truncate'>{thread.title}</span><AgentActivityIndicator id={`agent-activity-${thread.id}`} attention={thread.attention} completionUnread={thread.completionUnread} available={available} selected={selected} /></span>
       </SidebarMenuButton>
       <DropdownMenu><DropdownMenuTrigger render={<SidebarMenuAction className={cn(selected && 'text-primary-foreground peer-hover/menu-button:text-primary-foreground hover:text-primary-foreground')} aria-label={`Actions for ${thread.title}`} />}>⋯</DropdownMenuTrigger>
         <DropdownMenuContent><DropdownMenuGroup>
@@ -86,7 +86,7 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
   };
   return <>
     <Sidebar position='inline' collapsible='offcanvas' mobileWidth={`${alphaSidebarMinimumWidth}px`} className='min-w-0 flex-1'>
-      <SidebarHeader className='h-[var(--rail-height)] shrink-0 justify-center border-b bg-title-bar px-2 py-0'><div className='flex items-center justify-end gap-1'><ConnectionsButton controller={controller} />
+      <SidebarHeader className='h-[var(--rail-height)] shrink-0 justify-center border-b bg-title-bar px-2 py-0'><div className='flex items-center justify-end gap-1'>{sidebarToggle && <span className='mr-auto flex'>{sidebarToggle}</span>}{headerActions}<ConnectionsButton controller={controller} />
         <DropdownMenu><DropdownMenuTrigger render={<Button size='icon-xs' variant='ghost' aria-label='Sidebar actions' title='Sidebar actions' />}><HugeiconsIcon icon={MoreVerticalIcon} strokeWidth={2} /></DropdownMenuTrigger>
           <DropdownMenuContent align='end'>
             <DropdownMenuSub><DropdownMenuSubTrigger disabled={state.loading}>New workspace…</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuGroup>

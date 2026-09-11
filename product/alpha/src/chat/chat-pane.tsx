@@ -1,3 +1,4 @@
+import { useComposerPaneFocus } from '@/app/pane-focus';
 import { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import type {
@@ -406,6 +407,7 @@ function Composer({
   );
   const draftRef = useRef(draft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const paneFocus = useComposerPaneFocus(textareaRef);
   const running = model.turn.status === 'running';
   const text = draft.text;
   useEffect(() => {
@@ -423,7 +425,7 @@ function Composer({
     };
   }, [discardDraftOnUnmount, model.sessionId]);
   useEffect(() => {
-    if (focusRequest === undefined) return;
+    if (paneFocus || focusRequest === undefined) return;
     let frame: number | undefined;
     let focused = false;
     const focus = () => {
@@ -442,7 +444,7 @@ function Composer({
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'data-open', 'style'] });
     focus();
     return () => { observer.disconnect(); if (frame !== undefined) cancelAnimationFrame(frame); };
-  }, [focusRequest]);
+  }, [focusRequest, paneFocus]);
   const setText = (next: string) => {
     const updated = { revision: draftRef.current.revision + 1, text: next };
     writeComposerDraft(model.sessionId, updated);
@@ -454,8 +456,8 @@ function Composer({
     const clearedDraft = { revision: submittedDraft.revision + 1, text: '' };
     writeComposerDraft(model.sessionId, clearedDraft);
     if (
-      Capacitor.isNativePlatform() ||
-      window.matchMedia?.('(max-width: 767px)').matches
+      !paneFocus && (Capacitor.isNativePlatform() ||
+      window.matchMedia?.('(max-width: 767px)').matches)
     ) {
       textareaRef.current?.blur();
     }

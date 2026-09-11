@@ -44,7 +44,9 @@ static NSString *printableText(NSString *text) {
 - (BOOL)resignFirstResponder {
   for (NSNumber *code in self.pressedKeys) [self.terminal sendKey:macKey(code.unsignedShortValue) text:@"" modifiers:weaveKeyModifiers(NSEvent.modifierFlags) action:0];
   [self.pressedKeys removeAllObjects];
-  return [super resignFirstResponder];
+  BOOL resigned = [super resignFirstResponder];
+  if (resigned && self.event) self.event(@{@"kind": @"blur"});
+  return resigned;
 }
 - (void)drawRect:(NSRect)rect {
   [self.terminal drawInContext:NSGraphicsContext.currentContext.CGContext size:self.bounds.size];
@@ -59,6 +61,7 @@ static NSString *printableText(NSString *text) {
       NSRectFillUsingOperation(NSMakeRect(8 + index % cols * self.terminal.cellWidth, 8 + index / cols * self.terminal.cellHeight, self.terminal.cellWidth, self.terminal.cellHeight), NSCompositingOperationSourceOver);
     }
   }
+  [self.terminal drawDimmingInContext:NSGraphicsContext.currentContext.CGContext size:self.bounds.size];
   [self.terminal drawFocusBorderInContext:NSGraphicsContext.currentContext.CGContext size:self.bounds.size];
 }
 - (void)sendKey:(NSString *)key text:(NSString *)text event:(NSEvent *)event modifiers:(NSUInteger)modifiers {
@@ -135,6 +138,7 @@ static NSString *printableText(NSString *text) {
 }
 - (void)mouseDown:(NSEvent *)event {
   [self.window makeFirstResponder:self];
+  if (self.event) self.event(@{@"kind": @"focus", @"intent": @"pointer"});
   self.selecting = ![self reportMouse:event button:1 action:0];
   if (self.selecting) { self.selectionAnchor = [self cellAt:[self convertPoint:event.locationInWindow fromView:nil]]; self.selection = NSMakeRange(self.selectionAnchor, 0); self.needsDisplay = YES; }
 }
@@ -247,8 +251,8 @@ static napi_value create(napi_env env, napi_callback_info info) {
   napi_value result; napi_create_int64(env, id, &result); return result;
 }
 static napi_value layout(napi_env env, napi_callback_info info) {
-  size_t count = 10; napi_value args[10]; napi_get_cb_info(env, info, &count, args, NULL, NULL);
-  if (count != 10) return error(env, "Invalid native geometry");
+  size_t count = 11; napi_value args[11]; napi_get_cb_info(env, info, &count, args, NULL, NULL);
+  if (count != 11) return error(env, "Invalid native geometry");
   WeaveNativeSurface *entry = surface(env, args[0]);
   if (!entry) return error(env, "Native terminal is unavailable");
   double values[4]; bool visible, readOnly;
@@ -256,7 +260,10 @@ static napi_value layout(napi_env env, napi_callback_info info) {
   if (values[2] < 0 || values[3] < 0 || napi_get_value_bool(env, args[5], &visible) != napi_ok || napi_get_value_bool(env, args[6], &readOnly) != napi_ok) return error(env, "Invalid native geometry");
   double borderWidth, borderRadius; uint32_t borderRGB;
   if (napi_get_value_double(env, args[7], &borderWidth) != napi_ok || napi_get_value_double(env, args[8], &borderRadius) != napi_ok || napi_get_value_uint32(env, args[9], &borderRGB) != napi_ok || !std::isfinite(borderWidth) || !std::isfinite(borderRadius) || borderWidth < 0 || borderRadius < 0 || borderWidth > 1000 || borderRadius > 1000 || borderRGB > 0xffffff) return error(env, "Invalid native border");
-  entry.view.terminal.focusBorderWidth = borderWidth; entry.view.terminal.focusBorderRadius = borderRadius; entry.view.terminal.focusBorderRGB = borderRGB;
+  double dimAmount;
+  if (napi_get_value_double(env, args[10], &dimAmount) != napi_ok || !std::isfinite(dimAmount) || dimAmount < 0 || dimAmount > 1) return error(env, "Invalid native dim amount");
+  entry.view.terminal.dimAmount = dimAmount;
+  entry.view.terminal.focusBorderWidth = borderWidth; entry.view.terminal.focusBorderBottomRightRadius = borderRadius; entry.view.terminal.focusBorderRGB = borderRGB;
   NSView *parent = entry.view.superview;
   NSRect rectangle = NSMakeRect(values[0], parent.isFlipped ? values[1] : parent.bounds.size.height - values[1] - values[3], values[2], values[3]);
   if (values[2] > 0 && values[3] > 0) entry.view.frame = NSIntersectionRect(rectangle, parent.bounds);

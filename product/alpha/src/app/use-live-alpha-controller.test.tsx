@@ -54,6 +54,43 @@ afterEach(() => {
 });
 
 describe("useLiveAlphaController", () => {
+  it('consumes focused completions at the event and preserves unread completions until focused', async () => {
+    let emit!: ConstructorParameters<typeof DirectHostClient>[2];
+    const client = { snapshot: vi.fn(async () => snapshot), close: vi.fn() } as unknown as DirectHostClient;
+    const { result } = renderHook(() => useLiveAlphaController((_url, _signer, onEvent) => { emit = onEvent; return client; }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const unread = () => result.current.model.threads?.find((thread) => thread.id === 'host-1:thread-1')?.completionUnread;
+    act(() => result.current.actions.setFocusedAgentThread?.('host-1:thread-1'));
+    act(() => { emit({ type: 'turn/started' }, 'thread-1'); emit({ type: 'turn/stopped', stopReason: 'end_turn' }, 'thread-1'); });
+    expect(unread()).toBe(false);
+    act(() => result.current.actions.setFocusedAgentThread?.(undefined));
+    expect(unread()).toBe(false);
+    act(() => { emit({ type: 'turn/started' }, 'thread-1'); emit({ type: 'turn/stopped', stopReason: 'end_turn' }, 'thread-1'); });
+    expect(unread()).toBe(true);
+    act(() => result.current.actions.setFocusedAgentThread?.('host-1:other'));
+    expect(unread()).toBe(true);
+    act(() => result.current.actions.setFocusedAgentThread?.('host-1:thread-1'));
+    expect(unread()).toBe(false);
+  });
+
+  it('discards a prepared draft on pane closure without deleting a persisted thread or a newer selection', async () => {
+    const prepared = { ...snapshot.threads[0], threadId: 'draft-closed' };
+    const client = { snapshot: vi.fn(async () => ({ ...snapshot, capabilities: ['thread.draft'] })), close: vi.fn(),
+      createThreadDraft: vi.fn(async () => prepared), attach: vi.fn(async () => prepared), discardThreadDraft: vi.fn(async () => undefined) } as unknown as DirectHostClient;
+    const { result } = renderHook(() => useLiveAlphaController(() => client));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => result.current.actions.createThread('host-1:weave', undefined, 'workspace'));
+    await act(async () => result.current.actions.discardThreadDraft?.('host-1:thread-1'));
+    expect(client.discardThreadDraft).not.toHaveBeenCalled();
+    await act(async () => result.current.actions.discardThreadDraft?.('host-1:draft-closed'));
+    expect(client.discardThreadDraft).toHaveBeenCalledExactlyOnceWith('draft-closed');
+    expect(result.current.model.threads?.map((thread) => thread.id)).toEqual(['host-1:thread-1']);
+    expect(result.current.model.selectedThreadId).toBeUndefined();
+    await act(async () => result.current.actions.selectThread('host-1:thread-1'));
+    await act(async () => result.current.actions.discardThreadDraft?.('host-1:draft-closed'));
+    expect(result.current.model.selectedThreadId).toBe('host-1:thread-1');
+  });
+
   it("recovers automatically when a Host stays offline beyond the immediate reconnect", async () => {
     vi.useFakeTimers();
     let disconnected: ((error: Error) => void) | undefined;
@@ -871,6 +908,102 @@ describe("useLiveAlphaController", () => {
       id: "host-1:thread-1",
       status: "active",
     });
+  });
+
+  const archiveScenario = async () => {
+    let current: HostSnapshot = {
+      ...snapshot,
+      capabilities: [...snapshot.capabilities, 'workspace.composition.get', 'workspace.composition.replace'],
+      threads: ['first', 'selected', 'next', 'other'].map((threadId) => ({
+        ...snapshot.threads[0]!, threadId, workspaceId: threadId === 'other' ? 'other-workspace' : 'workspace',
+      })),
+    };
+    const archive = (threadId: string) => {
+      const thread = current.threads.find((thread) => thread.threadId === threadId)!;
+      const archived = { ...thread, status: 'archived' as const, archivedAt: '2026-09-11T00:00:00Z' };
+      current = { ...current, threads: current.threads.filter((thread) => thread.threadId !== threadId), archivedThreads: [...current.archivedThreads, archived] };
+      return archived;
+    };
+    const client = {
+      snapshot: vi.fn(async () => current),
+      attach: vi.fn(async (id: string) => current.threads.find((thread) => thread.threadId === id)),
+      archiveThread: vi.fn(async (id: string) => archive(id)),
+      getWorkspaceComposition: vi.fn(async () => ({ composition: {
+        schemaVersion: 2, hostId: 'host-1', revision: 0,
+        workspaces: ['workspace', 'other-workspace'].map((workspaceId) => ({ workspaceId, name: workspaceId, layout: null })),
+      } })),
+      listTerminals: vi.fn(async () => ({ terminals: [] })), close: vi.fn(),
+    };
+    const hook = renderHook(() => useLiveAlphaController(vi.fn(() => client as unknown as DirectHostClient)));
+    await act(async () => { await Promise.resolve(); });
+    act(() => hook.result.current.workspaceActions!.activate({ hostId: 'host-1', workspaceId: 'workspace' }));
+    await act(async () => hook.result.current.actions.selectThread('host-1:selected'));
+    return { ...hook, client, archive };
+  };
+
+  it('selects the next Thread in the active workspace and wraps after the final Thread', async () => {
+    const { result, client } = await archiveScenario();
+    await act(async () => result.current.actions.archiveThread('host-1:selected'));
+    expect(result.current.model.selectedThreadId).toBe('host-1:next');
+    expect(client.attach).toHaveBeenLastCalledWith('next');
+    await act(async () => result.current.actions.archiveThread('host-1:next'));
+    expect(result.current.model.selectedThreadId).toBe('host-1:first');
+    await act(async () => result.current.actions.archiveThread('host-1:first'));
+    expect(result.current.model.selectedThreadId).toBeUndefined();
+    expect(result.current.model.threads?.map((thread) => thread.id)).toEqual(['host-1:other']);
+  });
+
+  it.each([
+    { hostId: 'host-1', workspaceId: 'other-workspace' },
+    { hostId: 'other-host', workspaceId: 'workspace' },
+  ])('clears an archived selection when active workspace is $hostId/$workspaceId', async (workspace) => {
+    const { result, client } = await archiveScenario();
+    act(() => result.current.workspaceActions!.activate(workspace));
+    await act(async () => result.current.actions.archiveThread('host-1:selected'));
+    expect(result.current.model.selectedThreadId).toBeUndefined();
+    expect(client.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves selection when an unselected Thread is archived', async () => {
+    const { result, client } = await archiveScenario();
+    await act(async () => result.current.actions.archiveThread('host-1:first'));
+    expect(result.current.model.selectedThreadId).toBe('host-1:selected');
+    expect(client.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it('also selects a replacement when a periodic snapshot reports the selected Thread archived', async () => {
+    vi.useFakeTimers();
+    const { result, archive } = await archiveScenario();
+    archive('selected');
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(result.current.model.selectedThreadId).toBe('host-1:next');
+  });
+
+  it.each(['workspace', 'thread'] as const)('respects a changed %s while an archive is in flight', async (navigation) => {
+    const { result, client, archive } = await archiveScenario();
+    let complete!: () => void;
+    client.archiveThread.mockImplementationOnce((id) => new Promise((resolve) => { complete = () => resolve(archive(id)); }));
+    let pending!: Promise<void> | void;
+    act(() => { pending = result.current.actions.archiveThread('host-1:selected'); });
+    if (navigation === 'workspace') {
+      act(() => result.current.workspaceActions!.activate({ hostId: 'host-1', workspaceId: 'other-workspace' }));
+    } else {
+      await act(async () => result.current.actions.selectThread('host-1:other'));
+    }
+    await act(async () => { complete(); await pending; });
+    expect(result.current.model.selectedThreadId).toBe(navigation === 'thread' ? 'host-1:other' : undefined);
+    expect(client.attach).not.toHaveBeenCalledWith('next');
+  });
+
+  it('keeps the current selection if archive fails, and clears it if replacement attachment fails', async () => {
+    const { result, client } = await archiveScenario();
+    client.archiveThread.mockRejectedValueOnce(new Error('Archive refused'));
+    await act(async () => { await expect(result.current.actions.archiveThread('host-1:selected')).rejects.toThrow('Archive refused'); });
+    expect(result.current.model.selectedThreadId).toBe('host-1:selected');
+    client.attach.mockRejectedValueOnce(new Error('Attachment refused'));
+    await act(async () => result.current.actions.archiveThread('host-1:selected'));
+    expect(result.current.model.selectedThreadId).toBeUndefined();
+    expect(result.current.model.error).toBe('Attachment refused');
   });
 
   it("reports prompt failures and rejects so the composer can restore its draft", async () => {

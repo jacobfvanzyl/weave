@@ -44,3 +44,13 @@ it('expires activity without another snapshot and refreshes from a new observati
   view.rerender(<AgentActivityIndicator attention={attention('waiting')} available selected={false} />);
   expect(screen.getByRole('img')).toHaveAccessibleName('Waiting for your input');
 });
+
+it('retains an unread completion until consumed instead of expiring it like live activity', () => {
+  vi.useFakeTimers();
+  const completed = attention('completed');
+  const view = render(<AgentActivityIndicator attention={completed} completionUnread available selected={false} />);
+  act(() => vi.advanceTimersByTime(60_000));
+  expect(screen.getByRole('img', { name: 'Turn finished' })).toBeInTheDocument();
+  view.rerender(<AgentActivityIndicator attention={completed} completionUnread={false} available selected />);
+  expect(view.container).toBeEmptyDOMElement();
+});

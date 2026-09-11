@@ -12,7 +12,7 @@ export function useAgentBorderPrecedence() {
     const update = () => {
       frame = undefined;
       const agent = group.querySelector<HTMLElement>('[data-slot="thread-pane"]');
-      const terminal = group.querySelector<HTMLElement>('[data-focused="true"] [data-slot="terminal-focus-border"]');
+      const terminal = group.querySelector<HTMLElement>('[data-focused="true"]:not([data-agent-focused="true"]) [data-slot="terminal-focus-border"]');
       const elements = [group, agent, terminal].filter((element): element is HTMLElement => Boolean(element));
       for (const element of observed) if (!elements.includes(element as HTMLElement)) { resize.unobserve(element); observed.delete(element); }
       for (const element of elements) if (!observed.has(element)) { resize.observe(element); observed.add(element); }
@@ -49,7 +49,7 @@ export function useAgentBorderPrecedence() {
     const schedule = () => { if (frame === undefined) frame = requestAnimationFrame(update); };
     const resize = new ResizeObserver(schedule);
     const mutations = new MutationObserver(schedule);
-    mutations.observe(group, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'hidden', 'data-focused', 'data-agent-seam', 'data-agent-dock'] });
+    mutations.observe(group, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'hidden', 'data-focused', 'data-agent-focused', 'data-input-owner', 'data-agent-seam', 'data-agent-dock'] });
     window.addEventListener('resize', schedule);
     schedule();
     return () => {

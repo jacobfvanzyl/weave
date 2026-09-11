@@ -1,3 +1,4 @@
+import { usePaneFocusTarget, agentFocusId } from '@/app/pane-focus';
 import { PathLabel } from "./path-label";
 import type { ReactNode } from "react";
 import type { AlphaController } from "@/app/alpha-controller";
@@ -34,6 +35,7 @@ export function WorkspacePlaceholder({
 }) {
   const { model, actions } = controller;
   const thread = selectedThread(model);
+  const focusTarget = usePaneFocusTarget();
   const reconnecting = Boolean(
     thread && model.connections.some(
       ({ hostId, status }) =>
@@ -51,10 +53,11 @@ export function WorkspacePlaceholder({
         className,
       )}
       data-slot="thread-pane"
+      data-agent-input-focused={Boolean(thread && focusTarget === agentFocusId(thread.id)) || undefined}
     >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-slot="thread-pane-contents">
         <header
-          className="flex h-[var(--rail-height)] shrink-0 items-center gap-1 border-b bg-primary px-2 text-primary-foreground"
+          className="flex h-[var(--rail-height)] shrink-0 items-center gap-1 border-b bg-sidebar-selected px-2 text-foreground"
           data-slot="thread-top-rail"
         >
           {thread && (
@@ -71,7 +74,7 @@ export function WorkspacePlaceholder({
                     {thread.title || "Weave"}
                   </p>
                   {(model.showHostIdentity || model.workspaceCompositions) && (
-                    <div className="flex min-w-0 items-center gap-1 text-xs text-primary-foreground/80">
+                    <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
                       <span aria-hidden="true">·</span>
                       {model.showHostIdentity && <span className="max-w-24 truncate">{thread.hostName || model.connection.hostName}</span>}{model.workspaceCompositions && <>{model.showHostIdentity && " · "}<PathLabel className="text-left" path={context?.canonicalPath ?? context?.name ?? thread.executionContextId} /></>}
                     </div>

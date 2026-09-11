@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('weaveDesktop', Object.freeze({
     create: () => invoke('create'),
     layout: (input: unknown) => invoke('layout', input),
     write,
+    focusWeb: () => invoke('focusWeb', {}),
     focus: (input: unknown) => invoke('focus', input),
     close,
     inspect: (input: unknown) => invoke('inspect', input),

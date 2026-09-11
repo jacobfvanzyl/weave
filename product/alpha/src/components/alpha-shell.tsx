@@ -1,3 +1,4 @@
+import { useDesktopTitlebar } from '@/app/use-desktop-titlebar';
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react';
 import { type AlphaController } from '@/app/alpha-controller';
 import {
@@ -19,7 +20,7 @@ import { SidebarInset, SidebarProvider, useSidebar } from '@/components/ui/sideb
 import { ConnectionsDialog } from './connections-dialog';
 import { ArchivedThreadsDialog } from './archived-threads-dialog';
 import { DockRailActions } from './dock-rail-actions';
-import { GlobalBottomRail } from './global-bottom-rail';
+import { GlobalTopRail } from './global-top-rail';
 import { TerminalFirstShell } from './terminal-first-shell';
 import { TerminalPane } from './terminal-pane';
 import { ThreadSidebar } from './thread-sidebar';
@@ -190,16 +191,17 @@ function ResponsiveShell({
   );
 }
 
-function ConnectedBottomRail({
+function ConnectedTopRail({
   controller,
   dockActions,
 }: {
   controller: AlphaController;
   dockActions: ReactNode;
 }) {
+  useDesktopTitlebar();
   const threads = useSidebar();
   return (
-    <GlobalBottomRail
+    <GlobalTopRail
       controller={controller}
       dockActions={dockActions}
       threadsVisible={threads.isMobile ? threads.openMobile : threads.state === 'expanded'}
@@ -335,9 +337,12 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
       style={{
         '--sidebar-width': alphaSidebarDefaultWidth,
         '--sidebar-width-mobile': alphaSidebarDefaultWidth,
-        '--bottom-rail-height': 'var(--rail-height)',
       } as CSSProperties}
     >
+      <ConnectedTopRail
+        controller={controller}
+        dockActions={rail}
+      />
       <div data-slot='alpha-dock-content' className='flex min-h-0 min-w-0 flex-1 overflow-hidden'>
         {maximizedPanelId
           ? (
@@ -421,10 +426,7 @@ function ConnectedShell({ controller }: { controller: AlphaController }) {
             </ResizablePanelGroup>
           )}
       </div>
-      <ConnectedBottomRail
-        controller={controller}
-        dockActions={rail}
-      />
+
     </SidebarProvider>
   );
 }

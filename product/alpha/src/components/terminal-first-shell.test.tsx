@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useComposerPaneFocus } from '@/app/pane-focus';
+import { useEffect, useState, useRef } from 'react';
 import type { TerminalOutputSource } from '@/terminal/output-stream';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -19,10 +20,12 @@ vi.mock('@/app/portal-connection-storage', () => ({
   loadPortalConnections: async () => ({ connections: ['one', 'two'].map((hostId) => ({ hostId, displayName: hostId, hostUrl: `ws://${hostId}.test`, credentialId: hostId, keyId: hostId })) }),
   savePortalConnections: vi.fn(),
 }));
-vi.mock('./terminal-view', () => ({ TerminalView: ({ output, onInput }: { output?: TerminalOutputSource; onInput(data: string): void }) => {
+vi.mock('./terminal-view', () => ({ TerminalView: ({ output, onInput, dimAmount }: { output?: TerminalOutputSource; onInput(data: string): void; dimAmount?: number }) => {
   const [text, setText] = useState('');
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useComposerPaneFocus(ref);
   useEffect(() => output?.subscribe({ reset: async (value) => { setText(new TextDecoder().decode(value)); }, write: async (value) => { setText((current) => current + new TextDecoder().decode(value)); } }), [output]);
-  return <textarea aria-label='Terminal input' value={text} onChange={(event) => onInput(event.target.value)} />;
+  return <div data-slot='native-terminal' data-dim-amount={dimAmount}><textarea ref={ref} aria-label='Terminal input' value={text} onChange={(event) => onInput(event.target.value)} /></div>;
 } }));
 beforeEach(() => {
   storage.clear();
@@ -87,6 +90,16 @@ it('renders independent terminal and agent selection, compact groups, and non-de
   const rendered = render(<App />);
 
   await waitFor(() => expect(screen.getAllByRole('button', { name: /^Agent Agent on/ })).toHaveLength(2));
+  expect(rendered.container.querySelector('[data-slot="global-bottom-rail"]')).not.toBeInTheDocument();
+  const topAgentToggle = screen.getByRole('button', { name: 'Agent conversation' });
+  const topConnections = screen.getByRole('button', { name: 'Connections' });
+  expect(topAgentToggle.closest('[data-slot="sidebar-header"]')).toContainElement(topConnections);
+  expect(topAgentToggle.compareDocumentPosition(topConnections) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Toggle threads' }));
+  expect(screen.queryByRole('button', { name: 'Connections' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Agent conversation' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Toggle threads' }));
+  expect(screen.getByRole('button', { name: 'Agent conversation' })).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Agent Agent on two' }));
   await user.click(screen.getByRole('button', { name: 'Workspace Initial one' }));
   expect(screen.queryByText('No terminals')).not.toBeInTheDocument();
@@ -206,3 +219,98 @@ it('renders independent terminal and agent selection, compact groups, and non-de
   expect(controller!.model.workspaceCompositions!.presentation.focusedPanes[JSON.stringify(['one', first.workspaceId])]).toBe(firstPane.paneId);
   rendered.unmount();
 }, 15000);
+
+it('keeps the terminal mounted while archiving selects a replacement or removes the agent pane', async () => {
+  const user = userEvent.setup();
+  const makeClient = (hostId: string) => {
+    let snapshot: HostSnapshot = {
+      hostId, displayName: hostId,
+      capabilities: ['thread.archive', 'thread.restore', 'workspace.composition.get', 'workspace.composition.replace'],
+      executionContexts: [{ executionContextId: 'context', name: 'Code', canonicalPath: '/code', availability: 'available' }],
+      agents: [{ agentId: 'agent', name: 'Agent' }], archivedThreads: [],
+      threads: ['first', 'next'].map((threadId) => ({
+        threadId, executionContextId: 'context', agentId: 'agent', title: `${hostId} ${threadId}`,
+        workspaceId: `initial-${hostId}`, membershipRevision: 0, status: 'active', acpSessionId: `${hostId}-${threadId}`,
+        createdAt: '2026-09-11T00:00:00Z', updatedAt: '2026-09-11T00:00:00Z',
+      })),
+    };
+    const terminal = { terminalId: 'terminal', executionContextId: 'context', title: 'Shell', cols: 80, rows: 24, status: 'running' };
+    return {
+      snapshot: vi.fn(async () => snapshot), attach: vi.fn(async (id: string) => snapshot.threads.find((thread) => thread.threadId === id)), close: vi.fn(),
+      archiveThread: vi.fn(async (id: string) => {
+        const archived = { ...snapshot.threads.find((thread) => thread.threadId === id)!, status: 'archived' as const, archivedAt: '2026-09-11T00:00:01Z' };
+        snapshot = { ...snapshot, threads: snapshot.threads.filter((thread) => thread.threadId !== id), archivedThreads: [...snapshot.archivedThreads, archived] };
+        return archived;
+      }),
+      getWorkspaceComposition: vi.fn(async () => ({ composition: {
+        schemaVersion: 2, hostId, revision: 0, workspaces: [{ workspaceId: `initial-${hostId}`, name: hostId,
+          layout: { kind: 'terminal', nodeId: 'node', paneId: 'pane', terminalId: 'terminal', executionContextId: 'context' },
+        }],
+      } })),
+      listTerminals: vi.fn(async () => ({ terminals: [terminal] })),
+      attachTerminal: vi.fn(async () => ({ attachment: { attachmentId: 'attachment', mode: 'shared' }, snapshot: { terminal, data: new TextEncoder().encode('ready'), generation: 1, cursor: 5 }, startEvents: vi.fn() })),
+      detachTerminal: vi.fn(async () => undefined), resizeTerminal: vi.fn(async () => undefined), inputTerminal: vi.fn(async () => undefined),
+    };
+  };
+  const one = makeClient('one'), two = makeClient('two');
+  const factory = (url: string) => (url.includes('one') ? one : two) as unknown as DirectHostClient;
+  let controller!: AlphaController;
+  function App() { controller = useLiveAlphaController(factory); return <AlphaShell controller={controller} />; }
+  render(<App />);
+  await screen.findByRole('button', { name: 'Agent one first' });
+  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Agent conversation' }));
+  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Agent one first' }));
+  const terminal = await screen.findByRole('textbox', { name: 'Terminal input' });
+  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toHaveTextContent('one first');
+  await user.click(screen.getByRole('button', { name: 'Maximize agent pane' }));
+  await act(async () => controller.actions.archiveThread('one:first'));
+  expect(controller.model.selectedThreadId).toBe('one:next');
+  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toHaveTextContent('one next');
+  await act(async () => controller.actions.archiveThread('one:next'));
+  expect(controller.model.selectedThreadId).toBeUndefined();
+  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('separator', { name: 'Resize terminal workspace and agent conversation' })).not.toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(terminal);
+  expect(terminal.closest('[data-panel]')).not.toHaveAttribute('hidden');
+  await user.click(screen.getByRole('button', { name: 'Agent conversation' }));
+  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Agent two first' }));
+  await user.click(screen.getByRole('button', { name: 'Workspace one' }));
+  const activeTerminal = screen.getByRole('textbox', { name: 'Terminal input' });
+  await act(async () => controller.actions.archiveThread('two:first'));
+  expect(controller.model.selectedThreadId).toBeUndefined();
+  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(activeTerminal);
+  expect(two.attach).not.toHaveBeenCalledWith('next');
+
+  await act(async () => controller.actions.createThread('one:context', undefined, 'initial-one'));
+  let composer = await screen.findByRole('textbox', { name: 'Message agent' });
+  await waitFor(() => expect(document.activeElement).toBe(composer));
+  const active = screen.getByRole('textbox', { name: 'Terminal input' }).closest('[data-focused]')!;
+  expect(active).toHaveAttribute('data-focused', 'true');
+  expect(active).not.toHaveAttribute('data-dimmed');
+  expect(active.querySelector('[data-slot="native-terminal"]')).toHaveAttribute('data-dim-amount', '0');
+  expect(active.querySelector('[data-slot="terminal-focus-border"]')).toHaveClass('border-sidebar-selected');
+  expect(document.querySelector('[data-slot="thread-top-rail"]')).toHaveClass('bg-sidebar-selected', 'text-foreground');
+
+  const draftId = controller.model.selectedThreadId;
+  await user.click(screen.getByRole('button', { name: 'Close agent pane' }));
+  expect(controller.model.threads?.some((thread) => thread.id === draftId)).toBe(false);
+  expect(document.querySelector(`[data-thread-id="${draftId}"]`)).not.toBeInTheDocument();
+  expect(controller.model.selectedThreadId).toBeUndefined();
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Terminal input' })));
+  await act(async () => controller.actions.createThread('one:context', undefined, 'initial-one'));
+  composer = await screen.findByRole('textbox', { name: 'Message agent' });
+  await waitFor(() => expect(document.activeElement).toBe(composer));
+  await user.click(screen.getByRole('button', { name: 'Maximize terminal' }));
+  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
+  await act(async () => controller.actions.createThread('one:context', undefined, 'initial-one'));
+  composer = await screen.findByRole('textbox', { name: 'Message agent' });
+  await waitFor(() => expect(document.activeElement).toBe(composer));
+  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toBeInTheDocument();
+
+});

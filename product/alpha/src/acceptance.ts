@@ -3,7 +3,8 @@ import { nativeTerminalAcceptance } from '@/terminal/native-terminal';
 export type LiveAcceptanceInput = { hostUrl: string; pairingToken?: string; workspaceName: string; directory?: string; permission?: boolean };
 export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
   let stage = 'pairing';
-  const state = window as unknown as { alphaAcceptanceStage?: string; alphaAcceptanceDetail?: string };
+  let outsideBottomRightRadius = 0;
+  const state = window as unknown as { alphaAcceptanceStage?: string; alphaAcceptanceDetail?: string; alphaAcceptanceNativeSmoke?: boolean; alphaAcceptanceKeyboardDismissal?: boolean };
   const wait = async (predicate: () => unknown) => {
     state.alphaAcceptanceDetail = stage;
     for (let n = 0; n < 600; n++) {
@@ -11,6 +12,17 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     throw new Error(`Timed out at ${stage}`);
+  };
+  const windowCornersMatch = () => {
+    const radius = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--alpha-window-corner-radius')) || 0;
+    outsideBottomRightRadius = Math.max(outsideBottomRightRadius, radius);
+    return [...document.querySelectorAll<HTMLElement>('[data-slot="terminal-focus-border"], [data-slot="thread-pane"]')].filter(el => el.getBoundingClientRect().height > 0).every(el => {
+      const rect = el.getBoundingClientRect();
+      const outside = Math.abs(rect.right - innerWidth) < 1.5 && Math.abs(rect.bottom - innerHeight) < 1.5;
+      const style = getComputedStyle(el);
+      const expected = outside ? radius : 0;
+      return parseFloat(style.borderBottomRightRadius) === expected && parseFloat(style.borderBottomLeftRadius) === 0 && (el.dataset.slot !== 'thread-pane' || parseFloat(getComputedStyle(el, '::before').borderBottomRightRadius) === expected);
+    });
   };
   const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button, [role=menuitem]')].find((el) => el.getBoundingClientRect().height > 0 && (el.getAttribute('aria-label') === name || el.textContent?.trim() === name));
   const set = (selector: string, value: string) => {
@@ -21,8 +33,8 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
   };
   try {
     if (input.pairingToken) {
-      await wait(() => button('Settings') || document.querySelector('#pairing-token'));
-      button('Settings')?.click();
+      await wait(() => button('Connections') || button('Settings') || document.querySelector('#pairing-token'));
+      (button('Connections') ?? button('Settings'))?.click();
       await wait(() => document.querySelector('#pairing-token'));
       set('#host-url', input.hostUrl);
       set('#pairing-token', input.pairingToken);
@@ -46,15 +58,27 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     stage = 'create workspace';
     const originalWorkspace = await openWorkspace();
     const newThread = async () => {
+      const previousThread = document.querySelector('[data-thread-id]:has([aria-pressed="true"])')?.getAttribute('data-thread-id');
       document.querySelector<HTMLButtonElement>(`[data-workspace-id="${CSS.escape(originalWorkspace)}"] [aria-label="Workspace actions for ${CSS.escape(input.workspaceName)}"]`)!.click();
       await wait(() => button('New agent thread')); button('New agent thread')!.click();
       await wait(() => document.querySelector('[aria-label="Message agent"]') || document.querySelector('[role="dialog"]'));
       const choice = [...document.querySelectorAll<HTMLElement>('[role="dialog"] button [title]')].find(el => input.directory ? el.getAttribute('title') === input.directory : el.getAttribute('title')?.endsWith('/workspace'))?.closest<HTMLButtonElement>('button');
       choice?.click();
+      // A reconnected shell already has a composer. Wait for the newly created
+      // draft before sending a prompt or inspecting its workspace's terminal.
+      await wait(() => {
+        const selected = document.querySelector('[data-thread-id]:has([aria-pressed="true"])')?.getAttribute('data-thread-id');
+        return selected && selected !== previousThread && document.querySelector('[aria-label="Message agent"]') && document.body.textContent?.includes('Start a conversation with the agent.');
+      });
     };
     stage = 'create thread';
     await newThread();
     await wait(() => document.querySelector('[aria-label="Message agent"]') && document.body.textContent?.includes('Start a conversation with the agent.'));
+    stage = 'discard draft pane';
+    const discardedDraft = document.querySelector('[data-thread-id]:has([aria-pressed="true"])')!.getAttribute('data-thread-id')!;
+    button('Close agent pane')!.click();
+    await wait(() => !document.querySelector(`[data-thread-id="${CSS.escape(discardedDraft)}"]`) && !document.querySelector('[data-slot="thread-pane"]'));
+    await newThread();
     stage = 'ACP prompt';
     const prompt = input.permission ? 'UI_PERMISSION' : 'Reply with exactly WEAVE_DESKTOP_REAL_PROVIDER_OK. Do not use any tools.';
     // A new ACP draft can replace the provisional composer during preflight.
@@ -100,6 +124,63 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       const maximize = () => original.closest('section[data-terminal-id]')!.querySelector<HTMLButtonElement>('[aria-label="Maximize terminal"], [aria-label="Restore terminal"]')!;
       button('Split right')!.click();
       await wait(() => document.querySelectorAll('section[data-terminal-id]').length === 2);
+      stage = 'pane focus and inactive appearance';
+      // Let the desktop driver expose its window before testing AppKit focus.
+      if (!state.alphaAcceptanceNativeSmoke) {
+        state.alphaAcceptanceStage = 'native-pane-focus';
+        await wait(() => state.alphaAcceptanceStage === undefined);
+      }
+      await wait(() => nativeTerminalAcceptance.size === 2);
+      const paneId = original.closest('section[data-terminal-id]')!.getAttribute('aria-label')!.replace('Terminal pane ', '');
+      document.querySelector<HTMLButtonElement>(`[data-pane-id="${CSS.escape(paneId)}"] button`)!.click();
+      await wait(() => original.closest('section[data-focused="true"]'));
+      await wait(async () => { try { await nativeTerminalAcceptance.get(original)!.focus(); return true; } catch { return false; } });
+      const activeTerminal = original.closest('section[data-terminal-id]')!;
+      const selectedAgent = document.querySelector<HTMLButtonElement>('[data-thread-id] button[aria-pressed="true"]');
+      if (!selectedAgent) throw new Error('No agent to exercise focus handoff');
+      stage = 'native terminal to composer focus';
+      selectedAgent.click();
+      const composer = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Message agent"]');
+      await wait(() => composer() && document.activeElement === composer() && activeTerminal.getAttribute('data-agent-focused') === 'true');
+      await wait(() => !selectedAgent.querySelector('[data-state="completed"]'));
+      if (activeTerminal.hasAttribute('data-dimmed')) throw new Error('The active terminal dimmed while the agent owned focus');
+      if (!document.querySelector('section[data-terminal-id][data-dimmed="true"]')) throw new Error('Inactive terminal did not dim');
+      const inactiveRail = document.querySelector<HTMLElement>('section[data-dimmed="true"] [data-slot="terminal-rail-dim"]')!;
+      if (getComputedStyle(inactiveRail).opacity !== '0.4' || getComputedStyle(inactiveRail).pointerEvents !== 'none') throw new Error('Inactive terminal header must dim by 40% and remain clickable');
+      if (getComputedStyle(activeTerminal.querySelector('[data-slot="terminal-rail-dim"]')!).opacity !== '0') throw new Error('Active terminal header dimmed while the agent owned focus');
+      const frame = activeTerminal.querySelector<HTMLElement>('[data-slot="terminal-focus-border"]')!;
+      if (getComputedStyle(frame).borderTopLeftRadius !== '0px') throw new Error('Terminal pane frame is not square');
+      const agentFrame = document.querySelector<HTMLElement>('[data-slot="thread-pane"]')!;
+      if (getComputedStyle(agentFrame, '::after').borderTopLeftRadius !== '0px') throw new Error('Agent pane frame is not square');
+      const agentOutline = getComputedStyle(agentFrame, '::before');
+      const headerHeight = agentFrame.querySelector('[data-slot="thread-top-rail"]')!.getBoundingClientRect().height;
+      if (Number.parseFloat(agentOutline.top) !== headerHeight || agentOutline.borderTopWidth !== '1px') throw new Error('Agent top border does not run below its header rail');
+      await wait(windowCornersMatch);
+      stage = 'menu focus restoration';
+      button('Sidebar actions')!.click(); await wait(() => document.querySelector('[role="menu"]'));
+      const menu = document.querySelector<HTMLElement>('[role="menu"]')!;
+      menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await wait(() => !document.querySelector('[role="menu"]') && document.activeElement === composer());
+      const collapse = document.querySelector<HTMLButtonElement>(`[data-workspace-id="${CSS.escape(originalWorkspace)}"] button[aria-expanded]`)!;
+      stage = 'sidebar focus restoration';
+      collapse.focus(); collapse.click();
+      await wait(() => document.activeElement === composer());
+      collapse.click();
+      if (state.alphaAcceptanceNativeSmoke) {
+        stage = 'composer keyboard dismissal';
+        state.alphaAcceptanceKeyboardDismissal = undefined;
+        state.alphaAcceptanceStage = 'dismiss-composer-keyboard';
+        await wait(() => state.alphaAcceptanceKeyboardDismissal !== undefined);
+        if (!state.alphaAcceptanceKeyboardDismissal) throw new Error('Composer keyboard reopened after UIKit dismissed it');
+        state.alphaAcceptanceStage = undefined;
+        stage = 'iPad window corner after keyboard dismissal';
+        await wait(() => windowCornersMatch() && outsideBottomRightRadius > 0);
+        selectedAgent.click();
+        await wait(() => document.activeElement === composer());
+      }
+      await nativeTerminalAcceptance.get(original)!.focus();
+      await wait(() => activeTerminal.getAttribute('data-agent-focused') !== 'true');
+      stage = 'persistent split and maximize';
       maximize().click(); await wait(() => original.getBoundingClientRect().width >= terminalBounds.width - 10);
       maximize().click(); await wait(() => original.getBoundingClientRect().width < terminalBounds.width - 10);
       maximize().click(); await wait(() => original.getBoundingClientRect().width >= terminalBounds.width - 10);
@@ -107,6 +188,15 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
     await wait(async () => { try { await nativeSurface()![1].focus(); return true; } catch { return false; } });
+    if (state.alphaAcceptanceNativeSmoke) {
+      stage = 'terminal keyboard dismissal';
+      state.alphaAcceptanceKeyboardDismissal = undefined;
+      state.alphaAcceptanceStage = 'dismiss-terminal-keyboard';
+      await wait(() => state.alphaAcceptanceKeyboardDismissal !== undefined);
+      if (!state.alphaAcceptanceKeyboardDismissal) throw new Error('Terminal keyboard reopened after UIKit dismissed it');
+      state.alphaAcceptanceStage = undefined;
+      await nativeSurface()![1].focus();
+    }
     (window as unknown as { alphaAcceptanceFocusTerminal?: () => Promise<void> }).alphaAcceptanceFocusTerminal = async () => { await nativeSurface()![1].focus(); };
     state.alphaAcceptanceStage = 'native-terminal';
     stage = 'native terminal input and paste';
@@ -133,8 +223,22 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       await wait(async () => (await terminalText()).includes('界é'));
     }
 
+    stage = 'top rail controls';
+    if (document.querySelector('[data-slot="global-bottom-rail"]')) throw new Error('Bottom rail is still mounted');
+    const agentToggle = button('Agent conversation')!, connections = button('Connections')!;
+    const toggleRail = agentToggle.closest('[data-slot="sidebar-header"]');
+    if (!toggleRail?.contains(connections) || agentToggle.getBoundingClientRect().right > connections.getBoundingClientRect().left) throw new Error('Agent toggle must precede Connections in the top rail');
+    button('Toggle threads')!.click();
+    await wait(() => !button('Connections') && !button('Agent conversation'));
+    const sidebarToggle = button('Toggle threads')!;
+    const overlay = (navigator as Navigator & { windowControlsOverlay?: { visible: boolean; getTitlebarAreaRect(): DOMRect } }).windowControlsOverlay;
+    if (sidebarToggle.getBoundingClientRect().left < (overlay?.visible ? overlay.getTitlebarAreaRect().x : 0)) throw new Error('Sidebar toggle overlaps native window controls');
+    sidebarToggle.click(); await wait(() => button('Connections') && button('Agent conversation'));
+    await wait(async () => { try { await nativeSurface()![1].focus(); return true; } catch { return false; } });
 
+
+    await wait(windowCornersMatch);
     if (document.querySelector('[data-slot="browser-pane"], [data-slot="editor-pane"], [data-symbol="project-pane"]')) throw new Error('Deferred surface mounted');
-    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), permissionSurvivesConversationSwitch: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, runningTerminalReattached: true, nativePaneLifetime: Boolean(nativeSurface()), nativeCompositionCommit: Boolean(nativeSurface()), deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
+    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), permissionSurvivesConversationSwitch: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, runningTerminalReattached: true, nativePaneLifetime: Boolean(nativeSurface()), paneFocusRestoration: true, ...(state.alphaAcceptanceNativeSmoke ? { softwareKeyboardDismissal: true } : {}), activeTerminalUndimmed: true, squarePaneBorders: true, outsideBottomRightRadius, nativeCompositionCommit: Boolean(nativeSurface()), deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
   } catch (error) { return { passed: false, stage, error: String(error), nativeSurfaces: await Promise.all([...nativeTerminalAcceptance.entries()].map(async ([element, surface]) => ({ bounds: element.getBoundingClientRect().toJSON(), text: await surface.read().catch(String) }))), visibleControls: [...document.querySelectorAll<HTMLElement>('button, [role=menuitem]')].filter(el => el.getBoundingClientRect().height > 0).map(el => ({ label: el.getAttribute('aria-label') ?? el.textContent?.trim(), titles: [...el.querySelectorAll('[title]')].map(child => child.getAttribute('title')) })) }; }
 }

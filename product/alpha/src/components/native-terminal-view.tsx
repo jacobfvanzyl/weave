@@ -1,21 +1,24 @@
+import { usePaneFocusAdapter, paneVisible, paneOverlayOpen } from '@/app/pane-focus';
 import { TERMINAL_CODEC } from '@weave/product-protocol';
 import { useEffect, useRef, useState } from 'react';
 import type { TerminalOutputSource } from '@/terminal/output-stream';
 import { decodeTerminalBytes, encodeTerminalBytes, nativeTerminalAcceptance, nativeTerminalBridge } from '@/terminal/native-terminal';
 
-export function NativeTerminalView({ output, readOnly, onInput, onResize, focusRequest }: {
+export function NativeTerminalView({ output, readOnly, onInput, onResize, focusRequest, dimAmount = 0 }: {
   focusRequest?: string;
+  dimAmount?: number;
   output: TerminalOutputSource; readOnly: boolean;
   onInput?(data: string | Uint8Array): void; onResize?(cols: number, rows: number): void;
 }) {
+  const { owner, id: paneId } = usePaneFocusAdapter();
   const host = useRef<HTMLDivElement>(null);
-  const latest = useRef({ readOnly, onInput, onResize });
-  latest.current = { readOnly, onInput, onResize };
+  const latest = useRef({ readOnly, onInput, onResize, dimAmount });
+  latest.current = { readOnly, onInput, onResize, dimAmount };
   const [error, setError] = useState<string>();
   const updateGeometry = useRef<(() => void) | undefined>(undefined);
   const requestedFocus = useRef<string | undefined>(focusRequest);
   useEffect(() => { requestedFocus.current = focusRequest; updateGeometry.current?.(); }, [focusRequest]);
-  useEffect(() => updateGeometry.current?.(), [readOnly]);
+  useEffect(() => updateGeometry.current?.(), [readOnly, dimAmount]);
   useEffect(() => {
     const element = host.current;
     if (!element) return;
@@ -34,10 +37,13 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
       const target = event.target as HTMLElement;
       if (target !== element && !target.closest?.('[role="dialog"], [role="menu"], [role="listbox"]')) nativeFocused = false;
     };
-    document.addEventListener('focusin', webFocus);
+    if (!owner) document.addEventListener('focusin', webFocus);
+    let unregisterFocus: (() => void) | undefined;
+    let layoutReady = false;
     const fail = (cause: unknown) => {
       if (disposed) return;
       failed = true;
+      unregisterFocus?.();
       setError(cause instanceof Error ? cause.message : String(cause));
       measure();
     };
@@ -47,27 +53,30 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
         frame = undefined;
         if (disposed || !surfaceId) return;
         const rect = element.getBoundingClientRect();
-        const overlay = [...document.querySelectorAll('[role="dialog"], [role="menu"], [role="listbox"]')].some((item) => item.getBoundingClientRect().height > 0);
+        const overlay = paneOverlayOpen();
         const restoreFocus = overlayWasOpen && !overlay && nativeFocused;
         overlayWasOpen = overlay;
         const focusToken = requestedFocus.current;
-        const shouldFocus = Boolean(focusToken) || restoreFocus;
+        const shouldFocus = !owner && (Boolean(focusToken) || restoreFocus);
         const frameElement = element.closest<HTMLElement>('[data-slot="terminal-focus-border"]');
         const frameStyle = frameElement && getComputedStyle(frameElement);
-        const color = frameStyle?.getPropertyValue('--terminal-focus').trim();
+        const color = frameStyle?.getPropertyValue(frameElement?.closest('[data-agent-focused="true"]') ? '--sidebar-selected' : '--terminal-focus').trim();
         const focusBorder = frameStyle && /^#[0-9a-f]{6}$/i.test(color ?? '') ? {
           width: frameElement?.closest('[data-focused="true"]') ? parseFloat(frameStyle.borderTopWidth) || 0 : 0,
-          radius: parseFloat(frameStyle.borderTopLeftRadius) || 0,
+          radius: parseFloat(frameStyle.borderBottomRightRadius) || 0,
           rgb: parseInt(color!.slice(1), 16),
         } : undefined;
-        const bounds = { surfaceId, focusBorder, x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: !failed && !document.hidden && !overlay && element.isConnected && rect.width > 0 && rect.height > 0, readOnly: latest.current.readOnly };
+        const bounds = { surfaceId, focusBorder, dimAmount: latest.current.dimAmount, x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: !failed && !document.hidden && !overlay && paneVisible(element) && rect.width > 0 && rect.height > 0, readOnly: latest.current.readOnly };
         resizeEnabled = bounds.visible;
         const key = JSON.stringify(bounds);
         if (key === previousBounds && !shouldFocus) return;
         previousBounds = key;
         const revision = ++geometryRevision;
+        layoutReady = false;
         void nativeTerminalBridge.layout(bounds).then(({ cols, rows }) => {
           if (disposed || revision !== geometryRevision || !resizeEnabled || !bounds.visible) return;
+          layoutReady = true;
+          owner?.ready();
           if (!latest.current.readOnly) latest.current.onResize?.(cols, rows);
           if (shouldFocus && (restoreFocus || (focusToken && requestedFocus.current === focusToken))) {
             requestedFocus.current = undefined;
@@ -84,8 +93,9 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
     const resize = new ResizeObserver(measure);
     resize.observe(element);
     const mutations = new MutationObserver(measure);
-    mutations.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'hidden', 'data-open', 'data-focused'] });
+    mutations.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'hidden', 'data-open', 'data-closed', 'data-focused', 'data-agent-focused', 'data-window-bottom-right', 'class'] });
     window.addEventListener('resize', measure);
+    window.addEventListener('alpha-window-corner-change', measure);
     document.addEventListener('visibilitychange', measure);
     void (async () => {
       const listener = await nativeTerminalBridge.addListener('event', (event) => {
@@ -94,7 +104,16 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
         // Only an acknowledged visible layout can resize the Host. UIKit also
         // emits provisional sizes while creating/hiding its native view.
         if (event.kind === 'error') fail(event.message ?? 'Native terminal input failed.');
-        if (event.kind === 'focus') { nativeFocused = true; element.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); }
+        if (event.kind === 'blur') { nativeFocused = false; if (paneId) owner?.didBlur(paneId); }
+        if (event.kind === 'focus') {
+          if (owner && paneId) {
+            if (event.intent === 'pointer') owner.request(paneId);
+            // AppKit/UIKit may restore a native responder when an overlay
+            // disappears. It must not replace the remembered typing target.
+            if (owner.snapshot() && owner.snapshot() !== paneId) { owner.restoreTarget(); return; }
+          }
+          nativeFocused = true; element.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+        }
       });
       removeListener = () => listener.remove();
       if (disposed) { await listener.remove(); return; }
@@ -110,23 +129,32 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
       setError(undefined);
       element.dataset.nativeRenderer = created.renderer;
       const id = surfaceId;
+      if (owner && paneId) unregisterFocus = owner.register(paneId, {
+        element, available: () => !disposed && !failed && layoutReady && paneVisible(element),
+        focus: async () => {
+          if (!layoutReady || !paneVisible(element) || paneOverlayOpen()) return false;
+          await nativeTerminalBridge.focus({ surfaceId: id }); return true;
+        },
+      });
       unsubscribe = output.subscribe({
         reset: (data, grid) => nativeTerminalBridge.write({ surfaceId: id, data: window.weaveDesktop?.nativeTerminal ? data : encodeTerminalBytes(data), reset: true, ...(grid ? { cols: grid.cols, rows: grid.rows } : {}) }),
         history: (data) => nativeTerminalBridge.write({ surfaceId: id, data: window.weaveDesktop?.nativeTerminal ? data : encodeTerminalBytes(data), reset: false, history: true }),
         write: (data) => nativeTerminalBridge.write({ surfaceId: id, data: window.weaveDesktop?.nativeTerminal ? data : encodeTerminalBytes(data), reset: false }),
       });
       if (import.meta.env.VITE_ALPHA_ACCEPTANCE === '1') nativeTerminalAcceptance.set(element, {
-        focus: () => nativeTerminalBridge.focus({ surfaceId: id }),
+        focus: async () => { if (owner && paneId) owner.request(paneId); await nativeTerminalBridge.focus({ surfaceId: id }); },
         read: async () => (await nativeTerminalBridge.inspect({ surfaceId: id })).text,
       });
       measure();
     })().catch(fail);
     return () => {
       disposed = true;
+      unregisterFocus?.();
       updateGeometry.current = undefined;
       if (frame !== undefined) cancelAnimationFrame(frame);
       resize.disconnect(); mutations.disconnect();
       window.removeEventListener('resize', measure);
+      window.removeEventListener('alpha-window-corner-change', measure);
       document.removeEventListener('visibilitychange', measure);
       document.removeEventListener('focusin', webFocus);
       unsubscribe?.();
@@ -134,7 +162,7 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
       void removeListener?.();
       if (surfaceId) void nativeTerminalBridge.close({ surfaceId }).catch(() => undefined);
     };
-  }, [output]);
+  }, [output, owner, paneId]);
   return <div ref={host} data-slot='native-terminal' className='min-h-0 min-w-0 flex-1 overflow-hidden bg-[#1e1e2e]' aria-label='Native terminal surface'>
     {error && <p role='alert' className='p-3 text-sm text-destructive'>{error}</p>}
   </div>;

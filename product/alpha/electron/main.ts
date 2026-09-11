@@ -92,7 +92,9 @@ else {
             catch (error) { if (retry >= 20) throw error; await new Promise(resolve => setTimeout(resolve, 100)); }
           }
           handled.add(stageKey);
-          if (stage === 'native-terminal') {
+          if (stage === 'native-pane-focus') {
+            await contents.executeJavaScript('window.alphaAcceptanceStage = undefined');
+          } else if (stage === 'native-terminal') {
             await paste("printf 'WEAVE_NATIVE_PASTE_OK\\n'"); key('Enter');
             window?.setSize(1100, 780);
           } else if (stage === 'native-neovim') {

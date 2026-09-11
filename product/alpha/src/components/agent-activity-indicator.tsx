@@ -10,9 +10,10 @@ const indicators = {
   uncertain: { label: 'Interrupted — outcome unknown', color: 'bg-destructive' },
 };
 
-export function AgentActivityIndicator({ attention, available, selected, id }: {
+export function AgentActivityIndicator({ attention, completionUnread, available, selected, id }: {
   id?: string;
   attention?: ThreadAttention;
+  completionUnread?: boolean;
   available: boolean;
   selected: boolean;
 }) {
@@ -26,7 +27,9 @@ export function AgentActivityIndicator({ attention, available, selected, id }: {
     return () => window.clearTimeout(timer);
   }, [available, observedAt]);
 
-  if (!available || !attention || !Number.isFinite(observedAt) || Date.now() - observedAt >= freshnessMs) return null;
+  if (!available || !attention || !Number.isFinite(observedAt)) return null;
+  if (attention.state === 'completed' && completionUnread === false) return null;
+  if (!(attention.state === 'completed' && completionUnread) && Date.now() - observedAt >= freshnessMs) return null;
   if (attention.state === 'idle' || attention.state === 'unavailable') return null;
   // Older Hosts cannot distinguish dormant conversations from interrupted work.
   if (attention.state === 'uncertain' && attention.uncertaintyReason !== 'prompt_outcome_unknown') return null;
