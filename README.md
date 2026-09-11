@@ -4,7 +4,8 @@ Weave Alpha connects directly to Hosts to run structured ACP conversations and p
 
 ## Develop
 
-Use Bun 1.3.14 from the repository root:
+Use Bun 1.3.14, Zig 0.16.0 and a C++ toolchain (Xcode command-line tools on macOS)
+from the repository root:
 
 ```sh
 bun install --frozen-lockfile
@@ -15,7 +16,9 @@ bun run build:desktop
 ```
 
 Bun runs the package scripts, TypeScript checks, Vite, Vitest, Host and build tools.
-Electron supplies its own desktop runtime; Xcode supplies the iPad toolchain.
+Host tests build their native Terminal Service fixture automatically, including
+the pinned Ghostty library on the first run. Electron supplies its own desktop
+runtime; Xcode supplies the iPad toolchain.
 `bun run dev:alpha` remains the renderer development server; `bun run dev:ipad`
 syncs and opens the iPad project, and `bun run build:ipad` builds it.
 

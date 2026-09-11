@@ -18,7 +18,7 @@
     "dev:alpha": "bun run --cwd product/alpha dev",
     "build:alpha": "bun run --cwd product/alpha build",
     "check:portal": "bun run --cwd product/portal check",
-    "test:portal": "bun run --cwd product/portal test",
+    "test:portal": "bun product/portal/scripts/build-terminal-service.ts && bun run --cwd product/portal test",
     "check": "bun run check:tooling && bun run check:boundary && bun run test:boundary && bun run test:protocol && bun run test:alpha && bun run build:alpha && bun run check:portal && bun run test:portal && bun run check:desktop",
     "dev:host": "bun run --cwd product/portal dev",
     "build:host": "bun run --cwd product/portal build",
