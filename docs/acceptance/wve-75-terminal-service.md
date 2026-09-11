@@ -57,7 +57,11 @@ CoreText lines and avoids replacing unchanged visible text.
   only tagged Weave fixture terminals while retaining an unrelated tmux PID and
   nonterminal state.
 - macOS Host and Electron packages, iPad Debug app and Linux x64 artifacts built.
-  A Linux build is not evidence of Linux execution.
+- GitHub Actions on Ubuntu and macOS passed the complete repository checks,
+  native Host build, real Terminal Service stress and packaged Host lifecycle
+  acceptance on commit `9b92584c`; macOS desktop packaging also passed. This
+  establishes Linux execution; it does not establish per-user systemd
+  installation/update behavior. CI run: [34627135847](https://github.com/jacobfvanzyl/weave/actions/runs/34627135847).
 
 ## Reproduction
 
@@ -153,7 +157,8 @@ and suspension/reconnect acceptance have not yet been observed on the iPad.
 ## Completion gates still open
 
 - Bazzite reports offline in Tailscale; SSH attempts timed out. Linux packaged
-  execution, systemd lifecycle/update and process semantics remain unverified.
+  execution and process survival pass in GitHub Actions. Per-user systemd
+  installation and lifecycle/update acceptance remain open.
 - The iPad ordinary Debug build launches and authenticates. Native terminal
   visual/input, suspension/reconnect and attended physical input acceptance
   remain open. The earlier separate acceptance bundle could not be provisioned.
