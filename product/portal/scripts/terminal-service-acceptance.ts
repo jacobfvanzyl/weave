@@ -25,8 +25,8 @@ try {
   await waitFor(() => output.includes(`IDENTITY:${pid}`), 'Real shell PID');
   // Real foreground ownership is stronger evidence than isatty/stty alone.
   // A pre-created Bun.Terminal used to skip setsid/TIOCSCTTY and passed those checks.
-  await client.request({ method: 'input', terminalId: 'acceptance' }, Buffer.from("python3 -c 'import os; fd=os.open(\"/dev/tty\",os.O_RDWR); print(\"CONTROLLING_TTY_OK\" if os.tcgetpgrp(fd)==os.getpgrp() else \"NO_FOREGROUND\"); os.close(fd)'\n"));
-  await waitFor(() => output.includes('\r\nCONTROLLING_TTY_OK'), 'Foreground job owns the controlling terminal');
+  await client.request({ method: 'input', terminalId: 'acceptance' }, Buffer.from("python3 -c 'import os; fd=os.open(\"/dev/tty\",os.O_RDWR); print(\"CONTROLLING_\"+\"TTY_OK\" if os.tcgetpgrp(fd)==os.getpgrp() else \"NO_FOREGROUND\"); os.close(fd)'\n"));
+  await waitFor(() => output.includes('CONTROLLING_TTY_OK'), 'Foreground job owns the controlling terminal');
   await client.request({ method: 'input', terminalId: 'acceptance' }, Buffer.from("sleep 30\n"));
   await Bun.sleep(100);
   await client.request({ method: 'input', terminalId: 'acceptance' }, Buffer.from([3]));
