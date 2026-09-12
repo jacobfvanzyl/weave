@@ -22,7 +22,8 @@ private final class TerminalPointerRecognizer: UIGestureRecognizer {
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { send(touches, event, 1); state = .cancelled }
 }
 
-private final class GhosttyTerminalTextView: UITextView {
+final class GhosttyTerminalTextView: UITextView {
+    var inputBlocked = true
     let terminal: WeaveTerminalRenderer
     var sendInput: ((String) -> Void)?
     var resized: ((Int, Int) -> Void)?
@@ -310,7 +311,7 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             view.didSelect = { [weak self] in self?.notifyListeners("event", data: ["surfaceId": id, "kind": "focus", "intent": "pointer"]) }
             view.didBlur = { [weak self] in self?.notifyListeners("event", data: ["surfaceId": id, "kind": "blur"]) }
             self.surfaces[id] = view
-            parent.addSubview(view)
+            parent.insertSubview(view, belowSubview: self.bridge!.webView!)
             call.resolve(["surfaceId": id, "renderer": "libghostty-vt-coretext", "codec": WeaveTerminalRenderer.codecIdentity()])
         }
     }
@@ -347,7 +348,9 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
             if !rectangle.isEmpty && !rectangle.isNull { view.frame = web.convert(rectangle, to: parent) }
             view.isHidden = call.getBool("visible") != true || rectangle.isEmpty || rectangle.isNull
             let controlled = call.getBool("readOnly") != true
-            if view.isHidden { view.resignFirstResponder() }
+            view.inputBlocked = call.getBool("inputBlocked") ?? true
+            view.accessibilityElementsHidden = view.inputBlocked || view.isHidden
+            if view.isHidden || view.inputBlocked { view.resignFirstResponder() }
             view.terminal.readOnly = !controlled
             view.isEditable = controlled
             view.layoutIfNeeded()
@@ -372,7 +375,7 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
     @objc func focus(_ call: CAPPluginCall) { withSurface(call) { view in
-        guard !view.isHidden, view.window != nil, view.becomeFirstResponder() else { call.reject("Native terminal is not visible for input."); return }
+        guard !view.isHidden, !view.inputBlocked, view.window != nil, view.becomeFirstResponder() else { call.reject("Native terminal is not visible for input."); return }
         call.resolve()
     } }
     @objc func close(_ call: CAPPluginCall) {

@@ -1,3 +1,4 @@
+import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useState, type FormEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ComputerIcon, Delete02Icon, Link01Icon, RefreshIcon } from '@hugeicons/core-free-icons';
@@ -33,7 +34,9 @@ export function ConnectionsDialog({ controller }: { controller: AlphaController 
   const { model, actions } = controller;
   const [pairingToken, setPairingToken] = useState('');
   const [hostUrl, setHostUrl] = useState('');
-  const [deviceLabel, setDeviceLabel] = useState(`Weave on ${model.platform === 'ios' ? 'iPad' : model.platform}`);
+  const phone = usePhoneLayout();
+  const [customDeviceLabel, setDeviceLabel] = useState<string>();
+  const deviceLabel = customDeviceLabel ?? `Weave on ${model.platform === 'ios' ? phone ? 'iPhone' : 'iPad' : model.platform}`;
   const [pairingError, setPairingError] = useState<string>();
   const hasConnections = model.connections.length > 0;
   const open = model.connectionsLoaded && (model.connectionsOpen || !hasConnections);

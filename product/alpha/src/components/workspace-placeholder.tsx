@@ -25,12 +25,14 @@ export function WorkspacePlaceholder({
   headerActions,
   showFooter = true,
   inputFocusRequest,
+  preserveDraft = false,
 }: {
   controller: AlphaController;
   className?: string;
   footerActions?: ReactNode;
   headerActions?: ReactNode;
   showFooter?: boolean;
+  preserveDraft?: boolean;
   inputFocusRequest?: number | null;
 }) {
   const { model, actions } = controller;
@@ -123,7 +125,7 @@ export function WorkspacePlaceholder({
                 focusRequest={inputFocusRequest !== undefined ? inputFocusRequest ?? undefined : shouldFocusComposer
                   ? model.composerFocusRequest
                   : undefined}
-                discardDraftOnUnmount={thread.draft}
+                discardDraftOnUnmount={thread.draft && !preserveDraft}
               />
             )
             : (

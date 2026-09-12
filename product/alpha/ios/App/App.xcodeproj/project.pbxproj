@@ -347,7 +347,7 @@ A71000000000000000000004 = {isa = PBXSourcesBuildPhase; buildActionMask = 214748
                 HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../../native/ghostty", "$(SRCROOT)/../../native/.build/ios/include");
                 OTHER_LDFLAGS = ("$(inherited)", "$(SRCROOT)/../../native/.build/ios/lib/libghostty-vt.a", "-lc++");
                 CLANG_CXX_LANGUAGE_STANDARD = "c++17";
-				TARGETED_DEVICE_FAMILY = 2;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 			};
@@ -375,14 +375,14 @@ A71000000000000000000004 = {isa = PBXSourcesBuildPhase; buildActionMask = 214748
                 HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../../native/ghostty", "$(SRCROOT)/../../native/.build/ios/include");
                 OTHER_LDFLAGS = ("$(inherited)", "$(SRCROOT)/../../native/.build/ios/lib/libghostty-vt.a", "-lc++");
                 CLANG_CXX_LANGUAGE_STANDARD = "c++17";
-				TARGETED_DEVICE_FAMILY = 2;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 			};
 			name = Release;
 		};
-A71000000000000000000008 = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 942HB89NL5; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.veezee.alpha.uitests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 2; TEST_TARGET_NAME = App; }; name = Debug; };
-A71000000000000000000009 = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 942HB89NL5; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.veezee.alpha.uitests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 2; TEST_TARGET_NAME = App; }; name = Release; };
+A71000000000000000000008 = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 942HB89NL5; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.veezee.alpha.uitests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; TEST_TARGET_NAME = App; }; name = Debug; };
+A71000000000000000000009 = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 942HB89NL5; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.veezee.alpha.uitests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; TEST_TARGET_NAME = App; }; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */

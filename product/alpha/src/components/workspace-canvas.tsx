@@ -1,5 +1,6 @@
+import { useTerminalPaneActions } from '@/app/terminal-pane-actions';
 import { PaneFocusScope, terminalFocusId, usePaneFocusTarget } from '@/app/pane-focus';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { LayoutTwoColumnIcon, LayoutTwoRowIcon, ArrowExpand01Icon, ArrowShrink01Icon, Cancel01Icon } from '@hugeicons/core-free-icons';
 import { TerminalTitle } from './path-label';
@@ -16,7 +17,7 @@ import { TerminalView } from './terminal-view';
 import { TerminalPaneSkeleton } from './terminal-pane-skeleton';
 import { PortalTransportError } from '@/portal-client';
 
-function TerminalSurface({ controller, reference, node, focusRequest, maximized, focused }: { focused: boolean; maximized: boolean; focusRequest?: string; controller: AlphaController; reference: WorkspaceReference; node: Extract<TerminalLayoutNode, { kind: 'terminal' }> }) {
+function TerminalSurface({ controller, reference, node, focusRequest, maximized, focused, compact = false }: { compact?: boolean; focused: boolean; maximized: boolean; focusRequest?: string; controller: AlphaController; reference: WorkspaceReference; node: Extract<TerminalLayoutNode, { kind: 'terminal' }> }) {
   const inputTarget = usePaneFocusTarget();
   const agentFocused = inputTarget?.startsWith('agent:') ?? false;
   const dimAmount = focused ? 0 : 0.4;
@@ -35,6 +36,15 @@ function TerminalSurface({ controller, reference, node, focusRequest, maximized,
   const context = controller.model.executionContexts.find((workspace) => (workspace.placements ?? [workspace]).some((placement) => placement.hostId === reference.hostId && placement.executionContextId === node.executionContextId));
   const directoryAvailable = context?.availability === undefined || context.availability === 'available';
   const pending = controller.model.workspaceCompositions?.pending;
+  const registerActions = useTerminalPaneActions();
+  const latestActions = useRef(actions); latestActions.current = actions;
+  useEffect(() => {
+    if (!registerActions || !node.terminalId) return;
+    registerActions(paneFocusId, { enabled: Boolean(model.attachmentId && model.attachmentMode !== 'observe' && available), terminate: async () => {
+      await latestActions.current.close(node.terminalId!); setExited(true); await controller.workspaceActions?.refresh();
+    } });
+    return () => registerActions(paneFocusId);
+  }, [registerActions, paneFocusId, node.terminalId, model.attachmentId, model.attachmentMode, available]);
   const connecting = model.loading || Boolean(node.terminalId && !model.attachmentId && !model.error && available);
   if (exited || !node.terminalId) return null;
   // The active terminal remains bright even when the composer owns input.
@@ -42,10 +52,11 @@ function TerminalSurface({ controller, reference, node, focusRequest, maximized,
     {!available || connecting ? <TerminalPaneSkeleton framed /> : <>
     <header data-slot='terminal-top-rail' className='relative flex h-[var(--rail-height)] shrink-0 items-center gap-1 border-b bg-title-bar px-2'>
       <div className='min-w-0 flex-1 text-xs' aria-label='Terminal session'><TerminalTitle title={model.tabs[0]?.title ?? 'Terminal'} /></div>
-      <Button size='icon-xs' variant='ghost' aria-label='Split right' title='Split right' disabled={pending || !available || !directoryAvailable} onClick={() => void controller.workspaceActions?.split(reference, node.paneId, 'horizontal')}><HugeiconsIcon icon={LayoutTwoColumnIcon} strokeWidth={2} /></Button>
+      {!compact && <><Button size='icon-xs' variant='ghost' aria-label='Split right' title='Split right' disabled={pending || !available || !directoryAvailable} onClick={() => void controller.workspaceActions?.split(reference, node.paneId, 'horizontal')}><HugeiconsIcon icon={LayoutTwoColumnIcon} strokeWidth={2} /></Button>
       <Button size='icon-xs' variant='ghost' aria-label='Split down' title='Split down' disabled={pending || !available || !directoryAvailable} onClick={() => void controller.workspaceActions?.split(reference, node.paneId, 'vertical')}><HugeiconsIcon icon={LayoutTwoRowIcon} strokeWidth={2} /></Button>
       <Button size='icon-xs' variant='ghost' aria-label={maximized ? 'Restore terminal' : 'Maximize terminal'} title={maximized ? 'Restore terminal' : 'Maximize terminal'} aria-pressed={maximized} className={cn(maximized && 'text-primary')} onClick={() => controller.workspaceActions?.maximize(reference, node.paneId)}><HugeiconsIcon icon={maximized ? ArrowShrink01Icon : ArrowExpand01Icon} strokeWidth={2} /></Button>
       {model.attachmentId && <Button size='icon-xs' variant='ghost' aria-label='Terminate terminal' title='Terminate terminal' disabled={model.attachmentMode === 'observe'} onClick={() => void perform(() => actions.close(node.terminalId!).then(() => { setExited(true); return controller.workspaceActions?.refresh(); }))}><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>}
+      </>}
       <div aria-hidden='true' data-slot='terminal-rail-dim' className='pointer-events-none absolute inset-0 bg-title-bar' style={{ opacity: dimAmount }} />
     </header>
     <div data-slot='terminal-focus-border' className={cn('flex min-h-0 min-w-0 flex-1 flex-col border', focused ? agentFocused ? 'border-sidebar-selected' : 'border-terminal-focus' : 'border-transparent')}>
@@ -57,7 +68,7 @@ function TerminalSurface({ controller, reference, node, focusRequest, maximized,
   </section>;
 }
 export type TerminalInputFocusRequest = { workspaceKey: string; paneId: string; token: number };
-export function WorkspaceCanvas({ controller, inputFocusRequest }: { controller: AlphaController; inputFocusRequest?: TerminalInputFocusRequest | null }) {
+export function WorkspaceCanvas({ controller, inputFocusRequest, singlePaneId, active = true }: { singlePaneId?: string; active?: boolean; controller: AlphaController; inputFocusRequest?: TerminalInputFocusRequest | null }) {
   const state = controller.model.workspaceCompositions!;
   const ref = state.presentation.openWorkspaces.find((tab) => workspaceKey(tab) === state.presentation.activeWorkspace);
   const composition = ref ? state.compositions[hostCompositionKey(ref.hostId)] : undefined;
@@ -68,12 +79,12 @@ export function WorkspaceCanvas({ controller, inputFocusRequest }: { controller:
       const key = workspaceKey(reference);
       const saved = state.compositions[hostCompositionKey(reference.hostId)]?.workspaces.find((item) => item.workspaceId === reference.workspaceId);
       if (!saved?.layout || key !== state.presentation.activeWorkspace) return null;
-      const active = key === state.presentation.activeWorkspace;
-      const maximized = state.presentation.maximizedPanes[key];
+      const workspaceActive = active && key === state.presentation.activeWorkspace;
+      const maximized = singlePaneId ?? state.presentation.maximizedPanes[key];
       const focused = state.presentation.focusedPanes[key] ?? terminalPaneTargets([saved])[0]?.paneId;
-      return <WorkspacePaneLayout key={key} layout={saved.layout} active={active} maximized={maximized}
+      return <WorkspacePaneLayout key={key} layout={saved.layout} active={workspaceActive} maximized={maximized}
         setRatio={async (id, ratio) => controller.workspaceActions?.setRatio(reference, id, ratio)}
-        renderPane={(node, visible) => <PaneFocusScope id={terminalFocusId(key, node.paneId)}><TerminalSurface controller={controller} reference={reference} node={node} focused={visible && (maximized ?? focused) === node.paneId} maximized={maximized === node.paneId} focusRequest={visible && (maximized ?? focused) === node.paneId ? inputFocusRequest === undefined ? `${key}:${node.paneId}:${maximized ?? ''}` : inputFocusRequest === null ? undefined : inputFocusRequest.workspaceKey === key && inputFocusRequest.paneId === node.paneId ? `sidebar:${inputFocusRequest.token}` : `${key}:${node.paneId}:${maximized ?? ''}` : undefined} /></PaneFocusScope>} />;
+        renderPane={(node, visible) => <PaneFocusScope id={terminalFocusId(key, node.paneId)}><TerminalSurface controller={controller} reference={reference} node={node} compact={singlePaneId !== undefined} focused={visible && (maximized ?? focused) === node.paneId} maximized={maximized === node.paneId} focusRequest={visible && (maximized ?? focused) === node.paneId ? inputFocusRequest === undefined ? `${key}:${node.paneId}:${maximized ?? ''}` : inputFocusRequest === null ? undefined : inputFocusRequest.workspaceKey === key && inputFocusRequest.paneId === node.paneId ? `sidebar:${inputFocusRequest.token}` : `${key}:${node.paneId}:${maximized ?? ''}` : undefined} /></PaneFocusScope>} />;
     })}
     {ref && !tab ? <TerminalPaneSkeleton /> : !ref && <Empty>
       <EmptyHeader><EmptyTitle>Open a workspace</EmptyTitle><EmptyDescription>Create a workspace or reopen one from the sidebar menu.</EmptyDescription></EmptyHeader>

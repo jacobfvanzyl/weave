@@ -1,6 +1,54 @@
 import XCTest
 
 final class AlphaUITests: XCTestCase {
+    // Exercise the installed profile without creating or terminating Host work.
+    func testOverlayLayeringAndPhoneNavigation() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        let toggle = app.descendants(matching: .any).matching(identifier: "Toggle threads").firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 30))
+        let phone = UIDevice.current.userInterfaceIdiom == .phone
+        if phone { toggle.tap() }
+        let terminalRow = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Terminal '")).firstMatch
+        XCTAssertTrue(terminalRow.waitForExistence(timeout: 30), "A connected workspace terminal is needed for native layering acceptance")
+        terminalRow.tap()
+        let terminal = app.textViews["Terminal input"].firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 15))
+        if phone {
+            XCTAssertFalse(app.keyboards.firstMatch.exists, "Pane navigation opened the software keyboard")
+            XCTAssertFalse(app.buttons["Split right"].exists)
+            XCUIDevice.shared.orientation = .landscapeLeft
+            XCTAssertLessThan(app.frame.width, app.frame.height, "iPhone must retain portrait layout")
+        }
+        func capture(_ name: String) {
+            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+        }
+        capture("WVE-78 terminal")
+        if phone {
+            let openSidebar = app.descendants(matching: .any).matching(identifier: "Toggle threads").firstMatch
+            XCTAssertLessThan(openSidebar.frame.minY, 44, "Sidebar navigation belongs in the notch rail")
+            XCTAssertGreaterThanOrEqual(openSidebar.frame.minX, 20, "Sidebar button must clear the rounded screen corner")
+            openSidebar.tap()
+            capture("WVE-78 sidebar over terminal")
+            let closeSidebar = app.buttons["Close sidebar"]
+            XCTAssertTrue(closeSidebar.isHittable)
+            XCTAssertLessThanOrEqual(closeSidebar.frame.maxX, app.frame.width - 20, "Close button must clear the rounded screen corner")
+            closeSidebar.tap()
+            XCTAssertTrue(terminal.waitForExistence(timeout: 5))
+            openSidebar.tap()
+        }
+        app.buttons["Connections"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Configured Hosts"].waitForExistence(timeout: 5) || app.buttons["Pair and Connect"].exists)
+        capture("WVE-78 modal over terminal")
+        app.buttons["Close"].firstMatch.tap()
+        if phone, app.buttons["Close sidebar"].firstMatch.isHittable { app.buttons["Close sidebar"].firstMatch.tap() }
+        if phone { XCTAssertFalse(app.keyboards.firstMatch.exists) }
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        capture("WVE-78 terminal restored")
+    }
+
     func testSoftwareKeyboardDismissalPreservesPaneSelection() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -103,7 +103,7 @@ it('resizes the Host only for acknowledged visible geometry', async () => {
     act(() => native.listener?.({ surfaceId: 'native-1', kind: 'resize', cols: 2, rows: 2 }));
     expect(resize).not.toHaveBeenCalled();
     rerender(content(true));
-    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false })));
+    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ visible: true, inputBlocked: true })));
     expect(resize).not.toHaveBeenCalled();
   } finally { rectangle.mockRestore(); }
 });
@@ -117,7 +117,7 @@ it('restores requested observer focus after layout, without recreating or resizi
     await waitFor(() => expect(native.focus).toHaveBeenCalledOnce());
     act(() => native.listener?.({ surfaceId: 'native-1', kind: 'focus' }));
     rerender(content(true));
-    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false })));
+    await waitFor(() => expect(native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ visible: true, inputBlocked: true })));
     rerender(content());
     await waitFor(() => expect(native.focus).toHaveBeenCalledTimes(2));
     expect(native.create).toHaveBeenCalledOnce(); expect(native.close).not.toHaveBeenCalled();

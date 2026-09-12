@@ -150,7 +150,7 @@ export type AlphaActions = {
   ): Promise<void> | void;
   createThreadInDirectory?(hostId: string, path: string, workspaceId: string): Promise<void> | void;
   assignThread?(threadId: string, workspaceId: string): Promise<void> | void;
-  selectThread(threadId: string): Promise<void> | void;
+  selectThread(threadId: string, options?: { preserveDraft?: boolean }): Promise<void> | void;
   discardThreadDraft?(threadId: string): Promise<void> | void;
   setFocusedAgentThread?(threadId?: string): void;
   archiveThread(threadId: string): Promise<void> | void;

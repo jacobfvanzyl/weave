@@ -1,4 +1,4 @@
-import { usePaneFocusAdapter, paneVisible, paneOverlayOpen } from '@/app/pane-focus';
+import { usePaneFocusAdapter, paneVisible, paneRendered, paneOverlayOpen } from '@/app/pane-focus';
 import { TERMINAL_CODEC } from '@weave/product-protocol';
 import { useEffect, useRef, useState } from 'react';
 import type { TerminalOutputSource } from '@/terminal/output-stream';
@@ -31,6 +31,8 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
     let resizeEnabled = false;
     let geometryRevision = 0;
     let previousBounds = '';
+    let lastResize = '';
+
     let nativeFocused = false;
     let overlayWasOpen = false;
     const webFocus = (event: FocusEvent) => {
@@ -66,7 +68,7 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
           radius: parseFloat(frameStyle.borderBottomRightRadius) || 0,
           rgb: parseInt(color!.slice(1), 16),
         } : undefined;
-        const bounds = { surfaceId, focusBorder, dimAmount: latest.current.dimAmount, x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: !failed && !document.hidden && !overlay && paneVisible(element) && rect.width > 0 && rect.height > 0, readOnly: latest.current.readOnly };
+        const bounds = { surfaceId, focusBorder, dimAmount: latest.current.dimAmount, x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: !failed && !document.hidden && paneRendered(element) && rect.width > 0 && rect.height > 0, readOnly: latest.current.readOnly, inputBlocked: overlay || !paneVisible(element) };
         resizeEnabled = bounds.visible;
         const key = JSON.stringify(bounds);
         if (key === previousBounds && !shouldFocus) return;
@@ -77,8 +79,8 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
           if (disposed || revision !== geometryRevision || !resizeEnabled || !bounds.visible) return;
           layoutReady = true;
           owner?.ready();
-          if (!latest.current.readOnly) latest.current.onResize?.(cols, rows);
-          if (shouldFocus && (restoreFocus || (focusToken && requestedFocus.current === focusToken))) {
+          if (!latest.current.readOnly && lastResize !== `${cols}:${rows}`) { lastResize = `${cols}:${rows}`; latest.current.onResize?.(cols, rows); }
+          if (!bounds.inputBlocked && shouldFocus && (restoreFocus || (focusToken && requestedFocus.current === focusToken))) {
             requestedFocus.current = undefined;
             void nativeTerminalBridge.focus({ surfaceId: bounds.surfaceId }).catch(() => {
               // Occlusion can change between layout and native focus. Retain
@@ -93,14 +95,14 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
     const resize = new ResizeObserver(measure);
     resize.observe(element);
     const mutations = new MutationObserver(measure);
-    mutations.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'hidden', 'data-open', 'data-closed', 'data-focused', 'data-agent-focused', 'data-window-bottom-right', 'class'] });
+    mutations.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'hidden', 'inert', 'aria-hidden', 'data-open', 'data-closed', 'data-focused', 'data-agent-focused', 'data-window-bottom-right', 'class'] });
     window.addEventListener('resize', measure);
     window.addEventListener('alpha-window-corner-change', measure);
     document.addEventListener('visibilitychange', measure);
     void (async () => {
       const listener = await nativeTerminalBridge.addListener('event', (event) => {
         if (disposed || event.surfaceId !== surfaceId) return;
-        if (!failed && event.kind === 'input' && event.data && !latest.current.readOnly) latest.current.onInput?.(decodeTerminalBytes(event.data));
+        if (!failed && !paneOverlayOpen() && paneVisible(element) && event.kind === 'input' && event.data && !latest.current.readOnly) latest.current.onInput?.(decodeTerminalBytes(event.data));
         // Only an acknowledged visible layout can resize the Host. UIKit also
         // emits provisional sizes while creating/hiding its native view.
         if (event.kind === 'error') fail(event.message ?? 'Native terminal input failed.');
@@ -163,7 +165,7 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
       if (surfaceId) void nativeTerminalBridge.close({ surfaceId }).catch(() => undefined);
     };
   }, [output, owner, paneId]);
-  return <div ref={host} data-slot='native-terminal' className='min-h-0 min-w-0 flex-1 overflow-hidden bg-[#1e1e2e]' aria-label='Native terminal surface'>
+  return <div ref={host} data-slot='native-terminal' data-native-layered={error ? undefined : 'true'} className='min-h-0 min-w-0 flex-1 overflow-hidden' aria-label='Native terminal surface'>
     {error && <p role='alert' className='p-3 text-sm text-destructive'>{error}</p>}
   </div>;
 }

@@ -31,6 +31,7 @@ static NSString *printableText(NSString *text) {
 @property(nonatomic) NSRange markedSelection;
 @property(nonatomic) NSUInteger selectionAnchor;
 @property(nonatomic) BOOL selecting;
+@property(nonatomic) BOOL inputBlocked;
 @property(nonatomic, strong) NSTrackingArea *mouseArea;
 @property(nonatomic, strong) NSMutableAttributedString *marked;
 @property(nonatomic, strong) NSEvent *interpretingEvent;
@@ -171,10 +172,29 @@ static NSString *printableText(NSString *text) {
   if (event.scrollingDeltaY && [self reportMouse:event button:event.scrollingDeltaY > 0 ? 4 : 5 action:0]) return;
   [self.terminal scrollLines:(NSInteger)(-event.scrollingDeltaY)]; self.needsDisplay = YES;
 }
-- (BOOL)isAccessibilityElement { return YES; }
+- (BOOL)isAccessibilityElement { return !self.inputBlocked && !self.hidden; }
 - (NSString *)accessibilityRole { return NSAccessibilityTextAreaRole; }
 - (NSString *)accessibilityLabel { return @"Terminal input"; }
 - (id)accessibilityValue { return self.terminal.visibleText; }
+@end
+
+@interface WeaveSurfaceContainer : NSView
+@end
+@implementation WeaveSurfaceContainer
+- (BOOL)isFlipped { return YES; }
+- (NSView *)hitTest:(NSPoint)point {
+  NSPoint local = [self convertPoint:point fromView:self.superview];
+  if (!NSPointInRect(local, self.bounds)) return nil;
+  for (NSView *child in self.subviews.reverseObjectEnumerator) {
+    if (![child isKindOfClass:WeaveTerminalNSView.class]) continue;
+    WeaveTerminalNSView *terminal = (WeaveTerminalNSView *)child;
+    if (!terminal.hidden && !terminal.inputBlocked) {
+      NSView *hit = [terminal hitTest:local];
+      if (hit) return hit;
+    }
+  }
+  return [super hitTest:point];
+}
 @end
 
 @interface WeaveNativeSurface : NSObject
@@ -246,13 +266,25 @@ static napi_value create(napi_env env, napi_callback_info info) {
   };
   __weak WeaveTerminalNSView *weakView = entry.view;
   terminal.writeInput = ^(NSData *data) { WeaveTerminalNSView *view = weakView; if (view.event) view.event(@{@"kind": @"input", @"data": [data base64EncodedStringWithOptions:0]}); };
-  [parent addSubview:entry.view];
+  WeaveSurfaceContainer *container = nil;
+  for (NSView *child in parent.subviews) if ([child isKindOfClass:WeaveSurfaceContainer.class]) container = (WeaveSurfaceContainer *)child;
+  if (!container) {
+    container = [[WeaveSurfaceContainer alloc] initWithFrame:parent.bounds];
+    container.wantsLayer = YES;
+    container.layer.backgroundColor = [NSColor colorWithSRGBRed:30/255.0 green:30/255.0 blue:46/255.0 alpha:1].CGColor;
+    container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    NSArray<NSView *> *webViews = parent.subviews.copy;
+    [parent addSubview:container];
+    for (NSView *web in webViews) { [web removeFromSuperview]; [container addSubview:web]; }
+  }
+  entry.view.inputBlocked = YES;
+  [container addSubview:entry.view positioned:NSWindowBelow relativeTo:nil];
   int64_t id = nextId++; surfaces[@(id)] = entry;
   napi_value result; napi_create_int64(env, id, &result); return result;
 }
 static napi_value layout(napi_env env, napi_callback_info info) {
-  size_t count = 11; napi_value args[11]; napi_get_cb_info(env, info, &count, args, NULL, NULL);
-  if (count != 11) return error(env, "Invalid native geometry");
+  size_t count = 12; napi_value args[12]; napi_get_cb_info(env, info, &count, args, NULL, NULL);
+  if (count != 12) return error(env, "Invalid native geometry");
   WeaveNativeSurface *entry = surface(env, args[0]);
   if (!entry) return error(env, "Native terminal is unavailable");
   double values[4]; bool visible, readOnly;
@@ -262,6 +294,11 @@ static napi_value layout(napi_env env, napi_callback_info info) {
   if (napi_get_value_double(env, args[7], &borderWidth) != napi_ok || napi_get_value_double(env, args[8], &borderRadius) != napi_ok || napi_get_value_uint32(env, args[9], &borderRGB) != napi_ok || !std::isfinite(borderWidth) || !std::isfinite(borderRadius) || borderWidth < 0 || borderRadius < 0 || borderWidth > 1000 || borderRadius > 1000 || borderRGB > 0xffffff) return error(env, "Invalid native border");
   double dimAmount;
   if (napi_get_value_double(env, args[10], &dimAmount) != napi_ok || !std::isfinite(dimAmount) || dimAmount < 0 || dimAmount > 1) return error(env, "Invalid native dim amount");
+  bool inputBlocked;
+  if (napi_get_value_bool(env, args[11], &inputBlocked) != napi_ok) return error(env, "Invalid native input state");
+  entry.view.inputBlocked = inputBlocked;
+  [entry.view setAccessibilityElement:!inputBlocked && visible];
+  if (inputBlocked && entry.view.window.firstResponder == entry.view) [entry.view.window makeFirstResponder:nil];
   entry.view.terminal.dimAmount = dimAmount;
   entry.view.terminal.focusBorderWidth = borderWidth; entry.view.terminal.focusBorderBottomRightRadius = borderRadius; entry.view.terminal.focusBorderRGB = borderRGB;
   NSView *parent = entry.view.superview;
@@ -289,7 +326,7 @@ static napi_value focus(napi_env env, napi_callback_info info) {
   size_t count = 1; napi_value args[1]; napi_get_cb_info(env, info, &count, args, NULL, NULL);
   WeaveNativeSurface *entry = count == 1 ? surface(env, args[0]) : nil;
   if (!entry) return error(env, "Native terminal is unavailable");
-  if (entry.view.hidden || !entry.view.window || ![entry.view.window makeFirstResponder:entry.view]) return error(env, "Native terminal is not visible for input");
+  if (entry.view.hidden || entry.view.inputBlocked || !entry.view.window || ![entry.view.window makeFirstResponder:entry.view]) return error(env, "Native terminal is not visible for input");
   return undefined(env);
 }
 static napi_value inspect(napi_env env, napi_callback_info info) {

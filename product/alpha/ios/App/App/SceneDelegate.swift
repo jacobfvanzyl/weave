@@ -172,16 +172,37 @@ private extension Data {
     }
 }
 
+// The WebView paints chrome and overlays above live terminals. Route exposed
+// terminal regions to their native text view; overlays retain WebKit hit testing.
+private final class WeaveSurfaceContainer: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard self.point(inside: point, with: event) else { return nil }
+        for case let terminal as GhosttyTerminalTextView in subviews.reversed() {
+            guard !terminal.isHidden, !terminal.inputBlocked else { continue }
+            let local = terminal.convert(point, from: self)
+            if let hit = terminal.hitTest(local, with: event) { return hit }
+        }
+        return super.hitTest(point, with: event)
+    }
+}
+
 final class WeaveBridgeViewController: CAPBridgeViewController {
     private let nativeTerminal = NativeTerminalPlugin()
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(PortalCredentialPlugin())
         bridge?.registerPluginInstance(nativeTerminal)
         guard let webView else { return }
-        let container = UIView(frame: webView.frame)
+        let container = WeaveSurfaceContainer(frame: webView.frame)
         container.backgroundColor = UIColor(red: 30 / 255, green: 30 / 255, blue: 46 / 255, alpha: 1)
         view = container
         container.addSubview(webView)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        let idiom = UIDevice.current.userInterfaceIdiom == .phone ? "phone" : "pad"
+        let script = "document.documentElement.dataset.deviceIdiom = '\(idiom)';"
+        webView.configuration.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        webView.evaluateJavaScript(script, completionHandler: nil)
         if #available(iOS 26.0, *) {
             webView.cornerConfiguration = .corners(radius: .containerConcentric(minimum: 0))
         }

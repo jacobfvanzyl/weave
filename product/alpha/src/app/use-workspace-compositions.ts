@@ -23,7 +23,7 @@ export type WorkspaceCompositionActions = {
   move(workspace: WorkspaceReference, direction: -1 | 1): void;
   split(workspace: WorkspaceReference, paneId: string, axis: 'horizontal' | 'vertical'): Promise<void>;
   setRatio(workspace: WorkspaceReference, nodeId: string, ratio: number): Promise<void>;
-  addPane(workspace: WorkspaceReference, contextId: string): Promise<void>;
+  addPane(workspace: WorkspaceReference, contextId: string): Promise<string | void>;
   focus(workspace: WorkspaceReference, paneId: string): void;
   maximize(workspace: WorkspaceReference, paneId: string): void;
   collapse(workspaceId: string): void;
@@ -166,12 +166,17 @@ export function useWorkspaceCompositions(contexts: AlphaExecutionContext[], conn
       await replace(ref, (item) => ({ ...item, layout: mapLayout(item.layout, (node) => node.kind === 'terminal' && node.paneId === paneId ? { kind: 'split', nodeId: crypto.randomUUID(), axis, ratio: 0.5, children: [node, newPane(context?.executionContextId ?? source.executionContextId, cwd)] } : node) }));
     }); },
     setRatio: (ref, nodeId, ratio) => editWorkspace(ref, (workspace) => ({ ...workspace, layout: mapLayout(workspace.layout, (node) => node.kind === 'split' && node.nodeId === nodeId ? { ...node, ratio: Math.max(0.1, Math.min(0.9, ratio)) } : node) })),
-    addPane: (ref, contextId) => editWorkspace(ref, (workspace) => {
-      const context = state.current.contexts.find((context) => context.id === contextId && context.hostId === ref.hostId);
-      if (!context) throw new Error('Choose a directory on this Host.');
-      const pane = newPane(context.executionContextId);
-      return { ...workspace, layout: workspace.layout ? { kind: 'split', nodeId: crypto.randomUUID(), axis: 'horizontal', ratio: 0.5, children: [workspace.layout, pane] } : pane };
-    }),
+    addPane: async (ref, contextId) => {
+      let paneId: string | undefined;
+      const success = await edit(() => replace(ref, (workspace) => {
+        const context = state.current.contexts.find((context) => context.id === contextId && context.hostId === ref.hostId);
+        if (!context) throw new Error('Choose a directory on this Host.');
+        const pane = newPane(context.executionContextId);
+        paneId = pane.kind === 'terminal' ? pane.paneId : undefined;
+        return { ...workspace, layout: workspace.layout ? { kind: 'split', nodeId: crypto.randomUUID(), axis: 'horizontal', ratio: 0.5, children: [workspace.layout, pane] } : pane };
+      }));
+      if (success) return paneId;
+    },
     focus: (ref, paneId) => updatePresentation((value) => ({ ...activateWorkspace(value, ref), focusedPanes: { ...value.focusedPanes, [workspaceKey(ref)]: paneId }, maximizedPanes: value.maximizedPanes[workspaceKey(ref)] ? { ...value.maximizedPanes, [workspaceKey(ref)]: paneId } : value.maximizedPanes })),
     maximize: (ref, paneId) => updatePresentation((value) => { const maximizedPanes = { ...value.maximizedPanes }; if (maximizedPanes[workspaceKey(ref)] === paneId) delete maximizedPanes[workspaceKey(ref)]; else maximizedPanes[workspaceKey(ref)] = paneId; return { ...value, maximizedPanes }; }),
     collapse: (id) => updatePresentation((value) => ({ ...value, collapsedWorkspaces: value.collapsedWorkspaces.includes(id) ? value.collapsedWorkspaces.filter((item) => item !== id) : [...value.collapsedWorkspaces, id] })),

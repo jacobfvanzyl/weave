@@ -1,3 +1,5 @@
+import { usePhoneLayout } from '@/app/use-phone-layout';
+import { CompactShell } from './compact-shell';
 import { PaneFocusProvider, PaneFocusScope, usePaneFocus, usePaneFocusTarget, agentFocusId, terminalFocusId } from '@/app/pane-focus';
 import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
@@ -172,6 +174,8 @@ function Content({ controller }: { controller: AlphaController }) {
   </>;
 }
 export function TerminalFirstShell({ controller }: { controller: AlphaController }) {
+  const phone = usePhoneLayout();
+  if (phone) return <CompactShell controller={controller} />;
   return <SidebarProvider cookieName={false} keyboardShortcut={false} className={cn('fixed inset-x-0 top-[var(--alpha-viewport-top,0px)] h-[var(--alpha-viewport-height,100dvh)] min-h-0 flex-col overflow-hidden', controller.model.platform === 'ios' && 'pt-[env(safe-area-inset-top)]')}
     style={{ '--sidebar-width': minimumSidebarSize, '--sidebar-width-mobile': minimumSidebarSize, '--alpha-sidebar-toggle-width': '1.25rem' } as CSSProperties}>
     <PaneFocusProvider><Content controller={controller} /></PaneFocusProvider>

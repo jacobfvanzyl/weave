@@ -773,7 +773,7 @@ describe("useLiveAlphaController", () => {
     ).toBeUndefined();
   });
 
-  it("discards an untouched local draft when another Thread is selected", async () => {
+  it.each([false, true])("honors draft retention when selecting another Thread (preserve=%s)", async (preserveDraft) => {
     const prepared = {
       ...snapshot.threads[0],
       threadId: "draft-discarded",
@@ -819,15 +819,16 @@ describe("useLiveAlphaController", () => {
     expect(result.current.model.threads?.[0]?.id).toBe(draftId);
 
     await act(async () => {
-      await result.current.actions.selectThread("host-1:thread-1");
+      await result.current.actions.selectThread("host-1:thread-1", { preserveDraft });
     });
 
     expect(client.createThread).not.toHaveBeenCalled();
-    expect(client.discardThreadDraft).toHaveBeenCalledWith("draft-discarded");
+    if (preserveDraft) expect(client.discardThreadDraft).not.toHaveBeenCalled();
+    else expect(client.discardThreadDraft).toHaveBeenCalledWith("draft-discarded");
     expect(result.current.model.selectedThreadId).toBe("host-1:thread-1");
-    expect(result.current.model.executionContexts[0]?.threads).toHaveLength(1);
+    expect(result.current.model.executionContexts[0]?.threads).toHaveLength(preserveDraft ? 2 : 1);
     expect(result.current.model.threads?.[0]?.id).toBe(
-      "host-1:thread-1",
+      preserveDraft ? draftId : "host-1:thread-1",
     );
   });
 

@@ -1,8 +1,10 @@
 import { nativeSoftwareKeyboard, nativeTerminalAvailable, nativeTerminalBridge } from '@/terminal/native-terminal';
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 
-const overlaySelector = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
+export const overlaySelector = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
 const editableSelector = 'input, textarea, select, [contenteditable="true"], [role="textbox"]';
+// Modal aria-hidden/inert affects input, not the visibility of the live underlay.
+export const paneRendered = (element: HTMLElement) => element.isConnected && !element.closest('[hidden]') && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
 export const paneVisible = (element: HTMLElement) => element.isConnected && !element.closest('[hidden], [inert], [aria-hidden="true"]') && getComputedStyle(element).display !== 'none';
 export const paneOverlayOpen = () => [...document.querySelectorAll<HTMLElement>(overlaySelector)].some((element) => paneVisible(element) && element.getBoundingClientRect().height > 0);
 export type PaneFocusAdapter = { element: HTMLElement; available(): boolean; focus(isCurrent: () => boolean): boolean | Promise<boolean> };
@@ -10,7 +12,7 @@ export type PaneFocusAdapter = { element: HTMLElement; available(): boolean; foc
 /** Owns focus policy for both web composers and native terminal responders.
  * Adapters report readiness; no key events are intercepted or replayed. */
 export class PaneFocusOwner {
-  constructor(private softwareKeyboard = nativeSoftwareKeyboard) {}
+  constructor(private softwareKeyboard = nativeSoftwareKeyboard, private browseOnly = false) { this.keyboardDismissed = browseOnly; }
   private adapters = new Map<string, PaneFocusAdapter>();
   private listeners = new Set<() => void>();
   private target: string | undefined;
@@ -40,6 +42,12 @@ export class PaneFocusOwner {
   }
   setFallbacks(ids: string[]) { this.fallbacks = ids; this.schedule(); }
   request(id: string) { this.keyboardDismissed = false; this.publish(id); this.schedule(); }
+  browse(id?: string) {
+    this.keyboardDismissed = true; this.focused = undefined; this.publish(id);
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.matches(editableSelector)) active.blur();
+    if (nativeTerminalAvailable) void nativeTerminalBridge.focusWeb();
+  }
   didFocus(id: string) {
     // A native acknowledgement may arrive after a newer request was made.
     if (this.inFlight && this.target !== id) { this.schedule(); return; }
@@ -104,6 +112,7 @@ export class PaneFocusOwner {
       this.pointerDown = true;
       const element = event.target as HTMLElement;
       if (element.closest(overlaySelector)) return;
+      if (this.browseOnly && !element.closest(editableSelector + ', [data-slot="native-terminal"]')) return;
       const id = element.closest<HTMLElement>('[data-pane-focus-id]')?.dataset.paneFocusId;
       if (id) this.request(id);
       // Mouse actions on ordinary chrome must not strand the keyboard on a
@@ -149,8 +158,8 @@ export class PaneFocusOwner {
 }
 const OwnerContext = createContext<PaneFocusOwner | undefined>(undefined);
 const PaneContext = createContext<string | undefined>(undefined);
-export function PaneFocusProvider({ children }: { children: ReactNode }) {
-  const [owner] = useState(() => new PaneFocusOwner());
+export function PaneFocusProvider({ children, browseOnly = false }: { children: ReactNode; browseOnly?: boolean }) {
+  const [owner] = useState(() => new PaneFocusOwner(nativeSoftwareKeyboard, browseOnly));
   useEffect(() => owner.connect(), [owner]);
   return <OwnerContext value={owner}>{children}</OwnerContext>;
 }

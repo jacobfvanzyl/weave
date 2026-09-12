@@ -8,7 +8,7 @@ const channel = 'weave:terminal';
 type Addon = {
   codec: string;
   create(parent: Buffer, event: (json: string) => void, fontDirectory: string): number;
-  layout(id: number, x: number, y: number, width: number, height: number, visible: boolean, readOnly: boolean, borderWidth: number, borderRadius: number, borderRGB: number, dimAmount: number): { cols: number; rows: number };
+  layout(id: number, x: number, y: number, width: number, height: number, visible: boolean, readOnly: boolean, borderWidth: number, borderRadius: number, borderRGB: number, dimAmount: number, inputBlocked: boolean): { cols: number; rows: number };
   write(id: number, bytes: Buffer, reset: boolean, cols: number, rows: number, history: boolean): void;
   focus(id: number): void;
   inspect(id: number): string;
@@ -68,7 +68,7 @@ export function installNativeTerminals(window: BrowserWindow) {
         const dimAmount = value.dimAmount ?? 0;
         if (typeof dimAmount !== 'number' || !Number.isFinite(dimAmount) || dimAmount < 0 || dimAmount > 1) throw new Error('Invalid terminal dim amount.');
         const zoom = contents.getZoomFactor();
-        return addon.layout(id, (x as number) * zoom, (y as number) * zoom, (width as number) * zoom, (height as number) * zoom, visible, readOnly, (border.width as number) * zoom, (border.radius as number) * zoom, border.rgb as number, dimAmount);
+        return addon.layout(id, (x as number) * zoom, (y as number) * zoom, (width as number) * zoom, (height as number) * zoom, visible, readOnly, (border.width as number) * zoom, (border.radius as number) * zoom, border.rgb as number, dimAmount, value.inputBlocked !== false);
       }
       case 'write': {
         if (!(value.data instanceof Uint8Array) || value.data.byteLength > 64 * 1024 * 1024 || typeof value.reset !== 'boolean') throw new Error('Invalid terminal output.');

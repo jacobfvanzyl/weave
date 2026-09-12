@@ -1,6 +1,6 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 export type NativeTerminalEvent = { surfaceId: string; kind: 'input' | 'resize' | 'focus' | 'blur' | 'window-focus' | 'window-blur' | 'error'; intent?: 'pointer'; message?: string; data?: string; cols?: number; rows?: number };
-export type NativeTerminalBounds = { surfaceId: string; x: number; y: number; width: number; height: number; visible: boolean; readOnly: boolean; dimAmount?: number; focusBorder?: { width: number; radius: number; rgb: number } };
+export type NativeTerminalBounds = { surfaceId: string; x: number; y: number; width: number; height: number; visible: boolean; inputBlocked?: boolean; readOnly: boolean; dimAmount?: number; focusBorder?: { width: number; radius: number; rgb: number } };
 export type NativeTerminalBridge = {
   windowGeometry?(): Promise<{ bottomRightRadius: number; width: number }>;
   create(): Promise<{ surfaceId: string; renderer: string; codec: string }>;

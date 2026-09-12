@@ -118,3 +118,16 @@ it('does not pause a native-to-composer handoff when UIKit hides the previous ke
   element.remove(); owner.didBlur('agent'); await settle();
   expect(document.activeElement).toBe(terminal.element);
 });
+
+it('phone navigation waits for deliberate input after browsing and overlay dismissal', async () => {
+  disconnect(); owner = new PaneFocusOwner(true, true); disconnect = owner.connect();
+  const terminal = pane('terminal'), agent = pane('agent');
+  owner.setFallbacks(['terminal', 'agent']); owner.browse('terminal'); await settle();
+  expect(terminal.focus).not.toHaveBeenCalled();
+  owner.request('terminal'); await settle(); expect(terminal.focus).toHaveBeenCalledOnce();
+  owner.browse('agent'); owner.ready(); await settle();
+  expect(agent.focus).not.toHaveBeenCalled();
+  window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus')); await settle();
+  expect(agent.focus).not.toHaveBeenCalled();
+  owner.request('agent'); await settle(); expect(agent.focus).toHaveBeenCalledOnce();
+});

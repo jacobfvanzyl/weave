@@ -780,7 +780,7 @@ export function useLiveAlphaController(
     }
   };
 
-  const selectThread = async (id: string) => {
+  const selectThread = async (id: string, options?: { preserveDraft?: boolean }) => {
     const draft = localThreadDraftRef.current;
     if (id === draft?.thread.id) {
       selectedThreadIdRef.current = id;
@@ -809,7 +809,7 @@ export function useLiveAlphaController(
     setLoadingThreadId(id);
     activeThreadIdsRef.current.set(thread.hostId, id);
     try {
-      if (draft) await discardLocalThreadDraft();
+      if (draft && !options?.preserveDraft) await discardLocalThreadDraft();
       await client.attach(thread.threadId);
     } catch (cause) {
       if (selectedThreadIdRef.current === id) {

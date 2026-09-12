@@ -25,7 +25,7 @@ else {
   const createWindow = async () => {
     window = new BrowserWindow({
       title: 'Weave Alpha', width: 1400, height: 920, minWidth: 680, minHeight: 480,
-      backgroundColor: '#1e1e2e', show: false,
+      backgroundColor: '#00000000', show: false,
       ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, titleBarOverlay: true, trafficLightPosition: { x: 12, y: 9 } } : {}),
       webPreferences: { preload: join(import.meta.dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false },
     });

@@ -10,7 +10,7 @@ const internalEdge = (end: number) => end < 100 - 0.000001;
 const style = (rect: Rect): CSSProperties => ({ position: 'absolute', left: `${rect.x}%`, top: `${rect.y}%`, width: `calc(${rect.width}% - ${internalEdge(rect.x + rect.width) ? dividerWidth : 0}px)`, height: `calc(${rect.height}% - ${internalEdge(rect.y + rect.height) ? dividerWidth : 0}px)` });
 
 // Each internal boundary owns one trailing gutter, shared by both panes.
-// Native terminal frames must stop before it because they overlay the web view.
+// Native terminal frames stop before it so the web divider retains its own input region.
 // Flatten only presentation geometry. Pane components remain keyed siblings
 // even when their logical position in the Host's split tree changes.
 export function paneGeometry(root: TerminalLayoutNode, ratios: Record<string, number> = {}) {
@@ -45,10 +45,10 @@ export function WorkspacePaneLayout({ layout, maximized, active, setRatio, rende
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setRatios((current) => { const next = { ...current }; delete next[id]; return next; }); }
   };
-  return <div ref={host} className='relative min-h-0 min-w-0 flex-1' style={{ display: active ? undefined : 'none' }} aria-hidden={!active}>
+  return <div ref={host} hidden={!active} className='relative min-h-0 min-w-0 flex-1' style={{ display: active ? undefined : 'none' }} aria-hidden={!active}>
     {panes.map(({ node, rect }) => {
       const visible = active && (!expanded || expanded === node.paneId);
-      return <div key={node.paneId} style={{ ...style(expanded === node.paneId ? full : rect), display: visible ? 'flex' : 'none' }} data-pane-id={node.paneId}>
+      return <div key={node.paneId} hidden={!visible} aria-hidden={!visible} style={{ ...style(expanded === node.paneId ? full : rect), display: visible ? 'flex' : 'none' }} data-pane-id={node.paneId}>
         {renderPane(node, visible)}
       </div>;
     })}

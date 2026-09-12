@@ -54,6 +54,7 @@ function useSidebar() {
 
 function SidebarProvider({
   defaultOpen = true,
+  mobile,
   open: openProp,
   onOpenChange: setOpenProp,
   cookieName = SIDEBAR_COOKIE_NAME,
@@ -63,13 +64,15 @@ function SidebarProvider({
   children,
   ...props
 }: React.ComponentProps<"div"> & {
+  mobile?: boolean
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
   cookieName?: string | false
   keyboardShortcut?: string | false
 }) {
-  const isMobile = useIsMobile()
+  const narrow = useIsMobile()
+  const isMobile = mobile ?? narrow
   const [openMobile, setOpenMobile] = React.useState(false)
 
   // This is the internal state of the sidebar.
