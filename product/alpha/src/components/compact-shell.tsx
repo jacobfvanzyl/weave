@@ -73,8 +73,8 @@ function Content({ controller }: { controller: AlphaController }) {
     const id = await controller.workspaceActions?.addPane(ref, contextId);
     if (typeof id === 'string') select(ref, { kind: 'terminal', id });
   };
-  const toggle = <Button data-slot='sidebar-toggle' size='icon' variant='ghost' aria-label='Toggle threads' aria-expanded={sidebar.openMobile} onClick={() => { focus.browse(target); sidebar.toggleSidebar(); }}><HugeiconsIcon icon={SidebarLeftIcon} strokeWidth={2} /></Button>;
-  const topRail = (drawer = false) => <div data-slot='phone-safe-area-rail'>{toggle}{drawer && <Button size='icon' variant='ghost' aria-label='Close sidebar' onClick={() => sidebar.setOpenMobile(false)}><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>}</div>;
+  const toggle = <Button data-slot='sidebar-toggle' size='rail' variant='ghost' aria-label='Toggle threads' aria-expanded={sidebar.openMobile} onClick={() => { focus.browse(target); sidebar.toggleSidebar(); }}><HugeiconsIcon icon={SidebarLeftIcon} strokeWidth={2} /></Button>;
+  const topRail = (drawer = false) => <div data-slot='phone-safe-area-rail'>{toggle}{drawer && <Button size='rail' variant='ghost' aria-label='Close sidebar' onClick={() => sidebar.setOpenMobile(false)}><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>}</div>;
   return <TerminalPaneActionsContext value={registerActions}>
     <WorkspaceSidebar controller={controller} compact selectedPane={pane} compactHeader={topRail(true)} onSelectWorkspace={selectWorkspace} onSelectThread={selectAgent} onSelectTerminal={(ref, id) => select(ref, { kind: 'terminal', id })} onAddTerminal={addTerminal}
       terminalActions={terminalActions} onActionError={setError} />

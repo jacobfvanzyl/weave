@@ -242,7 +242,7 @@ export function ThreadSidebar({
           ) : (
             <Button
               type="button"
-              size="icon-sm"
+              size="rail"
               variant="ghost"
               aria-label="Search threads"
               title="Search threads"

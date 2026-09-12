@@ -13,6 +13,7 @@ import type { AlphaTerminalsModel } from '@/app/use-alpha-terminals';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
+import { isElectronDesktop } from '@/lib/platform';
 import { TerminalView } from './terminal-view';
 
 export function TerminalPane({
@@ -62,6 +63,7 @@ export function TerminalPane({
     >
       <header
         data-slot='terminal-top-rail'
+        data-hover-actions={isElectronDesktop() || undefined}
         className='flex h-[var(--rail-height)] shrink-0 items-stretch bg-title-bar'
       >
         <div className='scrollbar-none min-w-0 flex-1 overflow-x-auto overflow-y-hidden'>
@@ -90,14 +92,14 @@ export function TerminalPane({
                   onClick={() => void onSelect?.(terminal.terminalId)}
                   onKeyDown={(event) => activateOnKeyboard(event, terminal.terminalId)}
                 >
-                  <HugeiconsIcon icon={TerminalIcon} strokeWidth={1.75} className='size-3.5 shrink-0' />
+                  <HugeiconsIcon icon={TerminalIcon} strokeWidth={1.75} className='size-[16px] shrink-0' />
                   <TerminalTitle title={terminal.title} className='flex-1' />
                   <Button
                     type='button'
-                    size='icon-xs'
+                    size='rail'
                     variant='ghost'
                     aria-label={`Close ${compactTerminalTitle(terminal.title)}`}
-                    className='size-5 shrink-0 opacity-60 hover:opacity-100'
+                    className='shrink-0 opacity-60 hover:opacity-100'
                     disabled={disabled || !active || model.attachmentMode !== 'shared'}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -122,7 +124,7 @@ export function TerminalPane({
         >
           <Button
             type='button'
-            size='icon'
+            size='rail'
             variant='ghost'
             aria-label='New Terminal'
             className='h-full w-11 shrink-0 rounded-none border-0'
@@ -133,7 +135,7 @@ export function TerminalPane({
           </Button>
           <Button
             type='button'
-            size='icon'
+            size='rail'
             variant='ghost'
             aria-label={maximized ? 'Restore Terminal' : 'Maximize Terminal'}
             aria-pressed={maximized}

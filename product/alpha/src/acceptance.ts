@@ -225,15 +225,16 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
 
     stage = 'top rail controls';
     if (document.querySelector('[data-slot="global-bottom-rail"]')) throw new Error('Bottom rail is still mounted');
-    const agentToggle = button('Agent conversation')!, connections = button('Connections')!;
-    const toggleRail = agentToggle.closest('[data-slot="sidebar-header"]');
-    if (!toggleRail?.contains(connections) || agentToggle.getBoundingClientRect().right > connections.getBoundingClientRect().left) throw new Error('Agent toggle must precede Connections in the top rail');
+    if (button('Agent conversation')) throw new Error('Redundant agent toggle is still in the sidebar rail');
+    if (!button('Connections')?.closest('[data-slot="sidebar-header"]')) throw new Error('Connections must remain in the sidebar rail');
     button('Toggle threads')!.click();
-    await wait(() => !button('Connections') && !button('Agent conversation'));
+    await wait(() => !button('Connections'));
     const sidebarToggle = button('Toggle threads')!;
     const overlay = (navigator as Navigator & { windowControlsOverlay?: { visible: boolean; getTitlebarAreaRect(): DOMRect } }).windowControlsOverlay;
-    if (sidebarToggle.getBoundingClientRect().left < (overlay?.visible ? overlay.getTitlebarAreaRect().x : 0)) throw new Error('Sidebar toggle overlaps native window controls');
-    sidebarToggle.click(); await wait(() => button('Connections') && button('Agent conversation'));
+    // The button hit area now extends into the overlay's trailing padding;
+    // its visible icon must still clear the native window controls.
+    if (sidebarToggle.querySelector('svg')!.getBoundingClientRect().left < (overlay?.visible ? overlay.getTitlebarAreaRect().x : 0)) throw new Error('Sidebar icon overlaps native window controls');
+    sidebarToggle.click(); await wait(() => button('Connections'));
     await wait(async () => { try { await nativeSurface()![1].focus(); return true; } catch { return false; } });
 
 

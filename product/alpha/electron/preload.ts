@@ -33,6 +33,11 @@ const close = (input: { surfaceId: string }) => {
 contextBridge.exposeInMainWorld('weaveDesktop', Object.freeze({
   runtime: 'electron', platform: 'macos',
   setTopRailHeight: (height: number, overlayHeight: number) => ipcRenderer.invoke('weave:top-rail-height', height, overlayHeight),
+  onTitlebarPointer: (listener: (point: { x: number; y: number } | null) => void) => {
+    const receive = (_event: Electron.IpcRendererEvent, point: { x: number; y: number } | null) => listener(point);
+    ipcRenderer.on('weave:titlebar-pointer', receive);
+    return () => ipcRenderer.removeListener('weave:titlebar-pointer', receive);
+  },
   nativeTerminal: Object.freeze({
     create: () => invoke('create'),
     layout: (input: unknown) => invoke('layout', input),

@@ -20,11 +20,11 @@ import { AgentActivityIndicator } from './agent-activity-indicator';
 import { CodexIcon } from './codex-icon';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from './ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from './ui/dropdown-menu';
 import { Sidebar, SidebarHeader, SidebarContent, SidebarGroup, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarMenuAction } from './ui/sidebar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 
-export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThread, onSelectTerminal, headerActions, sidebarToggle, compactHeader, compact = false, selectedPane, onSelectWorkspace, onAddTerminal, terminalActions, onActionError }: { compact?: boolean; selectedPane?: CompactPane; onSelectWorkspace?(ref: WorkspaceReference): void; onAddTerminal?(ref: WorkspaceReference, contextId: string): Promise<void>; terminalActions?: Record<string, TerminalPaneAction>; onActionError?(message: string): void; headerActions?: ReactNode; sidebarToggle?: ReactNode; compactHeader?: ReactNode; controller: AlphaController; agentDock?: AgentDockPosition; onSelectThread?(threadId: string): void; onSelectTerminal?(workspace: WorkspaceReference, paneId: string): void }) {
+export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThread, onSelectTerminal, headerActions, sidebarToggle, compactHeader, agentPaneVisible = true, onAgentDockChange, compact = false, selectedPane, onSelectWorkspace, onAddTerminal, terminalActions, onActionError }: { agentPaneVisible?: boolean; onAgentDockChange?(position: AgentDockPosition): void; compact?: boolean; selectedPane?: CompactPane; onSelectWorkspace?(ref: WorkspaceReference): void; onAddTerminal?(ref: WorkspaceReference, contextId: string): Promise<void>; terminalActions?: Record<string, TerminalPaneAction>; onActionError?(message: string): void; headerActions?: ReactNode; sidebarToggle?: ReactNode; compactHeader?: ReactNode; controller: AlphaController; agentDock?: AgentDockPosition; onSelectThread?(threadId: string): void; onSelectTerminal?(workspace: WorkspaceReference, paneId: string): void }) {
   const { model, actions, workspaceActions } = controller;
   const state = model.workspaceCompositions!;
   const [closing, setClosing] = useState<{ reference: WorkspaceReference; plan: WorkspaceClosePlan }>();
@@ -70,12 +70,15 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
     setChoosingAgent({ reference, directories });
   };
   const threadRow = (thread: AlphaThread) => {
-    const selected = compact ? selectedPane?.kind === 'agent' && selectedPane.id === thread.id : thread.id === model.selectedThreadId;
+    const selected = compact ? selectedPane?.kind === 'agent' && selectedPane.id === thread.id : agentPaneVisible && thread.id === model.selectedThreadId;
+    const lastVisible = !selected && thread.id === model.selectedThreadId;
+    const paneState = selected ? 'visible' : lastVisible ? 'last-visible' : undefined;
     const available = connected(thread.hostId);
     return <SidebarMenuItem key={thread.id} data-thread-id={thread.id}>
-      <SidebarMenuButton size='default' className='data-active:bg-primary data-active:text-primary-foreground data-active:hover:bg-primary data-active:hover:text-primary-foreground' isActive={selected} aria-label={`Agent ${thread.title}`} aria-describedby={`agent-activity-${thread.id}`} aria-pressed={selected} onClick={() => onSelectThread ? onSelectThread(thread.id) : void actions.selectThread(thread.id)} disabled={!available || model.busy}>
+      <SidebarMenuButton size='default' data-agent-pane-state={paneState} className={cn('data-active:bg-primary data-active:text-primary-foreground data-active:hover:bg-primary data-active:hover:text-primary-foreground', lastVisible && 'ring-1 ring-inset ring-primary')} isActive={selected} aria-label={`Agent ${thread.title}`} aria-describedby={`agent-activity-${thread.id}${lastVisible ? ` agent-last-visible-${thread.id}` : ''}`} aria-pressed={selected} onClick={() => onSelectThread ? onSelectThread(thread.id) : void actions.selectThread(thread.id)} disabled={!available || model.busy}>
         <CodexIcon /><span className='flex min-w-0 flex-1 items-center gap-2 pr-0.5'><span className='min-w-0 flex-1 truncate'>{thread.title}</span><AgentActivityIndicator id={`agent-activity-${thread.id}`} attention={thread.attention} completionUnread={thread.completionUnread} available={available} selected={selected} /></span>
       </SidebarMenuButton>
+      {lastVisible && <span id={`agent-last-visible-${thread.id}`} className='sr-only'>Last visible agent. Activate to reopen.</span>}
       <DropdownMenu><DropdownMenuTrigger render={<SidebarMenuAction className={cn(selected && 'text-primary-foreground peer-hover/menu-button:text-primary-foreground hover:text-primary-foreground')} aria-label={`Actions for ${thread.title}`} />}>⋯</DropdownMenuTrigger>
         <DropdownMenuContent><DropdownMenuGroup>
           {thread.workspaceId && <DropdownMenuItem onClick={() => workspaceActions?.activate({ hostId: thread.hostId, workspaceId: thread.workspaceId! })}>Open workspace</DropdownMenuItem>}
@@ -92,8 +95,9 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
     <Sidebar position='inline' collapsible='offcanvas' mobileWidth={compact ? '100vw' : `${alphaSidebarMinimumWidth}px`} className='min-w-0 flex-1'>
       {compactHeader}
       <SidebarHeader className='h-[var(--rail-height)] shrink-0 justify-center border-b bg-title-bar px-2 py-0'><div className='flex items-center justify-end gap-1'>{sidebarToggle && <span className='mr-auto flex'>{sidebarToggle}</span>}{headerActions}<ConnectionsButton controller={controller} />
-        <DropdownMenu><DropdownMenuTrigger render={<Button size='icon-xs' variant='ghost' aria-label='Sidebar actions' title='Sidebar actions' />}><HugeiconsIcon icon={MoreVerticalIcon} strokeWidth={2} /></DropdownMenuTrigger>
+        <DropdownMenu><DropdownMenuTrigger render={<Button size='rail' variant='ghost' aria-label='Sidebar actions' title='Sidebar actions' />}><HugeiconsIcon icon={MoreVerticalIcon} strokeWidth={2} /></DropdownMenuTrigger>
           <DropdownMenuContent align='end'>
+            {onAgentDockChange && <DropdownMenuSub><DropdownMenuSubTrigger>Agent pane position</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuRadioGroup value={agentDock} onValueChange={(value) => { if (value === 'left' || value === 'right') onAgentDockChange(value); }}><DropdownMenuRadioItem closeOnClick value='left'>Left Dock</DropdownMenuRadioItem><DropdownMenuRadioItem closeOnClick value='right'>Right Dock</DropdownMenuRadioItem></DropdownMenuRadioGroup></DropdownMenuSubContent></DropdownMenuSub>}
             <DropdownMenuSub><DropdownMenuSubTrigger disabled={state.loading}>New workspace…</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuGroup>
               {model.executionContexts.map((context) => <DropdownMenuItem key={context.id} disabled={!connected(context.hostId) || context.availability !== 'available'} onClick={() => void workspaceActions?.open(context.id)}>{model.showHostIdentity && <>{context.hostName} · </>}<PathLabel path={context.canonicalPath ?? context.name} /></DropdownMenuItem>)}
               <DropdownMenuItem onClick={() => setAdding(true)}>Add directory…</DropdownMenuItem>

@@ -11,6 +11,14 @@ export function useDesktopTitlebar(reserveSidebarToggle = false) {
     const selector = '[data-slot="global-top-rail"], [data-slot="sidebar-header"], [data-slot="thread-top-rail"], [data-slot="terminal-top-rail"]';
     const paneSelector = '[data-slot="terminal-focus-border"], [data-slot="thread-pane"]';
     const observed = new Set<HTMLElement>();
+    let titlebarPointer: { x: number; y: number } | null = null;
+    const updateHover = () => {
+      for (const rail of document.querySelectorAll<HTMLElement>('[data-slot="terminal-top-rail"][data-hover-actions]')) {
+        const rect = rail.getBoundingClientRect();
+        rail.toggleAttribute('data-native-hover', Boolean(titlebarPointer && rect.width > 0 && rect.height > 0 && titlebarPointer.x >= rect.left && titlebarPointer.x < rect.right && titlebarPointer.y >= rect.top && titlebarPointer.y < rect.bottom));
+      }
+    };
+    const stopPointer = window.weaveDesktop?.onTitlebarPointer?.((point) => { titlebarPointer = point; updateHover(); });
     let frame: number | undefined, previousMetrics = '', disposed = false, geometryRevision = 0;
     const measure = () => {
       frame = undefined;
@@ -20,6 +28,9 @@ export function useDesktopTitlebar(reserveSidebarToggle = false) {
       const topEdge = Math.min(...visible.map((rect) => rect.top));
       const controlsWidth = overlay?.visible ? overlay.getTitlebarAreaRect().x : 0;
       document.documentElement.style.setProperty('--alpha-window-controls-width', `${controlsWidth}px`);
+      // The native overlay includes trailing space; account for it and the
+      // button's internal padding so the icon continues the traffic-light gap.
+      document.documentElement.style.setProperty('--alpha-sidebar-toggle-offset', overlay?.visible ? '-6px' : '8px');
       const panes = [...document.querySelectorAll<HTMLElement>(paneSelector)];
       const elements = [...rails, ...panes];
       for (const pane of panes) {
@@ -46,6 +57,7 @@ export function useDesktopTitlebar(reserveSidebarToggle = false) {
         rail.toggleAttribute('data-shell-controls-leading', top && Math.abs(rect.left) < 1 && reserveSidebarToggle && !rail.querySelector('[data-slot="sidebar-toggle"]'));
       }
       const top = rails.find((rail) => rail.hasAttribute('data-window-top-rail'));
+      updateHover();
       if (!top || !setHeight) return;
       const height = top.getBoundingClientRect().height;
       const overlayHeight = overlay?.getTitlebarAreaRect().height ?? 0;
@@ -69,12 +81,15 @@ export function useDesktopTitlebar(reserveSidebarToggle = false) {
     schedule();
     return () => {
       disposed = true;
+      stopPointer?.();
+      titlebarPointer = null; updateHover();
       if (frame !== undefined) cancelAnimationFrame(frame);
       resize.disconnect(); mutations.disconnect();
       window.removeEventListener('resize', schedule);
       overlay?.removeEventListener('geometrychange', schedule);
       document.documentElement.style.removeProperty('--alpha-window-corner-radius');
       document.documentElement.style.removeProperty('--alpha-window-controls-width');
+      document.documentElement.style.removeProperty('--alpha-sidebar-toggle-offset');
       for (const rail of observed) { rail.removeAttribute('data-window-top-rail'); rail.removeAttribute('data-window-controls-leading'); rail.removeAttribute('data-shell-controls-leading'); rail.removeAttribute('data-window-bottom-right'); }
     };
   }, [reserveSidebarToggle]);

@@ -105,7 +105,7 @@ export function DockRailActions({
           }
           : undefined}
         type='button'
-        size='icon'
+        size='rail'
         variant='ghost'
         aria-label={`${active ? 'Hide' : 'Show'} ${name} Pane`}
         aria-pressed={active}

@@ -31,7 +31,7 @@ export function GlobalTopRail({
       <div className="flex h-full items-center">
         <Button
           type="button"
-          size="icon-xs"
+          size="rail"
           variant="ghost"
           aria-label="Toggle threads"
           aria-pressed={threadsVisible}
@@ -44,7 +44,7 @@ export function GlobalTopRail({
         </Button>
         <RailDivider slot="sidebar-rail-divider" />
         {!controller.model.workspaceCompositions && <>
-          <Button size="icon-xs" variant="ghost" aria-label="Archived Threads" title="Archived Threads" onClick={controller.actions.openArchivedThreads}>
+          <Button size="rail" variant="ghost" aria-label="Archived Threads" title="Archived Threads" onClick={controller.actions.openArchivedThreads}>
             <HugeiconsIcon icon={FileBoxIcon} strokeWidth={2} />
           </Button>
         </>}

@@ -276,8 +276,13 @@
 [data-window-top-rail] { -webkit-app-region: drag; }
 [data-window-top-rail] :is(button, a, input, textarea, select, [role="button"], [role="separator"]) { -webkit-app-region: no-drag; }
 [data-window-controls-leading] { padding-left: calc(env(titlebar-area-x, 0px) + 8px); }
-[data-shell-controls-leading] { padding-left: calc(var(--alpha-window-controls-width, 0px) + var(--alpha-sidebar-toggle-width, 0px) + 16px); }
+[data-shell-controls-leading] { padding-left: calc(var(--alpha-window-controls-width, 0px) + var(--alpha-sidebar-toggle-offset, 8px) + var(--alpha-sidebar-toggle-width, 0px) + 8px); }
 [data-slot="sidebar-toggle-rail"] { -webkit-app-region: no-drag; }
+
+/* Keep the buttons' native no-drag hit regions registered while hiding artwork. */
+[data-slot="terminal-top-rail"][data-hover-actions]:not(:hover):not(:focus-within):not([data-native-hover]) button svg {
+  opacity: 0;
+}
 
 /* Clip the composer separately so the shared outline can extend over the seam. */
 [data-slot="thread-pane"] {
@@ -407,11 +412,12 @@ html[data-device-idiom="phone"] [data-slot="alert-dialog-content"] {
 
 /* The phone's notch band is navigation chrome; content reaches the bottom edge. */
 [data-slot="phone-safe-area-rail"] {
+  --rail-height: max(28px, calc(env(safe-area-inset-top) - 16px));
   display: flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
-  height: max(28px, calc(env(safe-area-inset-top) - 16px));
+  height: var(--rail-height);
   padding-inline: max(env(safe-area-inset-left), 20px) max(env(safe-area-inset-right), 20px);
   background-color: var(--title-bar);
 }

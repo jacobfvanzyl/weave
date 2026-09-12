@@ -4,6 +4,30 @@ import { useDesktopTitlebar } from './use-desktop-titlebar';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); delete (navigator as any).windowControlsOverlay; });
 
+it('reveals only the terminal rail under the native titlebar pointer and clears it on exit', async () => {
+  let receive: (point: { x: number; y: number } | null) => void = () => {};
+  const stop = vi.fn();
+  vi.stubGlobal('weaveDesktop', { onTitlebarPointer: (listener: typeof receive) => { receive = listener; return stop; } });
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    return this.dataset.testid === 'left' ? new DOMRect(250, 0, 400, 32) : new DOMRect(650, 0, 400, 32);
+  });
+  function Harness() { useDesktopTitlebar(true); return <><header data-testid='left' data-slot='terminal-top-rail' data-hover-actions /><header data-testid='right' data-slot='terminal-top-rail' data-hover-actions /></>; }
+  const view = render(<Harness />);
+  act(() => receive({ x: 400, y: 12 }));
+  expect(view.getByTestId('left')).toHaveAttribute('data-native-hover');
+  expect(view.getByTestId('right')).not.toHaveAttribute('data-native-hover');
+  act(() => receive({ x: 800, y: 12 }));
+  expect(view.getByTestId('left')).not.toHaveAttribute('data-native-hover');
+  expect(view.getByTestId('right')).toHaveAttribute('data-native-hover');
+  act(() => receive({ x: 800, y: 40 }));
+  expect(view.getByTestId('right')).not.toHaveAttribute('data-native-hover');
+  act(() => receive({ x: 400, y: 12 }));
+  act(() => receive(null));
+  expect(view.getByTestId('left')).not.toHaveAttribute('data-native-hover');
+  view.unmount();
+  expect(stop).toHaveBeenCalledOnce();
+});
+
 it('moves the native-control reservation between top rails and clears it in fullscreen', async () => {
   const setTopRailHeight = vi.fn(async () => 19.2);
   vi.stubGlobal('weaveDesktop', { setTopRailHeight });

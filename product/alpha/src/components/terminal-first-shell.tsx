@@ -12,8 +12,6 @@ import type { AlphaController } from '@/app/alpha-controller';
 import { SidebarInset, SidebarProvider, useSidebar } from './ui/sidebar';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './ui/resizable';
 import { useAgentDockPosition } from '@/app/agent-dock-position';
-import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuRadioGroup, ContextMenuRadioItem } from './ui/context-menu';
-import { WeaveIcon } from './weave-icon';
 import { Button } from './ui/button';
 import { WorkspaceSidebar } from './workspace-sidebar';
 import { WorkspaceCanvas } from './workspace-canvas';
@@ -31,7 +29,6 @@ function Content({ controller }: { controller: AlphaController }) {
   useAgentBorderPrecedence();
   const sidebar = useSidebar();
   const [agentDock, setAgentDock] = useAgentDockPosition();
-  const [dockMenuOpen, setDockMenuOpen] = useState(false);
   const contentRef = useRef<HTMLElement>(null);
   const [contentWidth, setContentWidth] = useState(0);
   useLayoutEffect(() => {
@@ -118,37 +115,23 @@ function Content({ controller }: { controller: AlphaController }) {
   const panels = [!conversationOnly && <ResizablePanel key='terminal-workspace' id='terminal-workspace' hidden={expanded} defaultSize={`${100 - agentSize}%`} minSize={conversationStacked ? '25%' : minimumPaneSize} className='flex min-h-0 min-w-0'><WorkspaceCanvas controller={controller} inputFocusRequest={null} /></ResizablePanel>,
     conversationVisible && !conversationOnly && <ResizableHandle key='agent-divider' style={expanded || terminalExpanded ? { display: 'none' } : undefined} aria-label='Resize terminal workspace and agent conversation' />,
     conversationVisible && <ResizablePanel key='agent-conversation' id='agent-conversation' style={sharedAgentEdge ? { overflow: 'visible' } : undefined} hidden={terminalExpanded} minSize={conversationStacked ? '25%' : minimumPaneSize} defaultSize={conversationOnly ? '100%' : `${agentSize}%`} className='flex min-h-0 min-w-0'><PaneFocusScope id={agentTarget ?? ''}><section data-pane-focus-id={agentTarget} aria-label='Selected agent conversation' className='flex min-h-0 min-w-0 flex-1'><WorkspacePlaceholder controller={controller} inputFocusRequest={null} showFooter={false} headerActions={<>
-      <Button size='icon-xs' variant='ghost' aria-label={expanded ? 'Restore agent pane' : 'Maximize agent pane'} title={expanded ? 'Restore agent pane' : 'Maximize agent pane'} aria-pressed={expanded} disabled={conversationOnly} className={cn(expanded && 'bg-primary-foreground/15')} onClick={() => setConversationMaximized((value) => !value)}><HugeiconsIcon icon={expanded ? ArrowShrink01Icon : ArrowExpand01Icon} strokeWidth={2} /></Button>
-      <Button size='icon-xs' variant='ghost' aria-label='Close agent pane' title='Close agent pane' disabled={conversationOnly && !thread?.draft} onClick={closeConversation}><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>
+      <Button size='rail' variant='ghost' aria-label={expanded ? 'Restore agent pane' : 'Maximize agent pane'} title={expanded ? 'Restore agent pane' : 'Maximize agent pane'} aria-pressed={expanded} disabled={conversationOnly} className={cn(expanded && 'bg-primary-foreground/15')} onClick={() => setConversationMaximized((value) => !value)}><HugeiconsIcon icon={expanded ? ArrowShrink01Icon : ArrowExpand01Icon} strokeWidth={2} /></Button>
+      <Button size='rail' variant='ghost' aria-label='Close agent pane' title='Close agent pane' disabled={conversationOnly && !thread?.draft} onClick={closeConversation}><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>
     </>} /></section></PaneFocusScope></ResizablePanel>
   ];
   if (agentDock === 'left') panels.reverse();
-  const sidebarToggle = <Button data-slot='sidebar-toggle' size='icon-xs' variant='ghost' aria-label='Toggle threads' title='Toggle threads' aria-pressed={sidebar.isMobile ? sidebar.openMobile : sidebar.open} className={cn((sidebar.isMobile ? sidebar.openMobile : sidebar.open) && 'text-primary')} onClick={sidebar.toggleSidebar}><HugeiconsIcon icon={SidebarLeftIcon} strokeWidth={2} /></Button>;
-  const agentToggle = <ContextMenu open={dockMenuOpen} onOpenChange={setDockMenuOpen}>
-      <ContextMenuTrigger aria-haspopup='menu' aria-expanded={dockMenuOpen} onKeyDown={(event) => {
-        if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
-        event.preventDefault();
-        const rect = event.currentTarget.getBoundingClientRect();
-        event.currentTarget.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.x, clientY: rect.y }));
-      }} className='flex' render={<Button size='icon-xs' variant='ghost' aria-label='Agent conversation' title='Agent conversation' className={cn(conversationVisible && !terminalExpanded && 'text-primary')} aria-pressed={conversationVisible && !terminalExpanded} aria-disabled={!thread || (conversationOnly && !thread.draft) || undefined}
-        onClick={() => { if (thread && (!conversationOnly || thread.draft) && !dockMenuOpen) { if (terminalExpanded && reference && maximizedTerminal) { controller.workspaceActions?.maximize(reference, maximizedTerminal); setConversationOpen(true); setFocusIntent({ id: agentFocusId(thread.id) }); } else if (conversationVisible) closeConversation(); else { setConversationOpen(true); setFocusIntent({ id: agentFocusId(thread.id) }); } } }} />}><WeaveIcon /></ContextMenuTrigger>
-      <ContextMenuContent><ContextMenuRadioGroup value={agentDock} onValueChange={(value) => { if (value === 'left' || value === 'right') setAgentDock(value); }}>
-        <ContextMenuRadioItem closeOnClick value='left'>Left Dock</ContextMenuRadioItem>
-        <ContextMenuRadioItem closeOnClick value='right'>Right Dock</ContextMenuRadioItem>
-      </ContextMenuRadioGroup></ContextMenuContent>
-    </ContextMenu>;
+  const sidebarToggle = <Button data-slot='sidebar-toggle' size='rail' variant='ghost' aria-label='Toggle threads' title='Toggle threads' aria-pressed={sidebar.isMobile ? sidebar.openMobile : sidebar.open} className={cn((sidebar.isMobile ? sidebar.openMobile : sidebar.open) && 'text-primary')} onClick={sidebar.toggleSidebar}><HugeiconsIcon icon={SidebarLeftIcon} strokeWidth={2} /></Button>;
 
   return <>
     <div className='relative flex min-h-0 min-w-0 flex-1 overflow-hidden'>
-      <div data-slot='sidebar-toggle-rail' className='absolute top-0 z-30 flex h-[var(--rail-height)] items-center' style={{ left: 'calc(var(--alpha-window-controls-width, 0px) + 8px)' }}>{sidebarToggle}</div>
-      {sidebar.isMobile && <WorkspaceSidebar controller={controller} headerActions={agentToggle} sidebarToggle={sidebar.isMobile ? sidebarToggle : undefined} agentDock={agentDock} onSelectThread={selectAgent} onSelectTerminal={selectTerminal} />}
+      {sidebar.isMobile && <WorkspaceSidebar controller={controller} agentPaneVisible={conversationVisible && !terminalExpanded} onAgentDockChange={setAgentDock} sidebarToggle={sidebar.isMobile ? sidebarToggle : undefined} agentDock={agentDock} onSelectThread={selectAgent} onSelectTerminal={selectTerminal} />}
       <ResizablePanelGroup orientation='horizontal' id='workspace-sidebar-layout'
         data-agent-leading={conversationVisible && !terminalExpanded && agentDock === 'left' ? 'true' : undefined}
         defaultLayout={sidebarSize === undefined ? undefined : { 'workspace-sidebar': sidebarSize, content: 100 - sidebarSize }}
         onLayoutChanged={(layout, { isUserInteraction }) => { if (isUserInteraction && layout['workspace-sidebar'] && layout.content) rememberSidebarSize(layout['workspace-sidebar']); }}>
         {!sidebar.isMobile && sidebar.open && <>
           <ResizablePanel id='workspace-sidebar' defaultSize={minimumSidebarSize} minSize={minimumSidebarSize} className='flex min-h-0 min-w-0 overflow-hidden'>
-            <WorkspaceSidebar controller={controller} headerActions={agentToggle} sidebarToggle={sidebar.isMobile ? sidebarToggle : undefined} agentDock={agentDock} onSelectThread={selectAgent} onSelectTerminal={selectTerminal} />
+            <WorkspaceSidebar controller={controller} agentPaneVisible={conversationVisible && !terminalExpanded} onAgentDockChange={setAgentDock} sidebarToggle={sidebar.isMobile ? sidebarToggle : undefined} agentDock={agentDock} onSelectThread={selectAgent} onSelectTerminal={selectTerminal} />
           </ResizablePanel>
           <ResizableHandle aria-label='Resize sidebar' />
         </>}
@@ -169,6 +152,9 @@ function Content({ controller }: { controller: AlphaController }) {
           </SidebarInset>
         </ResizablePanel>
       </ResizablePanelGroup>
+      {/* Electron applies drag regions in DOM order. Exclude this floating
+          control after the underlying draggable pane rails. */}
+      <div data-slot='sidebar-toggle-rail' className='absolute top-0 z-30 flex h-[var(--rail-height)] items-center' style={{ left: 'calc(var(--alpha-window-controls-width, 0px) + var(--alpha-sidebar-toggle-offset, 8px))' }}>{sidebarToggle}</div>
     </div>
 
   </>;
@@ -177,7 +163,7 @@ export function TerminalFirstShell({ controller }: { controller: AlphaController
   const phone = usePhoneLayout();
   if (phone) return <CompactShell controller={controller} />;
   return <SidebarProvider cookieName={false} keyboardShortcut={false} className={cn('fixed inset-x-0 top-[var(--alpha-viewport-top,0px)] h-[var(--alpha-viewport-height,100dvh)] min-h-0 flex-col overflow-hidden', controller.model.platform === 'ios' && 'pt-[env(safe-area-inset-top)]')}
-    style={{ '--sidebar-width': minimumSidebarSize, '--sidebar-width-mobile': minimumSidebarSize, '--alpha-sidebar-toggle-width': '1.25rem' } as CSSProperties}>
+    style={{ '--sidebar-width': minimumSidebarSize, '--sidebar-width-mobile': minimumSidebarSize, '--alpha-sidebar-toggle-width': '1.75rem' } as CSSProperties}>
     <PaneFocusProvider><Content controller={controller} /></PaneFocusProvider>
   </SidebarProvider>;
 }

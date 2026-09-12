@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, ClipboardItem, clipboard, net, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, ClipboardItem, clipboard, net, protocol, screen, session, shell } from 'electron';
 import { join, relative, resolve } from 'node:path';
 import { release } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -33,6 +33,34 @@ else {
     const contents = window.webContents;
     const hostWindow = window;
     let topRailHeight = 32;
+    // AppKit owns pointer events over draggable chrome, so CSS :hover cannot
+    // reveal its actions. Track only the focused window's top rail, in CSS units.
+    let pointerTimer: ReturnType<typeof setInterval> | undefined;
+    let lastPointer = '';
+    const reportTitlebarPointer = (point: { x: number; y: number } | null) => {
+      const value = JSON.stringify(point);
+      if (value === lastPointer || contents.isDestroyed()) return;
+      lastPointer = value;
+      contents.send('weave:titlebar-pointer', point);
+    };
+    const trackTitlebarPointer = () => {
+      const cursor = screen.getCursorScreenPoint();
+      const bounds = hostWindow.getContentBounds();
+      const zoom = contents.getZoomFactor();
+      const x = (cursor.x - bounds.x) / zoom, y = (cursor.y - bounds.y) / zoom;
+      reportTitlebarPointer(x >= 0 && x < bounds.width / zoom && y >= 0 && y < topRailHeight ? { x, y } : null);
+    };
+    const stopTitlebarPointer = () => {
+      clearInterval(pointerTimer); pointerTimer = undefined;
+      reportTitlebarPointer(null);
+    };
+    hostWindow.on('focus', () => {
+      if (pointerTimer) return;
+      trackTitlebarPointer();
+      pointerTimer = setInterval(trackTitlebarPointer, 50);
+    });
+    hostWindow.on('blur', stopTitlebarPointer);
+    hostWindow.once('closed', stopTitlebarPointer);
     let windowButtonHeight: number | undefined;
     let windowButtonInsetY = 9;
     const positionWindowButtons = () => {

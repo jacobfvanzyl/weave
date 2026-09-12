@@ -5,6 +5,7 @@ import { HugeiconsIcon } from '@hugeicons/react';
 import { LayoutTwoColumnIcon, LayoutTwoRowIcon, ArrowExpand01Icon, ArrowShrink01Icon, Cancel01Icon } from '@hugeicons/core-free-icons';
 import { TerminalTitle } from './path-label';
 import { cn } from '@/lib/utils';
+import { isElectronDesktop } from '@/lib/platform';
 import { terminalPaneTargets, type TerminalLayoutNode } from '@weave/product-protocol';
 import type { AlphaController } from '@/app/alpha-controller';
 import { useAlphaTerminals } from '@/app/use-alpha-terminals';
@@ -50,14 +51,15 @@ function TerminalSurface({ controller, reference, node, focusRequest, maximized,
   // The active terminal remains bright even when the composer owns input.
   return <section className='flex min-h-0 min-w-0 flex-1 flex-col' data-focused={focused || undefined} data-pane-focus-id={paneFocusId} data-dimmed={!focused || undefined} data-agent-focused={agentFocused || undefined} aria-label={`Terminal pane ${node.paneId}`} data-terminal-id={node.terminalId ?? undefined} onFocusCapture={(event) => { if ((event.target as HTMLElement).closest('[data-slot="native-terminal"]')) controller.workspaceActions?.focus(reference, node.paneId); }}>
     {!available || connecting ? <TerminalPaneSkeleton framed /> : <>
-    <header data-slot='terminal-top-rail' className='relative flex h-[var(--rail-height)] shrink-0 items-center gap-1 border-b bg-title-bar px-2'>
+    <header data-slot='terminal-top-rail' data-hover-actions={isElectronDesktop() || undefined} className='relative flex h-[var(--rail-height)] shrink-0 items-center gap-1 border-b bg-title-bar px-2'>
+      {/* Keep the draggable dim layer before the button no-drag regions in DOM order. */}
+      <div aria-hidden='true' data-slot='terminal-rail-dim' className='pointer-events-none absolute inset-0 z-10 bg-title-bar' style={{ opacity: dimAmount }} />
       <div className='min-w-0 flex-1 text-xs' aria-label='Terminal session'><TerminalTitle title={model.tabs[0]?.title ?? 'Terminal'} /></div>
-      {!compact && <><Button size='icon-xs' variant='ghost' aria-label='Split right' title='Split right' disabled={pending || !available || !directoryAvailable} onClick={() => void controller.workspaceActions?.split(reference, node.paneId, 'horizontal')}><HugeiconsIcon icon={LayoutTwoColumnIcon} strokeWidth={2} /></Button>
-      <Button size='icon-xs' variant='ghost' aria-label='Split down' title='Split down' disabled={pending || !available || !directoryAvailable} onClick={() => void controller.workspaceActions?.split(reference, node.paneId, 'vertical')}><HugeiconsIcon icon={LayoutTwoRowIcon} strokeWidth={2} /></Button>
-      <Button size='icon-xs' variant='ghost' aria-label={maximized ? 'Restore terminal' : 'Maximize terminal'} title={maximized ? 'Restore terminal' : 'Maximize terminal'} aria-pressed={maximized} className={cn(maximized && 'text-primary')} onClick={() => controller.workspaceActions?.maximize(reference, node.paneId)}><HugeiconsIcon icon={maximized ? ArrowShrink01Icon : ArrowExpand01Icon} strokeWidth={2} /></Button>
-      {model.attachmentId && <Button size='icon-xs' variant='ghost' aria-label='Terminate terminal' title='Terminate terminal' disabled={model.attachmentMode === 'observe'} onClick={() => void perform(() => actions.close(node.terminalId!).then(() => { setExited(true); return controller.workspaceActions?.refresh(); }))}><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>}
+      {!compact && <><Button size='rail' variant='ghost' aria-label='Split right' title='Split right' disabled={pending || !available || !directoryAvailable} onClick={() => void controller.workspaceActions?.split(reference, node.paneId, 'horizontal')}><HugeiconsIcon icon={LayoutTwoColumnIcon} strokeWidth={2} /></Button>
+      <Button size='rail' variant='ghost' aria-label='Split down' title='Split down' disabled={pending || !available || !directoryAvailable} onClick={() => void controller.workspaceActions?.split(reference, node.paneId, 'vertical')}><HugeiconsIcon icon={LayoutTwoRowIcon} strokeWidth={2} /></Button>
+      <Button size='rail' variant='ghost' aria-label={maximized ? 'Restore terminal' : 'Maximize terminal'} title={maximized ? 'Restore terminal' : 'Maximize terminal'} aria-pressed={maximized} className={cn(maximized && 'text-primary')} onClick={() => controller.workspaceActions?.maximize(reference, node.paneId)}><HugeiconsIcon icon={maximized ? ArrowShrink01Icon : ArrowExpand01Icon} strokeWidth={2} /></Button>
+      {model.attachmentId && <Button size='rail' variant='ghost' aria-label='Terminate terminal' title='Terminate terminal' disabled={model.attachmentMode === 'observe'} onClick={() => void perform(() => actions.close(node.terminalId!).then(() => { setExited(true); return controller.workspaceActions?.refresh(); }))}><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>}
       </>}
-      <div aria-hidden='true' data-slot='terminal-rail-dim' className='pointer-events-none absolute inset-0 bg-title-bar' style={{ opacity: dimAmount }} />
     </header>
     <div data-slot='terminal-focus-border' className={cn('flex min-h-0 min-w-0 flex-1 flex-col border', focused ? agentFocused ? 'border-sidebar-selected' : 'border-terminal-focus' : 'border-transparent')}>
     {(error || model.error) && <Alert variant='destructive'><AlertDescription>{error ?? model.error}</AlertDescription></Alert>}
